@@ -16,13 +16,28 @@ itself one way and behave another — see the 2026-07-24 note below.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping
 
-# Frozen empty default. A dataclass field may not default to a mutable literal,
-# and a shared read-only mapping is cheaper than a default_factory per model.
+# The shared frozen empty fragment, and it is handed out through a
+# `default_factory` rather than used as the field default directly.
+#
+# `@dataclass` refuses a *bare* default whose type is unhashable — since Python
+# 3.11 the check is `default.__class__.__hash__ is None`, and `mappingproxy` has
+# no `__hash__`. So `reasoning_body: Mapping[str, Any] = _NO_REASONING` raised
+# "mutable default <class 'mappingproxy'> for field reasoning_body is not
+# allowed: use default_factory" at import time, which took the entire relay down
+# before a single request was served. The factory is the repair the message
+# asks for, and the mapping it returns is still the same read-only object shared
+# by every model — the immutability this constant exists for is unchanged, and
+# nothing here becomes per-instance state.
 _NO_REASONING: Mapping[str, Any] = MappingProxyType({})
+
+
+def _no_reasoning() -> Mapping[str, Any]:
+    """The shared frozen empty fragment. Not a copy — see `reasoning_keys()`."""
+    return _NO_REASONING
 
 
 def _body(**keys: Any) -> Mapping[str, Any]:
@@ -79,7 +94,7 @@ class LLMModel:
     # accepts the `reasoning_effort` string that glm-4.5-air takes with a 200 and
     # then ignores. So this is per MODEL. Never state a mode by omission — see
     # the 2026-07-24 note above MODELS for what that costs.
-    reasoning_body: Mapping[str, Any] = _NO_REASONING
+    reasoning_body: Mapping[str, Any] = field(default_factory=_no_reasoning)
     # Reasoning efforts an operator may pick for this model, WEAKEST FIRST
     # (the editor offers [0] as the default on a fresh pick). Empty = no effort
     # string travels for this model, whatever its provider accepts elsewhere.

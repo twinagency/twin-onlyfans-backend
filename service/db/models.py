@@ -35,6 +35,7 @@ from sqlalchemy import (
     case,
     Date,
     DateTime,
+    false,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
@@ -3209,3 +3210,195 @@ def is_paid_ratchet(is_paid: bool | None):
     a third would otherwise reintroduce the bug by simply forgetting.
     """
     return case((Message.is_paid.is_(True), True), else_=is_paid)
+
+
+# ── §OF-B1 The Twin dashboard's OnlyFans bindings and read projections ──────
+#
+# Three tables, and the split between them is the point.
+#
+# The dashboard reads creator/account *bindings* and conversation *state* that
+# this relay owns; it never reads a provider session, a cookie or a credential
+# through this path, and it never writes any of these rows (milestone 3 and the
+# operator UI own the writes that follow). They live here rather than in a
+# dashboard-side store because of the plan's first rule: one authority per fact,
+# and the dashboard is not a second writable ledger.
+#
+# `of_creator_bindings` is the authorization half. Note what is NOT here: no
+# provider session id, no password, no proxy. A binding is an answer to "which
+# creator and which tenant owns this OnlyFans account", and nothing else.
+#
+# `conversation_id` is deliberately absent as a column. A conversation is
+# (account_id, fan_id) and the dashboard-facing id is derived from both by
+# `onlyfans_read.contract.conversation_id_for` — one definition, so a control
+# row that appears later cannot disagree with the id a URL already carries.
+
+
+class OfCreatorBinding(Base):
+    """Which tenant and creator own one OnlyFans account. The read authority.
+
+    `tenant_id` is the operator/agency: a `users.id`, or the literal
+    `deployment` for the installation's own operator credential. It is a plain
+    string, not an FK, for the same reason `Account.proxy_label` is: the
+    binding must survive an agency being deleted without the account losing its
+    creator, and an FK here would CASCADE a creator's identity away with a
+    login row.
+
+    `revoked_at` is how a binding ends. Rows are not deleted: a revoked binding
+    still answers "was this ever ours", which is what an audit or a
+    re-connection needs, and a deleted row would make a re-linked account look
+    like it had always belonged elsewhere.
+
+    Exactly ONE binding per account may be live, and that is what makes
+    "cross-account refusal" decidable without a tie-break rule. It is enforced
+    by a PARTIAL unique index on `account_id` where `revoked_at IS NULL`, not by
+    a plain `UNIQUE(account_id)`.
+
+    The difference is the whole point of keeping history. A plain unique
+    constraint counts revoked rows, so an account that is unlinked and later
+    re-linked — the same account, possibly back to the same creator — would be
+    refused by a constraint that cannot see the difference between "two live
+    claims" and "one live claim next to its own closed history". The partial
+    index refuses the first and permits the second, which is the real rule: at
+    most one *active* owner, any number of past ones.
+
+    The composite `(tenant_id, creator_id, account_id)` constraint this table
+    used to carry is gone for the same reason — it forbade re-binding an account
+    to a creator it had previously belonged to, which is a legitimate re-link,
+    and it added nothing: the partial index already permits at most one live row
+    per account, hence at most one live row per scope.
+
+    `sqlite_where` and `postgresql_where` both carry the predicate because the
+    relay runs on SQLite and this schema is also rehearsed on PostgreSQL; a
+    dialect that does not understand partial indexes would silently create a
+    full index instead, which is the exact bug being removed here.
+    """
+
+    __tablename__ = "of_creator_bindings"
+
+    #: Stable, backend-owned binding id. The dashboard shows it and never mints
+    #: one, so a re-binding gets a new id and an old id never resolves to a
+    #: different account.
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String, nullable=False)
+    creator_id: Mapped[str] = mapped_column(String, nullable=False)
+    creator_name: Mapped[str] = mapped_column(String, nullable=False, default="")
+    account_id: Mapped[str] = mapped_column(
+        String, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    #: Provider handle for display ("@avahart"). Not an identity.
+    handle: Mapped[str] = mapped_column(String, nullable=False, default="")
+    channel: Mapped[str] = mapped_column(String, nullable=False, default="onlyfans")
+    created_at: Mapped[datetime] = _ts_now()
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        Index(
+            "uq_of_creator_bindings_active_account",
+            "account_id",
+            unique=True,
+            sqlite_where=text("revoked_at IS NULL"),
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("ix_of_creator_bindings_tenant", "tenant_id", "creator_id"),
+    )
+
+
+class OfConversationState(Base):
+    """Conversation control, as a read projection.
+
+    Everything the dashboard's conversation summary needs that the message
+    history cannot answer: who is replying, how many times the conversation has
+    moved since a command was decided (`revision`), whether a human has taken
+    it over, and whether an unresolved send is holding it.
+
+    `revision` starts at 0 and is monotonic per conversation. A command states
+    the revision it was decided against, so a command decided on stale state is
+    refused rather than applied to a conversation that has moved on — and 0 is
+    the honest answer for a conversation no command has ever touched, not a
+    missing value.
+
+    This milestone only READS these rows. Nothing in the read service writes
+    one, and there is no route that can: the writes belong to the delivery
+    authority (milestone 3) and to the operator commands (milestone 5). Until
+    then every conversation reads as `automated`, `none`, revision 0 — which is
+    true, because no control has been recorded.
+    """
+
+    __tablename__ = "of_conversation_state"
+
+    account_id: Mapped[str] = mapped_column(String, primary_key=True)
+    fan_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    #: automated | human_controlled | paused | no_contact
+    mode: Mapped[str] = mapped_column(
+        String, nullable=False, default="automated", server_default=text("'automated'")
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    #: none | requested | effective — a request is not effective until the
+    #: backend confirms it, which is why the two are separate values.
+    takeover_state: Mapped[str] = mapped_column(
+        String, nullable=False, default="none", server_default=text("'none'")
+    )
+    #: Set while a send is unresolved. Non-null is what holds the conversation:
+    #: an unresolved attempt blocks conflicting sends regardless of mode, and
+    #: resuming replies must not erase it.
+    unresolved_attempt_id: Mapped[str | None] = mapped_column(String)
+    requires_attention: Mapped[bool] = mapped_column(
+        # `false()` rather than `text("0")`: on PostgreSQL a boolean column with
+        # a default of integer 0 is rejected outright ("column ... is of type
+        # boolean but default expression is of type integer"), and it renders as
+        # the dialect's own false literal everywhere else.
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    updated_at: Mapped[datetime] = _ts_now()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id", "fan_id"],
+            ["fans.account_id", "fans.fan_id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_of_conversation_state_updated", "updated_at"),
+    )
+
+
+class OfMessageDelivery(Base):
+    """Per-message delivery outcome — the receipt a bubble shows.
+
+    One row per outbound message that has an outcome worth recording. The
+    vocabulary is the dashboard's own (`contract.DELIVERY_OUTCOMES`), and
+    `unknown` is a first-class value rather than an error: a timeout, a missing
+    provider id or a restart is not proof of failure, and recording it as
+    `failed` would invite the one thing the plan forbids — an automatic resend
+    of something the provider may have accepted.
+
+    `attempt_id` links a message to the send attempt that produced it, so the
+    dashboard can offer an evidence path for an unresolved outcome instead of a
+    generic retry. `evidence_ref` names what settled it when it was settled.
+
+    Read-only in this milestone: nothing here is written by this package. Absent
+    rows are not "no delivery" either — the projection in `projections.py`
+    states what an absent row means for each direction, rather than defaulting
+    every message to a value.
+    """
+
+    __tablename__ = "of_message_delivery"
+
+    account_id: Mapped[str] = mapped_column(String, primary_key=True)
+    fan_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    message_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    outcome: Mapped[str] = mapped_column(String, nullable=False, default="none")
+    attempt_id: Mapped[str | None] = mapped_column(String)
+    evidence_ref: Mapped[str | None] = mapped_column(String)
+    detail: Mapped[str | None] = mapped_column(Text)
+    recorded_at: Mapped[datetime] = _ts_now()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["account_id", "fan_id", "message_id"],
+            ["messages.account_id", "messages.fan_id", "messages.message_id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_of_message_delivery_attempt", "attempt_id"),
+    )

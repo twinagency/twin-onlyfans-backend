@@ -99,6 +99,12 @@ from banned_words_api import router as _banned_words_router  # noqa: E402
 from account_config_api import router as _account_config_router  # noqa: E402
 from settings_transfer_api import router as _settings_transfer_router  # noqa: E402
 from assistant_api import router as _assistant_router  # noqa: E402
+# The Twin dashboard's read-only OnlyFans API (milestone OF-B1). It is
+# bearer-gated inside the package — see onlyfans_read/auth.py — and it lives in
+# its own namespace so the browser perimeter below can exempt it by one exact
+# prefix instead of by a pattern.
+from onlyfans_read import is_service_path as _is_onlyfans_service_path  # noqa: E402
+from onlyfans_read import router as _onlyfans_read_router  # noqa: E402
 # Growth surfaces (gaps-lane: Infloww-gap features) — all self-contained routers.
 from smart_lists_api import router as _smart_lists_router  # noqa: E402
 from trial_links_api import router as _trial_links_router  # noqa: E402
@@ -265,6 +271,11 @@ app.include_router(_trial_links_router)
 app.include_router(_tracking_links_router)
 app.include_router(_of_tracking_router)
 app.include_router(_promotions_router)
+# The Twin dashboard's read-only OnlyFans API. Registered here rather than with
+# the operator surfaces above because it is not one: it has no session, no
+# cookie and no account id in a browser, and its own bearer gate is the only
+# thing that admits a caller. GET only — there is no write route in the package.
+app.include_router(_onlyfans_read_router)
 
 # ── The one no-auth allowlist ───────────────────────────────────────
 #
@@ -491,6 +502,22 @@ async def _share_token_gate(request: Request, call_next):
     if not share_token:
         return await call_next(request)
     if request.url.path == "/health" or request.url.path == "/livez":
+        return await call_next(request)
+    # The OnlyFans read API (service/onlyfans_read). It is NOT added to the
+    # allowlist above, and the difference matters: that set means "answering
+    # with no credential at all", while this namespace answers only to its own
+    # bearer token — a credential a browser does not have and cannot present
+    # from a cookie. The share token is a *browser* perimeter (a GET-query-able
+    # shared secret, optional per deployment); requiring it here as well would
+    # not add a check to a service client that cannot carry it, it would only
+    # make the dashboard's read fail on any deployment that sets one.
+    #
+    # The exemption is prefix-exact and built from the package's own constant,
+    # so a route rename cannot leave a stale hole and `/onlyfans/api/v10` is not
+    # covered by it. The account-isolation middleware below needs no matching
+    # entry: its pre-filter only inspects `/admin/*` and `/api/of/*`, and this
+    # namespace is deliberately neither.
+    if _is_onlyfans_service_path(request.url.path):
         return await call_next(request)
     if request.url.path.startswith(_PUBLIC_PREFIXES):
         return await call_next(request)

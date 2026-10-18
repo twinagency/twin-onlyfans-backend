@@ -59,7 +59,7 @@ They add no activation, refund, automatic reconciliation or cap reset.
 
 ## Operations contract
 
-The existing private scoped GET now returns nested `of-operations.v2` within
+The existing private scoped GET now returns nested `of-operations.v3` within
 the unchanged outer `of-preview.v2` envelope. `modelCosts` contains the UTC day,
 literal unit `usd_millicents`, today's recorded cost plus reservations, the
 per-provider allowance, call count, number of provider rollups, and all-time

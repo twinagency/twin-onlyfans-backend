@@ -260,6 +260,25 @@ def test_native_media_requires_a_recent_completed_ledger_scan(database, monkeypa
     store.close()
 
 
+def test_long_scan_records_its_provider_cutoff_instead_of_claiming_newer_coverage(database, monkeypatch):
+    import onlyfans_runtime.ledger as ledger
+    import onlyfans_runtime.store as store_module
+    store, account, _ = verified(database, monkeypatch)
+    cutoff = utcnow()
+    monkeypatch.setattr(ledger, "utcnow", lambda: cutoff)
+    def read(self, **kwargs):
+        assert kwargs["end"] == cutoff
+        monkeypatch.setattr(ledger, "utcnow", lambda: cutoff+timedelta(minutes=20))
+        return payload([])
+    monkeypatch.setattr(NativeProviderConnector, "transaction_page", read)
+    assert process_ledger_pages(store, TENANT) == 1
+    with Session(database[1]) as s:
+        scan = s.get(OfLedgerScan, account)
+        assert scan.last_complete_at == cutoff and scan.last_full_at == cutoff
+        assert scan.next_poll_at <= cutoff+timedelta(minutes=20, seconds=2)
+    store.close()
+
+
 def test_populated_0083_upgrade_preserves_disabled_state_and_adds_checked_evidence(database, monkeypatch):
     from db.schema import check_schema, upgrade
     store, account, _ = verified(database, monkeypatch)

@@ -17,7 +17,7 @@ from .contract import iso
 from .errors import BadRequest, Unavailable
 
 SECTIONS = {"content", "sales", "settings"}
-SCHEMA = "of-workspace.v1"
+SCHEMA = "of-workspace.v2"
 MAX_INTEGER = 2**53-1
 
 
@@ -95,18 +95,18 @@ def sale_row(row):
         "occurredAt":iso(row.occurred_at)}
 
 
-def config_view(cfg):
+def config_view(cfg, *, shared_facts=None):
     if cfg is None:return None
     from automations._persona_contract import PERSONA_FACT_FIELDS, _parse_persona_facts
     issues=[]
     try:
-        saved=object_json(cfg.persona_facts_json)
+        saved=shared_facts if shared_facts is not None else object_json(cfg.persona_facts_json)
         facts=_parse_persona_facts(json.dumps(saved))
     except (ValueError,TypeError,RecursionError):facts={};issues.append("creator_facts_invalid")
     labels=dict(PERSONA_FACT_FIELDS)
     shown=[]
     for key,value in facts.items():
-        if type(value) is not str or len(value)>1000:
+        if type(value) is not str or len(value)>16000:
             issues.append("creator_facts_invalid");continue
         if value.strip():shown.append({"label":labels[key],"value":value})
     try:
@@ -174,7 +174,13 @@ async def read_workspace(s,*,tenant_id,account_id,section,cursor=None,limit=25):
             "openOffers":open_offers,"openOfferCount":open_count,"moreOpenOffers":open_count>len(open_offers),
             "nextCursor":cursor_for(account_id,section,rows[limit-1].id) if len(rows)>limit else None}
     policy=await s.get(OfDeliveryPolicy,account_id)
-    return {**snapshot,"configuration":config_view(await s.get(AccountAiConfig,account_id)),
+    config=await s.get(AccountAiConfig,account_id)
+    shared=None
+    if config is not None:
+        from onlyfans_runtime.creator_facts import effective
+        try:shared=await s.run_sync(lambda sync:effective(sync,config)[0])
+        except (ValueError,TypeError,RecursionError):pass
+    return {**snapshot,"configuration":config_view(config,shared_facts=shared),
         "runtimeEnabled":bool(runtime and runtime.enabled),
         "deliveryPolicy":None if policy is None else {"revision":integer(policy.revision),"enabled":policy.enabled,
             "mediaEnabled":policy.media_enabled,"usedUnits":integer(policy.used_units),"limitUnits":integer(policy.limit_units)}}

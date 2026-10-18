@@ -47,7 +47,7 @@ class CycleReport:
 
 class NativeWorker:
     """One serial lane per instance; separate processes compete through PG."""
-    def __init__(self,store,tenant_id,accounts,*,accounts_per_cycle=4,model_timeout_seconds=10):
+    def __init__(self,store,tenant_id,accounts,*,accounts_per_cycle=4,model_timeout_seconds=10,facts_reader=None):
         if os.environ.get("ONLYFANS_PROCESS_ROLE")!="worker" or type(store) is not Store:
             raise Refused("native worker requires an explicit worker Store")
         from .native_planning import NativeTextPlanner,SyntheticNativeModel
@@ -89,6 +89,10 @@ class NativeWorker:
         self.accounts_per_cycle,self.model_timeout=accounts_per_cycle,model_timeout_seconds
         self._cursor=0
         self._lock=threading.Lock()
+        from .creator_facts import TwinFactsReader
+        if facts_reader is not None and type(facts_reader) is not TwinFactsReader:
+            raise Refused("explicit shared creator source required")
+        self.facts_reader=facts_reader
 
     @staticmethod
     def _role():
@@ -142,6 +146,10 @@ class NativeWorker:
                     # revoked; this path grants no new planning or send rights.
                     report.expired+=self.authority.expire_dispatches(self.tenant_id,account.account_id,limit=4)
                     report.repaired+=self.authority.repair(self.tenant_id,account.account_id,limit=4)
+                    if self.facts_reader is not None:
+                        from .creator_facts import refresh
+                        try:refresh(self.store,self.tenant_id,account.account_id,self.facts_reader)
+                        except (Refused,ValueError,TypeError):report.held+=1
                     if stop.is_set():break
                     if account.reader is None:
                         report.ingress+=self.store.drain(self.tenant_id,account.account_id)
@@ -157,6 +165,19 @@ class NativeWorker:
                     if stop.is_set():break
                     if not self._can_dispatch_campaign(account):continue
                     if account.model is None:
+                        identity=self.campaigns.queue_due(self.tenant_id,account.account_id)
+                        if identity is not None:report.queued+=1
+                        if not stop.is_set():self._deliver(account,report)
+                        continue
+                    from .creator_facts import effective
+                    with Session(self.store.engine) as s,s.begin():
+                        self.store._runtime(s,self.tenant_id,account.account_id)
+                        from db.models import AccountAiConfig
+                        config=s.get(AccountAiConfig,account.account_id)
+                        source=effective(s,config)[1] if config is not None else None
+                    if source is not None and source["state"]!="current":
+                        report.held+=1
+                        # Operator-authored campaigns do not depend on AI facts.
                         identity=self.campaigns.queue_due(self.tenant_id,account.account_id)
                         if identity is not None:report.queued+=1
                         if not stop.is_set():self._deliver(account,report)

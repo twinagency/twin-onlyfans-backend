@@ -9,7 +9,7 @@ Sales and Settings views to the same Twin product.
 The GET-only read router adds
 `/onlyfans/api/v1/accounts/{account}/workspace/{content|sales|settings}`.
 The outer envelope remains `of-preview.v2`; its strict nested read model is
-`of-workspace.v1`. Existing operator/read-token/active-binding gates apply.
+`of-workspace.v2`. Existing operator/read-token/active-binding gates apply.
 The separate five-action command interface is unchanged.
 
 Each native read uses one PostgreSQL repeatable-read snapshot and a shared

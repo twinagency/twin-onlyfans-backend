@@ -4,7 +4,7 @@ This paired offline checkpoint adds the Settings editor to the existing native
 workspace. It updates the existing `AccountAiConfig` owner for a bound account;
 it does not introduce another persona, model selector, prompt or fact store.
 Database head is `0079_native_configuration`. Read projections remain
-`of-workspace.v1` under `of-preview.v2`; edits use `of-configuration.v1`.
+`of-workspace.v2` under `of-preview.v2`; edits use `of-configuration.v2`.
 
 ## Operator behavior
 
@@ -44,7 +44,7 @@ token server-side with its existing `ONLYFANS_API_BASE_URL`. An absent purpose
 token leaves the existing read-only Settings surface intact.
 
 Native routes are GET/POST `/onlyfans/configuration/v1/accounts/{account}` with
-`X-OnlyFans-Configuration-Version: of-configuration.v1`. Dashboard routes are
+`X-OnlyFans-Configuration-Version: of-configuration.v2`. Dashboard routes are
 GET/POST `/api/onlyfans-configuration/accounts/{account}`. Every request verifies
 the internal operator session and rejects agency/view-as access. POST additionally
 checks exact dashboard Origin/HTTP Host, Fetch Metadata and JSON content type;
@@ -117,3 +117,39 @@ staged cutover remain open gates. No Git commit/push, remote database migration,
 paid model/provider call, real account connection, deployment or cap reset was
 performed. Continue from the existing handover and ownership register; do not
 replace the native Fastt owner or the common delivery authority.
+
+
+## Shared Twin facts continuation
+
+Revision `0085_shared_creator_facts` adds a bounded read projection of Twin's
+existing creator row. It does not create another creator, Supabase project,
+onboarding service, prompt compiler, fan memory or model call. Existing
+`AccountAiConfig` remains the native configuration owner. The existing pinned
+fact composer renders the mapped typed facts; native calls retain complete
+bounded limit lists while legacy callers retain their 240-character default.
+
+`ONLYFANS_TWIN_FACTS_ENABLED=1`, `TWIN_FACTS_BASE_URL` and the existing
+`TWIN_ADMIN_API_KEY` enable source reads through Twin's authenticated admin API.
+Its bearer and loopback/Tailscale network checks remain in force. The worker
+never forges forwarding headers or receives a Supabase service key. Only the
+server-bound creator ID and explicitly admitted typed columns are requested.
+A two-row limit avoids Twin's conservative `truncated = rows == limit` marker
+for this single unique creator row; exactly one owned row is still required.
+
+A leased GET runs outside the database transaction, at most once per 30 seconds
+per account, with a five-second timeout and 64 KiB response budget. Effective
+facts must have been checked within 120 seconds before AI planning and again
+at final dispatch. Unavailable/stale facts hold AI replies without making a
+model call. Manual messages and operator-authored campaigns remain independent.
+Once an account has a source projection, disabling the flag does not silently
+restore a stale independent copy.
+
+Explicit typed DOB derives adult age on the UTC date; cover_story precedes the
+retired occupation field. Hometown and current city retain their labels.
+Unknown relationship, tattoos, kids and family are not invented. Limits and
+preferences map from their existing typed fields. Existing OF facts are
+adopted as explicit overrides. An edited field overrides Twin for OF; null
+clears it for OF. `inheritCreatorFacts` removes the override. Settings shows
+source state, inherited/overridden status and a Use Twin value action. Source
+changes use the existing immutable configuration audit and invalidate old plans;
+a freshness-only renewal does not generate another reply or invalidate a plan.

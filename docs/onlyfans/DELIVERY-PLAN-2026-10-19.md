@@ -23,7 +23,8 @@ describe what was true at their checkpoint, not the current scope or release.
 
 ## Current source work
 
-The ledger draft has been integrated as revision `0084_native_ledger`; runtime
+The ledger draft was integrated in `0084_native_ledger`; shared creator facts
+now bring the schema head to `0085_shared_creator_facts`. Runtime
 schema readiness, migration metadata and append-only evidence are registered
 together. The canonical financial owner remains Transaction. The existing
 transaction vocabulary and media-settlement function are shared rather than
@@ -72,3 +73,41 @@ source assertions against a different pre-existing page structure. Those are
 unresolved full-repository gates, not passes. No live provider,
 paid model, fan send or production database has been exercised for this work.
 Deployment devices remain offline and no live OF creator has been selected.
+
+
+## Shared facts and reporting checkpoint
+
+The source implementation now reads Twin's existing typed creator row through
+its existing private admin API, preserves explicit OF overrides, exposes source
+freshness and inheritance in Settings, and checks the same effective facts at
+planning and egress. The native prompt continues to use Fastt's existing fact
+composer, with full bounded typed limits. Telegram behavior keeps its old
+composer defaults. The rollout remains default-off until the private source URL
+and existing admin bearer are configured on the actual deployment.
+
+Campaign detail reports now expose 24-hour observed replies and exact
+message-linked native purchases/refunds/cleared gross USD revenue. Freshness and
+coverage failures have explicit unavailable reasons. Reply counts are not causal
+attribution and refunds do not count as cleared revenue. The paired contracts
+are `of-configuration.v2`, `of-campaigns.v2`, `of-workspace.v2`, and
+`of-operations.v3`; frontend and backend must be deployed together.
+
+Still to implement: native upload admission/worker/preview delivery, metadata
+and internal-folder adapters, wider inbound selling behavior, complete audience
+import, and the combined earnings view. The existing upload owner uses temporary
+scheduled carrier posts and cleanup evidence; no bypass into the old provider
+client has been added. These remaining items are not described as live or done.
+Actual selected-account provider formats, credentials and deployment access
+remain required for live acceptance.
+
+
+Verification for this continuation: shared-facts/configuration/workspace behavior
+checks passed, after correcting a source-reader test and an older migration
+fixture and rerunning their failed cases successfully. The populated 0078-to-current and 0084-to-current
+migration checks preserve existing rows. The additional isolation check now
+passes without importing the model adapter at API startup; the route inventory
+explicitly lists the existing campaign/content/connection command surfaces.
+The 52 admin-API checks, four affected frontend contract checks, TypeScript and
+production Next build pass. Campaign reporting passed its five focused PG cases
+and the broader campaign/media suite. A complete connected browser acceptance
+and live provider/model deployment are still release gates.

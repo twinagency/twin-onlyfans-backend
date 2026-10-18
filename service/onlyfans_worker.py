@@ -34,7 +34,7 @@ def _process_ledger_jobs(store, tenant, *, limit, stop):
 
 
 def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
-             load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None):
+             load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None,facts_reader=None):
     """Refresh bounded ordered cohorts without starving accounts after row 32.
 
     Cursor advancement is over scanned candidates, including invalid/expired
@@ -63,7 +63,8 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
                 ledger_jobs(store, tenant, limit=1, stop=stop)
                 if stop.is_set():
                     break
-            accounts, next_cursor, scanned = load_cohort(store, tenant, limit=32, after_account=cursor, stop=stop)
+            accounts, next_cursor, scanned = load_cohort(store, tenant, limit=32, after_account=cursor, stop=stop,
+                **({"facts_reader":facts_reader} if facts_reader is not None else {}))
             cursor = next_cursor
             if stop.is_set():
                 break
@@ -74,7 +75,7 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
                     store.request_poll(tenant, account.account_id)
                 if stop.is_set():
                     break
-                worker = worker_type(store, tenant, tuple(accounts))
+                worker = worker_type(store, tenant, tuple(accounts),**({"facts_reader":facts_reader} if facts_reader is not None else {}))
                 # Finish at least one pass over the selected cohort before
                 # advancing its DB cursor, even for a short refresh interval.
                 # --once intentionally performs one bounded four-account cycle.
@@ -136,7 +137,14 @@ def main(argv=None):
         except Exception:
             _emit({"schemaVersion":"of-worker.v1", "state":"startup_unavailable"})
             return 1
-        return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,
+        facts_reader=None
+        if os.environ.get("ONLYFANS_TWIN_FACTS_ENABLED")=="1":
+            from onlyfans_runtime.creator_facts import TwinFactsReader
+            try:facts_reader=TwinFactsReader(os.environ.get("TWIN_FACTS_BASE_URL",""),os.environ.get("TWIN_ADMIN_API_KEY",""))
+            except Exception:
+                _emit({"schemaVersion":"of-worker.v1","state":"creator_source_unavailable"})
+                return 1
+        return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,facts_reader=facts_reader,
                         vault_jobs=_process_vault_jobs,
                         ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None)
     finally:

@@ -43,7 +43,7 @@ def test_catalogue_uses_native_terms_and_bounded_account_cursor_without_writes(d
         legacy=CatalogScript(account_id="acc-a",name="Retained legacy sequence",status="disabled")
         s.add(legacy);s.flush();s.add(CatalogItem(account_id="acc-a",script_id=legacy.id,media_ids="[11]",price_cents=500,label="Hidden legacy sequence"))
     first=read(database,"content")
-    assert first["schemaVersion"]=="of-workspace.v1" and first["providerConnectionVerified"] is False
+    assert first["schemaVersion"]=="of-workspace.v2" and first["providerConnectionVerified"] is False
     assert first["historyRecoveryRequired"] is True and first["lastCompleteSyncAt"] is None
     assert len(first["items"])==25 and first["items"][0]["itemId"]==str(item)
     assert first["items"][0]["readiness"]=="terms_checked"

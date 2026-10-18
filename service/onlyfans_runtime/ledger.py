@@ -292,8 +292,12 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
             scan.page_offset, scan.last_page_hash = offset + len(rows), page_hash
             scan.next_poll_at = now + timedelta(seconds=1 if more else 300)
             if not more:
-                scan.status, scan.last_complete_at = "idle", now
+                # Freshness describes the frozen provider query cutoff, not
+                # the later wall-clock time at which a long scan finished.
+                scan.status, scan.last_complete_at = "idle", end
                 if end - start == timedelta(days=90):
-                    scan.last_full_at = now
+                    scan.last_full_at = end
+                if now - end > timedelta(minutes=5):
+                    scan.next_poll_at = now + timedelta(seconds=1)
             processed += 1
     return processed

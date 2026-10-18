@@ -13,7 +13,7 @@ from onlyfans_runtime.campaigns import CampaignService, InvalidCampaign, identit
 from onlyfans_runtime.store import Refused
 from .api import unique_keys
 
-SCHEMA = "of-campaigns.v1"
+SCHEMA = "of-campaigns.v2"
 HEADER = "X-OnlyFans-Campaign-Version"
 PREFIX = "/onlyfans/campaign/v1"
 router = APIRouter(prefix=PREFIX, tags=["onlyfans-campaigns"])

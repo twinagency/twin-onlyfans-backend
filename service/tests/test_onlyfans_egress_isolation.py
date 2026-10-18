@@ -274,7 +274,8 @@ for route in onlyfans_app.app.routes:
     methods = set(getattr(route, "methods", set()))
     if route.path.startswith("/onlyfans/control/v1/"):
         assert methods == {"POST"}, route.path
-    elif route.path.startswith("/onlyfans/configuration/v1/"):
+    elif route.path.startswith(("/onlyfans/configuration/v1/", "/onlyfans/campaign/v1/",
+                                "/onlyfans/content/v1/", "/onlyfans/connection/v1/")):
         assert methods in ({"GET"},{"POST"}), route.path
     else:
         assert methods <= {"GET", "HEAD"}, route.path

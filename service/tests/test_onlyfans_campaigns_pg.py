@@ -150,7 +150,9 @@ def test_campaign_delivery_uses_one_authority_and_human_authorship(database):
     details = service.detail(TENANT, ACCOUNT, created["campaignId"])
     assert details["campaign"]["counts"]["accepted"] == 1
     assert details["campaign"]["status"] == "completed"
-    assert details["campaign"]["reporting"] == {"replies": None, "revenueCents": None, "currency": None}
+    assert details["campaign"]["reporting"]["replies"] is None
+    assert details["campaign"]["reporting"]["revenueCents"] is None
+    assert details["campaign"]["reporting"]["revenueStatus"] == "ledger_unavailable"
     with Session(engine) as s:
         assert s.get(Message, (ACCOUNT, FAN, 9001)).automation_kind == "onlyfans_campaign"
     store.close()

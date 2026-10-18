@@ -303,11 +303,12 @@ class CampaignService:
         status = row.status
         if status in {"running", "scheduled"} and not any(counts[key] for key in ("pending", "queued", "dispatching", "unknown")):
             status = "completed"
+        from .campaign_reporting import report, unavailable
         result = dict(campaignId=row.campaign_id, accountId=row.account_id, name=row.name, body=row.body,
             audience=dict(kind=row.audience_kind, count=row.recipient_count, snapshotHash=row.audience_hash),
             scheduledAt=stamp(row.scheduled_at), createdAt=stamp(row.created_at), updatedAt=stamp(row.updated_at),
             status=status, revision=row.revision, counts=counts, recipientCount=row.recipient_count,
-            deliveryMode="individual_messages", reporting=dict(replies=None, revenueCents=None, currency=None))
+            deliveryMode="individual_messages", reporting=report(s, row) if recipients else unavailable())
         terms = json.loads(row.catalog_snapshot_json) if row.catalog_snapshot_json is not None else None
         label = terms["item"]["label"] if terms is not None else None
         result["offer"] = None if terms is None else dict(catalogItemId=row.catalog_item_id,

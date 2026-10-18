@@ -30,7 +30,13 @@ def versions(session, account_id, fan_id):
     config = read(AccountAiConfig, AccountAiConfig.account_id == account_id)
     fan = read(Fan, Fan.account_id == account_id, Fan.fan_id == fan_id)
     profile = read(FanProfile, FanProfile.account_id == account_id, FanProfile.fan_id == fan_id)
-    snapshot = {"config": config, "fan": fan, "profile": profile}
+    source = None
+    if config is not None:
+        from .creator_facts import effective
+        row = session.get(AccountAiConfig, account_id)
+        facts, source = effective(session, row)
+        config["persona_facts_json"] = canonical(facts) if facts else None
+    snapshot = {"config": config, "fan": fan, "profile": profile, "creatorFactsSource": source}
     return hashlib.sha256(canonical(snapshot).encode()).hexdigest(), snapshot
 
 

@@ -84,7 +84,9 @@ def _native_messages(context):
             candidate.last_in_text = message["body"]
             candidate.fan_msg_n += 1
     candidate.last_dir = context["messages"][-1]["direction"]
-    persona = compose_persona(cfg, fallback="")
+    # Shared typed lists must not silently lose creator limits after 240 chars.
+    # Use the same composer; all legacy callers retain its existing default.
+    persona = compose_persona(cfg, fallback="", fact_value_clip=16000)
     bot_accused = detect_bot_accusation(candidate.last_in_text, language)
     kind = native._turn_kind(bot_accused=bot_accused, pic_desc="", content_ask=False,
                             escalation=False, image_dare=False, dare_callback=False,
@@ -177,6 +179,8 @@ class NativeTextPlanner:
             if not live and count >= MAX_SYNTHETIC_INVOCATIONS:
                 raise Refused("synthetic planning allowance exhausted")
             fingerprint, snapshot = versions(s, claim.account_id, claim.fan_id)
+            if snapshot.get("creatorFactsSource") is not None and snapshot["creatorFactsSource"]["state"] != "current":
+                raise Refused("shared creator facts are not current")
             if snapshot["config"] is None:
                 raise Refused("approved creator configuration is required")
             messages = s.execute(select(Message.message_id, Message.direction, Message.body, Message.created_at).where(

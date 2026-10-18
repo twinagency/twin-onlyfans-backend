@@ -29,9 +29,16 @@ the legacy `send_mass_message`, `reply_mass_funnel` or `scheduled_send` writers.
   repricing it. Existing purchases are rechecked and owned recipients skipped.
 
 Text-only and existing paid-media campaigns are supported here. Free-media
-teasers, provider-native bulk queues/unsend, automated funnel branches and campaign purchase/reply
-attribution are not exposed. Reporting returns null for unsupported attribution
-instead of inventing zero revenue or crediting every later purchase to a blast.
+teasers, provider-native bulk queues/unsend and automated funnel branches remain
+outside this implementation. Detail reports count distinct recipient fans who
+reply within 24 hours after an accepted campaign message. This is an observed
+reply window, not proof that the campaign caused the reply. Incomplete or stale
+history returns null. Purchase attribution requires an applied native ledger
+observation with the exact campaign message ID; old fan/price/time heuristics do
+not qualify. Gross USD revenue counts cleared, linked purchases and excludes
+fees, pending payments and refunded/charged-back purchases. Missing, stale,
+held or insufficient ledger coverage returns null with an explicit reason,
+never an invented zero. List rows defer reporting to the detail view.
 Paid send acceptance creates an open canonical content offer and unpaid media
 send records. It does not create a purchase, ownership or revenue event.
 
@@ -79,7 +86,7 @@ ONLYFANS_CAMPAIGN_TOKEN=<distinct server-only secret>
 
 The campaign token must differ from read/control/configuration tokens. Routes
 live under `/onlyfans/campaign/v1` and require
-`X-OnlyFans-Campaign-Version: of-campaigns.v1`. Create/action requests reject
+`X-OnlyFans-Campaign-Version: of-campaigns.v2`. Create/action requests reject
 unknown fields, duplicate JSON keys, non-finite numbers and bodies over 128 KiB.
 The create body accepts optional `catalogItemId`; absent/null retains the
 text-only contract. Campaign reads add `offer: null` for text or frozen exact

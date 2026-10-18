@@ -224,7 +224,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                 assert operations.status_code == 200, operations.text
                 assert "no-store" in operations.headers["cache-control"]
                 diagnostics=operations.json()["operations"]
-                assert diagnostics["schemaVersion"] == "of-operations.v2"
+                assert diagnostics["schemaVersion"] == "of-operations.v3"
                 assert diagnostics["modelCosts"]["unit"] == "usd_millicents"
                 assert diagnostics["modelCosts"]["spentMillicents"] == 7
                 assert diagnostics["modelCosts"]["capPerProviderMillicents"] == 10000
@@ -343,6 +343,20 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     return
                 # Exercise the actual client-rendered page in the same isolated
                 # network namespace as both servers when Playwright is supplied.
+                # A real source projection, not a browser response override.
+                # Seed immediately before the browser so the freshness window
+                # exercises the real inheritance POST and canonical read path.
+                from db.onlyfans_creator_facts_models import OfCreatorFactsSource
+                from onlyfans_runtime.creator_facts import SOURCE_COLUMNS
+                from onlyfans_runtime.native_context import canonical
+                import hashlib
+                with Session(engine) as s,s.begin():
+                    source=dict.fromkeys(key for key in SOURCE_COLUMNS if key!="updated_at")
+                    source.update(id="creator-acc-a",current_city="Shared Twin city",tattoo_details=[],turn_ons=[],hard_limits=[])
+                    now=datetime.now(timezone.utc).replace(tzinfo=None)
+                    s.add(OfCreatorFactsSource(account_id="acc-a",binding_id="binding-acc-a",source_json=canonical(source),
+                        source_hash=hashlib.sha256(canonical(source).encode()).hexdigest(),source_updated_at=now,checked_at=now,
+                        overrides_json=s.get(AccountAiConfig,"acc-a").persona_facts_json))
                 browser_check=dashboard/"scripts/check-onlyfans-http-browser.mjs"
                 with operator_dispatcher(operator_store) as operator_peer:
                     subprocess.run([node,str(browser_check)],cwd=dashboard,env={**env,"ONLYFANS_TEST_WEB_URL":web,"ONLYFANS_TEST_COOKIE":sessions["operator"],"ONLYFANS_TEST_EVIDENCE":str(log_dir)},check=True,timeout=240)
@@ -361,7 +375,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     assert len(accepted_transport.calls)==len(unknown_transport.calls)==1
                     from db.onlyfans_models import OfConfigurationChange,OfRuntime
                     changes=s.scalars(select(OfConfigurationChange).where(OfConfigurationChange.account_id=="acc-a")).all()
-                    assert len(changes)==4 and s.get(OfRuntime,"acc-a").configuration_revision==4
+                    assert len(changes)==5 and s.get(OfRuntime,"acc-a").configuration_revision==5
                     config=s.get(AccountAiConfig,"acc-a")
                     assert config.persona=="Updated approved synthetic creator persona."
                     assert json.loads(config.persona_facts_json)["home_city"]=="Concurrent Synthetic Harbor"

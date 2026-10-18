@@ -29,8 +29,9 @@ CAMPAIGNS = "0080_onlyfans_campaigns"
 CONNECTION = "0081_native_connection"
 CONTENT = "0082_content_management"
 VAULT = "0083_vault_management"
-HEAD = "0084_native_ledger"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, HEAD:84}
+LEDGER = "0084_native_ledger"
+HEAD = "0085_shared_creator_facts"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, HEAD:85}
 HERE = Path(__file__).resolve().parent
 
 
@@ -43,7 +44,7 @@ def _metadata():
     from . import onlyfans_models  # noqa: F401 — register current tables
     from . import onlyfans_delivery_models  # noqa: F401 — register current tables
     from . import onlyfans_campaign_models,onlyfans_connection_models,onlyfans_content_models  # noqa: F401
-    from . import onlyfans_vault_models, onlyfans_ledger_models  # noqa: F401
+    from . import onlyfans_vault_models, onlyfans_ledger_models, onlyfans_creator_facts_models  # noqa: F401
     return Base.metadata
 
 

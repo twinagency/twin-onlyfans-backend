@@ -32,7 +32,7 @@ sys.path.insert(0, str(SERVICE_ROOT.parent))  # so `service.db.models` resolves 
 from service.db import onlyfans_models  # noqa: F401 — register foundation metadata
 from service.db import onlyfans_delivery_models  # noqa: F401 — register synthetic delivery metadata
 from service.db import onlyfans_campaign_models,onlyfans_connection_models,onlyfans_content_models  # noqa: F401
-from service.db import onlyfans_vault_models, onlyfans_ledger_models  # noqa: F401
+from service.db import onlyfans_vault_models, onlyfans_ledger_models, onlyfans_creator_facts_models  # noqa: F401
 from service.db.models import Base  # noqa: E402  — must come after sys.path patch
 
 config = context.config

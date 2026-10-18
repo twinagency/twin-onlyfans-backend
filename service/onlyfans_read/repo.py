@@ -296,6 +296,10 @@ class SqlOnlyFansReadRepo:
                 from onlyfans_runtime.commerce import held
                 if await s.run_sync(lambda sync: held(sync, account_id)):
                     reasons.append("commerce_evidence_conflict")
+                if cfg is not None:
+                    from onlyfans_runtime.creator_facts import effective
+                    source=await s.run_sync(lambda sync:effective(sync,cfg,now=naive_now)[1])
+                    if source is not None and source["state"]!="current":reasons.append("creator_facts_not_current")
                 if unresolved_calls: reasons.append("model_cost_unresolved")
                 if cap is not None and maximum is not None and maximum >= cap*100:
                     reasons.append("model_budget_exhausted")
@@ -317,7 +321,7 @@ class SqlOnlyFansReadRepo:
                 if policy is None or not policy.enabled: reasons.append("delivery_disabled")
                 if policy is not None and policy.used_units >= policy.limit_units: reasons.append("cap_exhausted")
                 if age is not None and age > 120: reasons.append("waiting_queue_older_than_two_minutes")
-                return {"schemaVersion": "of-operations.v2", "accountId": account_id, "asOf": iso(now),
+                return {"schemaVersion": "of-operations.v3", "accountId": account_id, "asOf": iso(now),
                         "providerConnectionVerified": bool(connection and runtime and connection.binding_id == runtime.binding_id and connection.status == "verified" and connection.verified_at is not None and connection.expires_at > naive_now), "reasons": reasons,
                         "modelCosts": model_costs,
                         "intake": ingress, "planning": planning, "work": {**work, "oldestWaitingAgeSeconds": age},

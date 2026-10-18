@@ -146,7 +146,7 @@ def _pinned_block(header: str, lines: list[str]) -> str:
     load-bearing in both: an un-enriched account and a fan with no deviations must
     each produce a byte-identical prompt to what shipped before them."""
     return f"{header}\n" + "\n".join(lines) + "\n\n" if lines else ""
-def _persona_facts_block(raw, voice=None) -> str:
+def _persona_facts_block(raw, voice=None, *, value_clip=_FACT_VALUE_CLIP) -> str:
     """Internal to compose_persona — the pinned-canon block for the chat prompts. "" when nothing is set, so an
     un-enriched account sends a byte-identical prompt — same discipline as the
     clock and location blocks.
@@ -172,7 +172,7 @@ def _persona_facts_block(raw, voice=None) -> str:
             val = ", ".join(str(v).strip() for v in val if str(v).strip())
         val = str(val).strip() if val is not None else ""
         if val:
-            lines.append(f"- {label}: {val[:_FACT_VALUE_CLIP]}")
+            lines.append(f"- {label}: {val[:value_clip]}")
     return _pinned_block(
         "THESE ARE THE FACTS ABOUT YOU. They are true, they never change, and "
         "you must never say anything that contradicts them:", lines)
@@ -417,7 +417,7 @@ def claims_to_scalars(merged: list[dict]) -> dict[str, str]:
 
 
 # ── The one place the identity preamble is assembled ──────────────────
-def compose_persona(cfg, *, fallback: str) -> str:
+def compose_persona(cfg, *, fallback: str, fact_value_clip=_FACT_VALUE_CLIP) -> str:
     """The creator's full identity preamble for a chat prompt: her prose persona,
     her pinned location, then the structured canon.
 
@@ -443,7 +443,7 @@ def compose_persona(cfg, *, fallback: str) -> str:
     # this module consults it. `getattr` because the tests (and any caller with a
     # hand-built config object) predate the column.
     facts = _persona_facts_block(getattr(cfg, "persona_facts_json", None),
-                                 getattr(cfg, "voice", None))
+                                 getattr(cfg, "voice", None), value_clip=fact_value_clip)
     return f"{persona}\n\n{facts}".rstrip() if facts else persona
 
 

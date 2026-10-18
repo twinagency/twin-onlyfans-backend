@@ -45,13 +45,16 @@ def object_value(raw):
     return value
 
 
-def editable(row,runtime):
+def editable(row,runtime,session):
     """Only approved fields and catalogue IDs; no arbitrary config or credentials."""
     from automations._voice import fact_labels
     from automations._model_selection import explicit_model
     labels=fact_labels(row.voice)
     facts_valid=True;models_valid=True
-    try:facts=object_value(row.persona_facts_json)
+    from .creator_facts import source_view
+    source={"state":"unavailable","checkedAt":None,"sourceUpdatedAt":None,"overrideKeys":[]}
+    try:facts,source=source_view(session,row)
+    except Refused:raise
     except (ValueError,TypeError,RecursionError):facts={};facts_valid=False
     try:
         purpose=object_value(row.model_by_purpose)
@@ -61,7 +64,8 @@ def editable(row,runtime):
     values={};readonly=[]
     for key,_ in fact_fields():
         value=facts.get(key)
-        if value is not None and (type(value) is not str or len(value)>1000):value=None;readonly.append(key)
+        if value is not None and (type(value) is not str or len(value)>16000):value=None;readonly.append(key)
+        if type(value) is str and len(value)>240 and key not in readonly:readonly.append(key)
         values[key]=value
     persona=row.persona or ""
     try:resolved=explicit_model(row,"ai_chatter",MODELS)
@@ -69,7 +73,7 @@ def editable(row,runtime):
     return {"configurationRevision":runtime.configuration_revision,"fingerprint":fingerprint(row),
         "persona":persona if len(persona)<=4096 else None,"personaTruncated":len(persona)>4096,
         "creatorFacts":values,"factFields":[{"key":key,"label":labels.get(key,label)} for key,label in fact_fields()],
-        "factsValid":facts_valid,"readOnlyFacts":readonly,"modelsValid":models_valid,
+        "factsValid":facts_valid,"readOnlyFacts":readonly,"modelsValid":models_valid,"sharedFacts":source,
         "defaultModel":row.model,"replyModelOverride":override,"replyOverridePresent":models_valid and "ai_chatter" in purpose,"resolvedReplyModel":resolved,
         "modelOptions":sorted(MODELS)}
 
@@ -79,13 +83,21 @@ def get_configuration(store,tenant_id,account_id):
         runtime=store._runtime(s,tenant_id,account_id)
         row=s.scalar(select(AccountAiConfig).where(AccountAiConfig.account_id==account_id).with_for_update(read=True))
         if row is None:raise Refused("configuration unavailable")
-        return editable(row,runtime)
+        return editable(row,runtime,s)
 
 
 def validate_patch(patch):
-    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","defaultModel","replyModelOverride"}:
+    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride"}:
         raise InvalidConfiguration("Only creator persona, facts and model choices may be edited here.")
     result={}
+    if "inheritCreatorFacts" in patch:
+        keys=patch["inheritCreatorFacts"]
+        if (type(keys) is not list or not keys
+                or any(type(key) is not str or key not in dict(fact_fields()) for key in keys)
+                or len(set(keys))!=len(keys)
+                or type(patch.get("creatorFacts")) is dict and set(keys)&set(patch["creatorFacts"])):
+            raise InvalidConfiguration("Choose distinct supported facts to inherit from Twin.")
+        result["inheritCreatorFacts"]=keys
     if "persona" in patch:
         persona=patch["persona"]
         if type(persona) is not str or len(persona)>4096 or not approved_persona(persona):
@@ -138,15 +150,32 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
         if "persona" in patch:
             changed=changed or row.persona!=patch["persona"]
             before["persona"]=row.persona;after["persona"]=patch["persona"];row.persona=patch["persona"]
-        if "creatorFacts" in patch:
+        if "creatorFacts" in patch or "inheritCreatorFacts" in patch:
             try:facts=object_value(row.persona_facts_json)
             except (ValueError,TypeError,RecursionError) as exc:raise InvalidConfiguration("Saved creator facts need review before they can be merged.") from exc
             previous_facts=canonical(facts)
-            before["creatorFacts"]={key:{"present":key in facts,"value":facts.get(key)} for key in patch["creatorFacts"]}
-            after["creatorFacts"]={key:{"present":value is not None,"value":value} for key,value in patch["creatorFacts"].items()}
-            for key,value in patch["creatorFacts"].items():
-                if value is None:facts.pop(key,None)
-                else:facts[key]=value
+            from db.onlyfans_creator_facts_models import OfCreatorFactsSource
+            from .creator_facts import effective
+            source=s.get(OfCreatorFactsSource,account_id)
+            edits=patch.get("creatorFacts",{})
+            inherits=patch.get("inheritCreatorFacts",[])
+            before["creatorFacts"]={key:{"present":key in facts,"value":facts.get(key)} for key in [*edits,*inherits]}
+            if source is not None:
+                overrides=object_value(source.overrides_json)
+                old_overrides=canonical(overrides)
+                for key,value in edits.items():overrides[key]=value
+                for key in inherits:overrides.pop(key,None)
+                source.overrides_json=canonical(overrides)
+                facts,_=effective(s,row)
+                changed=changed or old_overrides!=source.overrides_json
+                before["overrides"]=object_value(old_overrides)
+                after["overrides"]=overrides
+            else:
+                if inherits:raise InvalidConfiguration("Synchronize Twin facts before inheriting them.")
+                for key,value in edits.items():
+                    if value is None:facts.pop(key,None)
+                    else:facts[key]=value
+            after["creatorFacts"]={key:{"present":key in facts,"value":facts.get(key)} for key in [*edits,*inherits]}
             row.persona_facts_json=canonical(facts) if facts else None
             changed=changed or canonical(facts)!=previous_facts
         if "defaultModel" in patch:

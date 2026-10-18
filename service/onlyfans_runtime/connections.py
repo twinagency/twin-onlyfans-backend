@@ -8,6 +8,7 @@ import base64,hashlib,json,os,re,uuid
 from datetime import datetime,timedelta,timezone
 from sqlalchemy import select,text
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from db.models import Account,AccountAiConfig,OfCreatorBinding
 from db.onlyfans_models import OfRuntime
@@ -17,7 +18,6 @@ from onlyfans_read.contract import ID_PATTERN
 from .store import Refused,utcnow
 from .native_context import canonical
 from .provider_connector import session_from_capture,NativeProviderConnector
-from .provider_model import NativeProviderModel
 
 def encryption_key():
     raw=os.environ.get('ONLYFANS_CONNECTION_KEY','')
@@ -127,6 +127,7 @@ def save_connection(store,tenant,account,*,payload,expected_revision,command_key
             model=payload['model']
             if model is not None:
                 if type(model) is not dict or set(model)!={'modelId','apiKey'}:raise Refused('invalid selected model credential')
+                from .provider_model import NativeProviderModel
                 NativeProviderModel(account_id=account,model_id=model['modelId'],api_key=model['apiKey'],expires_at=expires)
         except Exception:raise Refused('invalid connection configuration') from None
         owner_lock=int.from_bytes(hashlib.sha256(('of-'+str(payload['ownerId'])).encode()).digest()[:8],'big',signed=True)
@@ -204,7 +205,7 @@ def load_worker_accounts(store,tenant,*,limit=32):
     """Backward-compatible first-cohort list; fleet workers retain the cursor."""
     return load_worker_cohort(store,tenant,limit=limit)[0]
 
-def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None):
+def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,facts_reader=None):
     """Bounded keyset refresh; all HTTP happens outside DB transactions.
 
     The cursor describes scanned candidate IDs, including refused credentials,
@@ -253,6 +254,10 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None):
                         or row.status!='pending' or row.expires_at<=utcnow()):continue
                     row.status='verified';row.verified_at=utcnow();row.last_error=None
             elif status!='verified':continue
+            if facts_reader is not None:
+                from .creator_facts import refresh
+                try:refresh(store,tenant,account,facts_reader)
+                except (Refused,ValueError,TypeError):pass
             # Verification is a GET only. Explicit activation remains a
             # separate operator command before history intake or delivery.
             with Session(store.engine) as s,s.begin():
@@ -260,10 +265,13 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None):
                 if (row is None or row.revision!=generation or row.binding_id!=runtime.binding_id
                     or row.status!='verified' or row.expires_at<=utcnow() or not runtime.enabled or policy is None
                     or not policy.enabled or policy.transport_kind!='native' or policy.revision!=policy_revision):continue
+            from .provider_model import NativeProviderModel
             model=clear['model'];model=NativeProviderModel(account_id=account,model_id=model['modelId'],api_key=model['apiKey'],expires_at=expires) if model else None
             result.append(WorkerAccount(account,model,transport,transport))
         except Refused:
             continue
+        except SQLAlchemyError:
+            raise
         except Exception:
             # Never put a provider response, exception URL or secret in health.
             with Session(store.engine) as s,s.begin():

@@ -48,7 +48,9 @@ def test_paid_campaign_freezes_exact_terms_and_acceptance_is_not_a_purchase(data
     assert wire.calls[0].price_cents == 1000
     result = service.detail(TENANT, ACCOUNT, created["campaignId"])["campaign"]
     assert result["offer"] == original["offer"] and result["counts"]["accepted"] == 1
-    assert result["reporting"] == {"replies": None, "revenueCents": None, "currency": None}
+    assert result["reporting"]["revenueCents"] is None
+    assert result["reporting"]["purchases"] is None
+    assert result["reporting"]["revenueStatus"] == "ledger_unavailable"
     with Session(engine) as s:
         assert s.get(Message, (ACCOUNT, FAN, 9001)).is_paid is False
         assert s.scalar(select(ContentOffer)).status == "open"

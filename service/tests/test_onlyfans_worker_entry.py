@@ -68,6 +68,22 @@ def test_empty_configured_accounts_are_idle_and_do_not_construct_a_native_worker
     assert reports==[{"schemaVersion":"of-worker.v1","state":"idle","connectedAccounts":0,"scannedAccounts":0}]
 
 
+def test_ledger_phase_runs_without_outgoing_accounts_and_honours_stop():
+    stop = threading.Event(); seen = []
+    def ledger(store, tenant, *, limit, stop):
+        assert tenant == "tenant-a" and limit == 1
+        seen.append("ledger")
+    def load(*_, **__): seen.append("accounts"); return [], None, 0
+    assert entry.run_loop(object(), "tenant-a", stop, once=True, load_cohort=load,
+        ledger_jobs=ledger, observe=lambda _:None) == 0
+    assert seen == ["ledger", "accounts"]
+    seen.clear()
+    def stopped(*_, stop, **__): seen.append("ledger"); stop.set()
+    assert entry.run_loop(object(), "tenant-a", stop, once=True, load_cohort=load,
+        ledger_jobs=stopped, observe=lambda _:None) == 0
+    assert seen == ["ledger"]
+
+
 def test_once_runtime_failure_is_redacted_and_exits_nonzero():
     reports=[]
     def load(*_,**__):raise RuntimeError("private-proxy-password")

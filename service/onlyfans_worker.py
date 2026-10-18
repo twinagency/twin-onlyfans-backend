@@ -28,8 +28,13 @@ def _process_vault_jobs(store, tenant, *, limit, stop):
     return process_vault_jobs(store, tenant, limit=limit, stop=stop)
 
 
+def _process_ledger_jobs(store, tenant, *, limit, stop):
+    from onlyfans_runtime.ledger import process_ledger_pages
+    return process_ledger_pages(store, tenant, limit=limit, stop=stop)
+
+
 def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
-             load_cohort=None, worker_type=None, observe=None, vault_jobs=None):
+             load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None):
     """Refresh bounded ordered cohorts without starving accounts after row 32.
 
     Cursor advancement is over scanned candidates, including invalid/expired
@@ -52,6 +57,10 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
             # frozen scope/generation and bounds each page before persistence.
             if vault_jobs is not None:
                 vault_jobs(store, tenant, limit=1, stop=stop)
+                if stop.is_set():
+                    break
+            if ledger_jobs is not None:
+                ledger_jobs(store, tenant, limit=1, stop=stop)
                 if stop.is_set():
                     break
             accounts, next_cursor, scanned = load_cohort(store, tenant, limit=32, after_account=cursor, stop=stop)
@@ -128,7 +137,8 @@ def main(argv=None):
             _emit({"schemaVersion":"of-worker.v1", "state":"startup_unavailable"})
             return 1
         return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,
-                        vault_jobs=_process_vault_jobs)
+                        vault_jobs=_process_vault_jobs,
+                        ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None)
     finally:
         try:
             if store is not None:

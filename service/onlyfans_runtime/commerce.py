@@ -5,6 +5,7 @@ OnlyFans event parser or a live registration. Payment evidence cannot invent a
 message, resolve an unknown send, trigger a model call or send anything.
 """
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 import hashlib
 import json
 import os
@@ -37,8 +38,26 @@ class SyntheticCommerceEvent:
 
 
 def held(s, account_id):
-    return s.scalar(select(OfCommerceEvidence.evidence_hash).where(
+    from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    from .ledger import PAID
+    from .store import utcnow
+    policy = s.get(OfDeliveryPolicy, account_id)
+    scan = s.get(OfLedgerScan, account_id)
+    if policy is not None and policy.transport_kind == "native" and policy.media_enabled:
+        now = utcnow()
+        if scan is None or scan.last_complete_at is None or not timedelta(0) <= now - scan.last_complete_at <= timedelta(minutes=15):
+            return True
+    return (s.scalar(select(OfCommerceEvidence.evidence_hash).where(
         OfCommerceEvidence.account_id == account_id, OfCommerceEvidence.status == "conflict").limit(1)) is not None
+        or s.scalar(select(OfLedgerEvidence.evidence_hash).where(OfLedgerEvidence.account_id == account_id,
+            OfLedgerEvidence.outcome == "conflict").limit(1)) is not None
+        or s.scalar(select(Transaction.id).where(Transaction.account_id == account_id,
+            Transaction.source == "ledger", Transaction.kind == "ppv_message",
+            Transaction.message_id.is_(None), Transaction.status.in_(tuple(PAID))).limit(1)) is not None
+        or s.scalar(select(OfLedgerScan.account_id).where(OfLedgerScan.account_id == account_id,
+            ((OfLedgerScan.status == "held") | (OfLedgerScan.last_complete_at.is_(None)))).limit(1)) is not None)
+
 
 
 class CommerceIntake:
@@ -142,38 +161,51 @@ class CommerceIntake:
             fan = s.scalar(select(Fan).where(Fan.account_id == account_id, Fan.fan_id == event.fan_id).with_for_update())
             if paid != was_paid:
                 fan.lifetime_spend_cents = max(0, fan.lifetime_spend_cents + (event.amount_cents if paid else -event.amount_cents))
-            if paid and (message.purchased_at is None or message.is_paid is not True):
-                message.purchased_at = stamp
-            message.is_paid = paid
-            purchase_stamp = message.purchased_at or stamp
-            # Only this purchase's exact sent rows change. Another bought copy
-            # of the same file remains independent evidence of ownership.
-            sends = s.scalars(select(VaultSend).where(VaultSend.account_id == account_id,
-                VaultSend.fan_id == event.fan_id, VaultSend.message_id == event.message_id).with_for_update()).all()
-            for sent in sends:
-                sent.was_purchased = paid
-            offer.status, offer.resolved_by = ("delivered", "ppv_ledger") if paid else ("cancelled", None)
-            offer.resolved_at, offer.updated_at = purchase_stamp if paid else stamp, now
-            if paid:
-                offer.delivery_message_id = event.message_id
-            quotes = s.scalars(select(LadderQuote).where(LadderQuote.account_id == account_id,
-                LadderQuote.fan_id == event.fan_id, LadderQuote.message_id == event.message_id).with_for_update()).all()
-            for quote in quotes:
-                quote.paid, quote.paid_at = paid, purchase_stamp if paid else None
-            from automations import upsell
-            lad = s.get(LadderState, (account_id, event.fan_id))
-            if lad is None:
-                lad = LadderState(account_id=account_id, fan_id=event.fan_id)
-                s.add(lad)
-            if paid and not was_paid:
-                lad.last_paid_at = max(lad.last_paid_at or purchase_stamp, purchase_stamp)
-                if lad.status not in {upsell.STATUS_STOPPED, upsell.STATUS_COMPANION}:
-                    lad.status = upsell.STATUS_HOT
-                    lad.unpaid_rungs = 0
-            elif not paid:
-                lad.status = upsell.STATUS_STOPPED
-                state.requires_attention = True
-            lad.updated_at = now
+            settle_media_purchase(s, account_id=account_id, fan_id=event.fan_id,
+                message=message, offer=offer, paid=paid, was_paid=was_paid, stamp=stamp, now=now)
             # Monetary context moving makes queued drafts obsolete through the
             # same native fact fingerprint. No claim, model or send is created.
             return status
+
+
+def settle_media_purchase(s, *, account_id, fan_id, message, offer, paid, was_paid, stamp, now):
+    """Shared canonical media effects, after the caller validates payment evidence.
+
+    The caller owns the account lock, transaction and financial delta. This
+    function creates no money, message, plan or provider operation.
+    """
+    if paid and (message.purchased_at is None or message.is_paid is not True):
+        message.purchased_at = stamp
+    message.is_paid = paid
+    purchase_stamp = message.purchased_at or stamp
+    # Only this purchase's exact sent rows change. Another bought copy
+    # of the same file remains independent evidence of ownership.
+    sends = s.scalars(select(VaultSend).where(VaultSend.account_id == account_id,
+        VaultSend.fan_id == fan_id, VaultSend.message_id == message.message_id).with_for_update()).all()
+    for sent in sends:
+        sent.was_purchased = paid
+    if offer is not None:
+        offer.status, offer.resolved_by = ("delivered", "ppv_ledger") if paid else ("cancelled", None)
+        offer.resolved_at, offer.updated_at = purchase_stamp if paid else stamp, now
+        if paid:
+            offer.delivery_message_id = message.message_id
+    quotes = s.scalars(select(LadderQuote).where(LadderQuote.account_id == account_id,
+        LadderQuote.fan_id == fan_id, LadderQuote.message_id == message.message_id).with_for_update()).all()
+    for quote in quotes:
+        quote.paid, quote.paid_at = paid, purchase_stamp if paid else None
+    from automations import upsell
+    lad = s.get(LadderState, (account_id, fan_id))
+    if lad is None:
+        lad = LadderState(account_id=account_id, fan_id=fan_id)
+        s.add(lad)
+    if paid and not was_paid:
+        lad.last_paid_at = max(lad.last_paid_at or purchase_stamp, purchase_stamp)
+        if lad.status not in {upsell.STATUS_STOPPED, upsell.STATUS_COMPANION}:
+            lad.status = upsell.STATUS_HOT
+            lad.unpaid_rungs = 0
+    elif not paid:
+        lad.status = upsell.STATUS_STOPPED
+        state = s.get(OfConversationState, (account_id, fan_id))
+        if state is not None:
+            state.requires_attention = True
+    lad.updated_at = now

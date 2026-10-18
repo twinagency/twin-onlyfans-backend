@@ -102,6 +102,28 @@ def test_new_disabled_account_sync_uses_native_owner_without_outgoing_or_llm(dat
     store.close()
 
 
+def test_native_search_uses_existing_tags_notes_and_effective_description_without_wildcard_or_scope_leaks(database, monkeypatch):
+    store, account, _, _ = sync(database, monkeypatch)
+    with Session(database[1]) as s, s.begin():
+        s.get(VaultItem, (account, 11)).tags = '["coast","sunset"]'
+        s.get(VaultItem, (account, 12)).notes = "Coast, 100% approved"
+        row = s.get(VaultItem, (account, 13))
+        row.description = "legacy description"
+        row.operator_overrides_json = '{"description":"Approved coastal video"}'
+        row.locked_fields_json = '["description"]'
+    assert [r["mediaId"] for r in list_vault(store, TENANT, account, query="COAST", limit=1)["items"]] == ["11"]
+    page = list_vault(store, TENANT, account, query="coast", after_media_id="11")
+    assert [r["mediaId"] for r in page["items"]] == ["12", "13"]
+    assert [r["mediaId"] for r in list_vault(store, TENANT, account, query="%" )["items"]] == ["12"]
+    video = list_vault(store, TENANT, account, kind="video")["items"]
+    assert len(video) == 1 and video[0]["description"] == "Approved coastal video"
+    assert list_vault(store, TENANT, account, query="no-such-tag")["items"] == []
+    with pytest.raises(Refused): list_vault(store, "other-tenant", account, query="coast")
+    for patch in [{"query":"x"*121}, {"query":"\x00"}, {"kind":"unknown"}]:
+        with pytest.raises(InvalidVault): list_vault(store, TENANT, account, **patch)
+    store.close()
+
+
 def test_sync_freezes_request_replays_and_one_active_job(database, monkeypatch):
     store, account, _ = verified(database, monkeypatch)
     first = queue(store, account)

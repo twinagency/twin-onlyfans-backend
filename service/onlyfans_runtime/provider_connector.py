@@ -186,7 +186,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
             raise Refused("invalid native HTTPS target")
         # Only the narrow read and send paths used by this connector are legal.
         if method == "GET":
-            allowed = target.path in {API_PATH + "/users/me", API_PATH + "/chats", API_PATH + "/vault/media"} or re.fullmatch(
+            allowed = target.path in {API_PATH + "/users/me", API_PATH + "/chats", API_PATH + "/vault/media", API_PATH + "/payouts/transactions"} or re.fullmatch(
                 re.escape(API_PATH) + r"/chats/[1-9][0-9]*/messages", target.path)
             if not allowed or body:
                 raise Refused("unsupported native HTTPS read")
@@ -250,6 +250,20 @@ class NativeProviderConnector(NativeLoopbackConnector):
         self.verify_identity()
         path = API_PATH + "/vault/media?" + urlencode(
             {"limit":limit,"offset":offset,"sort":"desc","field":"recent","list":"all"})
+        return self._call("GET", path)
+
+    def transaction_page(self, *, offset, limit=20, start, end):
+        """Reuse the legacy ledger endpoint with frozen UTC bounds and no retries."""
+        self._ready()
+        if (type(offset) is not int or not 0 <= offset <= 10000
+                or type(limit) is not int or not 1 <= limit <= 20
+                or type(start) is not datetime or type(end) is not datetime
+                or start.tzinfo is not None or end.tzinfo is not None
+                or not timedelta(0) <= end - start <= timedelta(days=90)):
+            raise Refused("invalid bounded native ledger page")
+        self.verify_identity()
+        path = API_PATH + "/payouts/transactions?" + urlencode({"limit": limit, "offset": offset,
+            "start": start.isoformat() + "Z", "end": end.isoformat() + "Z"})
         return self._call("GET", path)
 
     def send(self, dispatch, *, authority, tenant_id):

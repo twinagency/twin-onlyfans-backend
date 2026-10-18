@@ -113,6 +113,27 @@ def test_https_identity_uses_only_explicit_session_no_hidden_warmup_retry_or_env
         assert options["headers"]["User-ID"]==str(OWNER) and options["headers"]["X-Hash"]=="synthetic-hash"
 
 
+def test_ledger_get_uses_selected_identity_frozen_utc_window_and_no_write(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "worker")
+    wire = NativeProviderConnector(credential())
+    calls = []
+    monkeypatch.setattr(wire, "verify_identity", lambda: calls.append("identity"))
+    def call(method, path, body=b""):
+        assert calls == ["identity"] and method == "GET" and body == b""
+        parsed = urlsplit(path)
+        assert parsed.path == "/api2/v2/payouts/transactions"
+        assert parse_qs(parsed.query) == {"limit": ["20"], "offset": ["40"],
+            "start": ["2026-10-01T00:00:00Z"], "end": ["2026-10-08T00:00:00Z"]}
+        return b'{"list":[],"hasMore":false}'
+    monkeypatch.setattr(wire, "_call", call)
+    assert wire.transaction_page(offset=40, start=datetime(2026,10,1), end=datetime(2026,10,8))
+    for overrides in [{"offset": -1}, {"offset": True}, {"limit": 21},
+                      {"end": datetime(2027,10,8)}, {"start": datetime(2026,10,1,tzinfo=timezone.utc)}]:
+        args = dict(offset=40, start=datetime(2026,10,1), end=datetime(2026,10,8)); args.update(overrides)
+        with pytest.raises(Refused): wire.transaction_page(**args)
+
+
 @pytest.mark.parametrize("options", [
     {"status":302}, {"status":401}, {"status":429}, {"status":500},
     {"headers":{"content-type":"text/html"}}, {"headers":{"content-encoding":"gzip"}},

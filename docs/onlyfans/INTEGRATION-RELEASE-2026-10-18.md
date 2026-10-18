@@ -3,7 +3,11 @@
 This checkpoint continues the existing Twin dashboard and Fastt native engine.
 It does not replace the planner, create another fan-memory store, add a model
 call to manual messages/campaigns, or run the legacy Fastt sending workers.
-Schema head is `0083_vault_management`.
+Schema head is `0084_native_ledger`.
+
+The current remaining-work plan is [DELIVERY-PLAN-2026-10-19.md](DELIVERY-PLAN-2026-10-19.md). The original checkpoint below remains historical verification evidence.
+The native ledger continuation adds a default-off, bounded payment/refund reader
+into the existing canonical records. It has not been validated with a real provider.
 
 ## Implemented paths
 
@@ -97,9 +101,9 @@ No real provider connection, real paid model call, real fan send or production
 database was used for this checkpoint. Validate one account's reads, delivery,
 and purchase/refund evidence before calling this production-ready.
 
-The current parser deliberately refuses unsupported history shapes. Real
-payment/reversal reconciliation is not delivered by the synthetic commerce
-tests. Native media upload/deletion, provider bulk queues/unsend, posts/stories,
+The current parser deliberately refuses unsupported history shapes. Synthetic commerce tests do not establish real payment/reversal acceptance.
+The native ledger reader additionally requires explicit provider transaction
+evidence and retains unlinked PPV holds; live linkage remains a release gate. Native media upload/deletion, provider bulk queues/unsend, posts/stories,
 full roster import, campaign reply/open/revenue attribution and full Fastt/
 OnlyFans feature parity remain outside this checkpoint.
 

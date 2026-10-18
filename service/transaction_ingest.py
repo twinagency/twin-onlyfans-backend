@@ -39,7 +39,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -71,6 +70,7 @@ from of_client import OFClient
 import ownership
 import purchase_notifications
 from tip_ledger import TIP_LEDGER_PREFIX
+from transaction_contract import KIND_CATALOG, STATUS_MAP as _STATUS_MAP, strip_html as _strip_html, classify_kind as _classify_kind
 
 log = logging.getLogger("of-relay.ingest_tx")
 
@@ -160,41 +160,8 @@ _ONLINE_WINDOW_S = 600
 # as a tombstone from a crashed prior holder. 15min >> typical tick duration
 # (under 60s steady-state, a few min during a fresh 90d backfill).
 
-# ── Kind catalog (HTML-stripped description prefix -> kind) ─────────
-# Order matters — match top-to-bottom. Public so the admin
-# /unknown-kinds endpoint can render the prefix table.
-KIND_CATALOG: tuple[tuple[str, str], ...] = (
-    # OF's vocab: "Subscription from X" = first charge (new sub);
-    # "Recurring subscription from X" = monthly renewal. Verified
-    # against the data: of 57 fans with both labels, 56 had the plain
-    # "Subscription from" row strictly earlier than "Recurring".
-    # Mapping directly from the prefix beats the `_maybe_promote_to_rebill`
-    # heuristic — that heuristic depends on insertion order and quietly
-    # fails when historical backfill writes newest-first.
-    ("Recurring subscription from ", "rebill"),        # explicit renewal
-    ("Subscription from ",           "subscription"),  # first charge; promoted by safety net
-    ("Tip in chat from ",            "tip"),
-    ("Tip from ",                    "tip"),
-    ("Tip on post from ",            "tip_post"),
-    ("Tip on stream from ",          "tip_stream"),
-    ("Payment for message from ",    "ppv_message"),   # OF's actual prefix for PPV unlocks
-    ("Message from ",                "ppv_message"),
-    ("Post from ",                   "ppv_post"),
-    ("Post purchase by ",            "ppv_post"),       # OF's actual ledger prefix for feed-post unlocks
-    ("Stream from ",                 "ppv_stream"),
-    ("Custom request from ",         "custom"),
-    ("Custom from ",                 "custom"),
-)
-
-# OF's status vocab differs from the original capture. Map to Phase F vocab.
-_STATUS_MAP = {
-    "done":           "cleared",
-    "loading":        "pending",
-    "undo":           "chargedback",
-    "pending_return": "refund_pending",
-}
-
-_HTML_TAG = re.compile(r"<[^>]+>")
+# Provider-free vocabulary is shared with the dedicated reader. Legacy parser
+# defaults below stay unchanged; the dedicated parser requires explicit evidence.
 _REFUND_STATUSES = ("chargedback", "refunded")
 _NON_REVENUE_STATUSES = ("chargedback", "refunded", "failed")
 
@@ -206,20 +173,6 @@ def _normalize_status(raw_status: str | None) -> str:
 
 
 # ── Parsing helpers ─────────────────────────────────────────────────
-
-def _strip_html(s: str | None) -> str:
-    if not s:
-        return ""
-    return _HTML_TAG.sub("", s).strip()
-
-
-def _classify_kind(description: str | None) -> str:
-    text_ = _strip_html(description) if description and "<" in description else (description or "").strip()
-    for prefix, kind in KIND_CATALOG:
-        if text_.startswith(prefix):
-            return kind
-    return "unknown"
-
 
 def _to_cents(v: Any) -> int | None:
     if v is None or v == "":

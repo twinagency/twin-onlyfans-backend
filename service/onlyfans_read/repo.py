@@ -293,8 +293,8 @@ class SqlOnlyFansReadRepo:
                     OfWork.account_id == account_id, OfWork.status == "waiting"))
                 age = max(0, int((naive_now - oldest).total_seconds())) if oldest else None
                 reasons = []
-                if await s.scalar(select(OfCommerceEvidence.evidence_hash).where(
-                        OfCommerceEvidence.account_id == account_id, OfCommerceEvidence.status == "conflict").limit(1)):
+                from onlyfans_runtime.commerce import held
+                if await s.run_sync(lambda sync: held(sync, account_id)):
                     reasons.append("commerce_evidence_conflict")
                 if unresolved_calls: reasons.append("model_cost_unresolved")
                 if cap is not None and maximum is not None and maximum >= cap*100:

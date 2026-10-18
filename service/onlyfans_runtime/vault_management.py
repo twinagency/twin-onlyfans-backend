@@ -14,7 +14,7 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, func
 from sqlalchemy.orm import Session
 
 from onlyfans_read.contract import ID_PATTERN
@@ -22,6 +22,7 @@ from db.models import CatalogItem, CATALOG_IS_SINGLE, OfCreatorBinding, VaultIte
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_vault_models import OfVaultObservation, OfVaultProductCreate, OfVaultSyncJob
 from vault_mirror import MIRROR_REFRESH_FIELDS, row_values
+from vault_ai_effective import effective_value
 from .content_management import digest, editable, validate_patch
 from .native_context import canonical
 from .native_protocol import NativeProtocolError, load
@@ -189,17 +190,29 @@ def _ready(row, observation, job, connection, binding):
     return True, None
 
 
-def list_vault(store, tenant, account, *, after_media_id=None, limit=24):
+def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="", kind="all"):
     if type(limit) is not int or not 1 <= limit <= 48:
         raise InvalidVault("Use a vault page size between 1 and 48.")
     if after_media_id is not None:
         after_media_id = media_reference(after_media_id)
+    if (type(query) is not str or len(query) > 120 or any(ord(c) < 32 for c in query)
+            or type(kind) is not str or kind not in {"all", "photo", "video"}):
+        raise InvalidVault("Use a supported media type and a search of at most 120 characters.")
+    search = query.strip().lower()
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
         connection = s.get(OfProviderConnection, account)
         if connection is not None and connection.binding_id != runtime.binding_id:
             raise Refused("scope unavailable")
         query = select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id > 0)
+        if kind != "all":
+            query = query.where(VaultItem.kind == kind)
+        if search:
+            # Search existing metadata owners. Treat LIKE metacharacters as
+            # literal user text; no provider request or additional analyzer.
+            query = query.where(or_(*(func.lower(func.coalesce(field, "")).contains(search, autoescape=True)
+                for field in [VaultItem.search_text, VaultItem.description, VaultItem.video_description,
+                              VaultItem.tags, VaultItem.notes, VaultItem.operator_overrides_json])))
         if after_media_id is not None:
             query = query.where(VaultItem.media_id > after_media_id)
         rows = s.scalars(query.order_by(VaultItem.media_id).limit(limit + 1)).all()
@@ -208,7 +221,7 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24):
             observation = s.get(OfVaultObservation, (account, row.media_id))
             job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
             ready, reason = _ready(row, observation, job, connection, runtime.binding_id)
-            description = row.description
+            description = effective_value(row, "description")
             if type(description) is not str or len(description.encode()) > 2000:
                 description = None
             def bounded(value, low, high):

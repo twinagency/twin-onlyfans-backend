@@ -215,7 +215,17 @@ def test_native_paid_campaign_and_manual_media_use_same_wire_without_model(datab
         reason="Mocked native paid campaign and manual media")
     calls, requests = fake_requests(database, monkeypatch)
     service = CampaignService(store)
+    # This native-send fixture has a synthetic completed empty ledger scan.
+    # A native paid sender must not run before purchase coverage is ready.
+    from db.onlyfans_ledger_models import OfLedgerScan
     created = create(service, catalog_item_id=item)
+    assert service.queue_due(TENANT, ACCOUNT) is None
+    now = utcnow()
+    with Session(database[1]) as s, s.begin():
+        s.add(OfLedgerScan(account_id=ACCOUNT, binding_id="binding-" + ACCOUNT,
+            connection_revision=1, owner_id=7001, window_start=now-timedelta(days=90), window_end=now,
+            page_offset=0, status="idle", next_poll_at=now+timedelta(minutes=5),
+            last_complete_at=now, last_full_at=now, updated_at=now))
     wire = NativeProviderConnector(credential(policy_revision=3))
     worker = NativeWorker(store, TENANT, (WorkerAccount(ACCOUNT, None, wire, wire),))
     report = worker.step()

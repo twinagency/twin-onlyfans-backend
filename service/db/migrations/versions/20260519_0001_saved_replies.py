@@ -31,7 +31,7 @@ def upgrade() -> None:
         sa.Column("title", sa.String, nullable=True),
         sa.Column("text", sa.Text, nullable=False),
         sa.Column("price_cents", sa.Integer, nullable=False, server_default="0"),
-        sa.Column("locked_text", sa.Boolean, nullable=False, server_default=sa.text("0")),
+        sa.Column("locked_text", sa.Boolean, nullable=False, server_default=sa.false()),
         sa.Column("media_json", sa.Text, nullable=False, server_default="[]"),
         sa.Column("created_at", sa.DateTime, nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.Column("updated_at", sa.DateTime, nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),

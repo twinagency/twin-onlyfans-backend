@@ -60,7 +60,7 @@ def _create(name: str = "quota_audit") -> None:
         sa.Column("day", sa.String, primary_key=True, nullable=False),
         sa.Column("reason", sa.String, primary_key=True, nullable=False),
         sa.Column("enforced", sa.Boolean, primary_key=True, nullable=False,
-                  server_default=sa.text("0")),
+                  server_default=sa.false()),
         sa.Column("n", sa.Integer, nullable=False, server_default=sa.text("0")),
         sa.Column("quota", sa.Integer, nullable=False, server_default=sa.text("0")),
         sa.Column("used", sa.Integer, nullable=False, server_default=sa.text("0")),

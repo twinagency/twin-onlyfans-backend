@@ -80,7 +80,7 @@ def upgrade() -> None:
             sa.Column("kind", sa.String, nullable=False, server_default="rung"),
             sa.Column("message_id", sa.BigInteger, nullable=True),
             sa.Column("sent_at", sa.DateTime, nullable=True),
-            sa.Column("paid", sa.Boolean, nullable=False, server_default="0"),
+            sa.Column("paid", sa.Boolean, nullable=False, server_default=sa.false()),
             sa.Column("paid_at", sa.DateTime, nullable=True),
         )
         op.create_index("ix_ladder_quote_fan", "ladder_quote", ["account_id", "fan_id"])

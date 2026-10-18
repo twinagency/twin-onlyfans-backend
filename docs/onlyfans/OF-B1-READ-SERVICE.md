@@ -1,5 +1,10 @@
 # OF-B1 — the OnlyFans read service and account-binding foundation
 
+Historical OF-B1 record. The offline 18 October continuation supersedes the
+contract version, schema lifecycle, shim and projection defaults described here:
+see [FOUNDATION-2026-10-18.md](FOUNDATION-2026-10-18.md) for current behavior and
+the remaining release gates. The original review history below is retained.
+
 Status: **implemented and repaired in an isolated worktree, verified offline,
 not deployed, not migrated, not connected to a provider.** This is the first real
 read-only OnlyFans backend service behind the Twin dashboard's port.

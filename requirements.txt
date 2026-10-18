@@ -11,6 +11,7 @@ fastapi==0.136.1
 # laptop deleted it again — a fix made downstream is a fix that gets reverted.
 # It belongs here, in the source of truth.
 httpx==0.28.1
+cryptography==50.0.2
 uvicorn[standard]==0.47.0
 curl_cffi==0.15.0
 pydantic==2.13.4
@@ -48,3 +49,7 @@ google-auth-httplib2==0.4.0
 # lazily: a missing image library must degrade dupe detection, not boot the
 # relay into a crash loop.
 Pillow==12.2.0
+
+# PostgreSQL runtime and explicit migration command
+asyncpg==0.30.0
+psycopg2-binary==2.9.10

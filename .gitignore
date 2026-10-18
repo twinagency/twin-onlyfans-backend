@@ -58,6 +58,7 @@ bookmark_error_curl
 __pycache__/
 
 # Large local DB / session snapshots — never commit (100s of MB, contain live data)
+*.twinof
 *.bak
 service/*.pre_*
 service/sessions.*.tar.gz

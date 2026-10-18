@@ -156,50 +156,55 @@ async def seen_media(account_id: str, fan_id: int) -> set[int]:
     return {int(x) for x in ids}
 
 
-async def owned_or_seen_media(account_id: str, fan_id: int) -> set[int]:
-    """Media we must NOT re-offer this fan: only what he actually OWNS — a tip/PPV
-    unlock (VaultSend.was_purchased) or a paid Message whose media JSON overlaps.
-    Deliberately EXCLUDES anything merely SENT: a free teaser AND an offered-but-
-    UNBOUGHT PPV (whose VaultSend carries price_cents>0 as the ASKED price, not proof
-    of purchase) can both ride again in a future offer. (Product rule: dedup bought,
-    never sent-that-can-be-resent.)"""
-    out: set[int] = set()
-    async with get_session() as s:
-        seen_ids = (await s.execute(
-            select(VaultSend.media_id).where(
-                VaultSend.account_id == str(account_id),
-                VaultSend.fan_id == int(fan_id),
-                VaultSend.was_purchased.is_(True))
-        )).scalars().all()
-        paid_rows = (await s.execute(
-            select(Message.media_ids).where(
-                Message.account_id == str(account_id),
-                Message.fan_id == int(fan_id),
-                Message.is_paid.is_(True))
-        )).all()
-        # A NON-FREE delivered content_offer is durable item-level proof of purchase — it survives a
-        # missed/crashed was_purchased flip and covers gate-off accounts (which write no ladder_quote).
-        delivered_items = (await s.execute(
-            select(ContentOffer.item_id).where(
-                ContentOffer.account_id == str(account_id),
-                ContentOffer.fan_id == int(fan_id),
-                ContentOffer.status == "delivered",
-                ContentOffer.resolved_by.in_(OWNED_RESOLVED_BY))
-        )).scalars().all()
-        owned_items = (await s.execute(
-            select(CatalogItem).where(
-                CatalogItem.id.in_([int(i) for i in delivered_items])))
-        ).scalars().all() if delivered_items else []
-        s.expunge_all()
-    out |= {int(x) for x in seen_ids}
-    for (mids_json,) in paid_rows:
+def owned_media_in_session(s, account_id: str, fan_id: int, *, limit: int | None = None) -> set[int]:
+    """The same ownership reader inside an existing canonical transaction.
+
+    Actual sent media outrank a subsequently edited catalogue. Legacy delivered
+    offers without a recorded payload retain their old catalogue fallback, scoped
+    to this account. A bounded caller refuses rather than truncating evidence.
+    """
+    def rows(query):
+        result = s.execute(query.limit(limit + 1) if limit is not None else query).all()
+        if limit is not None and len(result) > limit:
+            raise ValueError("ownership evidence exceeds bounded read")
+        return result
+    seen = rows(select(VaultSend.media_id).where(VaultSend.account_id == str(account_id),
+        VaultSend.fan_id == int(fan_id), VaultSend.was_purchased.is_(True)))
+    paid = rows(select(Message.media_ids).where(Message.account_id == str(account_id),
+        Message.fan_id == int(fan_id), Message.is_paid.is_(True)))
+    offers = rows(select(ContentOffer.item_id, ContentOffer.offer_message_id, ContentOffer.delivery_message_id).where(
+        ContentOffer.account_id == str(account_id), ContentOffer.fan_id == int(fan_id),
+        ContentOffer.status == "delivered", ContentOffer.resolved_by.in_(OWNED_RESOLVED_BY)))
+    out = {int(row[0]) for row in seen}
+    def add(raw):
         try:
-            out |= {int(x) for x in json.loads(mids_json or "[]")}
-        except Exception:
-            continue
-    for it in owned_items:
-        out |= set(item_media(it))
+            out.update(int(x) for x in json.loads(raw or "[]"))
+        except (ValueError, TypeError):
+            pass
+    for (raw,) in paid:
+        add(raw)
+    message_ids = {mid for _, offer_mid, delivery_mid in offers for mid in (offer_mid, delivery_mid) if mid is not None}
+    payloads = dict(s.execute(select(Message.message_id, Message.media_ids).where(
+        Message.account_id == str(account_id), Message.fan_id == int(fan_id),
+        Message.message_id.in_(message_ids))).all()) if message_ids else {}
+    fallback = set()
+    for item_id, offer_mid, delivery_mid in offers:
+        actual = payloads.get(delivery_mid) or payloads.get(offer_mid)
+        if actual and actual != "[]":
+            add(actual)
+        else:
+            fallback.add(item_id)
+    if fallback:
+        for (raw,) in s.execute(select(CatalogItem.media_ids).where(
+                CatalogItem.account_id == str(account_id), CatalogItem.id.in_(fallback))):
+            add(raw)
     return out
+
+
+async def owned_or_seen_media(account_id: str, fan_id: int) -> set[int]:
+    """Purchased media only; merely sent/free-preview media do not grant ownership."""
+    async with get_session() as s:
+        return await s.run_sync(owned_media_in_session, account_id, fan_id)
 
 
 # A priced send must be at least half NEW photography (operator ruling

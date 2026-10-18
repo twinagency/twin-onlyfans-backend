@@ -24,11 +24,11 @@ WHAT IS REHEARSED, in this order on purpose:
      from the models MINUS this package's three tables, and alembic is stamped
      at `0064_user_llm_keys` — which is the state of a deployment that has been
      running the previous release.
-  3. A clean `upgrade heads` from there: a release. This is the first and only
+  3. A clean `upgrade 0070_onlyfans_read_bindings` from there: a release. This is the first and only
      time this migration's own DDL runs, so the three tables below are genuinely
      its work rather than `create_all`'s.
   4. `downgrade 0064_user_llm_keys` — the migration is reversible.
-  5. A SECOND `upgrade heads`, which proves a re-run after a rollback.
+  5. A SECOND `upgrade 0070_onlyfans_read_bindings`, which proves a re-run after a rollback.
   6. The constraint behaviour: at most one ACTIVE binding per account, rebinding
      after a revocation, and history that survives.
 
@@ -76,9 +76,8 @@ ACTIVE_INDEX = "uq_of_creator_bindings_active_account"
 
 TABLES = ("of_creator_bindings", "of_conversation_state", "of_message_delivery")
 
-#: The chain has a single head — 0019 and 0021 only LOOK like heads when a
-#: two-parent merge is read as one opaque parent — so `head` and `heads` are the
-#: same operation on this tree.
+# This historical rehearsal targets 0070 explicitly. The foundation suite
+# separately exercises the current bootstrap and populated upgrades.
 EXPECTED_HEAD = MIGRATION_REVISION
 
 FAILURES: list[str] = []
@@ -199,52 +198,6 @@ def present_tables(conn) -> list[str]:
     )
 
 
-def neutralise_pre_existing_boolean_defaults() -> list[str]:
-    """Correct integer boolean defaults on the PRE-EXISTING tables, in memory.
-
-    THIS IS A REHEARSAL SHIM, AND IT EXISTS BECAUSE OF A FINDING, NOT A
-    CONVENIENCE. Parts of the pre-existing schema declare an INTEGER default on
-    a BOOLEAN column: seven columns in the ORM, and fifteen columns across
-    eleven migration files. SQLite accepts that; PostgreSQL rejects it outright
-    ("column ... is of type boolean but default expression is of type
-    integer"), so `0001_initial`'s `create_all()` cannot build this schema on
-    PostgreSQL at all today. That is a pre-existing defect in the SHARED schema,
-    it is reported as a blocking dependency of this package, and repairing the
-    shared models is deliberately outside this package's scope.
-
-    What this function does NOT do is hide it: it corrects the default on the
-    in-memory metadata so a parent schema can be built and the OF-B1 migration
-    can be rehearsed against it, and it returns the seven columns it touched so
-    the report can name every one. The three tables this package adds are
-    asserted not to be among them — they were written with `false()` from the
-    start.
-    """
-    import sqlalchemy as sa
-    from sqlalchemy import Boolean
-    from sqlalchemy.schema import DefaultClause
-
-    # `service.db.models`, NOT `db.models`: env.py and `0001_initial` both import
-    # the dotted name, and importing the same file under two module names would
-    # build two independent MetaData objects — so mutating one would leave the
-    # schema Alembic actually creates untouched. (That is exactly how the first
-    # attempt at this shim appeared to do nothing.)
-    from service.db.models import Base
-
-    touched: list[str] = []
-    for table in Base.metadata.tables.values():
-        for column in table.columns:
-            if not isinstance(column.type, Boolean) or column.server_default is None:
-                continue
-            arg = column.server_default.arg
-            rendered = arg if isinstance(arg, str) else str(arg)
-            literal = rendered.strip().strip("'").strip('"')
-            if literal not in ("0", "1"):
-                continue
-            column.server_default = DefaultClause(sa.true() if literal == "1" else sa.false())
-            touched.append(f"{table.name}.{column.name}={rendered}")
-    return touched
-
-
 # ── The rehearsal ───────────────────────────────────────────────────────────
 
 
@@ -280,16 +233,13 @@ def rehearse(admin_url: str) -> int:
 
     cfg = Config(str(ALEMBIC_INI))
 
-    # The shared schema has to be creatable before anything can be migrated, and
-    # today it is not (see the shim's docstring). Applied BEFORE `upgrade` so
-    # `0001_initial`'s create_all sees the corrected metadata.
-    shimmed = neutralise_pre_existing_boolean_defaults()
-    print(f"  pre-existing integer boolean defaults corrected in memory: {len(shimmed)}")
-    for entry in shimmed:
-        print(f"    - {entry}")
-    check("the shim touched only tables this package does not own",
-          [entry for entry in shimmed if entry.split(".")[0] in TABLES], [])
-    check("and it found real work to do, so it is not dead code", len(shimmed) > 0, True)
+    # Source declarations are PostgreSQL compatible; no metadata shim.
+    from service.db.models import Base
+    from sqlalchemy import Boolean
+    bad_defaults = [f"{t.name}.{c.name}" for t in Base.metadata.tables.values() for c in t.columns
+                    if isinstance(c.type, Boolean) and c.server_default is not None
+                    and str(c.server_default.arg).strip("'\"") in {"0", "1"}]
+    check("all Boolean defaults are fixed at source", bad_defaults, [])
 
     # ── 1. Alembic's own discovery, through its own configuration ───────────
     print("\n1. Alembic discovers the revision through its real configuration")
@@ -297,7 +247,7 @@ def rehearse(admin_url: str) -> int:
     discovered = [rev.revision for rev in script.walk_revisions()]
     check("the config resolves a non-empty revision graph", len(discovered) > 1, True)
     check("the OF-B1 revision is discovered", MIGRATION_REVISION in discovered, True)
-    check("it is the single head", list(script.get_heads()), [EXPECTED_HEAD])
+    check("the native media revision is the single head", list(script.get_heads()), ["0079_native_configuration"])
     check("its down_revision is the committed head it was cut from",
           script.get_revision(MIGRATION_REVISION).down_revision, PARENT_REVISION)
     check("0001_initial is still the single base", list(script.get_bases()), ["0001_initial"])
@@ -334,9 +284,9 @@ def rehearse(admin_url: str) -> int:
           scalar(conn, "SELECT version_num FROM alembic_version"), PARENT_REVISION)
 
     # ── 3. A clean upgrade from the parent — this is a release ──────────────
-    print("\n3. A clean `upgrade heads` from the parent revision")
-    command.upgrade(cfg, "heads")
-    check("alembic stamped the head it just built",
+    print("\n3. A clean `upgrade 0070_onlyfans_read_bindings` from the parent revision")
+    command.upgrade(cfg, MIGRATION_REVISION)
+    check("alembic stamped the 0070 target it just built",
           scalar(conn, "SELECT version_num FROM alembic_version"), EXPECTED_HEAD)
     check("all three tables exist after the clean upgrade", present_tables(conn), sorted(TABLES))
     check("and are empty - the migration seeds nothing",
@@ -368,9 +318,9 @@ def rehearse(admin_url: str) -> int:
           scalar(conn, "SELECT to_regclass('public.accounts')") is not None, True)
 
     # ── 5. The second clean upgrade ─────────────────────────────────────────
-    print("\n5. A second clean `upgrade heads` after the rollback")
-    command.upgrade(cfg, "heads")
-    check("it stamps the head again",
+    print("\n5. A second clean `upgrade 0070_onlyfans_read_bindings` after the rollback")
+    command.upgrade(cfg, MIGRATION_REVISION)
+    check("it stamps the 0070 target again",
           scalar(conn, "SELECT version_num FROM alembic_version"), EXPECTED_HEAD)
     check("all three tables exist again", present_tables(conn), sorted(TABLES))
 

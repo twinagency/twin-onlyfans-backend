@@ -1,4 +1,4 @@
-"""The FastAPI surface: three reads and a smoke check.
+"""The scoped FastAPI read surface and its smoke check.
 
 GET only, by construction. There is no POST, PUT, PATCH or DELETE here, no
 command method and no path that reaches a provider — and the offline suite
@@ -149,6 +149,40 @@ async def list_conversations(
         log.exception("onlyfans conversation list read failed")
         return _refusal(Unavailable("read_failed", "The OnlyFans read did not succeed."))
     return JSONResponse(body, status_code=200, headers=_PRIVATE_HEADERS)
+
+
+@router.get("/accounts/{account_id}/operations")
+async def get_operations(request: Request, account_id: str) -> JSONResponse:
+    """Authenticated metadata, with the same binding scope as conversations."""
+    try:
+        from .errors import Refused
+        principal = await _authenticate(request)
+        account_id = service._require_id(account_id, what="account")
+        body = await _repo().operations(tenant_id=principal.tenant_id, account_id=account_id)
+        if body is None:
+            raise Refused("unknown_account")
+    except OnlyFansReadError as exc:
+        return _refusal(exc)
+    except Exception:
+        return _refusal(Unavailable("operations_unavailable", "The OnlyFans operational read did not succeed."))
+    return JSONResponse({"schemaVersion": SCHEMA_VERSION, "operations": body}, status_code=200, headers=_PRIVATE_HEADERS)
+
+
+@router.get("/accounts/{account_id}/workspace/{section}")
+async def workspace(request: Request, account_id: str, section: str,
+                    cursor: str | None = Query(default=None), limit: int = Query(default=25)):
+    try:
+        from .errors import Refused
+        principal=await _authenticate(request)
+        account_id=service._require_id(account_id,what="account")
+        body=await _repo().workspace(tenant_id=principal.tenant_id,account_id=account_id,
+            section=section,cursor=cursor,limit=limit)
+        if body is None:raise Refused("unknown_account")
+    except OnlyFansReadError as exc:
+        return _refusal(exc)
+    except Exception:
+        return _refusal(Unavailable("workspace_unavailable","The OnlyFans workspace read did not succeed."))
+    return JSONResponse({"schemaVersion":SCHEMA_VERSION,"workspace":body},headers=_PRIVATE_HEADERS)
 
 
 @router.get("/accounts/{account_id}/conversations/{conversation_id}")

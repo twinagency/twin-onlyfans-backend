@@ -36,7 +36,7 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("unsent_reason", sa.Text(), nullable=True))
         batch_op.add_column(sa.Column("unsent_at", sa.DateTime(), nullable=True))
         batch_op.add_column(
-            sa.Column("is_promise", sa.Boolean(), nullable=False, server_default="0")
+            sa.Column("is_promise", sa.Boolean(), nullable=False, server_default=sa.false())
         )
         batch_op.add_column(sa.Column("promise_due_date", sa.DateTime(), nullable=True))
         batch_op.create_foreign_key(

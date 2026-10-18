@@ -9,10 +9,9 @@ reason beside it. The three worth reading before changing anything:
    an operator acts on, so a plausible default is the most expensive kind of
    wrong.
 
-2. **Freshness is never `now`.** The anchor is the newest activity this relay
-   has actually observed for the account, or the binding's own creation when it
-   has observed nothing. A read that stamped itself with the current time would
-   always look fresh, which is the one thing the field exists to prevent.
+2. **Reads do not renew freshness.** The anchor is the last completed durable
+   synchronization. Missing or incomplete recovery produces a null, stale
+   anchor; recent message activity does not prove that other history is current.
 
 3. **A value outside the dashboard's vocabulary is a bug, not a value.** Each
    mapping is checked against `contract`'s tuples and falls back to the
@@ -63,21 +62,20 @@ def freshness(as_of: datetime | None, *, now: datetime | None = None) -> dict:
     reference = now or utc_now()
     age = age_seconds(as_of, now=reference)
     return {
-        "asOf": iso(as_of) or iso(reference),
+        "asOf": iso(as_of),
         "maxAgeSeconds": FRESHNESS_MAX_AGE_SECONDS,
         "stale": age is None or age > FRESHNESS_MAX_AGE_SECONDS,
     }
 
 
-def connection_health(binding: BindingRow) -> tuple[str, str | None]:
+def connection_health(binding: BindingRow, *, now: datetime | None = None) -> tuple[str, str | None]:
     """Connection state and its human reason.
 
     The relay records one failure mode per account — a dead session — and
     nothing else. So the mapping is deliberately small: a dead session is
-    `expired_session` with the relay's own reason attached, and everything else
-    is `connected`. Inventing `reconnecting` or `revoked` here would be a claim
-    about the provider that nothing in this database can support; those states
-    arrive when the connection lifecycle milestone records them.
+    `expired_session` with the relay's own reason attached. Without a verified
+    lifecycle record the account is disconnected. An attempted legacy probe
+    cannot establish a healthy connection.
     """
     if binding.session_dead_at is not None:
         reason = (binding.health_reason or "").strip()
@@ -85,25 +83,28 @@ def connection_health(binding: BindingRow) -> tuple[str, str | None]:
             "expired_session",
             reason or "OnlyFans rejected the stored session for this account. It needs re-linking.",
         )
-    return "connected", None
+    # Legacy last_probe_at records an attempted recovery probe, not a
+    # successful connection. It cannot establish a current session here.
+    return "disconnected", "No verified connection record is available for this integration."
 
 
-def capabilities() -> dict:
+def capabilities(binding: BindingRow | None = None) -> dict:
     """What this service can actually do for an account, honestly.
 
-    `viewConversations` is available because this package implements it.
-    Everything else is `not_configured`: there is no delivery authority, no
-    content pipeline and no sales read in this milestone, so the dashboard must
-    render those controls as not configured rather than as available-and-idle.
+    Conversation controls require the separate, explicitly tenant-scoped API
+    credential. Delivery, money and provider capabilities remain unavailable.
     """
+    from onlyfans_commands.settings import configured
+    command_scope = configured()
+    controls = CAPABILITY_AVAILABLE if binding is not None and command_scope is not None and binding.tenant_id == command_scope[1] else CAPABILITY_NOT_CONFIGURED
     return {
         "viewConversations": CAPABILITY_AVAILABLE,
         "sendManualMessage": CAPABILITY_NOT_CONFIGURED,
-        "pauseAutomation": CAPABILITY_NOT_CONFIGURED,
-        "requestTakeover": CAPABILITY_NOT_CONFIGURED,
+        "pauseAutomation": controls,
+        "requestTakeover": controls,
         "manageContent": CAPABILITY_NOT_CONFIGURED,
         "managePrices": CAPABILITY_NOT_CONFIGURED,
-        "viewSales": CAPABILITY_NOT_CONFIGURED,
+        "viewSales": CAPABILITY_AVAILABLE,
         "resolveDeliveryEvidence": CAPABILITY_NOT_CONFIGURED,
     }
 
@@ -111,10 +112,9 @@ def capabilities() -> dict:
 def account_model(
     binding: BindingRow, *, anchor: datetime | None, now: datetime | None = None
 ) -> dict:
-    health, health_reason = connection_health(binding)
-    # An account with no observed activity is anchored at its own binding time,
-    # so it reads "last known <when it was bound>" rather than "updated now".
-    as_of = anchor or binding.created_at
+    health, health_reason = connection_health(binding, now=now)
+    # Null means synchronization is missing or incomplete, never "updated now".
+    as_of = anchor
     return {
         "accountId": binding.account_id,
         "binding": {
@@ -126,11 +126,9 @@ def account_model(
         },
         "health": health,
         "healthReason": health_reason,
-        # No control record exists yet for any account in this milestone, and
-        # `automated` is the truth for that: nothing has paused it. Milestone 3
-        # and the operator commands write the mode.
-        "automationMode": "automated",
-        "capabilities": capabilities(),
+        # Account-level sending has no authority in this foundation.
+        "automationMode": "paused",
+        "capabilities": capabilities(binding),
         "syncFreshness": freshness(as_of, now=now),
     }
 
@@ -148,8 +146,8 @@ def _fan_name(conversation: ConversationRow) -> str:
 
 
 def _mode(state: StateRow | None) -> str:
-    raw = (state.mode if state else None) or "automated"
-    return raw if raw in ("automated", "human_controlled", "paused", "no_contact") else "automated"
+    raw = (state.mode if state else None) or "paused"
+    return raw if raw in ("automated", "human_controlled", "paused", "no_contact") else "paused"
 
 
 def _takeover(state: StateRow | None) -> str:
@@ -194,12 +192,11 @@ def delivery_for_message(
         so it was accepted. That is `sent`, and it says nothing about read or
         purchased, which the dashboard separately models.
 
-    Known gap, recorded rather than papered over: the relay can mark a message
-    `is_unsent` (we retracted it after it was accepted). The dashboard's outcome
-    vocabulary has no "retracted" member, so a retracted message projects as
-    `sent`. Adding one is a contract change, and it belongs with the topic that
-    owns retraction rather than being smuggled in as a different outcome here.
+    Retraction is a separate observed terminal lifecycle state in v2. The
+    original receipt remains available as evidence; the bubble says retracted.
     """
+    if message.is_unsent:
+        return "retracted", recorded.evidence_ref if recorded else None
     if recorded is not None:
         return _outcome(recorded.outcome), recorded.evidence_ref
     if message.direction == "in":
@@ -209,17 +206,20 @@ def delivery_for_message(
     return "sent", None
 
 
-def message_origin(message: MessageRow) -> str:
+def message_origin(message: MessageRow, recorded: DeliveryRow | None = None) -> str:
     """Who wrote this bubble, from what the relay records.
 
-    `automation_kind` is set for every automation send and `sent_by_employee_id`
-    for every human one, so those two answer the question directly. An outbound
+    A scoped delivery receipt records authorship for the text delivery path.
+    Only its supported outbound origins are authoritative. Legacy rows use
+    `automation_kind` or `sent_by_employee_id` when available. An outbound
     row with neither is history we did not write — legacy rows, and rows that
     arrived from OnlyFans without a local author — and `imported` is the honest
     bucket for that rather than guessing a human sent it.
     """
     if message.direction == "in":
         return "fan"
+    if recorded is not None and recorded.origin in ("ai", "human"):
+        return recorded.origin
     if message.automation_kind:
         return "ai"
     if message.sent_by_employee_id is not None:
@@ -235,7 +235,7 @@ def message_model(
         "messageId": str(message.message_id),
         "conversationId": conversation_id,
         "direction": "inbound" if message.direction == "in" else "outbound",
-        "origin": message_origin(message),
+        "origin": message_origin(message, recorded),
         "body": message.body or "",
         "occurredAt": iso(message.created_at) or "",
         "delivery": outcome,
@@ -283,7 +283,7 @@ def conversation_summary(
         "takeoverState": _takeover(state),
         "delivery": _outcome(last_delivery),
         "requiresAttention": requires_attention,
-        "freshness": freshness(as_of, now=now),
+        "freshness": freshness(anchor, now=now),
     }
 
 
@@ -292,10 +292,10 @@ def delivery_incident(
 ) -> dict | None:
     """The structured resolution path for an unresolved send, or None.
 
-    There are exactly two ways a conversation holds an unresolved outcome: the
-    control row names an attempt, or a message in the thread carries an outcome
-    that is not settled. Both are surfaced, because an operator needs the
-    evidence path whether or not the control write happened first.
+    The repository exposes a hold from the control pointer or an unsettled
+    receipt outside the visible thread. A message in the thread may also carry
+    an unsettled outcome. Both forms are surfaced, because an operator needs
+    the evidence path whether or not the control write happened first.
     """
     attempt_id = state.unresolved_attempt_id if state else None
     if attempt_id:
@@ -392,5 +392,5 @@ def detail_model(
         "facts": fact_models(facts),
         "ownedMedia": owned_media_models(owned),
         "deliveryIncident": delivery_incident(state=state, messages=messages, deliveries=deliveries),
-        "freshness": freshness(as_of, now=reference),
+        "freshness": freshness(anchor, now=reference),
     }

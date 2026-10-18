@@ -2110,6 +2110,24 @@ async def resolve_model(account_id: str, purpose: str, override: str | None = No
         log.warning("resolve_model: config read failed account=%s purpose=%s — "
                     "using %s", account_id, purpose, DEFAULT_MODEL, exc_info=True)
         return DEFAULT_MODEL
+    return resolve_model_from_config(cfg, purpose, account_id=account_id)
+
+
+def resolve_model_from_config(cfg, purpose: str, override: str | None = None, *,
+                              account_id: str = "", require_explicit: bool = False) -> str:
+    """Use the same selector with an already-read configuration snapshot.
+
+    Native preparation requires an explicit saved choice. The default branch
+    retains the legacy selector's fallback order and logging.
+    """
+    if require_explicit:
+        from ._model_selection import explicit_model
+        try:
+            return explicit_model(cfg,purpose,llm_client.MODELS,override=override)
+        except ValueError as exc:
+            raise llm_client.LLMConfigError(str(exc)) from exc
+    if override and override in llm_client.MODELS:
+        return override
     if cfg is not None and cfg.model_by_purpose:
         try:
             by_purpose = json.loads(cfg.model_by_purpose) or {}

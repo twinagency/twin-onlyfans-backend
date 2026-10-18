@@ -32,18 +32,31 @@ from sqlalchemy.ext.asyncio import (
 
 HERE = Path(__file__).resolve().parent
 # Load service/.env (gitignored). Falls back to env-vars already in process.
-load_dotenv(HERE.parent / ".env", override=False)
+ONLYFANS_PROCESS_ROLE = os.environ.get("ONLYFANS_PROCESS_ROLE")
+if ONLYFANS_PROCESS_ROLE not in {None, "api", "worker"}:
+    raise RuntimeError("Invalid ONLYFANS_PROCESS_ROLE")
+if ONLYFANS_PROCESS_ROLE is None:
+    load_dotenv(HERE.parent / ".env", override=False)
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     f"sqlite+aiosqlite:///{HERE.parent / 'chatterly.db'}",
 )
 
-_is_sqlite = DATABASE_URL.startswith("sqlite")
+if ONLYFANS_PROCESS_ROLE:
+    from sqlalchemy.engine import make_url
+    if not os.environ.get("DATABASE_URL") or make_url(DATABASE_URL).get_backend_name() != "postgresql":
+        raise RuntimeError("OnlyFans roles require an explicit PostgreSQL DATABASE_URL")
+    DATABASE_URL = make_url(DATABASE_URL).set(drivername="postgresql+asyncpg")
+
+
+_is_sqlite = str(DATABASE_URL).startswith("sqlite")
 
 # `connect_args` is SQLite-specific; passing it to a Postgres URL is harmless
 # but we keep it gated so the engine logs don't show misleading flags.
 _connect_args = {"check_same_thread": False} if _is_sqlite else {}
+if ONLYFANS_PROCESS_ROLE:
+    _connect_args = {"command_timeout": 15, "server_settings": {"statement_timeout": "10000", "lock_timeout": "3000", "timezone": "UTC"}}
 
 # `echo=False` because the relay logs are noisy enough already. Flip to
 # True via env var when debugging a slow query.
@@ -52,6 +65,7 @@ engine: AsyncEngine = create_async_engine(
     echo=os.environ.get("DB_ECHO") == "1",
     connect_args=_connect_args,
     future=True,
+    **({"pool_size": 4, "max_overflow": 0, "pool_timeout": 3, "pool_pre_ping": True} if ONLYFANS_PROCESS_ROLE else {}),
 )
 
 async_session_factory = async_sessionmaker(
@@ -100,6 +114,12 @@ async def init_db() -> None:
     On Postgres the same flow works; the recursion bug is Python-version
     sensitive and we keep the same code path for symmetry.
     """
+    if ONLYFANS_PROCESS_ROLE:
+        from .schema import check_schema
+        async with engine.connect() as connection:
+            await connection.run_sync(check_schema)
+        return
+
     if _is_sqlite:
         from sqlalchemy import event
 

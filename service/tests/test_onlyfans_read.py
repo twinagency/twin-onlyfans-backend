@@ -70,6 +70,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from onlyfans_read import auth as A  # noqa: E402
 from onlyfans_read import contract as C  # noqa: E402
 from onlyfans_read import service as S  # noqa: E402
+from onlyfans_read import projections as P  # noqa: E402
 from onlyfans_read.api import router as of_router  # noqa: E402
 from onlyfans_read.auth import ServicePrincipal  # noqa: E402
 from onlyfans_read.errors import BadRequest, Refused, Unauthorized, Unavailable  # noqa: E402
@@ -166,6 +167,7 @@ BINDINGS = [
         handle="avahart",
         channel="onlyfans",
         created_at=NOW - timedelta(days=30),
+        last_probe_at=NOW - timedelta(minutes=5),
     ),
     BindingRow(
         binding_id="ofb-1002",
@@ -420,7 +422,7 @@ def headers(**extra):
 # ══ 1. The contract ════════════════════════════════════════════════════════
 print("\n1. The contract: identity, cursors and bounds")
 
-check("the schema version is the dashboard's own", C.SCHEMA_VERSION, "of-preview.v1")
+check("the schema version is the dashboard's own", C.SCHEMA_VERSION, "of-preview.v2")
 check("and this service claims to support it", C.SCHEMA_VERSION in C.SUPPORTED_SCHEMA_VERSIONS, True)
 check("the namespace avoids the cookie-gated /api/of prefix",
       C.SERVICE_PREFIX.startswith("/api/of/"), False)
@@ -589,12 +591,13 @@ check("an account names its binding, creator and handle",
       (AVA["binding"]["bindingId"], AVA["binding"]["creatorId"], AVA["binding"]["handle"]),
       ("ofb-1001", "creator-ava", "avahart"))
 check("the channel is OnlyFans, never a persona field", AVA["binding"]["channel"], "onlyfans")
-check("a live account reads connected", AVA["health"], "connected")
-check("with no invented reason", AVA["healthReason"], None)
+check("an unverified account does not claim connected", AVA["health"], "disconnected")
+check("and explains the missing connection evidence", bool(AVA["healthReason"]), True)
 check("the view capability is the one this service implements",
       AVA["capabilities"]["viewConversations"], "available")
+check("the recorded sales view is available", AVA["capabilities"]["viewSales"], "available")
 check("and every mutation is not_configured rather than available",
-      sorted({v for k, v in AVA["capabilities"].items() if k != "viewConversations"}),
+      sorted({v for k, v in AVA["capabilities"].items() if k not in {"viewConversations", "viewSales"}}),
       ["not_configured"])
 check("freshness is anchored on the newest observed activity",
       AVA["syncFreshness"]["asOf"], C.iso(NOW - timedelta(minutes=3)))
@@ -662,6 +665,29 @@ check("a mass placeholder is dispatching, not sent", BY_ID["900200"]["delivery"]
 check("a human send is attributed to a human", BY_ID["900201"]["origin"], "human")
 check("a confirmed outbound row is sent", BY_ID["900201"]["delivery"], "sent")
 check("and a settled conversation has no incident", SECOND["deliveryIncident"], None)
+
+# The text delivery authority records authorship on its receipt; it does not
+# impersonate an employee or write legacy automation metadata to infer it.
+for recorded_origin in ("human", "ai"):
+    projected = P.message_model(
+        conversation_id="1001:5002",
+        message=_msg(900202, "out", "synthetic accepted text"),
+        recorded=DeliveryRow(900202, "sent", "attempt-origin", "receipt-origin",
+                             None, NOW, origin=recorded_origin),
+    )
+    check(f"a recorded {recorded_origin} origin survives an accepted text receipt",
+          (projected["origin"], projected["delivery"], projected["evidenceRef"]),
+          (recorded_origin, "sent", "receipt-origin"))
+check("a missing receipt origin preserves legacy automation inference",
+      P.message_origin(_msg(900203, "out", "legacy", kind="autoreply"),
+                       DeliveryRow(900203, "unknown", None, None, None, NOW)), "ai")
+check("an unsupported receipt origin does not replace legacy human attribution",
+      P.message_origin(_msg(900204, "out", "legacy", employee=7),
+                       DeliveryRow(900204, "sent", None, None, None, NOW, origin="fan")),
+      "human")
+check("a receipt cannot relabel an inbound fan message as local authorship",
+      P.message_origin(_msg(900205, "in", "inbound"),
+                       DeliveryRow(900205, "sent", None, None, None, NOW, origin="ai")), "fan")
 
 
 # ══ 4. Refusals: another tenant, another account, or nothing there ═════════
@@ -780,10 +806,12 @@ ROUTE_METHODS = {m for route in of_router.routes for m in getattr(route, "method
 check("the router exposes GET and HEAD and nothing else",
       ROUTE_METHODS - {"GET", "HEAD"}, set())
 PATHS = sorted(getattr(route, "path", "") for route in of_router.routes)
-check("it registers the three reads and the smoke check", PATHS, [
+check("it registers scoped reads, native workspace and the smoke check", PATHS, [
     f"{C.SERVICE_PREFIX}/accounts",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations/{{conversation_id}}",
+    f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/operations",
+    f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/workspace/{{section}}",
     f"{C.SERVICE_PREFIX}/status",
 ])
 
@@ -947,14 +975,14 @@ PARENTS = {
     for parent in (down if isinstance(down, tuple) else (down,))
 }
 HEADS = sorted(rev for rev in GRAPH if rev not in PARENTS)
-check("it is a head", MINE in HEADS, True)
+check("0070 is now an ancestor of the foundation head", MINE in HEADS, False)
 check("and nothing else descends from the committed head it was cut from",
       sorted(rev for rev, down in GRAPH.items() if down == "0064_user_llm_keys"),
       [MINE])
 # ONE head, this one. The chain that once looked like it had two stray heads
 # (0019/0021) in fact merges at 0022, so `upgrade heads` and `upgrade head` are
 # the same operation here — asserted now that the graph can be read at all.
-check("the tree has exactly one head", HEADS, [MINE])
+check("the tree has exactly one head", HEADS, ["0079_native_configuration"])
 check("its parent is a revision that exists", "0064_user_llm_keys" in GRAPH, True)
 
 # — and now the same graph through Alembic's real configuration, which is the
@@ -992,7 +1020,7 @@ _SD = _ScriptDirectory.from_config(_CFG)
 _DISCOVERED = [script.revision for script in _SD.walk_revisions()]
 check("alembic discovers every revision in the tree", len(_DISCOVERED), len(GRAPH))
 check("including this one", MINE in _DISCOVERED, True)
-check("and reports it as the single head", list(_SD.get_heads()), [MINE])
+check("and reports it as the single head", list(_SD.get_heads()), ["0079_native_configuration"])
 check("with 0001_initial still the single base", list(_SD.get_bases()), ["0001_initial"])
 check("and the down_revision Alembic resolves is the committed head",
       _SD.get_revision(MINE).down_revision, "0064_user_llm_keys")
@@ -1147,6 +1175,7 @@ from db.models import (  # noqa: E402
 # is fine for SQLite — the driver creates its future on whichever loop is
 # calling, and the phases are sequential — and it is what the production process
 # does too, since the relay serves every request from one loop.
+from db.onlyfans_models import OfRuntime as _OfRuntime
 _SCHEMA_ENGINE = _create_engine(os.environ["CHATTERLY_DB_URL"])
 _ModelsBase.metadata.create_all(
     _SCHEMA_ENGINE,
@@ -1159,6 +1188,7 @@ _ModelsBase.metadata.create_all(
         _OfBinding.__table__,
         _OfState.__table__,
         _OfDelivery.__table__,
+        _OfRuntime.__table__,
     ],
 )
 
@@ -1329,6 +1359,87 @@ check("a tenant with no bindings is a legitimate empty list, not a refusal",
       BIND["other_tenant_empty"], [])
 
 
+async def _durable_receipt_cases():
+    """Read actual scoped receipts without expanding the 100-message window."""
+    repo = SqlOnlyFansReadRepo()
+    for fan_id in (8101, 8102, 8103):
+        _sql(_insert(_Fan).values(account_id="9001", fan_id=fan_id))
+        _sql(_insert(_Chat).values(account_id="9001", fan_id=fan_id,
+                                  last_message_id=10105, last_message_at=NOW))
+    _sql(_insert(_Message).values([
+        {"account_id": "9001", "fan_id": 8101, "message_id": message_id,
+         "direction": "out", "body": "synthetic text", "created_at": NOW}
+        for message_id in range(10001, 10106)
+    ]))
+    for fan_id, message_id in ((8102, 20001), (8103, 30001)):
+        _sql(_insert(_Message).values(account_id="9001", fan_id=fan_id,
+                                     message_id=message_id, direction="out",
+                                     body="synthetic text", created_at=NOW))
+    receipt_time = NOW - timedelta(days=2)
+    _sql(_insert(_OfDelivery).values([
+        {"account_id": "9001", "fan_id": 8101, "message_id": 10001,
+         "outcome": "unknown", "attempt_id": "old-unresolved",
+         "evidence_ref": None, "origin": None, "recorded_at": receipt_time},
+        {"account_id": "9001", "fan_id": 8101, "message_id": 10104,
+         "outcome": "sent", "attempt_id": "accepted-ai",
+         "evidence_ref": "synthetic-ai-receipt", "origin": "ai", "recorded_at": NOW},
+        {"account_id": "9001", "fan_id": 8101, "message_id": 10105,
+         "outcome": "sent", "attempt_id": "accepted-human",
+         "evidence_ref": "synthetic-human-receipt", "origin": "human", "recorded_at": NOW},
+        {"account_id": "9001", "fan_id": 8102, "message_id": 20001,
+         "outcome": "partial", "attempt_id": None,
+         "evidence_ref": None, "origin": None, "recorded_at": NOW},
+        {"account_id": "9001", "fan_id": 8103, "message_id": 30001,
+         "outcome": "unknown", "attempt_id": "unrelated-receipt",
+         "evidence_ref": None, "origin": None, "recorded_at": NOW},
+    ]))
+    _sql(_insert(_OfState).values(account_id="9001", fan_id=8101,
+                                 mode="automated", revision=9, updated_at=NOW))
+    _sql(_insert(_OfState).values(account_id="9001", fan_id=8103,
+                                 mode="paused", revision=3,
+                                 unresolved_attempt_id="authority-pointer", updated_at=NOW))
+
+    detail = (await S.get_conversation(
+        repo, AGENCY_A, account_id="9001", conversation_id="9001:8101", now=NOW
+    ))["conversation"]
+    check("a durable old receipt does not expand the visible thread",
+          (len(detail["messages"]), detail["messages"][0]["messageId"]), (100, "10006"))
+    check("an unresolved receipt outside that thread remains visible as an incident",
+          (detail["deliveryIncident"]["attemptId"], detail["deliveryIncident"]["recordedAt"]),
+          ("old-unresolved", C.iso(receipt_time)))
+    check("an old unresolved receipt flags its conversation for attention",
+          (detail["summary"]["requiresAttention"], detail["summary"]["revision"]), (True, 9))
+    actual_messages = {message["messageId"]: message for message in detail["messages"]}
+    check("SQL reads the accepted manual receipt's authorship and evidence",
+          (actual_messages["10105"]["origin"], actual_messages["10105"]["delivery"],
+           actual_messages["10105"]["evidenceRef"]),
+          ("human", "sent", "synthetic-human-receipt"))
+    check("SQL reads the accepted automated receipt's authorship and evidence",
+          (actual_messages["10104"]["origin"], actual_messages["10104"]["delivery"],
+           actual_messages["10104"]["evidenceRef"]),
+          ("ai", "sent", "synthetic-ai-receipt"))
+    missing_control = await repo.conversation_state(account_id="9001", fan_id=8102)
+    check("an unsettled receipt with no control row derives a paused attention state",
+          (missing_control.mode, missing_control.revision, missing_control.requires_attention,
+           missing_control.unresolved_attempt_id), ("paused", 0, True, "message:20001"))
+    explicit = await repo.conversation_state(account_id="9001", fan_id=8103)
+    check("an explicit authority pointer is preserved over a different receipt",
+          (explicit.unresolved_attempt_id, explicit.revision), ("authority-pointer", 3))
+    check("a receipt from another fan cannot derive a hold for this fan",
+          await repo.conversation_state(account_id="9001", fan_id=8199), None)
+    check("a receipt from another account cannot derive a hold for this account",
+          await repo.conversation_state(account_id="9002", fan_id=8101), None)
+    check("the derived old hold never writes a missing control pointer",
+          _sql(_select(_OfState.unresolved_attempt_id, _OfState.requires_attention)
+               .where(_OfState.account_id == "9001", _OfState.fan_id == 8101)), [(None, False)])
+    check("the derived paused state never creates a missing control row",
+          _sql(_select(_OfState.fan_id).where(_OfState.account_id == "9001",
+                                            _OfState.fan_id == 8102)), [])
+
+
+run(_durable_receipt_cases())
+
+
 # ══ 10. The relay application itself ═══════════════════════════════════════
 print("\n10. The relay constructs, mounts the router read-only, and fails closed")
 
@@ -1348,11 +1459,13 @@ APP_ROUTES = [
     for route in RELAY.app.routes
 ]
 OF_ROUTES = sorted((path, methods) for path, methods in APP_ROUTES if C.is_service_path(path))
-check("the OnlyFans router is mounted on the real application", len(OF_ROUTES), 4)
+check("the OnlyFans router is mounted on the real application", len(OF_ROUTES), 6)
 check("with exactly the routes the package declares", [p for p, _ in OF_ROUTES], [
     f"{C.SERVICE_PREFIX}/accounts",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations/{{conversation_id}}",
+    f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/operations",
+    f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/workspace/{{section}}",
     f"{C.SERVICE_PREFIX}/status",
 ])
 check("every one of them is a read",

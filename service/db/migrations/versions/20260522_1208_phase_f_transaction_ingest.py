@@ -211,7 +211,7 @@ def upgrade() -> None:
             "fully_backfilled",
             sa.Boolean,
             nullable=False,
-            server_default=sa.text("0"),
+            server_default=sa.false(),
         ),
         sa.Column("backfill_floor", sa.DateTime, nullable=True),
         sa.Column(

@@ -53,7 +53,7 @@ def upgrade() -> None:
             sa.Column("color", sa.String, nullable=True),
             sa.Column(
                 "is_active", sa.Boolean,
-                nullable=False, server_default=sa.text("1"),
+                nullable=False, server_default=sa.true(),
             ),
             sa.Column(
                 "created_at", sa.DateTime,

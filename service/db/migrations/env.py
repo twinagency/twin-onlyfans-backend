@@ -21,6 +21,7 @@ sys.setrecursionlimit(50000)
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.engine import make_url
 
 # Make sibling `service/` importable when alembic is invoked from anywhere.
 HERE = Path(__file__).resolve().parent
@@ -28,6 +29,8 @@ SERVICE_ROOT = HERE.parent.parent
 sys.path.insert(0, str(SERVICE_ROOT))
 sys.path.insert(0, str(SERVICE_ROOT.parent))  # so `service.db.models` resolves too
 
+from service.db import onlyfans_models  # noqa: F401 — register foundation metadata
+from service.db import onlyfans_delivery_models  # noqa: F401 — register synthetic delivery metadata
 from service.db.models import Base  # noqa: E402  — must come after sys.path patch
 
 config = context.config
@@ -58,7 +61,7 @@ def _resolve_url() -> str:
         url, source = os.environ["CHATTERLY_DB_URL"], "CHATTERLY_DB_URL env"
     else:
         url, source = config.get_main_option("sqlalchemy.url"), "alembic.ini default"
-    print(f"[alembic env] using DB URL: {url}  (source: {source})", file=sys.stderr)
+    print(f"[alembic env] using DB URL: {make_url(url).render_as_string(hide_password=True)}  (source: {source})", file=sys.stderr)
     return url
 
 
@@ -81,22 +84,24 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Standard online migration against a live DB."""
-    section = config.get_section(config.config_ini_section, {}) or {}
-    section["sqlalchemy.url"] = _resolve_url()
-    connectable = engine_from_config(
-        section,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-    with connectable.connect() as connection:
-        is_sqlite = connection.dialect.name == "sqlite"
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            render_as_batch=is_sqlite,
-        )
+    def run(connection):
+        context.configure(connection=connection, target_metadata=target_metadata,
+                          render_as_batch=connection.dialect.name == "sqlite")
         with context.begin_transaction():
             context.run_migrations()
+
+    supplied = config.attributes.get("connection")
+    if supplied is not None:
+        run(supplied)
+        return
+    section = config.get_section(config.config_ini_section, {}) or {}
+    section["sqlalchemy.url"] = _resolve_url()
+    connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
+    try:
+        with connectable.connect() as connection:
+            run(connection)
+    finally:
+        connectable.dispose()
 
 
 if context.is_offline_mode():

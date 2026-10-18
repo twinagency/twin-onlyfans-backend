@@ -23,7 +23,8 @@ _HERE = Path(__file__).resolve().parent
 _ENV_FILE = _HERE / ".env"
 # Mirror db.engine: load service/.env if it hasn't been loaded yet. override=False
 # means a real value already in the process env (e.g. a host-exported key) wins.
-load_dotenv(_ENV_FILE, override=False)
+if "ONLYFANS_PROCESS_ROLE" not in os.environ:
+    load_dotenv(_ENV_FILE, override=False)
 
 
 @dataclass(frozen=True)

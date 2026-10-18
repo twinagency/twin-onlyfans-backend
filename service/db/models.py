@@ -36,6 +36,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     false,
+    true,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
@@ -432,7 +433,7 @@ class Fan(Base):
     # the creator silenced this chat). Persisted from the scrape; when a muted fan
     # is also a creator we follow (subscribedBy) the automations skip-list them so
     # nobody wastes an LLM call on mutual-promo spam. See _common.should_skip_muted_creator.
-    is_muted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"), default=False)
+    is_muted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false(), default=False)
     joined_date: Mapped[str | None] = mapped_column(String)
 
     # ── DEAD COLUMNS: the retired deep_convo drill's state machine ───
@@ -526,6 +527,10 @@ class Message(Base):
     __table_args__ = (
         ForeignKeyConstraint(["mass_run_id"], ["mass_runs.id"], ondelete="SET NULL"),
         Index("ix_messages_account_fan_time", "account_id", "fan_id", "created_at"),
+        Index(
+            "ix_messages_account_provider_id", "account_id", "message_id",
+            info={"onlyfans_since": "0072_onlyfans_text_delivery"},
+        ),
         # Backs the All-Messages tab's wider scan (direction-scoped per
         # account, no fan filter) — see 18_stats_per_fan_csv.md §SQL impact
         # and migration 0017_phase_g_messages_dir_index.
@@ -2552,7 +2557,7 @@ class TransactionScanHistory(Base):
     oldest_seen_occurred_at: Mapped[datetime | None] = mapped_column(DateTime)
     newest_seen_occurred_at: Mapped[datetime | None] = mapped_column(DateTime)
     fully_backfilled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("0")
+        Boolean, nullable=False, server_default=false()
     )
     backfill_floor: Mapped[datetime | None] = mapped_column(DateTime)
     current_status: Mapped[str] = mapped_column(
@@ -2600,15 +2605,15 @@ class MassBroadcastCache(Base):
     body_text: Mapped[str | None] = mapped_column(Text)
     raw_text: Mapped[str | None] = mapped_column(Text)
     giphy_id: Mapped[str | None] = mapped_column(String)
-    is_free: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("1"))
-    is_tip: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
+    is_free: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    is_tip: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     media_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     media_json: Mapped[str | None] = mapped_column(Text)  # OF media[] passthrough
     previews_json: Mapped[str | None] = mapped_column(Text)  # int[] passthrough
     sent_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     viewed_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    is_canceled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
-    can_unsend: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("1"))
+    is_canceled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    can_unsend: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
     unsend_seconds: Mapped[int | None] = mapped_column(Integer)
     template: Mapped[str | None] = mapped_column(String)
     fetched_at: Mapped[datetime] = _ts_now()
@@ -2647,7 +2652,7 @@ class User(Base):
     # (the user_id scoping in employees.py is bypassed). Distinct from the
     # transient founder impersonation cookie. Flip via the ADMIN_PASSWORD
     # founder gate or a DB update; migration 0039_user_is_admin.
-    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"), default=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false(), default=False)
 
 
 class UserAccount(Base):
@@ -3317,11 +3322,10 @@ class OfConversationState(Base):
     the honest answer for a conversation no command has ever touched, not a
     missing value.
 
-    This milestone only READS these rows. Nothing in the read service writes
-    one, and there is no route that can: the writes belong to the delivery
-    authority (milestone 3) and to the operator commands (milestone 5). Until
-    then every conversation reads as `automated`, `none`, revision 0 — which is
-    true, because no control has been recorded.
+    The scoped read service never writes these rows. Store owns audited control
+    changes and canonical input revisions; the text authority owns dispatch
+    holds. The legacy column default remains for schema compatibility, while
+    runtime creation of missing control explicitly starts paused/attention.
     """
 
     __tablename__ = "of_conversation_state"
@@ -3334,6 +3338,10 @@ class OfConversationState(Base):
     )
     revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
+    )
+    input_revision: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0"),
+        info={"onlyfans_since": "0072_onlyfans_text_delivery"},
     )
     #: none | requested | effective — a request is not effective until the
     #: backend confirms it, which is why the two are separate values.
@@ -3377,10 +3385,10 @@ class OfMessageDelivery(Base):
     dashboard can offer an evidence path for an unresolved outcome instead of a
     generic retry. `evidence_ref` names what settled it when it was settled.
 
-    Read-only in this milestone: nothing here is written by this package. Absent
-    rows are not "no delivery" either — the projection in `projections.py`
-    states what an absent row means for each direction, rather than defaulting
-    every message to a value.
+    The text authority projects accepted receipts here after saving durable
+    evidence. Queued and uncertain attempts without a provider identity live in
+    the intent ledger instead of fabricated message rows. The read projection
+    defines absent legacy receipts conservatively for each direction.
     """
 
     __tablename__ = "of_message_delivery"
@@ -3392,6 +3400,9 @@ class OfMessageDelivery(Base):
     attempt_id: Mapped[str | None] = mapped_column(String)
     evidence_ref: Mapped[str | None] = mapped_column(String)
     detail: Mapped[str | None] = mapped_column(Text)
+    origin: Mapped[str | None] = mapped_column(
+        String, info={"onlyfans_since": "0072_onlyfans_text_delivery"}
+    )
     recorded_at: Mapped[datetime] = _ts_now()
 
     __table_args__ = (
@@ -3401,4 +3412,9 @@ class OfMessageDelivery(Base):
             ondelete="CASCADE",
         ),
         Index("ix_of_message_delivery_attempt", "attempt_id"),
+        Index(
+            "ix_of_message_delivery_unresolved", "account_id", "fan_id", "outcome",
+            postgresql_where=text("outcome IN ('generating','queued','dispatching','unknown','partial')"),
+            info={"onlyfans_since": "0072_onlyfans_text_delivery"},
+        ),
     )

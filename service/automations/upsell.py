@@ -99,11 +99,9 @@ DISCOUNT_BAND = (0.80, 0.90)    # of the price HE SAW — a cut of 10-20%, never
                                 # if a 40% cut converts no better than a 20% one, the
                                 # extra 20 points were margin given away for nothing.
                                 # 0.80 is a hard floor no LLM proposal may cross.
-OF_PRICE_FLOOR_CENTS = 300      # OF rejects priced messages under $3.00
-OF_PRICE_MAX_CENTS = 20_000     # ...and over $200. A HARD INVARIANT, enforced in
-                                # next_price's caps, in human_cents, AND re-clamped at
-                                # the send site. Nothing enforced it inside upsell before;
-                                # at 3.0x on a whale the wire max is now reachable.
+from ._price_limits import OF_PRICE_FLOOR_CENTS, OF_PRICE_MAX_CENTS
+# Shared existing $3/$200 bounds are enforced in next_price, human_cents and
+# at the send site. Importing the bounds alone does not import this seller.
 
 # Pacing / anti-abuse. Hard constants: the churn path is ASKS, and a fan who buys
 # nothing never trips a spend cap — so the caps are on asks, not on dollars alone.

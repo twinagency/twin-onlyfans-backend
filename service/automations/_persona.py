@@ -41,6 +41,7 @@ from db.models import Fan
 from jsonsafe import load_dict, load_json
 from llm_client import LLMCapExceeded
 
+from ._persona_contract import PERSONA_FACT_FIELDS, PERSONA_FACTS_OPERATOR_ONLY, _parse_persona_facts
 from . import _voice
 from ._common import nonempty
 
@@ -108,21 +109,6 @@ def _persona_location_line(location: str | None) -> str:
 # outweighed the goal/style lines they sit above. Keys dropped from the slate are
 # silently ignored by _parse_persona_facts — stored persona_facts_json needs no
 # migration, those values just stop rendering.
-PERSONA_FACT_FIELDS: tuple[tuple[str, str], ...] = (
-    ("age", "Age"),                                  # [173]
-    ("job", "Work"),                                 # [81]
-    ("home_city", "Lives in"),                       # [92]
-    ("relationship", "Relationship"),                # [325] the most-asked of all
-    ("kids", "Kids"),                                # [163] binary — catastrophic to flip
-    ("family", "Family"),                            # [82]
-    # Fans read tattoos off her photos — body art is VISIBLE EVIDENCE, so there
-    # is a picture to check her answer against. Operator-only, like the two
-    # below. [179]
-    ("tattoos", "Tattoos"),
-    # ── Operator-only (see PERSONA_FACTS_OPERATOR_ONLY) ──
-    ("kinks", "What she's into"),                    # [65] and it saturates the sample
-    ("limits", "What she won't do"),                 # fans don't ask, they PUSH
-)
 
 # Slots the 🪄 enrich pass must NEVER propose. Two different reasons, both learned
 # the hard way:
@@ -138,7 +124,6 @@ PERSONA_FACT_FIELDS: tuple[tuple[str, str], ...] = (
 #       see, which makes a confident wrong answer worse than a blank one. This
 #       slot belongs to the vault-sourced pass; until that exists, the operator
 #       fills it.
-PERSONA_FACTS_OPERATOR_ONLY: frozenset[str] = frozenset({"kinks", "limits", "tattoos"})
 
 # The editor hints for these slots — the example text under each box — live in
 # `_voice._FACT_PLACEHOLDERS`, one lane each, read through `fact_placeholders()`.
@@ -147,9 +132,8 @@ PERSONA_FACTS_OPERATOR_ONLY: frozenset[str] = frozenset({"kinks", "limits", "tat
 # LABELS (most of which just name the field) there is no lane-neutral version to
 # keep as a default. `_voice` owns text that reads differently per lane.
 #
-# This is the slate's home, so this is where both tables get bound to it: a canon
-# field with no male placeholder, or a gendered label with no male form, fails
-# HERE at import rather than serving her copy on his account.
+# The pure slate lives in _persona_contract. Bind voice tables here so a field
+# without a matching voice placeholder still fails when native composition loads.
 _voice.assert_canon_parity(PERSONA_FACT_FIELDS)
 
 _FACT_VALUE_CLIP = 240      # one fact should be a line, never a paragraph
@@ -162,18 +146,6 @@ def _pinned_block(header: str, lines: list[str]) -> str:
     load-bearing in both: an un-enriched account and a fan with no deviations must
     each produce a byte-identical prompt to what shipped before them."""
     return f"{header}\n" + "\n".join(lines) + "\n\n" if lines else ""
-
-
-def _parse_persona_facts(raw) -> dict:
-    """`persona_facts_json` → dict, keys narrowed to the known field contract.
-
-    `load_dict` owns the defensive half (NULL / already-parsed / corrupt / a
-    stored list all collapse to {}), so this only has to say what is SPECIFIC to
-    persona facts: unknown keys are dropped, because the block that renders them
-    reads labels from PERSONA_FACT_FIELDS and a stray key would render unlabelled."""
-    return {k: v for k, v in load_dict(raw).items() if k in dict(PERSONA_FACT_FIELDS)}
-
-
 def _persona_facts_block(raw, voice=None) -> str:
     """Internal to compose_persona — the pinned-canon block for the chat prompts. "" when nothing is set, so an
     un-enriched account sends a byte-identical prompt — same discipline as the

@@ -367,6 +367,115 @@ async def _load_ladder(account_id: str, fan_id: int) -> LadderState | None:
         return row
 
 
+def fan_brake(fan, turn: Turn, lad: LadderState | None, now: datetime) -> SellVerdict | None:
+    """Native sales decisions over an already-read canonical fan and ladder."""
+    if _customs.is_owed(fan):
+        return SellVerdict(False, R_CUSTOM_OWED)
+    # Signals off his latest message. All three refuse, so the ORDER only picks
+    # which reason gets logged — and the most specific one is the most useful
+    # to whoever reads it. That is why this is not ai_chatter's order: there,
+    # HARD must win because the two carry different CONSEQUENCES (a 72h pause
+    # and a make-right apology vs a 24h pause), and this module writes none.
+    #
+    # ⚠️ `is_hard_decline` is misnamed for `en`: it returns true for ANY decline
+    # (`classify_decline(...) is not None`), hard, soft or bare-no. That is
+    # exactly what a SELL gate wants — ai_chatter stops selling on all three —
+    # so it is used deliberately, not by mistake.
+    text, lang = turn.text or "", turn.lang
+    if _language.detect_spend_regret(text, lang):
+        return SellVerdict(False, R_SPEND_REGRET)
+    if upsell.detect_companion_intent(text):   # no es form anywhere yet
+        return SellVerdict(False, R_COMPANION)
+    if _language.is_hard_decline(text, lang):
+        return SellVerdict(False, R_DECLINED)
+
+    if lad is not None:
+        if lad.status == upsell.STATUS_STOPPED:
+            return SellVerdict(False, R_STOPPED)
+        if lad.status == upsell.STATUS_TAPPED:
+            return SellVerdict(False, R_TAPPED)
+        if lad.status == upsell.STATUS_COMPANION:
+            return SellVerdict(False, R_COMPANION)
+        if _live(lad.companion_until, now):
+            return SellVerdict(False, R_COMPANION)
+        if _live(lad.cooldown_until, now):
+            return SellVerdict(False, R_COOLDOWN)
+        # The broke pause yields to HIS OWN pull and nothing else — the measured
+        # realness test (37/37 broke-then-buyers bought a FRESH offer).
+        if (_live(lad.offers_paused_until, now)
+                and not _language.is_fan_pull(text, lang)):
+            return SellVerdict(False, R_PAUSED)
+
+    return None
+
+
+def qualify_snapshot(cfg: dict, fan_id: int, turn: Turn, lad: LadderState | None,
+                     cnt: AskCounters, human_ask_at: datetime | None, now: datetime,
+                     *, engine="native") -> tuple[bool, str]:
+    """The one qualification decision, usable without the legacy session pool."""
+    if not cfg.get("qualification_gate_enabled"):
+        return True, "gate_off"
+    pull = _language.is_fan_pull(turn.text or "", turn.lang)
+    last_ask = max((t for t in ((lad.last_ask_at if lad is not None else None),
+                                human_ask_at) if t is not None), default=None)
+
+    ok, why = upsell.qualify(upsell.GateCtx(
+        fan_id=int(fan_id),
+        last_inbound_text=turn.text,
+        last_inbound_at=turn.at,
+        last_outbound_at=turn.our_last_at,
+        fan_spoke_last=turn.fan_spoke_last,
+        status=(lad.status if lad is not None else upsell.STATUS_IDLE),
+        offers_paused_until=(lad.offers_paused_until if lad is not None else None),
+        last_ask_at=last_ask,
+        asks_today=cnt.asks_today,
+        # Per-fan daily CENTS is stamped with a creator-local day this caller
+        # cannot resolve, and reading it against the wrong day never resets —
+        # blocking a fan for life. A stale day is a zero; the three ceilings
+        # above still bound the day.
+        daily_ask_cents=0,
+        account_offers_last_hour=cnt.account_hour,
+        account_offers_today=cnt.account_day,
+        ladder_may_open=True,
+        fan_pull=pull,
+        # 🚨 THE COLLISION THE WIDENED READERS LIVE INSIDE. `_LOW_INFO_TOKENS`
+        # holds "ok" / "yes" / "sure" and the token bar also rejects a bare
+        # "how much" — so without this the two readers fire and are refused
+        # `low_information` every time on a gate-ON account. A trigger that
+        # always refuses is worse than none: it spends the READ and reports a
+        # sale that never happens.
+        #
+        # Passed as an INPUT rather than lifted as a refusal, and that is not a
+        # style choice: `low_information` is decided before `declined`, the
+        # staleness TTL and all four ceilings, so lifting it afterwards would
+        # skip every one of them. Here the bar is satisfied and the rest of the
+        # gate still runs — which the "provenance never lifts a brake" case
+        # pins, because the first draft of this DID skip the burst cap.
+        inbound_qualifies=bool(turn.wide_ask),
+    ), now)
+    if not ok and pull and why in _PULL_LIFTS:
+        log.info("sell_lane explicit-ask lifts %s engine=%s account=%s fan=%s",
+                 why, engine, self.account_id, fan_id)
+        return True, f"pull_lifted:{why}"
+    return ok, why
+
+
+def money_brake(cfg: dict, paid7: int, open_count: int, unlocked: bool, caps_ok: bool) -> SellVerdict:
+    """Shared money and offer ceilings over a consistent read snapshot."""
+    from .ai_chatter import _MAX_OPEN_OFFERS
+    cap7 = int(cfg.get("spend_velocity_cap_7d_cents") or upsell.SPEND_VELOCITY_CAP_7D)
+    if cap7 and paid7 >= cap7:
+        return SellVerdict(False, R_SPEND_CAP_7D)
+    max_open = max(_MAX_OPEN_OFFERS, int(cfg.get("max_open_offers") or 0))
+    if open_count and unlocked:
+        open_count -= 1
+    if open_count >= max_open:
+        return SellVerdict(False, R_MAX_OPEN)
+    if not caps_ok:
+        return SellVerdict(False, R_CAPS)
+    return SellVerdict(True, OK)
+
+
 class SellLane:
     """The seller, bound to one account and one calling engine for one run.
 
@@ -502,41 +611,10 @@ class SellLane:
         if _customs.is_owed(fan):
             return SellVerdict(False, R_CUSTOM_OWED)
 
-        # Signals off his latest message. All three refuse, so the ORDER only picks
-        # which reason gets logged — and the most specific one is the most useful
-        # to whoever reads it. That is why this is not ai_chatter's order: there,
-        # HARD must win because the two carry different CONSEQUENCES (a 72h pause
-        # and a make-right apology vs a 24h pause), and this module writes none.
-        #
-        # ⚠️ `is_hard_decline` is misnamed for `en`: it returns true for ANY decline
-        # (`classify_decline(...) is not None`), hard, soft or bare-no. That is
-        # exactly what a SELL gate wants — ai_chatter stops selling on all three —
-        # so it is used deliberately, not by mistake.
-        text, lang = turn.text or "", turn.lang
-        if _language.detect_spend_regret(text, lang):
-            return SellVerdict(False, R_SPEND_REGRET)
-        if upsell.detect_companion_intent(text):   # no es form anywhere yet
-            return SellVerdict(False, R_COMPANION)
-        if _language.is_hard_decline(text, lang):
-            return SellVerdict(False, R_DECLINED)
-
         lad = await _load_ladder(self.account_id, fan_id)
-        if lad is not None:
-            if lad.status == upsell.STATUS_STOPPED:
-                return SellVerdict(False, R_STOPPED)
-            if lad.status == upsell.STATUS_TAPPED:
-                return SellVerdict(False, R_TAPPED)
-            if lad.status == upsell.STATUS_COMPANION:
-                return SellVerdict(False, R_COMPANION)
-            if _live(lad.companion_until, now):
-                return SellVerdict(False, R_COMPANION)
-            if _live(lad.cooldown_until, now):
-                return SellVerdict(False, R_COOLDOWN)
-            # The broke pause yields to HIS OWN pull and nothing else — the measured
-            # realness test (37/37 broke-then-buyers bought a FRESH offer).
-            if (_live(lad.offers_paused_until, now)
-                    and not _language.is_fan_pull(text, lang)):
-                return SellVerdict(False, R_PAUSED)
+        brake = fan_brake(fan, turn, lad, now)
+        if brake is not None:
+            return brake
 
         # Money brakes. Imported lazily: ai_chatter imports this module, so a
         # top-level import would be a cycle. Every number below is ai_chatter's own
@@ -546,28 +624,17 @@ class SellLane:
             _unlocked_since_open_offers,
         )
 
-        cap7 = int(self.cfg.get("spend_velocity_cap_7d_cents")
-                   or upsell.SPEND_VELOCITY_CAP_7D)
-        if cap7 and await _paid_cents_7d(self.account_id, fan_id, now) >= cap7:
-            return SellVerdict(False, R_SPEND_CAP_7D)
-
-        max_open = max(_MAX_OPEN_OFFERS,
-                       int(self.cfg.get("max_open_offers") or 0))
+        paid7 = await _paid_cents_7d(self.account_id, fan_id, now)
+        early = money_brake(self.cfg, paid7, 0, False, True)
+        if not early:
+            return early
         open_offers = await _open_offers(self.account_id, fan_id)
-        open_count = len(open_offers)
-        # An UNTRACKED unlock (tip_reward box, a tip, a hand-sent PPV) resolves no
-        # offer, so without this lift the ceiling stays full and the seam gags
-        # itself on a fan who has just paid.
-        if open_count and await _unlocked_since_open_offers(
-                self.account_id, fan_id, open_offers):
-            open_count -= 1
-        if open_count >= max_open:
-            return SellVerdict(False, R_MAX_OPEN)
-
-        if not await _offer_caps_ok(self.account_id, fan_id, self.cfg):
-            return SellVerdict(False, R_CAPS)
-
-        return SellVerdict(True, OK)
+        unlocked = bool(open_offers) and await _unlocked_since_open_offers(self.account_id, fan_id, open_offers)
+        early = money_brake(self.cfg, paid7, len(open_offers), unlocked, True)
+        if not early:
+            return early
+        caps_ok = await _offer_caps_ok(self.account_id, fan_id, self.cfg)
+        return money_brake(self.cfg, paid7, len(open_offers), unlocked, caps_ok)
 
     async def qualify(self, fan_id: int, turn: Turn, *,
                       counters: AskCounters | None = None,
@@ -593,48 +660,7 @@ class SellLane:
             human_ask_at = (await _human_money_signals(
                 self.account_id, [int(fan_id)], now)).get(
                     int(fan_id), _NO_MONEY).ask
-        last_ask = max((t for t in ((lad.last_ask_at if lad is not None else None),
-                                    human_ask_at) if t is not None), default=None)
-
-        ok, why = upsell.qualify(upsell.GateCtx(
-            fan_id=int(fan_id),
-            last_inbound_text=turn.text,
-            last_inbound_at=turn.at,
-            last_outbound_at=turn.our_last_at,
-            fan_spoke_last=turn.fan_spoke_last,
-            status=(lad.status if lad is not None else upsell.STATUS_IDLE),
-            offers_paused_until=(lad.offers_paused_until if lad is not None else None),
-            last_ask_at=last_ask,
-            asks_today=cnt.asks_today,
-            # Per-fan daily CENTS is stamped with a creator-local day this caller
-            # cannot resolve, and reading it against the wrong day never resets —
-            # blocking a fan for life. A stale day is a zero; the three ceilings
-            # above still bound the day.
-            daily_ask_cents=0,
-            account_offers_last_hour=cnt.account_hour,
-            account_offers_today=cnt.account_day,
-            ladder_may_open=True,
-            fan_pull=pull,
-            # 🚨 THE COLLISION THE WIDENED READERS LIVE INSIDE. `_LOW_INFO_TOKENS`
-            # holds "ok" / "yes" / "sure" and the token bar also rejects a bare
-            # "how much" — so without this the two readers fire and are refused
-            # `low_information` every time on a gate-ON account. A trigger that
-            # always refuses is worse than none: it spends the READ and reports a
-            # sale that never happens.
-            #
-            # Passed as an INPUT rather than lifted as a refusal, and that is not a
-            # style choice: `low_information` is decided before `declined`, the
-            # staleness TTL and all four ceilings, so lifting it afterwards would
-            # skip every one of them. Here the bar is satisfied and the rest of the
-            # gate still runs — which the "provenance never lifts a brake" case
-            # pins, because the first draft of this DID skip the burst cap.
-            inbound_qualifies=bool(turn.wide_ask),
-        ), now)
-        if not ok and pull and why in _PULL_LIFTS:
-            log.info("sell_lane explicit-ask lifts %s engine=%s account=%s fan=%s",
-                     why, self.engine, self.account_id, fan_id)
-            return True, f"pull_lifted:{why}"
-        return ok, why
+        return qualify_snapshot(self.cfg, fan_id, turn, lad, cnt, human_ask_at, now, engine=self.engine)
 
     # ── the send ────────────────────────────────────────────────────
 

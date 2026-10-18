@@ -3,6 +3,8 @@
 .gitignore
 
 # never bake secrets or local DB state into an image
+*.twinof
+**/*.twinof
 service/.session_secret
 service/.chatter_secret
 .session_secret
@@ -97,3 +99,11 @@ fansly/sessions/
 fansly/**/*.har
 fansly/**/*.json
 fansly/**/*.png
+
+# Nested environment and credential files are never build inputs.
+**/.env
+**/.env.*
+!**/.env.example
+**/secrets.json
+**/.session_secret
+**/.chatter_secret

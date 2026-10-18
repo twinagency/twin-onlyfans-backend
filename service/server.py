@@ -14,6 +14,12 @@ Run from the repo root with whichever venv has curl_cffi + fastapi + uvicorn:
 """
 from __future__ import annotations
 
+# Dedicated OnlyFans roles must never start the legacy schedulers or writers.
+import os as _onlyfans_role_os
+if "ONLYFANS_PROCESS_ROLE" in _onlyfans_role_os.environ:
+    raise RuntimeError("Use onlyfans_app:app for the OnlyFans API role; legacy relay startup is refused")
+
+
 import hashlib
 import logging
 import os

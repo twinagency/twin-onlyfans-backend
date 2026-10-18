@@ -42,7 +42,7 @@ def upgrade() -> None:
         sa.Column("account_id", sa.String, nullable=False),
         sa.Column("newest_post_published_at", sa.DateTime, nullable=True),
         sa.Column("oldest_post_published_at", sa.DateTime, nullable=True),
-        sa.Column("fully_backfilled", sa.Boolean, nullable=False, server_default=sa.text("0")),
+        sa.Column("fully_backfilled", sa.Boolean, nullable=False, server_default=sa.false()),
         sa.Column("last_scan_at", sa.DateTime, nullable=True),
         sa.Column("scanned_posts_total", sa.Integer, nullable=False, server_default="0"),
         sa.PrimaryKeyConstraint("account_id", name="pk_wall_scan_state"),

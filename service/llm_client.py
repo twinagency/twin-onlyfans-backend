@@ -51,7 +51,8 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal, ROUND_CEILING
 from typing import Any
 
 import httpx
@@ -174,6 +175,101 @@ def _resolve(model: str) -> tuple[LLMModel, LLMProvider]:
             f"model {model!r} maps to unknown provider {mdl.provider!r}"
         )
     return mdl, prov
+
+
+def _synthetic_scope(session, account_id, now):
+    """Internal PostgreSQL test seam; never resolves credentials or a URL."""
+    if (os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker"
+            or session.get_bind().dialect.name != "postgresql"
+            or type(account_id) is not str or not account_id or type(now) is not datetime):
+        raise LLMConfigError("a scoped synthetic worker is required")
+    from db.onlyfans_models import OfRuntime
+    if session.scalar(select(OfRuntime.account_id).where(
+            OfRuntime.account_id == account_id).with_for_update()) is None:
+        raise LLMConfigError("the synthetic account is not registered")
+    return now.astimezone(timezone.utc).replace(tzinfo=None) if now.tzinfo is not None else now
+
+
+def reserve_scoped_synthetic_call(session, *, account_id, fan_id, model, messages, now):
+    """Reserve in the existing daily ledger, committed by the caller before generation.
+
+    Seed catalogue rates and a byte-based upper estimate are for offline fake
+    calls only. They do not establish a live-provider price or token bound.
+    The common runtime row serializes reservations across fans of one account.
+    """
+    now = _synthetic_scope(session, account_id, now)
+    if type(fan_id) is not int or fan_id <= 0:
+        raise LLMConfigError("a scoped fan is required")
+    mdl, _ = _resolve(model)
+    cfg = session.scalar(select(AccountAiConfig).where(
+        AccountAiConfig.account_id == account_id).with_for_update(read=True))
+    cap = cfg.daily_cost_cap_cents if cfg is not None else None
+    if type(cap) is not int or not 0 <= cap <= 1000000:
+        raise LLMConfigError("an explicit valid daily model cap is required")
+    prompt = json.dumps(messages, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    size = len(prompt.encode())
+    if not 0 < size <= 81920:
+        raise LLMConfigError("synthetic prompt exceeds its byte budget")
+    rates = [Decimal(str(mdl.input_per_1k_cents)), Decimal(str(mdl.output_per_1k_cents))]
+    if any(not rate.is_finite() or rate <= 0 for rate in rates):
+        raise LLMConfigError("synthetic model price is unsupported")
+    reserve = int(((size*rates[0]+20000*rates[1])*100/1000).to_integral_value(rounding=ROUND_CEILING))
+    if not 1 <= reserve <= 100000000:
+        raise LLMConfigError("invalid synthetic reservation")
+    day = now.strftime("%Y-%m-%d")
+    row = session.scalar(select(GrokDailyCost).where(
+        GrokDailyCost.day == day, GrokDailyCost.account_id == account_id,
+        GrokDailyCost.provider == mdl.provider).with_for_update())
+    spent = row.cost_cents if row is not None else 0
+    calls = row.call_count if row is not None else 0
+    if type(spent) is not int or spent < 0 or type(calls) is not int or calls < 0:
+        raise LLMConfigError("invalid retained model cost evidence")
+    if spent+reserve > cap*100:
+        raise LLMCapExceeded(account_id, cap, (spent+reserve+99)//100)
+    if row is None:
+        session.add(GrokDailyCost(day=day, account_id=account_id, provider=mdl.provider,
+            cost_cents=reserve, call_count=1, is_capped=False, updated_at=now))
+    else:
+        row.cost_cents += reserve
+        row.call_count += 1
+        row.updated_at = now
+    call = GrokCall(purpose="ai_chatter", account_id=account_id, fan_id=fan_id,
+        model=model, provider=mdl.provider, endpoint="synthetic://onlyfans-native-text",
+        prompt_json=prompt, status="pending", cost_cents=reserve, was_dry_run=True, called_at=now)
+    session.add(call)
+    session.flush()
+    return call, reserve, day
+
+
+def settle_scoped_synthetic_call(session, *, account_id, call_id, reserved_millicents,
+                                  actual_millicents, now):
+    """Settle once on the original account/provider/UTC day; unknown retains the hold."""
+    now = _synthetic_scope(session, account_id, now)
+    if (type(call_id) is not int or call_id <= 0 or type(reserved_millicents) is not int
+            or not 1 <= reserved_millicents <= 100000000):
+        raise LLMConfigError("invalid synthetic settlement reference")
+    call = session.scalar(select(GrokCall).where(GrokCall.id == call_id,
+        GrokCall.account_id == account_id).with_for_update())
+    if call is None or call.endpoint != "synthetic://onlyfans-native-text" or not call.was_dry_run:
+        raise LLMConfigError("synthetic call evidence is missing")
+    if call.status != "pending":
+        return call.cost_cents if call.status == "done" else None
+    if call.cost_cents != reserved_millicents:
+        raise LLMConfigError("synthetic reservation evidence changed")
+    if actual_millicents is None:
+        call.status = "unknown"
+        return None
+    if type(actual_millicents) is not int or not 0 <= actual_millicents <= 100000000:
+        raise LLMConfigError("invalid synthetic usage evidence")
+    day = call.called_at.strftime("%Y-%m-%d")
+    row = session.scalar(select(GrokDailyCost).where(GrokDailyCost.day == day,
+        GrokDailyCost.account_id == account_id, GrokDailyCost.provider == call.provider).with_for_update())
+    if row is None or row.cost_cents < reserved_millicents:
+        raise LLMConfigError("retained synthetic reservation is missing")
+    row.cost_cents += actual_millicents-reserved_millicents
+    row.updated_at = now
+    call.status, call.cost_cents = "done", actual_millicents
+    return actual_millicents
 
 
 def _resolve_effort(mdl: LLMModel, requested: str, stored: str = "") -> str:
@@ -809,6 +905,9 @@ async def chat(
     Raises:
         LLMConfigError, LLMCapExceeded, LLMHTTPError.
     """
+    import os
+    if "ONLYFANS_PROCESS_ROLE" in os.environ:
+        raise RuntimeError("Legacy model calls are unavailable in dedicated OnlyFans roles")
     mdl, prov = _resolve(model)
     # Before the cap reservation and the audit row, exactly where the old
     # combined _resolve raised: a call with no usable credential must cost

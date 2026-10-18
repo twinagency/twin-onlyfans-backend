@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 # The value the dashboard's `ONLYFANS_PREVIEW_SCHEMA_VERSION` declares. These
 # two literals are a contract; changing one without the other is a breaking
 # change and is detected at runtime in both directions.
-SCHEMA_VERSION = "of-preview.v1"
+SCHEMA_VERSION = "of-preview.v2"
 
 # What this service can serve. Newest first is a habit, not a rule — the
 # service emits SCHEMA_VERSION regardless of which supported value the client
@@ -96,6 +96,7 @@ DELIVERY_OUTCOMES = (
     "queued",
     "dispatching",
     "sent",
+    "retracted",
     "partial",
     "unknown",
     "refused",

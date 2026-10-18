@@ -1,4 +1,4 @@
-"""The read repository boundary — the only SQL in this package.
+"""The read repository boundary, including bounded native workspace projections.
 
 Everything above this module (service.py, projections.py, contract.py) is pure
 and takes rows as plain dataclasses, so the whole read path can be driven
@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, func, case
 from sqlalchemy.exc import SQLAlchemyError
 
 from db.engine import get_session
@@ -46,7 +46,12 @@ from db.models import (
     parse_ts,
 )
 
+from db.onlyfans_models import OfRuntime
+
+from .contract import UNRESOLVED_OUTCOMES
 from .errors import Unavailable
+
+MAX_ACCOUNT_READ = 500
 
 #: How many messages of one conversation the detail read returns. The dashboard
 #: renders a thread, not an archive; the newest window is the one an operator
@@ -115,6 +120,7 @@ class DeliveryRow:
     evidence_ref: str | None
     detail: str | None
     recorded_at: datetime | None
+    origin: str | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +203,130 @@ def _storage_failure(exc: Exception) -> Unavailable:
 class SqlOnlyFansReadRepo:
     """The real repository: async SQLAlchemy over this relay's own tables."""
 
+    async def workspace(self, *, tenant_id, account_id, section, cursor=None, limit=25):
+        from .workspace import read_workspace
+        try:
+            async with get_session() as s:
+                return await read_workspace(s, tenant_id=tenant_id, account_id=account_id,
+                    section=section, cursor=cursor, limit=limit)
+        except (SQLAlchemyError, ValueError, TypeError, RecursionError) as exc:
+            raise _storage_failure(exc) from exc
+
+    async def operations(self, *, tenant_id: str | None, account_id: str) -> dict | None:
+        """Account-scoped counters only; a refusal never becomes healthy/zero."""
+        from db.onlyfans_models import OfIngress, OfWork
+        from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent, OfNativePlan, OfCommerceEvidence
+        from db.models import AccountAiConfig, GrokCall, GrokDailyCost
+        from .contract import iso
+        try:
+            async with get_session() as s:
+                binding = select(OfCreatorBinding.id).where(
+                    OfCreatorBinding.account_id == account_id,
+                    OfCreatorBinding.channel == "onlyfans",
+                    OfCreatorBinding.revoked_at.is_(None),
+                )
+                if tenant_id is not None:
+                    binding = binding.where(OfCreatorBinding.tenant_id == tenant_id)
+                # Prevent revocation from committing between authorization and
+                # these private reads; no model/provider call crosses this lock.
+                if await s.scalar(binding.with_for_update(read=True)) is None:
+                    return None
+                now = await s.scalar(select(func.clock_timestamp()))
+                naive_now = now.replace(tzinfo=None)
+                runtime = await s.get(OfRuntime, account_id)
+                policy = await s.get(OfDeliveryPolicy, account_id)
+                cfg = await s.get(AccountAiConfig, account_id)
+                cap = cfg.daily_cost_cap_cents if cfg is not None else None
+                if cap is not None and (type(cap) is not int or not 0 <= cap <= 1000000):
+                    raise Unavailable("storage_unavailable")
+                day = naive_now.strftime("%Y-%m-%d")
+                totals = (await s.execute(select(
+                    func.coalesce(func.sum(GrokDailyCost.cost_cents), 0),
+                    func.coalesce(func.sum(GrokDailyCost.call_count), 0), func.count(),
+                    func.min(GrokDailyCost.cost_cents), func.max(GrokDailyCost.cost_cents),
+                    func.min(GrokDailyCost.call_count)).where(
+                    GrokDailyCost.account_id == account_id, GrokDailyCost.day == day))).one()
+                spent, calls, providers, minimum, maximum, min_calls = totals
+                if (minimum is not None and minimum < 0) or (min_calls is not None and min_calls < 0):
+                    raise Unavailable("storage_unavailable")
+                unresolved_calls = await s.scalar(select(func.count()).select_from(GrokCall).where(
+                    GrokCall.account_id == account_id, GrokCall.status.in_(("pending", "unknown"))))
+                model_costs = {"day": day, "unit": "usd_millicents", "spentMillicents": spent,
+                    "capPerProviderMillicents": None if cap is None else cap*100,
+                    "calls": calls, "unresolvedCalls": unresolved_calls, "providers": providers}
+
+                async def counts(model, status, values):
+                    rows = (await s.execute(select(status, func.count()).where(
+                        model.account_id == account_id, status.in_(values)).group_by(status))).all()
+                    return {v: dict(rows).get(v, 0) for v in values}
+
+                ingress = await counts(OfIngress, OfIngress.status, ("pending", "quarantined"))
+                work = await counts(OfWork, OfWork.status, ("waiting", "claimed", "blocked"))
+                delivery = await counts(OfTextIntent, OfTextIntent.status, ("queued", "dispatching", "unknown"))
+                # Holds describe each conversation's current canonical input.
+                # Historical unknown/refused plans remain durable evidence, but
+                # must not hold a newer input after it has superseded them.
+                plan_statuses = ("generating", "ready", "unknown", "refused", "stale")
+                plan_status = case(
+                    (and_(OfNativePlan.status.in_(("ready", "queued")),
+                        or_(OfNativePlan.model_call_id.is_(None), OfNativePlan.cost_settled_at.is_(None))), "unknown"),
+                    (and_(OfNativePlan.status == "generating", OfNativePlan.expires_at <= naive_now), "unknown"),
+                    (and_(OfNativePlan.status == "ready", OfNativePlan.expires_at <= naive_now), "stale"),
+                    else_=OfNativePlan.status)
+                plan_counts = dict((await s.execute(select(plan_status, func.count()).join(
+                    OfConversationState, and_(OfConversationState.account_id == OfNativePlan.account_id,
+                        OfConversationState.fan_id == OfNativePlan.fan_id,
+                        OfConversationState.input_revision == OfNativePlan.input_revision)
+                ).where(OfNativePlan.account_id == account_id, OfNativePlan.status.in_((*plan_statuses, "queued")))
+                    .group_by(plan_status))).all())
+                planning = {status: plan_counts.get(status, 0) for status in plan_statuses}
+                awaiting_projection = await s.scalar(select(func.count()).select_from(OfTextIntent).where(
+                    OfTextIntent.account_id == account_id, OfTextIntent.status == "accepted", OfTextIntent.projected_at.is_(None)))
+                retained_unknown = await s.scalar(select(func.count()).select_from(OfMessageDelivery).where(
+                    OfMessageDelivery.account_id == account_id, OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES)))
+                oldest = await s.scalar(select(func.min(OfWork.due_at)).where(
+                    OfWork.account_id == account_id, OfWork.status == "waiting"))
+                age = max(0, int((naive_now - oldest).total_seconds())) if oldest else None
+                reasons = []
+                if await s.scalar(select(OfCommerceEvidence.evidence_hash).where(
+                        OfCommerceEvidence.account_id == account_id, OfCommerceEvidence.status == "conflict").limit(1)):
+                    reasons.append("commerce_evidence_conflict")
+                if unresolved_calls: reasons.append("model_cost_unresolved")
+                if cap is not None and maximum is not None and maximum >= cap*100:
+                    reasons.append("model_budget_exhausted")
+                if runtime is None: reasons.append("runtime_not_registered")
+                else:
+                    if not runtime.enabled: reasons.append("runtime_disabled")
+                    if runtime.recovery_needed: reasons.append("history_recovery_required")
+                    if runtime.pending_events != ingress["pending"]: reasons.append("intake_count_mismatch")
+                    if runtime.last_sync_at is None or (naive_now-runtime.last_sync_at).total_seconds() > 1800:
+                        reasons.append("history_not_current")
+                    elif runtime.last_sync_at > naive_now:
+                        reasons.append("history_sync_time_invalid")
+                if ingress["quarantined"]: reasons.append("history_quarantined")
+                if delivery["unknown"] or retained_unknown: reasons.append("delivery_unresolved")
+                if delivery["dispatching"]: reasons.append("delivery_in_progress")
+                if awaiting_projection: reasons.append("receipt_projection_pending")
+                if planning["unknown"]: reasons.append("generation_unresolved")
+                if planning["stale"] or planning["refused"]: reasons.append("generation_held")
+                if policy is None or not policy.enabled: reasons.append("delivery_disabled")
+                if policy is not None and policy.used_units >= policy.limit_units: reasons.append("cap_exhausted")
+                if age is not None and age > 120: reasons.append("waiting_queue_older_than_two_minutes")
+                return {"schemaVersion": "of-operations.v2", "accountId": account_id, "asOf": iso(now),
+                        "providerConnectionVerified": False, "reasons": reasons,
+                        "modelCosts": model_costs,
+                        "intake": ingress, "planning": planning, "work": {**work, "oldestWaitingAgeSeconds": age},
+                        "delivery": {**delivery, "acceptedAwaitingProjection": awaiting_projection,
+                                     "retainedUnresolvedReceipts": retained_unknown},
+                        "runtime": {"registered": runtime is not None, "enabled": bool(runtime and runtime.enabled),
+                                    "recoveryRequired": bool(runtime is None or runtime.recovery_needed),
+                                    "lastCompleteSyncAt": iso(runtime.last_sync_at) if runtime else None},
+                        "policy": None if policy is None else {"revision": policy.revision, "enabled": policy.enabled,
+                                    "usedUnits": policy.used_units, "limitUnits": policy.limit_units,
+                                    "nextDispatchAt": iso(policy.next_dispatch_at)}}
+        except SQLAlchemyError as exc:
+            raise _storage_failure(exc) from exc
+
     async def list_bindings(
         self, *, tenant_id: str | None, creator_id: str | None, account_id: str | None
     ) -> list[BindingRow]:
@@ -229,7 +359,9 @@ class SqlOnlyFansReadRepo:
                     stmt = stmt.where(OfCreatorBinding.creator_id == creator_id)
                 if account_id is not None:
                     stmt = stmt.where(OfCreatorBinding.account_id == account_id)
-                rows = (await s.execute(stmt)).all()
+                rows = (await s.execute(stmt.limit(MAX_ACCOUNT_READ + 1))).all()
+                if len(rows) > MAX_ACCOUNT_READ:
+                    raise Unavailable("scope_too_large", "Narrow this read to one creator or account.")
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
         return [
@@ -279,7 +411,7 @@ class SqlOnlyFansReadRepo:
                     # Newest first, with the fan id as a stable tiebreak so a
                     # page boundary cannot repeat or skip a row when two chats
                     # share a timestamp.
-                    .order_by(Chat.last_message_at.desc(), Chat.fan_id.desc())
+                    .order_by(Chat.last_message_at.desc().nullslast(), Chat.fan_id.desc())
                     .limit(limit)
                 )
                 if before is not None:
@@ -364,6 +496,7 @@ class SqlOnlyFansReadRepo:
         )
 
     async def conversation_state(self, *, account_id: str, fan_id: int) -> StateRow | None:
+        unresolved = None
         try:
             async with get_session() as s:
                 row = (
@@ -381,17 +514,41 @@ class SqlOnlyFansReadRepo:
                         )
                     )
                 ).first()
+                # The visible thread is bounded; an older unsettled receipt
+                # still holds the conversation even if its control pointer was
+                # never written. Derive an attention state without repairing
+                # storage or replacing an explicit authority pointer.
+                if row is None or not row[3]:
+                    unresolved = (
+                        await s.execute(
+                            select(
+                                OfMessageDelivery.attempt_id,
+                                OfMessageDelivery.message_id,
+                                OfMessageDelivery.recorded_at,
+                            ).where(
+                                OfMessageDelivery.account_id == account_id,
+                                OfMessageDelivery.fan_id == fan_id,
+                                OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES),
+                            ).order_by(
+                                OfMessageDelivery.recorded_at.desc().nulls_last(),
+                                OfMessageDelivery.message_id.desc(),
+                            ).limit(1)
+                        )
+                    ).first()
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
-        if row is None:
+        if row is None and unresolved is None:
             return None
         return StateRow(
-            mode=row[0] or "automated",
-            revision=int(row[1] or 0),
-            takeover_state=row[2] or "none",
-            unresolved_attempt_id=row[3],
-            requires_attention=bool(row[4]),
-            updated_at=row[5],
+            mode=(row[0] or "paused") if row else "paused",
+            revision=int(row[1] or 0) if row else 0,
+            takeover_state=(row[2] or "none") if row else "none",
+            unresolved_attempt_id=(
+                unresolved[0] or f"message:{unresolved[1]}"
+                if unresolved is not None else row[3]
+            ),
+            requires_attention=bool(unresolved is not None or (row and row[4])),
+            updated_at=unresolved[2] if unresolved is not None else row[5],
         )
 
     async def messages(self, *, account_id: str, fan_id: int, limit: int) -> list[MessageRow]:
@@ -454,9 +611,11 @@ class SqlOnlyFansReadRepo:
                             OfMessageDelivery.evidence_ref,
                             OfMessageDelivery.detail,
                             OfMessageDelivery.recorded_at,
+                            OfMessageDelivery.origin,
                         ).where(
                             OfMessageDelivery.account_id == account_id,
                             OfMessageDelivery.fan_id == fan_id,
+                            OfMessageDelivery.message_id.in_(select(Message.message_id).where(Message.account_id == account_id, Message.fan_id == fan_id).order_by(Message.message_id.desc()).limit(DETAIL_MESSAGE_LIMIT)),
                         )
                     )
                 ).all()
@@ -470,6 +629,7 @@ class SqlOnlyFansReadRepo:
                 evidence_ref=row[3],
                 detail=row[4],
                 recorded_at=row[5],
+                origin=row[6],
             )
             for row in rows
         }
@@ -513,9 +673,9 @@ class SqlOnlyFansReadRepo:
         """What this fan has actually PAID for.
 
         A paid message is the durable proof available to this read: the relay
-        flips `messages.is_paid` one-way from the purchase feed
-        (`models.is_paid_ratchet`) and never un-flips it. Offered-but-unbought
-        PPV rows stay NULL, so they are excluded — which is the product rule
+        historically ratchets `messages.is_paid` from the purchase feed.
+        Dedicated canonical reversal evidence may explicitly revoke it.
+        Offered-but-unbought PPV rows are NULL/false and excluded, the product rule
         `ownership.py` states at length: dedup bought, never sent.
         """
         try:
@@ -547,29 +707,14 @@ class SqlOnlyFansReadRepo:
         return out
 
     async def account_activity_anchor(self, *, account_id: str) -> datetime | None:
-        """The newest observed activity for one account — the freshness anchor.
-
-        It reads `chats.last_message_at`, not `max(messages.created_at)`, on
-        purpose: the chats row is maintained by the inbox poll and is not the
-        column that has held an empty string in production, so the anchor
-        cannot be poisoned by one bad message row. `None` means this relay has
-        no observed activity for the account, which the projection reports as
-        "no anchor" rather than substituting the current time — a read that
-        stamped itself with `now` would always look fresh.
-        """
+        """Last complete durable synchronization; message activity is not health."""
         try:
             async with get_session() as s:
-                row = (
-                    await s.execute(
-                        select(Chat.last_message_at)
-                        .where(Chat.account_id == account_id)
-                        .order_by(Chat.last_message_at.desc())
-                        .limit(1)
-                    )
-                ).first()
+                row = (await s.execute(select(OfRuntime.last_sync_at, OfRuntime.recovery_needed)
+                       .where(OfRuntime.account_id == account_id))).first()
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
-        return row[0] if row else None
+        return row[0] if row and not row[1] else None
 
 
 def _media_ids(raw: str | None, *, fallback: int) -> list[int]:

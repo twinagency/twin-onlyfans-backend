@@ -31,6 +31,8 @@ import accounts as account_registry
 import live_rev
 import proxies as proxy_registry
 from of_signer import sign
+from of_message_contract import wrap_text_as_p as _wrap_text_as_p, message_body
+from onlyfans_runtime.role_guard import require_legacy_provider_role
 
 # Dedicated logger so proxy/upstream errors are filterable from the rest
 # of the relay log noise: `grep "of-client" /tmp/of-relay.log`.
@@ -199,27 +201,6 @@ class OFAPIError(Exception):
         self.response = response
 
 
-def _wrap_text_as_p(text: str) -> str:
-    """OF web's chat textarea is a rich-text editor that always emits a
-    `<p>…</p>` wrapper. Plain-text sends to fans work without wrapping,
-    but creator-to-creator sends 400 unless wrapped — match OF web's
-    body exactly here. Multi-paragraph text becomes one `<p>` with
-    `<br>` separators, mirroring what the OF editor produces."""
-    if not text:
-        return text
-    stripped = text.strip()
-    # Already HTML? Don't double-wrap.
-    if stripped.startswith("<p") or stripped.startswith("<P"):
-        return text
-    # Internal newlines → <br>, then wrap the whole thing.
-    escaped = (
-        stripped
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\n", "<br />")
-    )
-    return f"<p>{escaped}</p>"
 
 
 # The release-form arrays, which OF's composer always emits together. A send
@@ -270,6 +251,10 @@ class OFClient:
     def __init__(self, session_dict: dict, *, proxies: dict | None = None,
                  proxy_label: str | None = None,
                  timeout_s: int = DEFAULT_TIMEOUT_S):
+        # Dedicated OnlyFans roles currently use synthetic transports only.
+        # Presence, including an invalid/empty value, must not fall through to
+        # captured-session parsing or create a live HTTP client.
+        require_legacy_provider_role()
         h = session_dict["headers"]
         rules = session_dict["signing"]["rules"]
         for k in ("static_param", "start", "end", "checksum_indexes", "checksum_constant"):
@@ -323,6 +308,7 @@ class OFClient:
           2. Per-session-file binding (assigned_session == path.name)
              — legacy; remains supported for back-compat.
         """
+        require_legacy_provider_role()
         path = Path(path)
         data = json.loads(path.read_text())
         if "proxies" not in kw and "proxy_label" not in kw:
@@ -341,6 +327,7 @@ class OFClient:
     def from_account(cls, account_id: str, **kw) -> "OFClient":
         """Load the OFClient that serves a specific account. The session lives
         at sessions/accounts/<account_id>/latest.json."""
+        require_legacy_provider_role()
         path = account_registry.latest_session_path(account_id)
         if path is None:
             raise FileNotFoundError(
@@ -353,6 +340,7 @@ class OFClient:
     def from_latest_session(cls, **kw) -> "OFClient":
         """Legacy entry point: resolves the *currently-active* account and
         loads its session. Kept so single-account callers keep working."""
+        require_legacy_provider_role()
         aid = account_registry.get_active_account_id()
         if not aid:
             raise FileNotFoundError(
@@ -447,6 +435,7 @@ class OFClient:
         Also the single place we passively observe OF's current build hash:
         every response carries `x-of-rev` in the headers, which feeds the
         global live-rev cache for drift detection (see live_rev.py)."""
+        require_legacy_provider_role()
         headers = self._signed_headers(url)
         if json_body is not None:
             headers["Content-Type"] = "application/json"
@@ -518,6 +507,7 @@ class OFClient:
         download, /users/list, convert upload) funnel through it, so one
         half-second proxy blip can no longer hard-fail a request."""
         for attempt in range(tries):
+            require_legacy_provider_role()
             try:
                 return fn()
             except requests.exceptions.ProxyError as e:
@@ -1527,36 +1517,9 @@ class OFClient:
 
         Returns the created message object (same shape as items in
         /chats/.../messages.list)."""
-        # GIF sends pass an empty text — OF stores the GIF reference under
-        # the top-level `giphyId` field, not in `mediaFiles`. Skip the <p>
-        # wrap so the empty string survives literally (OF echoes "text":""
-        # back). Verified live 2026-05-23 via captured cURL.
-        wrapped_text = "" if (giphy_id and not text) else _wrap_text_as_p(text)
-        body = {
-            "text": wrapped_text,
-            "lockedText": locked_text,
-            "mediaFiles": media_files or [],
-            "price": price,
-            # `previews` is plural — list of vault media ids that ride along
-            # as UNLOCKED teasers when `price > 0`. Empty list = everything
-            # locked. Verified live on OF web 2026-05-23: sending 3 mediaFiles
-            # + price=5 + previews=[id1] yields 1 free thumb + 2 locked.
-            "previews": previews or [],
-            # Release-form consent fields. OF web always sends these as
-            # empty arrays; omitting them seems to be why creator-to-
-            # creator sends 400 "Cannot send message to this user".
-            "rfTag": [],
-            "rfGuest": [],
-            "rfPartner": [],
-            "isForward": is_forward,
-        }
-        if giphy_id:
-            # Sibling of mediaFiles, not nested inside it. OF echoes it on
-            # the response object (`"giphyId":"…","mediaCount":0`). One per
-            # send — desktop OF doesn't let you attach multiple GIFs.
-            body["giphyId"] = str(giphy_id)
-        if reply_to_message_id is not None:
-            body["replyToMessageId"] = reply_to_message_id
+        body = message_body(text, locked_text=locked_text, price=price,
+            media_files=media_files, previews=previews, is_forward=is_forward,
+            reply_to_message_id=reply_to_message_id, giphy_id=giphy_id)
         # `userTags` is OF's "tag other creators in this message" field —
         # numeric user ids, captured from /self/tagged-friend-users. OF
         # rejects unknown / non-friend ids with 400, so the picker UI is
@@ -2799,6 +2762,7 @@ class OFClient:
             done: list[dict | None] = [None] * part_count
 
             def _put_part(n: int) -> None:
+                require_legacy_provider_role()
                 sess = requests.Session(impersonate=IMPERSONATE)
                 if self.http.proxies:
                     sess.proxies.update(self.http.proxies)
@@ -2808,6 +2772,7 @@ class OFClient:
                         chunk = fh.read(_PART_SIZE)
                     last: Exception | None = None
                     for _ in range(3):      # same CONNECT-blip tolerance as _proxy_retry
+                        require_legacy_provider_role()
                         try:
                             r = sess.put(by_part[n], data=chunk,
                                          headers={"Content-Type": ct},

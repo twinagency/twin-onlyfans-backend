@@ -91,9 +91,9 @@ def upgrade() -> None:
             sa.Column("duration_sec", sa.Integer, nullable=True),
             sa.Column("price_cents", sa.Integer, nullable=False, server_default="0"),
             sa.Column("tip_unlock_cents", sa.Integer, nullable=False, server_default="0"),
-            sa.Column("is_free_teaser", sa.Boolean, nullable=False, server_default="0"),
+            sa.Column("is_free_teaser", sa.Boolean, nullable=False, server_default=sa.false()),
             sa.Column("tags", sa.Text, nullable=False, server_default="[]"),
-            sa.Column("enabled", sa.Boolean, nullable=False, server_default="1"),
+            sa.Column("enabled", sa.Boolean, nullable=False, server_default=sa.true()),
             sa.Column("created_at", sa.DateTime, nullable=False),
             sa.Column("updated_at", sa.DateTime, nullable=False),
         )

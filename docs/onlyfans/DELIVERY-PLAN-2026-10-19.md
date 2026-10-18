@@ -93,8 +93,8 @@ attribution and refunds do not count as cleared revenue. The paired contracts
 are `of-configuration.v2`, `of-campaigns.v2`, `of-workspace.v2`, and
 `of-operations.v3`; frontend and backend must be deployed together.
 
-Still to implement: native upload admission/worker/preview delivery, wider inbound selling behavior, complete audience
-import, and the combined earnings view. The existing upload owner uses temporary
+Still to implement: native upload admission/worker/preview delivery, wider inbound selling behavior and complete audience
+import. The existing upload owner uses temporary
 scheduled carrier posts and cleanup evidence; no bypass into the old provider
 client has been added. These remaining items are not described as live or done.
 Actual selected-account provider formats, credentials and deployment access
@@ -109,8 +109,9 @@ passes without importing the model adapter at API startup; the route inventory
 explicitly lists the existing campaign/content/connection command surfaces.
 The 52 admin-API checks, four affected frontend contract checks, TypeScript and
 production Next build pass. Campaign reporting passed its five focused PG cases
-and the broader campaign/media suite. A complete connected browser acceptance
-and live provider/model deployment are still release gates.
+and the broader campaign/media suite. The later vault/earnings checkpoints below
+record the completed local browser acceptance. Live provider/model deployment
+remains a release gate.
 
 
 ## Vault editing checkpoint
@@ -150,3 +151,43 @@ Both saved Desktop Commander connections remain offline. A selected actual OF
 account/session, reachable deployment and configured private Twin source are
 still needed for provider-shape validation and the live pilot. No outgoing
 activation or production allowance was changed by these checks.
+
+## Combined earnings and onboarding checkpoint
+
+The Overview now reads the existing Twin revenue cache and the native canonical
+ledger for one exact reporting window. The cache exposes the window it already
+uses; this adds no second rollup, background job or financial record owner.
+Periods are 1W, 1M and 3M using the existing Sydney calendar/DST resolver.
+The read-only native route is `GET /onlyfans/api/v1/earnings?start=...&end=...`,
+under the existing read-token and `of-preview.v2` envelope. Its nested contract
+is `of-earnings.v1`; the dashboard combines it as `combined-earnings.v1`.
+
+Telegram shows recorded Stars and the existing configured USD payout estimate.
+OnlyFans shows cleared gross USD and recorded net only when every included
+cleared row supplies net. It also shows pending/refunded counts and account
+coverage. No fee percentage, revenue share or combined mixed-basis grand total
+is inferred. OF numbers require current, complete native ledger evidence for
+the requested window and all authorized accounts. Missing, stale, held,
+unsupported or unverified coverage returns unavailable values, not zero.
+The read selects no sealed credentials and never contacts the provider.
+The combined operator API rejects agency/view-as access and clears private
+values on session expiry.
+
+The full browser run exposed an existing account-selection race after
+registration. URL correction now consults the current request state instead of
+an older rendered account list; a deliberately delayed response verifies that
+the newly registered account and connection editor remain selected.
+
+Verification: five focused earnings PostgreSQL cases, the earnings contract
+checks, five existing revenue-window cases and the actual HTTP integration
+passed. The complete browser/API/worker/PG flow then passed, including earnings
+periods, unavailable-versus-zero values, access/session checks, mobile layout
+and delayed onboarding. No real revenue, provider, model or fan was used.
+
+Before frontend release, integrate this branch with current main using a normal
+three-way merge or rebase. Main has newer viewer-specific revenue cache keys
+and platform-cut terms. Preserve those changes together with the new
+`reportWindow` metadata; do not overwrite main with this older feature checkout.
+A three-way merge of the cache file was rehearsed without conflicts and retained
+both `viewerCacheKey(access)` and `reportWindow`. Post-merge verification and
+selected-account live acceptance remain required.

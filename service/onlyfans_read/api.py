@@ -202,3 +202,19 @@ async def get_conversation(
         log.exception("onlyfans conversation read failed")
         return _refusal(Unavailable("read_failed", "The OnlyFans read did not succeed."))
     return JSONResponse(body, status_code=200, headers=_PRIVATE_HEADERS)
+
+
+@router.get("/earnings")
+async def earnings(request:Request):
+    try:
+        principal=await _authenticate(request)
+        from .errors import BadRequest
+        if set(request.query_params)!={"start","end"} or any(len(request.query_params.getlist(k))!=1 for k in request.query_params):
+            raise BadRequest("invalid_earnings_window","Supply one explicit start and end timestamp.")
+        from db.engine import get_session
+        from .earnings import read_earnings
+        async with get_session() as session:
+            value=await read_earnings(session,tenant_id=principal.tenant_id,start=request.query_params["start"],end=request.query_params["end"])
+    except OnlyFansReadError as exc:return _refusal(exc)
+    except Exception:return _refusal(Unavailable("earnings_unavailable","Recorded OnlyFans earnings could not be read."))
+    return JSONResponse({"schemaVersion":SCHEMA_VERSION,"earnings":value},headers=_PRIVATE_HEADERS)

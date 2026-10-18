@@ -336,6 +336,19 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                         scoped_page=client.get(web+"/onlyfans/operations"+query,headers={"Cookie":cookie})
                         assert scoped_page.status_code==200,scoped_page.text
                         assert "data-of-cap" not in scoped_page.text, "invalid or mismatched scope must not choose another account"
+                with httpx.Client(timeout=40,trust_env=False) as combined_client:
+                    combined_path=web+"/api/combined-earnings?period=1M"
+                    assert combined_client.get(combined_path).status_code==401
+                    assert combined_client.get(combined_path,headers={"Cookie":cookie+"; twin_agency_access=synthetic-agency-token"}).status_code==403
+                    combined=combined_client.get(combined_path,headers={"Cookie":cookie})
+                    assert combined.status_code==200,combined.text
+                    combined_data=combined.json()
+                    assert combined_data["telegram"]["status"]=="unavailable"  # stub has no revenue service
+                    assert combined_data["telegram"]["netStars"] is None
+                    assert combined_data["onlyfans"]["status"]=="unavailable"
+                    assert combined_data["onlyfans"]["clearedGrossCents"] is None
+                    assert combined_data["onlyfans"]["window"]==combined_data["window"]
+                    assert combined_client.get(combined_path+"&clone=other",headers={"Cookie":cookie}).status_code==400
                 if os.environ.get("ONLYFANS_TEST_CLIENT") == "http":
                     from onlyfans_operator_fixture import check_campaign_http
                     with httpx.Client(timeout=40, trust_env=False) as client:

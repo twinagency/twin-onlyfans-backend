@@ -9,6 +9,21 @@ The current remaining-work plan is [DELIVERY-PLAN-2026-10-19.md](DELIVERY-PLAN-2
 The native ledger continuation adds a default-off, bounded payment/refund reader
 into the existing canonical records. It has not been validated with a real provider.
 
+The current continuation also provides audited metadata/internal folders, shared
+Twin facts, campaign detail reports and the combined earnings overview. Read-only
+earnings uses `/onlyfans/api/v1/earnings` under the existing read token and
+`of-preview.v2` envelope, with nested `of-earnings.v1`. It reads verified native
+ledger coverage and reports unavailable values when evidence is incomplete.
+The complete local browser/API/worker/PG flow now passes; the older interrupted
+browser result below is retained only as historical evidence.
+
+Before deploying the frontend, merge/rebase onto current main and retain its
+newer `viewerCacheKey` and platform-cut changes alongside `reportWindow` metadata.
+Do not copy this older feature checkout over current production source. The
+normal three-way cache merge was rehearsed, but the integrated release still
+requires verification. Deployment access and a selected real OF account remain
+live-release gates.
+
 ## Implemented paths
 
 | Operator workflow | Implementation |
@@ -104,7 +119,7 @@ and purchase/refund evidence before calling this production-ready.
 The current parser deliberately refuses unsupported history shapes. Synthetic commerce tests do not establish real payment/reversal acceptance.
 The native ledger reader additionally requires explicit provider transaction
 evidence and retains unlinked PPV holds; live linkage remains a release gate. Native media upload/deletion, provider bulk queues/unsend, posts/stories,
-full roster import, campaign reply/open/revenue attribution and full Fastt/
+full roster import, campaign open/causal attribution and full Fastt/
 OnlyFans feature parity remain outside this checkpoint.
 
 The hosted private Site is a sample-data presentation of the product components.

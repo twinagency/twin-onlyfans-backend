@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from db.models import AccountAiConfig, CatalogItem, CATALOG_IS_SINGLE, ContentOffer, OfCreatorBinding, Transaction
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_delivery_models import OfDeliveryPolicy
+from db.onlyfans_connection_models import OfProviderConnection
 from .contract import iso
 from .errors import BadRequest, Unavailable
 
@@ -137,10 +138,13 @@ async def read_workspace(s,*,tenant_id,account_id,section,cursor=None,limit=25):
     if tenant_id is not None:binding=binding.where(OfCreatorBinding.tenant_id==tenant_id)
     if await s.scalar(binding.with_for_update(read=True)) is None:return None
     runtime=await s.get(OfRuntime,account_id)
+    connection=await s.get(OfProviderConnection,account_id)
+    now=(await s.scalar(select(func.clock_timestamp()))).replace(tzinfo=None)
     snapshot={"schemaVersion":SCHEMA,"section":section,"accountId":account_id,
         "asOf":iso(await s.scalar(select(func.transaction_timestamp()))),
         "lastCompleteSyncAt":iso(runtime.last_sync_at) if runtime else None,
-        "historyRecoveryRequired":bool(runtime is None or runtime.recovery_needed or runtime.last_sync_at is None),"providerConnectionVerified":False}
+        "historyRecoveryRequired":bool(runtime is None or runtime.recovery_needed or runtime.last_sync_at is None),
+        "providerConnectionVerified":bool(connection and runtime and connection.binding_id==runtime.binding_id and connection.status=='verified' and connection.verified_at is not None and connection.expires_at>now)}
     if section=="content":
         query=select(CatalogItem).where(CatalogItem.account_id==account_id,CATALOG_IS_SINGLE)
         if after is not None:query=query.where(CatalogItem.id>after)

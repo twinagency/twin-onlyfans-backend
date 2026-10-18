@@ -114,7 +114,7 @@ class OfCommerceEvidence(Base):
 class OfDeliveryPolicy(Base):
     __tablename__ = "of_delivery_policy"
     __table_args__ = (
-        CheckConstraint("transport_kind = 'synthetic'", name="transport_kind"),
+        CheckConstraint("transport_kind IN ('synthetic','native')", name="transport_kind"),
         CheckConstraint("limit_units >= 0 AND limit_units <= 10000", name="limit_units"),
         CheckConstraint("used_units >= 0", name="used_units"),
         CheckConstraint("queued_count >= 0 AND queued_count <= 1000", name="queued_count"),
@@ -155,7 +155,7 @@ class OfTextIntent(Base):
         UniqueConstraint("account_id", "command_key", name="uq_of_text_intent_command"),
         UniqueConstraint("account_id", "attempt_id", name="uq_of_text_intent_attempt"),
         UniqueConstraint("account_id", "provider_message_id", name="uq_of_text_intent_provider_message"),
-        CheckConstraint("origin IN ('automated','manual')", name="origin"),
+        CheckConstraint("origin IN ('automated','manual','campaign')", name="origin"),
         CheckConstraint("status IN ('queued','dispatching','accepted','not_accepted','unknown','cancelled','refused')", name="status"),
         CheckConstraint("provider_message_id IS NULL OR provider_message_id > 0", name="provider_message_id"),
         CheckConstraint("(catalog_item_id IS NULL AND media_json = '[]' AND preview_json = '[]' AND price_cents = 0 AND catalog_snapshot_json IS NULL AND offer_id IS NULL) OR (catalog_item_id IS NOT NULL AND media_json <> '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents >= 300 AND price_cents <= 20000)",

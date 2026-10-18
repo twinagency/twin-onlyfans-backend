@@ -148,7 +148,7 @@ def make_scratch(admin_url: str):
     base = make_url(admin_url)
     name = f"of_b1_migration_{uuid.uuid4().hex[:8]}"
 
-    admin = psycopg2.connect(admin_url)
+    admin = psycopg2.connect(base.set(drivername="postgresql").render_as_string(hide_password=False))
     admin.autocommit = True
     with admin.cursor() as cur:
         cur.execute(f'DROP DATABASE IF EXISTS "{name}"')
@@ -165,7 +165,7 @@ def make_scratch(admin_url: str):
         admin.close()
 
     target = base.set(database=name).set(drivername="postgresql+psycopg2")
-    return name, str(target), drop
+    return name, target.render_as_string(hide_password=False), drop
 
 
 def connect(url: str):
@@ -247,7 +247,8 @@ def rehearse(admin_url: str) -> int:
     discovered = [rev.revision for rev in script.walk_revisions()]
     check("the config resolves a non-empty revision graph", len(discovered) > 1, True)
     check("the OF-B1 revision is discovered", MIGRATION_REVISION in discovered, True)
-    check("the native media revision is the single head", list(script.get_heads()), ["0079_native_configuration"])
+    from db.schema import HEAD
+    check("the supported runtime revision is the single head", list(script.get_heads()), [HEAD])
     check("its down_revision is the committed head it was cut from",
           script.get_revision(MIGRATION_REVISION).down_revision, PARENT_REVISION)
     check("0001_initial is still the single base", list(script.get_bases()), ["0001_initial"])

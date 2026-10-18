@@ -83,6 +83,12 @@ def connection_health(binding: BindingRow, *, now: datetime | None = None) -> tu
             "expired_session",
             reason or "OnlyFans rejected the stored session for this account. It needs re-linking.",
         )
+    if binding.connection_expires_at is not None and age_seconds(binding.connection_expires_at,now=now or utc_now()) is not None and binding.connection_expires_at.replace(tzinfo=None)<=(now or utc_now()).replace(tzinfo=None):
+        return "expired_session", "The stored connection has expired. Reconnect this account."
+    if binding.connection_status == "verified" and binding.connection_verified_at is not None and binding.connection_expires_at is not None:
+        return "connected", None
+    if binding.connection_status == "failed":
+        return "disconnected", "The selected account connection could not be verified."
     # Legacy last_probe_at records an attempted recovery probe, not a
     # successful connection. It cannot establish a current session here.
     return "disconnected", "No verified connection record is available for this integration."
@@ -94,16 +100,19 @@ def capabilities(binding: BindingRow | None = None) -> dict:
     Conversation controls require the separate, explicitly tenant-scoped API
     credential. Delivery, money and provider capabilities remain unavailable.
     """
-    from onlyfans_commands.settings import configured
+    from onlyfans_commands.settings import configured, manual_configured
     command_scope = configured()
     controls = CAPABILITY_AVAILABLE if binding is not None and command_scope is not None and binding.tenant_id == command_scope[1] else CAPABILITY_NOT_CONFIGURED
+    from onlyfans_commands.content_api import configured as content_configured
+    content_scope=content_configured()
+    content=CAPABILITY_AVAILABLE if binding is not None and content_scope is not None and binding.tenant_id==content_scope[1] else CAPABILITY_NOT_CONFIGURED
     return {
         "viewConversations": CAPABILITY_AVAILABLE,
-        "sendManualMessage": CAPABILITY_NOT_CONFIGURED,
+        "sendManualMessage": CAPABILITY_AVAILABLE if controls == CAPABILITY_AVAILABLE and manual_configured() is not None else CAPABILITY_NOT_CONFIGURED,
         "pauseAutomation": controls,
         "requestTakeover": controls,
-        "manageContent": CAPABILITY_NOT_CONFIGURED,
-        "managePrices": CAPABILITY_NOT_CONFIGURED,
+        "manageContent": content,
+        "managePrices": content,
         "viewSales": CAPABILITY_AVAILABLE,
         "resolveDeliveryEvidence": CAPABILITY_NOT_CONFIGURED,
     }

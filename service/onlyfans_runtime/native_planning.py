@@ -1,8 +1,9 @@
-"""Offline native text preparation over canonical PostgreSQL snapshots.
+"""Native text preparation over canonical PostgreSQL snapshots.
 
 Uses Fastt's existing prompt composer and deterministic outbound guard. It
 does not run the legacy scheduler/send loop, create catalogue/commerce rows,
-or construct a provider. Only the explicit synthetic model is registered.
+or construct a provider. Explicit synthetic and account-bound native adapters
+are registered; constructing/resolving live credentials belongs to deployment.
 One durable invocation per canonical input survives crashes without a replay.
 """
 from dataclasses import asdict
@@ -129,8 +130,12 @@ class NativeTextPlanner:
         self.authority = TextAuthority(store)
 
     def prepare(self, tenant_id, claim, model, *, timeout_seconds=10):
-        if type(claim) is not Claim or type(model) is not SyntheticNativeModel:
-            raise Refused("only a scoped synthetic native invocation is registered")
+        from .provider_model import NativeProviderModel
+        if type(claim) is not Claim or type(model) not in {SyntheticNativeModel, NativeProviderModel}:
+            raise Refused("only an explicit scoped native model invocation is registered")
+        live = type(model) is NativeProviderModel
+        if live and model.account_id != claim.account_id:
+            raise Refused("native model account scope mismatch")
         _id(claim.fan_id)
         _id(claim.target_message_id)
         if any(type(value) is not int or value < 0 for value in (claim.generation, claim.control_revision, claim.input_revision)):
@@ -162,12 +167,14 @@ class NativeTextPlanner:
             state = s.get(OfConversationState, (claim.account_id, claim.fan_id))
             work = s.get(OfWork, (claim.account_id, claim.fan_id))
             policy = s.get(OfDeliveryPolicy, claim.account_id)
+            if policy is None or policy.transport_kind != ("native" if live else "synthetic"):
+                raise Refused("native model mode does not match its delivery policy")
             if not self.authority._valid_work(claim, work, state, now):
                 raise Refused("stale native planning claim")
             if self.authority._eligibility(s, runtime, policy, state, s.get(Fan, (claim.account_id, claim.fan_id)), "automated", now):
                 raise Refused("native planning is currently held")
             count = s.scalar(select(func.count()).select_from(OfNativePlan).where(OfNativePlan.account_id == claim.account_id))
-            if count >= MAX_SYNTHETIC_INVOCATIONS:
+            if not live and count >= MAX_SYNTHETIC_INVOCATIONS:
                 raise Refused("synthetic planning allowance exhausted")
             fingerprint, snapshot = versions(s, claim.account_id, claim.fan_id)
             if snapshot["config"] is None:
@@ -201,6 +208,9 @@ class NativeTextPlanner:
             messages = _native_messages(context)
             chosen = resolve_model_from_config(AccountAiConfig(**context["config"]),
                 "ai_chatter", account_id=claim.account_id, require_explicit=True)
+            if live:
+                model.configure_call(account_id=claim.account_id, chosen_model=chosen,
+                                     config=context["config"], messages=messages)
             with Session(self.engine) as s, s.begin():
                 runtime = self.store._runtime(s, tenant_id, claim.account_id)
                 plan = s.get(OfNativePlan, (claim.account_id, identity))
@@ -214,7 +224,8 @@ class NativeTextPlanner:
                         or versions(s, claim.account_id, claim.fan_id)[0] != fingerprint):
                     plan.status, plan.reason = "stale", "snapshot_changed"
                     return identity
-                call, reserved, day = reserve_scoped_synthetic_call(s,
+                reserve = model.reserve if live else reserve_scoped_synthetic_call
+                call, reserved, day = reserve(s,
                     account_id=claim.account_id, fan_id=claim.fan_id, model=chosen, messages=messages, now=now)
                 plan.resolved_model_id, plan.model_call_id = chosen, call.id
                 plan.reserved_millicents, plan.budget_day, plan.billing_provider = reserved, day, call.provider
@@ -236,7 +247,8 @@ class NativeTextPlanner:
             plan = s.get(OfNativePlan, (claim.account_id, identity))
             now = self.authority._db_now(s)
             if plan.model_call_id is not None:
-                charged = settle_scoped_synthetic_call(s, account_id=claim.account_id,
+                settle = model.settle if live else settle_scoped_synthetic_call
+                charged = settle(s, account_id=claim.account_id,
                     call_id=plan.model_call_id, reserved_millicents=plan.reserved_millicents,
                     actual_millicents=model.reported_cost_millicents if model.completed else None, now=now)
                 if charged is not None:

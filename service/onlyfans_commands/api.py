@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from onlyfans_read.contract import ID_PATTERN, conversation_id_for, fan_id_from_conversation_id
 from onlyfans_runtime.store import Refused
-from .settings import ACTIONS, HEADER, PREFIX, SCHEMA, configured
+from .settings import ACTIONS, HEADER, PREFIX, SCHEMA, configured, manual_configured
 
 router = APIRouter(prefix=PREFIX, tags=["onlyfans-controls"])
 log = logging.getLogger("onlyfans.controls")
@@ -62,20 +62,44 @@ async def control(request: Request, account_id: str, conversation_id: str):
             raise ValueError()
         raw = bytearray()
         async for part in request.stream():
-            if len(raw) + len(part) > 4096:
+            if len(raw) + len(part) > 65536:
                 return refused("request_too_large", 413, "The control request is too large.")
             raw.extend(part)
-        body = json.loads(raw, object_pairs_hook=unique_keys)
-        if type(body) is not dict or set(body) != {"action", "expectedRevision", "commandKey", "actor"}:
+        def nonfinite(_):
+            raise ValueError("nonfinite number")
+        body = json.loads(raw, object_pairs_hook=unique_keys, parse_constant=nonfinite)
+        manual = type(body) is dict and body.get("action") == "manual_message"
+        keys = {"action", "expectedRevision", "commandKey", "actor"} | ({"body"} if manual else set())
+        if manual and "catalogItemId" in body:
+            keys.add("catalogItemId")
+        if not manual and len(raw) > 4096:
+            return refused("request_too_large", 413, "The control request is too large.")
+        if type(body) is not dict or set(body) != keys:
             raise ValueError()
         action, revision, key, actor = (body[k] for k in ("action", "expectedRevision", "commandKey", "actor"))
-        if (type(action) is not str or action not in ACTIONS or type(revision) is not int or
+        if (type(action) is not str or action not in {*ACTIONS, "manual_message"} or type(revision) is not int or
                 not 0 <= revision < 2**31-1 or type(key) is not str or not re.fullmatch(r"[a-f0-9]{64}", key) or
                 type(actor) is not str or not re.fullmatch(r"op-session:[a-f0-9]{64}", actor)):
+            raise ValueError()
+        if manual and (type(body["body"]) is not str or not body["body"].strip() or "\x00" in body["body"]
+                or len(body["body"].encode()) > 4000):
+            raise ValueError()
+        if manual and body.get("catalogItemId") is not None and (
+                type(body["catalogItemId"]) is not int or not 0 < body["catalogItemId"] < 2**31):
             raise ValueError()
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return refused("invalid_request", 400, "That conversation control request is invalid.")
     try:
+        if manual:
+            if manual_configured() is None:
+                return refused("manual_unavailable", 503, "Manual messaging is not configured.")
+            from onlyfans_runtime.text_delivery import TextAuthority
+            intent = await asyncio.to_thread(TextAuthority(store).prepare, tenant, account_id, fan,
+                command_key=key, expected_revision=revision, body=body["body"], origin="manual", actor=actor,
+                catalog_item_id=body.get("catalogItemId"))
+            return response({"ok": True, "applied": True, "commandKey": key, "accountId": account_id,
+                "conversationId": conversation_id, "action": action, "recordedRevision": revision,
+                "intentId": intent, "outcome": "queued"})
         recorded = await asyncio.to_thread(store.control, tenant, account_id, fan, mode=ACTIONS[action],
             expected_revision=revision, command_key=key, actor=actor, action=action,
             reason="Dashboard operator: " + action)

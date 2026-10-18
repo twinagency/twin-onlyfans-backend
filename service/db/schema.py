@@ -24,8 +24,12 @@ BUDGET = "0075_native_model_budget"
 MEMORY = "0076_native_memory_evidence"
 MEDIA = "0077_native_media_sales"
 CONTROLS = "0078_operator_controls"
-HEAD = "0079_native_configuration"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, HEAD: 79}
+CONFIGURATION = "0079_native_configuration"
+CAMPAIGNS = "0080_onlyfans_campaigns"
+CONNECTION = "0081_native_connection"
+CONTENT = "0082_content_management"
+HEAD = "0083_vault_management"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, HEAD:83}
 HERE = Path(__file__).resolve().parent
 
 
@@ -37,6 +41,8 @@ def _metadata():
     from .models import Base
     from . import onlyfans_models  # noqa: F401 — register current tables
     from . import onlyfans_delivery_models  # noqa: F401 — register current tables
+    from . import onlyfans_campaign_models,onlyfans_connection_models,onlyfans_content_models  # noqa: F401
+    from . import onlyfans_vault_models  # noqa: F401
     return Base.metadata
 
 
@@ -135,6 +141,10 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         (77, "of_commerce_evidence", "of_commerce_immutable", "commerce evidence is append-only"),
         (78, "of_control_audit", "of_control_immutable", "control evidence is append-only"),
         (79, "of_configuration_change", "of_configuration_immutable", "configuration evidence is append-only"),
+        (80, "of_campaign_change", "of_campaign_immutable", "campaign evidence is append-only"),
+        (81, "of_connection_change", "of_connection_immutable", "connection evidence is append-only"),
+        (82, "of_content_change", "of_content_immutable", "content evidence is append-only"),
+        (83, "of_vault_product_create", "of_vault_product_immutable", "vault product evidence is append-only"),
     ]:
         if expected_rank < rank:
             continue

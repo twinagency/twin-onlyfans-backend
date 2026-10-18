@@ -1,4 +1,4 @@
-"""Durable message dispatch with synthetic and owned-loopback transports.
+"""Durable message dispatch with explicitly scoped registered transports.
 
 The account lock orders policy, control and input checks before a single
 dispatching transition commits. Neither a lease nor a restart can grant a
@@ -6,7 +6,7 @@ second transport invocation. Ambiguous outcomes retain their reservation and
 hold; accepted evidence is saved before repairable transcript projection.
 
 No provider client, credentials, model invocation or command route is constructed here.
-A production transport requires a separate reviewed release.
+Native credentials and account activation are supplied explicitly by deployment.
 """
 from __future__ import annotations
 
@@ -177,13 +177,15 @@ class TextAuthority:
         return True
 
     def configure(self, tenant_id, account_id, *, expected_revision, enabled,
-                  limit_units, throttle_seconds, actor, reason, media_enabled=None):
+                  limit_units, throttle_seconds, actor, reason, media_enabled=None,
+                  transport_kind=None):
         if (type(expected_revision) is not int or expected_revision < 0 or type(enabled) is not bool
                 or type(limit_units) is not int or not 0 <= limit_units <= 10000
                 or type(throttle_seconds) is not int or not 1 <= throttle_seconds <= 86400
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or not isinstance(reason, str) or not 1 <= len(reason) <= 512
-                or media_enabled is not None and type(media_enabled) is not bool):
+                or media_enabled is not None and type(media_enabled) is not bool
+                or transport_kind is not None and transport_kind not in {"synthetic", "native"}):
             raise Refused("invalid delivery policy")
         with Session(self.engine) as s, s.begin():
             self.store._runtime(s, tenant_id, account_id)
@@ -196,6 +198,9 @@ class TextAuthority:
                 s.flush()
             if policy.revision != expected_revision:
                 raise Refused("policy revision conflict")
+            if transport_kind is not None and transport_kind != policy.transport_kind:
+                if policy.active_intent_id or policy.queued_count:
+                    raise Refused("delivery mode cannot change with active or queued work")
             before = self._policy_values(policy)
             if throttle_seconds > policy.throttle_seconds and policy.next_dispatch_at is not None:
                 policy.next_dispatch_at = max(policy.next_dispatch_at,
@@ -204,6 +209,8 @@ class TextAuthority:
             policy.enabled, policy.limit_units, policy.throttle_seconds = enabled, limit_units, throttle_seconds
             if media_enabled is not None:
                 policy.media_enabled = media_enabled
+            if transport_kind is not None:
+                policy.transport_kind = transport_kind
             # Policy changes never reset used units, holds, throttle or queue.
             s.add(OfDeliveryPolicyChange(account_id=account_id, revision=policy.revision,
                                          actor=actor, reason=reason, before_json=_json(before),
@@ -217,7 +224,7 @@ class TextAuthority:
             OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES)).limit(1)) is not None
 
     def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None):
-        if policy is None or not policy.enabled or policy.transport_kind != "synthetic":
+        if policy is None or not policy.enabled or policy.transport_kind not in {"synthetic", "native"}:
             return "delivery_disabled"
         if not runtime.enabled:
             return "account_disabled"
@@ -234,7 +241,7 @@ class TextAuthority:
             return "contact_blocked"
         if state.takeover_state == "requested":
             return "takeover_pending"
-        if origin == "automated" and (state.mode != "automated" or state.takeover_state != "none"):
+        if origin in {"automated", "campaign"} and (state.mode != "automated" or state.takeover_state != "none"):
             return "owner_changed"
         if origin == "manual" and (state.mode != "human_controlled" or state.takeover_state not in {"none", "effective"}):
             return "human_control_required"
@@ -253,15 +260,18 @@ class TextAuthority:
 
     def prepare(self, tenant_id, account_id, fan_id, *, command_key, expected_revision,
                 body, origin, actor, work: Claim | None = None, ttl_seconds=300, native_plan_id=None,
-                catalog_item_id=None, quoted_price_cents=None):
+                catalog_item_id=None, quoted_price_cents=None, campaign_id=None):
         _id(fan_id)
         if (not isinstance(command_key, str) or not 1 <= len(command_key) <= 64
                 or type(expected_revision) is not int or expected_revision < 0
                 or not isinstance(body, str) or not body.strip() or len(body.encode()) > 20000
-                or origin not in {"automated", "manual"}
+                or origin not in {"automated", "manual", "campaign"}
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 600):
             raise Refused("invalid text intent")
+        if (origin == "campaign" and (campaign_id is None or work is not None or native_plan_id is not None)
+                or origin != "campaign" and campaign_id is not None):
+            raise Refused("invalid campaign intent")
         if work is not None and (not isinstance(work, Claim) or work.account_id != account_id or work.fan_id != fan_id):
             raise Refused("work scope mismatch")
         if catalog_item_id is not None:
@@ -273,6 +283,8 @@ class TextAuthority:
         request = dict(account_id=account_id, fan_id=fan_id, command_key=command_key,
                        expected_revision=expected_revision, body=body, origin=origin,
                        actor=actor, work=asdict(work) if work else None, ttl_seconds=ttl_seconds)
+        if campaign_id is not None:
+            request["campaign_id"] = campaign_id
         if native_plan_id is not None:
             if type(native_plan_id) is not str or len(native_plan_id) != 36 or origin != "automated" or work is None:
                 raise Refused("invalid native plan reference")
@@ -302,6 +314,11 @@ class TextAuthority:
                 raise Refused("delivery queue full")
             if policy.active_intent_id:
                 raise Refused("account delivery unresolved")
+            recipient = None
+            if origin == "campaign":
+                from .campaigns import validate_prepare
+                recipient = validate_prepare(s, runtime, fan_id=fan_id, body=body, campaign_id=campaign_id,
+                    command_key=command_key, actor=actor, now=now, catalog_item_id=catalog_item_id)
             terms = None
             if catalog_item_id is not None:
                 from .media_delivery import catalog_terms, assert_unowned
@@ -357,6 +374,9 @@ class TextAuthority:
                                preview_json=_json(terms["preview_ids"]) if terms else "[]",
                                price_cents=terms["price_cents"] if terms else 0))
             policy.queued_count += 1
+            if recipient is not None:
+                from .campaigns import attach
+                attach(s, recipient, identity, now)
             return identity
 
     @staticmethod
@@ -395,6 +415,9 @@ class TextAuthority:
             if not obsolete and intent.native_plan_id is not None:
                 from .native_context import matches
                 obsolete = not matches(s, intent)
+            if not obsolete and intent.origin == "campaign":
+                from .campaigns import current
+                obsolete = not current(s, intent, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now)
             if reason:
                 intent.status = "cancelled" if obsolete else "refused"
@@ -439,7 +462,7 @@ class TextAuthority:
                   (grant.token, 36), (grant.body, 20000), (grant.payload_hash, 64))
         if (any(type(value) is not str or not 1 <= len(value.encode()) <= limit for value, limit in fields)
                 or len(grant.payload_hash) != 64 or any(c not in "0123456789abcdef" for c in grant.payload_hash)
-                or type(grant.origin) is not str or grant.origin not in {"automated", "manual"}
+                or type(grant.origin) is not str or grant.origin not in {"automated", "manual", "campaign"}
                 or type(grant.deadline) is not datetime or grant.deadline.tzinfo is not None
                 or type(grant.policy_revision) is not int or grant.policy_revision < 0
                 or type(grant.wire_version) is not int or grant.wire_version not in {0, 1}):
@@ -505,6 +528,9 @@ class TextAuthority:
             if not obsolete and row.native_plan_id is not None:
                 from .native_context import matches
                 obsolete = not matches(s, row)
+            if not obsolete and row.origin == "campaign":
+                from .campaigns import current
+                obsolete = not current(s, row, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(
                 s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id)
             if reason is None and (policy.active_intent_id != row.intent_id or not row.reservation_held
@@ -697,7 +723,8 @@ class TextAuthority:
                               direction="out", body=row.body, created_at=stamp, raw_json=row.receipt_json,
                               media_ids=row.media_json, media_count=len(json.loads(row.media_json)),
                               price_cents=row.price_cents, is_paid=False if row.price_cents else None,
-                              automation_kind=("onlyfans_media" if row.catalog_item_id is not None else "onlyfans_text") if row.origin == "automated" else None))
+                              automation_kind="onlyfans_campaign" if row.origin == "campaign" else
+                                ("onlyfans_media" if row.catalog_item_id is not None else "onlyfans_text") if row.origin == "automated" else None))
                 state.input_revision += 1
                 s.flush()
             from .media_delivery import project
@@ -708,7 +735,7 @@ class TextAuthority:
             receipt.outcome, receipt.attempt_id = "sent", row.attempt_id
             receipt.origin = "ai" if row.origin == "automated" else "human"
             receipt.evidence_ref, receipt.recorded_at = row.evidence_ref, stamp
-            receipt.detail = "The offline transport accepted this exact message. This is not a purchase or read receipt."
+            receipt.detail = "The transport accepted this exact message. This is not a purchase or read receipt."
             chat = s.get(Chat, (account_id, row.fan_id))
             if chat is None:
                 chat = Chat(account_id=account_id, fan_id=row.fan_id, unread_count=0)
@@ -720,18 +747,25 @@ class TextAuthority:
             return True
 
     def dispatch(self, tenant_id, account_id, intent_id, transport):
+        from .provider_connector import NativeProviderConnector
         transport_generation = None
         if type(transport) is not SyntheticTextTransport:
             try:
                 from .loopback_transport import LoopbackTextTransport
                 from .native_connector import NativeLoopbackConnector
             except ImportError as exc:
-                raise Refused("only an explicitly scoped offline transport is supported") from exc
-            if type(transport) not in {LoopbackTextTransport, NativeLoopbackConnector}:
-                raise Refused("only an explicitly scoped offline transport is supported")
+                raise Refused("only an explicitly scoped registered transport is supported") from exc
+            if type(transport) not in {LoopbackTextTransport, NativeLoopbackConnector, NativeProviderConnector}:
+                raise Refused("only an explicitly scoped registered transport is supported")
             transport_generation = transport.policy_revision
         if transport.account_id != account_id:
             raise Refused("transport scope mismatch")
+        with Session(self.engine) as s:
+            self.store._runtime(s, tenant_id, account_id)
+            policy = s.get(OfDeliveryPolicy, account_id)
+            expected = "native" if type(transport) is NativeProviderConnector else "synthetic"
+            if policy is None or policy.transport_kind != expected:
+                raise Refused("transport does not match the account delivery mode")
         grant = self.admit(tenant_id, account_id, intent_id, transport_generation=transport_generation)
         if isinstance(grant, str):
             return grant

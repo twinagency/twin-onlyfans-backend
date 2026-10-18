@@ -22,7 +22,7 @@ router=APIRouter(prefix=PREFIX,tags=["onlyfans-configuration"])
 def configured():
     token=(os.environ.get("ONLYFANS_CONFIGURATION_TOKEN") or "").strip()
     tenant=(os.environ.get("ONLYFANS_CONFIGURATION_TENANT") or "").strip()
-    other=[(os.environ.get(name) or "").strip() for name in ("ONLYFANS_API_TOKEN","ONLYFANS_CONTROL_TOKEN")]
+    other=[(os.environ.get(name) or "").strip() for name in ("ONLYFANS_API_TOKEN","ONLYFANS_CONTROL_TOKEN","ONLYFANS_CAMPAIGN_TOKEN","ONLYFANS_CONTENT_TOKEN","ONLYFANS_CONNECTION_TOKEN")]
     if (os.environ.get("ONLYFANS_PROCESS_ROLE")!="api" or not token or tenant=="deployment" or
         not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}",tenant) or
         any(value and hmac.compare_digest(value.encode(),token.encode()) for value in other)):

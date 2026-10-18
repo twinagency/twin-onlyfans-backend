@@ -47,6 +47,7 @@ from db.models import (
 )
 
 from db.onlyfans_models import OfRuntime
+from db.onlyfans_connection_models import OfProviderConnection
 
 from .contract import UNRESOLVED_OUTCOMES
 from .errors import Unavailable
@@ -80,6 +81,9 @@ class BindingRow:
     health_reason: str | None = None
     session_dead_at: datetime | None = None
     last_probe_at: datetime | None = None
+    connection_status: str | None = None
+    connection_verified_at: datetime | None = None
+    connection_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -234,6 +238,7 @@ class SqlOnlyFansReadRepo:
                 now = await s.scalar(select(func.clock_timestamp()))
                 naive_now = now.replace(tzinfo=None)
                 runtime = await s.get(OfRuntime, account_id)
+                connection = await s.get(OfProviderConnection, account_id)
                 policy = await s.get(OfDeliveryPolicy, account_id)
                 cfg = await s.get(AccountAiConfig, account_id)
                 cap = cfg.daily_cost_cap_cents if cfg is not None else None
@@ -313,7 +318,7 @@ class SqlOnlyFansReadRepo:
                 if policy is not None and policy.used_units >= policy.limit_units: reasons.append("cap_exhausted")
                 if age is not None and age > 120: reasons.append("waiting_queue_older_than_two_minutes")
                 return {"schemaVersion": "of-operations.v2", "accountId": account_id, "asOf": iso(now),
-                        "providerConnectionVerified": False, "reasons": reasons,
+                        "providerConnectionVerified": bool(connection and runtime and connection.binding_id == runtime.binding_id and connection.status == "verified" and connection.verified_at is not None and connection.expires_at > naive_now), "reasons": reasons,
                         "modelCosts": model_costs,
                         "intake": ingress, "planning": planning, "work": {**work, "oldestWaitingAgeSeconds": age},
                         "delivery": {**delivery, "acceptedAwaitingProjection": awaiting_projection,
@@ -346,10 +351,14 @@ class SqlOnlyFansReadRepo:
                         AccountHealth.session_dead_at,
                         AccountHealth.session_dead_reason,
                         AccountHealth.last_probe_at,
+                        OfProviderConnection.status,
+                        OfProviderConnection.verified_at,
+                        OfProviderConnection.expires_at,
                     )
                     .select_from(OfCreatorBinding)
                     .join(Account, Account.id == OfCreatorBinding.account_id)
                     .outerjoin(AccountHealth, AccountHealth.account_id == OfCreatorBinding.account_id)
+                    .outerjoin(OfProviderConnection, and_(OfProviderConnection.account_id == OfCreatorBinding.account_id,OfProviderConnection.binding_id == OfCreatorBinding.id))
                     .where(OfCreatorBinding.revoked_at.is_(None))
                     .order_by(OfCreatorBinding.creator_name, OfCreatorBinding.account_id)
                 )
@@ -378,6 +387,7 @@ class SqlOnlyFansReadRepo:
                 session_dead_at=row[9],
                 health_reason=row[10],
                 last_probe_at=row[11],
+                connection_status=row[12],connection_verified_at=row[13],connection_expires_at=row[14],
             )
             for row in rows
         ]

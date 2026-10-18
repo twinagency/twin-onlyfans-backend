@@ -1,0 +1,60 @@
+name: twin-onlyfans
+services:
+  database:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: twin_onlyfans
+      POSTGRES_USER: twin_onlyfans
+      POSTGRES_PASSWORD: ${ONLYFANS_DB_PASSWORD:?Set a database password}
+    volumes:
+      - onlyfans-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U twin_onlyfans -d twin_onlyfans"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile.onlyfans
+    restart: unless-stopped
+    env_file: ${ONLYFANS_ENV_FILE:-onlyfans.env}
+    environment:
+      ONLYFANS_PROCESS_ROLE: api
+      DATABASE_URL: postgresql+psycopg2://twin_onlyfans:${ONLYFANS_DB_PASSWORD:?Set a database password}@database:5432/twin_onlyfans
+    ports:
+      - "127.0.0.1:${ONLYFANS_API_PORT:-8788}:8787"
+    depends_on:
+      database:
+        condition: service_healthy
+  worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile.onlyfans
+    restart: unless-stopped
+    stop_grace_period: 45s
+    env_file: ${ONLYFANS_ENV_FILE:-onlyfans.env}
+    environment:
+      ONLYFANS_PROCESS_ROLE: worker
+      DATABASE_URL: postgresql+psycopg2://twin_onlyfans:${ONLYFANS_DB_PASSWORD:?Set a database password}@database:5432/twin_onlyfans
+    command: ["python", "-m", "service.onlyfans_worker"]
+    depends_on:
+      database:
+        condition: service_healthy
+  migrate:
+    profiles: ["ops"]
+    build:
+      context: ..
+      dockerfile: Dockerfile.onlyfans
+    environment:
+      ONLYFANS_PROCESS_ROLE: worker
+      DATABASE_URL: postgresql+psycopg2://twin_onlyfans:${ONLYFANS_DB_PASSWORD:?Set a database password}@database:5432/twin_onlyfans
+      ONLYFANS_MIGRATION_URL: postgresql+psycopg2://twin_onlyfans:${ONLYFANS_DB_PASSWORD:?Set a database password}@database:5432/twin_onlyfans
+    entrypoint: ["python", "-m", "service.db.schema"]
+    command: ["check"]
+    depends_on:
+      database:
+        condition: service_healthy
+volumes:
+  onlyfans-postgres:

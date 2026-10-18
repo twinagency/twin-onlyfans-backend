@@ -982,7 +982,8 @@ check("and nothing else descends from the committed head it was cut from",
 # ONE head, this one. The chain that once looked like it had two stray heads
 # (0019/0021) in fact merges at 0022, so `upgrade heads` and `upgrade head` are
 # the same operation here — asserted now that the graph can be read at all.
-check("the tree has exactly one head", HEADS, ["0079_native_configuration"])
+from db.schema import HEAD as _SUPPORTED_HEAD
+check("the tree has exactly one head", HEADS, [_SUPPORTED_HEAD])
 check("its parent is a revision that exists", "0064_user_llm_keys" in GRAPH, True)
 
 # — and now the same graph through Alembic's real configuration, which is the
@@ -1020,7 +1021,7 @@ _SD = _ScriptDirectory.from_config(_CFG)
 _DISCOVERED = [script.revision for script in _SD.walk_revisions()]
 check("alembic discovers every revision in the tree", len(_DISCOVERED), len(GRAPH))
 check("including this one", MINE in _DISCOVERED, True)
-check("and reports it as the single head", list(_SD.get_heads()), ["0079_native_configuration"])
+check("and reports it as the single head", list(_SD.get_heads()), [_SUPPORTED_HEAD])
 check("with 0001_initial still the single base", list(_SD.get_bases()), ["0001_initial"])
 check("and the down_revision Alembic resolves is the committed head",
       _SD.get_revision(MINE).down_revision, "0064_user_llm_keys")
@@ -1176,6 +1177,7 @@ from db.models import (  # noqa: E402
 # calling, and the phases are sequential — and it is what the production process
 # does too, since the relay serves every request from one loop.
 from db.onlyfans_models import OfRuntime as _OfRuntime
+from db.onlyfans_connection_models import OfProviderConnection as _OfProviderConnection
 _SCHEMA_ENGINE = _create_engine(os.environ["CHATTERLY_DB_URL"])
 _ModelsBase.metadata.create_all(
     _SCHEMA_ENGINE,
@@ -1189,6 +1191,7 @@ _ModelsBase.metadata.create_all(
         _OfState.__table__,
         _OfDelivery.__table__,
         _OfRuntime.__table__,
+        _OfProviderConnection.__table__,
     ],
 )
 

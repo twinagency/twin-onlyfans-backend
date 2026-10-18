@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from sqlalchemy.orm import Session
@@ -49,6 +50,10 @@ class IdentityStub(BaseHTTPRequestHandler):
         elif path == "/rest/v1/agency_memberships": value = [{"agency_id":"synthetic-agency"}]
         elif path == "/rest/v1/partner_agencies": value = [{"id":"synthetic-agency", "name":"Synthetic agency"}]
         elif path == "/rest/v1/agency_creators": value = []
+        elif path == "/rest/v1/clones":
+            creator={"id":"creator-acc-a","name":"Synthetic Creator"}
+            wanted=parse_qs(urlsplit(self.path).query).get("id", [None])[0]
+            value=[creator] if wanted in (None,"eq.creator-acc-a") else []
         else: status, value = 500, {"error":"Unexpected identity dependency"}
         if "vnd.pgrst.object" in self.headers.get("Accept","") and isinstance(value,list):
             value = value[0] if value else None
@@ -164,6 +169,8 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
     store, other, incoming, manual_revision, accepted_evidence, unknown_attempt, accepted_transport, unknown_transport = synthetic_scenario(database, monkeypatch)
     from onlyfans_worker_fixture import run_worker_scenario
     assert run_worker_scenario(database,monkeypatch)["providerRequests"]==0
+    from onlyfans_operator_fixture import seed_operator, operator_dispatcher, ACCOUNT as OPERATOR_ACCOUNT, MANUAL as OPERATOR_MESSAGE
+    operator_store=seed_operator(database)
     backend=Path(__file__).resolve().parents[2]
     dashboard=Path(os.environ.get("ONLYFANS_TEST_DASHBOARD",str(backend.parent/"twin-dashboard"))).resolve()
     assert (dashboard/"node_modules/next/dist/bin/next").exists(), "Run npm ci in the dashboard first"
@@ -176,6 +183,11 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
     web=f"http://127.0.0.1:{next_port}"
     env={**os.environ,"ONLYFANS_PROCESS_ROLE":"api","DATABASE_URL":url,"ONLYFANS_API_TOKEN":"synthetic-of-token","ONLYFANS_API_TENANT":"tenant-a","ONLYFANS_API_BASE_URL":api,
          "ONLYFANS_CONTROL_TOKEN":"synthetic-controls-only-token","ONLYFANS_CONTROL_TENANT":"tenant-a",
+         "ONLYFANS_MANUAL_ENABLED":"1","ONLYFANS_TEST_OPERATOR":"1",
+         "ONLYFANS_CAMPAIGN_TOKEN":"synthetic-campaign-only-token","ONLYFANS_CAMPAIGN_TENANT":"tenant-a",
+         "ONLYFANS_CONTENT_TOKEN":"synthetic-content-only-token","ONLYFANS_CONTENT_TENANT":"tenant-a","ONLYFANS_TEST_CONTENT":"1",
+         "ONLYFANS_CONNECTION_TOKEN":"synthetic-connection-only-token","ONLYFANS_CONNECTION_TENANT":"tenant-a",
+         "ONLYFANS_CONNECTION_KEY":"17"*32,"ONLYFANS_TEST_CONNECTIONS":"1",
          "ONLYFANS_CONFIGURATION_TOKEN":"synthetic-configuration-only-token","ONLYFANS_CONFIGURATION_TENANT":"tenant-a","ONLYFANS_TEST_CONFIGURATION":"1","ONLYFANS_TEST_WORKER":"1",
          "DASHBOARD_SESSION_SECRET":"synthetic-local-session-secret","SUPABASE_URL":f"http://127.0.0.1:{identity.server_port}","SUPABASE_SERVICE_KEY":"synthetic-service-key","NEXT_TELEMETRY_DISABLED":"1","TZ":"UTC"}
     node=os.environ.get("CODEX_PRIMARY_RUNTIME_NODE","node")
@@ -272,7 +284,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     assert client.post(command_path,json=command_body,headers={**command_headers,"Sec-Fetch-Site":"cross-site"}).status_code==403
                     assert client.post(command_path,json={**command_body,"actor":"forged"},headers=command_headers).status_code==400
                     assert client.post(command_path,json={**command_body,"action":"send_manual_message"},headers=command_headers).status_code==400
-                    assert client.post(command_path,content="x"*4097,headers=command_headers).status_code==413
+                    assert client.post(command_path,content="x"*65537,headers=command_headers).status_code==413
                     for denied in (cookie+"; twin_agency_access=synthetic-agency-token",cookie+"; twin_admin_view_as="+sessions["viewAs"]):
                         assert client.post(command_path,json=command_body,headers={**command_headers,"Cookie":denied}).status_code==403
                     assert client.post(command_path,json=command_body,headers={**command_headers,"Cookie":cookie+"; twin_agency_access=expired"}).status_code==401
@@ -324,10 +336,17 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                         scoped_page=client.get(web+"/onlyfans/operations"+query,headers={"Cookie":cookie})
                         assert scoped_page.status_code==200,scoped_page.text
                         assert "data-of-cap" not in scoped_page.text, "invalid or mismatched scope must not choose another account"
+                if os.environ.get("ONLYFANS_TEST_CLIENT") == "http":
+                    from onlyfans_operator_fixture import check_campaign_http
+                    with httpx.Client(timeout=40, trust_env=False) as client:
+                        check_campaign_http(client, web, cookie, engine)
+                    return
                 # Exercise the actual client-rendered page in the same isolated
                 # network namespace as both servers when Playwright is supplied.
                 browser_check=dashboard/"scripts/check-onlyfans-http-browser.mjs"
-                subprocess.run([node,str(browser_check)],cwd=dashboard,env={**env,"ONLYFANS_TEST_WEB_URL":web,"ONLYFANS_TEST_COOKIE":sessions["operator"],"ONLYFANS_TEST_EVIDENCE":str(log_dir)},check=True,timeout=100)
+                with operator_dispatcher(operator_store) as operator_peer:
+                    subprocess.run([node,str(browser_check)],cwd=dashboard,env={**env,"ONLYFANS_TEST_WEB_URL":web,"ONLYFANS_TEST_COOKIE":sessions["operator"],"ONLYFANS_TEST_EVIDENCE":str(log_dir)},check=True,timeout=240)
+                    assert len(operator_peer.posts)==1, "manual lost acknowledgement retry must not send twice"
                 from db.models import OfConversationState
                 from db.onlyfans_models import OfControlAudit
                 with Session(engine) as s:
@@ -349,5 +368,17 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     assert json.loads(config.persona_facts_json)["secret"]=="private creator config field"
                     assert config.daily_cost_cap_cents==100 and config.model=="grok-4-1-fast-non-reasoning"
                     assert all(row.actor.startswith("op-session:") and sessions["operator"] not in row.actor for row in changes)
+                    operator_intents=s.scalars(select(OfTextIntent).where(OfTextIntent.account_id==OPERATOR_ACCOUNT)).all()
+                    assert len(operator_intents)==1 and operator_intents[0].status=="accepted"
+                    assert operator_intents[0].body==OPERATOR_MESSAGE and operator_intents[0].origin=="manual"
+                    assert s.get(OfDeliveryPolicy,OPERATOR_ACCOUNT).used_units==1
+                    assert s.scalar(select(Message.body).where(Message.account_id==OPERATOR_ACCOUNT,Message.direction=="out"))==OPERATOR_MESSAGE
+                    from db.onlyfans_campaign_models import OfCampaign, OfCampaignRecipient, OfCampaignChange
+                    operator_campaigns=s.scalars(select(OfCampaign).where(OfCampaign.account_id==OPERATOR_ACCOUNT)).all()
+                    assert len(operator_campaigns)==1 and operator_campaigns[0].status=="cancelled"
+                    operator_recipients=s.scalars(select(OfCampaignRecipient).where(OfCampaignRecipient.account_id==OPERATOR_ACCOUNT)).all()
+                    assert len(operator_recipients)==1 and operator_recipients[0].status=="cancelled"
+                    operator_changes=s.scalars(select(OfCampaignChange).where(OfCampaignChange.account_id==OPERATOR_ACCOUNT)).all()
+                    assert len(operator_changes)==4, "create retry must preserve one campaign and one audit event"
     finally:
-        identity.shutdown();identity.server_close();store.close();other.close()
+        identity.shutdown();identity.server_close();store.close();other.close();operator_store.close()

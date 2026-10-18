@@ -1,9 +1,9 @@
-"""Bounded offline worker over the existing canonical owners.
+"""Bounded worker over the existing canonical owners.
 
-No deployment factory, environment credential resolution, provider client or
-live model registration exists here. Intake adapters record through Store; this
-loop drains that durable intake and coordinates native preparation, one-use
-delivery and receipt repair. Injected seams must be explicit offline types.
+No environment credential resolution or automatic activation exists here.
+Explicit account-bound adapters are supplied by deployment. Intake records through Store; this
+loop drains durable intake and coordinates native preparation, one-use
+delivery and receipt repair. Injected seams must be explicitly registered types.
 """
 from dataclasses import asdict,dataclass
 import math
@@ -53,6 +53,8 @@ class NativeWorker:
         from .native_planning import NativeTextPlanner,SyntheticNativeModel
         from .loopback_transport import LoopbackTextTransport
         from .native_connector import NativeLoopbackConnector
+        from .provider_connector import NativeProviderConnector
+        from .provider_model import NativeProviderModel
         if type(tenant_id) is not str or tenant_id=="deployment" or not ID_PATTERN.fullmatch(tenant_id):
             raise Refused("an explicit worker tenant is required")
         if (type(accounts) is not tuple or not 1<=len(accounts)<=32
@@ -60,19 +62,30 @@ class NativeWorker:
             raise Refused("bounded explicit worker accounts are required")
         for item in accounts:
             if (type(item.account_id) is not str or not ID_PATTERN.fullmatch(item.account_id)
-                    or type(item.model) is not SyntheticNativeModel
-                    or type(item.transport) not in {SyntheticTextTransport,LoopbackTextTransport,NativeLoopbackConnector}
+                    or (item.model is not None and type(item.model) not in {SyntheticNativeModel, NativeProviderModel})
+                    or type(item.transport) not in {SyntheticTextTransport,LoopbackTextTransport,NativeLoopbackConnector,NativeProviderConnector}
                     or item.transport.account_id!=item.account_id):
-                raise Refused("worker seams must be explicitly offline and account-bound")
-            if item.reader is not None and (type(item.reader) is not NativeLoopbackConnector or item.reader is not item.transport):
-                raise Refused("native intake and delivery must use the same bound fixture connector")
-        if len({item.account_id for item in accounts})!=len(accounts) or len({id(item.model) for item in accounts})!=len(accounts):
-            raise Refused("worker accounts and synthetic models must be isolated")
+                raise Refused("worker seams must be explicitly registered and account-bound")
+            if item.model is None and type(item.transport) is not NativeProviderConnector:
+                raise Refused("only native provider workers may omit the model credential")
+            if item.model is not None and (type(item.transport) is NativeProviderConnector) != (type(item.model) is NativeProviderModel):
+                raise Refused("native provider model and transport must be selected together")
+            if type(item.model) is NativeProviderModel and item.model.account_id!=item.account_id:
+                raise Refused("native provider model account mismatch")
+            if item.reader is not None and (type(item.reader) not in {NativeLoopbackConnector,NativeProviderConnector} or item.reader is not item.transport):
+                raise Refused("native intake and delivery must use the same bound connector")
+            if type(item.transport) is NativeProviderConnector and item.reader is not item.transport:
+                raise Refused("native provider workers require their account-bound history reader")
+        models=[item.model for item in accounts if item.model is not None]
+        if len({item.account_id for item in accounts})!=len(accounts) or len({id(item) for item in models})!=len(models):
+            raise Refused("worker accounts and model credentials must be isolated")
         if (type(accounts_per_cycle) is not int or not 1<=accounts_per_cycle<=4
                 or type(model_timeout_seconds) not in {int,float} or not math.isfinite(model_timeout_seconds)
                 or not .01<=model_timeout_seconds<=15):raise Refused("invalid worker resource bound")
         self.store,self.tenant_id,self.accounts=store,tenant_id,accounts
         self.planner,self.authority=NativeTextPlanner(store),TextAuthority(store)
+        from .campaigns import CampaignService
+        self.campaigns=CampaignService(store)
         self.accounts_per_cycle,self.model_timeout=accounts_per_cycle,model_timeout_seconds
         self._cursor=0
         self._lock=threading.Lock()
@@ -82,7 +95,12 @@ class NativeWorker:
         if os.environ.get("ONLYFANS_PROCESS_ROLE")!="worker":raise Refused("native worker role is no longer active")
 
     def _can_plan(self,account):
+        return account.model is not None and self._can_dispatch_campaign(account)
+
+    def _can_dispatch_campaign(self,account):
         self._role()
+        from .provider_connector import NativeProviderConnector
+        kind="native" if type(account.transport) is NativeProviderConnector else "synthetic"
         with Session(self.store.engine) as s,s.begin():
             runtime=self.store._runtime(s,self.tenant_id,account.account_id)
             policy=s.get(OfDeliveryPolicy,account.account_id)
@@ -91,7 +109,7 @@ class NativeWorker:
                 and runtime.last_sync_at is not None and
                 (now-runtime.last_sync_at).total_seconds()>=-300 and
                 (now-runtime.last_sync_at).total_seconds()<=MAX_SYNC_AGE_SECONDS
-                and policy is not None and policy.enabled and policy.transport_kind=="synthetic"
+                and policy is not None and policy.enabled and policy.transport_kind==kind
                 and policy.used_units<policy.limit_units and not policy.active_intent_id and policy.queued_count==0
                 and (policy.next_dispatch_at is None or policy.next_dispatch_at<=now)
                 and (not hasattr(account.transport,"policy_revision") or account.transport.policy_revision==policy.revision))
@@ -137,9 +155,20 @@ class NativeWorker:
                     if stop.is_set():break
                     self._deliver(account,report)
                     if stop.is_set():break
-                    if not self._can_plan(account):continue
+                    if not self._can_dispatch_campaign(account):continue
+                    if account.model is None:
+                        identity=self.campaigns.queue_due(self.tenant_id,account.account_id)
+                        if identity is not None:report.queued+=1
+                        if not stop.is_set():self._deliver(account,report)
+                        continue
                     claim=self.store.claim(self.tenant_id,account_ids=(account.account_id,))
-                    if claim is None:continue
+                    if claim is None:
+                        # Reactive inputs keep priority. A due operator-authored
+                        # campaign uses the same authority and makes no model call.
+                        identity=self.campaigns.queue_due(self.tenant_id,account.account_id)
+                        if identity is not None:report.queued+=1
+                        if not stop.is_set():self._deliver(account,report)
+                        continue
                     report.claims+=1
                     # Once a claim exists, finish a started model's durable cost
                     # evidence, but begin no new model phase after stop is seen.

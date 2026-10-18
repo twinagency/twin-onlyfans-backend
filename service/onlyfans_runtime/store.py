@@ -238,10 +238,12 @@ class Store:
             runtime.pending_events -= 1
             return
         fan = s.get(Fan, (account, event.fan_id))
+        new_fan = fan is None
         if fan is None:
             fan = Fan(account_id=account, fan_id=event.fan_id)
             s.add(fan)
             s.flush()
+        new_state = s.get(OfConversationState, (account, event.fan_id)) is None
         state = self._state(s, account, event.fan_id)
         stamp = datetime.fromisoformat(event.created_at).replace(tzinfo=None)
         if stamp > now + timedelta(minutes=5):
@@ -262,6 +264,21 @@ class Store:
         if chat.last_message_at is None or (stamp, event.message_id) > (chat.last_message_at, chat.last_message_id or 0):
             chat.last_message_id, chat.last_message_at, chat.last_message_preview = event.message_id, stamp, event.body[:500]
         historical = row.source == "import" or stamp < runtime.activated_at
+        if new_fan and new_state and event.direction == "in" and not historical and runtime.enabled and not fan.is_muted:
+            from db.onlyfans_connection_models import OfProviderConnection
+            connection=s.get(OfProviderConnection,account)
+            if (connection is not None and connection.binding_id==runtime.binding_id and
+                connection.status=="verified" and connection.verified_at is not None and connection.expires_at>now and
+                connection.automate_new_conversations and connection.automation_starts_at is not None and stamp>=connection.automation_starts_at):
+                # The operator explicitly armed FUTURE new conversations. No
+                # existing state, old history, takeover or stop is resumed here.
+                state.mode="automated";state.revision=1;state.requires_attention=False;state.updated_at=now
+                command=hashlib.sha256(f"initial-automation:{runtime.binding_id}:{event.fan_id}".encode()).hexdigest()
+                s.add(OfControlAudit(account_id=account,command_key=command,fan_id=event.fan_id,mode="automated",
+                    previous_revision=0,revision=1,actor=f"account-policy:{connection.revision}",
+                    reason="Operator account policy enabled a new inbound conversation.",
+                    consent_ref=f"connection:{connection.revision}",action="initial_automation",
+                    takeover_from="none",takeover_to="none",created_at=now))
         if event.direction == "in" and not historical:
             if fan.last_message_received_at is None or stamp > fan.last_message_received_at:
                 fan.last_message_received_at = stamp
@@ -533,6 +550,34 @@ class Store:
                 self._begin_cycle(s, scan)
             else:
                 scan.repeat_requested = True
+
+    def request_poll(self, tenant_id, account_id, *, min_interval_seconds=5):
+        """Start a later read cycle only after the previous one completed.
+
+        This never activates an account, resets a high-water mark, renews a send
+        or changes an allowance. In-flight recovery keeps its exact cursor and
+        is not forced into repeated scans by periodic worker refreshes.
+        """
+        if type(min_interval_seconds) is not int or not 5 <= min_interval_seconds <= 300:
+            raise Refused("invalid native polling interval")
+        with Session(self.engine) as s, s.begin():
+            runtime = self._runtime(s, tenant_id, account_id)
+            if not runtime.enabled:
+                return False
+            scan = s.get(OfScan, account_id)
+            if scan is not None and (scan.status != "complete" or runtime.recovery_needed):
+                return False
+            if (scan is not None and runtime.last_sync_at is not None
+                    and runtime.last_sync_at > utcnow() - timedelta(seconds=min_interval_seconds)):
+                return False
+            if scan is None:
+                scan = OfScan(account_id=account_id)
+                s.add(scan)
+                s.flush()
+            self._begin_cycle(s, scan)
+            self._seed_known(s, scan)
+            runtime.recovery_needed = True
+            return True
 
     def claim_scan(self, tenant_id, account_id):
         with Session(self.engine) as s, s.begin():

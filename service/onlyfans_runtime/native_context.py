@@ -36,15 +36,32 @@ def versions(session, account_id, fan_id):
 
 def cost_matches(session, plan):
     from db.models import GrokCall
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
     if (plan.model_call_id is None or plan.cost_settled_at is None or plan.charged_millicents is None
             or plan.reserved_millicents is None or plan.reserved_millicents <= 0 or plan.charged_millicents < 0):
         return False
     call = session.scalar(select(GrokCall).where(GrokCall.id == plan.model_call_id).with_for_update(read=True))
+    policy = session.get(OfDeliveryPolicy, plan.account_id)
+    if call is None or policy is None:
+        return False
+    if call.was_dry_run:
+        mode_matches = (policy.transport_kind == "synthetic" and plan.model_id == "synthetic/native-text"
+                        and call.endpoint == "synthetic://onlyfans-native-text")
+    else:
+        # Pure registries only: no credential resolution or model client is
+        # constructed at final egress. Synthetic plans cannot cross into a
+        # native account after an explicit mode change.
+        from llm_models import MODELS
+        from llm_providers import PROVIDERS
+        model = MODELS.get(plan.resolved_model_id)
+        provider = PROVIDERS.get(model.provider) if model is not None else None
+        mode_matches = (policy.transport_kind == "native" and provider is not None
+            and plan.model_id == plan.resolved_model_id and call.provider == provider.name
+            and call.endpoint == provider.base_url.rstrip("/") + "/chat/completions")
     return (call is not None and call.account_id == plan.account_id and call.fan_id == plan.fan_id
             and call.model == plan.resolved_model_id and call.provider == plan.billing_provider
             and call.called_at.strftime("%Y-%m-%d") == plan.budget_day and call.purpose == "ai_chatter"
-            and call.status == "done" and call.was_dry_run
-            and call.endpoint == "synthetic://onlyfans-native-text" and call.cost_cents == plan.charged_millicents)
+            and call.status == "done" and mode_matches and call.cost_cents == plan.charged_millicents)
 
 
 def matches(session, intent):

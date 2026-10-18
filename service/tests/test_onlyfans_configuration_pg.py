@@ -165,7 +165,7 @@ def test_populated_0078_upgrade_retains_every_existing_public_row(database):
         for table in reversed(_metadata().sorted_tables):
             if _table_rank(table)>REVISION_RANK[CONTROLS]:table.drop(c)
         for function in ("of_configuration_immutable","of_campaign_immutable","of_connection_immutable",
-                "of_content_immutable","of_vault_product_immutable","of_vault_sync_frozen","of_ledger_immutable"):
+                "of_content_immutable","of_vault_product_immutable","of_vault_sync_frozen","of_ledger_immutable","of_vault_edit_immutable"):
             c.exec_driver_sql(f'DROP FUNCTION "{function}"()')
         c.exec_driver_sql("ALTER TABLE of_runtime DROP COLUMN configuration_revision")
         c.exec_driver_sql("ALTER TABLE of_text_intent DROP CONSTRAINT ck_of_text_intent_origin; ALTER TABLE of_text_intent ADD CONSTRAINT ck_of_text_intent_origin CHECK (origin IN ('automated','manual'))")

@@ -25,6 +25,7 @@ overwrite an existing description with a refusal/blank").
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from jsonsafe import load_json
@@ -99,3 +100,36 @@ def effective_value(item: Any, field: str, config: Any = None, *, default: Any =
             return cfg_default
 
     return default
+
+
+def normalize_tags(v: Any) -> list[str]:
+    """Accept a list OR a comma/newline-separated string → deduped, lower-cased,
+    trimmed tag list (cap 12, matching the describe path)."""
+    if isinstance(v, str):
+        parts = re.split(r"[,\n]", v)
+    elif isinstance(v, (list, tuple)):
+        parts = [str(x) for x in v]
+    else:
+        parts = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        t = str(p).strip().lower()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out[:12]
+
+
+
+def project_operator_text(field, raw, overrides, locked, columns):
+    """Shared override, lock and compat projection for existing text/tag edits.
+
+    Each caller admits its own editable fields. The value and precedence rules
+    stay the same for the legacy editor and the scoped native adapter.
+    """
+    value=normalize_tags(raw) if field=="tags" else None if raw is None else str(raw)
+    overrides[field]=value
+    locked.add(field)
+    columns[field]=json.dumps(value) if field=="tags" else value
+    return value

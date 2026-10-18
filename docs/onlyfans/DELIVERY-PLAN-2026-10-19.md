@@ -24,7 +24,8 @@ describe what was true at their checkpoint, not the current scope or release.
 ## Current source work
 
 The ledger draft was integrated in `0084_native_ledger`; shared creator facts
-now bring the schema head to `0085_shared_creator_facts`. Runtime
+were added in `0085_shared_creator_facts`; audited vault edits now bring the
+schema head to `0086_vault_edits`. Runtime
 schema readiness, migration metadata and append-only evidence are registered
 together. The canonical financial owner remains Transaction. The existing
 transaction vocabulary and media-settlement function are shared rather than
@@ -92,8 +93,7 @@ attribution and refunds do not count as cleared revenue. The paired contracts
 are `of-configuration.v2`, `of-campaigns.v2`, `of-workspace.v2`, and
 `of-operations.v3`; frontend and backend must be deployed together.
 
-Still to implement: native upload admission/worker/preview delivery, metadata
-and internal-folder adapters, wider inbound selling behavior, complete audience
+Still to implement: native upload admission/worker/preview delivery, wider inbound selling behavior, complete audience
 import, and the combined earnings view. The existing upload owner uses temporary
 scheduled carrier posts and cleanup evidence; no bypass into the old provider
 client has been added. These remaining items are not described as live or done.
@@ -111,3 +111,42 @@ The 52 admin-API checks, four affected frontend contract checks, TypeScript and
 production Next build pass. Campaign reporting passed its five focused PG cases
 and the broader campaign/media suite. A complete connected browser acceptance
 and live provider/model deployment are still release gates.
+
+
+## Vault editing checkpoint
+
+Head `0086_vault_edits` adds immutable command evidence only. Assets retain
+`VaultItem`; folders retain `VaultFolder`/`VaultFolderItem`. The legacy editor
+and native adapter share tag normalization and the operator override/lock/compat
+projection in `vault_ai_effective`. No second media catalogue, folder owner,
+classifier or provider sender was created. A source refresh with identical
+facts now also preserves the original JSON and does not record a false edit.
+
+The native dashboard can edit asset descriptions/tags and create, rename,
+archive, add/remove and filter internal folders. Commands carry account/actor,
+nonce and fingerprint fences, retain historical retry acknowledgements and
+refuse stale edits. All folder membership references must belong to the account;
+archiving preserves membership records. These folders do not publish OF lists.
+One selection feeds organization and product curation. Cached/unready assets
+can be organized, but a catalogue product still requires verified readiness.
+Folder management targets and the library's current filter are separate UI
+choices so a new empty folder does not hide the assets that must be added.
+
+Account connection controls now remain accessible when conversation history is
+stale. Ownership/authentication and backend connection checks still apply;
+chat-history freshness is not a prerequisite for configuring a connection.
+
+Verification: nine focused database/edit/migration cases passed; 85 vault,
+shared-fact, ledger-upgrade and egress-isolation regression cases passed. New
+vault-edit contracts and existing vault contracts passed. The complete browser
+flow passed through real Next/FastAPI handlers and disposable PG, including
+shared-fact inheritance, metadata lock/normalization, exact lost-ack retries,
+internal-folder membership/filter/rename/archive, readiness holds, account
+onboarding, one-use manual/worker sends, campaigns, Operations, session clearing
+and mobile layout. TypeScript and the production Next build passed. These are
+synthetic local acceptances, not live OF/model/production deployment results.
+
+Both saved Desktop Commander connections remain offline. A selected actual OF
+account/session, reachable deployment and configured private Twin source are
+still needed for provider-shape validation and the live pilot. No outgoing
+activation or production allowance was changed by these checks.

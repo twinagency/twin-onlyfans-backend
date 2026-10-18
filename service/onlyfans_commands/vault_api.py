@@ -55,7 +55,7 @@ def failure(exc):
     if isinstance(exc, InvalidVault):
         return refuse("invalid_vault_request", 400, str(exc))
     if isinstance(exc, Refused):
-        if str(exc) in {"scope unavailable", "vault media unavailable"}:
+        if str(exc) in {"scope unavailable", "vault media unavailable", "vault folder unavailable"}:
             return refuse("not_available", 404, "Those vault records are not available.")
         if str(exc) == "verified connection unavailable":
             return refuse("vault_connection_unavailable", 409, "Verify the selected account connection before synchronizing its vault.")
@@ -70,14 +70,14 @@ async def get(request: Request, account_id: str):
         return context
     store, tenant = context
     try:
-        if not set(request.query_params) <= {"afterMediaId", "limit", "q", "kind"} or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
+        if not set(request.query_params) <= {"afterMediaId", "limit", "q", "kind", "folderId"} or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
             raise InvalidVault("That vault page request is invalid.")
         raw_limit = request.query_params.get("limit", "24")
         if not raw_limit.isascii() or not raw_limit.isdecimal() or len(raw_limit) > 2:
             raise InvalidVault("That vault page size is invalid.")
         value = await asyncio.to_thread(list_vault, store, tenant, account_id,
             after_media_id=request.query_params.get("afterMediaId"), limit=int(raw_limit),
-            query=request.query_params.get("q", ""), kind=request.query_params.get("kind", "all"))
+            query=request.query_params.get("q", ""), kind=request.query_params.get("kind", "all"),folder_id=request.query_params.get("folderId"))
         return response({"ok": True, "accountId": account_id, "vault": value})
     except Exception as exc:
         return failure(exc)
@@ -115,3 +115,57 @@ async def create(request: Request, account_id: str):
         return response({"ok": True, "applied": True, "accountId": account_id, **acknowledgement})
     except Exception as exc:
         return failure(exc)
+
+
+@router.get("/accounts/{account_id}/vault/assets/{media_id}")
+async def asset_get(request:Request,account_id:str,media_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    try:
+        if request.query_params:raise InvalidVault("Asset metadata does not use query parameters.")
+        from onlyfans_runtime.vault_editing import get_asset
+        result=await asyncio.to_thread(get_asset,*context,account_id,media_id)
+        return response({"ok":True,"accountId":account_id,"asset":result})
+    except Exception as exc:return failure(exc)
+
+
+@router.post("/accounts/{account_id}/vault/assets/{media_id}")
+async def asset_edit(request:Request,account_id:str,media_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    try:
+        value=await body(request,{"patch","expectedFingerprint","commandKey","actor"})
+        if isinstance(value,JSONResponse):return value
+        from onlyfans_runtime.vault_editing import edit_asset
+        result=await asyncio.to_thread(edit_asset,*context,account_id,media_id,patch=value["patch"],
+            expected_fingerprint=value["expectedFingerprint"],command_key=value["commandKey"],actor=value["actor"])
+        return response({"ok":True,"applied":True,"accountId":account_id,"commandKey":value["commandKey"],**result})
+    except Exception as exc:return failure(exc)
+
+
+@router.get("/accounts/{account_id}/vault/folders")
+@router.get("/accounts/{account_id}/vault/folders/{folder_id}")
+async def folders_get(request:Request,account_id:str,folder_id:str=None):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    try:
+        if request.query_params:raise InvalidVault("Folder metadata does not use query parameters.")
+        from onlyfans_runtime.vault_editing import get_folders
+        result=await asyncio.to_thread(get_folders,*context,account_id,folder_id)
+        return response({"ok":True,"accountId":account_id,"folder" if folder_id is not None else "folders":result})
+    except Exception as exc:return failure(exc)
+
+
+@router.post("/accounts/{account_id}/vault/folders")
+@router.post("/accounts/{account_id}/vault/folders/{folder_id}")
+async def folder_edit(request:Request,account_id:str,folder_id:str=None):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    try:
+        value=await body(request,{"action","name","mediaIds","expectedFingerprint","commandKey","actor"})
+        if isinstance(value,JSONResponse):return value
+        from onlyfans_runtime.vault_editing import edit_folder
+        result=await asyncio.to_thread(edit_folder,*context,account_id,folder_id,action=value["action"],name=value["name"],media_ids=value["mediaIds"],
+            expected_fingerprint=value["expectedFingerprint"],command_key=value["commandKey"],actor=value["actor"])
+        return response({"ok":True,"applied":True,"accountId":account_id,"commandKey":value["commandKey"],**result})
+    except Exception as exc:return failure(exc)

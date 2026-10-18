@@ -3560,23 +3560,7 @@ _EDITABLE_FIELDS = (
 )
 
 
-def _normalize_tags(v: Any) -> list[str]:
-    """Accept a list OR a comma/newline-separated string → deduped, lower-cased,
-    trimmed tag list (cap 12, matching the describe path)."""
-    if isinstance(v, str):
-        parts = _re.split(r"[,\n]", v)
-    elif isinstance(v, (list, tuple)):
-        parts = [str(x) for x in v]
-    else:
-        parts = []
-    out: list[str] = []
-    seen: set[str] = set()
-    for p in parts:
-        t = str(p).strip().lower()
-        if t and t not in seen:
-            seen.add(t)
-            out.append(t)
-    return out[:12]
+from vault_ai_effective import normalize_tags as _normalize_tags, project_operator_text
 
 
 def _item_edit_view(item: VaultItem, locked: list[str]) -> dict[str, Any]:
@@ -3634,8 +3618,8 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
         flag_edits: dict[str, Any] = {}
         for field, raw in edits.items():
             if field == "tags":
-                ov: Any = _normalize_tags(raw)
-                col_vals["tags"] = json.dumps(ov)
+                project_operator_text(field,raw,overrides,locked,col_vals)
+                continue
             elif field == "suggested_price_cents":
                 # Cents, non-negative. Blank/None clears it back to "no price".
                 if raw is None or (isinstance(raw, str) and not raw.strip()):
@@ -3663,12 +3647,9 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
             elif field in vault_ai_brief.OVER_KEYS.values():
                 ov = str(raw).strip()[:60] if raw else None
                 flag_edits[field] = ov
-            elif raw is None:
-                ov = None
-                col_vals[field] = None
             else:
-                ov = str(raw)
-                col_vals[field] = ov
+                project_operator_text(field,raw,overrides,locked,col_vals)
+                continue
             overrides[field] = ov       # operator override (locked or not — read-time wins)
             locked.add(field)            # lock: a describe rerun's is_locked() skips it
         if flag_edits:

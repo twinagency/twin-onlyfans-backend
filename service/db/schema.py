@@ -30,8 +30,9 @@ CONNECTION = "0081_native_connection"
 CONTENT = "0082_content_management"
 VAULT = "0083_vault_management"
 LEDGER = "0084_native_ledger"
-HEAD = "0085_shared_creator_facts"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, HEAD:85}
+CREATOR_FACTS = "0085_shared_creator_facts"
+HEAD = "0086_vault_edits"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, HEAD:86}
 HERE = Path(__file__).resolve().parent
 
 
@@ -44,7 +45,7 @@ def _metadata():
     from . import onlyfans_models  # noqa: F401 — register current tables
     from . import onlyfans_delivery_models  # noqa: F401 — register current tables
     from . import onlyfans_campaign_models,onlyfans_connection_models,onlyfans_content_models  # noqa: F401
-    from . import onlyfans_vault_models, onlyfans_ledger_models, onlyfans_creator_facts_models  # noqa: F401
+    from . import onlyfans_vault_models, onlyfans_ledger_models, onlyfans_creator_facts_models, onlyfans_vault_edit_models  # noqa: F401
     return Base.metadata
 
 
@@ -147,6 +148,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         (81, "of_connection_change", "of_connection_immutable", "connection evidence is append-only"),
         (82, "of_content_change", "of_content_immutable", "content evidence is append-only"),
         (83, "of_vault_product_create", "of_vault_product_immutable", "vault product evidence is append-only"),
+        (86, "of_vault_edit", "of_vault_edit_immutable", "vault edit evidence is append-only"),
         (84, "of_ledger_evidence", "of_ledger_immutable", "ledger evidence is append-only"),
     ]:
         if expected_rank < rank:

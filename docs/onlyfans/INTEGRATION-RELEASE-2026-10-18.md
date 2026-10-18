@@ -3,7 +3,7 @@
 This checkpoint continues the existing Twin dashboard and Fastt native engine.
 It does not replace the planner, create another fan-memory store, add a model
 call to manual messages/campaigns, or run the legacy Fastt sending workers.
-Schema head is `0085_shared_creator_facts`.
+Schema head is `0086_vault_edits`.
 
 The current remaining-work plan is [DELIVERY-PLAN-2026-10-19.md](DELIVERY-PLAN-2026-10-19.md). The original checkpoint below remains historical verification evidence.
 The native ledger continuation adds a default-off, bounded payment/refund reader

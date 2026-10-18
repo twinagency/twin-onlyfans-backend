@@ -184,10 +184,24 @@ def test_missing_source_holds_before_model_and_inherit_requires_cache(database,m
 def test_populated_ledger_upgrade_preserves_rows_and_registers_fact_projection(database):
     store=setup(database);store.close()
     with database[1].begin() as c:
-        c.exec_driver_sql("DROP TABLE of_creator_facts_source")
+        c.exec_driver_sql("DROP TABLE of_vault_edit; DROP FUNCTION of_vault_edit_immutable(); DROP TABLE of_creator_facts_source")
         c.execute(text("UPDATE alembic_version SET version_num=:head"),{"head":LEDGER})
         check_schema(c,expected=LEDGER)
         before=c.exec_driver_sql("SELECT row_to_json(t) FROM account_ai_config t").scalars().all()
         upgrade(c);upgrade(c);check_schema(c)
         assert before==c.exec_driver_sql("SELECT row_to_json(t) FROM account_ai_config t").scalars().all()
         assert c.scalar(text("SELECT count(*) FROM of_creator_facts_source"))==0
+
+
+def test_identical_shared_facts_preserve_legacy_json_and_do_not_create_an_edit(database,monkeypatch):
+    store=setup(database)
+    with Session(database[1]) as s:
+        before=s.get(AccountAiConfig,ACCOUNT).persona_facts_json
+    r,_=reader(monkeypatch,source(date_of_birth=None,hometown=None,current_city=None,cover_story=None,occupation=None,relationship_canon=None,tattoos=None))
+    refresh(store,TENANT,ACCOUNT,r)
+    with Session(database[1]) as s:
+        assert s.get(AccountAiConfig,ACCOUNT).persona_facts_json==before
+        assert s.get(OfRuntime,ACCOUNT).configuration_revision==0
+        assert s.scalar(select(func.count()).select_from(OfConfigurationChange))==0
+    assert get_configuration(store,TENANT,ACCOUNT)["sharedFacts"]["state"]=="current"
+    store.close()

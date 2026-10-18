@@ -226,8 +226,8 @@ def refresh(store, tenant, account, reader):
         source.source_json, source.source_hash, source.source_updated_at = canonical(body), digest, version
         source.checked_at, source.last_error = utcnow(), None
         facts, _ = effective(s, row)
-        row.persona_facts_json = canonical(facts) if facts else None
-        if before != row.persona_facts_json:
+        if object_value(before) != facts:
+            row.persona_facts_json = canonical(facts) if facts else None
             runtime.configuration_revision += 1
             row.updated_at = utcnow()
             s.flush()

@@ -190,7 +190,7 @@ def _ready(row, observation, job, connection, binding):
     return True, None
 
 
-def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="", kind="all"):
+def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="", kind="all", folder_id=None):
     if type(limit) is not int or not 1 <= limit <= 48:
         raise InvalidVault("Use a vault page size between 1 and 48.")
     if after_media_id is not None:
@@ -205,6 +205,13 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
         if connection is not None and connection.binding_id != runtime.binding_id:
             raise Refused("scope unavailable")
         query = select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id > 0)
+        if folder_id is not None:
+            from db.models import VaultFolderItem
+            from .vault_editing import _folder,folder_reference
+            fid=folder_reference(folder_id)
+            _folder(s,account,fid)
+            query=query.where(VaultItem.media_id.in_(select(VaultFolderItem.media_id).where(
+                VaultFolderItem.account_id==account,VaultFolderItem.folder_id==fid)))
         if kind != "all":
             query = query.where(VaultItem.kind == kind)
         if search:

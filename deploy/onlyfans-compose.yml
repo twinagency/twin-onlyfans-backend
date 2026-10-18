@@ -22,9 +22,12 @@ services:
     env_file: ${ONLYFANS_ENV_FILE:-onlyfans.env}
     environment:
       ONLYFANS_PROCESS_ROLE: api
+      VAULT_IMAGE_DIR: /var/lib/twin-vault/images
       DATABASE_URL: postgresql+psycopg2://twin_onlyfans:${ONLYFANS_DB_PASSWORD:?Set a database password}@database:5432/twin_onlyfans
     ports:
       - "127.0.0.1:${ONLYFANS_API_PORT:-8788}:8787"
+    volumes:
+      - onlyfans-vault-images:/var/lib/twin-vault/images:ro
     depends_on:
       database:
         condition: service_healthy
@@ -37,8 +40,11 @@ services:
     env_file: ${ONLYFANS_ENV_FILE:-onlyfans.env}
     environment:
       ONLYFANS_PROCESS_ROLE: worker
+      VAULT_IMAGE_DIR: /var/lib/twin-vault/images
       DATABASE_URL: postgresql+psycopg2://twin_onlyfans:${ONLYFANS_DB_PASSWORD:?Set a database password}@database:5432/twin_onlyfans
     command: ["python", "-m", "service.onlyfans_worker"]
+    volumes:
+      - onlyfans-vault-images:/var/lib/twin-vault/images
     depends_on:
       database:
         condition: service_healthy
@@ -58,3 +64,4 @@ services:
         condition: service_healthy
 volumes:
   onlyfans-postgres:
+  onlyfans-vault-images:

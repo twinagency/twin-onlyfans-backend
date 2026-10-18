@@ -171,6 +171,9 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
     assert run_worker_scenario(database,monkeypatch)["providerRequests"]==0
     from onlyfans_operator_fixture import seed_operator, operator_dispatcher, ACCOUNT as OPERATOR_ACCOUNT, MANUAL as OPERATOR_MESSAGE
     operator_store=seed_operator(database)
+    from onlyfans_vault_preview_fixture import seed_preview
+    preview_root=tmp_path/"vault-images"
+    preview_bytes=seed_preview(engine,preview_root,monkeypatch)
     backend=Path(__file__).resolve().parents[2]
     dashboard=Path(os.environ.get("ONLYFANS_TEST_DASHBOARD",str(backend.parent/"twin-dashboard"))).resolve()
     assert (dashboard/"node_modules/next/dist/bin/next").exists(), "Run npm ci in the dashboard first"
@@ -181,7 +184,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
     identity_thread=threading.Thread(target=identity.serve_forever,daemon=True);identity_thread.start()
     api=f"http://127.0.0.1:{api_port}"
     web=f"http://127.0.0.1:{next_port}"
-    env={**os.environ,"ONLYFANS_PROCESS_ROLE":"api","DATABASE_URL":url,"ONLYFANS_API_TOKEN":"synthetic-of-token","ONLYFANS_API_TENANT":"tenant-a","ONLYFANS_API_BASE_URL":api,
+    env={**os.environ,"ONLYFANS_PROCESS_ROLE":"api","DATABASE_URL":url,"ONLYFANS_API_TOKEN":"synthetic-of-token","ONLYFANS_API_TENANT":"tenant-a","ONLYFANS_API_BASE_URL":api,"VAULT_IMAGE_DIR":str(preview_root),
          "ONLYFANS_CONTROL_TOKEN":"synthetic-controls-only-token","ONLYFANS_CONTROL_TENANT":"tenant-a",
          "ONLYFANS_MANUAL_ENABLED":"1","ONLYFANS_TEST_OPERATOR":"1",
          "ONLYFANS_CAMPAIGN_TOKEN":"synthetic-campaign-only-token","ONLYFANS_CAMPAIGN_TENANT":"tenant-a",
@@ -252,6 +255,14 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     for invalid in ("malformed", sessions["operator"]+".extra", "9999999999999."+"!"*43):
                         assert client.get(path,headers={"Cookie":"allie_admin_session="+invalid}).status_code==401
                     cookie="allie_admin_session="+sessions["operator"]
+                    preview_path=web+"/api/onlyfans-content/accounts/acc-a/vault/previews/11"
+                    assert client.get(preview_path).status_code==401
+                    assert client.get(preview_path,headers={"Cookie":cookie+"; twin_agency_access=synthetic-agency-token"}).status_code==403
+                    picture=client.get(preview_path,headers={"Cookie":cookie})
+                    assert picture.status_code==200 and picture.content==preview_bytes
+                    assert picture.headers["content-type"]=="image/png" and "no-store" in picture.headers["cache-control"]
+                    assert client.get(preview_path+"?url=https://caller.example",headers={"Cookie":cookie}).status_code==400
+                    assert client.get(preview_path.replace("acc-a","acc-b"),headers={"Cookie":cookie}).status_code==404
                     response=client.get(path,headers={"Cookie":cookie})
                     assert response.status_code==200,response.text
                     assert "no-store" in response.headers["cache-control"]

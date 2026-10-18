@@ -162,15 +162,21 @@ def request_sync(store, tenant, account, *, expected_connection_revision, comman
         return job_view(row)
 
 
+def _provenance(row, observation, job, connection, binding, *, current_revision=True):
+    return (observation is not None and job is not None and connection is not None
+        and job.binding_id == binding and connection.binding_id == binding
+        and job.owner_id == connection.owner_id
+        and (not current_revision or job.connection_revision == connection.revision)
+        and observation.raw_hash == digest(row.raw_json))
+
+
 def _ready(row, observation, job, connection, binding):
     if row.removed_at is not None:
         return False, "removed"
     if row.kind not in {"photo", "video"}:
         return False, "unsupported_kind"
-    if (observation is None or job is None or connection is None or job.binding_id != binding
-        or job.connection_revision != connection.revision or job.owner_id != connection.owner_id
-        or connection.status != "verified" or connection.expires_at <= utcnow()
-        or observation.raw_hash != digest(row.raw_json)):
+    if (not _provenance(row, observation, job, connection, binding)
+        or connection.status != "verified" or connection.expires_at <= utcnow()):
         return False, "unverified_owner"
     try:
         raw = json.loads(row.raw_json)
@@ -392,7 +398,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             token = str(uuid.uuid4())
             job.status, job.lease_token = "running", token
             job.lease_until, job.updated_at = utcnow() + timedelta(seconds=60), utcnow()
-            offset, owner, expires = job.page_offset, job.owner_id, connection.expires_at
+            offset, owner, expires, binding = job.page_offset, job.owner_id, connection.expires_at, runtime.binding_id
         if stop is not None and stop.is_set():
             break
         error = None
@@ -403,6 +409,9 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 expires_at=expires.replace(tzinfo=timezone.utc)))
             raw = transport.vault_page(offset=offset, limit=PAGE_SIZE)
             rows, more = parse_vault_page(raw, owner_id=owner)
+            if os.environ.get("ONLYFANS_VAULT_PREVIEWS_ENABLED") == "1":
+                from .vault_previews import warm_page
+                warm_page(transport, rows, binding_id=binding, owner_id=owner, stop=stop)
         except NativeProtocolError:
             error = "unsupported_vault_response"
         except Exception:

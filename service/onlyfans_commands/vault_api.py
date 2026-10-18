@@ -4,7 +4,7 @@ import hmac
 import json
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from onlyfans_read.contract import ID_PATTERN
 from onlyfans_runtime.store import Refused
@@ -98,6 +98,24 @@ async def sync(request: Request, account_id: str):
         return response({"ok": True, "applied": True, "accountId": account_id, "commandKey": value["commandKey"], "sync": job})
     except Exception as exc:
         return failure(exc)
+
+
+@router.get("/accounts/{account_id}/vault/previews/{media_id}")
+async def preview(request: Request, account_id: str, media_id: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse): return context
+    try:
+        if request.query_params: raise InvalidVault("Preview reads do not accept URLs or query parameters.")
+        from onlyfans_runtime.vault_previews import read_preview, SCHEMA as PREVIEW_SCHEMA
+        data, mime = await asyncio.to_thread(read_preview, *context, account_id, media_id)
+        return Response(data, media_type=mime, headers={
+            "Cache-Control": "private, no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox", HEADER: SCHEMA,
+            "X-OnlyFans-Preview": PREVIEW_SCHEMA, "X-OnlyFans-Account-Id": account_id,
+            "X-OnlyFans-Media-Id": media_id})
+    except Refused:
+        return refuse("preview_unavailable", 404, "That vault preview is unavailable. Sync the vault to refresh it.")
+    except Exception as exc: return failure(exc)
 
 
 @router.post("/accounts/{account_id}/items")

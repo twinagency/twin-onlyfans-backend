@@ -252,6 +252,55 @@ class NativeProviderConnector(NativeLoopbackConnector):
             {"limit":limit,"offset":offset,"sort":"desc","field":"recent","list":"all"})
         return self._call("GET", path)
 
+    def still_bytes(self, url):
+        """One credential-free CDN image GET, through this account's fixed proxy.
+
+        URLs come only from a validated vault page, never from an HTTP caller.
+        No cookies/signing headers, redirects, decompression or retries. The
+        permanent still store owns format detection and its existing byte cap.
+        """
+        self._ready()
+        self._handle.current()
+        from vault_still_store import MAX_STILL_BYTES, image_type
+        if (type(url) is not str or len(url) > 8192 or not url.isascii()
+                or any(ord(c) < 33 or ord(c) == 127 for c in url) or "\\" in url):
+            raise Refused("unsupported native image target")
+        try:
+            parsed = urlsplit(url)
+            if (parsed.scheme != "https" or not re.fullmatch(r"cdn[0-9]{0,2}\.onlyfans\.com", parsed.hostname or "")
+                    or parsed.port not in {None, 443} or parsed.username or parsed.password or parsed.fragment):
+                raise ValueError()
+        except ValueError:
+            raise Refused("unsupported native image target") from None
+        from curl_cffi import requests
+        chunks, size = [], 0
+        def bounded(chunk):
+            nonlocal size
+            size += len(chunk)
+            if size > MAX_STILL_BYTES:
+                raise NativeProtocolError("native image exceeded its byte budget")
+            chunks.append(chunk)
+            return len(chunk)
+        try:
+            with requests.Session(impersonate="chrome", trust_env=False, retry=0) as client:
+                response = client.request("GET", url,
+                    headers={"Accept": "image/jpeg,image/png,image/webp,image/gif", "Accept-Encoding": "identity",
+                             "User-Agent": self._handle.user_agent, "Referer": ORIGIN + "/"},
+                    proxy=self._handle.proxy_url, timeout=min(self._timeout, 2),
+                    allow_redirects=False, verify=True, accept_encoding="identity",
+                    content_callback=bounded, discard_cookies=True)
+                data = b"".join(chunks)
+                mime = image_type(data)
+                if (response.status_code != 200 or not mime or size > MAX_STILL_BYTES
+                        or response.headers.get("content-encoding", "identity").strip().lower() != "identity"
+                        or response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != mime):
+                    raise NativeProtocolError("native image response is unavailable")
+                return data
+        except (NativeProtocolError, Refused):
+            raise
+        except Exception:
+            raise NativeProtocolError("native image read is unavailable") from None
+
     def transaction_page(self, *, offset, limit=20, start, end):
         """Reuse the legacy ledger endpoint with frozen UTC bounds and no retries."""
         self._ready()

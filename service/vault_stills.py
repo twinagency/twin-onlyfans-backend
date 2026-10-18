@@ -45,6 +45,7 @@ import asyncio
 import logging
 import os
 import weakref
+from vault_still_store import image_type, image_path as shared_image_path, MAX_STILL_BYTES, write
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
@@ -83,22 +84,13 @@ def poster_path(account_id: str, media_id: int, idx: int) -> Path:
 
 
 def image_path(account_id: str, media_id: int) -> Path:
-    return IMAGE_DIR / account_id / f"{media_id}.jpg"
+    return shared_image_path(account_id, media_id, root=IMAGE_DIR)
 
 
 # Every store here holds ONE still — a 300px square, a ~960x1280 preview, a video
 # poster frame. Those run tens of KB; the cap is set well above the largest real
 # one and well below a video, so it can only ever catch a mis-picked url.
-_MAX_STILL_BYTES = 8 * 1024 * 1024
-
-# Magic numbers for the formats OF actually serves. A still is written to disk as
-# `{media_id}.jpg` and served as image/jpeg, so "the server said 200" is not
-# enough to believe it is a picture.
-_IMAGE_MAGIC = (
-    b"\xff\xd8\xff",      # JPEG
-    b"\x89PNG\r\n\x1a\n",  # PNG
-    b"GIF87a", b"GIF89a",  # GIF
-)
+_MAX_STILL_BYTES = MAX_STILL_BYTES
 
 
 # How many stills may be OF-bound at once, process-wide.
@@ -138,10 +130,7 @@ def _fetch_slot() -> asyncio.Semaphore:
 
 
 def _looks_like_an_image(data: bytes) -> bool:
-    if data.startswith(_IMAGE_MAGIC):
-        return True
-    # WEBP is RIFF....WEBP — the size field sits between the two markers.
-    return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return image_type(data) is not None
 
 
 def fetch_bytes_sync(client: Any, url: str) -> bytes | None:
@@ -180,26 +169,6 @@ def fetch_bytes_sync(client: Any, url: str) -> bytes | None:
     return None
 
 
-def write(p: Path, data: bytes) -> None:
-    """Persist a fetched still. Best-effort — a full disk must not break the
-    response we already have in hand.
-
-    Written to a sibling temp file and RENAMED into place, because a disk hit
-    short-circuits every validation below: a partial file (full disk, killed
-    container, two writers racing the same media) would otherwise be cached as
-    that media's picture permanently, and the bytes it truncated are the only
-    copy that outlives OF's signature. `os.replace` is atomic within a
-    filesystem, so a reader sees the whole file or no file."""
-    tmp = p.with_name(f".{p.name}.{os.getpid()}.part")
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_bytes(data)
-        os.replace(tmp, p)
-    except Exception:  # noqa: BLE001
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
 
 
 class _Resolved(NamedTuple):

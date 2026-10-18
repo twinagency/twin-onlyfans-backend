@@ -93,7 +93,7 @@ attribution and refunds do not count as cleared revenue. The paired contracts
 are `of-configuration.v2`, `of-campaigns.v2`, `of-workspace.v2`, and
 `of-operations.v3`; frontend and backend must be deployed together.
 
-Still to implement: native upload admission/worker/preview delivery, wider inbound selling behavior and complete audience
+Still to implement: native upload admission/worker, full video preview playback, wider inbound selling behavior and complete audience
 import. The existing upload owner uses temporary
 scheduled carrier posts and cleanup evidence; no bypass into the old provider
 client has been added. These remaining items are not described as live or done.
@@ -191,3 +191,41 @@ and platform-cut terms. Preserve those changes together with the new
 A three-way merge of the cache file was rehearsed without conflicts and retained
 both `viewerCacheKey(access)` and `reportWindow`. Post-merge verification and
 selected-account live acceptance remain required.
+
+## Photo and poster previews
+
+The native vault now exposes authenticated photo and video-poster previews.
+The existing permanent image store, image-signature checks, atomic writer and
+aspect-preserving `of_shapes.still_url` selection are shared with Fastt's legacy
+ladder. The dashboard also shares Twin's media renderer and dialog. No second
+image cache, media catalogue, classifier, prompt or AI call was added.
+
+With `ONLYFANS_VAULT_PREVIEWS_ENABLED=1`, an operator-requested vault sync warms
+at most 24 stills per page, three at a time, with a two-second per-image network
+bound and the existing 8 MiB still cap. The fixed account proxy is retained;
+only HTTPS `cdn[0-9]{0,2}.onlyfans.com` hosts are allowed. There are no retries,
+redirects, session cookies or signing headers on CDN requests. A failed image
+does not become a successful preview or erase the vault metadata. Missing
+pictures remain visibly unavailable and a new sync can refresh their URLs.
+
+The API serves only existing bytes with canonical vault ownership provenance
+and a matching binding/owner/content-hash receipt. It loads no encrypted session
+payload and makes no provider requests. The permanent picture remains readable
+after sending is paused or credentials expire, but an unauthorized/revoked
+binding, wrong owner, removed/hidden media or corrupt receipt is refused.
+Preview reads cannot grant paid-media readiness. Full video playback and upload
+intake are still open; video previews are explicitly labelled poster frames.
+
+The dedicated compose stack now mounts the existing image store as a persistent
+volume, writable by the worker and read-only in the API. Retain this volume with
+backups and rollback; deleting it requires a fresh vault sync to restore stills.
+The feature defaults off and no deployment or outgoing allowance was changed.
+
+Verification: 94 preview/vault/egress cases passed. After narrowing the preview
+connection query to non-secret columns, all 11 focused preview cases passed
+again, including an assertion that no sealed credentials are selected. Binary
+contract checks and the production build passed. The full real Next/API/worker/
+PG browser flow passed in 154.78 seconds, including a decoded 96x128 synthetic
+image, contain-fit expansion, missing poster, account/session refusals and mobile
+layout. This is synthetic local acceptance; actual CDN shapes and live account
+delivery remain unverified.

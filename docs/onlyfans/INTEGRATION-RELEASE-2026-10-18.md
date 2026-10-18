@@ -24,6 +24,15 @@ normal three-way cache merge was rehearsed, but the integrated release still
 requires verification. Deployment access and a selected real OF account remain
 live-release gates.
 
+Native photo and video-poster previews now share the existing permanent image
+store. Explicitly enable `ONLYFANS_VAULT_PREVIEWS_ENABLED=1` to warm stills during
+requested vault sync; the compose image volume is writable by the worker and
+read-only in the API. Keep this volume during backup/rollback. Preview GETs use
+the content-purpose token and return private binary `vault-still.v1` responses;
+the browser receives neither signed CDN URLs nor credentials. Full clip playback
+and upload intake remain open. The updated complete local browser run passed;
+see the delivery plan for coverage and limits.
+
 ## Implemented paths
 
 | Operator workflow | Implementation |

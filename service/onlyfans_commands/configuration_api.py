@@ -13,7 +13,7 @@ from onlyfans_runtime.configuration import get_configuration,update_configuratio
 from onlyfans_runtime.store import Refused
 from .api import unique_keys
 
-SCHEMA="of-configuration.v2"
+SCHEMA="of-configuration.v3"
 HEADER="X-OnlyFans-Configuration-Version"
 PREFIX="/onlyfans/configuration/v1"
 router=APIRouter(prefix=PREFIX,tags=["onlyfans-configuration"])

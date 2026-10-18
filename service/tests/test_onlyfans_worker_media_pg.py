@@ -17,14 +17,16 @@ from onlyfans_runtime.loopback_transport import LoopbackTextTransport,from_serve
 from onlyfans_runtime.native_planning import NativeTextPlanner,SyntheticNativeModel
 from onlyfans_runtime.native_context import canonical
 from onlyfans_runtime.store import utcnow
+from onlyfans_runtime.configuration import get_configuration, update_configuration
 
 
 @pytest.mark.parametrize("mode",["accepted","accepted_drop"])
 def test_worker_media_keeps_price_and_ownership_semantics_through_local_http(database,monkeypatch,mode):
     store,authority=start(database,monkeypatch);item=shelf(database[1]);media_policy(authority)
-    with Session(database[1]) as s,s.begin():
-        s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json=canonical({"pack_send_enabled":True,
-            "pack_on_ask_enabled":True,"qualification_gate_enabled":True})
+    config=get_configuration(store,TENANT,ACCOUNT)
+    update_configuration(store,TENANT,ACCOUNT,patch={"onRequestSalesEnabled":True},
+        expected_revision=config["configurationRevision"],expected_fingerprint=config["fingerprint"],
+        command_key="a"*64,actor="op-session:"+"b"*64)
     store.record(TENANT,ACCOUNT,event(mid=2,body=ASK));store.drain(TENANT,ACCOUNT);due(database[1])
     model=SyntheticNativeModel("Here are the saved collection details.",sale={"item_id":item,"quote":ASK},reported_cost_millicents=7)
     with peer_server(mode) as peer:

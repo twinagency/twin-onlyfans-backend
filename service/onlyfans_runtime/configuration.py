@@ -21,6 +21,20 @@ class InvalidConfiguration(ValueError):
     pass
 
 
+SALES_FLAGS = ("pack_send_enabled", "pack_on_ask_enabled", "qualification_gate_enabled")
+
+
+def sales_settings(row):
+    """Project only the existing native on-request controls, never private JSON."""
+    try:
+        raw = object_value(row.ai_chatter_config_json)
+        if any(key in raw and type(raw[key]) is not bool for key in SALES_FLAGS):
+            raise ValueError("invalid sales switch")
+        return raw, True
+    except (ValueError, TypeError, RecursionError):
+        return {}, False
+
+
 def digest(value):return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
@@ -70,12 +84,14 @@ def editable(row,runtime,session):
     persona=row.persona or ""
     try:resolved=explicit_model(row,"ai_chatter",MODELS)
     except (ValueError,RecursionError):resolved=None
+    sales, sales_valid = sales_settings(row)
     return {"configurationRevision":runtime.configuration_revision,"fingerprint":fingerprint(row),
         "persona":persona if len(persona)<=4096 else None,"personaTruncated":len(persona)>4096,
         "creatorFacts":values,"factFields":[{"key":key,"label":labels.get(key,label)} for key,label in fact_fields()],
         "factsValid":facts_valid,"readOnlyFacts":readonly,"modelsValid":models_valid,"sharedFacts":source,
         "defaultModel":row.model,"replyModelOverride":override,"replyOverridePresent":models_valid and "ai_chatter" in purpose,"resolvedReplyModel":resolved,
-        "modelOptions":sorted(MODELS)}
+        "modelOptions":sorted(MODELS), "salesConfigurationValid":sales_valid,
+        "onRequestSalesEnabled":sales_valid and all(sales.get(key) is True for key in SALES_FLAGS)}
 
 
 def get_configuration(store,tenant_id,account_id):
@@ -87,9 +103,13 @@ def get_configuration(store,tenant_id,account_id):
 
 
 def validate_patch(patch):
-    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride"}:
-        raise InvalidConfiguration("Only creator persona, facts and model choices may be edited here.")
+    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled"}:
+        raise InvalidConfiguration("Only creator persona, facts, model choices and on-request sales may be edited here.")
     result={}
+    if "onRequestSalesEnabled" in patch:
+        if type(patch["onRequestSalesEnabled"]) is not bool:
+            raise InvalidConfiguration("The on-request sales setting must be an explicit boolean.")
+        result["onRequestSalesEnabled"]=patch["onRequestSalesEnabled"]
     if "inheritCreatorFacts" in patch:
         keys=patch["inheritCreatorFacts"]
         if (type(keys) is not list or not keys
@@ -147,6 +167,21 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
         if runtime.configuration_revision!=expected_revision or fingerprint(row)!=expected_fingerprint:
             raise Refused("configuration revision conflict")
         before={};after={};changed=False
+        if "onRequestSalesEnabled" in patch:
+            sales, valid = sales_settings(row)
+            if not valid:
+                raise InvalidConfiguration("Saved sales configuration needs review before it can be edited.")
+            before["salesSettings"]={key:{"present":key in sales,"value":sales.get(key)} for key in SALES_FLAGS}
+            previous_sales=canonical(sales)
+            # Enable the existing request/qualification lane explicitly. Turning
+            # it off stops offers without disabling qualification or other brakes.
+            sales["pack_send_enabled"]=patch["onRequestSalesEnabled"]
+            if patch["onRequestSalesEnabled"]:
+                sales.update({key:True for key in SALES_FLAGS})
+            after["salesSettings"]={key:{"present":key in sales,"value":sales.get(key)} for key in SALES_FLAGS}
+            changed=changed or previous_sales!=canonical(sales)
+            if previous_sales!=canonical(sales):
+                row.ai_chatter_config_json=canonical(sales)
         if "persona" in patch:
             changed=changed or row.persona!=patch["persona"]
             before["persona"]=row.persona;after["persona"]=patch["persona"];row.persona=patch["persona"]

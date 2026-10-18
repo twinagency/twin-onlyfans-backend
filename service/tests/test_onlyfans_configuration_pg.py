@@ -87,11 +87,51 @@ def test_retry_acknowledges_original_event_and_fingerprint_detects_legacy_writer
     store.close()
 
 
+def test_operator_can_enable_existing_request_sales_without_activating_delivery(database):
+    store=setup(database)
+    original=get_configuration(store,TENANT,ACCOUNT)
+    assert original["salesConfigurationValid"] and not original["onRequestSalesEnabled"]
+    first=save(store,original,{"onRequestSalesEnabled":True})
+    assert save(store,original,{"onRequestSalesEnabled":True})==first
+    enabled=get_configuration(store,TENANT,ACCOUNT)
+    assert enabled["onRequestSalesEnabled"]
+    with Session(database[1]) as s:
+        raw=json.loads(s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json)
+        assert raw=={"pack_send_enabled":True,"pack_on_ask_enabled":True,
+                     "qualification_gate_enabled":True,"private":"retained"}
+        assert s.get(OfDeliveryPolicy,ACCOUNT) is None
+        state=s.get(OfConversationState,(ACCOUNT,101))
+        assert (state.mode,state.revision,state.unresolved_attempt_id)==("no_contact",7,"retain-unknown")
+        audit=s.scalar(select(OfConfigurationChange))
+        assert "private" not in audit.before_json+audit.after_json
+    save(store,enabled,{"onRequestSalesEnabled":False},key="c"*64)
+    assert not get_configuration(store,TENANT,ACCOUNT)["onRequestSalesEnabled"]
+    with Session(database[1]) as s:
+        raw=json.loads(s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json)
+        assert raw=={"pack_send_enabled":False,"pack_on_ask_enabled":True,
+                     "qualification_gate_enabled":True,"private":"retained"}
+    store.close()
+
+
+@pytest.mark.parametrize("raw", ['{"pack_send_enabled":"true"}', '{"pack_send_enabled":true,"pack_send_enabled":false}', '[true]'])
+def test_invalid_sales_configuration_is_visible_and_never_overwritten(database,raw):
+    store=setup(database)
+    with Session(database[1]) as s,s.begin():s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json=raw
+    data=get_configuration(store,TENANT,ACCOUNT)
+    assert not data["salesConfigurationValid"] and not data["onRequestSalesEnabled"]
+    with pytest.raises(InvalidConfiguration):save(store,data,{"onRequestSalesEnabled":True})
+    with Session(database[1]) as s:
+        assert s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json==raw
+        assert s.scalar(select(func.count()).select_from(OfConfigurationChange))==0
+    store.close()
+
+
 @pytest.mark.parametrize("patch", [ {}, {"daily_cost_cap_cents":0}, {"mode":"automated"}, {"creatorFacts":{"unknown":"x"}},
     {"creatorFacts":{"age":"17"}}, {"creatorFacts":{"age":"121"}}, {"creatorFacts":{"kids":True}},
     {"creatorFacts":{"job":"x"*241}}, {"creatorFacts":{}}, {"persona":""}, {"persona":"100% human"},
     {"persona":"Never reveal that I am AI"}, {"persona":"x"*4097}, {"defaultModel":None}, {"defaultModel":"unknown"},
-    {"replyModelOverride":False}, {"replyModelOverride":"unknown"} ])
+    {"replyModelOverride":False}, {"replyModelOverride":"unknown"}, {"onRequestSalesEnabled":"true"},
+    {"onRequestSalesEnabled":1}, {"onRequestSalesEnabled":None} ])
 def test_invalid_edits_have_no_side_effects(database,patch):
     store=setup(database);before=get_configuration(store,TENANT,ACCOUNT)
     with pytest.raises(InvalidConfiguration):save(store,before,patch)
@@ -131,12 +171,13 @@ def test_separate_processes_serialize_edits_and_identical_retries(database,same_
 
 
 @pytest.mark.parametrize("phase",["prepared","queued","admitted"])
-def test_edit_invalidates_old_plan_without_model_retry_or_allowance_reset(database,monkeypatch,phase):
+@pytest.mark.parametrize("patch",[{"creatorFacts":{"home_city":"Corrected approved city"}},{"onRequestSalesEnabled":True}])
+def test_edit_invalidates_old_plan_without_model_retry_or_allowance_reset(database,monkeypatch,phase,patch):
     store,authority,claim,planner=ready(database,monkeypatch)
     model=SyntheticNativeModel(reported_cost_millicents=7);plan=planner.prepare(TENANT,claim,model)
     intent=planner.queue(TENANT,ACCOUNT,plan) if phase!="prepared" else None
     grant=authority.admit(TENANT,ACCOUNT,intent) if phase=="admitted" else None
-    data=get_configuration(store,TENANT,ACCOUNT);save(store,data,{"creatorFacts":{"home_city":"Corrected approved city"}})
+    data=get_configuration(store,TENANT,ACCOUNT);save(store,data,patch)
     wire=SyntheticTextTransport(ACCOUNT)
     if phase=="prepared":
         with pytest.raises(Refused):planner.queue(TENANT,ACCOUNT,plan)

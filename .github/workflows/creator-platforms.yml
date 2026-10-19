@@ -1,7 +1,7 @@
 name: Creator platform acceptance
 on:
   push:
-    branches: [codex/creator-platform-connections-20261019, codex/onlyfans-guided-connect-20261020]
+    branches: [codex/creator-platform-connections-20261019, codex/onlyfans-guided-connect-20261020, codex/creator-selfhosted-connect-20261020]
   workflow_dispatch:
 permissions:
   contents: read

@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from db.models import Account,OfCreatorBinding
 from db.onlyfans_connection_models import OfConnectionEnrollment,OfProviderConnection
 from .connections import (_validate_identity,_request,_seal,_aad,_open,encryption_key,
-    provision_account,save_connection,get_connection)
+    provision_account,save_connection,get_connection,capture_network_fingerprint)
 from .provider_connector import session_from_capture,NativeProviderConnector
 from .browser_capture import validate_browser_payload,normalize_browser_payload
 from .store import Refused,utcnow
@@ -33,7 +33,8 @@ def submit_enrollment(store,tenant,*,creator_id,creator_name,handle,payload,comm
         expires=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00'))
         if 'browser' in payload:validate_browser_payload(payload)
         else:
-            if set(payload)!={'ownerId','capture','xHash','expiresAt'}:raise ValueError()
+            if set(payload) not in ({'ownerId','capture','xHash','expiresAt'},{'ownerId','capture','xHash','expiresAt','networkFingerprint'}):raise ValueError()
+            if 'networkFingerprint' in payload and (type(payload['networkFingerprint']) is not str or not re.fullmatch(r'[a-f0-9]{64}',payload['networkFingerprint'])):raise ValueError()
             session_from_capture(account_id='of-'+str(payload['ownerId']),owner_id=payload['ownerId'],policy_revision=1,
                 capture=payload['capture'],x_hash=payload['xHash'],proxy_url=None,expires_at=expires)
     except Exception:raise Refused('invalid connection enrollment') from None
@@ -103,6 +104,8 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
                 if existing is not None and (binding is None or binding.tenant_id!=tenant or binding.creator_id!=creator_id):raise Refused('scope unavailable')
                 connection=s.get(OfProviderConnection,account)
                 proxy=_open(connection,tenant)['proxyUrl'] if connection is not None else None
+            network_fingerprint=payload.pop('networkFingerprint',None)
+            if network_fingerprint is not None and network_fingerprint!=capture_network_fingerprint(proxy):raise Refused('capture network changed')
             if 'browser' in payload:
                 payload=normalize_browser_payload(payload,proxy=proxy)
                 # Freeze normalized credentials before provider verification or
@@ -111,7 +114,8 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
                 with Session(store.engine) as s,s.begin():
                     row=s.get(OfConnectionEnrollment,identity,with_for_update=True)
                     if row.status!='checking' or row.generation!=generation or row.lease_until<=utcnow() or row.expires_at<=utcnow():continue
-                    row.sealed_config=_seal(payload,tenant,'enrollment:'+identity,creator_id,1)
+                    frozen={**payload,'networkFingerprint':network_fingerprint} if network_fingerprint is not None else payload
+                    row.sealed_config=_seal(frozen,tenant,'enrollment:'+identity,creator_id,1)
             session=session_from_capture(account_id=account,owner_id=owner_id,policy_revision=1,capture=payload['capture'],
                 x_hash=payload['xHash'],proxy_url=proxy,expires_at=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00')))
             connector_type(session).verify_identity()
@@ -136,7 +140,7 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
             with Session(store.engine) as s,s.begin():
                 row=s.get(OfConnectionEnrollment,identity,with_for_update=True)
                 if row.status!='checking' or row.generation!=generation or row.lease_until<=utcnow() or row.expires_at<=utcnow():continue
-                save_connection(store,tenant,account,payload=payload,expected_revision=expected,command_key=save_key,actor=actor,session_only=True)
+                save_connection(store,tenant,account,payload=payload,expected_revision=expected,command_key=save_key,actor=actor,session_only=True,expected_network_fingerprint=network_fingerprint)
                 row.status='accepted';row.account_id=account;row.last_error=None;row.sealed_config=None;row.updated_at=utcnow()
             completed+=1
         except Exception:

@@ -19,7 +19,9 @@ SCHEMA = "of-browser.v1"
 
 def validate_browser_payload(payload, *, fresh=True):
     try:
-        if type(payload) is not dict or set(payload) != {"ownerId", "browser", "expiresAt"}:
+        if type(payload) is not dict or set(payload) not in ({"ownerId", "browser", "expiresAt"}, {"ownerId", "browser", "expiresAt", "networkFingerprint"}):
+            raise ValueError()
+        if 'networkFingerprint' in payload and (type(payload['networkFingerprint']) is not str or not re.fullmatch(r'[a-f0-9]{64}',payload['networkFingerprint'])):
             raise ValueError()
         owner = payload["ownerId"]
         if type(owner) is not int or not 0 < owner <= 9007199254740991:

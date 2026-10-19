@@ -21,6 +21,8 @@ CREATOR='creator-session:'+'c'*64
 def test_browser_enrollment_normalizes_in_worker_and_freezes_before_replay(database,monkeypatch):
     from test_onlyfans_browser_capture import payload,assets
     settings(monkeypatch);store=Store(database[0]);calls=assets(monkeypatch);p=payload()
+    from onlyfans_runtime.connections import capture_network_fingerprint
+    p['networkFingerprint']=capture_network_fingerprint(None)
     first=submit(store,p);assert first['status']=='pending' and calls==[] and counts(database[1])==(0,0)
     monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:None)
     real=module.save_connection
@@ -30,12 +32,40 @@ def test_browser_enrollment_normalizes_in_worker_and_freezes_before_replay(datab
     assert len(calls)==2
     with Session(database[1]) as s,s.begin():
         row=s.get(OfConnectionEnrollment,first['id']);assert 'browser' not in module._clear(row)
+        assert module._clear(row)['networkFingerprint']==p['networkFingerprint']
         row.lease_until=utcnow()-timedelta(seconds=1)
     monkeypatch.setattr(module,'save_connection',real)
     assert module.process_enrollments(store,TENANT)==1 and len(calls)==2
     assert module.get_enrollments(store,TENANT,'creator-a')[0]['status']=='accepted'
     assert get_connection(store,TENANT,'of-123')['outgoingEnabled'] is False
     assert counts(database[1])==(1,1)
+    store.close()
+
+
+def test_hosted_capture_network_is_scoped_and_never_public_status(database,monkeypatch):
+    from onlyfans_runtime.connections import get_capture_context,capture_network_fingerprint
+    store,account,original=verified(database,monkeypatch)
+    context=get_capture_context(store,TENANT,'creator-new',account)
+    assert context['proxyUrl']==original['proxyUrl'] and context['ownerId']==OWNER
+    assert context['fingerprint']==capture_network_fingerprint(original['proxyUrl'])
+    assert get_capture_context(store,TENANT,'creator-new')['proxyUrl'] is None
+    with pytest.raises(Refused):get_capture_context(store,TENANT,'foreign-creator',account)
+    with pytest.raises(Refused):get_capture_context(store,'foreign-tenant','creator-new',account)
+    assert 'proxyUrl' not in get_connection(store,TENANT,account)
+    before=get_connection(store,TENANT,account)['revision']
+    with pytest.raises(Refused):save_connection(store,TENANT,account,payload=session_payload(),expected_revision=before,command_key='a'*64,actor=CREATOR,session_only=True,expected_network_fingerprint=capture_network_fingerprint('http://different.invalid:8080'))
+    assert get_connection(store,TENANT,account)['revision']==before
+    store.close()
+
+
+def test_hosted_network_change_refuses_before_assets_or_owner_probe(database,monkeypatch):
+    from test_onlyfans_browser_capture import payload,assets
+    settings(monkeypatch);store=Store(database[0]);calls=assets(monkeypatch);p=payload();p['networkFingerprint']='f'*64
+    first=submit(store,p)
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:pytest.fail('Changed network reached provider'))
+    assert module.process_enrollments(store,TENANT)==1 and calls==[] and counts(database[1])==(0,0)
+    assert module.get_enrollments(store,TENANT,'creator-a')[0]['status']=='failed'
+    with Session(database[1]) as s:assert s.get(OfConnectionEnrollment,first['id']).sealed_config is None
     store.close()
 
 def test_bad_browser_proof_never_provisions_and_clears_pending_secrets(database,monkeypatch):
@@ -178,6 +208,11 @@ def test_enrollment_http_uses_separate_auth_strict_json_and_never_calls_provider
     monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:pytest.fail('API never verifies provider'))
     app=FastAPI();app.include_router(router);app.state.control_store=store;client=TestClient(app)
     path='/onlyfans/connection/v1/enrollments';headers={'Authorization':'Bearer synthetic-connect',HEADER:SCHEMA}
+    login_path='/onlyfans/connection/v1/capture-context'
+    assert client.post(login_path,json={'creatorId':'creator-a','accountId':None}).status_code==401
+    context=client.post(login_path,headers=headers,json={'creatorId':'creator-a','accountId':None})
+    assert context.status_code==200 and context.json()['context']['proxyUrl'] is None
+    assert client.post(login_path,headers=headers,json={'creatorId':'creator-a','accountId':None,'proxyUrl':'http://forged.invalid:8080'}).status_code==400
     body={'creatorId':'creator-a','creatorName':'Synthetic creator','handle':'synthetic','session':session_payload(),'actor':CREATOR,'commandKey':'1'*64}
     for token in ('wrong','synthetic-read','synthetic-control'):
         assert client.post(path,headers={HEADER:SCHEMA,'Authorization':'Bearer '+token},json=body).status_code==401

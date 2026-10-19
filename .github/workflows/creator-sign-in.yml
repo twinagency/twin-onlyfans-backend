@@ -1,0 +1,19 @@
+name: Private creator sign-in
+on:
+  push:
+    branches: [codex/creator-selfhosted-connect-20261020]
+  pull_request:
+    paths: ['creator-sign-in/**', 'loginExtension/interceptor.js', 'Dockerfile.sign-in', '.github/workflows/creator-sign-in.yml']
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22}
+      - run: npm ci --prefix creator-sign-in
+      - run: npx --prefix creator-sign-in playwright install --with-deps chromium
+      - run: node creator-sign-in/check.mjs

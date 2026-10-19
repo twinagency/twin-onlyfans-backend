@@ -25,4 +25,4 @@ jobs:
       - run: docker build -f Dockerfile.sign-in -t twin-sign-in-check .
       - name: Headed browser with Chromium sandbox and ephemeral storage
         run: |
-          docker run --rm --init --user pwuser --read-only --cap-drop ALL --security-opt no-new-privileges --security-opt seccomp=deploy/creator-sign-in-seccomp.json --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 --shm-size=256m --memory=1536m --cpus=1 --pids-limit=256 -e TWIN_SIGNIN_TEST_HEADED=1 -e TWIN_SIGNIN_TEST_SANDBOX=1 twin-sign-in-check xvfb-run -a node creator-sign-in/check.mjs
+          docker run --rm --init --user pwuser --read-only --cap-drop ALL --security-opt no-new-privileges --security-opt seccomp=deploy/creator-sign-in-seccomp.json --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 --shm-size=256m --memory=1536m --cpus=1 --pids-limit=256 -e TWIN_SIGNIN_TEST_HEADED=1 -e TWIN_SIGNIN_TEST_SANDBOX=1 -e DEBUG=pw:browser twin-sign-in-check xvfb-run -a node creator-sign-in/check.mjs

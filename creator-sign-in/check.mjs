@@ -31,7 +31,7 @@ async function until(predicate){for(let i=0;i<120;i++){if(await predicate())retu
 try{
   const started=await service.start(scope,{startKey:randomUUID(),network});
   const resumed=await service.start(scope,{startKey:randomUUID(),network});assert.equal(started.id,resumed.id);
-  await until(()=>service.status(scope,started.id).phase==='waiting');
+  await until(()=>{const phase=service.status(scope,started.id).phase;if(phase==='failed')throw Error('The fixture browser could not open; check the CI browser diagnostics.');return phase==='waiting';});
   await assert.rejects(()=>service.start(other,{startKey:randomUUID(),network}),e=>e.status===429);
   assert.throws(()=>service.status(other,started.id),e=>e.status===404);
   const frame=await service.frame(scope,started.id);assert.equal(frame[0],0xff);assert.equal(frame[1],0xd8);

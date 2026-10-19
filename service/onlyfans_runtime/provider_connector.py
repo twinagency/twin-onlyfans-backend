@@ -338,6 +338,6 @@ class NativeProviderConnector(NativeLoopbackConnector):
         if current is None:
             raise Refused("native dispatch did not pass the one-use egress boundary")
         body = request(current)
-        raw = self._call("POST", API_PATH + f"/chats/{current.fan_id}/messages", body)
+        raw = self._send_once(body, current)
         proof = acceptance(raw, current, owner_id=self._handle.owner_id, request_bytes=body)
         return replace(proof, evidence_ref=proof.evidence_ref.replace("native-local:", "native-https:", 1))

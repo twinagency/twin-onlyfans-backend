@@ -93,3 +93,70 @@ def test_concurrent_pause_during_health_get_cannot_reenable_account(database,mon
     assert load_worker_accounts(store,TENANT)==[]
     with Session(database[1]) as s:assert s.get(OfRuntime,account).enabled is False
     assert get_connection(store,TENANT,account)['status']=='paused';store.close()
+
+
+def test_hosted_worker_imports_history_without_model_or_outgoing_policy(database,monkeypatch):
+    import json,sys
+    from types import SimpleNamespace
+    from urllib.parse import urlsplit
+    from sqlalchemy import select,func
+    from db.models import Message
+    from onlyfans_native_protocol_fixture import native_message
+    from onlyfans_runtime.native_worker import NativeWorker
+    store,account,_=accepted(database,monkeypatch)
+    cohort=load_worker_accounts(store,TENANT);records=[]
+    class CurlSession:
+        def __init__(self,**options):pass
+        def __enter__(self):return self
+        def __exit__(self,*_):return False
+        def request(self,method,url,**options):
+            records.append((method,url));assert method=='GET'
+            path=urlsplit(url).path
+            if path.endswith('/me'):body={'data':{'id':OWNER}}
+            elif path.endswith('/chats'):body={'data':[{'withUser':{'id':101}}],'_pagination':{'next_page':None}}
+            else:
+                assert path.endswith('/chats/101/messages')
+                body={'data':[native_message(9001,owner=OWNER)],'_pagination':{'next_page':None}}
+            options['content_callback'](json.dumps(body).encode())
+            return SimpleNamespace(status_code=200,headers={'content-type':'application/json'})
+    monkeypatch.setitem(sys.modules,'curl_cffi',SimpleNamespace(requests=SimpleNamespace(Session=CurlSession)))
+    worker=NativeWorker(store,TENANT,tuple(cohort))
+    for _ in range(5):assert worker.step().accepted==0
+    with Session(database[1]) as s:
+        assert s.get(Message,(account,101,9001)) is not None
+        assert s.scalar(select(func.count()).select_from(Message).where(Message.direction=='out'))==0
+        assert s.get(OfDeliveryPolicy,account).enabled is False
+    assert records and all(method=='GET' for method,_ in records);store.close()
+
+
+def test_hosted_send_keeps_one_use_authority_and_stable_intent_key(database,monkeypatch):
+    import json,sys
+    from types import SimpleNamespace
+    from onlyfans_native_protocol_fixture import native_message
+    from onlyfans_runtime.text_delivery import TextAuthority
+    from test_onlyfans_text_delivery_pg import current
+    from db.models import Fan,OfConversationState
+    store,account,_=accepted(database,monkeypatch);load_worker_accounts(store,TENANT)
+    change(store,account,'activate',1,'d'*64,{'limitUnits':3,'throttleSeconds':1,'mediaEnabled':False})
+    cohort=load_worker_accounts(store,TENANT);wire=cohort[0].transport
+    with Session(database[1]) as s,s.begin():
+        s.add(Fan(account_id=account,fan_id=101));s.flush()
+        s.add(OfConversationState(account_id=account,fan_id=101,mode='human_controlled',revision=0,takeover_state='none',requires_attention=False))
+    current(database[1],account=account)
+    authority=TextAuthority(store)
+    identity=authority.prepare(TENANT,account,101,command_key='hosted-manual',expected_revision=0,body='Synthetic reply',origin='manual',actor='synthetic-operator')
+    dispatch=authority.admit(TENANT,account,identity);records=[]
+    class CurlSession:
+        def __init__(self,**options):pass
+        def __enter__(self):return self
+        def __exit__(self,*_):return False
+        def request(self,method,url,**options):
+            records.append((method,url,options))
+            body={'data':{'id':OWNER}} if method=='GET' else {'data':native_message(9999,owner=OWNER,outgoing=True,text='Synthetic reply')}
+            options['content_callback'](json.dumps(body).encode())
+            return SimpleNamespace(status_code=200,headers={'content-type':'application/json'})
+    monkeypatch.setitem(sys.modules,'curl_cffi',SimpleNamespace(requests=SimpleNamespace(Session=CurlSession)))
+    proof=wire.send(dispatch,authority=authority,tenant_id=TENANT);assert proof.message_id==9999
+    posts=[options for method,_,options in records if method=='POST'];assert len(posts)==1 and posts[0]['headers']['Idempotency-Key']=='twin:'+identity
+    with pytest.raises(Refused):wire.send(dispatch,authority=authority,tenant_id=TENANT)
+    assert sum(method=='POST' for method,_,_ in records)==1;store.close()

@@ -163,5 +163,6 @@ def call_once(session, method, path, body=b"", *, timeout=5, maximum=MAX_BYTES, 
     except (Refused, NativeProtocolError):
         raise
     except Exception:
+        if size > maximum:raise NativeProtocolError("hosted response exceeded its byte budget") from None
         if method=="GET":raise HostedUnavailable("hosted account verification is unavailable") from None
         raise NativeProtocolError("hosted request outcome is uncertain") from None

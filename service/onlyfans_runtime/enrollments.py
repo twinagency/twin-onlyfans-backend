@@ -10,6 +10,7 @@ from db.onlyfans_connection_models import OfConnectionEnrollment,OfProviderConne
 from .connections import (_validate_identity,_request,_seal,_aad,_open,encryption_key,
     provision_account,save_connection,get_connection)
 from .provider_connector import session_from_capture,NativeProviderConnector
+from .browser_capture import validate_browser_payload,normalize_browser_payload
 from .store import Refused,utcnow
 
 def _scope(tenant,creator):
@@ -27,11 +28,14 @@ def submit_enrollment(store,tenant,*,creator_id,creator_name,handle,payload,comm
     if (not actor.startswith('creator-session:') or type(creator_name)is not str or not creator_name.strip()
         or len(creator_name.encode())>160 or '\x00' in creator_name or type(handle)is not str
         or not handle.strip() or len(handle.encode())>160 or '\x00' in handle
-        or type(payload)is not dict or set(payload)!={'ownerId','capture','xHash','expiresAt'}):raise Refused('invalid connection enrollment')
+        or type(payload)is not dict):raise Refused('invalid connection enrollment')
     try:
         expires=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00'))
-        session_from_capture(account_id='of-'+str(payload['ownerId']),owner_id=payload['ownerId'],policy_revision=1,
-            capture=payload['capture'],x_hash=payload['xHash'],proxy_url=None,expires_at=expires)
+        if 'browser' in payload:validate_browser_payload(payload)
+        else:
+            if set(payload)!={'ownerId','capture','xHash','expiresAt'}:raise ValueError()
+            session_from_capture(account_id='of-'+str(payload['ownerId']),owner_id=payload['ownerId'],policy_revision=1,
+                capture=payload['capture'],x_hash=payload['xHash'],proxy_url=None,expires_at=expires)
     except Exception:raise Refused('invalid connection enrollment') from None
     fingerprint=_request('enroll',{'creatorId':creator_id,'creatorName':creator_name,'handle':handle,'session':payload},0)
     with Session(store.engine) as s,s.begin():
@@ -99,6 +103,15 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
                 if existing is not None and (binding is None or binding.tenant_id!=tenant or binding.creator_id!=creator_id):raise Refused('scope unavailable')
                 connection=s.get(OfProviderConnection,account)
                 proxy=_open(connection,tenant)['proxyUrl'] if connection is not None else None
+            if 'browser' in payload:
+                payload=normalize_browser_payload(payload,proxy=proxy)
+                # Freeze normalized credentials before provider verification or
+                # any canonical write. A reclaimed lease replays the exact same
+                # credential command even if the CDN hash or revision changes.
+                with Session(store.engine) as s,s.begin():
+                    row=s.get(OfConnectionEnrollment,identity,with_for_update=True)
+                    if row.status!='checking' or row.generation!=generation or row.lease_until<=utcnow() or row.expires_at<=utcnow():continue
+                    row.sealed_config=_seal(payload,tenant,'enrollment:'+identity,creator_id,1)
             session=session_from_capture(account_id=account,owner_id=owner_id,policy_revision=1,capture=payload['capture'],
                 x_hash=payload['xHash'],proxy_url=proxy,expires_at=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00')))
             connector_type(session).verify_identity()

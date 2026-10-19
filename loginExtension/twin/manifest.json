@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Twin OnlyFans Connect",
+  "version": "1.0.0",
+  "minimum_chrome_version": "120",
+  "description": "Connect your own OnlyFans login to your Twin creator account, with explicit account confirmation.",
+  "permissions": ["storage", "tabs", "cookies", "alarms"],
+  "host_permissions": ["https://onlyfans.com/*", "https://dashboard.tgaiclone.xyz/*"],
+  "action": {"default_title": "Twin OnlyFans Connect", "default_popup": "confirm.html"},
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [
+    {"matches": ["https://onlyfans.com/*"], "js": ["interceptor.js"], "run_at": "document_start", "world": "MAIN"},
+    {"matches": ["https://onlyfans.com/*"], "js": ["of-bridge.js"], "run_at": "document_start", "world": "ISOLATED"},
+    {"matches": ["https://dashboard.tgaiclone.xyz/creator/platforms*"], "js": ["dashboard-bridge.js"], "run_at": "document_start", "world": "ISOLATED"}
+  ]
+}

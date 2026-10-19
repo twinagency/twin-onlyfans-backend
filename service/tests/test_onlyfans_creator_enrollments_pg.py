@@ -17,6 +17,36 @@ from onlyfans_runtime import enrollments as module
 from onlyfans_runtime.provider_connector import NativeProviderConnector
 
 CREATOR='creator-session:'+'c'*64
+
+def test_browser_enrollment_normalizes_in_worker_and_freezes_before_replay(database,monkeypatch):
+    from test_onlyfans_browser_capture import payload,assets
+    settings(monkeypatch);store=Store(database[0]);calls=assets(monkeypatch);p=payload()
+    first=submit(store,p);assert first['status']=='pending' and calls==[] and counts(database[1])==(0,0)
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:None)
+    real=module.save_connection
+    def crash(*args,**kw):real(*args,**kw);raise SystemExit('synthetic worker crash')
+    monkeypatch.setattr(module,'save_connection',crash)
+    with pytest.raises(SystemExit):module.process_enrollments(store,TENANT)
+    assert len(calls)==2
+    with Session(database[1]) as s,s.begin():
+        row=s.get(OfConnectionEnrollment,first['id']);assert 'browser' not in module._clear(row)
+        row.lease_until=utcnow()-timedelta(seconds=1)
+    monkeypatch.setattr(module,'save_connection',real)
+    assert module.process_enrollments(store,TENANT)==1 and len(calls)==2
+    assert module.get_enrollments(store,TENANT,'creator-a')[0]['status']=='accepted'
+    assert get_connection(store,TENANT,'of-123')['outgoingEnabled'] is False
+    assert counts(database[1])==(1,1)
+    store.close()
+
+def test_bad_browser_proof_never_provisions_and_clears_pending_secrets(database,monkeypatch):
+    from test_onlyfans_browser_capture import payload,assets
+    settings(monkeypatch);store=Store(database[0]);assets(monkeypatch);p=payload();p['browser']['staticParam']='wrong-static'
+    first=submit(store,p)
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:pytest.fail('Bad capture reached provider identity'))
+    assert module.process_enrollments(store,TENANT)==1 and counts(database[1])==(0,0)
+    assert module.get_enrollments(store,TENANT,'creator-a')[0]['status']=='failed'
+    with Session(database[1]) as s:assert s.get(OfConnectionEnrollment,first['id']).sealed_config is None
+    store.close()
 def session_payload():return {key:value for key,value in data().items() if key in {'ownerId','capture','xHash','expiresAt'}}
 def submit(store,payload=None,key='1'*64,creator='creator-a',actor=CREATOR):
     return module.submit_enrollment(store,TENANT,creator_id=creator,creator_name='Synthetic creator',handle='synthetic',payload=payload or session_payload(),command_key=key,actor=actor)

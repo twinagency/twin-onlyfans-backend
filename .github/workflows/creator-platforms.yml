@@ -1,7 +1,7 @@
 name: Creator platform acceptance
 on:
   push:
-    branches: [codex/creator-platform-connections-20261019]
+    branches: [codex/creator-platform-connections-20261019, codex/onlyfans-guided-connect-20261020]
   workflow_dispatch:
 permissions:
   contents: read
@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Browser connector boundaries
+        run: node scripts/check-twin-connector.mjs
       - name: Build the runtime and disposable test image
         run: |
           docker build -f Dockerfile.onlyfans -t creator-platforms-candidate .
@@ -25,7 +27,7 @@ jobs:
           docker exec creator-platform-pg pg_isready -h 127.0.0.1 -U postgres
       - name: Ownership, recovery, migration, connection and worker acceptance
         run: |
-          timeout 900 docker run --rm --network creator-platform-check -e ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres:synthetic-pilot-only@creator-platform-pg:5432/postgres creator-platforms-tests python -m pytest service/tests/test_onlyfans_creator_enrollments_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_worker_media_pg.py service/tests/test_onlyfans_ledger_pg.py service/tests/test_onlyfans_native_planning_pg.py service/tests/test_onlyfans_provider_pg.py service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_worker_entry.py -q -x
+          timeout 900 docker run --rm --network creator-platform-check -e ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres:synthetic-pilot-only@creator-platform-pg:5432/postgres creator-platforms-tests python -m pytest service/tests/test_onlyfans_browser_capture.py service/tests/test_onlyfans_creator_enrollments_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_worker_media_pg.py service/tests/test_onlyfans_ledger_pg.py service/tests/test_onlyfans_native_planning_pg.py service/tests/test_onlyfans_provider_pg.py service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_worker_entry.py -q -x
       - name: Remove disposable database
         if: always()
         run: |

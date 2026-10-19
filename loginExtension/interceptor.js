@@ -26,7 +26,8 @@
   "use strict";
 
   const REQUIRED_HDRS = ["user-id", "x-bc", "x-of-rev", "sign", "time"];
-  const lastSeen = {};
+  let lastSeen = {};
+  let identity = null;
   const lastRules = {};  // static_param, start, end
 
   function publish() {
@@ -45,6 +46,7 @@
               "sign":       lastSeen["sign"],
               "time":       lastSeen["time"],
               "user-agent": lastSeen["user-agent"] || navigator.userAgent,
+              "x-hash": lastSeen["x-hash"] || null,
             },
             // Runtime-captured signing fields (may be partial if the page
             // hasn't called sign() yet — the popup will warn if missing).
@@ -54,6 +56,7 @@
               end:          lastRules.end || null,
             },
             capturedAt: new Date().toISOString(),
+            identity: identity && String(identity.id) === lastSeen["user-id"] ? identity : null,
           },
         },
         location.origin
@@ -61,60 +64,65 @@
     } catch (_) {}
   }
 
-  function recordHeader(name, value) {
-    const lc = String(name || "").toLowerCase();
-    if (!value) return;
-    if (lc === "user-id")    lastSeen["user-id"]    = String(value);
-    else if (lc === "x-bc")       lastSeen["x-bc"]       = String(value);
-    else if (lc === "x-of-rev")   lastSeen["x-of-rev"]   = String(value);
-    else if (lc === "sign")       lastSeen["sign"]       = String(value);
-    else if (lc === "time")       lastSeen["time"]       = String(value);
-    else if (lc === "user-agent") lastSeen["user-agent"] = String(value);
+  function apiUrl(value) {
+    try {
+      const url = new URL(value, location.origin);
+      return url.origin === "https://onlyfans.com" && url.pathname.startsWith("/api2/v2/") ? url.href : null;
+    } catch (_) { return null; }
   }
-
-  // ── XHR ───────────────────────────────────────────────────────
-  const _xhrOpen = XMLHttpRequest.prototype.open;
-  const _xhrSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-  const _xhrSend = XMLHttpRequest.prototype.send;
-
+  function recordRequest(url, headers) {
+    if (!apiUrl(url)) return;
+    const next = {__url: apiUrl(url)};
+    try {
+      new Headers(headers).forEach((v, k) => { next[k.toLowerCase()] = v; });
+      if (REQUIRED_HDRS.some(k => !next[k])) return;
+      lastSeen = next;
+      publish();
+    } catch (_) {}
+  }
+  function recordIdentity(url, value) {
+    try {
+      if (new URL(url, location.origin).pathname !== "/api2/v2/users/me") return;
+      if (!value || !Number.isSafeInteger(value.id) || value.id <= 0 || typeof value.username !== "string" || !/^[A-Za-z0-9_.-]{1,80}$/.test(value.username)) return;
+      identity = {id: value.id, username: value.username};
+      publish();
+    } catch (_) {}
+  }
+  const xhrOpen = XMLHttpRequest.prototype.open;
+  const xhrHeader = XMLHttpRequest.prototype.setRequestHeader;
+  const xhrSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
     this.__cl_url = typeof url === "string" ? url : "";
-    return _xhrOpen.call(this, method, url, ...rest);
+    this.__cl_headers = {};
+    return xhrOpen.call(this, method, url, ...rest);
   };
   XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
-    recordHeader(name, value);
-    return _xhrSetHeader.call(this, name, value);
+    if (this.__cl_headers) this.__cl_headers[String(name).toLowerCase()] = String(value);
+    return xhrHeader.call(this, name, value);
   };
   XMLHttpRequest.prototype.send = function (...args) {
-    const url = this.__cl_url;
-    if (url && url.includes("/api2/v2/")) {
-      lastSeen.__url = url;
-      publish();
+    if (apiUrl(this.__cl_url)) {
+      recordRequest(this.__cl_url, this.__cl_headers);
+      this.addEventListener("load", () => {
+        try {
+          if (this.status !== 200 || new URL(this.__cl_url, location.origin).pathname !== "/api2/v2/users/me") return;
+          recordIdentity(this.__cl_url, this.responseType === "json" ? this.response : JSON.parse(this.responseText));
+        } catch (_) {}
+      }, {once: true});
     }
-    return _xhrSend.apply(this, args);
+    return xhrSend.apply(this, args);
   };
-
-  // ── fetch() ───────────────────────────────────────────────────
-  const _fetch = window.fetch;
+  const originalFetch = window.fetch;
   window.fetch = function (input, init) {
-    try {
-      const url = typeof input === "string" ? input : (input && input.url) || "";
-      const hdrs = (init && init.headers) || (input && input.headers);
-      if (hdrs) {
-        if (typeof hdrs.forEach === "function") {
-          hdrs.forEach((v, k) => recordHeader(k, v));
-        } else if (Array.isArray(hdrs)) {
-          for (const [k, v] of hdrs) recordHeader(k, v);
-        } else {
-          for (const k of Object.keys(hdrs)) recordHeader(k, hdrs[k]);
-        }
-      }
-      if (url && url.includes("/api2/v2/")) {
-        lastSeen.__url = url;
-        publish();
-      }
-    } catch (_) {}
-    return _fetch.apply(this, arguments);
+    const url = typeof input === "string" ? input : (input && input.url) || "";
+    recordRequest(url, (init && init.headers) || (input && input.headers) || {});
+    const result = originalFetch.apply(this, arguments);
+    if (apiUrl(url) && new URL(url, location.origin).pathname === "/api2/v2/users/me") {
+      result.then(response => {
+        if (response.ok) response.clone().json().then(body => recordIdentity(url, body)).catch(() => {});
+      }).catch(() => {});
+    }
+    return result;
   };
 
   // ── Webpack module hooks (capture static_param + start + end) ──

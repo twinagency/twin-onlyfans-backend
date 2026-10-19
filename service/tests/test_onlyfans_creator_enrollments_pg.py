@@ -57,7 +57,7 @@ def test_valid_worker_proof_attaches_exact_creator_without_enabling_messages(dat
 
 def test_session_refresh_keeps_private_model_and_proxy_and_cannot_set_them(database,monkeypatch):
     store,account,original=verified(database,monkeypatch,model={'modelId':MODEL,'apiKey':'synthetic-model-key'})
-    assert change(store,account,'activate',1,'a'*64,LIMITS)==2
+    assert change(store,account,'activate',1,'c'*64,LIMITS)==2
     payload=session_payload()
     assert save_connection(store,TENANT,account,payload=payload,expected_revision=2,command_key='d'*64,actor=CREATOR,session_only=True)==3
     assert save_connection(store,TENANT,account,payload=payload,expected_revision=2,command_key='d'*64,actor=CREATOR,session_only=True)==3
@@ -118,4 +118,46 @@ def test_enrollment_is_worker_only_and_pending_submissions_are_bounded(database,
     monkeypatch.setenv('ONLYFANS_PROCESS_ROLE','api')
     with pytest.raises(Refused):module.process_enrollments(store,TENANT)
     assert counts(database[1])==(0,0)
+    store.close()
+
+def test_existing_account_refuses_foreign_creator_and_reconnect_keeps_operator_settings(database,monkeypatch):
+    store,account,original=verified(database,monkeypatch,model={'modelId':MODEL,'apiKey':'synthetic-model-key'})
+    denied=submit(store,creator='foreign-creator')
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:pytest.fail('Foreign account reached provider'))
+    assert module.process_enrollments(store,TENANT)==1
+    assert module.get_enrollments(store,TENANT,'foreign-creator')[0]['status']=='failed'
+    assert get_connection(store,TENANT,account)['revision']==1
+    own=submit(store,key='2'*64,creator='creator-new')
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:None)
+    assert module.process_enrollments(store,TENANT)==1
+    assert module.get_enrollments(store,TENANT,'creator-new')[0]['status']=='accepted'
+    with Session(database[1]) as s:
+        clear=_open(s.get(OfProviderConnection,account),TENANT)
+        assert clear['proxyUrl']==original['proxyUrl'] and clear['model']==original['model']
+    assert get_connection(store,TENANT,account)['revision']==2 and counts(database[1])==(1,1)
+    store.close()
+
+
+def test_enrollment_http_uses_separate_auth_strict_json_and_never_calls_provider(database,monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from onlyfans_commands.connection_api import router,SCHEMA,HEADER
+    settings(monkeypatch);store=Store(database[0])
+    for key,value in {'ONLYFANS_PROCESS_ROLE':'api','ONLYFANS_CONNECTION_TOKEN':'synthetic-connect','ONLYFANS_CONNECTION_TENANT':TENANT,
+        'ONLYFANS_API_TOKEN':'synthetic-read','ONLYFANS_CONTROL_TOKEN':'synthetic-control'}.items():monkeypatch.setenv(key,value)
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:pytest.fail('API never verifies provider'))
+    app=FastAPI();app.include_router(router);app.state.control_store=store;client=TestClient(app)
+    path='/onlyfans/connection/v1/enrollments';headers={'Authorization':'Bearer synthetic-connect',HEADER:SCHEMA}
+    body={'creatorId':'creator-a','creatorName':'Synthetic creator','handle':'synthetic','session':session_payload(),'actor':CREATOR,'commandKey':'1'*64}
+    for token in ('wrong','synthetic-read','synthetic-control'):
+        assert client.post(path,headers={HEADER:SCHEMA,'Authorization':'Bearer '+token},json=body).status_code==401
+    assert client.post(path,headers={'Authorization':'Bearer synthetic-connect'},json=body).status_code==400
+    assert client.post(path,headers=headers,json={**body,'proxyUrl':None}).status_code==400
+    duplicate=json.dumps(body)[:-1]+',"creatorId":"foreign"}'
+    assert client.post(path,headers={**headers,'Content-Type':'application/json'},content=duplicate).status_code==400
+    ack=client.post(path,headers=headers,json=body);assert ack.status_code==200,ack.text
+    assert client.post(path,headers=headers,json=body).json()==ack.json()
+    rows=client.get(path+'?creator=creator-a',headers=headers);assert rows.status_code==200 and len(rows.json()['enrollments'])==1
+    assert client.get(path+'?creator=foreign',headers=headers).json()['enrollments']==[]
+    assert 'synthetic-session' not in ack.text+rows.text and counts(database[1])==(0,0)
     store.close()

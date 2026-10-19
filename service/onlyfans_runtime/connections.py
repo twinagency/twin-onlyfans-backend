@@ -18,6 +18,7 @@ from onlyfans_read.contract import ID_PATTERN
 from .store import Refused,utcnow
 from .native_context import canonical
 from .provider_connector import session_from_capture,NativeProviderConnector
+from .hosted_provider import session_from_saved
 
 def encryption_key():
     raw=os.environ.get('ONLYFANS_CONNECTION_KEY','')
@@ -111,7 +112,8 @@ def get_connection(store,tenant,account):
 
 def save_connection(store,tenant,account,*,payload,expected_revision,command_key,actor,session_only=False):
     _validate_identity(command_key,actor,expected_revision)
-    required={'ownerId','capture','xHash','expiresAt'} if session_only else {'ownerId','capture','xHash','proxyUrl','expiresAt','model'}
+    session_keys={'ownerId','hosted','expiresAt'} if type(payload)is dict and 'hosted' in payload else {'ownerId','capture','xHash','expiresAt'}
+    required=session_keys if session_only else session_keys|{'proxyUrl','model'}
     if type(payload) is not dict or set(payload)!=required:raise Refused('invalid connection configuration')
     action='session' if session_only else 'save'
     fingerprint=_request(action,payload,expected_revision)
@@ -132,8 +134,7 @@ def save_connection(store,tenant,account,*,payload,expected_revision,command_key
             payload={**payload,'proxyUrl':previous.get('proxyUrl'),'model':previous.get('model')}
         try:
             expires=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00'))
-            session_from_capture(account_id=account,owner_id=payload['ownerId'],policy_revision=1,capture=payload['capture'],
-                x_hash=payload['xHash'],proxy_url=payload['proxyUrl'],expires_at=expires)
+            session_from_saved(payload=payload,account_id=account,policy_revision=1,expires_at=expires)
             model=payload['model']
             if model is not None:
                 if type(model) is not dict or set(model)!={'modelId','apiKey'}:raise Refused('invalid selected model credential')
@@ -248,33 +249,45 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
             with Session(store.engine) as s,s.begin():
                 runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
                 if row is None or row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
-                if row.expires_at<=utcnow():
+                if row.expires_at<=utcnow() and 'hosted' not in _open(row,tenant):
                     row.status='expired';runtime.enabled=False;continue
                 clear=_open(row,tenant);generation=row.revision
                 policy=s.get(OfDeliveryPolicy,account);policy_revision=policy.revision if policy else 1
                 status=row.status;expires=row.expires_at.replace(tzinfo=timezone.utc)
-            transport=NativeProviderConnector(session_from_capture(account_id=account,owner_id=clear['ownerId'],policy_revision=policy_revision,
-                capture=clear['capture'],x_hash=clear['xHash'],proxy_url=clear['proxyUrl'],expires_at=expires))
-            if status=='pending':
+                hosted='hosted' in clear
+                probe=hosted and (row.verified_at is None or row.verified_at<utcnow()-timedelta(minutes=5) or status!='verified' or expires<=datetime.now(timezone.utc)+timedelta(hours=1))
+                if hosted and expires<=datetime.now(timezone.utc)+timedelta(hours=1):expires=datetime.now(timezone.utc)+timedelta(hours=23)
+            transport=NativeProviderConnector(session_from_saved(payload=clear,account_id=account,policy_revision=policy_revision,expires_at=expires))
+            if status=='pending' or probe:
                 if stop is not None and stop.is_set():break
                 transport.verify_identity()
                 with Session(store.engine) as s,s.begin():
                     runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
                     if (row is None or row.binding_id!=runtime.binding_id or row.revision!=generation
-                        or row.status!='pending' or row.expires_at<=utcnow()):continue
+                        or (row.status!='pending' and not hosted) or row.status=='paused' or (row.expires_at<=utcnow() and not hosted)):continue
                     row.status='verified';row.verified_at=utcnow();row.last_error=None
+                    if hosted:
+                        # A renewable health lease; no account credentials or send allowance change.
+                        clear={**clear,'expiresAt':expires.isoformat()}
+                        row.expires_at=expires.astimezone(timezone.utc).replace(tzinfo=None)
+                        row.sealed_config=_seal(clear,tenant,account,runtime.binding_id,row.revision)
+                        runtime.enabled=True
+                        policy=s.get(OfDeliveryPolicy,account)
+                        if policy is None:
+                            s.add(OfDeliveryPolicy(account_id=account,revision=1,enabled=False,transport_kind='native'))
             elif status!='verified':continue
             if facts_reader is not None:
                 from .creator_facts import refresh
                 try:refresh(store,tenant,account,facts_reader)
                 except (Refused,ValueError,TypeError):pass
-            # Verification is a GET only. Explicit activation remains a
-            # separate operator command before history intake or delivery.
+            # Hosted accounts may sync history with a disabled delivery policy.
+            # Native captures keep their existing activation gate. Sending still
+            # requires the separate operator policy in both modes.
             with Session(store.engine) as s,s.begin():
                 runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
                 if (row is None or row.revision!=generation or row.binding_id!=runtime.binding_id
                     or row.status!='verified' or row.expires_at<=utcnow() or not runtime.enabled or policy is None
-                    or not policy.enabled or policy.transport_kind!='native' or policy.revision!=policy_revision):continue
+                    or (not policy.enabled and not hosted) or policy.transport_kind!='native' or policy.revision!=policy_revision):continue
             from .provider_model import NativeProviderModel
             model=clear['model'];model=NativeProviderModel(account_id=account,model_id=model['modelId'],api_key=model['apiKey'],expires_at=expires) if model else None
             result.append(WorkerAccount(account,model,transport,transport))
@@ -290,3 +303,13 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                     row.status='failed';row.last_error='provider_verification_failed';runtime.enabled=False
     next_cursor=last_scanned if more or scanned<len(ids) else None
     return result,next_cursor,scanned
+
+
+def get_hosted_account(store,tenant,account):
+    with Session(store.engine) as s:
+        runtime=store._runtime(s,tenant,account)
+        row=s.get(OfProviderConnection,account)
+        if row is None or row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
+        clear=_open(row,tenant);value=clear.get('hosted')
+        if type(value)is not dict or value.get('schemaVersion')!='ofapi.v1':raise Refused('scope unavailable')
+        return {'accountId':account,'providerAccountId':value['accountId'],'ownerId':str(row.owner_id)}

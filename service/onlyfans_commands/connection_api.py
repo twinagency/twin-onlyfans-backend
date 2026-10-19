@@ -3,7 +3,7 @@ import asyncio,hmac,json,os,re
 from fastapi import APIRouter,Request
 from fastapi.responses import JSONResponse
 from onlyfans_read.contract import ID_PATTERN
-from onlyfans_runtime.connections import encryption_key,get_connection,save_connection,change_connection,provision_account
+from onlyfans_runtime.connections import encryption_key,get_connection,save_connection,change_connection,provision_account,get_hosted_account
 from onlyfans_runtime.enrollments import submit_enrollment,get_enrollments
 from onlyfans_runtime.store import Refused
 from .api import unique_keys
@@ -73,6 +73,14 @@ async def get(request:Request,account_id:str):
     if isinstance(context,JSONResponse):return context
     store,tenant=context
     try:return response({'ok':True,'connection':await asyncio.to_thread(get_connection,store,tenant,account_id)})
+    except Exception as exc:return failure(exc)
+
+@router.get('/hosted-accounts/{account_id}')
+async def hosted_account(request:Request,account_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    try:return response({'ok':True,'account':await asyncio.to_thread(get_hosted_account,store,tenant,account_id)})
     except Exception as exc:return failure(exc)
 
 @router.post('/accounts/{account_id}')

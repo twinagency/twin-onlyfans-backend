@@ -10,6 +10,7 @@ from db.onlyfans_connection_models import OfConnectionEnrollment,OfProviderConne
 from .connections import (_validate_identity,_request,_seal,_aad,_open,encryption_key,
     provision_account,save_connection,get_connection)
 from .provider_connector import session_from_capture,NativeProviderConnector
+from .hosted_provider import session_from_saved,HostedUnavailable
 from .browser_capture import validate_browser_payload,normalize_browser_payload
 from .store import Refused,utcnow
 
@@ -32,6 +33,9 @@ def submit_enrollment(store,tenant,*,creator_id,creator_name,handle,payload,comm
     try:
         expires=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00'))
         if 'browser' in payload:validate_browser_payload(payload)
+        elif 'hosted' in payload:
+            if set(payload)!={'ownerId','hosted','expiresAt'}:raise ValueError()
+            session_from_saved(payload=payload,account_id='of-'+str(payload['ownerId']),policy_revision=1,expires_at=expires)
         else:
             if set(payload)!={'ownerId','capture','xHash','expiresAt'}:raise ValueError()
             session_from_capture(account_id='of-'+str(payload['ownerId']),owner_id=payload['ownerId'],policy_revision=1,
@@ -112,8 +116,7 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
                     row=s.get(OfConnectionEnrollment,identity,with_for_update=True)
                     if row.status!='checking' or row.generation!=generation or row.lease_until<=utcnow() or row.expires_at<=utcnow():continue
                     row.sealed_config=_seal(payload,tenant,'enrollment:'+identity,creator_id,1)
-            session=session_from_capture(account_id=account,owner_id=owner_id,policy_revision=1,capture=payload['capture'],
-                x_hash=payload['xHash'],proxy_url=proxy,expires_at=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00')))
+            session=session_from_saved(payload={**payload,'proxyUrl':proxy},account_id=account,policy_revision=1)
             connector_type(session).verify_identity()
             # No canonical account/binding is written until this exact owner is proven.
             if stop is not None and stop.is_set():break
@@ -138,6 +141,17 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
                 if row.status!='checking' or row.generation!=generation or row.lease_until<=utcnow() or row.expires_at<=utcnow():continue
                 save_connection(store,tenant,account,payload=payload,expected_revision=expected,command_key=save_key,actor=actor,session_only=True)
                 row.status='accepted';row.account_id=account;row.last_error=None;row.sealed_config=None;row.updated_at=utcnow()
+            completed+=1
+        except HostedUnavailable:
+            # A signed hosted account event can arrive while sign-in is still
+            # completing. Retry only these safe identity GETs, never a send.
+            with Session(store.engine) as s,s.begin():
+                row=s.get(OfConnectionEnrollment,identity,with_for_update=True)
+                if row.status=='checking' and row.generation==generation:
+                    if generation<60 and row.created_at>utcnow()-timedelta(minutes=15):
+                        row.lease_until=utcnow()+timedelta(seconds=15);row.updated_at=utcnow()
+                    else:
+                        row.status='failed';row.last_error='verification_unavailable';row.sealed_config=None;row.updated_at=utcnow()
             completed+=1
         except Exception:
             # Unknown provider results never attach an account or authorize sends.

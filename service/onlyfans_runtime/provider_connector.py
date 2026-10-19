@@ -20,6 +20,7 @@ from .native_connector import NativeLoopbackConnector
 from .native_protocol import API_PATH, MAX_BYTES, NativeProtocolError, acceptance, request
 from .store import Refused, _id
 from .text_delivery import Dispatch, TextAuthority
+from .hosted_provider import HostedProviderSession, call_once as hosted_call_once
 
 ORIGIN = "https://onlyfans.com"
 APP_TOKEN = "33d57ade8c02dbc5a333db99ff9ae26a"
@@ -153,7 +154,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
     account activation and credential custody belong to the deployment owner.
     """
     def __init__(self, session, *, timeout_seconds=5, max_response_bytes=MAX_BYTES):
-        if type(session) is not NativeProviderSession:
+        if type(session) not in {NativeProviderSession, HostedProviderSession}:
             raise Refused("an explicit account-bound native session is required")
         if (type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds)
                 or not .05 <= timeout_seconds <= 10
@@ -176,6 +177,8 @@ class NativeProviderConnector(NativeLoopbackConnector):
 
     def _call(self, method, path, body=b""):
         self._ready()
+        if type(self._handle) is HostedProviderSession:
+            return hosted_call_once(self._handle,method,path,body,timeout=self._timeout,maximum=self._max_bytes)
         self._handle.current()
         if (method not in {"GET", "POST"} or type(path) is not str or len(path) > 2048
                 or not path.startswith(API_PATH + "/") or any(c in path for c in "\r\n#\\")
@@ -235,6 +238,12 @@ class NativeProviderConnector(NativeLoopbackConnector):
             # curl errors may contain authenticated proxy URLs or response
             # bodies. Never propagate those to logs/API/worker observations.
             raise NativeProtocolError("native HTTPS request outcome is uncertain") from None
+
+    def _send_once(self, body, dispatch):
+        if type(self._handle) is HostedProviderSession:
+            return hosted_call_once(self._handle,"POST",API_PATH+f"/chats/{dispatch.fan_id}/messages",
+                body,timeout=self._timeout,maximum=self._max_bytes,idempotency_key="twin:"+dispatch.intent_id)
+        return super()._send_once(body,dispatch)
 
     def vault_page(self, *, offset, limit=24):
         """Read one bounded selected-account vault page, without importing it.

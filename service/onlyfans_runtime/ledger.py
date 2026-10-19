@@ -261,6 +261,8 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
             break
         error = None
         try:
+            if "hosted" in clear:
+                raise NativeProtocolError("hosted earnings import is unsupported")
             from .provider_connector import NativeProviderConnector, session_from_capture
             transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
                 policy_revision=1, capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"],

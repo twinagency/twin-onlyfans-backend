@@ -403,10 +403,10 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             break
         error = None
         try:
-            from .provider_connector import NativeProviderConnector, session_from_capture
-            transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
-                policy_revision=1, capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"],
-                expires_at=expires.replace(tzinfo=timezone.utc)))
+            from .provider_connector import NativeProviderConnector
+            from .hosted_provider import session_from_saved
+            transport = NativeProviderConnector(session_from_saved(payload=clear,account_id=account,
+                policy_revision=1,expires_at=expires.replace(tzinfo=timezone.utc)))
             raw = transport.vault_page(offset=offset, limit=PAGE_SIZE)
             rows, more = parse_vault_page(raw, owner_id=owner)
             if os.environ.get("ONLYFANS_VAULT_PREVIEWS_ENABLED") == "1":

@@ -4,6 +4,7 @@ from fastapi import APIRouter,Request
 from fastapi.responses import JSONResponse
 from onlyfans_read.contract import ID_PATTERN
 from onlyfans_runtime.connections import encryption_key,get_connection,save_connection,change_connection,provision_account
+from onlyfans_runtime.enrollments import submit_enrollment,get_enrollments
 from onlyfans_runtime.store import Refused
 from .api import unique_keys
 SCHEMA='of-connections.v1'
@@ -82,11 +83,35 @@ async def command(request:Request,account_id:str):
     try:
         body=await read_json(request)
         if set(body)!={'action','payload','expectedRevision','actor','commandKey'} or type(body['action'])is not str:raise ValueError()
-        if body['action']not in {'save','verify','activate','pause'}:raise ValueError()
+        if body['action']not in {'save','session','verify','activate','pause'}:raise ValueError()
     except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid account connection request.'},400)
     try:
         args=dict(payload=body['payload'],expected_revision=body['expectedRevision'],command_key=body['commandKey'],actor=body['actor'])
-        if body['action']=='save':revision=await asyncio.to_thread(save_connection,store,tenant,account_id,**args)
+        if body['action'] in {'save','session'}:revision=await asyncio.to_thread(save_connection,store,tenant,account_id,session_only=body['action']=='session',**args)
         else:revision=await asyncio.to_thread(change_connection,store,tenant,account_id,action=body['action'],**args)
         return response({'ok':True,'applied':True,'accountId':account_id,'commandKey':body['commandKey'],'recordedRevision':revision,'action':body['action']})
+    except Exception as exc:return failure(exc)
+
+
+@router.get('/enrollments')
+async def enrollments(request:Request):
+    context=authenticate(request)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    creator=request.query_params.get('creator','')
+    try:return response({'ok':True,'enrollments':await asyncio.to_thread(get_enrollments,store,tenant,creator)})
+    except Exception as exc:return failure(exc)
+
+@router.post('/enrollments')
+async def enroll(request:Request):
+    context=authenticate(request)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    try:
+        body=await read_json(request)
+        if set(body)!={'creatorId','creatorName','handle','session','actor','commandKey'}:raise ValueError()
+    except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid connection enrollment.'},400)
+    try:
+        result=await asyncio.to_thread(submit_enrollment,store,tenant,creator_id=body['creatorId'],creator_name=body['creatorName'],handle=body['handle'],payload=body['session'],actor=body['actor'],command_key=body['commandKey'])
+        return response({'ok':True,'enrollment':result})
     except Exception as exc:return failure(exc)

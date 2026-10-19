@@ -23,6 +23,11 @@ def _emit(value):
     print(json.dumps(value), flush=True)
 
 
+def _process_connection_enrollments(store, tenant, *, limit, stop):
+    from onlyfans_runtime.enrollments import process_enrollments
+    return process_enrollments(store, tenant, limit=limit, stop=stop)
+
+
 def _process_vault_jobs(store, tenant, *, limit, stop):
     from onlyfans_runtime.vault_management import process_vault_jobs
     return process_vault_jobs(store, tenant, limit=limit, stop=stop)
@@ -34,7 +39,7 @@ def _process_ledger_jobs(store, tenant, *, limit, stop):
 
 
 def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
-             load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None,facts_reader=None):
+             load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None,facts_reader=None,enrollment_jobs=None):
     """Refresh bounded ordered cohorts without starving accounts after row 32.
 
     Cursor advancement is over scanned candidates, including invalid/expired
@@ -55,6 +60,10 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
             # Operator-requested vault reads need a verified connection, not an
             # outgoing-message activation or AI key. The job owner rechecks its
             # frozen scope/generation and bounds each page before persistence.
+            if enrollment_jobs is not None:
+                enrollment_jobs(store, tenant, limit=1, stop=stop)
+                if stop.is_set():
+                    break
             if vault_jobs is not None:
                 vault_jobs(store, tenant, limit=1, stop=stop)
                 if stop.is_set():
@@ -145,7 +154,7 @@ def main(argv=None):
                 _emit({"schemaVersion":"of-worker.v1","state":"creator_source_unavailable"})
                 return 1
         return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,facts_reader=facts_reader,
-                        vault_jobs=_process_vault_jobs,
+                        vault_jobs=_process_vault_jobs, enrollment_jobs=_process_connection_enrollments,
                         ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None)
     finally:
         try:

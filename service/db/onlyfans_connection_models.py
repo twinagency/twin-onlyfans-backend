@@ -1,5 +1,5 @@
 """Scoped encrypted provider credentials and non-secret lifecycle evidence."""
-from sqlalchemy import BigInteger,Boolean,CheckConstraint,Column,DateTime,ForeignKey,Integer,String,Text,false
+from sqlalchemy import BigInteger,Boolean,CheckConstraint,Column,DateTime,ForeignKey,Integer,String,Text,false,UniqueConstraint,Index
 from .models import Base
 INFO={"onlyfans_since":"0081_native_connection"}
 
@@ -29,3 +29,32 @@ class OfConnectionChange(Base):
     request_hash=Column(String(64),nullable=False)
     actor=Column(String(128),nullable=False)
     created_at=Column(DateTime,nullable=False)
+
+
+class OfConnectionEnrollment(Base):
+    __tablename__="of_connection_enrollment"
+    __table_args__=(
+        CheckConstraint("status IN ('pending','checking','accepted','failed','expired')",name="status"),
+        UniqueConstraint("tenant_id","command_key",name="uq_of_connection_enrollment_tenant_key"),
+        Index("ix_of_connection_enrollment_pending","tenant_id","status","created_at"),
+        Index("ix_of_connection_enrollment_creator","tenant_id","creator_id","created_at"),
+        {"info":{"onlyfans_since":"0087_creator_enrollment"}})
+    id=Column(String,primary_key=True)
+    tenant_id=Column(String,nullable=False)
+    creator_id=Column(String,nullable=False)
+    creator_name=Column(Text,nullable=False)
+    handle=Column(Text,nullable=False)
+    owner_id=Column(BigInteger,nullable=False)
+    actor=Column(String(128),nullable=False)
+    command_key=Column(String(64),nullable=False)
+    request_hash=Column(String(64),nullable=False)
+    status=Column(String(16),nullable=False)
+    sealed_config=Column(Text)
+    expires_at=Column(DateTime,nullable=False)
+    lease_until=Column(DateTime)
+    generation=Column(Integer,nullable=False)
+    expected_revision=Column(Integer)
+    account_id=Column(String)
+    last_error=Column(String(64))
+    created_at=Column(DateTime,nullable=False)
+    updated_at=Column(DateTime,nullable=False)

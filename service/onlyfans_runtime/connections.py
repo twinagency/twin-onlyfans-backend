@@ -51,7 +51,7 @@ def _audit(s,row,key,actor,action,fingerprint):
 
 def _validate_identity(key,actor,revision):
     if (type(key) is not str or not re.fullmatch(r'[a-f0-9]{64}',key) or type(actor) is not str
-        or not re.fullmatch(r'op-session:[a-f0-9]{64}',actor) or type(revision) is not int or not 0<=revision<2**31-1):
+        or not re.fullmatch(r'(?:op-session|creator-session):[a-f0-9]{64}',actor) or type(revision) is not int or not 0<=revision<2**31-1):
         raise Refused('invalid connection command')
 
 def provision_account(store,tenant,*,creator_id,creator_name,owner_id,handle,command_key,actor):
@@ -109,17 +109,27 @@ def get_connection(store,tenant,account):
             'limitUnits':policy.limit_units if policy else 0,'mediaEnabled':bool(policy and policy.media_enabled),
             'automateNewConversations':bool(row and row.automate_new_conversations)}
 
-def save_connection(store,tenant,account,*,payload,expected_revision,command_key,actor):
+def save_connection(store,tenant,account,*,payload,expected_revision,command_key,actor,session_only=False):
     _validate_identity(command_key,actor,expected_revision)
-    required={'ownerId','capture','xHash','proxyUrl','expiresAt','model'}
+    required={'ownerId','capture','xHash','expiresAt'} if session_only else {'ownerId','capture','xHash','proxyUrl','expiresAt','model'}
     if type(payload) is not dict or set(payload)!=required:raise Refused('invalid connection configuration')
-    fingerprint=_request('save',payload,expected_revision)
+    action='session' if session_only else 'save'
+    fingerprint=_request(action,payload,expected_revision)
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account)
         prior=s.get(OfConnectionChange,(account,command_key))
         if prior:
             if prior.request_hash!=fingerprint or prior.actor!=actor:raise Refused('connection idempotency conflict')
             return prior.revision
+        row=s.get(OfProviderConnection,account)
+        if row is not None and row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
+        if (row.revision if row else 0)!=expected_revision:raise Refused('connection revision conflict')
+        if row is not None and row.owner_id!=payload['ownerId']:raise Refused('connection owner cannot change')
+        if session_only:
+            # A creator refreshes authentication only. Keep operator-owned network
+            # and model settings inside the encrypted store, never in a response.
+            previous=_open(row,tenant) if row is not None else {}
+            payload={**payload,'proxyUrl':previous.get('proxyUrl'),'model':previous.get('model')}
         try:
             expires=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00'))
             session_from_capture(account_id=account,owner_id=payload['ownerId'],policy_revision=1,capture=payload['capture'],
@@ -149,7 +159,7 @@ def save_connection(store,tenant,account,*,payload,expected_revision,command_key
         row.expires_at=expires.astimezone(timezone.utc).replace(tzinfo=None);row.status='pending'
         row.verified_at=None;row.last_error=None;row.updated_at=utcnow();runtime.enabled=False;runtime.recovery_needed=True
         if policy:policy.enabled=False;policy.revision+=1
-        _audit(s,row,command_key,actor,'save',fingerprint)
+        _audit(s,row,command_key,actor,action,fingerprint)
     store.begin_scan(tenant,account)
     return revision
 

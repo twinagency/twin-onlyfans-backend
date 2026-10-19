@@ -2,6 +2,7 @@
 // are fulfilled locally. This does not claim a real OnlyFans login.
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {readFileSync} from 'node:fs';
 import {createSignInService,networkFingerprint,allowedRequest} from './service.mjs';
 import {launchSignInBrowser} from './browser.mjs';
 
@@ -60,4 +61,5 @@ try{
     assert.equal(allowedRequest({url:()=>url,method:()=>method,isNavigationRequest:()=>false}),expected);
   }
   console.log('PASS self-hosted sign-in: actual browser input and capture, one start/resume, isolated creator scope, capacity, frozen retry, minimal metadata, native handoff acknowledgement, cleanup, expiry, no fan sends or purchases.');
+  if(process.env.TWIN_SIGNIN_TEST_SANDBOX==='1'){try{console.log('Fixture container peak memory MiB:',Math.ceil(Number(readFileSync('/sys/fs/cgroup/memory.peak','utf8'))/1024/1024));}catch{}}
 }finally{await service.close();}

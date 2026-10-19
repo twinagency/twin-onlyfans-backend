@@ -14,7 +14,7 @@ export async function launchSignInBrowser(proxyUrl,{headless=false,chromiumSandb
   try{
     let proxy;
     if(proxyUrl){const u=new URL(proxyUrl);proxy={server:u.protocol+'//'+u.host,...(u.username?{username:decodeURIComponent(u.username)}:{}),...(u.password?{password:decodeURIComponent(u.password)}:{})};}
-    const browser=await chromium.launch({headless,chromiumSandbox,env,proxy,...(executablePath?{executablePath}:{})});
+    const browser=await chromium.launch({headless,chromiumSandbox,env,proxy,args:['--use-gl=angle','--use-angle=swiftshader'],...(executablePath?{executablePath}:{})});
     browser.once('disconnected',()=>void cleanup());
     const close=browser.close.bind(browser);
     browser.close=async(...args)=>{try{await close(...args);}finally{await cleanup();}};

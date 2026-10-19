@@ -21,8 +21,8 @@ jobs:
           docker network create creator-platform-check
           PG_MAJOR=$(docker run --rm creator-platforms-tests pg_dump --version | sed -E 's/.* ([0-9]+)\..*/\1/')
           docker run -d --name creator-platform-pg --network creator-platform-check -e POSTGRES_PASSWORD=synthetic-pilot-only postgres:$PG_MAJOR-alpine
-          for i in $(seq 1 30); do docker exec creator-platform-pg pg_isready -U postgres && break; sleep 1; done
-          docker exec creator-platform-pg pg_isready -U postgres
+          for i in $(seq 1 30); do docker exec creator-platform-pg pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
+          docker exec creator-platform-pg pg_isready -h 127.0.0.1 -U postgres
       - name: Ownership, recovery, migration, connection and worker acceptance
         run: |
           timeout 900 docker run --rm --network creator-platform-check -e ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres:synthetic-pilot-only@creator-platform-pg:5432/postgres creator-platforms-tests python -m pytest service/tests/test_onlyfans_creator_enrollments_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_worker_media_pg.py service/tests/test_onlyfans_ledger_pg.py service/tests/test_onlyfans_native_planning_pg.py service/tests/test_onlyfans_provider_pg.py service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_worker_entry.py -q -x

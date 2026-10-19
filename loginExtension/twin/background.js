@@ -53,7 +53,11 @@ async function handle(m, sender) {
   let j = await job();
   if (m.type === "start" && dashboard(sender)) {
     if (!/^[A-Za-z0-9._:-]{1,64}$/.test(m.profileId || "")) return {ok: false};
-    if (j && !["submitted", "refused"].includes(j.phase)) return {ok: false, error: "Finish or cancel the existing connection first."};
+    if (j && !["submitted", "refused"].includes(j.phase)) {
+      if (j.dashboardTab === sender.tab.id && j.documentId === sender.documentId) return view(j);
+      if (j.dashboardTab === sender.tab.id) { await clear(); j = null; }
+      else return {ok: false, error: "Finish or cancel the existing connection using the Twin Connect extension icon."};
+    }
     j = {id: crypto.randomUUID(), dashboardTab: sender.tab.id, documentId: sender.documentId, ofTab: null, profileId: m.profileId,
       handle: null, deadline: Date.now() + 15 * 60000, phase: "waiting", samples: []};
     // A new tab binds capture to this attempt; existing sessions are never cleared.

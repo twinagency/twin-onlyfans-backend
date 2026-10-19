@@ -1,0 +1,24 @@
+name: OnlyFans browser connector
+on:
+  push:
+    branches: [codex/onlyfans-guided-connect-20261020]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install isolated browser tooling
+        run: |
+          npm install --prefix "$RUNNER_TEMP/twin-browser-tools" playwright@1.61.1 --no-package-lock
+          "$RUNNER_TEMP/twin-browser-tools/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Real extension account handoff
+        run: |
+          node scripts/check-twin-connector.mjs
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/twin-browser-tools/node_modules/playwright/index.mjs" node scripts/check-twin-connector-browser.mjs

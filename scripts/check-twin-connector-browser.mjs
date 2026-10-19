@@ -28,8 +28,11 @@ try{
   document.querySelector('#start').onclick=()=>window.postMessage({source:'twin-dashboard',id:crypto.randomUUID(),type:'start',profileId:'canonical-creator'},location.origin);</script>`});
  });
  const page=await context.newPage();await page.goto('https://dashboard.tgaiclone.xyz/creator/platforms');
- await page.locator('#start').click();
- await page.waitForFunction(()=>received.some(r=>r.phase==='waiting'));
+ const opened=context.waitForEvent('page');await page.locator('#start').click();
+ await page.waitForFunction(()=>received.some(r=>r.phase==='waiting'));const ofPage=await opened;
+ // Extension-created tabs can navigate before Playwright attaches its routing.
+ // Reload the fixture after attachment; this is a normal signed-in page load.
+ await ofPage.goto('https://onlyfans.com/my/profile');
  const confirm=await new Promise((resolve,reject)=>{const existing=context.pages().find(p=>p.url().startsWith('chrome-extension://')&&p.url().endsWith('/confirm.html'));if(existing)return resolve(existing);const timer=setTimeout(()=>reject(Error('Confirmation tab did not open')),15000);context.on('page',async p=>{await p.waitForLoadState('domcontentloaded').catch(()=>{});if(p.url().startsWith('chrome-extension://')&&p.url().endsWith('/confirm.html')){clearTimeout(timer);resolve(p)}})});
  await confirm.getByText('@synthetic_creator',{exact:true}).waitFor();assert.equal(submissions.length,0,'No automatic session submission');
  await confirm.getByRole('button',{name:'Connect this account',exact:true}).click();await confirm.getByText('Submitted to Twin for verification.',{exact:true}).waitFor();

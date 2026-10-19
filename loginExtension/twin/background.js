@@ -61,8 +61,9 @@ async function handle(m, sender) {
     j = {id: crypto.randomUUID(), dashboardTab: sender.tab.id, documentId: sender.documentId, ofTab: null, profileId: m.profileId,
       handle: null, deadline: Date.now() + 15 * 60000, phase: "waiting", samples: []};
     // A new tab binds capture to this attempt; existing sessions are never cleared.
-    const tab = await chrome.tabs.create({url: OF + "/my/profile"});
-    j.ofTab = tab.id; await chrome.storage.session.set({job: j}); return view(j);
+    const tab = await chrome.tabs.create({url: "about:blank"});
+    j.ofTab = tab.id; await chrome.storage.session.set({job: j});
+    await chrome.tabs.update(tab.id, {url: OF + "/my/profile"}); return view(j);
   }
   if (m.type === "capture") return capture(m, sender, j);
   const fromDashboard = dashboard(sender) && j && j.dashboardTab === sender.tab.id && j.documentId === sender.documentId;

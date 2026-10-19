@@ -1,15 +1,11 @@
 import {createServer} from 'node:http';
 import {timingSafeEqual} from 'node:crypto';
-import {chromium} from 'playwright';
 import {createSignInService,SignInError} from './service.mjs';
+import {launchSignInBrowser} from './browser.mjs';
 
 const token=process.env.ONLYFANS_SIGNIN_TOKEN??'';
 if(token.length<32)throw Error('A separate private sign-in credential is required');
-const service=createSignInService({maxActive:Number(process.env.ONLYFANS_SIGNIN_MAX_BROWSERS??2),launch:async proxyUrl=>{
-  let proxy;
-  if(proxyUrl){const u=new URL(proxyUrl);proxy={server:u.protocol+'//'+u.host,...(u.username?{username:decodeURIComponent(u.username)}:{}),...(u.password?{password:decodeURIComponent(u.password)}:{})};}
-  return chromium.launch({headless:false,chromiumSandbox:true,proxy});
-}});
+const service=createSignInService({maxActive:Number(process.env.ONLYFANS_SIGNIN_MAX_BROWSERS??2),launch:launchSignInBrowser});
 const authorized=req=>{const supplied=Buffer.from(req.headers.authorization??''),expected=Buffer.from('Bearer '+token);return supplied.length===expected.length&&timingSafeEqual(supplied,expected);};
 async function body(req){let value='';for await(const part of req){value+=part;if(Buffer.byteLength(value)>16384)throw new SignInError('request_too_large',413);}try{return JSON.parse(value);}catch{throw new SignInError('invalid_request',400);}}
 const server=createServer(async(req,res)=>{

@@ -2,8 +2,8 @@
 // are fulfilled locally. This does not claim a real OnlyFans login.
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {chromium} from 'playwright';
 import {createSignInService,networkFingerprint,allowedRequest} from './service.mjs';
+import {launchSignInBrowser} from './browser.mjs';
 
 const scope={creatorId:'synthetic-creator',actor:'creator-session:'+'a'.repeat(64)};
 const other={creatorId:'another-creator',actor:'creator-session:'+'b'.repeat(64)};
@@ -15,7 +15,7 @@ const chunk=[[],{89668:m=>{m.exports=()=> 'a'.repeat(40)}}];self.webpackChunkof_
 for(let i=0;i<2;i++){await fetch('/api2/v2/users/me',{headers:{'user-id':'123','x-bc':'synthetic-bc','x-of-rev':'synthetic-rev',sign:'s:'+(i?'b':'a').repeat(40)+':123:e',time:String(Date.now())}});await new Promise(r=>setTimeout(r,50));}};</script>`;
 const service=createSignInService({now:()=>clock,maxActive:1,launch:async proxy=>{
   assert.equal(proxy,null);launches++;
-  const browser=await chromium.launch({headless:process.env.TWIN_SIGNIN_TEST_HEADED!=='1',chromiumSandbox:process.env.TWIN_SIGNIN_TEST_SANDBOX==='1',...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});browser.on('disconnected',()=>closed++);return browser;
+  const browser=await launchSignInBrowser(proxy,{headless:process.env.TWIN_SIGNIN_TEST_HEADED!=='1',chromiumSandbox:process.env.TWIN_SIGNIN_TEST_SANDBOX==='1',...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});browser.on('disconnected',()=>closed++);return browser;
 },transport:async(route,context)=>{
   const request=route.request(),u=new URL(request.url());
   if(u.pathname==='/api2/v2/users/login'){

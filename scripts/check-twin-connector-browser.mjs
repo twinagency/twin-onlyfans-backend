@@ -38,4 +38,7 @@ try{
  const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');const stored=await worker.evaluate(()=>chrome.storage.session.get('job'));
  assert.equal(stored.job.phase,'submitted');assert.equal(stored.job.command,undefined);assert(!JSON.stringify(stored).includes('synthetic-session'));
  console.log('PASS real Chromium extension: installed manifest, main/isolated bridges, selected-tab HttpOnly cookies, actual account confirmation, original-document submission, metadata-only page messages, success cleanup.');
+}catch(error){
+ const worker=context.serviceWorkers()[0];if(worker)console.log('Connector stage:',await worker.evaluate(async()=>{const {job}=await chrome.storage.session.get('job');return job?{phase:job.phase,samples:job.samples?.length,hasIdentity:!!job.identity,hasCommand:!!job.command}:null}));
+ console.log('Open test pages:',context.pages().map(p=>p.url()));throw error;
 }finally{await context.close();rmSync(temp,{recursive:true,force:true});}

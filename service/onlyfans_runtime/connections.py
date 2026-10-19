@@ -271,7 +271,7 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                         clear={**clear,'expiresAt':expires.isoformat()}
                         row.expires_at=expires.astimezone(timezone.utc).replace(tzinfo=None)
                         row.sealed_config=_seal(clear,tenant,account,runtime.binding_id,row.revision)
-                        runtime.enabled=True
+                        if status=='pending':runtime.enabled=True
                         policy=s.get(OfDeliveryPolicy,account)
                         if policy is None:
                             s.add(OfDeliveryPolicy(account_id=account,revision=1,enabled=False,transport_kind='native'))

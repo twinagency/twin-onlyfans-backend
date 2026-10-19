@@ -152,7 +152,7 @@ def test_hosted_send_keeps_one_use_authority_and_stable_intent_key(database,monk
         def __exit__(self,*_):return False
         def request(self,method,url,**options):
             records.append((method,url,options))
-            body={'data':{'id':OWNER}} if method=='GET' else {'data':native_message(9999,owner=OWNER,outgoing=True,text='Synthetic reply')}
+            body={'data':{'id':OWNER}} if method=='GET' else {'data':native_message(9999,owner=OWNER,outgoing=True,text=json.loads(options['data'])['text'])}
             options['content_callback'](json.dumps(body).encode())
             return SimpleNamespace(status_code=200,headers={'content-type':'application/json'})
     monkeypatch.setitem(sys.modules,'curl_cffi',SimpleNamespace(requests=SimpleNamespace(Session=CurlSession)))
@@ -160,3 +160,13 @@ def test_hosted_send_keeps_one_use_authority_and_stable_intent_key(database,monk
     posts=[options for method,_,options in records if method=='POST'];assert len(posts)==1 and posts[0]['headers']['Idempotency-Key']=='twin:'+identity
     with pytest.raises(Refused):wire.send(dispatch,authority=authority,tenant_id=TENANT)
     assert sum(method=='POST' for method,_,_ in records)==1;store.close()
+
+
+def test_health_refresh_does_not_reenable_independently_stopped_runtime(database,monkeypatch):
+    store,account,_=accepted(database,monkeypatch);load_worker_accounts(store,TENANT)
+    with Session(database[1]) as s,s.begin():
+        s.get(OfProviderConnection,account).verified_at=utcnow()-timedelta(minutes=6)
+        s.get(OfRuntime,account).enabled=False
+    assert load_worker_accounts(store,TENANT)==[]
+    with Session(database[1]) as s:assert s.get(OfRuntime,account).enabled is False
+    store.close()

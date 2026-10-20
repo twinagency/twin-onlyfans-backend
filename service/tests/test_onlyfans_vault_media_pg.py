@@ -400,3 +400,18 @@ def test_admission_and_recorded_run_cannot_be_rewritten_or_deleted(database,monk
         with pytest.raises(DBAPIError),database[1].begin() as connection:
             connection.exec_driver_sql(statement)
     store.close()
+
+
+def test_reassigned_account_does_not_disclose_prior_binding_upload_names(database,monkeypatch):
+    store,account,_=verified(database,monkeypatch)
+    admit(store,account,[declared('private-prior-creator.png',photo())])
+    with Session(store.engine) as session,session.begin():
+        runtime=session.get(OfRuntime,account)
+        session.get(OfCreatorBinding,runtime.binding_id).revoked_at=utcnow()
+        session.flush()
+        replacement=OfCreatorBinding(id='replacement-binding',tenant_id='new-tenant',creator_id='replacement-creator',
+            creator_name='Replacement Creator',account_id=account,handle='replacement',channel='onlyfans')
+        session.add(replacement);session.flush();runtime.binding_id=replacement.id
+    assert upload.list_uploads(store,'new-tenant',account)['jobs']==[]
+    with pytest.raises(Refused):upload.list_uploads(store,TENANT,account)
+    store.close()

@@ -178,9 +178,10 @@ def request_upload(store, tenant, account, *, files, expected_connection_revisio
 
 def list_uploads(store, tenant, account):
     with Session(store.engine) as session, session.begin():
-        store._runtime(session, tenant, account)
+        runtime = store._runtime(session, tenant, account)
         jobs = session.scalars(select(OfVaultMediaJob).where(OfVaultMediaJob.account_id == account,
-            OfVaultMediaJob.kind == "upload").order_by(OfVaultMediaJob.requested_at.desc()).limit(20)).all()
+            OfVaultMediaJob.binding_id == runtime.binding_id, OfVaultMediaJob.kind == "upload")
+            .order_by(OfVaultMediaJob.requested_at.desc()).limit(20)).all()
         return {"schemaVersion": SCHEMA, "accountId": account, "maxFiles": min(MAX_FILES, 200),
             "maxFileBytes": MAX_BYTES, "chunkBytes": CHUNK_BYTES,
             "enabled": os.environ.get("ONLYFANS_VAULT_MEDIA_ENABLED") == "1", "jobs": [_view(job) for job in jobs]}

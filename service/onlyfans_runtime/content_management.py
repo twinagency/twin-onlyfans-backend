@@ -6,6 +6,7 @@ The common account lock serializes edits with planning and final delivery checks
 import hashlib
 import re
 
+from onlyfans_read.agency_scope import actor_allowed
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -122,7 +123,7 @@ def update_content(store, tenant_id, account_id, item_id, *, patch, expected_rev
     if (type(expected_revision) is not int or not 0 <= expected_revision < 2**31 - 1 or
         type(expected_fingerprint) is not str or not re.fullmatch(r"[a-f0-9]{64}", expected_fingerprint) or
         type(command_key) is not str or not re.fullmatch(r"[a-f0-9]{64}", command_key) or
-        type(actor) is not str or not re.fullmatch(r"op-session:[a-f0-9]{64}", actor)):
+        not actor_allowed(actor)):
         raise InvalidContent("The content version or command identity is invalid.")
     request_hash = digest(patch)
     with Session(store.engine) as session, session.begin():

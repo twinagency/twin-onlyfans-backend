@@ -31,7 +31,8 @@ def test_native_money_never_silently_becomes_free_or_rounds_fractional_cents(val
     with pytest.raises(NativeProtocolError): cents(value)
 
 
-@pytest.mark.parametrize("raw", [b'[]',b'{"id":1,"id":2}',b'{"x":NaN}',b'{"x":Infinity}',b'\xff',b'{'*1001,b' '*65537])
+@pytest.mark.parametrize("raw", [b'[]',b'{"id":1,"id":2}',b'{"x":NaN}',b'{"x":Infinity}',b'\xff',b'{'*1001,b' '*65537],
+    ids=['array','duplicate-key','nan','infinity','invalid-utf8','too-deep','too-large'])
 def test_bounded_native_json_rejects_ambiguous_input(raw):
     with pytest.raises(NativeProtocolError): load(raw)
 
@@ -71,7 +72,8 @@ def test_native_send_freezes_exact_text_files_previews_price_and_receipt_hashes(
         acceptance(json.dumps(reply).encode(), dispatch, owner_id=OWNER, request_bytes=b'{}')
 
 
-@pytest.mark.parametrize("body", [" leading", "trailing ", "<p>already HTML</p>", "&"*20000])
+@pytest.mark.parametrize("body", [" leading", "trailing ", "<p>already HTML</p>", "&"*20000],
+    ids=["leading-space","trailing-space","already-html","too-large"])
 def test_native_formatting_that_changes_frozen_text_or_exceeds_wire_bound_is_refused(body):
     with pytest.raises(NativeProtocolError): request(grant(body=body))
 

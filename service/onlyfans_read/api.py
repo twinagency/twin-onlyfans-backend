@@ -218,3 +218,28 @@ async def earnings(request:Request):
     except OnlyFansReadError as exc:return _refusal(exc)
     except Exception:return _refusal(Unavailable("earnings_unavailable","Recorded OnlyFans earnings could not be read."))
     return JSONResponse({"schemaVersion":SCHEMA_VERSION,"earnings":value},headers=_PRIVATE_HEADERS)
+
+
+
+@router.get("/accounts/{account_id}/conversations/{conversation_id}/handover")
+async def handover(request: Request, account_id: str, conversation_id: str):
+    try:
+        principal = await _authenticate(request)
+        account_id = service._require_id(account_id, what="account")
+        from .contract import fan_id_from_conversation_id, conversation_id_for
+        from .errors import Refused
+        from db.engine import get_session
+        from onlyfans_runtime.handover import read_handover
+        fan = fan_id_from_conversation_id(conversation_id, account_id)
+        if fan is None or not 0 < fan < 2**63 or conversation_id_for(account_id, fan) != conversation_id:
+            raise Refused("unknown_conversation")
+        # Tenant grant remains mandatory, in addition to the per-agency binding.
+        if await _repo().get_binding(tenant_id=principal.tenant_id, account_id=account_id) is None:
+            raise Refused("unknown_account")
+        async with get_session() as session:
+            body = await read_handover(session, account_id, fan, principal.tenant_id)
+    except OnlyFansReadError as exc:
+        return _refusal(exc)
+    except Exception:
+        return _refusal(Unavailable("handover_unavailable", "Conversation ownership could not be read."))
+    return JSONResponse(body, headers=_PRIVATE_HEADERS)

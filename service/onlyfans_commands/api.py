@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from onlyfans_read.contract import ID_PATTERN, conversation_id_for, fan_id_from_conversation_id
+from onlyfans_read.agency_scope import actor_allowed
 from onlyfans_runtime.store import Refused
 from .settings import ACTIONS, HEADER, PREFIX, SCHEMA, configured, manual_configured
 
@@ -79,7 +80,7 @@ async def control(request: Request, account_id: str, conversation_id: str):
         action, revision, key, actor = (body[k] for k in ("action", "expectedRevision", "commandKey", "actor"))
         if (type(action) is not str or action not in {*ACTIONS, "manual_message"} or type(revision) is not int or
                 not 0 <= revision < 2**31-1 or type(key) is not str or not re.fullmatch(r"[a-f0-9]{64}", key) or
-                type(actor) is not str or not re.fullmatch(r"op-session:[a-f0-9]{64}", actor)):
+                not actor_allowed(actor)):
             raise ValueError()
         if manual and (type(body["body"]) is not str or not body["body"].strip() or "\x00" in body["body"]
                 or len(body["body"].encode()) > 4000):

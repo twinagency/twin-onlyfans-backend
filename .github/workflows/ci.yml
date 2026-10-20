@@ -25,19 +25,13 @@ jobs:
         # tests observe. A runner without ffmpeg is not this project's runtime.
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Install pinned deps
-        # Not needed by the tests themselves, which are dependency-free plain
-        # -assert scripts. It runs so a broken requirements.txt fails here and
-        # not on someone's VPS halfway through a deploy.
+        # Test-only dependencies remain separate from the production image.
         run: |
           python -m venv venv
           ./venv/bin/pip install --upgrade pip
-          ./venv/bin/pip install -r requirements.txt
+          ./venv/bin/pip install -r requirements-onlyfans-test.txt
       - name: service/tests
-        run: |
-          for t in service/tests/test_*.py; do
-            echo "▶ $t"
-            ./venv/bin/python "$t"
-          done
+        run: ./venv/bin/python scripts/run-service-tests.py
 
   app:
     name: dashboard (next)

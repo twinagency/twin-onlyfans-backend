@@ -1,6 +1,8 @@
 """Scoped operator controls against disposable PostgreSQL, never a provider."""
 import json
 import multiprocessing
+from pathlib import Path
+from alembic import command as alembic_command
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from test_onlyfans_foundation_pg import database, seed, event, due
 from test_onlyfans_text_delivery_pg import configured, prepare, accepted, rejected, TENANT, ACCOUNT, FAN
-from db.models import Message, OfConversationState, OfCreatorBinding, OfMessageDelivery
+from db.models import Account, Fan, Message, OfConversationState, OfCreatorBinding, OfMessageDelivery
 from db.onlyfans_models import OfControlAudit, OfWork
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from db.schema import MEDIA, SchemaMismatch, check_schema, upgrade
@@ -145,11 +147,19 @@ def test_two_process_controls_serialize_and_replay_without_duplicate_evidence(da
 
 def test_populated_media_upgrade_retains_control_evidence_and_append_only_enforcement(database):
     _,engine=database
-    store=seed(*database);command(store,"pause_automation",0);store.close()
+    # Rehearse the actual published revision. Removing a few columns from HEAD
+    # leaves later campaign/media tables behind and is not a 0077 database.
+    from db.schema import BASELINE, _config
     with engine.begin() as c:
-        c.exec_driver_sql("DROP TABLE of_configuration_change; DROP FUNCTION of_configuration_immutable(); ALTER TABLE of_runtime DROP COLUMN configuration_revision")
-        c.exec_driver_sql("DROP TRIGGER of_control_immutable ON of_control_audit; DROP FUNCTION of_control_immutable(); ALTER TABLE of_control_audit DROP COLUMN action, DROP COLUMN takeover_from, DROP COLUMN takeover_to")
-        c.execute(text("UPDATE alembic_version SET version_num=:v"),{"v":MEDIA})
+        c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+        c.exec_driver_sql((Path(__file__).resolve().parents[1]/"db/snapshots/0070_postgresql.sql").read_text())
+        alembic_command.stamp(_config(c), BASELINE)
+        alembic_command.upgrade(_config(c), MEDIA)
+        c.execute(Account.__table__.insert(), {"id":"acc-a", "nickname":"Synthetic"})
+        c.execute(OfCreatorBinding.__table__.insert(), {"id":"binding-acc-a", "tenant_id":"tenant-a", "creator_id":"creator-a", "creator_name":"Synthetic", "account_id":"acc-a", "handle":"synthetic", "channel":"onlyfans"})
+        c.execute(Fan.__table__.insert(), {"account_id":"acc-a", "fan_id":101})
+        c.execute(text("INSERT INTO of_runtime(account_id,binding_id,activated_at) VALUES ('acc-a','binding-acc-a',CURRENT_TIMESTAMP)"))
+        c.execute(text("INSERT INTO of_control_audit(account_id,command_key,fan_id,mode,previous_revision,revision,actor,reason,created_at) VALUES ('acc-a','old-control',101,'paused',0,1,'synthetic','Retained control',CURRENT_TIMESTAMP)"))
         check_schema(c,expected=MEDIA)
         before=[dict(x) for x in c.execute(text("SELECT * FROM of_control_audit")).mappings()]
         upgrade(c);upgrade(c);check_schema(c)
@@ -202,7 +212,7 @@ def test_http_credential_contract_scope_and_strict_body(database,monkeypatch):
     for bad in invalid:assert client.post(path,headers=headers,json=bad).status_code==400
     duplicate=json.dumps(body)[:-1]+',"expectedRevision":0}'
     assert client.post(path,headers={**headers,"Content-Type":"application/json"},content=duplicate).status_code==400
-    assert client.post(path,headers={**headers,"Content-Type":"application/json"},content="x"*4097).status_code==413
+    assert client.post(path,headers={**headers,"Content-Type":"application/json"},content=json.dumps(body)+" "*4097).status_code==413
     assert client.post(path.replace("acc-a","acc-b"),headers=headers,json=body).status_code==404
     result=client.post(path,headers=headers,json=body)
     assert result.status_code==200,result.text

@@ -137,7 +137,8 @@ class Store:
             OfCreatorBinding.channel == "onlyfans",
             OfCreatorBinding.revoked_at.is_(None),
         ).with_for_update(read=True))
-        if binding is None:
+        from onlyfans_read.agency_scope import creator_allowed
+        if binding is None or not creator_allowed(binding.creator_id):
             raise Refused("scope unavailable")
         return runtime
 
@@ -338,6 +339,9 @@ class Store:
                 raise Refused("replies are not paused")
             if action == "release_takeover" and state.mode != "human_controlled":
                 raise Refused("human control is not active")
+            from .handover import staff_owns_takeover
+            if action == "release_takeover" and not staff_owns_takeover(s, account_id, fan_id, state, actor):
+                raise Refused("takeover belongs to another team member")
             if action in {"resume_automation", "release_takeover"}:
                 if self._unresolved(s, account_id, fan_id, state):
                     raise Refused("unresolved delivery holds resumption")

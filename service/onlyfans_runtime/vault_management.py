@@ -14,6 +14,7 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
+from onlyfans_read.agency_scope import actor_allowed
 from sqlalchemy import and_, or_, select, func
 from sqlalchemy.orm import Session
 
@@ -39,7 +40,7 @@ class InvalidVault(ValueError):
 
 def _identity(command_key, actor):
     if (type(command_key) is not str or not re.fullmatch(r"[a-f0-9]{64}", command_key)
-        or type(actor) is not str or not re.fullmatch(r"op-session:[a-f0-9]{64}", actor)):
+        or not actor_allowed(actor)):
         raise InvalidVault("The vault command identity is invalid.")
 
 

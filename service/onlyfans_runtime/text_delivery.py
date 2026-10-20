@@ -308,6 +308,9 @@ class TextAuthority:
             reason = self._eligibility(s, runtime, policy, state, fan, origin, now)
             if reason:
                 raise Refused(reason)
+            from .handover import staff_owns_takeover
+            if origin == "manual" and not staff_owns_takeover(s, account_id, fan_id, state, actor):
+                raise Refused("takeover belongs to another team member")
             if state.revision != expected_revision:
                 raise Refused("control revision conflict")
             if policy.queued_count >= MAX_QUEUED:
@@ -412,6 +415,9 @@ class TextAuthority:
                         or (transport_generation is not None and transport_generation != intent.policy_revision)
                         or (intent.work_generation is not None and
                             (work is None or work.generation != intent.work_generation)))
+            from .handover import staff_owns_takeover
+            if not obsolete and intent.origin == "manual":
+                obsolete = not staff_owns_takeover(s, account_id, intent.fan_id, state, intent.actor)
             if not obsolete and intent.native_plan_id is not None:
                 from .native_context import matches
                 obsolete = not matches(s, intent)
@@ -525,6 +531,9 @@ class TextAuthority:
                         or row.payload_hash != self._intent_hash(row)
                         or not self._media_current(s, row, policy, now)
                         or (row.work_generation is not None and (work is None or work.generation != row.work_generation)))
+            from .handover import staff_owns_takeover
+            if not obsolete and row.origin == "manual":
+                obsolete = not staff_owns_takeover(s, row.account_id, row.fan_id, state, row.actor)
             if not obsolete and row.native_plan_id is not None:
                 from .native_context import matches
                 obsolete = not matches(s, row)

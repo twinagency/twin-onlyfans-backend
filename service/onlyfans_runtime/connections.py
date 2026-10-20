@@ -89,6 +89,32 @@ def provision_account(store,tenant,*,creator_id,creator_name,owner_id,handle,com
             request_hash=fingerprint,actor=actor,created_at=utcnow()))
     return account
 
+def capture_network_fingerprint(proxy):
+    return hashlib.sha256(('twin-capture-network.v1\x00'+(proxy or '')).encode()).hexdigest()
+
+
+def get_capture_context(store,tenant,creator,account=None):
+    """Private server-to-server login context, never a creator status response."""
+    if (type(creator)is not str or not ID_PATTERN.fullmatch(creator)
+            or type(tenant)is not str or tenant=='deployment' or not ID_PATTERN.fullmatch(tenant)):
+        raise Refused('scope unavailable')
+    proxy=None;owner=None
+    if account is not None:
+        if type(account)is not str or not ID_PATTERN.fullmatch(account):raise Refused('scope unavailable')
+        with Session(store.engine) as s:
+            runtime=store._runtime(s,tenant,account)
+            binding=s.get(OfCreatorBinding,runtime.binding_id)
+            if binding is None or binding.creator_id!=creator or binding.revoked_at is not None:raise Refused('scope unavailable')
+            match=re.fullmatch(r'of-([1-9][0-9]{0,15})',account)
+            if match is None:raise Refused('scope unavailable')
+            owner=int(match[1])
+            row=s.get(OfProviderConnection,account)
+            if row is not None:
+                if row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
+                clear=_open(row,tenant);proxy=clear['proxyUrl'];owner=row.owner_id
+    return {'accountId':account,'ownerId':owner,'proxyUrl':proxy,'fingerprint':capture_network_fingerprint(proxy)}
+
+
 def get_connection(store,tenant,account):
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account)
@@ -109,7 +135,7 @@ def get_connection(store,tenant,account):
             'limitUnits':policy.limit_units if policy else 0,'mediaEnabled':bool(policy and policy.media_enabled),
             'automateNewConversations':bool(row and row.automate_new_conversations)}
 
-def save_connection(store,tenant,account,*,payload,expected_revision,command_key,actor,session_only=False):
+def save_connection(store,tenant,account,*,payload,expected_revision,command_key,actor,session_only=False,expected_network_fingerprint=None):
     _validate_identity(command_key,actor,expected_revision)
     required={'ownerId','capture','xHash','expiresAt'} if session_only else {'ownerId','capture','xHash','proxyUrl','expiresAt','model'}
     if type(payload) is not dict or set(payload)!=required:raise Refused('invalid connection configuration')
@@ -129,6 +155,8 @@ def save_connection(store,tenant,account,*,payload,expected_revision,command_key
             # A creator refreshes authentication only. Keep operator-owned network
             # and model settings inside the encrypted store, never in a response.
             previous=_open(row,tenant) if row is not None else {}
+            if expected_network_fingerprint is not None and expected_network_fingerprint!=capture_network_fingerprint(previous.get('proxyUrl')):
+                raise Refused('capture network changed')
             payload={**payload,'proxyUrl':previous.get('proxyUrl'),'model':previous.get('model')}
         try:
             expires=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00'))

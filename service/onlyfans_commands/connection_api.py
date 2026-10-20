@@ -3,7 +3,7 @@ import asyncio,hmac,json,os,re
 from fastapi import APIRouter,Request
 from fastapi.responses import JSONResponse
 from onlyfans_read.contract import ID_PATTERN
-from onlyfans_runtime.connections import encryption_key,get_connection,save_connection,change_connection,provision_account
+from onlyfans_runtime.connections import encryption_key,get_connection,save_connection,change_connection,provision_account,get_capture_context
 from onlyfans_runtime.enrollments import submit_enrollment,get_enrollments
 from onlyfans_runtime.store import Refused
 from .api import unique_keys
@@ -65,6 +65,21 @@ async def provision(request:Request):
     try:
         account=await asyncio.to_thread(provision_account,store,tenant,creator_id=body['creatorId'],creator_name=body['creatorName'],owner_id=body['ownerId'],handle=body['handle'],command_key=body['commandKey'],actor=body['actor'])
         return response({'ok':True,'applied':True,'accountId':account,'commandKey':body['commandKey'],'status':'unconfigured'})
+    except Exception as exc:return failure(exc)
+
+
+@router.post('/capture-context')
+async def capture_context(request:Request):
+    context=authenticate(request)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    try:
+        body=await read_json(request)
+        if set(body)!={'creatorId','accountId'}:raise ValueError()
+    except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid login context.'},400)
+    try:
+        result=await asyncio.to_thread(get_capture_context,store,tenant,body['creatorId'],body['accountId'])
+        return response({'ok':True,'context':result})
     except Exception as exc:return failure(exc)
 
 @router.get('/accounts/{account_id}')

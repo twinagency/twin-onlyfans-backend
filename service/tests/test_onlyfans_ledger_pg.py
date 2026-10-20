@@ -283,6 +283,8 @@ def test_populated_0083_upgrade_preserves_disabled_state_and_adds_checked_eviden
     from db.schema import check_schema, upgrade
     store, account, _ = verified(database, monkeypatch)
     with database[1].begin() as c:
+        # Recreate the published 0083 shape, including removal of newer media admission.
+        c.exec_driver_sql("DROP TABLE of_vault_media_job; DROP FUNCTION of_vault_media_guard()")
         c.exec_driver_sql("DROP TABLE of_connection_enrollment; DROP TABLE of_vault_edit; DROP FUNCTION of_vault_edit_immutable(); DROP TABLE of_creator_facts_source; DROP TABLE of_ledger_evidence; DROP TABLE of_ledger_scan; DROP FUNCTION of_ledger_immutable()")
         c.exec_driver_sql("UPDATE alembic_version SET version_num='0083_vault_management'")
         upgrade(c)

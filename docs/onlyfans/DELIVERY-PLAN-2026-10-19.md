@@ -93,7 +93,7 @@ attribution and refunds do not count as cleared revenue. The paired contracts
 are `of-configuration.v2`, `of-campaigns.v2`, `of-workspace.v2`, and
 `of-operations.v3`; frontend and backend must be deployed together.
 
-Still to implement: native upload admission/worker, full video preview playback, wider inbound selling behavior and complete audience
+Native upload admission/worker and full video playback are implemented on the paired native-media branch, with rollout and selected-account provider acceptance tracked below. Still to implement: wider inbound selling behavior and complete audience
 import. The existing upload owner uses temporary
 scheduled carrier posts and cleanup evidence; no bypass into the old provider
 client has been added. These remaining items are not described as live or done.
@@ -229,3 +229,33 @@ PG browser flow passed in 154.78 seconds, including a decoded 96x128 synthetic
 image, contain-fit expansion, missing poster, account/session refusals and mobile
 layout. This is synthetic local acceptance; actual CDN shapes and live account
 delivery remain unverified.
+
+
+## Native media checkpoint, 2026-10-20
+
+`0088_native_vault_media` extends creator enrollment at `0087`. It adds bounded
+media work admission and recovery evidence; `VaultItem` and existing vault
+observations remain authoritative. Browser transfers use 8 MiB checksummed,
+resumable chunks. A reselected file must match the acknowledged prefix before
+resuming. Each file keeps its individual outcome in the existing uploader.
+
+The worker shares the existing single/multipart upload, dedupe, conversion and
+carrier logic through a narrowly scoped native transport. It never constructs
+OFClient or permits fan messages/immediate posts. The same unique job marker,
+recorded carrier IDs and durable before-POST intent drive recovery. Interrupted
+provider work is held instead of replayed. Successful uploads request the usual
+authoritative vault refresh; processing is never inferred from a local upload.
+
+Full MP4/WebM video preparation uses authoritative observed source metadata and
+the selected account proxy. Only a worker downloads full bytes. Authenticated
+API and dashboard routes serve the private cache with HEAD/range support for
+seeking. Cache receipts bind owner, account and creator binding; full-video
+bytes expire after 48 hours. Permanent still previews retain their existing
+owner. Unsupported/DRM-only sources remain explicitly unavailable.
+
+`ONLYFANS_VAULT_MEDIA_ENABLED` defaults off. The API and worker must share a
+persistent writable spool, and the existing image volume stays read-only in the
+API. The native runtime image now includes ffmpeg/ffprobe. Deploy the migration,
+runtime, volumes and paired dashboard together before enabling the feature.
+See `NATIVE-MEDIA-2026-10-20.md` for verification and rollout steps. This source
+checkpoint does not assert a real selected-account upload or live rollout.

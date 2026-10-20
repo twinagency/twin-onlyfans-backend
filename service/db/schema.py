@@ -8,6 +8,7 @@ structural checks; an old self-healed SQLite schema is an import, not a stamp.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 
 from alembic import command
@@ -32,8 +33,9 @@ VAULT = "0083_vault_management"
 LEDGER = "0084_native_ledger"
 CREATOR_FACTS = "0085_shared_creator_facts"
 VAULT_EDITS = "0086_vault_edits"
-HEAD = "0087_creator_enrollment"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, HEAD:87}
+ENROLLMENT = "0087_creator_enrollment"
+HEAD = "0088_native_vault_media"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, HEAD:88}
 HERE = Path(__file__).resolve().parent
 
 
@@ -47,6 +49,7 @@ def _metadata():
     from . import onlyfans_delivery_models  # noqa: F401 — register current tables
     from . import onlyfans_campaign_models,onlyfans_connection_models,onlyfans_content_models  # noqa: F401
     from . import onlyfans_vault_models, onlyfans_ledger_models, onlyfans_creator_facts_models, onlyfans_vault_edit_models  # noqa: F401
+    from . import onlyfans_media_models  # noqa: F401
     return Base.metadata
 
 
@@ -162,6 +165,15 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 or rows[0][3] != trigger or rows[0][5] != "plpgsql"
                 or " ".join(rows[0][4].split()) != f"BEGIN RAISE EXCEPTION '{message}'; END;"):
             failures.append(f"missing append-only protection {table}")
+    if expected_rank >= 88:
+        guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+            WHERE t.tgrelid=to_regclass('of_vault_media_job') AND t.tgname='of_vault_media_guard'
+            AND NOT t.tgisinternal""")).all()
+        if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+                or guard[0][2] != "of_vault_media_guard"
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "95986d179ea6a7826b1fa0c8b84407efb8dcd7897a2dcc70bed69938a88ff3b6"):
+            failures.append("missing media admission protection")
     if "per_employee_revenue_with_attribution" not in inspector.get_view_names():
         failures.append("missing revenue view")
     if failures:

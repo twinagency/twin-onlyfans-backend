@@ -1,21 +1,22 @@
 name: Creator platform acceptance
 on:
   push:
-    branches: [codex/creator-platform-connections-20261019, codex/onlyfans-guided-connect-20261020]
+    branches: [codex/creator-platform-connections-20261019, codex/onlyfans-guided-connect-20261020, codex/creator-selfhosted-connect-20261020]
+    paths: ['service/**', 'loginExtension/**', 'Dockerfile.onlyfans', 'requirements*.txt', '.github/workflows/creator-platforms.yml']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   native:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Browser connector boundaries
         run: node scripts/check-twin-connector.mjs
       - name: Build the runtime and disposable test image
         run: |
-          docker build -f Dockerfile.onlyfans -t creator-platforms-candidate .
+          docker build --label org.opencontainers.image.revision="$GITHUB_SHA" -f Dockerfile.onlyfans -t creator-platforms-candidate .
           printf '%s\n' 'FROM creator-platforms-candidate' 'RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/* && pip install pytest==8.3.5' > Dockerfile.creator-check
           docker build -f Dockerfile.creator-check -t creator-platforms-tests .
       - name: Start isolated PostgreSQL
@@ -27,7 +28,18 @@ jobs:
           docker exec creator-platform-pg pg_isready -h 127.0.0.1 -U postgres
       - name: Ownership, recovery, migration, connection and worker acceptance
         run: |
-          timeout 900 docker run --rm --network creator-platform-check -e ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres:synthetic-pilot-only@creator-platform-pg:5432/postgres creator-platforms-tests python -m pytest service/tests/test_onlyfans_browser_capture.py service/tests/test_onlyfans_creator_enrollments_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_worker_media_pg.py service/tests/test_onlyfans_ledger_pg.py service/tests/test_onlyfans_native_planning_pg.py service/tests/test_onlyfans_provider_pg.py service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_worker_entry.py -q -x
+          timeout 1200 docker run --rm --network creator-platform-check -e ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres:synthetic-pilot-only@creator-platform-pg:5432/postgres creator-platforms-tests python -m pytest service/tests/test_onlyfans_browser_capture.py service/tests/test_onlyfans_creator_enrollments_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_worker_media_pg.py service/tests/test_onlyfans_ledger_pg.py service/tests/test_onlyfans_native_planning_pg.py service/tests/test_onlyfans_provider_pg.py service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_worker_entry.py service/tests/test_onlyfans_vault_media_pg.py service/tests/test_onlyfans_agency_pg.py -q -x
+      - name: Export the accepted runtime image
+        run: |
+          mkdir -p release
+          docker save creator-platforms-candidate | gzip > release/native-runtime.tar.gz
+          cd release && sha256sum native-runtime.tar.gz > native-runtime.sha256
+          printf '%s\n' "$GITHUB_SHA" > native-commit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-runtime
+          path: release/
+          retention-days: 3
       - name: Remove disposable database
         if: always()
         run: |

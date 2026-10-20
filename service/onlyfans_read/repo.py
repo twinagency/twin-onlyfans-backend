@@ -204,6 +204,9 @@ def _storage_failure(exc: Exception) -> Unavailable:
     )
 
 
+from .agency_scope import current_scope, lock_read_scope
+
+
 class SqlOnlyFansReadRepo:
     """The real repository: async SQLAlchemy over this relay's own tables."""
 
@@ -224,6 +227,7 @@ class SqlOnlyFansReadRepo:
         from .contract import iso
         try:
             async with get_session() as s:
+                await lock_read_scope(s, account_id)
                 binding = select(OfCreatorBinding.id).where(
                     OfCreatorBinding.account_id == account_id,
                     OfCreatorBinding.channel == "onlyfans",
@@ -366,6 +370,9 @@ class SqlOnlyFansReadRepo:
                     .where(OfCreatorBinding.revoked_at.is_(None))
                     .order_by(OfCreatorBinding.creator_name, OfCreatorBinding.account_id)
                 )
+                scope = current_scope.get()
+                if scope is not None:
+                    stmt = stmt.where(OfCreatorBinding.creator_id.in_(scope.creator_ids))
                 if tenant_id is not None:
                     stmt = stmt.where(OfCreatorBinding.tenant_id == tenant_id)
                 if creator_id is not None:
@@ -405,6 +412,7 @@ class SqlOnlyFansReadRepo:
     ) -> list[ConversationRow]:
         try:
             async with get_session() as s:
+                await lock_read_scope(s, account_id)
                 stmt = (
                     select(
                         Chat.account_id,
@@ -471,6 +479,7 @@ class SqlOnlyFansReadRepo:
     async def conversation(self, *, account_id: str, fan_id: int) -> ConversationRow | None:
         try:
             async with get_session() as s:
+                await lock_read_scope(s, account_id)
                 row = (
                     await s.execute(
                         select(
@@ -513,6 +522,7 @@ class SqlOnlyFansReadRepo:
         unresolved = None
         try:
             async with get_session() as s:
+                await lock_read_scope(s, account_id)
                 row = (
                     await s.execute(
                         select(
@@ -568,6 +578,7 @@ class SqlOnlyFansReadRepo:
     async def messages(self, *, account_id: str, fan_id: int, limit: int) -> list[MessageRow]:
         try:
             async with get_session() as s:
+                await lock_read_scope(s, account_id)
                 rows = (
                     await s.execute(
                         select(
@@ -616,6 +627,7 @@ class SqlOnlyFansReadRepo:
     async def deliveries(self, *, account_id: str, fan_id: int) -> dict[int, DeliveryRow]:
         try:
             async with get_session() as s:
+                await lock_read_scope(s, account_id)
                 rows = (
                     await s.execute(
                         select(
@@ -658,6 +670,7 @@ class SqlOnlyFansReadRepo:
         """
         try:
             async with get_session() as s:
+                await lock_read_scope(s, account_id)
                 row = (
                     await s.execute(
                         select(
@@ -694,6 +707,7 @@ class SqlOnlyFansReadRepo:
         """
         try:
             async with get_session() as s:
+                await lock_read_scope(s, account_id)
                 rows = (
                     await s.execute(
                         select(Message.message_id, Message.body, Message.price_cents, Message.purchased_at, Message.media_ids)
@@ -724,6 +738,7 @@ class SqlOnlyFansReadRepo:
         """Last complete durable synchronization; message activity is not health."""
         try:
             async with get_session() as s:
+                await lock_read_scope(s, account_id)
                 row = (await s.execute(select(OfRuntime.last_sync_at, OfRuntime.recovery_needed)
                        .where(OfRuntime.account_id == account_id))).first()
         except SQLAlchemyError as exc:

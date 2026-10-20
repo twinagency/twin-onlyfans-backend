@@ -1,0 +1,10 @@
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
+WORKDIR /app
+COPY creator-sign-in/package*.json ./creator-sign-in/
+RUN npm ci --prefix creator-sign-in --omit=dev && mkdir -p /app/loginExtension && chown -R pwuser:pwuser /app
+COPY --chown=pwuser:pwuser creator-sign-in/ ./creator-sign-in/
+COPY --chown=pwuser:pwuser loginExtension/interceptor.js ./loginExtension/interceptor.js
+USER pwuser
+ENV NODE_ENV=production
+EXPOSE 8479
+CMD ["xvfb-run", "-a", "node", "creator-sign-in/server.mjs"]

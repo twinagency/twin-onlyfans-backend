@@ -135,6 +135,9 @@ async def read_workspace(s,*,tenant_id,account_id,section,cursor=None,limit=25):
     await s.connection(execution_options={"isolation_level":"REPEATABLE READ"})
     binding=select(OfCreatorBinding.id).where(OfCreatorBinding.account_id==account_id,
         OfCreatorBinding.channel=="onlyfans",OfCreatorBinding.revoked_at.is_(None))
+    from .agency_scope import current_scope
+    scope = current_scope.get()
+    if scope is not None:binding=binding.where(OfCreatorBinding.creator_id.in_(scope.creator_ids))
     if tenant_id is not None:binding=binding.where(OfCreatorBinding.tenant_id==tenant_id)
     if await s.scalar(binding.with_for_update(read=True)) is None:return None
     runtime=await s.get(OfRuntime,account_id)

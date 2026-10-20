@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the whole project test suite:
-#   - backend: every service/tests/test_*.py plain-assert script
+#   - backend: isolated script/pytest checks; --postgres includes database acceptance
 #   - frontend: vitest (app/) one-shot
 # Exit 0 only if everything passes.
 set -uo pipefail
@@ -13,11 +13,7 @@ echo "──────── Backend (service/tests/*.py) ──────�
 if [ ! -x "$PY" ]; then
   echo "✗ venv python not found at $PY"; fail=1
 else
-  for t in "$ROOT"/service/tests/test_*.py; do
-    [ -e "$t" ] || continue
-    echo "▶ $(basename "$t")"
-    "$PY" "$t" || { echo "  ✗ FAILED"; fail=1; }
-  done
+  "$PY" "$ROOT/scripts/run-service-tests.py" "$@" || fail=1
 fi
 
 echo "──────── Frontend (vitest, app/) ────────"

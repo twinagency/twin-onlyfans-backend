@@ -138,6 +138,7 @@ def main(argv=None):
     stop = threading.Event()
     previous = {}
     store = None
+    media_worker = None
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
             previous[sig] = signal.signal(sig, lambda *_: stop.set())
@@ -153,10 +154,17 @@ def main(argv=None):
             except Exception:
                 _emit({"schemaVersion":"of-worker.v1","state":"creator_source_unavailable"})
                 return 1
+        if os.environ.get("ONLYFANS_VAULT_MEDIA_ENABLED") == "1" and not args.once:
+            from onlyfans_runtime.vault_media_worker import MediaWorker
+            media_worker = MediaWorker(store, tenant, stop)
+            media_worker.start()
         return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,facts_reader=facts_reader,
                         vault_jobs=_process_vault_jobs, enrollment_jobs=_process_connection_enrollments,
                         ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None)
     finally:
+        stop.set()
+        if media_worker is not None:
+            media_worker.join()
         try:
             if store is not None:
                 store.close()

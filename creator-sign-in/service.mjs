@@ -17,13 +17,13 @@ export function allowedRequest(request){
   let u;try{u=new URL(request.url());}catch{return false;}
   if(u.protocol!=='https:')return false;
   const of=u.hostname==='onlyfans.com'||u.hostname.endsWith('.onlyfans.com');
-  const challenge=u.hostname==='challenges.cloudflare.com'||u.hostname==='hcaptcha.com'||u.hostname.endsWith('.hcaptcha.com');
-  const recaptcha=['www.google.com','www.gstatic.com'].includes(u.hostname)&&u.pathname.startsWith('/recaptcha/');
+  const challenge=(u.hostname==='challenges.cloudflare.com'||u.hostname.endsWith('.challenges.cloudflare.com'))||u.hostname==='hcaptcha.com'||u.hostname.endsWith('.hcaptcha.com');
+  const recaptcha=['www.google.com','www.gstatic.com','recaptcha.net','www.recaptcha.net'].includes(u.hostname)&&u.pathname.startsWith('/recaptcha/');
   if(!of&&!challenge&&!recaptcha)return false;
   if(request.isNavigationRequest()&&request.frame().parentFrame()===null&&u.origin!==OF)return false;
   if(of&&!['GET','HEAD','OPTIONS'].includes(request.method())){
     let p;try{p=decodeURIComponent(u.pathname);}catch{return false;}
-    if(!p.startsWith('/cdn-cgi/challenge-platform/')&&!/^\/api2\/v2\/(?:users\/(?:login|logout|otp|auth|2fa|two-factor)|auth|login|otp|captcha|challenge)(?:\/|$)/.test(p))return false;
+    if(p!=='/api2/v2/webauthn/login/options'&&!p.startsWith('/cdn-cgi/challenge-platform/')&&!/^\/api2\/v2\/(?:users\/(?:login|logout|otp|auth|2fa|two-factor)|auth|login|otp|captcha|challenge)(?:\/|$)/.test(p))return false;
   }
   return true;
 }
@@ -127,6 +127,12 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
       if(j.closed||j.phase!=='waiting'||!j.page)fail('input_unavailable',409);
       const keys=Object.keys(event??{}).sort().join(',');
       if(event?.type==='click'&&keys==='type,x,y'&&[event.x,event.y].every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1))await j.page.mouse.click(event.x*WIDTH,event.y*HEIGHT);
+      else if(event?.type==='login'&&keys==='email,password,type'&&typeof event.email==='string'&&typeof event.password==='string'&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(event.email)&&Buffer.byteLength(event.email)<=320&&event.password.length>0&&Buffer.byteLength(event.password)<=4096&&!/[\x00-\x1f]/.test(event.email+event.password)){
+        // Values live only in this temporary provider page; never in job/capture metadata.
+        const email=j.page.locator('input[name="email"],input[type="email"]').first();
+        const password=j.page.locator('input[name="password"],input[type="password"]').first();
+        await email.fill(event.email);await password.fill(event.password);await password.press('Enter');
+      }
       else if(event?.type==='text'&&keys==='text,type'&&typeof event.text==='string'&&event.text.length>0&&Buffer.byteLength(event.text)<=512&&!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(event.text))await j.page.keyboard.insertText(event.text);
       else if(event?.type==='key'&&keys==='key,type'&&['Enter','Tab','Backspace','Delete','Escape','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key))await j.page.keyboard.press(event.key);
       else if(event?.type==='scroll'&&keys==='delta,type'&&typeof event.delta==='number'&&Number.isFinite(event.delta)&&Math.abs(event.delta)<=1000)await j.page.mouse.wheel(0,event.delta);

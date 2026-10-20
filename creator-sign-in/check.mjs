@@ -42,13 +42,13 @@ try{
   await service.input(scope,started.id,{type:'key',key:'Tab'});
   assert.equal(service.status(scope,started.id).keyboard,'password');
   await service.input(scope,started.id,{type:'text',text:'synthetic-password'});
-  await service.input(scope,started.id,{type:'key',key:'Enter'});
+  await service.input(scope,started.id,{type:'login',email:'fixture@example.invalid',password:'synthetic-password'});
   await until(()=>service.status(scope,started.id).phase==='ready');
   const captured=service.capture(scope,started.id);assert.equal(captured.profileId,scope.creatorId);assert.equal(captured.session.ownerId,123);assert.equal(captured.session.networkFingerprint,network.fingerprint);
   assert.equal(captured.handle,'synthetic_creator');assert.equal(captured.session.browser.samples.length,2);
   assert.deepEqual(service.capture(scope,started.id),captured,'A lost native response must retry the exact capture');
   assert(!JSON.stringify(service.status(scope,started.id)).includes('synthetic-session'));
-  assert(!JSON.stringify(captured).includes('must-not-transfer'));
+  assert(!JSON.stringify(captured).includes('must-not-transfer'));assert(!JSON.stringify(captured).includes('synthetic-password'));assert(!JSON.stringify(service.status(scope,started.id)).includes('synthetic-password'));
   await assert.rejects(()=>service.input(scope,started.id,{type:'text',text:'must not send'}));
   await assert.rejects(()=>service.frame(scope,started.id));
   const enrollment=randomUUID();assert.equal((await service.acknowledge(scope,started.id,enrollment)).phase,'submitted');
@@ -57,7 +57,7 @@ try{
   const second=await service.start(scope,{startKey:randomUUID(),network});assert.notEqual(second.id,started.id);
   await service.cancel(scope,second.id);assert.equal(service.status(scope,second.id).phase,'cancelled');
   const third=await service.start(scope,{startKey:randomUUID(),network});clock+=16*60_000;await service.collect();assert.throws(()=>service.status(scope,third.id),e=>e.status===404);
-  for(const [url,method,expected]of [['https://onlyfans.com/api2/v2/chats/123/messages','POST',false],['https://onlyfans.com/api2/v2/payments','POST',false],['https://onlyfans.com/api2/v2/users/login','POST',true],['http://127.0.0.1/private','GET',false],['https://foreign.example/','GET',false]]){
+  for(const [url,method,expected]of [['https://onlyfans.com/api2/v2/chats/123/messages','POST',false],['https://onlyfans.com/api2/v2/payments','POST',false],['https://onlyfans.com/api2/v2/users/login','POST',true],['http://127.0.0.1/private','GET',false],['https://recaptcha.net/recaptcha/enterprise.js','GET',true],['https://www.recaptcha.net/recaptcha/api2/anchor','GET',true],['https://brunhild.challenges.cloudflare.com/cdn-cgi/challenge-platform/test','GET',true],['https://onlyfans.com/api2/v2/webauthn/login/options','POST',true],['https://recaptcha.net.attacker.example/recaptcha/enterprise.js','GET',false],['https://foreign.example/','GET',false]]){
     assert.equal(allowedRequest({url:()=>url,method:()=>method,isNavigationRequest:()=>false}),expected);
   }
   console.log('PASS self-hosted sign-in: actual browser input and capture, one start/resume, isolated creator scope, capacity, frozen retry, minimal metadata, native handoff acknowledgement, cleanup, expiry, no fan sends or purchases.');

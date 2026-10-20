@@ -25,6 +25,19 @@ ORIGIN = "https://onlyfans.com"
 APP_TOKEN = "33d57ade8c02dbc5a333db99ff9ae26a"
 
 
+def validate_cdn_url(url):
+    if (type(url) is not str or len(url) > 8192 or not url.isascii()
+            or any(ord(c) < 33 or ord(c) == 127 for c in url) or "\\" in url):
+        raise Refused("unsupported native media target")
+    try:
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or not re.fullmatch(r"cdn[0-9]{0,2}\.onlyfans\.com", parsed.hostname or "")
+                or parsed.port not in {None, 443} or parsed.username or parsed.password or parsed.fragment):
+            raise ValueError()
+    except ValueError:
+        raise Refused("unsupported native media target") from None
+
+
 def _header(value, label, maximum=4096):
     if (type(value) is not str or not 1 <= len(value) <= maximum
             or not value.isascii() or any(ord(c) < 32 or ord(c) == 127 for c in value)):
@@ -193,6 +206,21 @@ class NativeProviderConnector(NativeLoopbackConnector):
         elif (not re.fullmatch(re.escape(API_PATH) + r"/chats/[1-9][0-9]*/messages", target.path)
               or target.query or not body):
             raise Refused("unsupported native HTTPS write")
+        return self._signed_request(method, path, body)
+
+    def _signed_request(self, method, path, body=b"", *, max_response_bytes=None,
+                        accepted_statuses=(200,), with_status=False):
+        """Shared one-attempt signed wire call; each caller owns its narrow route authority."""
+        self._ready()
+        self._handle.current()
+        if (method not in {"GET", "POST", "DELETE"} or type(path) is not str
+                or not path.startswith(API_PATH + "/") or len(path) > 8192
+                or any(c in path for c in "\r\n#\\") or ".." in urlsplit(path).path.split("/")
+                or type(body) is not bytes or len(body) > MAX_BYTES):
+            raise Refused("invalid signed transport request")
+        limit = self._max_bytes if max_response_bytes is None else max_response_bytes
+        if type(limit) is not int or not 1 <= limit <= 1024 * 1024:
+            raise Refused("invalid signed transport response budget")
         url = ORIGIN + path
         sig = sign(url, self._handle.owner_id, self._handle.rules())
         headers = {"Accept": "application/json", "Content-Type": "application/json",
@@ -209,7 +237,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
         def bounded(chunk):
             nonlocal size
             size += len(chunk)
-            if size > self._max_bytes:
+            if size > limit:
                 raise NativeProtocolError("native HTTPS response exceeded its byte budget")
             chunks.append(chunk)
             return len(chunk)
@@ -219,16 +247,16 @@ class NativeProviderConnector(NativeLoopbackConnector):
                     proxy=self._handle.proxy_url, timeout=self._timeout,
                     allow_redirects=False, verify=True, accept_encoding="identity",
                     content_callback=bounded, discard_cookies=True)
-                if response.status_code != 200:
+                if response.status_code not in accepted_statuses:
                     raise NativeProtocolError("native HTTPS status is not delivery evidence")
                 if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
                     raise NativeProtocolError("encoded native HTTPS response is refused")
-                if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+                if response.status_code != 204 and response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                     raise NativeProtocolError("native HTTPS response must be JSON")
-                raw = b"".join(chunks)
-                if len(raw) > self._max_bytes:
+                raw = b"".join(chunks) if response.status_code != 204 else b"{}"
+                if len(raw) > limit:
                     raise NativeProtocolError("native HTTPS response exceeded its byte budget")
-                return raw
+                return (response.status_code, raw) if with_status else raw
         except (NativeProtocolError, Refused):
             raise
         except Exception:
@@ -262,16 +290,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
         self._ready()
         self._handle.current()
         from vault_still_store import MAX_STILL_BYTES, image_type
-        if (type(url) is not str or len(url) > 8192 or not url.isascii()
-                or any(ord(c) < 33 or ord(c) == 127 for c in url) or "\\" in url):
-            raise Refused("unsupported native image target")
-        try:
-            parsed = urlsplit(url)
-            if (parsed.scheme != "https" or not re.fullmatch(r"cdn[0-9]{0,2}\.onlyfans\.com", parsed.hostname or "")
-                    or parsed.port not in {None, 443} or parsed.username or parsed.password or parsed.fragment):
-                raise ValueError()
-        except ValueError:
-            raise Refused("unsupported native image target") from None
+        validate_cdn_url(url)
         from curl_cffi import requests
         chunks, size = [], 0
         def bounded(chunk):

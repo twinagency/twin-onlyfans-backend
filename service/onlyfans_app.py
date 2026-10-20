@@ -23,6 +23,7 @@ from onlyfans_commands.campaign_api import router as campaign_router,configured 
 from onlyfans_commands.content_api import router as content_router,configured as content_configured
 from onlyfans_commands.connection_api import router as connection_router,configured as connection_configured
 from onlyfans_commands.vault_api import router as vault_router
+from onlyfans_commands.vault_media_api import router as vault_media_router
 
 
 @asynccontextmanager
@@ -49,6 +50,7 @@ app.include_router(campaign_router)
 app.include_router(content_router)
 app.include_router(connection_router)
 app.include_router(vault_router)
+app.include_router(vault_media_router)
 
 
 @app.middleware("http")

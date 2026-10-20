@@ -88,27 +88,33 @@ def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
         return sum(executor.map(one, rows))
 
 
-def read_preview(store, tenant, account, media_id):
+def asset_scope(session, store, tenant, account, media_id):
+    """Shared canonical ownership check for cached stills and full video reads."""
     if (type(media_id) is not str or not media_id.isascii() or not media_id.isdecimal()
             or media_id.startswith("0") or len(media_id) > 19):
         raise InvalidVault("Use an exact vault media reference.")
     mid = _id(int(media_id))
+    runtime = store._runtime(session, tenant, account)
+    row = session.get(VaultItem, (account, mid))
+    observation = session.get(OfVaultObservation, (account, mid))
+    job = session.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
+    connection = session.execute(select(OfProviderConnection.binding_id, OfProviderConnection.owner_id,
+        OfProviderConnection.revision).where(OfProviderConnection.account_id == account)).first()
+    if (row is None or row.removed_at is not None or row.kind not in {"photo", "video"}
+            or not _provenance(row, observation, job, connection, runtime.binding_id, current_revision=False)):
+        raise Refused("vault preview unavailable")
+    raw = json.loads(row.raw_json)
+    if (raw.get("id") != mid or raw.get("type") != row.kind or raw.get("isDeleted") is True
+            or raw.get("isHidden") is True or raw.get("canView") is False):
+        raise Refused("vault preview unavailable")
+    return runtime, row, connection, raw
+
+
+def read_preview(store, tenant, account, media_id):
     with Session(store.engine) as session, session.begin():
-        runtime = store._runtime(session, tenant, account)
-        row = session.get(VaultItem, (account, mid))
-        observation = session.get(OfVaultObservation, (account, mid))
-        job = session.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
-        connection = session.execute(select(OfProviderConnection.binding_id, OfProviderConnection.owner_id,
-            OfProviderConnection.revision).where(OfProviderConnection.account_id == account)).first()
-        if (row is None or row.removed_at is not None or row.kind not in {"photo", "video"}
-                or not _provenance(row, observation, job, connection, runtime.binding_id, current_revision=False)):
-            raise Refused("vault preview unavailable")
-        # Permanent pictures remain readable when outgoing delivery is paused or
-        # session credentials expire. This cannot make an asset sellable.
-        raw = json.loads(row.raw_json)
-        if (raw.get("id") != mid or raw.get("type") != row.kind or raw.get("isDeleted") is True
-                or raw.get("isHidden") is True or raw.get("canView") is False):
-            raise Refused("vault preview unavailable")
+        runtime, row, connection, raw = asset_scope(session, store, tenant, account, media_id)
+        # Cached bytes remain readable after pause/expiry, never becoming sellable.
+        mid = row.media_id
         data = _read(account, runtime.binding_id, connection.owner_id, mid)
         if data is None: raise Refused("vault preview unavailable")
         return data, images.image_type(data)

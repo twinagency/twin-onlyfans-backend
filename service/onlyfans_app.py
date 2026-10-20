@@ -43,6 +43,8 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Twin OnlyFans read service", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+from onlyfans_read.agency_scope import AgencyScopeMiddleware
+app.add_middleware(AgencyScopeMiddleware)
 app.include_router(router)
 app.include_router(control_router)
 app.include_router(configuration_router)

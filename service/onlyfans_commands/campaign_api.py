@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import re
+from onlyfans_read.agency_scope import actor_allowed
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -127,7 +128,7 @@ async def create_campaign(request: Request, account_id: str):
         required = {"commandKey", "actor", "name", "body", "audience", "scheduledAt"}
         if set(body) not in (required, required | {"catalogItemId"}):
             raise InvalidCampaign("invalid campaign fields")
-        if type(body["actor"]) is not str or not re.fullmatch(r"op-session:[a-f0-9]{64}", body["actor"]):
+        if not actor_allowed(body["actor"]):
             raise InvalidCampaign("invalid campaign actor")
         result = await asyncio.to_thread(service.create, tenant, account_id,
             command_key=body["commandKey"], actor=body["actor"], name=body["name"], body=body["body"],
@@ -148,7 +149,7 @@ async def campaign_action(request: Request, account_id: str, campaign_id: str):
         if (set(body) != {"commandKey", "actor", "expectedRevision", "action"}
                 or not identity(campaign_id) or type(body["action"]) is not str):
             raise InvalidCampaign("invalid campaign action")
-        if type(body["actor"]) is not str or not re.fullmatch(r"op-session:[a-f0-9]{64}", body["actor"]):
+        if not actor_allowed(body["actor"]):
             raise InvalidCampaign("invalid campaign actor")
         result = await asyncio.to_thread(service.action, tenant, account_id, campaign_id,
             command_key=body["commandKey"], actor=body["actor"], expected_revision=body["expectedRevision"], action=body["action"])

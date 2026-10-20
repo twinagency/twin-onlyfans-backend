@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 
+from onlyfans_read.agency_scope import actor_allowed
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -152,7 +153,7 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
     if (type(expected_revision) is not int or not 0<=expected_revision<2**31-1 or
         type(expected_fingerprint) is not str or not re.fullmatch(r"[a-f0-9]{64}",expected_fingerprint) or
         type(command_key) is not str or not re.fullmatch(r"[a-f0-9]{64}",command_key) or
-        type(actor) is not str or not re.fullmatch(r"op-session:[a-f0-9]{64}",actor)):
+        not actor_allowed(actor)):
         raise InvalidConfiguration("The configuration version or command identity is invalid.")
     request_hash=digest(patch)
     with Session(store.engine) as s,s.begin():

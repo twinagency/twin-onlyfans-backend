@@ -66,6 +66,7 @@ import atomic_json
 import gdrive
 import media_prep
 import of_client
+from vault_media_limits import MAX_FILES, MAX_BYTES, MIN_FREE_BYTES
 
 log = logging.getLogger("of-relay.vault_upload")
 
@@ -81,7 +82,6 @@ STAGE_ROOT = SPOOL_ROOT / "incoming"
 # Caps. Per-file size is the one an operator actually tunes; the batch cap
 # exists because every file costs a carrier post, and a runaway batch is a
 # runaway number of scheduled posts on a real feed.
-MAX_FILES = int(os.environ.get("VAULT_UPLOAD_MAX_FILES") or 40)
 # THERE IS NO MEASURED SIZE CEILING. This used to sit at 200 MB, recorded as a
 # "MEASURED CEILING" because a 443 MB object drew 504s out of
 # `convert.onlyfans.com`. A HAR capture of the real OnlyFans web client says
@@ -102,10 +102,8 @@ MAX_FILES = int(os.environ.get("VAULT_UPLOAD_MAX_FILES") or 40)
 # `guard_space` + `MIN_FREE_BYTES` refuse a file that would eat the free-space
 # floor, which is the constraint that genuinely exists on this box.
 MAX_MB = int(os.environ.get("VAULT_UPLOAD_MAX_MB") or 4000)
-MAX_BYTES = MAX_MB * 1024 * 1024
 # Free space we refuse to drop below while spooling. A batch that fills the
 # disk breaks the whole relay, not just itself.
-MIN_FREE_BYTES = int(os.environ.get("VAULT_UPLOAD_MIN_FREE_MB") or 2048) * 1024 * 1024
 # How large a source we are willing to FETCH, as opposed to upload. A ceiling
 # ABOVE the upload ceiling is only ever worth having when the step in between
 # can make the file smaller — which is now only the opt-in compress hatch. A
@@ -142,7 +140,7 @@ RUN_STATUSES = ("running", "done", "failed", "interrupted")
 # dashboard's own union is written against.
 RUN_PHASES = ("collecting", "uploading", "mirroring", "finished")
 
-_RUN_ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}-\d{8}T\d{6}-[0-9a-f]{6}")
+_RUN_ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}-(?:\d{8}T\d{6}-[0-9a-f]{6}|native-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})")
 
 
 @dataclass(frozen=True)
@@ -332,24 +330,7 @@ def _save(state: dict) -> None:
     atomic_json.write_atomic(_state_path(state["run_id"]), state)
 
 
-def _intent_unresolved(item: dict) -> bool:
-    """True while an intent might name a carrier nothing has accounted for.
-
-    An intent is written before EVERY carrier POST, and is never cleared once
-    an id is learned -- so `carrier_intent` alone does not mean "outstanding".
-    Only an intent with no id is unaccounted for, and only until a completed
-    marker scan says OnlyFans has no such post (`carrier_scan_clear`).
-
-    This is the one definition. Pass 1's scan trigger used to spell it without
-    the id check, so every successfully imported file kept its account in the
-    hourly scan for the 48 h its run dir was retained -- a full paged walk of
-    the creator's schedule, hourly, for nothing.
-    """
-    if item.get("carrier_write_pending"):
-        return True
-    return bool(item.get("carrier_intent")
-                and not item.get("carrier_post_id")
-                and not item.get("carrier_scan_clear"))
+from vault_upload_state import intent_unresolved as _intent_unresolved
 
 
 def account_runs(account_id: str) -> list[dict]:
@@ -763,7 +744,7 @@ def landed_ids(state: dict) -> list[int]:
     return out
 
 
-def begin(account_id: str, *, list_id: int | None = None) -> str:
+def begin(account_id: str, *, list_id: int | None = None, run_id: str | None = None) -> str:
     """Claim the account and write the run record. Returns the run id.
 
     SYNCHRONOUS on purpose: the HTTP route calls this before it hands the work
@@ -773,7 +754,11 @@ def begin(account_id: str, *, list_id: int | None = None) -> str:
     completion with the panel showing the PREVIOUS run's summary.
     """
     aid = str(account_id)
-    run_id = f"{aid}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
+    run_id = run_id or f"{aid}-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}-{uuid.uuid4().hex[:6]}"
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise ValueError("invalid upload run reference")
+    if _state_path(run_id).exists():
+        raise RuntimeError("an existing upload run must be reviewed, never restarted")
     # In-process claim FIRST. Taking the file lock first meant a second run in
     # this same process found its own pid in the lockfile, treated it as stale,
     # cleared it — and then failed the `_live` check and released the lock the
@@ -907,7 +892,8 @@ def start(account_id: str, *, client, gate=None,
           list_id: int | None = None,
           run_id: str | None = None,
           on_landed: Callable[[list[int]], Any] | None = None,
-          limits: Limits | None = None) -> dict:
+          limits: Limits | None = None,
+          validate_item: Callable[[dict], Any] | None = None) -> dict:
     """Run a whole batch, synchronously. Returns the final state.
 
     BLOCKING and network-bound — the caller must hand this to a thread, never
@@ -953,6 +939,13 @@ def start(account_id: str, *, client, gate=None,
 
         todo = [i for i in items if i["status"] == "pending"]
         for n, item in enumerate(todo):
+            if validate_item is not None:
+                try:
+                    validate_item(item)
+                except Exception:
+                    item.update(status="failed", error="This file is not a supported photo or video.")
+                    _save(state)
+                    continue
             _upload_one(state, item, client, gate, limits)
             _save(state)
             # Space the CARRIERS, and only them. Sleeping after every item —
@@ -1446,7 +1439,7 @@ _SCHEDULE_MAX_PAGES = 50
 
 
 def _sweep_scheduled(client, account_id: str,
-                     recheck: Callable[[], set | None]) -> tuple[int, int, bool]:
+                     recheck: Callable[[], set | None], *, marker: str | None = None) -> tuple[int, int, bool]:
     """Reconcile against OnlyFans' OWN list of scheduled posts, DELETING the
     ones nobody has on record.
 
@@ -1506,7 +1499,7 @@ def _sweep_scheduled(client, account_id: str,
         pid = post.get("id") if isinstance(post, dict) else None
         if pid is None or str(pid) in known:
             continue
-        if of_client.VAULT_MARKER not in _marker_text(post):
+        if (of_client.VAULT_MARKER if marker is None else marker) not in _marker_text(post):
             continue
         # Re-asked per candidate, immediately before the irreversible bit. The
         # listing above may be a minute old by now.

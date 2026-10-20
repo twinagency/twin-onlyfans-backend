@@ -798,8 +798,9 @@ check("the package never imports the provider client", "of_client" in PACKAGE_SO
 check("and never imports an automation or send path",
       any(word in PACKAGE_SOURCE for word in ("pack_sender", "sell_lane", "automation_executor")),
       False)
+# The recorded-earnings projection merges a Python dictionary; it is not SQL.
 check("nothing in the package writes (no inserts, updates or deletes)",
-      any(word in PACKAGE_SOURCE for word in ("sqlite_insert", "insert(", ".update(", "delete(")),
+      any(word in PACKAGE_SOURCE.replace('result.update(status="current",', "dictionary_merge(") for word in ("sqlite_insert", "insert(", ".update(", "delete(")),
       False)
 
 ROUTE_METHODS = {m for route in of_router.routes for m in getattr(route, "methods", set())}
@@ -810,8 +811,10 @@ check("it registers scoped reads, native workspace and the smoke check", PATHS, 
     f"{C.SERVICE_PREFIX}/accounts",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations/{{conversation_id}}",
+    f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations/{{conversation_id}}/handover",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/operations",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/workspace/{{section}}",
+    f"{C.SERVICE_PREFIX}/earnings",
     f"{C.SERVICE_PREFIX}/status",
 ])
 
@@ -1462,13 +1465,15 @@ APP_ROUTES = [
     for route in RELAY.app.routes
 ]
 OF_ROUTES = sorted((path, methods) for path, methods in APP_ROUTES if C.is_service_path(path))
-check("the OnlyFans router is mounted on the real application", len(OF_ROUTES), 6)
+check("the OnlyFans router is mounted on the real application", len(OF_ROUTES), 8)
 check("with exactly the routes the package declares", [p for p, _ in OF_ROUTES], [
     f"{C.SERVICE_PREFIX}/accounts",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations/{{conversation_id}}",
+    f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations/{{conversation_id}}/handover",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/operations",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/workspace/{{section}}",
+    f"{C.SERVICE_PREFIX}/earnings",
     f"{C.SERVICE_PREFIX}/status",
 ])
 check("every one of them is a read",

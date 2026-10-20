@@ -387,7 +387,7 @@ with tempfile.TemporaryDirectory() as td:
                             None, vault_upload.Limits(max_bytes=16))
     check("32 bytes is refused by a 16-byte ceiling", small["status"], "skipped")
     check("the message quotes the OVERRIDE, not the module constant",
-          "over the 0 MB limit" in (small["error"] or ""), True)
+          "over the 0 MB per-file limit" in (small["error"] or ""), True)
     passing = vault_upload._item("photo.jpg", str(media), "local", 32)
     state["items"] = [passing]
     vault_upload._upload_one(state, passing, _FakeClient({"vault_id": 1, "ready": True}),
@@ -397,7 +397,7 @@ vault_upload.SPOOL_ROOT = _spool_root_orig
 
 check("the compression target is forced below the upload ceiling",
       vault_upload.Limits(max_bytes=100 * 1024 * 1024,
-                          target_bytes=300 * 1024 * 1024).checked().target_bytes
+                          target_bytes=300 * 1024 * 1024, compress_over_bytes=1).checked().target_bytes
       < 100 * 1024 * 1024, True)
 check("a sane pair is left alone",
       vault_upload.Limits(max_bytes=200, target_bytes=100).checked().target_bytes, 100)
@@ -417,10 +417,10 @@ check("oversized video counts against the batch cap", len(kept), 4)
 check("the overflow says why",
       "batch cap" in (plan[-1]["error"] or ""), True)
 
-huge = [vault_upload._item("dump.zip", "/tmp/dump.zip", "local", 900 * 1024 * 1024)]
+huge = [vault_upload._item("dump.zip", "/tmp/dump.zip", "local", vault_upload.MAX_BYTES + 1)]
 vault_upload._apply_caps(huge, vault_upload.Limits())
-check("a large non-video is skipped, and says it cannot be compressed",
-      huge[0]["status"] == "skipped" and "cannot be compressed" in huge[0]["error"],
+check("an over-limit non-video is skipped, and says ffmpeg cannot prepare it",
+      huge[0]["status"] == "skipped" and "is not video ffmpeg can prepare" in huge[0]["error"],
       True)
 
 

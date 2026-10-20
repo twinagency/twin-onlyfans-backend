@@ -2621,6 +2621,13 @@ class OFClient:
             out["thumbId"] = (claim["thumbs"][0] or {}).get("id")
         return out
 
+    def _require_upload_transport(self):
+        require_legacy_provider_role()
+
+    def _upload_part_session(self):
+        self._require_upload_transport()
+        return requests.Session(impersonate=IMPERSONATE)
+
     def upload_media(self, file_path: str | Path, *,
                      content_type: str | None = None,
                      check_dedupe: bool = True,
@@ -2762,8 +2769,8 @@ class OFClient:
             done: list[dict | None] = [None] * part_count
 
             def _put_part(n: int) -> None:
-                require_legacy_provider_role()
-                sess = requests.Session(impersonate=IMPERSONATE)
+                self._require_upload_transport()
+                sess = self._upload_part_session()
                 if self.http.proxies:
                     sess.proxies.update(self.http.proxies)
                 try:
@@ -2772,7 +2779,7 @@ class OFClient:
                         chunk = fh.read(_PART_SIZE)
                     last: Exception | None = None
                     for _ in range(3):      # same CONNECT-blip tolerance as _proxy_retry
-                        require_legacy_provider_role()
+                        self._require_upload_transport()
                         try:
                             r = sess.put(by_part[n], data=chunk,
                                          headers={"Content-Type": ct},

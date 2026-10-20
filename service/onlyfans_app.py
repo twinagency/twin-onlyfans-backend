@@ -23,6 +23,7 @@ from onlyfans_commands.campaign_api import router as campaign_router,configured 
 from onlyfans_commands.content_api import router as content_router,configured as content_configured
 from onlyfans_commands.connection_api import router as connection_router,configured as connection_configured
 from onlyfans_commands.vault_api import router as vault_router
+from onlyfans_commands.vault_media_api import router as vault_media_router
 
 
 @asynccontextmanager
@@ -42,6 +43,8 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Twin OnlyFans read service", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+from onlyfans_read.agency_scope import AgencyScopeMiddleware
+app.add_middleware(AgencyScopeMiddleware)
 app.include_router(router)
 app.include_router(control_router)
 app.include_router(configuration_router)
@@ -49,6 +52,7 @@ app.include_router(campaign_router)
 app.include_router(content_router)
 app.include_router(connection_router)
 app.include_router(vault_router)
+app.include_router(vault_media_router)
 
 
 @app.middleware("http")

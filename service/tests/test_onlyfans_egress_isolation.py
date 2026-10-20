@@ -274,6 +274,8 @@ for route in onlyfans_app.app.routes:
     methods = set(getattr(route, "methods", set()))
     if route.path.startswith("/onlyfans/control/v1/"):
         assert methods == {"POST"}, route.path
+    elif route.path == "/onlyfans/content/v1/accounts/{account_id}/vault/videos/{media_id}/stream":
+        assert methods == {"GET", "HEAD"}, route.path
     elif route.path.startswith(("/onlyfans/configuration/v1/", "/onlyfans/campaign/v1/",
                                 "/onlyfans/content/v1/", "/onlyfans/connection/v1/")):
         assert methods in ({"GET"},{"POST"}), route.path
@@ -315,7 +317,7 @@ else:
 
 def test_raw_http_mutation_sinks_require_review():
     """An added verb/raw session needs an explicit isolation test and review."""
-    tree = ast.parse((_SERVICE / "of_client.py").read_text())
+    tree = ast.parse((_SERVICE / "of_client.py").read_text(encoding="utf-8"))
     writes, sessions = set(), set()
 
     class Sinks(ast.NodeVisitor):
@@ -343,4 +345,4 @@ def test_raw_http_mutation_sinks_require_review():
         ("upload_media._put", "self.http.put"),
         ("upload_media._put_part", "sess.put"),
     }
-    assert sessions == {("__init__", "requests.Session"), ("upload_media._put_part", "requests.Session")}
+    assert sessions == {("__init__", "requests.Session"), ("_upload_part_session", "requests.Session")}

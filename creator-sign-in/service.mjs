@@ -19,7 +19,8 @@ export function allowedRequest(request){
   const of=u.hostname==='onlyfans.com'||u.hostname.endsWith('.onlyfans.com');
   const challenge=(u.hostname==='challenges.cloudflare.com'||u.hostname.endsWith('.challenges.cloudflare.com'))||u.hostname==='hcaptcha.com'||u.hostname.endsWith('.hcaptcha.com');
   const recaptcha=['www.google.com','www.gstatic.com','recaptcha.net','www.recaptcha.net'].includes(u.hostname)&&u.pathname.startsWith('/recaptcha/');
-  if(!of&&!challenge&&!recaptcha)return false;
+  const loginAsset=['GET','HEAD'].includes(request.method())&&((['abs-0.twimg.com','abs.twimg.com'].includes(u.hostname)&&u.pathname.startsWith('/login/'))||(u.hostname==='pbs.twimg.com'&&u.pathname.startsWith('/app_img/')));
+  if(!of&&!challenge&&!recaptcha&&!loginAsset)return false;
   if(request.isNavigationRequest()&&request.frame().parentFrame()===null&&u.origin!==OF)return false;
   if(of&&!['GET','HEAD','OPTIONS'].includes(request.method())){
     let p;try{p=decodeURIComponent(u.pathname);}catch{return false;}
@@ -117,10 +118,10 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
       allocation=operation.catch(()=>{});return operation;
     },
     status(s,identity){return view(lookup(s,identity));},
-    async frame(s,identity){const j=lookup(s,identity);return sequential(j,async()=>{
+    async frame(s,identity,{format='jpeg'}={}){if(!['jpeg','png'].includes(format))fail('invalid_frame_format',400);const j=lookup(s,identity);return sequential(j,async()=>{
       if(j.closed||j.phase!=='waiting'||!j.page)fail('frame_unavailable',409);
       if(now()-(j.lastFrame??0)<350)fail('frame_limit',429);j.lastFrame=now();
-      const frame=await j.page.screenshot({type:'jpeg',quality:95,timeout:3000});
+      const frame=await j.page.screenshot({type:format,...(format==='jpeg'?{quality:95}:{}),timeout:3000});
       if(frame.length>2*1024*1024)fail('frame_unavailable',409);return frame;
     });},
     async input(s,identity,event){const j=lookup(s,identity);return sequential(j,async()=>{
@@ -135,7 +136,7 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
       }
       else if(event?.type==='text'&&keys==='text,type'&&typeof event.text==='string'&&event.text.length>0&&Buffer.byteLength(event.text)<=512&&!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(event.text))await j.page.keyboard.insertText(event.text);
       else if(event?.type==='key'&&keys==='key,type'&&['Enter','Tab','Backspace','Delete','Escape','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(event.key))await j.page.keyboard.press(event.key);
-      else if(event?.type==='scroll'&&keys==='delta,type'&&typeof event.delta==='number'&&Number.isFinite(event.delta)&&Math.abs(event.delta)<=1000)await j.page.mouse.wheel(0,event.delta);
+      else if(event?.type==='scroll'&&['delta,type','delta,type,x,y'].includes(keys)&&typeof event.delta==='number'&&Number.isFinite(event.delta)&&Math.abs(event.delta)<=1000&&(keys==='delta,type'||[event.x,event.y].every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1))){if(keys==='delta,type,x,y')await j.page.mouse.move(event.x*WIDTH,event.y*HEIGHT);await j.page.mouse.wheel(0,event.delta);}
       else fail('invalid_input',400);
       if(j.page&&j.phase==='waiting')j.keyboard=await j.page.evaluate(()=>{const el=document.activeElement;if(!el||!['INPUT','TEXTAREA'].includes(el.tagName))return null;return el.getAttribute('type')==='password'?'password':el.getAttribute('type')==='email'?'email':'text';}).catch(()=>null);
       return view(j);

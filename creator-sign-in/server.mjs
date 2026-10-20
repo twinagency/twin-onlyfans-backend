@@ -21,7 +21,7 @@ const server=createServer(async(req,res)=>{
     if(!match)return json({ok:false,error:'not_found'},404);
     const [,identity,action]=match;
     if(!action&&req.method==='GET')return json({ok:true,attempt:service.status(scope,identity)});
-    if(action==='frame'&&req.method==='GET'){const frame=await service.frame(scope,identity);res.setHeader('Content-Type','image/jpeg');return res.end(frame);}
+    if(action==='frame'&&req.method==='GET'){const format=url.searchParams.get('format')??'jpeg',frame=await service.frame(scope,identity,{format});res.setHeader('Content-Type',format==='png'?'image/png':'image/jpeg');return res.end(frame);}
     if(action==='capture'&&req.method==='GET')return json({ok:true,capture:service.capture(scope,identity)});
     if(action==='input'&&req.method==='POST')return json({ok:true,attempt:await service.input(scope,identity,await body(req))});
     if(action==='cancel'&&req.method==='POST'){const b=await body(req);if(Object.keys(b).length)throw new SignInError('invalid_request',400);return json({ok:true,attempt:await service.cancel(scope,identity)});}

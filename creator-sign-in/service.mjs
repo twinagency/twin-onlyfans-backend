@@ -79,7 +79,7 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
       if(j.closed||j.deadline<=now()){await browser.close();return;}
       j.browser=browser;
       browser.on('disconnected',()=>{if(!j.closed&&!['ready','submitted'].includes(j.phase))void discard(j,'failed');});
-      j.context=await browser.newContext({viewport:{width:WIDTH,height:HEIGHT},acceptDownloads:false,serviceWorkers:'block'});
+      j.context=await browser.newContext({viewport:{width:WIDTH,height:HEIGHT},deviceScaleFactor:2,acceptDownloads:false,serviceWorkers:'block'});
       j.context.on('page',p=>{if(j.page&&p!==j.page)void p.close().catch(()=>{});});
       await j.context.route('**/*',async route=>{
         if(!allowedRequest(route.request()))return route.abort('blockedbyclient');
@@ -120,7 +120,7 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
     async frame(s,identity){const j=lookup(s,identity);return sequential(j,async()=>{
       if(j.closed||j.phase!=='waiting'||!j.page)fail('frame_unavailable',409);
       if(now()-(j.lastFrame??0)<350)fail('frame_limit',429);j.lastFrame=now();
-      const frame=await j.page.screenshot({type:'jpeg',quality:60,timeout:3000});
+      const frame=await j.page.screenshot({type:'jpeg',quality:95,timeout:3000});
       if(frame.length>2*1024*1024)fail('frame_unavailable',409);return frame;
     });},
     async input(s,identity,event){const j=lookup(s,identity);return sequential(j,async()=>{

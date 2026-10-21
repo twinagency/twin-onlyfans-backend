@@ -19,7 +19,8 @@ def test_opened_queued_link_history_does_not_record_payment(database):
     with Session(database[1]) as session:
         row=session.get(Message,('acc-a',101,10))
         assert row.body=='View the update.' and row.price_cents==1000
-        assert row.is_paid is False and row.purchased_at is None
+        # Historical opened state is not payment evidence; preserve unknown.
+        assert row.is_paid is None and row.purchased_at is None
         assert session.scalar(select(func.count()).select_from(Transaction))==0
         assert owned_media_in_session(session,'acc-a',101)==set()
     store.close()

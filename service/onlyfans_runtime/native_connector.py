@@ -135,7 +135,7 @@ class NativeLoopbackConnector:
         if before_id is not None:
             params["id"] = before_id
         path = API_PATH + f"/chats/{fan_id}/messages?" + urlencode(params)
-        rows, more = self._page(load(self._call("GET", path)), limit)
+        rows, more = self._page(load(self._call("GET", path), max_bytes=MAX_HISTORY_BYTES), limit)
         events = [message(row, owner_id=self._handle.owner_id, fan_id=fan_id, history=True) for row in rows]
         ids = [event.message_id for event in events]
         if ids != sorted(set(ids), reverse=True) or (before_id is not None and any(value >= before_id for value in ids)):

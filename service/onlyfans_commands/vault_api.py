@@ -70,14 +70,17 @@ async def get(request: Request, account_id: str):
         return context
     store, tenant = context
     try:
-        if not set(request.query_params) <= {"afterMediaId", "limit", "q", "kind", "folderId"} or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
+        if not set(request.query_params) <= {"afterMediaId", "limit", "q", "kind", "folderId", "includeSummary"} or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
             raise InvalidVault("That vault page request is invalid.")
+        if request.query_params.get("includeSummary", "0") not in {"0", "1"}:
+            raise InvalidVault("That vault summary option is invalid.")
         raw_limit = request.query_params.get("limit", "24")
         if not raw_limit.isascii() or not raw_limit.isdecimal() or len(raw_limit) > 2:
             raise InvalidVault("That vault page size is invalid.")
         value = await asyncio.to_thread(list_vault, store, tenant, account_id,
             after_media_id=request.query_params.get("afterMediaId"), limit=int(raw_limit),
-            query=request.query_params.get("q", ""), kind=request.query_params.get("kind", "all"),folder_id=request.query_params.get("folderId"))
+            query=request.query_params.get("q", ""), kind=request.query_params.get("kind", "all"),folder_id=request.query_params.get("folderId"),
+            include_summary=request.query_params.get("includeSummary") == "1")
         return response({"ok": True, "accountId": account_id, "vault": value})
     except Exception as exc:
         return failure(exc)

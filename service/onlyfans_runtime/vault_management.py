@@ -197,7 +197,9 @@ def _ready(row, observation, job, connection, binding):
     return True, None
 
 
-def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="", kind="all", folder_id=None):
+def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="", kind="all", folder_id=None, include_summary=False):
+    if type(include_summary) is not bool:
+        raise InvalidVault("Use an explicit summary option.")
     if type(limit) is not int or not 1 <= limit <= 48:
         raise InvalidVault("Use a vault page size between 1 and 48.")
     if after_media_id is not None:
@@ -212,6 +214,7 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
         if connection is not None and connection.binding_id != runtime.binding_id:
             raise Refused("scope unavailable")
         query = select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id > 0)
+        all_assets = query
         if folder_id is not None:
             from db.models import VaultFolderItem
             from .vault_editing import _folder,folder_reference
@@ -227,6 +230,22 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
             query = query.where(or_(*(func.lower(func.coalesce(field, "")).contains(search, autoescape=True)
                 for field in [VaultItem.search_text, VaultItem.description, VaultItem.video_description,
                               VaultItem.tags, VaultItem.notes, VaultItem.operator_overrides_json])))
+        summary = None
+        if include_summary:
+            from db.models import VaultFolder
+            def count(statement):
+                return select(func.count()).select_from(statement.subquery()).scalar_subquery()
+            # A single database statement: account-wide totals and filtered matches
+            # share one snapshot, independent of the current page cursor.
+            counts = s.execute(select(
+                count(all_assets), count(all_assets.where(VaultItem.kind == "photo")),
+                count(all_assets.where(VaultItem.kind == "video")), count(query),
+                select(func.count()).select_from(VaultFolder).where(
+                    VaultFolder.account_id == account, VaultFolder.deleted_at.is_(None)).scalar_subquery()
+            )).one()
+            total, photos, videos, matching, folders = counts
+            summary = {"total": total, "photos": photos, "videos": videos,
+                       "other": total - photos - videos, "matching": matching, "folders": folders}
         if after_media_id is not None:
             query = query.where(VaultItem.media_id > after_media_id)
         rows = s.scalars(query.order_by(VaultItem.media_id).limit(limit + 1)).all()
@@ -248,7 +267,8 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
         latest = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
             OfVaultSyncJob.binding_id == runtime.binding_id).order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
         return {"items": result, "nextCursor": str(rows[limit - 1].media_id) if len(rows) > limit else None,
-            "sync": job_view(latest) if latest else None, "connectionRevision": connection.revision if connection else None}
+            "sync": job_view(latest) if latest else None, "connectionRevision": connection.revision if connection else None,
+            **({"summary": summary} if include_summary else {})}
 
 
 def media_reference(value):

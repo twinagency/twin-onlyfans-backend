@@ -243,7 +243,7 @@ def load_worker_accounts(store,tenant,*,limit=32):
     """Backward-compatible first-cohort list; fleet workers retain the cursor."""
     return load_worker_cohort(store,tenant,limit=limit)[0]
 
-def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,facts_reader=None):
+def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,facts_reader=None,include_read_only=False):
     """Bounded keyset refresh; all HTTP happens outside DB transactions.
 
     The cursor describes scanned candidate IDs, including refused credentials,
@@ -252,6 +252,7 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
     """
     if os.environ.get('ONLYFANS_PROCESS_ROLE')!='worker':raise Refused('connection loading requires the worker role')
     if type(limit) is not int or not 1<=limit<=32:raise Refused('invalid worker account bound')
+    if type(include_read_only) is not bool:raise Refused('invalid inbox loading mode')
     if (type(tenant) is not str or tenant=='deployment' or not ID_PATTERN.fullmatch(tenant)
         or after_account is not None and (type(after_account) is not str or not ID_PATTERN.fullmatch(after_account))):
         raise Refused('invalid worker account cursor or tenant')
@@ -296,13 +297,17 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                 from .creator_facts import refresh
                 try:refresh(store,tenant,account,facts_reader)
                 except (Refused,ValueError,TypeError):pass
-            # Verification is a GET only. Explicit activation remains a
-            # separate operator command before history intake or delivery.
+            # Verified connections can load inbox history without an AI key or
+            # outgoing activation. Sending keeps its existing policy gate.
             with Session(store.engine) as s,s.begin():
                 runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
                 if (row is None or row.revision!=generation or row.binding_id!=runtime.binding_id
-                    or row.status!='verified' or row.expires_at<=utcnow() or not runtime.enabled or policy is None
-                    or not policy.enabled or policy.transport_kind!='native' or policy.revision!=policy_revision):continue
+                    or row.status!='verified' or row.verified_at is None or row.expires_at<=utcnow()):continue
+                outgoing=bool(runtime.enabled and policy is not None and policy.enabled
+                    and policy.transport_kind=='native' and policy.revision==policy_revision)
+            if not outgoing:
+                if include_read_only:result.append(WorkerAccount(account,None,transport,transport,generation))
+                continue
             from .provider_model import NativeProviderModel
             model=clear['model'];model=NativeProviderModel(account_id=account,model_id=model['modelId'],api_key=model['apiKey'],expires_at=expires) if model else None
             result.append(WorkerAccount(account,model,transport,transport))

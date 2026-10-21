@@ -43,12 +43,13 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
     """Refresh bounded ordered cohorts without starving accounts after row 32.
 
     Cursor advancement is over scanned candidates, including invalid/expired
-    credentials. The loader performs no history work for inactive accounts.
+    credentials. Verified inactive accounts import history without sending.
     The explicit dependency seams support network-free lifecycle tests.
     """
     if load_cohort is None:
         from onlyfans_runtime.connections import load_worker_cohort
-        load_cohort = load_worker_cohort
+        from functools import partial
+        load_cohort = partial(load_worker_cohort, include_read_only=True)
     if worker_type is None:
         from onlyfans_runtime.native_worker import NativeWorker
         worker_type = NativeWorker
@@ -81,7 +82,9 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
                 for account in accounts:
                     if stop.is_set():
                         break
-                    store.request_poll(tenant, account.account_id)
+                    revision=getattr(account,"read_connection_revision",None)
+                    store.request_poll(tenant, account.account_id,
+                        **({"connection_revision":revision} if revision is not None else {}))
                 if stop.is_set():
                     break
                 worker = worker_type(store, tenant, tuple(accounts),**({"facts_reader":facts_reader} if facts_reader is not None else {}))

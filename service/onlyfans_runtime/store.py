@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 import uuid
 
 from sqlalchemy import create_engine, or_, select, update
@@ -142,6 +143,25 @@ class Store:
             raise Refused("scope unavailable")
         return runtime
 
+    @staticmethod
+    def _read_connection(s, runtime, revision):
+        """Fence inactive inbox work to the verified connection we loaded.
+
+        Connection commands lock the same runtime before changing a revision.
+        Recheck at both claim and commit; no DB lock spans a provider request.
+        """
+        if revision is None:
+            return
+        if (os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker"
+                or type(revision) is not int or revision < 1):
+            raise Refused("invalid inbox connection revision")
+        from db.onlyfans_connection_models import OfProviderConnection
+        connection = s.get(OfProviderConnection, runtime.account_id)
+        if (connection is None or connection.binding_id != runtime.binding_id
+                or connection.revision != revision or connection.status != "verified"
+                or connection.verified_at is None or connection.expires_at <= utcnow()):
+            raise Refused("inbox connection is no longer current")
+
     def register(self, tenant_id, account_id, *, activated_at, enabled=False):
         if activated_at.tzinfo is not None:
             activated_at = activated_at.astimezone(timezone.utc).replace(tzinfo=None)
@@ -189,15 +209,16 @@ class Store:
         s.flush()
         return "accepted"
 
-    def drain(self, tenant_id, account_id, *, limit=PAGE_LIMIT):
+    def drain(self, tenant_id, account_id, *, limit=PAGE_LIMIT, connection_revision=None):
         if not 1 <= limit <= PAGE_LIMIT:
             raise Refused("invalid batch limit")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
+            self._read_connection(s, runtime, connection_revision)
             events = s.scalars(select(OfIngress).where(OfIngress.account_id == account_id,
                                OfIngress.status == "pending").order_by(OfIngress.received_at, OfIngress.event_key).limit(limit)).all()
             for row in events:
-                self._apply(s, runtime, row)
+                self._apply(s, runtime, row, history_only=connection_revision is not None)
             self._mark_current(s, runtime)
             return len(events)
 
@@ -212,7 +233,7 @@ class Store:
             s.flush()
         return state
 
-    def _apply(self, s, runtime, row):
+    def _apply(self, s, runtime, row, *, history_only=False):
         event = Event(**json.loads(row.payload)).normalized()
         account = runtime.account_id
         now = utcnow()
@@ -264,7 +285,7 @@ class Store:
             s.add(chat)
         if chat.last_message_at is None or (stamp, event.message_id) > (chat.last_message_at, chat.last_message_id or 0):
             chat.last_message_id, chat.last_message_at, chat.last_message_preview = event.message_id, stamp, event.body[:500]
-        historical = row.source == "import" or stamp < runtime.activated_at
+        historical = history_only or row.source == "import" or stamp < runtime.activated_at
         if new_fan and new_state and event.direction == "in" and not historical and runtime.enabled and not fan.is_muted:
             from db.onlyfans_connection_models import OfProviderConnection
             connection=s.get(OfProviderConnection,account)
@@ -480,10 +501,11 @@ class Store:
                 else:
                     scan.repeat_requested = True
 
-    def claim_recovery(self, tenant_id, account_id):
+    def claim_recovery(self, tenant_id, account_id, *, connection_revision=None):
         now = utcnow()
         with Session(self.engine) as s, s.begin():
-            self._runtime(s, tenant_id, account_id)
+            runtime = self._runtime(s, tenant_id, account_id)
+            self._read_connection(s, runtime, connection_revision)
             row = s.scalar(select(OfRecovery).where(OfRecovery.account_id == account_id,
                            or_(OfRecovery.status == "needed", (OfRecovery.status == "running") & (OfRecovery.lease_until <= now)))
                            .order_by(OfRecovery.last_complete_at.asc().nullsfirst(), OfRecovery.fan_id).limit(1))
@@ -493,7 +515,7 @@ class Store:
             row.lease_until = now + timedelta(seconds=LEASE_SECONDS)
             return RecoveryClaim(account_id, row.fan_id, row.generation, row.lease_token, row.high_water, row.upper_bound, row.before_id)
 
-    def recovery_page(self, tenant_id, claim: RecoveryClaim, events: list[Event], *, has_more: bool):
+    def recovery_page(self, tenant_id, claim: RecoveryClaim, events: list[Event], *, has_more: bool, connection_revision=None):
         if type(has_more) is not bool or len(events) > PAGE_LIMIT or (has_more and not events):
             raise Refused("invalid recovery page")
         normalized = [event.normalized() for event in events]
@@ -504,6 +526,7 @@ class Store:
             raise Refused("recovery cursor did not advance")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, claim.account_id)
+            self._read_connection(s, runtime, connection_revision)
             row = s.get(OfRecovery, (claim.account_id, claim.fan_id))
             if row is None or row.status != "running" or row.generation != claim.generation or row.lease_token != claim.token or row.lease_until <= utcnow():
                 raise Refused("stale recovery claim")
@@ -513,7 +536,10 @@ class Store:
                 row.upper_bound = max(ids, default=row.high_water)
             for event in normalized:
                 if event.message_id > row.high_water:
-                    self._record(s, runtime, event, event.payload(), "catchup", utcnow())
+                    # Imports stay historical even if activation happens before
+                    # their next drain. Reading never consents to an AI reply.
+                    source = "import" if connection_revision is not None else "catchup"
+                    self._record(s, runtime, event, event.payload(), source, utcnow())
             finished = not has_more or any(i <= row.high_water for i in ids)
             if finished:
                 row.high_water = max(row.high_water, row.upper_bound)
@@ -555,7 +581,7 @@ class Store:
             else:
                 scan.repeat_requested = True
 
-    def request_poll(self, tenant_id, account_id, *, min_interval_seconds=5):
+    def request_poll(self, tenant_id, account_id, *, min_interval_seconds=5, connection_revision=None):
         """Start a later read cycle only after the previous one completed.
 
         This never activates an account, resets a high-water mark, renews a send
@@ -566,7 +592,8 @@ class Store:
             raise Refused("invalid native polling interval")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
-            if not runtime.enabled:
+            self._read_connection(s, runtime, connection_revision)
+            if not runtime.enabled and connection_revision is None:
                 return False
             scan = s.get(OfScan, account_id)
             if scan is not None and (scan.status != "complete" or runtime.recovery_needed):
@@ -583,9 +610,10 @@ class Store:
             runtime.recovery_needed = True
             return True
 
-    def claim_scan(self, tenant_id, account_id):
+    def claim_scan(self, tenant_id, account_id, *, connection_revision=None):
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
+            self._read_connection(s, runtime, connection_revision)
             scan = s.get(OfScan, account_id)
             if scan is not None and not scan.known_fans_complete:
                 self._seed_known(s, scan)
@@ -609,7 +637,7 @@ class Store:
             scan.known_fan_after = ids[-1]
         scan.known_fans_complete = len(ids) < PAGE_LIMIT
 
-    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None):
+    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None, connection_revision=None):
         if len(fan_ids) > PAGE_LIMIT or len(set(fan_ids)) != len(fan_ids):
             raise Refused("invalid discovery page")
         for fan in fan_ids: _id(fan)
@@ -617,6 +645,7 @@ class Store:
             raise Refused("invalid discovery cursor")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, claim.account_id)
+            self._read_connection(s, runtime, connection_revision)
             scan = s.get(OfScan, claim.account_id)
             if scan is None or scan.status != "running" or scan.generation != claim.generation or scan.lease_token != claim.token or scan.lease_until <= utcnow():
                 raise Refused("stale discovery claim")

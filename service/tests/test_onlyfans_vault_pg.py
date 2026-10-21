@@ -243,6 +243,10 @@ def test_api_content_purpose_strict_json_scope_and_no_provider_on_request(databa
     headers = {"authorization": "Bearer synthetic-content-only", HEADER: SCHEMA}
     assert client.get(base + "/vault").status_code == 401
     assert client.get(base + "/vault", headers=headers).json()["vault"]["items"] == []
+    summary = client.get(base + "/vault?includeSummary=1", headers=headers)
+    assert summary.status_code == 200 and summary.json()["vault"]["summary"]["total"] == 0
+    assert client.get(base + "/vault?includeSummary=yes", headers=headers).status_code == 400
+    assert client.get(base + "/vault?includeSummary=1&includeSummary=1", headers=headers).status_code == 400
     assert client.get(base + "/vault?limit=999", headers=headers).status_code == 400
     assert client.get(base + "/vault?limit=1&limit=2", headers=headers).status_code == 400
     body = {"expectedConnectionRevision": 1, "commandKey": "c" * 64, "actor": ACTOR}
@@ -257,3 +261,26 @@ def test_api_content_purpose_strict_json_scope_and_no_provider_on_request(databa
     with Session(database[1]) as s, s.begin(): s.get(OfCreatorBinding, s.get(OfRuntime, account).binding_id).revoked_at = utcnow()
     assert client.post(base + "/vault/sync", headers=headers, json=body).status_code == 404
     store.close()
+
+
+
+def test_summary_counts_full_account_and_filtered_results_before_pagination(database, monkeypatch):
+    store, account, _, _ = sync(database, monkeypatch)
+    with Session(store.engine) as session, session.begin():
+        session.get(VaultItem, (account, 11)).description = "100% coast"
+        session.get(VaultItem, (account, 12)).description = "1000 coast"
+        from db.models import Account
+        session.add(Account(id="other-account")); session.flush()
+        session.add(VaultItem(account_id="other-account", media_id=99, kind="video", created_at=utcnow()))
+    result = list_vault(store, TENANT, account, limit=1, include_summary=True)
+    assert len(result["items"]) == 1 and result["nextCursor"] is not None
+    assert result["summary"] == {"total": 3, "photos": 2, "videos": 1, "other": 0, "matching": 3, "folders": 0}
+    assert "summary" not in list_vault(store, TENANT, account)
+    assert list_vault(store, TENANT, account, after_media_id="12", include_summary=True)["summary"] == result["summary"]
+    assert list_vault(store, TENANT, account, query="100%", include_summary=True)["summary"]["matching"] == 1
+    assert list_vault(store, TENANT, account, kind="video", include_summary=True)["summary"]["matching"] == 1
+    assert list_vault(store, TENANT, account, query="unmatched", include_summary=True)["summary"]["matching"] == 0
+    with pytest.raises(Refused):
+        list_vault(store, "unrelated-tenant", account, include_summary=True)
+    with pytest.raises(InvalidVault):
+        list_vault(store, TENANT, account, include_summary="1")

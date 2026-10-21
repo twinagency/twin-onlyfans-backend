@@ -221,3 +221,82 @@ def test_mixed_cohort_keeps_paging_and_never_adopts_unconnected_or_foreign_creat
     assert load_worker_cohort(store, "foreign-tenant", include_read_only=True) == ([], None, 0)
     with pytest.raises(Refused): store.request_poll("foreign-tenant", accounts[1], connection_revision=1)
     store.close()
+
+
+def test_new_connection_recovers_first_provider_failure_then_imports_and_keeps_syncing(database, monkeypatch):
+    from onlyfans_runtime.provider_connector import NativeProtocolError
+    settings(monkeypatch); store=Store(database[0]); account=provision(store)
+    save(store,account,data())
+    forbid_outgoing(monkeypatch)
+    calls=[]
+    def unavailable(self):
+        calls.append(self.account_id)
+        raise NativeProtocolError("synthetic unavailable provider")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",unavailable)
+    assert load_worker_cohort(store,TENANT,include_read_only=True)[0]==[]
+    with Session(database[1]) as s:
+        row=s.get(OfProviderConnection,account)
+        original=(row.sealed_config,row.expires_at,row.revision)
+        assert row.status=="pending" and row.verified_at is None
+        assert row.last_error=="provider_connection_check_retry"
+        assert s.get(OfScan,account).status=="needed"
+    assert load_worker_cohort(store,TENANT,include_read_only=True)[0]==[]
+    assert calls==[account]
+    with Session(database[1]) as s,s.begin():
+        s.get(OfProviderConnection,account).updated_at=utcnow()-timedelta(minutes=2)
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",lambda self:calls.append(self.account_id))
+    history=[incoming()]
+    monkeypatch.setattr(NativeProviderConnector,"chats",lambda self,**kw:ChatPage([901],None))
+    monkeypatch.setattr(NativeProviderConnector,"messages",lambda self,**kw:MessagePage(history,False))
+    for _ in range(4):assert entry.run_loop(store,TENANT,threading.Event(),once=True,observe=lambda _:None)==0
+    with Session(database[1]) as s,s.begin():
+        row=s.get(OfProviderConnection,account)
+        assert row.status=="verified" and row.last_error is None
+        assert (row.sealed_config,row.expires_at,row.revision)==original
+        runtime=s.get(OfRuntime,account)
+        assert not runtime.enabled and not runtime.recovery_needed and runtime.last_sync_at is not None
+        runtime.last_sync_at=utcnow()-timedelta(seconds=6)
+    history.insert(0,incoming(20))
+    for _ in range(3):assert entry.run_loop(store,TENANT,threading.Event(),once=True,observe=lambda _:None)==0
+    with Session(database[1]) as s:
+        assert s.scalar(select(func.count()).select_from(Message))==2
+        assert s.get(Chat,(account,901)).last_message_id==20
+        assert s.get(OfConversationState,(account,901)).mode=="paused"
+        for table in (OfWork,OfTextIntent,GrokCall,Transaction):
+            assert s.scalar(select(func.count()).select_from(table))==0
+    assert calls==[account,account]
+    store.close()
+
+
+@pytest.mark.parametrize("outcome",["authentication","expired","paused","replaced"])
+def test_first_verification_retry_respects_auth_expiry_and_connection_changes(database,monkeypatch,outcome):
+    from onlyfans_runtime.provider_connector import NativeProtocolError,NativeAuthenticationError
+    settings(monkeypatch);store=Store(database[0]);account=provision(store)
+    payload=data();save(store,account,payload)
+    def unavailable(self):raise NativeProtocolError("synthetic temporary failure")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",unavailable)
+    assert load_worker_cohort(store,TENANT,include_read_only=True)[0]==[]
+    if outcome=="paused":change(store,account,"pause",1,"c"*64)
+    elif outcome=="replaced":
+        save(store,account,payload,1,"c"*64)
+        with Session(database[1]) as s:
+            row=s.get(OfProviderConnection,account)
+            assert row.revision==2 and row.status=="pending" and row.last_error is None
+        store.close();return
+    elif outcome=="expired":
+        with Session(database[1]) as s,s.begin():s.get(OfProviderConnection,account).expires_at=utcnow()-timedelta(seconds=1)
+    else:
+        with Session(database[1]) as s,s.begin():s.get(OfProviderConnection,account).updated_at=utcnow()-timedelta(minutes=2)
+    calls=[]
+    def rejected(self):
+        calls.append(self.account_id)
+        raise NativeAuthenticationError("synthetic rejected identity")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",rejected)
+    assert load_worker_cohort(store,TENANT,include_read_only=True)[0]==[]
+    assert load_worker_cohort(store,TENANT,include_read_only=True)[0]==[]
+    assert calls==([account] if outcome=="authentication" else [])
+    with Session(database[1]) as s:
+        row=s.get(OfProviderConnection,account)
+        assert row.status=={"authentication":"failed","paused":"paused","expired":"expired"}[outcome]
+        assert not s.get(OfRuntime,account).enabled
+    store.close()

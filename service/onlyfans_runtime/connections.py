@@ -17,7 +17,7 @@ from db.onlyfans_connection_models import OfProviderConnection,OfConnectionChang
 from onlyfans_read.contract import ID_PATTERN
 from .store import Refused,utcnow
 from .native_context import canonical
-from .provider_connector import session_from_capture,NativeProviderConnector,NativeAuthenticationError
+from .provider_connector import session_from_capture,NativeProviderConnector,NativeAuthenticationError,NativeProtocolError
 
 # The stored deadline is a renewable verification lease, not a forced logout.
 # Short in-memory transport deadlines and all existing send gates remain intact.
@@ -296,7 +296,7 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                 check_due=renewable and (row.verified_at<=now-CONNECTION_CHECK_INTERVAL
                     or row.expires_at<=now+CONNECTION_CHECK_INTERVAL
                     or row.last_error=='provider_connection_check_retry')
-                if (check_due and row.last_error=='provider_connection_check_retry'
+                if ((status=='pending' or check_due) and row.last_error=='provider_connection_check_retry'
                         and row.updated_at>now-CONNECTION_RETRY_INTERVAL):
                     # A still-valid lease preserves activation intent; it does
                     # not permit inbox/model/send work to evade retry pacing.
@@ -353,9 +353,11 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                 runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
                 if (row and generation is not None and row.revision==generation
                         and row.sealed_config==snapshot and row.status!='paused'):
-                    if renewable and not isinstance(error,NativeAuthenticationError):
-                        # A network/provider outage is not a logout. Retry later;
-                        # the unchanged lease still blocks work if it elapses.
+                    if ((renewable or (row.status=='pending' and isinstance(error,NativeProtocolError)))
+                            and not isinstance(error,NativeAuthenticationError)):
+                        # A transient first verification must not strand a new
+                        # connection. Retain its original capture deadline and
+                        # pace retries; only verified leases may be renewed.
                         row.last_error='provider_connection_check_retry';row.updated_at=utcnow()
                     else:
                         row.status='failed';runtime.enabled=False

@@ -82,3 +82,27 @@ def test_every_supported_cent_value_survives_existing_native_float_serialization
     for price in range(20001):
         dispatch = grant(body="Hello", price_cents=price)
         assert cents(load(request(dispatch))["price"]) == price
+
+
+@pytest.mark.parametrize("tag", ["strong", "b", "em", "i", "u", "s", "strike", "del", "span", "code", "sub", "sup"])
+def test_inline_history_preserves_visible_text_without_affecting_send_evidence(tag):
+    value = native_message(text=f'<p><{tag} class="ignored" onclick="ignored()">Hello &amp; <a href="https://synthetic.invalid">welcome</a><br/>back</{tag}></p>')
+    event = message(value, owner_id=OWNER, fan_id=101, history=True)
+    assert event.body == "Hello & welcome\nback"
+    with pytest.raises(NativeProtocolError):
+        message(value, owner_id=OWNER, fan_id=101)
+
+def test_nested_history_formatting_keeps_words_and_paragraphs():
+    value = native_message(text='<p><strong>Hello <em>there</em></strong></p><p><a href="x"><span>Next</span></a></p>')
+    assert message(value, owner_id=OWNER, fan_id=101, history=True).body == "Hello there\nNext"
+
+@pytest.mark.parametrize("html", [
+    "<p><strong>unfinished</p>",
+    "<p><a href='x'><a href='y'>nested links</a></a></p>",
+    "<p><style>hidden</style></p>",
+    "<p><iframe>hidden</iframe></p>",
+    "<p>" + "<span>"*65 + "deep" + "</span>"*65 + "</p>",
+])
+def test_history_inline_support_keeps_structure_and_active_content_checks(html):
+    with pytest.raises(NativeProtocolError):
+        message(native_message(text=html), owner_id=OWNER, fan_id=101, history=True)

@@ -160,6 +160,44 @@ def test_readonly_drain_of_old_pending_intake_does_not_create_reply_work(databas
     store.close()
 
 
+def test_unavailable_provider_cooldown_fences_cached_readers_then_recovers(database, monkeypatch):
+    store, account, _ = verified(database, monkeypatch)
+    item = readonly(store)
+    forbid_outgoing(monkeypatch)
+    with Session(database[1]) as s, s.begin():
+        row=s.get(OfProviderConnection,account)
+        original_expiry=row.expires_at
+        row.last_error="provider_connection_check_retry";row.updated_at=utcnow()
+    def forbidden(*_,**__):pytest.fail("provider cooldown was bypassed")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",forbidden)
+    monkeypatch.setattr(NativeProviderConnector,"chats",forbidden)
+    monkeypatch.setattr(NativeProviderConnector,"messages",forbidden)
+    cohort,cursor,scanned=load_worker_cohort(store,TENANT,include_read_only=True)
+    assert cohort==[] and cursor is None and scanned==1
+    assert NativeWorker(store,TENANT,(item,)).step().held==1
+    with Session(database[1]) as s, s.begin():
+        row=s.get(OfProviderConnection,account)
+        assert row.expires_at==original_expiry and row.revision==1
+        assert s.get(OfScan,account).status=="needed"
+        assert not s.get(OfRuntime,account).enabled
+        row.updated_at=utcnow()-timedelta(minutes=2)
+    calls=[]
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",lambda self:calls.append(self.account_id))
+    monkeypatch.setattr(NativeProviderConnector,"chats",lambda self,**kw:ChatPage([901],None))
+    monkeypatch.setattr(NativeProviderConnector,"messages",lambda self,**kw:MessagePage([incoming()],False))
+    recovered=readonly(store)
+    assert calls==[account]
+    worker=NativeWorker(store,TENANT,(recovered,))
+    for _ in range(3):assert worker.step().errors==0
+    with Session(database[1]) as s:
+        assert s.get(OfProviderConnection,account).last_error is None
+        assert s.get(Message,(account,901,10)) is not None
+        assert not s.get(OfRuntime,account).enabled
+        assert s.scalar(select(func.count()).select_from(OfWork))==0
+        assert s.scalar(select(func.count()).select_from(OfTextIntent))==0
+    store.close()
+
+
 def test_mixed_cohort_keeps_paging_and_never_adopts_unconnected_or_foreign_creators(database, monkeypatch):
     settings(monkeypatch); store = Store(database[0]); accounts = []
     monkeypatch.setattr(NativeProviderConnector, "verify_identity", lambda self: None)

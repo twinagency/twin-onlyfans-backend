@@ -510,9 +510,11 @@ class Store:
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
             self._read_connection(s, runtime, connection_revision)
+            # Lowest attempt generation first: an expired failing low-ID history
+            # must yield to untouched histories. Lease/cursor fences stay intact.
             row = s.scalar(select(OfRecovery).where(OfRecovery.account_id == account_id,
                            or_(OfRecovery.status == "needed", (OfRecovery.status == "running") & (OfRecovery.lease_until <= now)))
-                           .order_by(OfRecovery.last_complete_at.asc().nullsfirst(), OfRecovery.fan_id).limit(1))
+                           .order_by(OfRecovery.generation.asc(), OfRecovery.last_complete_at.asc().nullsfirst(), OfRecovery.fan_id).limit(1))
             if row is None:
                 return None
             row.status, row.generation, row.lease_token = "running", row.generation + 1, str(uuid.uuid4())

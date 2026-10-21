@@ -26,7 +26,7 @@ from vault_mirror import MIRROR_REFRESH_FIELDS, row_values
 from vault_ai_effective import effective_value
 from .content_management import digest, editable, validate_patch
 from .native_context import canonical
-from .native_protocol import NativeProtocolError, load
+from .native_protocol import MAX_VAULT_BYTES, NativeProtocolError, load
 from .store import Refused, _id, utcnow
 
 PAGE_SIZE = 24
@@ -64,7 +64,7 @@ def parse_vault_page(raw, *, owner_id):
     or not at all; no skipped malformed row can silently advance its cursor.
     """
     _id(owner_id)
-    load(raw)  # duplicate keys, UTF-8, nonfinite literals and 64KiB boundary
+    load(raw, max_bytes=MAX_VAULT_BYTES)  # strict JSON with a separate bounded vault-page budget
     try:
         value = json.loads(raw)
         json.dumps(value, allow_nan=False)

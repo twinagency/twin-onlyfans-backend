@@ -17,12 +17,13 @@ from .text_delivery import Accepted,Dispatch,_stamp
 
 API_PATH="/api2/v2"
 MAX_BYTES=65536
+MAX_VAULT_BYTES=1024*1024
 
 
 class NativeProtocolError(ValueError):pass
 
 
-def load(raw):
+def load(raw, *, max_bytes=MAX_BYTES):
     def unique(pairs):
         result={}
         for key,value in pairs:
@@ -31,7 +32,8 @@ def load(raw):
         return result
     def nonfinite(_):raise NativeProtocolError("nonfinite native response")
     try:
-        if type(raw) is not bytes or len(raw)>MAX_BYTES:raise NativeProtocolError("invalid native response size")
+        if (type(max_bytes) is not int or not 1<=max_bytes<=MAX_VAULT_BYTES
+            or type(raw) is not bytes or len(raw)>max_bytes):raise NativeProtocolError("invalid native response size")
         value=json.loads(raw.decode("utf-8"),object_pairs_hook=unique,parse_float=Decimal,parse_constant=nonfinite)
     except (ValueError,UnicodeError,RecursionError) as exc:raise NativeProtocolError("invalid native JSON response") from exc
     if type(value) is not dict:raise NativeProtocolError("native response must be an object")

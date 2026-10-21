@@ -8,6 +8,7 @@ of this subset is a separate release gate.
 from decimal import Decimal,InvalidOperation
 import hashlib
 import html
+from html.parser import HTMLParser
 import json
 import re
 
@@ -68,6 +69,64 @@ def plain_text(value):
     return value
 
 
+class _HistoryText(HTMLParser):
+    """Keep visible paragraph/link text; attributes never become CRM authority."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts, self.stack = [], []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "br" and self.stack:
+            self.parts.append("\n")
+        elif tag == "p" and not self.stack:
+            if self.parts and not self.parts[-1].endswith("\n"):
+                self.parts.append("\n")
+            self.stack.append(tag)
+        elif tag == "a" and self.stack == ["p"]:
+            self.stack.append(tag)
+        else:
+            raise NativeProtocolError("unsupported native history formatting")
+
+    def handle_endtag(self, tag):
+        if not self.stack or self.stack.pop() != tag:
+            raise NativeProtocolError("unbalanced native history formatting")
+
+    def handle_startendtag(self, tag, attrs):
+        if tag != "br":
+            raise NativeProtocolError("unsupported native history formatting")
+        self.handle_starttag(tag, attrs)
+
+    def handle_data(self, data):
+        if not self.stack and data.strip():
+            raise NativeProtocolError("unsupported native history formatting")
+        if self.stack:
+            self.parts.append(data)
+
+    def handle_comment(self, data):
+        raise NativeProtocolError("unsupported native history formatting")
+
+    def handle_decl(self, decl):
+        raise NativeProtocolError("unsupported native history formatting")
+
+    def handle_pi(self, data):
+        raise NativeProtocolError("unsupported native history formatting")
+
+
+def history_text(value):
+    try:
+        return plain_text(value)
+    except NativeProtocolError:
+        if (type(value) is not str or len(value.encode()) > 20000
+                or not value.startswith("<p>") or not value.endswith("</p>")):
+            raise NativeProtocolError("unsupported native history formatting") from None
+    parser = _HistoryText()
+    parser.feed(value)
+    parser.close()
+    if parser.stack:
+        raise NativeProtocolError("unbalanced native history formatting")
+    return "".join(parser.parts)
+
+
 def message(value,*,owner_id,fan_id,history=False):
     try:
         _id(owner_id);_id(fan_id)
@@ -96,7 +155,8 @@ def message(value,*,owner_id,fan_id,history=False):
         stamp=value["createdAt"]
         if type(stamp) is not str:raise ValueError()
         _stamp(stamp)
-        return Event(fan_id,identity,stamp,"out" if sender==owner_id else "in",plain_text(value["text"]),ids,price).normalized()
+        text = history_text(value["text"]) if history else plain_text(value["text"])
+        return Event(fan_id,identity,stamp,"out" if sender==owner_id else "in",text,ids,price).normalized()
     except (ValueError,TypeError,KeyError,OverflowError,AttributeError) as exc:raise NativeProtocolError("native message scope or evidence is unsupported") from exc
 
 

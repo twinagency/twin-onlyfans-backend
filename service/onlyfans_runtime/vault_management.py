@@ -172,6 +172,12 @@ def _provenance(row, observation, job, connection, binding, *, current_revision=
 
 
 def _ready(row, observation, job, connection, binding):
+    """Whether a verified native vault identity may be curated for an offer.
+
+    The native message body contains vault media IDs, never CDN source URLs.
+    Protected videos legitimately have no progressive full-file URL. Playback
+    has its own source/cache checks in vault_video; it grants no offer rights.
+    """
     if row.removed_at is not None:
         return False, "removed"
     if row.kind not in {"photo", "video"}:
@@ -190,9 +196,6 @@ def _ready(row, observation, job, connection, binding):
     if "isReady" not in raw:
         return False, "readiness_unknown"
     if raw.get("isReady") is not True or raw.get("isProcessing") is True or raw.get("canView") is False:
-        return False, "not_ready"
-    files = raw.get("files")
-    if type(files) is not dict or type(files.get("full")) is not dict or not files["full"].get("url"):
         return False, "not_ready"
     return True, None
 
@@ -484,3 +487,4 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 job.status = "pending"
             processed += 1
     return processed
+

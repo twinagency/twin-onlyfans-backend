@@ -197,6 +197,22 @@ def _ready(row, observation, job, connection, binding):
     return True, None
 
 
+def _library_summary(session, account, all_assets, filtered_assets):
+    from db.models import VaultFolder
+    def count(statement):
+        return select(func.count()).select_from(
+            statement.with_only_columns(VaultItem.media_id).subquery()).scalar_subquery()
+    # One SQL snapshot. Neither page cursor nor page size affects library totals.
+    total, photos, videos, matching, folders = session.execute(select(
+        count(all_assets), count(all_assets.where(VaultItem.kind == "photo")),
+        count(all_assets.where(VaultItem.kind == "video")), count(filtered_assets),
+        select(func.count()).select_from(VaultFolder).where(
+            VaultFolder.account_id == account, VaultFolder.deleted_at.is_(None)).scalar_subquery()
+    )).one()
+    return {"total": total, "photos": photos, "videos": videos,
+            "other": total - photos - videos, "matching": matching, "folders": folders}
+
+
 def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="", kind="all", folder_id=None, include_summary=False):
     if type(include_summary) is not bool:
         raise InvalidVault("Use an explicit summary option.")
@@ -232,20 +248,7 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
                               VaultItem.tags, VaultItem.notes, VaultItem.operator_overrides_json])))
         summary = None
         if include_summary:
-            from db.models import VaultFolder
-            def count(statement):
-                return select(func.count()).select_from(statement.subquery()).scalar_subquery()
-            # A single database statement: account-wide totals and filtered matches
-            # share one snapshot, independent of the current page cursor.
-            counts = s.execute(select(
-                count(all_assets), count(all_assets.where(VaultItem.kind == "photo")),
-                count(all_assets.where(VaultItem.kind == "video")), count(query),
-                select(func.count()).select_from(VaultFolder).where(
-                    VaultFolder.account_id == account, VaultFolder.deleted_at.is_(None)).scalar_subquery()
-            )).one()
-            total, photos, videos, matching, folders = counts
-            summary = {"total": total, "photos": photos, "videos": videos,
-                       "other": total - photos - videos, "matching": matching, "folders": folders}
+            summary = _library_summary(s, account, all_assets, query)
         if after_media_id is not None:
             query = query.where(VaultItem.media_id > after_media_id)
         rows = s.scalars(query.order_by(VaultItem.media_id).limit(limit + 1)).all()

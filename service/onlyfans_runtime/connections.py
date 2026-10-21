@@ -6,12 +6,12 @@ provider requests, and uploading a capture never enables outgoing messages.
 from __future__ import annotations
 import base64,hashlib,json,os,re,uuid
 from datetime import datetime,timedelta,timezone
-from sqlalchemy import select,text
+from sqlalchemy import select,text,func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from db.models import Account,AccountAiConfig,OfCreatorBinding
-from db.onlyfans_models import OfRuntime
+from db.onlyfans_models import OfRuntime,OfScan,OfRecovery,OfIngress
 from db.onlyfans_delivery_models import OfDeliveryPolicy,OfDeliveryPolicyChange
 from db.onlyfans_connection_models import OfProviderConnection,OfConnectionChange
 from onlyfans_read.contract import ID_PATTERN
@@ -121,7 +121,7 @@ def get_capture_context(store,tenant,creator,account=None):
     return {'accountId':account,'ownerId':owner,'proxyUrl':proxy,'fingerprint':capture_network_fingerprint(proxy)}
 
 
-def get_connection(store,tenant,account):
+def get_connection(store,tenant,account,*,include_sync=False):
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account)
         row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
@@ -131,8 +131,8 @@ def get_connection(store,tenant,account):
         if row is not None and row.expires_at>now:
             try:_open(row,tenant)
             except Refused:credentials_valid=False
-        return {'accountId':account,'revision':row.revision if row else 0,
-            'status':('expired' if row and row.expires_at<=now else row.status if credentials_valid else 'failed') if row else 'unconfigured',
+        result={'accountId':account,'revision':row.revision if row else 0,
+            'status':('expired' if row and row.expires_at<=now and row.status not in {'paused','failed'} else row.status if credentials_valid else 'failed') if row else 'unconfigured',
             'ownerId':str(row.owner_id) if row else None,'expiresAt':row.expires_at.isoformat()+'Z' if row else None,
             'verifiedAt':row.verified_at.isoformat()+'Z' if row and row.verified_at else None,
             'lastError':('stored_credentials_unavailable' if not credentials_valid else row.last_error) if row else None,
@@ -140,6 +140,15 @@ def get_connection(store,tenant,account):
             'policyRevision':policy.revision if policy else 0,'usedUnits':policy.used_units if policy else 0,
             'limitUnits':policy.limit_units if policy else 0,'mediaEnabled':bool(policy and policy.media_enabled),
             'automateNewConversations':bool(row and row.automate_new_conversations)}
+        if include_sync:
+            scan=s.get(OfScan,account)
+            recovery=dict(s.execute(select(OfRecovery.status,func.count()).where(OfRecovery.account_id==account).group_by(OfRecovery.status)).all())
+            quarantined=s.scalar(select(func.count()).select_from(OfIngress).where(OfIngress.account_id==account,OfIngress.status=='quarantined'))
+            result['sync']={'discoveryStatus':scan.status if scan else 'not_started','pages':scan.page_count if scan else 0,
+                'conversationsComplete':recovery.get('complete',0),'conversationsRemaining':sum(count for state,count in recovery.items() if state!='complete'),
+                'pendingMessages':runtime.pending_events,'quarantinedMessages':quarantined,'recoveryRequired':runtime.recovery_needed,
+                'lastCompleteSyncAt':runtime.last_sync_at.isoformat()+'Z' if runtime.last_sync_at else None}
+        return result
 
 def save_connection(store,tenant,account,*,payload,expected_revision,command_key,actor,session_only=False,expected_network_fingerprint=None):
     _validate_identity(command_key,actor,expected_revision)

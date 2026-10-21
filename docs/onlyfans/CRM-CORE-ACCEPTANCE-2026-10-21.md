@@ -21,7 +21,7 @@ Dashboard player checks passed at 320, 390 and 1440 px, including the protected 
 
 ## Pending code/release
 
-1. Dashboard PR220 passed all CI and merged as `7c0c85f30a6f2c5962f9ca018461956608044ee3`. Deployment run `39592761340` successfully restarted the app and proved the running commit. Agency earnings/private photos and Moxy signup/photo-upload/cleanup checks passed. The final all-creator catalogue video audit was still running at this checkpoint; do not report the entire workflow green.
+1. Dashboard PR220 passed all CI and merged as `7c0c85f30a6f2c5962f9ca018461956608044ee3`. Deployment run `39592761340` successfully restarted the app and proved the running commit. Agency earnings/private photos and Moxy signup/photo-upload/cleanup checks passed. The final catalogue audit completed across all 30 creators: 1,313 videos checked, 1,309 passed and the same four previously identified damaged files failed. The workflow therefore concluded failure at that audit; the running release remains verified. Public Ava verification was skipped after the failed audit.
 2. Backend PR10: history-only extraction of visible paragraph, anchor and line-break text. Source `37ea5d494f91b6dc2e7b3df027b97670df63df47` built image `sha256:3866af0d0b089962db794848cc534deffa0d8a850c26f27b7653bec344420f78` and passed candidate unit checks. Its PostgreSQL and live checks are not confirmed. Do not mark it ready or deploy it until those pass.
 3. PR10 leaves strict send acceptance and financial/ownership intake unchanged. URLs and attributes are discarded rather than treated as financial or identity evidence.
 

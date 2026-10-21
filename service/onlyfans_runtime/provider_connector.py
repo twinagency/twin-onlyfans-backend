@@ -17,12 +17,16 @@ from urllib.parse import urlencode, urlsplit
 from of_signer import sign
 from onlyfans_read.contract import ID_PATTERN
 from .native_connector import NativeLoopbackConnector
-from .native_protocol import API_PATH, MAX_BYTES, MAX_VAULT_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, request
+from .native_protocol import API_PATH, MAX_BYTES, MAX_VAULT_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, request, load
 from .store import Refused, _id
 from .text_delivery import Dispatch, TextAuthority
 
 ORIGIN = "https://onlyfans.com"
 APP_TOKEN = "33d57ade8c02dbc5a333db99ff9ae26a"
+
+
+class NativeAuthenticationError(NativeProtocolError):
+    """The provider rejected authentication or returned another account."""
 
 
 def validate_cdn_url(url):
@@ -216,6 +220,11 @@ class NativeProviderConnector(NativeLoopbackConnector):
             return self._signed_request(method, path, body, max_response_bytes=MAX_HISTORY_BYTES)
         return self._signed_request(method, path, body)
 
+    def verify_identity(self):
+        value = load(self._call("GET", API_PATH + "/users/me"))
+        if type(value.get("id")) is not int or value["id"] != self._handle.owner_id:
+            raise NativeAuthenticationError("native provider owner mismatch")
+
     def _signed_request(self, method, path, body=b"", *, max_response_bytes=None,
                         accepted_statuses=(200,), with_status=False):
         """Shared one-attempt signed wire call; each caller owns its narrow route authority."""
@@ -255,6 +264,8 @@ class NativeProviderConnector(NativeLoopbackConnector):
                     proxy=self._handle.proxy_url, timeout=self._timeout,
                     allow_redirects=False, verify=True, accept_encoding="identity",
                     content_callback=bounded, discard_cookies=True)
+                if response.status_code in {401, 403}:
+                    raise NativeAuthenticationError("native provider rejected authentication")
                 if response.status_code not in accepted_statuses:
                     raise NativeProtocolError("native HTTPS status is not delivery evidence")
                 if response.headers.get("content-encoding", "identity").strip().lower() != "identity":

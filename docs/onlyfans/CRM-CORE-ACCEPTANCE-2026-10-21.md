@@ -5,11 +5,11 @@ This checkpoint records verified work and remaining release gates. It does not m
 ## Verified live
 
 - Backend PR9 merged into `codex/onlyfans-agency-access-20261020` at `05870595d440f76821cc44a0a0246bae96f128d5`.
-- API and worker run source `17f52f991232861e6d64d31e80435ab0da58c555`, image `sha256:6e3420d6a89489396d0ade75a78f914398f76e2a3f9211e571ad33e33072a274`.
+- API and worker now run source `a20276dc16f651024af2253f1a454f1b8c4a5ffa`, image `sha256:d1d368dace1e02afb68cd4614616bfb4fded735d7fc5136ac40173502dab5eee`. PR10 merged at `a006016f9ac569b2bf19e8617ef331f0f16c3f65` after CI and isolated acceptance passed. Prior source was `17f52f991232861e6d64d31e80435ab0da58c555`.
 - Schema remains `0088_native_vault_media`. Environment, persistent mounts and outgoing policy state were preserved. No messaging activation was performed.
 - Selected account `of-176774528`: 1,064 assets, including 515 photos, 491 videos and 58 unsupported audio/GIF assets. All 1,006 photo/video identities passed offer-curation readiness after separating provider readiness from progressive playback URLs.
 - The protected-video status route returns `protected_playback_not_supported`; it does not claim playback works.
-- Live chats can be read with the larger bounded history budget. A linked queued message still blocks full page interpretation under this deployed revision. Inbox readiness remains unproven.
+- The larger bounded history budget and history-only visible paragraph/link extraction are deployed. Full inbox readiness remains unproven: current connection revision 2 expired at 11:37:08 UTC / 21:37 Brisbane, so the live provider follow-up correctly made no request. Reconnect is required, followed by a vault sync for the new revision.
 - Read-only native ledger samples within the supported 90-day window parsed. A one-day request returned older rows and was correctly refused by that narrower parser window. Exact message linkage and a complete live scan remain unverified.
 - No live fan send, purchase, refund or upload was performed in this continuation.
 
@@ -22,7 +22,7 @@ Dashboard player checks passed at 320, 390 and 1440 px, including the protected 
 ## Pending code/release
 
 1. Dashboard PR220 passed all CI and merged as `7c0c85f30a6f2c5962f9ca018461956608044ee3`. Deployment run `39592761340` successfully restarted the app and proved the running commit. Agency earnings/private photos and Moxy signup/photo-upload/cleanup checks passed. The final catalogue audit completed across all 30 creators: 1,313 videos checked, 1,309 passed and the same four previously identified damaged files failed. The workflow therefore concluded failure at that audit; the running release remains verified. Public Ava verification was skipped after the failed audit.
-2. Backend PR10: history-only extraction of visible paragraph, anchor and line-break text. Source `37ea5d494f91b6dc2e7b3df027b97670df63df47` built image `sha256:3866af0d0b089962db794848cc534deffa0d8a850c26f27b7653bec344420f78` and passed candidate unit checks. Its PostgreSQL and live checks are not confirmed. Do not mark it ready or deploy it until those pass.
+2. Backend PR10 is merged and deployed. Exact source a20276d/image d1d368d passed 139 units and 32 isolated PostgreSQL/native-connector tests. An initial new test incorrectly expected imported payment state false; the implementation correctly preserves unknown (NULL). The corrected test also proves no transaction or owned media. The original unused candidate was pruned during dashboard deployment; the rebuilt final image was source-hash verified and fully retested. No claim is made that live provider history passed after this release: the account session is expired.
 3. PR10 leaves strict send acceptance and financial/ownership intake unchanged. URLs and attributes are discarded rather than treated as financial or identity evidence.
 
 ## Remaining core work
@@ -57,3 +57,11 @@ Resume using:
 ## Resume attempt at approximately 11:50 UTC
 
 The laptop answered one diagnostic at 11:43 UTC, but its heartbeat subsequently became stale again. The new isolated-test helper `C:/Users/conta/AppData/Local/Temp/twin-crm-history-resume-pg.cjs` was successfully written. Its start-process request timed out without returning a PID or call ID. A subsequent read found no `twin-crm-history-resume-command.json` metadata file. Inspect owned sessions before retrying: successful SSM submission is still unconfirmed. Read-only metadata inspection call `4d636599-b26a-4dd1-99d6-e296e105f4e0` completed with ENOENT. No new backend deployment was performed.
+
+## Latest completed release and next gate — approximately 12:14 UTC
+
+- `d1f8932b-312c-4406-adc0-de25757f575b`: final corrected candidate unit and PostgreSQL acceptance succeeded (139 + 32).
+- `de0c7526-4280-491d-bbb2-5be100954d2a`: API/worker release succeeded, preserving environment, volumes, schema and disabled outgoing controls; no active upload/cleanup was interrupted.
+- `58b2a562-3e49-45f6-a2d0-b400bf27c0a7`: live account inspection succeeded; account session expired, no provider GET attempted.
+- Next independent implementation: read-only history preparation must be separated from outgoing activation. Both connections.load_worker_cohort and Store.request_poll currently gate on runtime.enabled; preserve send authority and import/payment semantics when changing this. This feature is not implemented by PR10.
+- Reconcile Windows owned checkout before a new push: its HEAD is stale relative to merged PR10 and the corrected PG assertion.

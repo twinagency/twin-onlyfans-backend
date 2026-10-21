@@ -79,12 +79,18 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
             if stop.is_set():
                 break
             if accounts:
+                from onlyfans_runtime.store import Refused
                 for account in accounts:
                     if stop.is_set():
                         break
                     revision=getattr(account,"read_connection_revision",None)
-                    store.request_poll(tenant, account.account_id,
-                        **({"connection_revision":revision} if revision is not None else {}))
+                    try:
+                        store.request_poll(tenant, account.account_id,
+                            **({"connection_revision":revision} if revision is not None else {}))
+                    except Refused:
+                        # Scope/health can change after cohort loading. The
+                        # worker fences that account too; still poll the rest.
+                        continue
                 if stop.is_set():
                     break
                 worker = worker_type(store, tenant, tuple(accounts),**({"facts_reader":facts_reader} if facts_reader is not None else {}))

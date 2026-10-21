@@ -1,5 +1,7 @@
 # Automatic connected inbox sync — 22 October 2026 (Brisbane)
 
+Current release: [AGENCY-LAUNCH-2026-10-22.md](AGENCY-LAUNCH-2026-10-22.md) supersedes the deployed source and live status below; the wider unfinished scope remains open.
+
 This supersedes the release and inbox-status sections of CRM-CORE-ACCEPTANCE-2026-10-21.md. The wider media/payment/CRM scope in that checkpoint and DELIVERY-PLAN-2026-10-19.md remains open.
 
 ## User priority

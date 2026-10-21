@@ -19,7 +19,7 @@ from test_onlyfans_foundation_pg import database,seed
 from test_onlyfans_text_delivery_pg import ACCOUNT,TENANT
 from test_onlyfans_provider_adapters import OWNER,MODEL,capture,expires
 from db.models import Account,AccountAiConfig,Fan,GrokCall,Message,OfCreatorBinding,OfConversationState
-from db.onlyfans_models import OfRuntime,OfScan,OfRecovery
+from db.onlyfans_models import OfRuntime,OfScan,OfRecovery,OfIngress
 from db.onlyfans_delivery_models import OfDeliveryPolicy,OfTextIntent
 from db.onlyfans_connection_models import OfProviderConnection,OfConnectionChange
 from db.schema import SchemaMismatch,check_schema
@@ -173,7 +173,7 @@ def test_expiry_and_failed_identity_never_activate_or_expose_provider_error(data
     assert 'secret' not in json.dumps(public) and public['outgoingEnabled'] is False
     with Session(database[1]) as session,session.begin():session.get(OfProviderConnection,account).expires_at=utcnow()-timedelta(seconds=1)
     assert load_worker_accounts(store,TENANT)==[]
-    assert get_connection(store,TENANT,account)['status']=='expired'
+    assert get_connection(store,TENANT,account)['status']=='failed'
     with pytest.raises(Refused):change(store,account,'verify',1,'c'*64)
     with pytest.raises(Refused):change(store,account,'activate',1,'c'*64,LIMITS)
     monkeypatch.setattr(module,'session_from_capture',lambda **kw:(_ for _ in ()).throw(Refused('synthetic expired capture')))
@@ -428,7 +428,11 @@ def test_connection_api_separate_credentials_strict_json_redacted_ack_and_revoca
     ack=client.post(path,headers=headers,json=body);assert ack.status_code==200,ack.text
     assert client.post(path,headers=headers,json=body).json()==ack.json()
     result=client.get(path,headers=headers);assert result.status_code==200 and 'no-store' in result.headers['cache-control']
-    assert 'synthetic-session' not in ack.text+result.text
+    assert 'sync' not in result.json()['connection']
+    progress=client.get(path+'?progress=1',headers=headers)
+    assert progress.status_code==200 and progress.json()['connection']['sync']['lastCompleteSyncAt'] is None
+    assert client.get(path+'?progress=1',headers={HEADER:SCHEMA,'Authorization':'Bearer synthetic-read'}).status_code==401
+    assert 'synthetic-session' not in ack.text+result.text+progress.text
     with Session(database[1]) as session,session.begin():
         runtime=session.get(OfRuntime,account);session.get(OfCreatorBinding,runtime.binding_id).revoked_at=utcnow()
     assert client.get(path,headers=headers).status_code==404
@@ -445,3 +449,44 @@ def test_connection_audit_is_immutable_and_checked_at_startup(database,monkeypat
     with database[1].begin() as connection:
         connection.exec_driver_sql('ALTER TABLE of_connection_change DISABLE TRIGGER of_connection_immutable')
         with pytest.raises(SchemaMismatch,match='append-only protection'):check_schema(connection)
+
+
+def test_opt_in_sync_progress_uses_canonical_work_without_mutation_or_false_completion(database,monkeypatch):
+    settings(monkeypatch);store=Store(database[0]);account=provision(store);save(store,account,data())
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:pytest.fail('Progress reads must not call provider'))
+    assert 'sync' not in get_connection(store,TENANT,account)
+    initial=get_connection(store,TENANT,account,include_sync=True)['sync']
+    assert initial['pages']==0 and initial['conversationsRemaining']==0 and initial['lastCompleteSyncAt'] is None
+    with Session(database[1]) as s,s.begin():
+        runtime=s.get(OfRuntime,account);scan=s.get(OfScan,account)
+        scan.status='complete';scan.page_count=4;scan.known_fans_complete=True
+        runtime.pending_events=1;runtime.recovery_needed=True
+        s.add(OfRecovery(account_id=account,fan_id=101,status='complete'))
+        s.add(OfRecovery(account_id=account,fan_id=102,status='needed'))
+        s.add(OfIngress(account_id=account,event_key='f'*64,binding_id=runtime.binding_id,fan_id=102,
+            message_id=1001,source='history',payload='{}',status='quarantined',reason='synthetic_conflict',received_at=utcnow()))
+        audits=s.scalar(select(func.count()).select_from(OfConnectionChange))
+    view=get_connection(store,TENANT,account,include_sync=True)
+    assert view['sync']=={'discoveryStatus':'complete','pages':4,'conversationsComplete':1,'conversationsRemaining':1,
+        'pendingMessages':1,'quarantinedMessages':1,'recoveryRequired':True,'lastCompleteSyncAt':None}
+    for secret in ('synthetic-session','proxy-secret','synthetic-hash','payload','event_key'):
+        assert secret not in json.dumps(view)
+    with pytest.raises(Refused):get_connection(store,'foreign-tenant',account,include_sync=True)
+    with Session(database[1]) as s:
+        assert s.get(OfRuntime,account).pending_events==1
+        assert s.scalar(select(func.count()).select_from(OfConnectionChange))==audits
+        assert s.get(OfProviderConnection,account).status=='pending'
+    store.close()
+
+
+def test_elapsed_deadline_does_not_hide_paused_or_failed_connection(database,monkeypatch):
+    store,account,payload=verified(database,monkeypatch)
+    with Session(database[1]) as s,s.begin():
+        row=s.get(OfProviderConnection,account);row.status='paused';row.expires_at=utcnow()-timedelta(seconds=1)
+    assert get_connection(store,TENANT,account)['status']=='paused'
+    assert get_connection(store,TENANT,account,include_sync=True)['outgoingEnabled'] is False
+    with Session(database[1]) as s,s.begin():
+        row=s.get(OfProviderConnection,account);row.status='failed';row.last_error='provider_authentication_required'
+    public=get_connection(store,TENANT,account)
+    assert public['status']=='failed' and public['lastError']=='provider_authentication_required'
+    store.close()

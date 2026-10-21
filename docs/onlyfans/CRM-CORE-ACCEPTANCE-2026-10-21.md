@@ -94,3 +94,26 @@ Read-only inspected diagnostics:
 - `C:/Users/conta/AppData/Local/Temp/twin-provider-error-kind.json`
 
 No workflow permissions, IAM policies, tokens, proxy routing or fan-messaging settings were expanded to complete these checks.
+
+## Continued work: provider cooldown and independent CI acceptance
+
+PR13 https://github.com/jesse98/twin-onlyfans-backend/pull/13 is merged at `9febe8376ccbc1d27940ea587771aeacf488c44e`. Final code source is `283aa9f2049c875869e3d832f0d0c7c2326502db`. **This change is not deployed yet.** The last confirmed production image remains the PR12 image listed above.
+
+Confirmed code defect: when a transient provider check failed, the loader's one-minute retry branch set `check_due=False` for an unexpired saved lease, then returned the account for normal inbox work. That allowed fresh work to evade the intended cooldown. The loader now returns no work during the cooldown, cached import-only readers reject unhealthy connections at claim/commit, and an account becoming unavailable after cohort loading no longer aborts the other accounts' poll requests. Saved activation intent, leases, policy allowances, revisions and fixed network routing are preserved.
+
+The existing `scripts/run-service-tests.py` now runs four native PostgreSQL acceptance modules on GitHub-hosted CI using an owned temporary cluster. It disables TCP, uses a private Unix socket, verifies the data directory and listener setting before testing, and stops/removes only that cluster. Existing explicit local `--postgres` behavior is preserved. No workflow permissions or production credentials were added.
+
+CI run `39611651391` passed both jobs on the exact final source. Python job `119261764102` ran 58 PostgreSQL cases: renewal 11, connections 28, read-only inbox 15, worker entry 4. These include cooldown enforcement, cached-reader fencing, automatic recovery without activation, and creator isolation. Existing script/unit checks passed too. Forty other PostgreSQL modules remain outside this critical CI smoke selection; this is not a full-suite claim.
+
+Deployment status and blocker:
+- Windows Desktop Commander went offline again, last seen about 27 minutes before the final inventory check. AWS access had worked immediately before it went offline; another AWS sign-in has not been requested or shown necessary.
+- The next detailed 503 diagnostic file write, call `4b39aaf1-f2d7-48c8-a395-a0c93daab926`, definitively failed with device timeout. No new provider request was submitted for that diagnostic. Inspect file existence before reuse.
+- The offline device prevented the additional checks for a configured proxy, bounded error-code/label indicators and Retry-After. Those findings remain unknown; do not invent a cause for the Cloudflare 503.
+- The private sign-in service closes its browser after capture. Native reads use the saved capture and fixed route; no alternate browser/proxy/session has been substituted or verification bypassed.
+- Existing GitHub workflows provide CI/build artifacts but no native live-deployment path. Do not repurpose workflow tokens or expand their permissions.
+
+Prepared local work, reproducible from the committed source:
+- `/workspace/scratch/6b5196797599/crm-retry/` contains the current source snapshot and `build-acceptance.py` test-only host harness.
+- `/tmp/twin-provider-backoff-test.json` is the prepared SSM build/acceptance payload. It embeds only the seven changed source/test-runner files, starts from the exact PR12 image, verifies copied source hashes, retains the immutable candidate image, runs production-Python unit checks and an isolated database acceptance subset, and records candidate metadata. It has not been copied to the offline laptop or executed.
+- Exact production-image checks and a guarded release still need to run after the remote connection is restored. Use the existing deployment helper hash, release lock, active-media/cleanup gate, and preserved environment/mount/schema/outgoing-policy checks already recorded here.
+- No new image was built or live service changed in this continuation. No live fan send, upload, model call or purchase/refund was initiated. Inbox acceptance remains blocked, with the last observed provider response HTTP 503.

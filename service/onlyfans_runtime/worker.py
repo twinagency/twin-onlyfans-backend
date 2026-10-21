@@ -47,7 +47,12 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
         discovered = 1
     recovery = store.claim_recovery(tenant_id, account_id, **scope)
     if recovery:
-        page = reader.messages(fan_id=recovery.fan_id, before_id=recovery.before_id, limit=PAGE_LIMIT)
+        try:
+            page = reader.messages(fan_id=recovery.fan_id, before_id=recovery.before_id, limit=PAGE_LIMIT)
+        except Exception as error:
+            from .history_diagnostics import record_history_failure
+            record_history_failure(error)
+            raise
         store.recovery_page(tenant_id, recovery, page.events, has_more=page.has_more, **scope)
         recovered = 1
     return ReadProgress(applied, discovered, recovered)

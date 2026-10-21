@@ -85,7 +85,9 @@ class _HistoryText(HTMLParser):
             if self.parts and not self.parts[-1].endswith("\n"):
                 self.parts.append("\n")
             self.stack.append(tag)
-        elif tag == "a" and self.stack == ["p"]:
+        elif tag in self.INLINE and self.stack:
+            self.stack.append(tag)
+        elif tag == "a" and self.stack and "a" not in self.stack:
             self.stack.append(tag)
         else:
             raise NativeProtocolError("unsupported native history formatting")

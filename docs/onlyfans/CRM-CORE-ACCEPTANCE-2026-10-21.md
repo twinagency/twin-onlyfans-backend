@@ -21,7 +21,7 @@ Dashboard player checks passed at 320, 390 and 1440 px, including the protected 
 
 ## Pending code/release
 
-1. Dashboard PR220: protected-playback explanation. The first shared overview test-loader correction passed on Node 24 and failed on Node 22. The final correction bundles the pure fixture with the existing esbuild dependency. Head `62ba97874bd8fe10a6cf37db1d1fe71ecfe73121` awaits CI; it is not deployed.
+1. Dashboard PR220 passed all CI and merged as `7c0c85f30a6f2c5962f9ca018461956608044ee3`. Deployment run `39592761340` successfully restarted the app and proved the running commit. Agency earnings/private photos and Moxy signup/photo-upload/cleanup checks passed. The final all-creator catalogue video audit was still running at this checkpoint; do not report the entire workflow green.
 2. Backend PR10: history-only extraction of visible paragraph, anchor and line-break text. Source `37ea5d494f91b6dc2e7b3df027b97670df63df47` built image `sha256:3866af0d0b089962db794848cc534deffa0d8a850c26f27b7653bec344420f78` and passed candidate unit checks. Its PostgreSQL and live checks are not confirmed. Do not mark it ready or deploy it until those pass.
 3. PR10 leaves strict send acceptance and financial/ownership intake unchanged. URLs and attributes are discarded rather than treated as financial or identity evidence.
 
@@ -53,3 +53,7 @@ Resume using:
 - Dashboard checkout: `C:/Users/conta/Documents/ChatGPT/TWIN CLONE CREATION/twin-dashboard-crm-core-20261021`. It was at `31dba9d` with a local test-loader edit. GitHub now contains the final fixture bundling correction at `62ba978`; reconcile the owned checkout before pushing.
 - Pending helper: `C:/Users/conta/AppData/Local/Temp/twin-crm-history-pg-and-loader.cjs`. Verify file existence and owned sessions first. Its intended SSM metadata file is `twin-crm-history-final-command.json`.
 - No workflow permissions, IAM policies, tokens or fan-messaging settings should be expanded to resume this work.
+
+## Resume attempt at approximately 11:50 UTC
+
+The laptop answered one diagnostic at 11:43 UTC, but its heartbeat subsequently became stale again. The new isolated-test helper `C:/Users/conta/AppData/Local/Temp/twin-crm-history-resume-pg.cjs` was successfully written. Its start-process request timed out without returning a PID or call ID. A subsequent read found no `twin-crm-history-resume-command.json` metadata file. Inspect owned sessions before retrying: successful SSM submission is still unconfirmed. Read-only metadata inspection call `4d636599-b26a-4dd1-99d6-e296e105f4e0` completed with ENOENT. No new backend deployment was performed.

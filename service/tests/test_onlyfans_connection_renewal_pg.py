@@ -107,7 +107,7 @@ def test_temporary_failure_retries_without_disabling_saved_intent_or_extending_u
         assert _open(row,TENANT)==original and row.last_error=='provider_connection_check_retry'
         assert s.get(OfRuntime,account).enabled is True
     assert get_connection(store,TENANT,account)['outgoingEnabled'] is (not elapsed)
-    load_worker_accounts(store,TENANT)
+    assert load_worker_accounts(store,TENANT)==[], 'a valid lease cannot bypass an unavailable-provider cooldown'
     assert calls==[account], 'retry cooldown must bound provider calls'
     with Session(store.engine) as s,s.begin():
         s.get(OfProviderConnection,account).updated_at=utcnow()-timedelta(minutes=2)

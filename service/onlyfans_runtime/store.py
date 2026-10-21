@@ -159,6 +159,7 @@ class Store:
         connection = s.get(OfProviderConnection, runtime.account_id)
         if (connection is None or connection.binding_id != runtime.binding_id
                 or connection.revision != revision or connection.status != "verified"
+                or connection.last_error is not None
                 or connection.verified_at is None or connection.expires_at <= utcnow()):
             raise Refused("inbox connection is no longer current")
 

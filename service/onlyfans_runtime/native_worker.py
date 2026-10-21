@@ -26,6 +26,8 @@ class WorkerAccount:
     model:object
     transport:object
     reader:object=None
+    # A revision selects import-only execution, never planning or delivery.
+    read_connection_revision:int|None=None
 
 
 @dataclass
@@ -61,6 +63,10 @@ class NativeWorker:
                 or any(type(item) is not WorkerAccount for item in accounts)):
             raise Refused("bounded explicit worker accounts are required")
         for item in accounts:
+            if item.read_connection_revision is not None and (
+                    type(item.read_connection_revision) is not int or item.read_connection_revision < 1
+                    or type(item.transport) is not NativeProviderConnector or item.model is not None):
+                raise Refused("read-only workers require a native connection revision and no model")
             if (type(item.account_id) is not str or not ID_PATTERN.fullmatch(item.account_id)
                     or (item.model is not None and type(item.model) not in {SyntheticNativeModel, NativeProviderModel})
                     or type(item.transport) not in {SyntheticTextTransport,LoopbackTextTransport,NativeLoopbackConnector,NativeProviderConnector}
@@ -142,6 +148,12 @@ class NativeWorker:
             for account in selected:
                 if stop.is_set():break
                 try:
+                    if account.read_connection_revision is not None:
+                        from .worker import read_step
+                        progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,
+                            connection_revision=account.read_connection_revision)
+                        report.ingress+=progress.applied
+                        continue
                     # Historical acceptance is repaired even after a binding is
                     # revoked; this path grants no new planning or send rights.
                     report.expired+=self.authority.expire_dispatches(self.tenant_id,account.account_id,limit=4)

@@ -33,21 +33,22 @@ class BoundReader(Protocol):
     def messages(self, *, fan_id: int, before_id: int | None, limit: int) -> MessagePage: ...
 
 
-def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader) -> ReadProgress:
+def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader, *, connection_revision=None) -> ReadProgress:
     if reader.account_id != account_id:
         raise Refused("reader scope mismatch")
-    applied = store.drain(tenant_id, account_id)
+    scope = {"connection_revision": connection_revision} if connection_revision is not None else {}
+    applied = store.drain(tenant_id, account_id, **scope)
     discovered = recovered = 0
-    scan = store.claim_scan(tenant_id, account_id)
+    scan = store.claim_scan(tenant_id, account_id, **scope)
     if scan:
         # No database transaction remains open across this network boundary.
         page = reader.chats(cursor=scan.cursor, limit=PAGE_LIMIT)
-        store.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor)
+        store.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor, **scope)
         discovered = 1
-    recovery = store.claim_recovery(tenant_id, account_id)
+    recovery = store.claim_recovery(tenant_id, account_id, **scope)
     if recovery:
         page = reader.messages(fan_id=recovery.fan_id, before_id=recovery.before_id, limit=PAGE_LIMIT)
-        store.recovery_page(tenant_id, recovery, page.events, has_more=page.has_more)
+        store.recovery_page(tenant_id, recovery, page.events, has_more=page.has_more, **scope)
         recovered = 1
     return ReadProgress(applied, discovered, recovered)
 

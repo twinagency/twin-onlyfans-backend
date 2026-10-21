@@ -17,7 +17,13 @@ from db.onlyfans_connection_models import OfProviderConnection,OfConnectionChang
 from onlyfans_read.contract import ID_PATTERN
 from .store import Refused,utcnow
 from .native_context import canonical
-from .provider_connector import session_from_capture,NativeProviderConnector
+from .provider_connector import session_from_capture,NativeProviderConnector,NativeAuthenticationError
+
+# The stored deadline is a renewable verification lease, not a forced logout.
+# Short in-memory transport deadlines and all existing send gates remain intact.
+CONNECTION_LEASE = timedelta(hours=6)
+CONNECTION_CHECK_INTERVAL = timedelta(minutes=15)
+CONNECTION_RETRY_INTERVAL = timedelta(minutes=1)
 
 def encryption_key():
     raw=os.environ.get('ONLYFANS_CONNECTION_KEY','')
@@ -243,7 +249,7 @@ def load_worker_accounts(store,tenant,*,limit=32):
     """Backward-compatible first-cohort list; fleet workers retain the cursor."""
     return load_worker_cohort(store,tenant,limit=limit)[0]
 
-def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,facts_reader=None):
+def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,facts_reader=None,include_read_only=False):
     """Bounded keyset refresh; all HTTP happens outside DB transactions.
 
     The cursor describes scanned candidate IDs, including refused credentials,
@@ -252,6 +258,7 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
     """
     if os.environ.get('ONLYFANS_PROCESS_ROLE')!='worker':raise Refused('connection loading requires the worker role')
     if type(limit) is not int or not 1<=limit<=32:raise Refused('invalid worker account bound')
+    if type(include_read_only) is not bool:raise Refused('invalid inbox loading mode')
     if (type(tenant) is not str or tenant=='deployment' or not ID_PATTERN.fullmatch(tenant)
         or after_account is not None and (type(after_account) is not str or not ID_PATTERN.fullmatch(after_account))):
         raise Refused('invalid worker account cursor or tenant')
@@ -271,38 +278,67 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
     for account in ids:
         if stop is not None and stop.is_set():break
         scanned+=1;last_scanned=account
-        generation=None
+        generation=None;renewable=False;snapshot=None
         try:
             with Session(store.engine) as s,s.begin():
                 runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
                 if row is None or row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
-                if row.expires_at<=utcnow():
+                now=utcnow()
+                renewable=(row.status in {'verified','expired'} and row.verified_at is not None
+                    and row.last_error in {None,'provider_connection_check_retry'})
+                if row.status not in {'pending','verified','expired'}:continue
+                if row.expires_at<=now and not renewable:
                     row.status='expired';runtime.enabled=False;continue
-                clear=_open(row,tenant);generation=row.revision
+                if row.status=='expired' and not renewable:continue
+                clear=_open(row,tenant);generation=row.revision;snapshot=row.sealed_config
                 policy=s.get(OfDeliveryPolicy,account);policy_revision=policy.revision if policy else 1
                 status=row.status;expires=row.expires_at.replace(tzinfo=timezone.utc)
+                check_due=renewable and (row.verified_at<=now-CONNECTION_CHECK_INTERVAL
+                    or row.expires_at<=now+CONNECTION_CHECK_INTERVAL
+                    or row.last_error=='provider_connection_check_retry')
+                if (check_due and row.last_error=='provider_connection_check_retry'
+                        and row.updated_at>now-CONNECTION_RETRY_INTERVAL):
+                    if row.expires_at<=now:continue
+                    check_due=False
+            # An elapsed local lease may only be used for this identity GET.
+            # No history, media, model or delivery work receives this probe.
+            probe_expiry=(utcnow()+timedelta(minutes=1)).replace(tzinfo=timezone.utc) if check_due else expires
             transport=NativeProviderConnector(session_from_capture(account_id=account,owner_id=clear['ownerId'],policy_revision=policy_revision,
-                capture=clear['capture'],x_hash=clear['xHash'],proxy_url=clear['proxyUrl'],expires_at=expires))
-            if status=='pending':
+                capture=clear['capture'],x_hash=clear['xHash'],proxy_url=clear['proxyUrl'],expires_at=probe_expiry))
+            if status=='pending' or check_due:
                 if stop is not None and stop.is_set():break
                 transport.verify_identity()
                 with Session(store.engine) as s,s.begin():
                     runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
                     if (row is None or row.binding_id!=runtime.binding_id or row.revision!=generation
-                        or row.status!='pending' or row.expires_at<=utcnow()):continue
+                        or row.sealed_config!=snapshot or row.status!=status
+                        or status=='pending' and row.expires_at<=utcnow()):continue
+                    if check_due:
+                        expires=(utcnow()+CONNECTION_LEASE).replace(tzinfo=timezone.utc)
+                        clear={**clear,'expiresAt':expires.isoformat()}
+                        row.sealed_config=_seal(clear,tenant,account,runtime.binding_id,generation)
+                        row.expires_at=expires.replace(tzinfo=None)
+                        row.updated_at=utcnow()
                     row.status='verified';row.verified_at=utcnow();row.last_error=None
+                if check_due:
+                    transport=NativeProviderConnector(session_from_capture(account_id=account,owner_id=clear['ownerId'],policy_revision=policy_revision,
+                        capture=clear['capture'],x_hash=clear['xHash'],proxy_url=clear['proxyUrl'],expires_at=expires))
             elif status!='verified':continue
             if facts_reader is not None:
                 from .creator_facts import refresh
                 try:refresh(store,tenant,account,facts_reader)
                 except (Refused,ValueError,TypeError):pass
-            # Verification is a GET only. Explicit activation remains a
-            # separate operator command before history intake or delivery.
+            # Verified connections can load inbox history without an AI key or
+            # outgoing activation. Sending keeps its existing policy gate.
             with Session(store.engine) as s,s.begin():
                 runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
                 if (row is None or row.revision!=generation or row.binding_id!=runtime.binding_id
-                    or row.status!='verified' or row.expires_at<=utcnow() or not runtime.enabled or policy is None
-                    or not policy.enabled or policy.transport_kind!='native' or policy.revision!=policy_revision):continue
+                    or row.status!='verified' or row.verified_at is None or row.expires_at<=utcnow()):continue
+                outgoing=bool(runtime.enabled and policy is not None and policy.enabled
+                    and policy.transport_kind=='native' and policy.revision==policy_revision)
+            if not outgoing:
+                if include_read_only:result.append(WorkerAccount(account,None,transport,transport,generation))
+                continue
             from .provider_model import NativeProviderModel
             model=clear['model'];model=NativeProviderModel(account_id=account,model_id=model['modelId'],api_key=model['apiKey'],expires_at=expires) if model else None
             result.append(WorkerAccount(account,model,transport,transport))
@@ -310,11 +346,18 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
             continue
         except SQLAlchemyError:
             raise
-        except Exception:
+        except Exception as error:
             # Never put a provider response, exception URL or secret in health.
             with Session(store.engine) as s,s.begin():
                 runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
-                if row and generation is not None and row.revision==generation:
-                    row.status='failed';row.last_error='provider_verification_failed';runtime.enabled=False
+                if (row and generation is not None and row.revision==generation
+                        and row.sealed_config==snapshot and row.status!='paused'):
+                    if renewable and not isinstance(error,NativeAuthenticationError):
+                        # A network/provider outage is not a logout. Retry later;
+                        # the unchanged lease still blocks work if it elapses.
+                        row.last_error='provider_connection_check_retry';row.updated_at=utcnow()
+                    else:
+                        row.status='failed';runtime.enabled=False
+                        row.last_error='provider_authentication_required' if isinstance(error,NativeAuthenticationError) else 'provider_verification_failed'
     next_cursor=last_scanned if more or scanned<len(ids) else None
     return result,next_cursor,scanned

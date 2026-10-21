@@ -298,8 +298,9 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                     or row.last_error=='provider_connection_check_retry')
                 if (check_due and row.last_error=='provider_connection_check_retry'
                         and row.updated_at>now-CONNECTION_RETRY_INTERVAL):
-                    if row.expires_at<=now:continue
-                    check_due=False
+                    # A still-valid lease preserves activation intent; it does
+                    # not permit inbox/model/send work to evade retry pacing.
+                    continue
             # An elapsed local lease may only be used for this identity GET.
             # No history, media, model or delivery work receives this probe.
             probe_expiry=(utcnow()+timedelta(minutes=1)).replace(tzinfo=timezone.utc) if check_due else expires

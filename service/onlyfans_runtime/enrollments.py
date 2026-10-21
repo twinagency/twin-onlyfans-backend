@@ -8,8 +8,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from db.models import Account,OfCreatorBinding
 from db.onlyfans_connection_models import OfConnectionEnrollment,OfProviderConnection
 from .connections import (_validate_identity,_request,_seal,_aad,_open,encryption_key,
-    provision_account,save_connection,get_connection,capture_network_fingerprint)
-from .provider_connector import session_from_capture,NativeProviderConnector
+    provision_account,save_connection,get_connection,capture_network_fingerprint,CONNECTION_RETRY_INTERVAL)
+from .provider_connector import session_from_capture,NativeProviderConnector,NativeProtocolError,NativeAuthenticationError
 from .browser_capture import validate_browser_payload,normalize_browser_payload
 from .store import Refused,utcnow
 
@@ -85,7 +85,7 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
         if stop is not None and stop.is_set():break
         with Session(store.engine) as s,s.begin():
             row=s.scalar(select(OfConnectionEnrollment).where(OfConnectionEnrollment.tenant_id==tenant,
-                or_(OfConnectionEnrollment.status=='pending',
+                or_((OfConnectionEnrollment.status=='pending')&or_(OfConnectionEnrollment.lease_until.is_(None),OfConnectionEnrollment.lease_until<=utcnow()),
                     (OfConnectionEnrollment.status=='checking')&(OfConnectionEnrollment.lease_until<=utcnow())))
                 .order_by(OfConnectionEnrollment.created_at,OfConnectionEnrollment.id).with_for_update(skip_locked=True).limit(1))
             if row is None:break
@@ -143,12 +143,22 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
                 save_connection(store,tenant,account,payload=payload,expected_revision=expected,command_key=save_key,actor=actor,session_only=True,expected_network_fingerprint=network_fingerprint)
                 row.status='accepted';row.account_id=account;row.last_error=None;row.sealed_config=None;row.updated_at=utcnow()
             completed+=1
-        except Exception:
+        except Exception as error:
             # Unknown provider results never attach an account or authorize sends.
             # A crash after the durable save replays the same frozen command key.
             with Session(store.engine) as s,s.begin():
                 row=s.get(OfConnectionEnrollment,identity,with_for_update=True)
                 if row.status=='checking' and row.generation==generation:
-                    row.status='failed';row.last_error='verification_unavailable';row.sealed_config=None;row.updated_at=utcnow()
+                    now=utcnow()
+                    if (isinstance(error,NativeProtocolError) and not isinstance(error,NativeAuthenticationError)
+                            and row.expires_at>now):
+                        # Keep the frozen encrypted capture for a later GET.
+                        # The cooldown excludes this row so other creators proceed.
+                        row.status='pending';row.last_error='provider_connection_check_retry'
+                        row.lease_until=now+CONNECTION_RETRY_INTERVAL
+                    else:
+                        row.status='expired' if row.expires_at<=now else 'failed'
+                        row.last_error='verification_unavailable';row.sealed_config=None
+                    row.updated_at=now
             completed+=1
     return completed

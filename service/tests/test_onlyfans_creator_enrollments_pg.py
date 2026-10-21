@@ -226,3 +226,64 @@ def test_enrollment_http_uses_separate_auth_strict_json_and_never_calls_provider
     assert client.get(path+'?creator=foreign',headers=headers).json()['enrollments']==[]
     assert 'synthetic-session' not in ack.text+rows.text and counts(database[1])==(0,0)
     store.close()
+
+
+def test_temporary_first_enrollment_retries_durably_without_blocking_other_creators(database,monkeypatch):
+    from onlyfans_runtime.provider_connector import NativeProtocolError
+    settings(monkeypatch);store=Store(database[0]);first=submit(store)
+    calls=[]
+    def unavailable(self):
+        calls.append(self.account_id)
+        raise NativeProtocolError("synthetic maintenance response")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",unavailable)
+    assert module.process_enrollments(store,TENANT)==1
+    with Session(database[1]) as s:
+        row=s.get(OfConnectionEnrollment,first["id"])
+        assert row.status=="pending" and row.sealed_config is not None
+        frozen=(row.sealed_config,row.expires_at)
+        assert row.last_error=="provider_connection_check_retry" and row.lease_until>utcnow()
+    assert module.process_enrollments(store,TENANT)==0 and calls==["of-"+str(OWNER)]
+    assert counts(database[1])==(0,0)
+    other=session_payload();other["ownerId"]=OWNER+1;other["capture"]["headers"]["user_id"]=str(OWNER+1)
+    submit(store,other,key="2"*64,creator="creator-b")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",lambda self:calls.append(self.account_id))
+    assert module.process_enrollments(store,TENANT)==1
+    assert module.get_enrollments(store,TENANT,"creator-b")[0]["status"]=="accepted"
+    assert counts(database[1])==(1,1)
+    with Session(database[1]) as s,s.begin():
+        row=s.get(OfConnectionEnrollment,first["id"])
+        assert (row.sealed_config,row.expires_at)==frozen
+        row.lease_until=utcnow()-timedelta(seconds=1)
+    # A new Store represents a worker restart; retry state is not process-local.
+    store.close();store=Store(database[0])
+    assert module.process_enrollments(store,TENANT)==1
+    result=module.get_enrollments(store,TENANT,"creator-a")[0]
+    assert result["status"]=="accepted" and result["accountId"]=="of-"+str(OWNER)
+    assert counts(database[1])==(2,2)
+    with Session(database[1]) as s:
+        row=s.get(OfConnectionEnrollment,first["id"])
+        assert row.sealed_config is None and row.last_error is None
+        assert not s.get(OfRuntime,result["accountId"]).enabled
+    store.close()
+
+
+@pytest.mark.parametrize("outcome",["authentication","expired","stale"])
+def test_enrollment_retry_keeps_auth_expiry_and_generation_fences(database,monkeypatch,outcome):
+    from onlyfans_runtime.provider_connector import NativeProtocolError,NativeAuthenticationError
+    settings(monkeypatch);store=Store(database[0]);first=submit(store)
+    def failure(self):
+        if outcome in {"expired","stale"}:
+            with Session(database[1]) as s,s.begin():
+                row=s.get(OfConnectionEnrollment,first["id"])
+                if outcome=="expired":row.expires_at=utcnow()-timedelta(seconds=1)
+                else:row.generation+=1
+        if outcome=="authentication":raise NativeAuthenticationError("synthetic rejected identity")
+        raise NativeProtocolError("synthetic temporary failure")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",failure)
+    module.process_enrollments(store,TENANT)
+    assert counts(database[1])==(0,0)
+    with Session(database[1]) as s:
+        row=s.get(OfConnectionEnrollment,first["id"])
+        assert row.status=={"authentication":"failed","expired":"expired","stale":"checking"}[outcome]
+        assert (row.sealed_config is None)==(outcome!="stale")
+    store.close()

@@ -18,6 +18,7 @@ from .text_delivery import Accepted,Dispatch,_stamp
 API_PATH="/api2/v2"
 MAX_BYTES=65536
 MAX_VAULT_BYTES=1024*1024
+MAX_HISTORY_BYTES=1024*1024
 
 
 class NativeProtocolError(ValueError):pass
@@ -67,9 +68,10 @@ def plain_text(value):
     return value
 
 
-def message(value,*,owner_id,fan_id):
+def message(value,*,owner_id,fan_id,history=False):
     try:
         _id(owner_id);_id(fan_id)
+        if type(history) is not bool:raise ValueError()
         if owner_id==fan_id:raise ValueError()
         if type(value) is not dict or not {"id","fromUser","createdAt","text","media","mediaCount","price","responseType"}<=set(value):raise ValueError()
         if value["responseType"]!="message" or type(value["fromUser"]) is not dict:raise ValueError()
@@ -78,14 +80,19 @@ def message(value,*,owner_id,fan_id):
         if "toUser" in value:
             if type(value["toUser"]) is not dict or _id(value["toUser"].get("id"))!=(fan_id if sender==owner_id else owner_id):raise ValueError()
         if any(value.get(key) is not None and value.get(key) is not False
-               for key in ("isTip","isFromQueue","isUnsent","isDeleted")):raise ValueError()
+               for key in ("isTip","isUnsent","isDeleted")):raise ValueError()
+        if value.get("isFromQueue") is not None and type(value["isFromQueue"]) is not bool:raise ValueError()
+        if value.get("isFromQueue") is True and not history:raise ValueError()
         media=value["media"]
         if type(media) is not list or len(media)>100 or any(type(row) is not dict for row in media):raise ValueError()
         ids=tuple(_id(row.get("id")) for row in media)
         if len(set(ids))!=len(ids) or type(value["mediaCount"]) is not int or value["mediaCount"]!=len(ids):raise ValueError()
         price=cents(value["price"])
         # A history flag is not an authoritative, source-revisioned payment event.
-        if price and value.get("isOpened") is not None and value.get("isOpened") is not False:raise ValueError()
+        if value.get("isOpened") is not None and type(value["isOpened"]) is not bool:raise ValueError()
+        if price and value.get("isOpened") is True and not history:raise ValueError()
+        # History is a message observation only. Queued/opened flags grant no
+        # payment, ownership or dispatch acceptance; ledger evidence owns those.
         stamp=value["createdAt"]
         if type(stamp) is not str:raise ValueError()
         _stamp(stamp)

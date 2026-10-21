@@ -17,7 +17,7 @@ from urllib.parse import urlencode, urlsplit
 from of_signer import sign
 from onlyfans_read.contract import ID_PATTERN
 from .native_connector import NativeLoopbackConnector
-from .native_protocol import API_PATH, MAX_BYTES, MAX_VAULT_BYTES, NativeProtocolError, acceptance, request
+from .native_protocol import API_PATH, MAX_BYTES, MAX_VAULT_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, request
 from .store import Refused, _id
 from .text_delivery import Dispatch, TextAuthority
 
@@ -211,6 +211,9 @@ class NativeProviderConnector(NativeLoopbackConnector):
             raise Refused("unsupported native HTTPS write")
         if method == "GET" and target.path == API_PATH + "/vault/media":
             return self._signed_request(method, path, body, max_response_bytes=self._vault_max_bytes)
+        if method == "GET" and (target.path == API_PATH + "/chats" or re.fullmatch(
+                re.escape(API_PATH) + r"/chats/[1-9][0-9]*/messages", target.path)):
+            return self._signed_request(method, path, body, max_response_bytes=MAX_HISTORY_BYTES)
         return self._signed_request(method, path, body)
 
     def _signed_request(self, method, path, body=b"", *, max_response_bytes=None,

@@ -17,7 +17,7 @@ from of_signer import sign
 from .loopback_transport import (
     LoopbackPeerHandle, LoopbackTextTransport, _request_once, from_server,
 )
-from .native_protocol import API_PATH, MAX_BYTES, NativeProtocolError, acceptance, load, message, request
+from .native_protocol import API_PATH, MAX_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, load, message, request
 from .store import PAGE_LIMIT, Refused, _id
 from .text_delivery import Dispatch, TextAuthority
 from .worker import ChatPage, MessagePage
@@ -115,7 +115,7 @@ class NativeLoopbackConnector:
             raise Refused("native discovery budget exhausted")
         self.verify_identity()
         path = API_PATH + "/chats?" + urlencode({"limit": limit, "order": "recent", "offset": offset, "skip_users": "all"})
-        rows, more = self._page(load(self._call("GET", path)), limit)
+        rows, more = self._page(load(self._call("GET", path), max_bytes=MAX_HISTORY_BYTES), limit)
         try:
             fans = [_id(row["withUser"]["id"]) for row in rows if type(row) is dict]
             if len(fans) != len(rows) or len(set(fans)) != len(fans) or self._handle.owner_id in fans:
@@ -136,7 +136,7 @@ class NativeLoopbackConnector:
             params["id"] = before_id
         path = API_PATH + f"/chats/{fan_id}/messages?" + urlencode(params)
         rows, more = self._page(load(self._call("GET", path)), limit)
-        events = [message(row, owner_id=self._handle.owner_id, fan_id=fan_id) for row in rows]
+        events = [message(row, owner_id=self._handle.owner_id, fan_id=fan_id, history=True) for row in rows]
         ids = [event.message_id for event in events]
         if ids != sorted(set(ids), reverse=True) or (before_id is not None and any(value >= before_id for value in ids)):
             raise NativeProtocolError("native message cursor did not advance")

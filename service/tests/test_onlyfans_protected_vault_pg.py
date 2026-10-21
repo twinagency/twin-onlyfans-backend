@@ -8,6 +8,7 @@ from test_onlyfans_vault_pg import sync, media, create
 from test_onlyfans_vault_media_pg import storage, api
 from test_onlyfans_connections_pg import TENANT, ACTOR
 from db.onlyfans_media_models import OfVaultMediaJob
+from db.models import CatalogItem
 from onlyfans_runtime.vault_management import list_vault
 from onlyfans_runtime.vault_video import ProtectedVideoUnavailable, request_video, video_status
 
@@ -17,7 +18,8 @@ def test_protected_video_product_and_explicit_playback_status(database, monkeypa
     store, account, _, _ = sync(database, monkeypatch, [row])
     assert list_vault(store, TENANT, account)['items'][0]['ready'] is True
     product = create(store, account, mediaIds=['13'], previewMediaIds=[])
-    assert product['item']['kind'] == 'video'
+    with Session(store.engine) as session:
+        assert session.get(CatalogItem, int(product['itemId'])).kind == 'video'
     with pytest.raises(ProtectedVideoUnavailable):
         request_video(store, TENANT, account, '13', command_key='e'*64, actor=ACTOR)
     assert video_status(store, TENANT, account, '13') == {

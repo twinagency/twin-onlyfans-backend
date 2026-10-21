@@ -70,19 +70,24 @@ def plain_text(value):
 
 
 class _HistoryText(HTMLParser):
-    """Keep visible paragraph/link text; attributes never become CRM authority."""
+    """Keep visible history formatting; attributes never become CRM authority."""
+    INLINE = frozenset({"strong", "b", "em", "i", "u", "s", "strike", "del", "span", "code", "sub", "sup"})
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.parts, self.stack = [], []
 
     def handle_starttag(self, tag, attrs):
+        if len(self.stack) >= 64:
+            raise NativeProtocolError("native history formatting is too deep")
         if tag == "br" and self.stack:
             self.parts.append("\n")
         elif tag == "p" and not self.stack:
             if self.parts and not self.parts[-1].endswith("\n"):
                 self.parts.append("\n")
             self.stack.append(tag)
-        elif tag == "a" and self.stack == ["p"]:
+        elif tag in self.INLINE and self.stack:
+            self.stack.append(tag)
+        elif tag == "a" and self.stack and "a" not in self.stack:
             self.stack.append(tag)
         else:
             raise NativeProtocolError("unsupported native history formatting")

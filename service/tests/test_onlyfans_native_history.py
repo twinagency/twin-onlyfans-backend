@@ -10,6 +10,22 @@ from test_onlyfans_vault_response_limits import session
 
 
 class NativeHistory(unittest.TestCase):
+    def test_link_history_retains_visible_text_without_link_authority(self):
+        raw = native_message(10, owner=OWNER, outgoing=True,
+            text='<p>Read <a href="https://synthetic.invalid/private" target="_blank">the &lt;update&gt;</a><br/>Today</p><p>Thanks &amp; bye</p>')
+        event = message(raw, owner_id=OWNER, fan_id=101, history=True)
+        self.assertEqual(event.body, 'Read the <update>\nToday\nThanks & bye')
+        self.assertNotIn('synthetic.invalid', event.payload())
+        with self.assertRaises(NativeProtocolError):
+            message(raw, owner_id=OWNER, fan_id=101)
+
+    def test_unsupported_or_unbalanced_history_html_is_not_silently_dropped(self):
+        for text in ['<p><script>hidden()</script></p>', '<p><a href="x">broken</p>',
+                     '<p><!-- hidden -->text</p>', '<p><img src="x"></p>',
+                     '<p><p>nested</p></p>']:
+            with self.subTest(text=text), self.assertRaises(NativeProtocolError):
+                message(native_message(text=text), owner_id=OWNER, fan_id=101, history=True)
+
     def test_queued_and_opened_history_keeps_message_identity_and_price(self):
         for flags in [{'isFromQueue': True}, {'isOpened': True}]:
             raw = {**native_message(10, owner=OWNER, outgoing=True, price=10), **flags}

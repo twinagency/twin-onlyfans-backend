@@ -29,6 +29,15 @@ from .vault_previews import asset_scope, _paths
 SCHEMA = "vault-video.v1"
 
 
+class ProtectedVideoUnavailable(Refused):
+    """The owner may use a vault identity without a progressive playback URL."""
+
+
+def protected_source(raw):
+    files = raw.get("files")
+    return bool(raw.get("drm") or isinstance(files, dict) and files.get("drm"))
+
+
 def video_type(data):
     if len(data) >= 12 and data[4:8] == b"ftyp":
         return "video/mp4"
@@ -109,7 +118,8 @@ def _status(store, tenant, account, media_id):
         return {"mediaId": media_id, "ready": cached is not None,
             "status": "ready" if cached else job.status if job else "unprepared",
             "bytes": cached[1]["bytes"] if cached else None,
-            "lastError": None if cached else job.last_error if job else None}
+            "lastError": None if cached else "protected_playback_not_supported" if protected_source(raw)
+                else job.last_error if job else None}
 
 
 def video_status(store, tenant, account, media_id):
@@ -125,9 +135,10 @@ def request_video(store, tenant, account, media_id, *, command_key, actor):
             raise Refused("video processing is incomplete")
         if _cached(account, row.media_id, runtime.binding_id, connection.owner_id):
             return {"mediaId": media_id, "ready": True, "status": "ready", "bytes": None, "lastError": None}
+        if protected_source(raw):
+            raise ProtectedVideoUnavailable("protected video playback is unavailable")
         _, source = media_urls(raw)
-        if (raw.get("drm") or raw.get("files", {}).get("drm") or not source
-                or not urlsplit(source).path.lower().endswith((".mp4", ".m4v", ".webm"))):
+        if (not source or not urlsplit(source).path.lower().endswith((".mp4", ".m4v", ".webm"))):
             raise Refused("a playable full video is unavailable")
         request = {"mediaId": media_id, "rawHash": hashlib.sha256(row.raw_json.encode()).hexdigest()}
         fingerprint = hashlib.sha256(canonical(request).encode()).hexdigest()
@@ -271,3 +282,4 @@ def process_video(store, tenant, *, stop=None):
             job.lease_until, job.lease_token = None, None
             job.completed_at, job.updated_at = utcnow(), utcnow()
     return 1
+

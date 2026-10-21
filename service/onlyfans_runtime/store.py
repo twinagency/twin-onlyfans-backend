@@ -218,7 +218,10 @@ class Store:
             events = s.scalars(select(OfIngress).where(OfIngress.account_id == account_id,
                                OfIngress.status == "pending").order_by(OfIngress.received_at, OfIngress.event_key).limit(limit)).all()
             for row in events:
-                self._apply(s, runtime, row, history_only=connection_revision is not None)
+                if connection_revision is None:
+                    self._apply(s, runtime, row)
+                else:
+                    self._apply(s, runtime, row, history_only=True)
             self._mark_current(s, runtime)
             return len(events)
 

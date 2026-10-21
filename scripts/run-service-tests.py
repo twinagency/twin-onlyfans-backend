@@ -23,6 +23,7 @@ NATIVE_PG_SMOKE = {
     "test_onlyfans_creator_enrollments_pg.py",
     "test_onlyfans_connection_renewal_pg.py",
     "test_onlyfans_readonly_inbox_pg.py",
+    "test_onlyfans_recovery_fairness_pg.py",
     "test_onlyfans_worker_entry_pg.py",
 }
 

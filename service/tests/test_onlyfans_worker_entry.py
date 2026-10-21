@@ -91,6 +91,22 @@ def test_once_runtime_failure_is_redacted_and_exits_nonzero():
     assert reports==[{"schemaVersion":"of-worker.v1","state":"unavailable"}]
 
 
+def test_one_account_becoming_unavailable_does_not_abort_other_account_polls():
+    from onlyfans_runtime.store import Refused
+    polled=[];serviced=[]
+    accounts=[SimpleNamespace(account_id="unavailable"),SimpleNamespace(account_id="ready")]
+    class Store:
+        def request_poll(self,tenant,account):
+            polled.append(account)
+            if account=="unavailable":raise Refused("scope unavailable")
+    class Worker:
+        def __init__(self,store,tenant,cohort):serviced.extend(item.account_id for item in cohort)
+        def run(self,*_,**__):pass
+    assert entry.run_loop(Store(),"tenant-a",threading.Event(),once=True,
+        load_cohort=lambda *_,**__: (accounts,None,2),worker_type=Worker,observe=lambda _:None)==0
+    assert polled==serviced==["unavailable","ready"]
+
+
 def test_paged_cohorts_service_accounts_after_first_32_and_cover_each_cohort_before_refresh():
     stop=threading.Event();seen=[];cursors=[]
     class Store:

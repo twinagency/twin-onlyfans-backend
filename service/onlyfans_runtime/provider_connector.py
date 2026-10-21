@@ -17,7 +17,7 @@ from urllib.parse import urlencode, urlsplit
 from of_signer import sign
 from onlyfans_read.contract import ID_PATTERN
 from .native_connector import NativeLoopbackConnector
-from .native_protocol import API_PATH, MAX_BYTES, NativeProtocolError, acceptance, request
+from .native_protocol import API_PATH, MAX_BYTES, MAX_VAULT_BYTES, NativeProtocolError, acceptance, request
 from .store import Refused, _id
 from .text_delivery import Dispatch, TextAuthority
 
@@ -165,15 +165,18 @@ class NativeProviderConnector(NativeLoopbackConnector):
     the one-use marker before the only POST. Identity checks precede it. Live
     account activation and credential custody belong to the deployment owner.
     """
-    def __init__(self, session, *, timeout_seconds=5, max_response_bytes=MAX_BYTES):
+    def __init__(self, session, *, timeout_seconds=5, max_response_bytes=MAX_BYTES,
+                 max_vault_response_bytes=MAX_VAULT_BYTES):
         if type(session) is not NativeProviderSession:
             raise Refused("an explicit account-bound native session is required")
         if (type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds)
                 or not .05 <= timeout_seconds <= 10
-                or type(max_response_bytes) is not int or not 1 <= max_response_bytes <= MAX_BYTES):
+                or type(max_response_bytes) is not int or not 1 <= max_response_bytes <= MAX_BYTES
+                or type(max_vault_response_bytes) is not int or not 1 <= max_vault_response_bytes <= MAX_VAULT_BYTES):
             raise Refused("invalid native HTTPS resource bound")
         self._handle = session
         self._timeout, self._max_bytes = float(timeout_seconds), max_response_bytes
+        self._vault_max_bytes = max_vault_response_bytes
 
     @property
     def account_id(self):
@@ -206,6 +209,8 @@ class NativeProviderConnector(NativeLoopbackConnector):
         elif (not re.fullmatch(re.escape(API_PATH) + r"/chats/[1-9][0-9]*/messages", target.path)
               or target.query or not body):
             raise Refused("unsupported native HTTPS write")
+        if method == "GET" and target.path == API_PATH + "/vault/media":
+            return self._signed_request(method, path, body, max_response_bytes=self._vault_max_bytes)
         return self._signed_request(method, path, body)
 
     def _signed_request(self, method, path, body=b"", *, max_response_bytes=None,
@@ -268,8 +273,9 @@ class NativeProviderConnector(NativeLoopbackConnector):
         """Read one bounded selected-account vault page, without importing it.
 
         The vault job owner validates the full page and persists catalogue
-        metadata. No download URL, media body or provider schema is inferred by
-        this transport, and the fixed native response byte budget still applies.
+        metadata. Vault reads have a separate explicit 1 MiB maximum because signed
+        media URLs make these pages larger than message responses. Message and
+        receipt reads keep their existing 64 KiB budget.
         """
         self._ready()
         if (type(offset) is not int or not 0 <= offset <= 1000000

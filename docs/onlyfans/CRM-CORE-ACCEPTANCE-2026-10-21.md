@@ -1,5 +1,7 @@
 # CRM core acceptance checkpoint — 21 October 2026
 
+> Release and live inbox status are superseded by [INBOX-SYNC-2026-10-22.md](INBOX-SYNC-2026-10-22.md). Read that checkpoint first. The wider unfinished CRM/media/payment scope below remains relevant.
+
 This is the current OnlyFans CRM checkpoint. The entire CRM is not complete. Read alongside DELIVERY-PLAN-2026-10-19.md; earlier checkpoints and synthetic tests do not prove live end-to-end acceptance.
 
 ## Current release: deployed and confirmed

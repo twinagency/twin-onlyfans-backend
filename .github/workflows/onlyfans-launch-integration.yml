@@ -1,0 +1,67 @@
+name: OnlyFans combined launch acceptance
+on:
+  push:
+    branches: [codex/onlyfans-final-integration-20261023]
+    paths: ['service/**', 'Dockerfile.onlyfans', 'requirements*.txt', '.github/workflows/onlyfans-launch-integration.yml']
+  pull_request:
+    paths: ['service/**', 'Dockerfile.onlyfans', 'requirements*.txt', '.github/workflows/onlyfans-launch-integration.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: onlyfans-launch-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the candidate and test image
+        run: |
+          docker build --label org.opencontainers.image.revision="$GITHUB_SHA" -f Dockerfile.onlyfans -t launch-candidate .
+          printf '%s\n' 'FROM launch-candidate' 'RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/* && pip install pytest==8.3.5' > Dockerfile.launch-check
+          docker build -f Dockerfile.launch-check -t launch-tests .
+          docker image inspect launch-candidate --format '{{.Id}}' > candidate-image-id.txt
+      - name: Start disposable PostgreSQL
+        run: |
+          docker network create launch-check
+          PG_MAJOR=$(docker run --rm launch-tests pg_dump --version | sed -E 's/.* ([0-9]+)\..*/\1/')
+          docker run -d --name launch-pg --network launch-check -e POSTGRES_PASSWORD=synthetic-launch-only postgres:$PG_MAJOR-alpine
+          for i in $(seq 1 30); do docker exec launch-pg pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
+          docker exec launch-pg pg_isready -h 127.0.0.1 -U postgres
+      - name: Run combined feature and delivery acceptance
+        shell: bash
+        run: |
+          mkdir -p test-results
+          docker run --rm --network launch-check \
+            -v "$PWD/test-results:/test-results" \
+            -e ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres:synthetic-launch-only@launch-pg:5432/postgres \
+            launch-tests sh -c 'python -m pytest -q -rs --junitxml=/test-results/launch.xml \
+              service/tests/test_onlyfans_launch_*.py \
+              service/tests/test_onlyfans_fixed_price_pg.py \
+              service/tests/test_onlyfans_offer_import_pg.py \
+              service/tests/test_onlyfans_offer_import_upgrade_pg.py \
+              service/tests/test_onlyfans_content_sync_pg.py \
+              service/tests/test_onlyfans_content_sync_delivery_pg.py' \
+            2>&1 | tee test-results/pytest.log
+      - name: Require a nonempty run with zero skipped tests
+        if: always()
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('test-results/launch.xml').getroot()
+          cases = list(root.iter('testcase'))
+          assert cases, 'No acceptance tests were collected'
+          skipped = [c.attrib.get('name') for c in cases if c.find('skipped') is not None]
+          assert not skipped, f'Required acceptance tests were skipped: {skipped}'
+          print(f'{len(cases)} cases collected; zero skipped')
+          PY
+      - name: Save evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onlyfans-launch-${{ github.sha }}
+          path: |
+            test-results/
+            candidate-image-id.txt

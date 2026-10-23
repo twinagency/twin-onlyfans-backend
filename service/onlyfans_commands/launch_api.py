@@ -119,8 +119,9 @@ async def engagement_configure(request: Request, account_id: str):
 async def engagement_actions(request: Request, account_id: str):
     def work(store, tenant, _):
         with Session(store.engine) as s, s.begin():
-            store._runtime(s, tenant, account_id)
-            rows = s.scalars(select(Action).where(Action.account_id == account_id)
+            runtime = store._runtime(s, tenant, account_id)
+            rows = s.scalars(select(Action).where(Action.account_id == account_id,
+                Action.binding_id == runtime.binding_id)
                 .order_by(Action.created_at.desc(), Action.action_id).limit(50)).all()
             return {"engagementVersion": "of-engagement.v1", "actions": [action_view(row) for row in rows]}
     return await _run(request, account_id, work)
@@ -149,8 +150,11 @@ async def engagement_refresh(request: Request, account_id: str, action_id: str):
 
 def engagement_action_sync(store, tenant, account_id, action_id):
     with Session(store.engine) as s, s.begin():
-        store._runtime(s, tenant, account_id)
-        return {"engagementVersion": "of-engagement.v1", "action": action_view(s.get(Action, (account_id, action_id)))}
+        runtime = store._runtime(s, tenant, account_id)
+        row = s.get(Action, (account_id, action_id))
+        if row is None or row.binding_id != runtime.binding_id:
+            raise Refused("engagement action unavailable")
+        return {"engagementVersion": "of-engagement.v1", "action": action_view(row)}
 
 
 @engagement_router.post("/actions/{action_id}/cancel")
@@ -214,3 +218,4 @@ async def history_fan_backfill(request: Request, account_id: str, fan_id: str):
         HistoryRecovery(store).request_fan(tenant, account_id, _fan(fan_id))
         return {"requested": "fan"}
     return await _run(request, account_id, work, required=("actor",))
+

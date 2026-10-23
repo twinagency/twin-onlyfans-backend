@@ -410,7 +410,8 @@ def list_drafts(store, tenant, account, *, after, limit):
             mark = s.get(Draft, (account, _uuid(after)))
             if mark is None or mark.binding_id != runtime.binding_id:
                 raise InvalidSync("That page reference is invalid.")
-            query = query.where((Draft.created_at, Draft.draft_id) < (mark.created_at, mark.draft_id))
+            query = query.where(or_(Draft.created_at < mark.created_at,
+                and_(Draft.created_at == mark.created_at, Draft.draft_id < mark.draft_id)))
         rows = s.scalars(query.order_by(Draft.created_at.desc(), Draft.draft_id.desc()).limit(limit + 1)).all()
         return {"items": [draft_view(s, r) for r in rows[:limit]],
                 "nextCursor": rows[limit - 1].draft_id if len(rows) > limit else None}
@@ -873,3 +874,4 @@ def _still_needed(store, account, asset_id):
     with Session(store.engine) as s:
         state = s.scalar(select(Asset.state).where(Asset.account_id == account, Asset.asset_id == asset_id))
     return state != "synced"
+

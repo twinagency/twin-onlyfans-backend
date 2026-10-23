@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from onlyfans_read.agency_scope import actor_allowed
 from onlyfans_read.contract import ID_PATTERN
 from db.models import CatalogItem, CATALOG_IS_SINGLE, ContentOffer, Message, OfCreatorBinding, VaultItem
-from db.onlyfans_offer_import_models import (OfOfferImportCandidate, OfOfferImportCursor,
+from db.onlyfans_offer_import_models import (OfContentSyncSource, OfOfferImportCandidate, OfOfferImportCursor,
     OfOfferImportDecision, OfOfferImportJob, OfOfferObservation)
 from .content_management import digest, editable, fingerprint as item_fingerprint, validate_patch
 from .native_context import canonical
@@ -239,18 +239,29 @@ def inventory_batch(store, tenant, account, job_id, *, token=None):
             return None
         cursor = (job.after_fan_id or 0, job.after_message_id or 0)
         rows = s.execute(select(Message.fan_id, Message.message_id, Message.media_ids, Message.price_cents,
-                Message.created_at).where(Message.account_id == account, Message.direction == "out",
+                Message.created_at, Message.ingested_at).where(Message.account_id == account, Message.direction == "out",
                 Message.price_cents > 0, Message.message_id <= job.upper_message_id,
                 tuple_(Message.fan_id, Message.message_id) > cursor)
             .order_by(Message.fan_id, Message.message_id).limit(BATCH_ROWS)).all()
         now = utcnow()
         touched = {}
-        from .content_sync import echo_map
+        from .content_sync import echo_map, LATE_OVERLAP_SECONDS
         # A CRM-originated paid message is the same offer we sent: no candidate.
-        echoes = echo_map(s, account, runtime.binding_id, [mid for _, mid, _, _, _ in rows])
-        for fan, mid, raw, price, created in rows:
+        echoes = echo_map(s, account, runtime.binding_id, [r[1] for r in rows])
+        # Rows imported after this scan began (older provider ids imported late) may also be reached by the
+        # content-sync late fold; the shared ledger makes whichever comes second a no-op.
+        window = job.requested_at - timedelta(seconds=LATE_OVERLAP_SECONDS)
+        recent = [dict(account_id=account, binding_id=runtime.binding_id, fan_id=r[0], message_id=r[1],
+                       refresh_pending=False, refresh_attempts=0, folded_at=now) for r in rows if r[5] >= window]
+        counted = None
+        if recent:
+            from sqlalchemy.dialects.postgresql import insert
+            counted = set(s.execute(insert(OfContentSyncSource).values(recent).on_conflict_do_nothing()
+                .returning(OfContentSyncSource.fan_id, OfContentSyncSource.message_id)).all())
+            counted |= {(r[0], r[1]) for r in rows if r[5] < window}
+        for fan, mid, raw, price, created, _ingested in rows:
             media = _ids(raw)
-            if not media or mid in echoes:
+            if not media or mid in echoes or (counted is not None and (fan, mid) not in counted):
                 continue
             mkey = media_key(media)
             candidate = touched.get(mkey) or s.get(OfOfferImportCandidate, (account, job_id, mkey), with_for_update=True)

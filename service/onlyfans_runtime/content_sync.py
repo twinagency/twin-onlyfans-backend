@@ -16,7 +16,8 @@ import os
 import re
 import uuid
 
-from sqlalchemy import and_, exists, func, or_, select, true
+from sqlalchemy import and_, exists, func, or_, select, true, tuple_, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -30,7 +31,8 @@ from db.onlyfans_delivery_models import OfTextIntent
 from db.onlyfans_vault_models import OfVaultObservation, OfVaultSyncJob
 from db.onlyfans_offer_import_models import (OfContentSyncAccount as Account, OfContentSyncConflict as Conflict,
     OfContentSyncDecision as Decision, OfContentSyncDraft as Draft, OfContentSyncOperation as Operation,
-    OfOfferImportCandidate, OfOfferImportCursor, OfOfferImportDecision, OfOfferImportJob, OfOfferObservation)
+    OfContentSyncSource as Source, OfOfferImportCandidate, OfOfferImportCursor, OfOfferImportDecision, OfOfferImportJob,
+    OfOfferObservation)
 from .content_management import digest, fingerprint as item_fingerprint, _revision
 from .native_context import canonical
 from .offer_terms import MAX_ATTACHMENTS, MAX_PRICE_CENTS, MIN_PRICE_CENTS, media_key
@@ -50,6 +52,12 @@ VAULT_MIN_INTERVAL_SECONDS = 240
 PRIORITY_QUOTA = 100
 ROTATION_QUOTA = 100
 BACKOFF_CAP_SECONDS = 3600
+# Messages imported late (older provider id than the fold cursor) are found by ingestion time: the window
+# reaches back this far so a slow writer's row is still seen, and a ledger row stops double counting.
+LATE_OVERLAP_SECONDS = 120
+# Sources still waiting for a detail refresh are retried at most this many times, then reported as given up.
+MAX_REFRESH_ATTEMPTS = 3
+REFRESH_RETRY_SECONDS = 60
 SYNC_KINDS = ("incremental", "reconcile")
 PASS_KINDS = ("incremental", "reconcile", "sync_now")
 RETRYABLE_ERRORS = {"pass_failed", "connection_unavailable"}
@@ -418,6 +426,8 @@ def _ensure_initial(s, runtime, row, now, seed):
             and job.status in {"pending", "running", "complete", "partial"}):
         if row.covered_through_message_id is None:
             row.covered_through_message_id = job.upper_message_id
+        if row.late_through_at is None:
+            row.late_through_at = now
         return job
     job = s.scalar(select(OfOfferImportJob).where(OfOfferImportJob.account_id == account,
         OfOfferImportJob.mode == "inventory", OfOfferImportJob.status.in_(("pending", "running"))).limit(1).with_for_update())
@@ -432,6 +442,8 @@ def _ensure_initial(s, runtime, row, now, seed):
         job = create_inventory_job(s, runtime, command_key=key, request_hash=digest({"mode": "inventory", "sources": []}),
             actor=row.actor, now=now)
     row.initial_job_id, row.covered_through_message_id = job.job_id, job.upper_message_id
+    # History before this moment belongs to the initial scan; only later imports are "late".
+    row.late_through_at = now
     s.add(Operation(account_id=account, operation_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
         command_key=digest(["initial-operation", account, job.job_id]), request_hash=digest({"initial": job.job_id}),
         actor=row.actor, kind="initial", status="queued", connection_revision=row.connection_revision,
@@ -453,6 +465,9 @@ def _park(s, row, runtime, now, reason):
     row.enabled, row.status, row.blocked_reason = False, "blocked", reason
     row.initial_job_id = row.covered_through_message_id = row.reconcile_after_item_id = None
     row.reconcile_cycle_started_at = row.last_incremental_at = row.last_reconcile_at = row.last_full_reconcile_at = None
+    row.late_through_at = row.reconcile_priority_after_item_id = None
+    row.posts_cursor = row.posts_audit_after = row.posts_checked_at = row.posts_error = None
+    row.posts_history_complete = False
     row.incremental_due_at = row.reconcile_due_at = None
     row.lease_token = row.lease_until = None
     row.backlog, row.updated_at = 0, now
@@ -676,7 +691,9 @@ def _finish(store, tenant, claim, outcome):
         row.failures = 0
         if claim.sync_kind == "incremental":
             row.last_incremental_at, row.backlog = now, backlog
-            row.incremental_due_at = now + timedelta(seconds=DRAIN_SECONDS) if backlog > 0 else _next_incremental(claim.account, now)
+            row.incremental_due_at = (now + timedelta(seconds=DRAIN_SECONDS) if backlog > 0 or outcome.get("drain")
+                else now + timedelta(seconds=REFRESH_RETRY_SECONDS) if outcome.get("pendingRefresh")
+                else _next_incremental(claim.account, now))
         else:
             row.last_reconcile_at = now
             row.reconcile_due_at = now + timedelta(seconds=RECONCILE_SECONDS)
@@ -765,75 +782,140 @@ def _queue_vault(store, tenant, claim, actor):
         return "unavailable"
 
 
+def _fold_rows(s, claim, runtime, job, rows):
+    """Merge never-considered outgoing paid messages into the initial job's candidates.
+
+    The ledger insert is the idempotency point: a message already considered (by the cursor fold, the late
+    fold or the initial scan) is never counted twice. Messages with media that carry no observation yet are
+    queued (durably) for a detail refresh.
+    """
+    from .offer_import import _date as day, _merge
+    if not rows:
+        return 0
+    ids = [r[1] for r in rows]
+    echoes = echo_map(s, claim.account, runtime.binding_id, ids)
+    seen = set(s.scalars(select(OfOfferObservation.source_id).where(OfOfferObservation.account_id == claim.account,
+        OfOfferObservation.binding_id == runtime.binding_id, OfOfferObservation.source_kind == "message",
+        OfOfferObservation.source_id.in_(ids))))
+    values = [dict(account_id=claim.account, binding_id=runtime.binding_id, fan_id=fan, message_id=mid,
+        refresh_pending=bool(_ids(raw)) and mid not in echoes and mid not in seen, refresh_attempts=0, folded_at=claim.now)
+        for fan, mid, raw, _price, _created in rows]
+    inserted = set(s.execute(insert(Source).values(values).on_conflict_do_nothing().returning(Source.fan_id, Source.message_id)).all())
+    touched, merged = {}, 0
+    for fan, mid, raw, price, created in rows:
+        media = _ids(raw)
+        if (fan, mid) not in inserted or not media or mid in echoes:
+            continue
+        mkey = media_key(media)
+        candidate = touched.get(mkey) or s.get(OfOfferImportCandidate, (claim.account, job.job_id, mkey), with_for_update=True)
+        if candidate is None:
+            candidate = OfOfferImportCandidate(account_id=claim.account, job_id=job.job_id, media_key=mkey,
+                media_json=canonical(sorted(media)), source_count=0, variants_json="[]", samples_json="[]",
+                revision=0, updated_at=claim.now)
+            s.add(candidate)
+        touched[mkey] = candidate
+        _merge(candidate, media, price, {"fanId": str(fan), "messageId": mid, "priceCents": price, "sentAt": day(created)})
+        candidate.updated_at = claim.now
+        merged += 1
+    return merged
+
+
+def _refresh_queue(s, claim, binding):
+    """Drop queue entries that no longer need a refresh, then list the newest waiting ones.
+
+    Returns (sources to request now, total waiting). Nothing waiting is ever forgotten because the cursor
+    moved on: only an observation (done) or the retry cap (given up) removes an entry.
+    """
+    mine = (Source.account_id == claim.account, Source.binding_id == binding, Source.refresh_pending.is_(True))
+    s.execute(update(Source).where(*mine, exists().where(OfOfferObservation.account_id == Source.account_id,
+        OfOfferObservation.binding_id == Source.binding_id, OfOfferObservation.source_kind == "message",
+        OfOfferObservation.source_id == Source.message_id)).values(refresh_pending=False))
+    s.execute(update(Source).where(*mine, Source.refresh_attempts >= MAX_REFRESH_ATTEMPTS).values(refresh_pending=False))
+    total = s.scalar(select(func.count()).select_from(Source).where(*mine)) or 0
+    rows = s.execute(select(Source.fan_id, Source.message_id).where(*mine)
+        .order_by(Source.message_id.desc(), Source.fan_id).limit(REFRESH_SOURCES)).all()
+    return [tuple(r) for r in rows], total
+
+
 def _fold(store, tenant, claim):
     """DB-only fold of new outgoing paid messages into the initial job's candidates."""
-    from .offer_import import _date as day, _merge
-    folded, lacking, last = 0, {}, None
+    folded, start = 0, None
     for _ in range(FOLD_BATCHES):
         with Session(store.engine) as s, s.begin():
             runtime, row, op = _check(store, tenant, s, claim)
             job = _ensure_initial(s, runtime, row, claim.now, claim.operation_id)
+            if start is None:
+                start = row.covered_through_message_id or 0
             rows = s.execute(select(Message.fan_id, Message.message_id, Message.media_ids, Message.price_cents,
                     Message.created_at).where(Message.account_id == claim.account, Message.direction == "out",
                     Message.price_cents > 0, Message.message_id > (row.covered_through_message_id or 0))
                 .order_by(Message.message_id, Message.fan_id).limit(FOLD_ROWS)).all()
-            ids = [r[1] for r in rows]
-            echoes = echo_map(s, claim.account, runtime.binding_id, ids)
-            seen = set(s.scalars(select(OfOfferObservation.source_id).where(OfOfferObservation.account_id == claim.account,
-                OfOfferObservation.binding_id == runtime.binding_id, OfOfferObservation.source_kind == "message",
-                OfOfferObservation.source_id.in_(ids)))) if ids else set()
-            touched = {}
-            for fan, mid, raw, price, created in rows:
-                media = _ids(raw)
-                if not media or mid in echoes:
-                    continue
-                mkey = media_key(media)
-                candidate = touched.get(mkey) or s.get(OfOfferImportCandidate, (claim.account, job.job_id, mkey), with_for_update=True)
-                if candidate is None:
-                    candidate = OfOfferImportCandidate(account_id=claim.account, job_id=job.job_id, media_key=mkey,
-                        media_json=canonical(sorted(media)), source_count=0, variants_json="[]", samples_json="[]",
-                        revision=0, updated_at=claim.now)
-                    s.add(candidate)
-                touched[mkey] = candidate
-                _merge(candidate, media, price, {"fanId": str(fan), "messageId": mid, "priceCents": price, "sentAt": day(created)})
-                candidate.updated_at = claim.now
-                if mid not in seen:
-                    lacking[(fan, mid)] = None
+            _fold_rows(s, claim, runtime, job, rows)
             if rows:
                 row.covered_through_message_id = rows[-1][1]
-                last = rows[-1][1]
             row.updated_at = claim.now
             folded += len(rows)
             more = len(rows) == FOLD_ROWS
         if not more:
             break
+    late_more = False
+    with Session(store.engine) as s, s.begin():
+        runtime, row, op = _check(store, tenant, s, claim)
+        job = _ensure_initial(s, runtime, row, claim.now, claim.operation_id)
+        # Rows with a provider id at or below the cursor that were imported after the window opened and were
+        # never considered: late imports. Ingestion order (not provider id) decides what is new here.
+        since = row.late_through_at or claim.now - timedelta(seconds=LATE_OVERLAP_SECONDS)
+        late = s.execute(select(Message.fan_id, Message.message_id, Message.media_ids, Message.price_cents,
+                Message.created_at, Message.ingested_at).where(Message.account_id == claim.account,
+                Message.direction == "out", Message.price_cents > 0, Message.message_id <= start,
+                Message.ingested_at >= since,
+                ~exists().where(Source.account_id == Message.account_id, Source.binding_id == runtime.binding_id,
+                    Source.fan_id == Message.fan_id, Source.message_id == Message.message_id))
+            .order_by(Message.ingested_at, Message.message_id, Message.fan_id).limit(FOLD_ROWS)).all()
+        _fold_rows(s, claim, runtime, job, [r[:5] for r in late])
+        folded += len(late)
+        late_more = len(late) == FOLD_ROWS
+        # Never move the window past rows a slow writer may not have committed yet.
+        row.late_through_at = late[-1][5] if late_more else max(since, claim.now - timedelta(seconds=LATE_OVERLAP_SECONDS))
     with Session(store.engine) as s, s.begin():
         runtime, row, op = _check(store, tenant, s, claim)
         backlog = s.scalar(select(func.count()).select_from(select(Message.message_id).where(
             Message.account_id == claim.account, Message.direction == "out", Message.price_cents > 0,
             Message.message_id > (row.covered_through_message_id or 0)).limit(BACKLOG_PROBE).subquery())) or 0
         conflicts = detect_conflicts(s, claim.account, runtime.binding_id, claim.now)
+        wanted, waiting = _refresh_queue(s, claim, runtime.binding_id)
         actor = row.actor
         covered = row.covered_through_message_id
-    return folded, lacking, backlog, conflicts, actor, covered, last
+    return folded, wanted, waiting, backlog, conflicts, actor, covered, late_more
+
+
+def _requested(store, tenant, claim, sources):
+    """The refresh job exists: count the attempt for each source it covers."""
+    if not sources:
+        return
+    with Session(store.engine) as s, s.begin():
+        runtime, row, op = _check(store, tenant, s, claim)
+        s.execute(update(Source).where(Source.account_id == claim.account, Source.binding_id == runtime.binding_id,
+            Source.refresh_pending.is_(True), tuple_(Source.fan_id, Source.message_id).in_(sources)).values(refresh_attempts=Source.refresh_attempts + 1))
 
 
 def _incremental(store, tenant, claim):
-    folded, lacking, backlog, conflicts, actor, covered, _ = _fold(store, tenant, claim)
-    wanted = sorted(lacking, key=lambda t: t[1], reverse=True)
-    sources = wanted[:REFRESH_SOURCES]
+    folded, sources, waiting, backlog, conflicts, actor, covered, late_more = _fold(store, tenant, claim)
     refresh = _queue_refresh(store, tenant, claim, actor, sources)
+    if refresh == "queued":
+        _requested(store, tenant, claim, sources)
     vault = _queue_vault(store, tenant, claim, actor)
-    truncated = len(wanted) > REFRESH_SOURCES
+    truncated = waiting > len(sources)
     coverage = {"foldedRows": folded, "foldedThroughMessageId": None if covered is None else str(covered),
-        "backlog": backlog, "bounded": backlog > 0, "newSourcesWithoutDetails": len(wanted),
+        "backlog": backlog, "bounded": backlog > 0 or late_more, "newSourcesWithoutDetails": waiting,
         "refreshSources": len(sources), "refresh": refresh, "refreshTruncated": truncated, "vaultRead": vault,
         "conflictsOpened": conflicts}
     result = {"syncKind": "incremental"} if claim.kind == "sync_now" else {}
     if "auth" in (refresh, vault):
         return {"status": "cancelled", "error": "connection_unavailable", "coverage": coverage, "result": result}
-    status = "partial" if backlog > 0 or truncated else "complete"
-    return {"status": status, "backlog": backlog, "coverage": coverage, "result": result}
+    status = "partial" if backlog > 0 or truncated or late_more else "complete"
+    return {"status": status, "backlog": backlog, "coverage": coverage, "result": result, "drain": late_more,
+        "pendingRefresh": waiting > (len(sources) if refresh == "queued" else 0)}
 
 
 def _reconcile(store, tenant, claim):

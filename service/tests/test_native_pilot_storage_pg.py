@@ -130,10 +130,11 @@ class PgFixture(ledger_test.Fixture):
             # The real column is NOT NULL: a job with no kind is the empty kind (still not 'gen_info').
             args = (args[0], args[1], "" if args[2] is None else args[2])
         elif sql.startswith("INSERT INTO catalog_items VALUES("):
-            m = re.fullmatch(r"INSERT INTO catalog_items VALUES\((\d+),\?,'(\w+)','(\[\d+\])',(\d+),([01]),([01])\)", sql)
+            # Runner fixture shape: (id, account, kind, media_ids, preview_media_ids, price, is_free_teaser, enabled, pricing_mode).
+            m = re.fullmatch(r"INSERT INTO catalog_items VALUES\((\d+),\?,'(\w+)','(\[[\d, ]+\])','(\[[\d, ]*\])',(\d+),([01]),([01]),'(\w+)'\)", sql)
             sql = ("INSERT INTO catalog_items(id,account_id,kind,media_ids,preview_media_ids,price_cents,tip_unlock_cents,"
-                   f"is_free_teaser,tags,enabled) VALUES({m.group(1)},?,'{m.group(2)}','{m.group(3)}','[]',{m.group(4)},0,"
-                   f"{'true' if m.group(5) == '1' else 'false'},'[]',{'true' if m.group(6) == '1' else 'false'})")
+                   f"is_free_teaser,tags,enabled,pricing_mode) VALUES({m.group(1)},?,'{m.group(2)}','{m.group(3)}','{m.group(4)}',{m.group(5)},0,"
+                   f"{'true' if m.group(6) == '1' else 'false'},'[]',{'true' if m.group(7) == '1' else 'false'},'{m.group(8)}')")
         return rows(sql, args)
 
     def source(self, mid=100, **overrides):
@@ -278,6 +279,10 @@ def main():
         engine = create_engine(SYNC_URL, connect_args={"options": "-c timezone=UTC"})
         with engine.begin() as conn:
             bootstrap(conn)
+            # Employee ids the reused runner suite stamps on messages (Automation/human sentinels and a stray id);
+            # messages.sent_by_employee_id is a real FK on PostgreSQL.
+            conn.exec_driver_sql("INSERT INTO employees(id,display_name,is_active) VALUES "
+                                 "(5,'Automation',false),(6,'Twin staff',false),(9,'Other',false)")
         engine.dispose()
         schema_checks()
         print("schema ok", CHECKS)

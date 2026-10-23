@@ -725,9 +725,32 @@ def _sweep(store, tenant):
     return count
 
 
+def lease_authority(store, tenant, lease):
+    """Callable for a provider write boundary: raises Refused unless this exact leased asset, binding and
+    connection (owner, revision, unexpired) still hold. Evaluated against the database every time."""
+    def authorize():
+        now = utcnow()
+        with Session(store.engine) as s, s.begin():
+            try:
+                runtime = store._runtime(s, tenant, lease.account)
+            except Refused:
+                raise Refused("upload scope changed") from None
+            asset = s.get(Asset, (lease.account, lease.asset_id))
+            connection = s.get(OfProviderConnection, lease.account)
+            if (asset is None or asset.lease_token != lease.token or asset.lease_until is None or asset.lease_until <= now
+                    or asset.state not in ACTIVE or asset.binding_id != lease.binding or runtime.binding_id != lease.binding
+                    or not _usable(connection, lease.binding, now) or connection.owner_id != lease.owner
+                    or connection.revision != lease.revision):
+                raise Refused("upload authority lost")
+    return authorize
+
+
 def _step(store, tenant, lease, provide, stop):
     try:
-        transport = provide(lease.connection, tenant, lease.account)
+        if getattr(provide, "needs_authority", False):
+            transport = provide(lease.connection, tenant, lease.account, lease_authority(store, tenant, lease))
+        else:
+            transport = provide(lease.connection, tenant, lease.account)
     except AuthRequired:
         transport = AuthRequired
     except Exception:

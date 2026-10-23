@@ -29,7 +29,7 @@ def setup(database,*,account="acc-a",tenant="tenant-a",coverage=True):
     return store
 
 
-def read(database,*,tenant="tenant-a",start=None,end=None):
+def read(database,*,tenant="tenant-a",start=None,end=None,include_pending=False):
     now=utcnow()
     a=start or (now-timedelta(days=30)).isoformat(timespec="milliseconds")+"Z"
     b=end or now.isoformat(timespec="milliseconds")+"Z"
@@ -40,7 +40,7 @@ def read(database,*,tenant="tenant-a",start=None,end=None):
         sql_event.listen(engine.sync_engine,"before_cursor_execute",no_credentials)
         try:
             async with async_sessionmaker(engine)() as session:
-                async with session.begin():return await read_earnings(session,tenant_id=tenant,start=a,end=b)
+                async with session.begin():return await read_earnings(session,tenant_id=tenant,start=a,end=b,include_pending=include_pending)
         finally:await engine.dispose()
     return asyncio.run(run())
 

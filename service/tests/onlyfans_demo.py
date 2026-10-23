@@ -86,7 +86,11 @@ def main():
             # The harness app has no public/ of its own (it is gitignored). Copy
             # the exact static assets the shared shell requests so the Overview
             # does not log 404s, as check-onlyfans-render-browser.mjs already does.
-            for asset in ["brand/platforms", "moxy", "lynq", "icon.png", "brand/catalogue/approved-blue-badge.png"]:
+            # Newer dashboards track preview/onlyfans-integration/public as a symlink to ../../public;
+            # the assets are then already served and copying them would copy each file onto itself.
+            harness_public = dashboard/"preview/onlyfans-integration/public"
+            shared = harness_public.is_symlink() and harness_public.resolve() == (dashboard/"public").resolve()
+            for asset in ([] if shared else ["brand/platforms", "moxy", "lynq", "icon.png", "brand/catalogue/approved-blue-badge.png"]):
                 source, target = dashboard/"public"/asset, dashboard/"preview/onlyfans-integration/public"/asset
                 if source.is_dir():shutil.copytree(source,target,dirs_exist_ok=True)
                 elif source.is_file():target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)

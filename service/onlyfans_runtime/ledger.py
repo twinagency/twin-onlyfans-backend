@@ -193,6 +193,7 @@ def apply_observation(s, account, observation, *, now):
             offer = offers[0] if offers else None
     if outcome == "applied":
         was_paid = tx is not None and tx.status in PAID
+        moved = tx is None or tx.status != observation["status"] or tx.message_id != mid
         if tx is None:
             tx = Transaction(account_id=account, provider_transaction_id=provider,
                 occurred_at=occurred, source="ledger", **{key: observation[key] for key in core})
@@ -218,6 +219,11 @@ def apply_observation(s, account, observation, *, now):
             from .commerce import settle_media_purchase
             settle_media_purchase(s, account_id=account, fan_id=fan_id, message=message,
                 offer=offer, paid=paid, was_paid=was_paid, stamp=occurred, now=now)
+        if moved and fan_id is not None:
+            # Purchase, refund or reversal: unsent proactive work for this fan is obsolete.
+            s.flush()
+            from .launch_engagement.events import cancel_for_fan
+            cancel_for_fan(s, account, fan_id, "purchase", now=now)
     s.add(OfLedgerEvidence(account_id=account, evidence_hash=fingerprint,
         provider_transaction_id=provider, fan_id=fan_id, transaction_id=tx.id if tx else None,
         outcome=outcome, observation_json=encoded, recorded_at=now))

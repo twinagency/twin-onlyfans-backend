@@ -30,7 +30,7 @@ import json
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator
 
@@ -124,11 +124,23 @@ _SCHEMA = (
 )
 
 
+# Persistent-service pilots (see activate_service) are never capped by their own
+# conversation budget: the account's delivery allowance is the cap. The
+# conversation budget only has to stay above anything the allowance can grant
+# (``limit_units`` is at most 10000), so it can never be the first thing to bind.
+SERVICE_BUDGET_CEILING = 10000
+SERVICE_ID = re.compile(r"svc-[A-Za-z0-9_-]{1,92}")
+
+
 class Ledger:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, allowance: bool = False):
         # A PostgreSQL target is the application URL (never printed or logged).
         self.path = path if store.is_pg(path) else Path(path)
         self.pg = store.is_pg(path)
+        # allowance=True (persistent service only): every admission also consumes
+        # one unit of the account's EXISTING of_delivery_policy, in the same
+        # transaction as the durable attempt. The bounded pilot never sets it.
+        self.allowance = allowance
 
     def _check_target(self) -> None:
         # Never silently create an empty database at a misspelled production path.
@@ -337,6 +349,8 @@ class Ledger:
                 raise Refused("source-changed")
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND bubble_no=?", (input_key, bubble_no)).fetchone():
                 raise Refused("attempt-already-exists")
+            if self.allowance:
+                self._consume_allowance(con, p["account_id"], now_s)
             tid = "native-pilot-" + _hash([pilot_id, input_key, bubble_no])
             aid = store.insert_id(con, "INSERT INTO twin_bridge_send_attempts(account_id,fan_id,turn_id,attempt_no,state,"
                                   "owner_token,revision,created_at,updated_at) VALUES(?,?,?,1,'dispatching',?,?,?,?)",
@@ -346,6 +360,50 @@ class Ledger:
             con.execute("INSERT INTO native_pilot_receipts(attempt_id,pilot_id,input_key,bubble_no,state,created_at,updated_at) "
                         "VALUES(?,?,?,?,'dispatching',?,?)", (aid, pilot_id, input_key, bubble_no, now_s, now_s))
             return Attempt(aid, p["account_id"], p["fan_id"], tid, 1, owner_token, revision)
+
+    @staticmethod
+    def _policy_row(con, account: str):
+        return con.execute("SELECT enabled,limit_units,used_units,throttle_seconds,next_dispatch_at,active_intent_id "
+                           "FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()
+
+    @classmethod
+    def _consume_allowance(cls, con, account: str, now_s: str) -> None:
+        """Spend ONE unit of the account's delivery allowance, or refuse.
+
+        Never resets, lowers or raises ``used_units`` except by this single
+        increment, and the increment is conditional on the row still reading as
+        checked, so it cannot pass ``limit_units`` even against Twin's own worker.
+        The unit is never refunded: an unknown outcome keeps it spent.
+        """
+        row = cls._policy_row(con, account)
+        if row is None:
+            raise Refused("allowance-missing")
+        if not row["enabled"]:
+            raise Refused("allowance-disabled")
+        if row["used_units"] >= row["limit_units"]:
+            raise Refused("allowance-exhausted")
+        if row["active_intent_id"]:
+            raise Refused("allowance-busy")
+        if row["next_dispatch_at"] is not None and _dt(row["next_dispatch_at"]) > now_s:
+            raise Refused("allowance-throttled")
+        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=row["throttle_seconds"]))
+        cur = con.execute("UPDATE of_delivery_policy SET used_units=used_units+1,next_dispatch_at=? "
+                          "WHERE account_id=? AND enabled AND used_units=? AND used_units<limit_units "
+                          "AND active_intent_id IS NULL",
+                          (due, account, row["used_units"]))
+        if cur.rowcount != 1:
+            raise Refused("allowance-changed")
+
+    def allowance_status(self, account: str) -> dict | None:
+        """Read-only copy of the account's delivery policy numbers (None when absent)."""
+        with store.readonly(self.path) as con:
+            row = self._policy_row(con, account)
+        if row is None:
+            return None
+        due = row["next_dispatch_at"]
+        return {"enabled": bool(row["enabled"]), "limit": row["limit_units"], "used": row["used_units"],
+                "throttle_seconds": row["throttle_seconds"], "busy": bool(row["active_intent_id"]),
+                "next_dispatch_at": None if due is None else _dt(due)}
 
     def validate_dispatch(self, *, pilot_id: str, owner_token: str, attempt_id: int,
                           now: datetime | str) -> None:
@@ -488,6 +546,144 @@ class Ledger:
                 raise Refused("pilot-owner-mismatch")
             con.execute("UPDATE native_pilot_inputs SET state='complete',updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
                         (_dt(now), pilot_id, input_key))
+
+    # ── persistent service pilots ────────────────────────────────────────────
+    # Same rows, same fences and the same admission/unknown rules as a bounded
+    # pilot; what differs is that the lease is renewed instead of fixed, the
+    # cap is the account's delivery allowance, and a restarted process may adopt
+    # its own pilot once the old lease has lapsed and nothing is unresolved.
+
+    def activate_service(self, *, pilot_id: str, account_id: str, fan_id: int, owner_token: str,
+                         now: datetime | str, ttl_s: float) -> Pilot:
+        """Create or adopt the ONE stable service pilot for an account/fan.
+
+        Refuses (never waits, never forces) while another owner's lease is live,
+        any send is unsettled (dispatching / unknown / writer marker / open Twin
+        turn), or the conversation is not active (an operator pause, or the
+        attention state an unknown outcome leaves behind). Adoption keeps the
+        original ``cutoff`` and every used count; it only issues a new fenced
+        token and revision. A claim abandoned by a crash is stopped, never
+        regenerated (no receipt can exist for it, or ``_unsettled`` would refuse).
+        """
+        if not isinstance(pilot_id, str) or not SERVICE_ID.fullmatch(pilot_id):
+            raise Refused("invalid-pilot-id")
+        from .scope import AccountScope
+        if not AccountScope.valid(account_id) or not isinstance(fan_id, int) or isinstance(fan_id, bool) or fan_id <= 0:
+            raise Refused("invalid-identity")
+        if not isinstance(owner_token, str) or not 16 <= len(owner_token) <= 256:
+            raise Refused("invalid-owner")
+        if not isinstance(ttl_s, (int, float)) or isinstance(ttl_s, bool) or not 5 <= ttl_s <= 3600:
+            raise Refused("invalid-ttl")
+        now_s = _dt(now)
+        lease_s = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=ttl_s))
+        with self._tx(initialize=True) as con:
+            c = con.execute("SELECT * FROM twin_bridge_conversations WHERE account_id=? AND fan_id=?",
+                            (account_id, fan_id)).fetchone()
+            if c is None or c["state"] != "active":
+                raise Refused("conversation-not-active")
+            existing = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            if con.execute("SELECT 1 FROM native_pilots WHERE account_id=? AND fan_id=? AND state='active' AND pilot_id<>?",
+                           (account_id, fan_id, pilot_id)).fetchone():
+                raise Refused("pilot-already-active")
+            self._unsettled(con, account_id, fan_id)
+            lease_live = bool(c["owner_token"] and c["owner_expires_at"] and _dt(c["owner_expires_at"]) > now_s)
+            if existing is not None:
+                if (existing["account_id"], existing["fan_id"]) != (account_id, fan_id):
+                    raise Refused("activation-conflict")
+                if existing["state"] == "active" and (lease_live or _dt(existing["deadline"]) > now_s):
+                    raise Refused("owner-live")
+                end = existing["end_limit"]
+                if c["send_budget_used"] >= end:
+                    raise Refused("budget-exhausted")
+                revision = max(c["revision"], existing["revision"]) + 1
+                con.execute("UPDATE native_pilots SET owner_token=?,deadline=?,revision=?,state='active',reason=NULL,"
+                            "updated_at=? WHERE pilot_id=?", (owner_token, lease_s, revision, now_s, pilot_id))
+                con.execute("UPDATE native_pilot_inputs SET state='stopped',updated_at=? WHERE pilot_id=? AND state='generating'",
+                            (now_s, pilot_id))
+            else:
+                if lease_live:
+                    raise Refused("owner-live")
+                used, old_limit = c["send_budget_used"], c["send_budget_limit"]
+                if used < 0 or old_limit != used:
+                    raise Refused("prior-budget-not-exhausted")
+                revision, end = c["revision"] + 1, used + SERVICE_BUDGET_CEILING
+                con.execute("INSERT INTO native_pilots(pilot_id,account_id,fan_id,owner_token,cutoff,deadline,"
+                            "grant_limit,baseline_used,end_limit,revision,state,created_at,updated_at) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?)",
+                            (pilot_id, account_id, fan_id, owner_token, now_s, lease_s, SERVICE_BUDGET_CEILING,
+                             used, end, revision, now_s, now_s))
+            con.execute("UPDATE twin_bridge_conversations SET send_budget_limit=?,owner_token=?,owner_expires_at=?,"
+                        "reserved=?,revision=?,updated_at=? WHERE account_id=? AND fan_id=?",
+                        (end, owner_token, lease_s, True, revision, now_s, account_id, fan_id))
+            return self._pilot(con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone())
+
+    def renew(self, *, pilot_id: str, owner_token: str, now: datetime | str, ttl_s: float) -> str:
+        """Move the pilot deadline and the conversation lease forward; returns the new deadline.
+
+        Refuses (``authority-lost``) once the lease has already lapsed or another
+        token/revision owns the conversation: a lapsed lease may have been adopted,
+        so it is never silently revived.
+        """
+        if not isinstance(ttl_s, (int, float)) or isinstance(ttl_s, bool) or not 5 <= ttl_s <= 3600:
+            raise Refused("invalid-ttl")
+        now_s = _dt(now)
+        lease_s = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=ttl_s))
+        with self._tx() as con:
+            # Deliberately NOT ``_active``: a lease must stay renewable while one
+            # POST is in flight (an unsettled attempt would make ``_active`` refuse).
+            p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            if p is None or p["owner_token"] != owner_token:
+                raise Refused("pilot-owner-mismatch")
+            if p["state"] != "active":
+                raise Refused("pilot-stopped")
+            c = con.execute("SELECT * FROM twin_bridge_conversations WHERE account_id=? AND fan_id=?",
+                            (p["account_id"], p["fan_id"])).fetchone()
+            if now_s >= p["deadline"] or c is None or c["state"] != "active" or not c["reserved"] \
+                    or c["owner_token"] != owner_token or c["revision"] != p["revision"] \
+                    or not c["owner_expires_at"] or _dt(c["owner_expires_at"]) <= now_s:
+                raise Refused("authority-lost")
+            con.execute("UPDATE native_pilots SET deadline=?,updated_at=? WHERE pilot_id=?", (lease_s, now_s, pilot_id))
+            con.execute("UPDATE twin_bridge_conversations SET owner_expires_at=?,updated_at=? "
+                        "WHERE account_id=? AND fan_id=? AND owner_token=? AND revision=?",
+                        (lease_s, now_s, p["account_id"], p["fan_id"], owner_token, p["revision"]))
+            return lease_s
+
+    def release_service(self, *, pilot_id: str, owner_token: str, now: datetime | str) -> None:
+        """Clean shutdown: end the lease, keep the pilot, state and reservation.
+
+        Only the current owner may release. A claim with NO receipt is deleted so
+        the unanswered message is generated again after restart (nothing was
+        sent for it); a claim with any receipt is stopped, never regenerated.
+        Unsettled sends are left exactly as they are and still block adoption.
+        """
+        now_s = _dt(now)
+        with self._tx() as con:
+            p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            if p is None or p["owner_token"] != owner_token:
+                raise Refused("pilot-owner-mismatch")
+            con.execute("DELETE FROM native_pilot_inputs WHERE pilot_id=? AND state='generating' AND NOT EXISTS "
+                        "(SELECT 1 FROM native_pilot_receipts r WHERE r.input_key=native_pilot_inputs.input_key)", (pilot_id,))
+            con.execute("UPDATE native_pilot_inputs SET state='stopped',updated_at=? WHERE pilot_id=? AND state='generating'",
+                        (now_s, pilot_id))
+            if p["state"] == "active":
+                con.execute("UPDATE native_pilots SET deadline=?,updated_at=? WHERE pilot_id=?", (now_s, now_s, pilot_id))
+                con.execute("UPDATE twin_bridge_conversations SET owner_token=NULL,owner_expires_at=NULL,"
+                            "revision=revision+1,updated_at=? WHERE account_id=? AND fan_id=? AND owner_token=? AND revision=?",
+                            (now_s, p["account_id"], p["fan_id"], owner_token, p["revision"]))
+
+    def count_model_call(self, *, pilot_id: str, owner_token: str, now: datetime | str) -> int:
+        """Durably count a model attempt for a service pilot (no per-pilot cap; the
+        per-call limits and the account's daily budget bound spend)."""
+        now_s = _dt(now)
+        with self._tx() as con:
+            p = self._active(con, pilot_id, owner_token, now_s)
+            con.execute("UPDATE native_pilots SET model_calls=model_calls+1,updated_at=? WHERE pilot_id=?", (now_s, pilot_id))
+            return p["model_calls"] + 1
+
+    def input_claimed(self, *, pilot_id: str, message_id: int) -> bool:
+        with store.readonly(self.path) as con:
+            return con.execute("SELECT 1 FROM native_pilot_inputs WHERE pilot_id=? AND message_id=?",
+                               (pilot_id, message_id)).fetchone() is not None
 
     def status(self, pilot_id: str) -> dict:
         """Return only public metadata/counters, never owner tokens or message text."""

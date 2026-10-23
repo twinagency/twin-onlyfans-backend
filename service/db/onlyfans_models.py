@@ -23,6 +23,8 @@ class OfRuntime(Base):
     pending_events = Column(Integer, nullable=False, server_default=text("0"))
     configuration_revision = Column(Integer, nullable=False, server_default=text("0"),
         info={"onlyfans_since":"0079_native_configuration"})
+    # A routine freshness poll in flight; it never invalidates existing proof (a genuine gap sets recovery_needed).
+    poll_pending = Column(Boolean, nullable=False, server_default=false(), info={"onlyfans_since":"0092_work_block_reason"})
 
 
 class OfConfigurationChange(Base):
@@ -82,6 +84,10 @@ class OfWork(Base):
     lease_token = Column(String(36))
     lease_until = Column(DateTime)
     last_claim_at = Column(DateTime, nullable=False, server_default=text("'1970-01-01'"))
+    # Why a blocked input is blocked: only a before-model hold is ever retried automatically.
+    block_reason = Column(String(48), info={"onlyfans_since":"0092_work_block_reason"})
+    block_phase = Column(String(16), info={"onlyfans_since":"0092_work_block_reason"})
+    block_input_revision = Column(Integer, info={"onlyfans_since":"0092_work_block_reason"})
 
 
 class OfRecovery(Base):

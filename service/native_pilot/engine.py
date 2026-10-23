@@ -109,12 +109,13 @@ class NativeEngine:
             ContentOffer.account_id == self.account_id,
             ContentOffer.status.in_(("open", "unlocked")),
         )
-        if self.content is not None:
+        item = getattr(self.content, "item", None) if self.content is not None else None
+        if item is not None:
             # An open PPV for the one approved item, to this fan, is not an obligation the
             # runner must settle: OnlyFans unlocks a paid card itself. Any other open offer
             # (another fan, another item, a tip-unlock) still stops the turn.
             approved = (ContentOffer.fan_id == self.fan_id) & (ContentOffer.mode == "ppv") \
-                & (ContentOffer.item_id == self.content.item["catalog_id"])
+                & (ContentOffer.item_id == item["catalog_id"])
             query = query.where(~approved)
         async with get_session() as session:
             row = (await session.execute(query.limit(1))).first()

@@ -12,7 +12,8 @@ existing OnlyFans call follows its original path byte-for-byte.
 from __future__ import annotations
 
 import contextvars
-from typing import Any, Mapping, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -32,6 +33,21 @@ class TelegramNativeCapabilities(Protocol):
     async def load_day(self, account_id: str, *args: Any, **kwargs: Any) -> Any: ...
     async def teaser_config(self, account_id: str, kind: str) -> Any: ...
     async def hold(self, account_id: str, fan_id: int, seconds: float, **kwargs: Any) -> None: ...
+
+
+@dataclass(frozen=True)
+class PromptContext:
+    """What a capability supplies at ``ai_chatter``'s single prompt hook.
+
+    ``persona`` replaces the native persona for this fan (approved prose plus the
+    approved creator facts); ``finish`` receives the composed (system, user)
+    messages and returns them with any additional fan-memory evidence. A
+    capability opts in by defining ``async prompt_context(account_id, fan_id, *,
+    last_inbound)``; it is deliberately not part of the required protocol above,
+    so capabilities without it keep the native prompt byte-for-byte.
+    """
+    persona: str
+    finish: Callable[[list], list] | None = None
 
 
 _active: contextvars.ContextVar[TelegramNativeCapabilities | None] = contextvars.ContextVar(

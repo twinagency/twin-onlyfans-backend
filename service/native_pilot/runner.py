@@ -259,6 +259,30 @@ class Gateway:
             raise Refused(self.stopped_reason) from None
 
 
+CLEAN_STOPS = frozenset({"preflight-only", "time-limit-reached", "send-limit-reached", "operator-stop",
+                         "native-declined-turn", "paid-card-sent-test-complete"})
+
+
+def db_account_id(account):
+    """The ONE call site where the pilot/FASTT account id becomes the canonical DB id.
+
+    Identity today; the runtime-mapping helper (`to_live_account_id`) replaces the body."""
+    return account
+
+
+async def report_to_twin(ledger, pilot, run_error=None):
+    """Accepted sends, unknowns and errors into Twin's reporting tables (see reporting.py).
+
+    Never raises: reporting must not change the pilot's stop/ownership decisions."""
+    try:
+        from .reporting import report_outcomes
+        result = await report_outcomes(account_id=db_account_id(pilot.account_id), fan_id=pilot.fan_id,
+                                       receipts=ledger.receipts(pilot_id=pilot.pilot_id), run_error=run_error)
+        emit({"event": "twin-report", **result})
+    except Exception:
+        emit({"event": "twin-report-failed"})
+
+
 def begin_native_run(path, account):
     """Create the native audit row without invoking the automation scheduler."""
     with sqlite3.connect(Path(path).resolve().as_uri() + "?mode=rw", uri=True) as con:
@@ -338,7 +362,12 @@ async def run(args):
             deadline=time.monotonic() + args.max_seconds, should_stop=gateway.stopped, on_event=emit,
             reserve_call=lambda: ledger.reserve_model_call(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=now()))
         reason = "time-limit-reached"
-        with NativeEngine(args.account, args.fan, chat=model.chat, send=gateway.send, emit=emit, content=content) as native:
+        context = None
+        if getattr(args, "twin_context", False):
+            from .twin_context import TwinPromptContext
+            context = TwinPromptContext()
+        with NativeEngine(args.account, args.fan, chat=model.chat, send=gateway.send, emit=emit, content=content,
+                          context=context) as native:
             emit({"event": "ready", "pilot_id": pilot.pilot_id, "account_id": args.account, "fan_id": args.fan,
                   "engine": "fastt-native", "limit": args.send_limit, "deadline_utc": pilot.deadline,
                   "fresh_messages_only": True, "creator_profile": profile["creator_profile"]})
@@ -379,6 +408,7 @@ async def run(args):
                     finish_native_run(path, run_id, stats, run_error)
                 receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=gateway.input_key)
                 verify_attribution(path, args.account, args.fan, receipts, content=content)
+                await report_to_twin(ledger, pilot)
                 ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=gateway.input_key, now=now())
                 if content:
                     with readonly(path) as con:
@@ -410,6 +440,7 @@ async def run(args):
     finally:
         try:
             if pilot is not None:
+                await report_to_twin(ledger, pilot, None if reason in CLEAN_STOPS else reason)
                 try:
                     ledger.stop(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, reason=reason, now=now())
                 finally:
@@ -437,6 +468,8 @@ def main():
     parser.add_argument("--send-limit", type=int, default=10)
     parser.add_argument("--max-seconds", type=int, default=1800)
     parser.add_argument("--enable-send", action="store_true")
+    parser.add_argument("--twin-context", action="store_true",
+                        help="Feed Twin's approved persona, creator facts and fan memory through the single prompt hook")
     parser.add_argument("--content-manifest", help="Explicit private two-card pilot manifest; text only when omitted")
     args = parser.parse_args()
     if not args.account.isdecimal() or args.fan <= 0 or not 1 <= args.send_limit <= 30 or not 60 <= args.max_seconds <= 1800:

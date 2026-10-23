@@ -429,6 +429,10 @@ class Store:
                                  takeover_from=before_takeover if action is not None else None,
                                  takeover_to=state.takeover_state if action is not None else None, created_at=utcnow()))
             s.flush()
+            # One authority: FASTT's durable stop is a projection of this state,
+            # written in this same transaction (never a second writable flag).
+            from .fastt_controls import project_stop
+            project_stop(s, account_id, fan_id, state)
             from .launch_engagement.events import cancel_for_fan
             cancel_for_fan(s, account_id, fan_id, {"human_controlled": "takeover", "paused": "pause",
                 "no_contact": "no_contact"}.get(mode, "operator_cancelled"), now=utcnow())

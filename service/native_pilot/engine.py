@@ -135,7 +135,30 @@ class NativeEngine:
             # Approved creator facts ride the system prompt on every turn, not
             # only when the fan asks about her (FASTT's token-saving default).
             result.update(persona_facts_on_ask_only=False)
+        if await self._resumed_after_last_human():
+            # An operator explicitly handed the chat back (Resume / Hand back) after the
+            # last human message: FASTT's timed "cautious resume" yield is satisfied.
+            result.update(resume_after_manual_hours=0)
         return result
+
+    async def _resumed_after_last_human(self):
+        """True when the newest explicit resume/release for this fan is later than the
+        newest human (non-automation) outbound. Fails closed (False) on any error."""
+        try:
+            from sqlalchemy import select, func
+            from db.engine import get_session
+            from db.models import Message
+            from db.onlyfans_models import OfControlAudit
+            async with get_session() as session:
+                resumed = (await session.execute(select(func.max(OfControlAudit.created_at)).where(
+                    OfControlAudit.account_id == self.account_id, OfControlAudit.fan_id == self.fan_id,
+                    OfControlAudit.action.in_(("resume_automation", "release_takeover"))))).scalar()
+                human = (await session.execute(select(func.max(Message.created_at)).where(
+                    Message.account_id == self.account_id, Message.fan_id == self.fan_id,
+                    Message.direction == "out", Message.automation_kind.is_(None)))).scalar()
+            return resumed is not None and (human is None or resumed > human)
+        except Exception:
+            return False
 
     async def prompt_context(self, account_id, fan_id, *, last_inbound):
         """The single prompt hook (see ai_chatter._runtime_prompt_context)."""

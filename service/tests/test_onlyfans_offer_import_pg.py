@@ -313,6 +313,8 @@ def test_inventory_scales_past_the_audited_history_volume(ready):
     """T13: 330,000 synthetic priced rows (audit saw 325,072), bounded batches."""
     store, account = ready
     with store.engine.begin() as c:
+        # Seeding only: the store's 10s statement limit still applies to every batch below.
+        c.execute(text("SET LOCAL statement_timeout = 0"))
         c.execute(text("""INSERT INTO messages(account_id, fan_id, message_id, direction, sender_name, body, media_ids,
               media_count, price_cents, is_tip, is_unsent, is_promise, created_at)
             SELECT :account, 10000 + (n / 100), 100000 + n, 'out', '', '',

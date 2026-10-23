@@ -33,6 +33,17 @@ def drop_0090(c):
     c.execute(text("UPDATE alembic_version SET version_num=:v"), {"v": OFFER_IMPORT})
 
 
+def rewind_to_0088(c):
+    """Remove every 0090 and 0089 object (test databases only); the caller stamps the revision."""
+    drop_0090(c)
+    c.exec_driver_sql("DROP TABLE of_content_sync_decision, of_content_sync_conflict, of_content_sync_draft, of_content_sync_asset,"
+                      " of_content_sync_operation, of_content_sync_account;"
+                      " DROP FUNCTION of_content_sync_decision_immutable(); DROP FUNCTION of_content_sync_asset_frozen(); DROP FUNCTION of_content_sync_conflict_frozen();"
+                      " DROP TABLE of_offer_import_decision, of_offer_import_candidate, of_offer_import_cursor, of_offer_import_job, of_offer_observation;"
+                      " DROP FUNCTION of_offer_observation_immutable(); DROP FUNCTION of_offer_decision_immutable(); DROP FUNCTION of_offer_import_job_frozen();"
+                      " ALTER TABLE catalog_items DROP CONSTRAINT ck_catalog_items_pricing_mode, DROP COLUMN pricing_mode")
+
+
 def test_populated_0088_upgrade_keeps_existing_items_dynamic_and_unchanged(database):
     _, engine = database
     from db.models import Account
@@ -41,13 +52,7 @@ def test_populated_0088_upgrade_keeps_existing_items_dynamic_and_unchanged(datab
         s.add(CatalogItem(account_id="legacy-acc", kind="image", media_ids="[1]", price_cents=1007, enabled=True))
     with engine.begin() as c:
         before = [{k: v for k, v in r.items() if k != "pricing_mode"} for r in c.execute(text("SELECT * FROM catalog_items")).mappings()]
-        drop_0090(c)
-        c.exec_driver_sql("DROP TABLE of_content_sync_decision, of_content_sync_conflict, of_content_sync_draft, of_content_sync_asset,"
-                          " of_content_sync_operation, of_content_sync_account;"
-                          " DROP FUNCTION of_content_sync_decision_immutable(); DROP FUNCTION of_content_sync_asset_frozen(); DROP FUNCTION of_content_sync_conflict_frozen();"
-                          " DROP TABLE of_offer_import_decision, of_offer_import_candidate, of_offer_import_cursor, of_offer_import_job, of_offer_observation;"
-                          " DROP FUNCTION of_offer_observation_immutable(); DROP FUNCTION of_offer_decision_immutable(); DROP FUNCTION of_offer_import_job_frozen();"
-                          " ALTER TABLE catalog_items DROP CONSTRAINT ck_catalog_items_pricing_mode, DROP COLUMN pricing_mode")
+        rewind_to_0088(c)
         c.execute(text("UPDATE alembic_version SET version_num=:v"), {"v": VAULT_MEDIA})
         check_schema(c, expected=VAULT_MEDIA)
         with pytest.raises(SchemaMismatch, match="not supported"):

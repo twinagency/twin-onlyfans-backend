@@ -14,7 +14,7 @@ import json
 import os
 import uuid
 
-from sqlalchemy import create_engine, or_, select, update
+from sqlalchemy import case, create_engine, or_, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
@@ -105,6 +105,27 @@ class ScanClaim:
     token: str
     cursor: str | None
 
+
+
+def fan_current_override(account_id):
+    """Explicit owner-approved fans that may be served before the account-wide
+    recent recovery finishes: ONLYFANS_FAN_CURRENT_OVERRIDE="acct:fan,acct:fan"."""
+    out = set()
+    for part in os.environ.get("ONLYFANS_FAN_CURRENT_OVERRIDE", "").split(","):
+        account, _, fan = part.strip().partition(":")
+        if account == account_id and fan.isdigit():
+            out.add(int(fan))
+    return out
+
+
+def fan_history_current(s, account_id, fan_id):
+    """An override fan whose own recent recovery is complete and unquarantined."""
+    if fan_id not in fan_current_override(account_id):
+        return False
+    row = s.get(OfRecovery, (account_id, fan_id))
+    quarantined = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account_id,
+        OfIngress.fan_id == fan_id, OfIngress.status == "quarantined").limit(1)) if hasattr(OfIngress, "fan_id") else None
+    return row is not None and row.status == "complete" and quarantined is None
 
 class Store:
     def __init__(self, url: str):
@@ -536,7 +557,8 @@ class Store:
             # must yield to untouched histories. Lease/cursor fences stay intact.
             row = s.scalar(select(OfRecovery).where(OfRecovery.account_id == account_id,
                            or_(OfRecovery.status == "needed", (OfRecovery.status == "running") & (OfRecovery.lease_until <= now)))
-                           .order_by(OfRecovery.generation.asc(), OfRecovery.last_complete_at.asc().nullsfirst(), OfRecovery.fan_id).limit(1))
+                           .order_by(case((OfRecovery.fan_id.in_(fan_current_override(account_id) or {-1}), 0), else_=1),
+                                     OfRecovery.generation.asc(), OfRecovery.last_complete_at.asc().nullsfirst(), OfRecovery.fan_id).limit(1))
             if row is None:
                 return None
             row.status, row.generation, row.lease_token = "running", row.generation + 1, str(uuid.uuid4())

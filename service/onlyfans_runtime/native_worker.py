@@ -124,10 +124,13 @@ class NativeWorker:
             runtime=self.store._runtime(s,self.tenant_id,account.account_id)
             policy=s.get(OfDeliveryPolicy,account.account_id)
             now=self.authority._db_now(s)
-            return bool(runtime.enabled and not runtime.recovery_needed and not runtime.pending_events
-                and runtime.last_sync_at is not None and
+            from .store import fan_current_override
+            current=bool(not runtime.recovery_needed and runtime.last_sync_at is not None and
                 (now-runtime.last_sync_at).total_seconds()>=-300 and
-                (now-runtime.last_sync_at).total_seconds()<=MAX_SYNC_AGE_SECONDS
+                (now-runtime.last_sync_at).total_seconds()<=MAX_SYNC_AGE_SECONDS)
+            # Per-fan eligibility still requires that fan's own recovery (text_delivery).
+            return bool(runtime.enabled and not runtime.pending_events
+                and (current or bool(fan_current_override(account.account_id)))
                 and policy is not None and policy.enabled and policy.transport_kind==kind
                 and policy.used_units<policy.limit_units and not policy.active_intent_id and policy.queued_count==0
                 and (policy.next_dispatch_at is None or policy.next_dispatch_at<=now)

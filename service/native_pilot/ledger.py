@@ -1,7 +1,11 @@
 """Durable limits for a manually activated native Fastt text pilot.
 
-This stdlib-only module imports no application, environment, session or client.
-Constructing ``Ledger(path)`` performs no I/O. ``activate`` is the explicit write
+This module imports no application, environment, session or client (the raw-SQL
+store helper it uses is stdlib-only unless a PostgreSQL target is opened).
+``Ledger(target)`` takes a SQLite file path OR the PostgreSQL URL of the
+application database, with identical semantics on both: every write is one
+serialised transaction (SQLite BEGIN IMMEDIATE / PostgreSQL advisory lock).
+Constructing ``Ledger(target)`` performs no I/O. ``activate`` is the explicit write
 boundary: it requires an EXISTING active bridge conversation with no live owner,
 unsettled delivery, writer marker, open Twin turn or unused prior budget. It
 grants at most ten *provider messages*, once, preserving all prior evidence, and
@@ -24,12 +28,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
+
+from twin_bridge import store
 
 
 class Refused(RuntimeError):
@@ -121,43 +126,38 @@ _SCHEMA = (
 
 class Ledger:
     def __init__(self, path: str | Path):
-        self.path = Path(path)
+        # A PostgreSQL target is the application URL (never printed or logged).
+        self.path = path if store.is_pg(path) else Path(path)
+        self.pg = store.is_pg(path)
+
+    def _check_target(self) -> None:
+        # Never silently create an empty database at a misspelled production path.
+        if not self.pg and not self.path.is_file():
+            raise Refused("database-missing")
 
     @contextmanager
-    def _tx(self, *, initialize: bool = False) -> Iterator[sqlite3.Connection]:
-        # Never silently create an empty database at a misspelled production path.
-        if not self.path.is_file():
-            raise Refused("database-missing")
-        con = sqlite3.connect(self.path.resolve().as_uri() + "?mode=rw", uri=True,
-                              timeout=5, isolation_level=None)
-        con.row_factory = sqlite3.Row
-        try:
-            con.execute("BEGIN IMMEDIATE")
-            if initialize:
+    def _tx(self, *, initialize: bool = False) -> Iterator[object]:
+        self._check_target()
+        with store.transaction(self.path) as con:
+            # PostgreSQL tables come from migration 0092, never from runtime DDL.
+            if initialize and not self.pg:
                 for statement in _SCHEMA:
                     con.execute(statement)
             yield con
-            con.execute("COMMIT")
-        except BaseException:
-            if con.in_transaction:
-                con.execute("ROLLBACK")
-            raise
-        finally:
-            con.close()
 
     @staticmethod
-    def _pilot(row: sqlite3.Row) -> Pilot:
+    def _pilot(row) -> Pilot:
         return Pilot(**{key: row[key] for key in Pilot.__dataclass_fields__})
 
     @staticmethod
-    def _unsettled(con: sqlite3.Connection, account: str, fan: int) -> None:
+    def _unsettled(con, account: str, fan: int) -> None:
         if con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? AND fan_id=? "
                        "AND state IN ('dispatching','delivery_unknown') LIMIT 1", (account, fan)).fetchone():
             raise Refused("delivery-unresolved")
         if con.execute("SELECT 1 FROM twin_bridge_turns WHERE account_id=? AND fan_id=? "
                        "AND state NOT IN ('delivered','cancelled','parked') LIMIT 1", (account, fan)).fetchone():
             raise Refused("twin-work-open")
-        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='twin_bridge_writes'").fetchone():
+        if store.has_table(con, "twin_bridge_writes"):
             if con.execute("SELECT 1 FROM twin_bridge_writes WHERE account_id=? AND fan_id IN (?,0) LIMIT 1",
                            (account, fan)).fetchone():
                 raise Refused("writer-unresolved")
@@ -202,8 +202,8 @@ class Ledger:
                 raise Refused("prior-budget-not-exhausted")
             revision, end = c["revision"] + 1, used + limit
             con.execute("UPDATE twin_bridge_conversations SET send_budget_limit=?,owner_token=?,"
-                        "owner_expires_at=?,reserved=1,revision=?,updated_at=? WHERE account_id=? AND fan_id=?",
-                        (end, owner_token, deadline_s, revision, now_s, account_id, fan_id))
+                        "owner_expires_at=?,reserved=?,revision=?,updated_at=? WHERE account_id=? AND fan_id=?",
+                        (end, owner_token, deadline_s, True, revision, now_s, account_id, fan_id))
             con.execute("INSERT INTO native_pilots(pilot_id,account_id,fan_id,owner_token,cutoff,deadline,"
                         "grant_limit,baseline_used,end_limit,revision,state,created_at,updated_at) "
                         "VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?)",
@@ -211,7 +211,7 @@ class Ledger:
                          end, revision, now_s, now_s))
             return self._pilot(con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone())
 
-    def _active(self, con: sqlite3.Connection, pilot_id: str, owner_token: str, now: str) -> sqlite3.Row:
+    def _active(self, con, pilot_id: str, owner_token: str, now: str):
         p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
         if p is None or p["owner_token"] != owner_token:
             raise Refused("pilot-owner-mismatch")
@@ -233,13 +233,13 @@ class Ledger:
         return p
 
     @staticmethod
-    def _source(con: sqlite3.Connection, p: sqlite3.Row, now: str,
+    def _source(con, p, now: str,
                 exclude_input_key: str | None = None) -> SourceSnapshot | None:
         # Only proven outputs from the CURRENT input are excluded. A newer external
         # outbound, system event, unsupported fan input, etc. holds the pilot.
         rows = con.execute("SELECT m.message_id,m.direction,m.body,m.media_ids,m.media_count,m.price_cents,"
                           "m.is_tip,m.is_unsent,m.created_at,m.ingested_at,m.raw_json FROM messages m "
-                          "WHERE m.account_id=? AND m.fan_id=? AND NOT (m.direction='out' AND m.is_unsent=1) "
+                          "WHERE m.account_id=? AND m.fan_id=? AND NOT (m.direction='out' AND m.is_unsent) "
                           "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts r "
                           "WHERE r.pilot_id=? AND r.input_key=? AND r.state='sent' "
                           "AND r.provider_message_id=CAST(m.message_id AS TEXT)) "
@@ -298,7 +298,8 @@ class Ledger:
                            (pilot_id, snapshot.message_id)).fetchone():
                 raise Refused("input-already-claimed")
             key = _hash([pilot_id, snapshot.message_id])
-            con.execute("INSERT INTO native_pilot_inputs VALUES(?,?,?,?,?,?,?,?,'generating',?,?)",
+            con.execute("INSERT INTO native_pilot_inputs(input_key,pilot_id,message_id,source_hash,created_at,ingested_at,"
+                        "member_ids_json,earliest_created_at,state,claimed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'generating',?,?)",
                         (key, pilot_id, snapshot.message_id, snapshot.source_hash, snapshot.created_at,
                          snapshot.ingested_at, _json(snapshot.member_ids), snapshot.earliest_created_at, now_s, now_s))
             return key
@@ -337,10 +338,9 @@ class Ledger:
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND bubble_no=?", (input_key, bubble_no)).fetchone():
                 raise Refused("attempt-already-exists")
             tid = "native-pilot-" + _hash([pilot_id, input_key, bubble_no])
-            inserted = con.execute("INSERT INTO twin_bridge_send_attempts(account_id,fan_id,turn_id,attempt_no,state,"
-                                   "owner_token,revision,created_at,updated_at) VALUES(?,?,?,1,'dispatching',?,?,?,?)",
-                                   (p["account_id"], p["fan_id"], tid, owner_token, revision, now_s, now_s))
-            aid = int(inserted.lastrowid)
+            aid = store.insert_id(con, "INSERT INTO twin_bridge_send_attempts(account_id,fan_id,turn_id,attempt_no,state,"
+                                  "owner_token,revision,created_at,updated_at) VALUES(?,?,?,1,'dispatching',?,?,?,?)",
+                                  (p["account_id"], p["fan_id"], tid, owner_token, revision, now_s, now_s))
             con.execute("UPDATE twin_bridge_conversations SET send_budget_used=send_budget_used+1,updated_at=? "
                         "WHERE account_id=? AND fan_id=?", (now_s, p["account_id"], p["fan_id"]))
             con.execute("INSERT INTO native_pilot_receipts(attempt_id,pilot_id,input_key,bubble_no,state,created_at,updated_at) "
@@ -358,14 +358,8 @@ class Ledger:
         No database transaction is kept open during the eventual network POST.
         """
         now_s = _dt(now)
-        if not self.path.is_file():
-            raise Refused("database-missing")
-        con = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True,
-                              timeout=5, isolation_level=None)
-        con.row_factory = sqlite3.Row
-        try:
-            con.execute("PRAGMA query_only=ON")
-            con.execute("BEGIN")
+        self._check_target()
+        with store.readonly(self.path) as con:
             p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
@@ -397,7 +391,7 @@ class Ledger:
                            "AND state NOT IN ('delivered','cancelled','parked') LIMIT 1",
                            (p["account_id"], p["fan_id"])).fetchone():
                 raise Refused("twin-work-open")
-            if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='twin_bridge_writes'").fetchone():
+            if store.has_table(con, "twin_bridge_writes"):
                 if con.execute("SELECT 1 FROM twin_bridge_writes WHERE account_id=? AND fan_id IN (?,0) LIMIT 1",
                                (p["account_id"], p["fan_id"])).fetchone():
                     raise Refused("writer-unresolved")
@@ -409,10 +403,6 @@ class Ledger:
                                       tuple(json.loads(i["member_ids_json"])), i["earliest_created_at"])
             if self._source(con, p, now_s, exclude_input_key=r["input_key"]) != expected:
                 raise Refused("source-changed")
-        finally:
-            if con.in_transaction:
-                con.execute("ROLLBACK")
-            con.close()
 
     def record_sent(self, *, pilot_id: str, owner_token: str, attempt_id: int,
                     provider_message_id: str, validated_response: dict, evidence: dict,
@@ -450,7 +440,7 @@ class Ledger:
                         (provider_message_id, evidence_s, now_s, attempt_id))
 
     @staticmethod
-    def _outcome_owner(con: sqlite3.Connection, pilot_id: str, owner_token: str, attempt_id: int) -> None:
+    def _outcome_owner(con, pilot_id: str, owner_token: str, attempt_id: int) -> None:
         row = con.execute("SELECT p.owner_token,a.owner_token AS attempt_owner FROM native_pilot_receipts r "
                           "JOIN native_pilots p ON p.pilot_id=r.pilot_id JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
                           "WHERE r.attempt_id=? AND p.pilot_id=?", (attempt_id, pilot_id)).fetchone()
@@ -458,7 +448,7 @@ class Ledger:
             raise Refused("attempt-owner-mismatch")
 
     @staticmethod
-    def _stop(con: sqlite3.Connection, pilot_id: str, owner_token: str, reason: str, now_s: str, *, unknown: bool = False) -> None:
+    def _stop(con, pilot_id: str, owner_token: str, reason: str, now_s: str, *, unknown: bool = False) -> None:
         p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
         if p is None or p["owner_token"] != owner_token:
             raise Refused("pilot-owner-mismatch")
@@ -467,9 +457,9 @@ class Ledger:
         # Never modify a replacement owner's conversation. The pilot itself is
         # nevertheless stopped, preventing the old token from admitting work.
         con.execute("UPDATE twin_bridge_conversations SET state=?,reason=?,send_budget_limit=send_budget_used,"
-                    "revision=revision+1,owner_token=NULL,owner_expires_at=NULL,reserved=1,updated_at=? "
+                    "revision=revision+1,owner_token=NULL,owner_expires_at=NULL,reserved=?,updated_at=? "
                     "WHERE account_id=? AND fan_id=? AND owner_token=? AND revision=?",
-                    ("attention" if unknown else "paused", "native-pilot-" + reason, now_s,
+                    ("attention" if unknown else "paused", "native-pilot-" + reason, True, now_s,
                      p["account_id"], p["fan_id"], owner_token, p["revision"]))
 
     def stop(self, *, pilot_id: str, owner_token: str, reason: str, now: datetime | str) -> None:

@@ -37,8 +37,9 @@ ENROLLMENT = "0087_creator_enrollment"
 VAULT_MEDIA = "0088_native_vault_media"
 OFFER_IMPORT = "0089_offer_import"
 LAUNCH = "0090_launch"
-HEAD = "0091_launch_controls"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, HEAD:91}
+LAUNCH_CONTROLS = "0091_launch_controls"
+HEAD = "0092_native_pilot_storage"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, HEAD:92}
 HERE = Path(__file__).resolve().parent
 
 
@@ -55,6 +56,7 @@ def _metadata():
     from . import onlyfans_media_models  # noqa: F401
     from . import onlyfans_offer_import_models  # noqa: F401
     from . import onlyfans_launch_models  # noqa: F401
+    from . import onlyfans_pilot_models  # noqa: F401  # 0092 pilot ledger + writer markers
     from . import onlyfans_content_sync_progress_models  # noqa: F401
     from onlyfans_runtime import launch_operations_models  # noqa: F401
     from onlyfans_runtime.launch_ledger import models as _ledger_retry_models  # noqa: F401

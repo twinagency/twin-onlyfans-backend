@@ -29,7 +29,7 @@ from typing import Any
 
 from sqlalchemy import select, type_coerce
 from sqlalchemy import String as SAString
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from .store import dialect_insert
 
 from db.models import Message, TwinBridgeInput
 
@@ -195,7 +195,7 @@ async def enqueue_inbound_if_enabled(
         return INELIGIBLE, "oversized-event"
 
     insert_stmt = (
-        sqlite_insert(TwinBridgeInput)
+        dialect_insert(TwinBridgeInput)
         .values(
             account_id=candidate.account_id,
             fan_id=candidate.fan_id,

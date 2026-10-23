@@ -32,10 +32,12 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 from sqlalchemy import case, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from db.engine import get_session
 from db.models import TwinBridgeConversation, TwinBridgeSendAttempt, TwinBridgeTurn
+
+from . import store
+from .store import DB_ERRORS, dialect_insert
 
 log = logging.getLogger("of-relay.twin_bridge.coordination")
 
@@ -101,26 +103,37 @@ def _key(account_id: object, fan_id: object) -> tuple[str, int]:
 
 # ── durable reservation read (synchronous, for the transport boundary) ─
 
-def _sqlite_path() -> str | None:
-    """The on-disk SQLite file for this process, or None when not SQLite.
-
-    Fastt is a single-machine SQLite deployment (see `db/engine.py`); the
-    synchronous send boundary cannot await an async session, so it reads the
-    durable reservation directly. A non-SQLite deployment returns None and the
-    in-process mirror is the only gate (documented in the bridge README).
-    """
+def _database_url() -> str:
     from db import engine as _engine
-    url = os.environ.get("DATABASE_URL") or getattr(_engine, "DATABASE_URL", "")
-    if not url.startswith("sqlite"):
-        return None
-    path = url
-    for prefix in ("sqlite+aiosqlite:///", "sqlite:///"):
-        if path.startswith(prefix):
-            path = path[len(prefix):]
-            break
-    if path.startswith("file:"):
-        return None
-    return path or None
+    return os.environ.get("DATABASE_URL") or getattr(_engine, "DATABASE_URL", "")
+
+
+def _sqlite_path() -> str | None:
+    """The on-disk SQLite file for this process, or None when not SQLite."""
+    target = store.target_from_url(_database_url())
+    return None if store.is_pg(target) else target
+
+
+def _store_target() -> str | None:
+    """The coordination store for this process: a SQLite file path, the PostgreSQL
+    URL of the application database, or None when neither can be determined.
+
+    The synchronous send boundary cannot await an async session, so it reads the
+    durable reservation directly (SQLite file, or PostgreSQL via psycopg2 with the
+    same rules; see ``store``). With no usable store the in-process mirror is the
+    only gate (documented in the bridge README).
+    """
+    path = _sqlite_path()
+    if path:
+        return path
+    target = store.target_from_url(_database_url())
+    return target if store.is_pg(target) else None
+
+
+def _connect(target, *, timeout: float, **kwargs):
+    if store.is_pg(target):
+        return store.connect_pg(target)
+    return sqlite3.connect(target, timeout=timeout, **kwargs)
 
 
 def _durable_reserved(account_id: object, fan_id: object) -> bool:
@@ -131,12 +144,12 @@ def _durable_reserved(account_id: object, fan_id: object) -> bool:
     so a database blip can never wedge ordinary sends; a live in-process
     reservation is still enforced first.
     """
-    path = _sqlite_path()
+    path = _store_target()
     if not path:
         return False
     try:
-        con = sqlite3.connect(path, timeout=2.0)
-    except sqlite3.Error:
+        con = _connect(path, timeout=2.0)
+    except DB_ERRORS:
         return False
     try:
         row = con.execute(
@@ -144,7 +157,7 @@ def _durable_reserved(account_id: object, fan_id: object) -> bool:
             "WHERE account_id = ? AND fan_id = ? LIMIT 1",
             (str(account_id), int(fan_id)),
         ).fetchone()
-    except sqlite3.Error:
+    except DB_ERRORS:
         return False
     finally:
         con.close()
@@ -152,20 +165,20 @@ def _durable_reserved(account_id: object, fan_id: object) -> bool:
 
 
 def _durable_any_reserved(account_id: object) -> bool:
-    path = _sqlite_path()
+    path = _store_target()
     if not path:
         return False
     try:
-        con = sqlite3.connect(path, timeout=2.0)
-    except sqlite3.Error:
+        con = _connect(path, timeout=2.0)
+    except DB_ERRORS:
         return False
     try:
         row = con.execute(
             "SELECT 1 FROM twin_bridge_conversations "
-            "WHERE account_id = ? AND reserved = 1 LIMIT 1",
-            (str(account_id),),
+            "WHERE account_id = ? AND reserved = ? LIMIT 1",
+            (str(account_id), True),
         ).fetchone()
-    except sqlite3.Error:
+    except DB_ERRORS:
         return False
     finally:
         con.close()
@@ -218,6 +231,11 @@ def sqlite_path() -> str | None:
     return _sqlite_path()
 
 
+def store_target() -> str | None:
+    """Public accessor: SQLite file path or PostgreSQL URL (never log the latter)."""
+    return _store_target()
+
+
 def sql_dt(value: datetime) -> str:
     """Public datetime formatter matching SQLAlchemy's SQLite DateTime storage."""
     return _sql_dt(value)
@@ -262,14 +280,19 @@ def _marker_expiry_iso(ttl_s: float | None = None) -> str:
 
 
 def _ensure_marker_table(con) -> None:
-    """Create the marker table, and add the `state` column to an older one."""
+    """Create the marker table, and add the `state` column to an older one.
+
+    PostgreSQL never runs runtime DDL: its table is created by migration 0092.
+    """
+    if isinstance(con, store.PgConnection):
+        return
     con.execute(_MARKER_TABLE)
     try:
         con.execute(
             "ALTER TABLE twin_bridge_writes "
             "ADD COLUMN state TEXT NOT NULL DEFAULT 'held'"
         )
-    except sqlite3.Error:
+    except DB_ERRORS:
         pass  # already present
 
 
@@ -324,7 +347,7 @@ def _renew_held_markers() -> None:
                 (expires, str(account), int(fan), holder, MARKER_HELD),
             )
         con.commit()
-    except sqlite3.Error:
+    except DB_ERRORS:
         pass
     finally:
         con.close()
@@ -342,17 +365,17 @@ def _untrack_holder(holder: str) -> None:
 
 
 def _durable_write_conn():
-    path = _sqlite_path()
+    path = _store_target()
     if not path:
         return None
     try:
-        con = sqlite3.connect(path, timeout=5.0)
-    except sqlite3.Error:
+        con = _connect(path, timeout=5.0)
+    except DB_ERRORS:
         return None
     try:
         _ensure_marker_table(con)
         con.commit()
-    except sqlite3.Error:
+    except DB_ERRORS:
         con.close()
         return None
     return con
@@ -382,12 +405,12 @@ def _writer_register(account_id: object, fan_id: object, holder: str, *,
     refused while ANY conversation for the account is reserved; a targeted DM is
     refused only for its own conversation.
     """
-    path = _sqlite_path()
+    path = _store_target()
     if not path:
         return _WRITER_UNAVAILABLE
     try:
-        con = sqlite3.connect(path, timeout=5.0, isolation_level=None)
-    except sqlite3.Error:
+        con = _connect(path, timeout=5.0, isolation_level=None)
+    except DB_ERRORS:
         return _WRITER_UNAVAILABLE
     try:
         _ensure_marker_table(con)
@@ -396,30 +419,32 @@ def _writer_register(account_id: object, fan_id: object, holder: str, *,
             if broadcast:
                 row = con.execute(
                     "SELECT 1 FROM twin_bridge_conversations "
-                    "WHERE account_id = ? AND reserved = 1 LIMIT 1",
-                    (str(account_id),),
+                    "WHERE account_id = ? AND reserved = ? LIMIT 1",
+                    (str(account_id), True),
                 ).fetchone()
             else:
                 row = con.execute(
                     "SELECT 1 FROM twin_bridge_conversations "
-                    "WHERE account_id = ? AND fan_id = ? AND reserved = 1 LIMIT 1",
-                    (str(account_id), int(fan_id)),
+                    "WHERE account_id = ? AND fan_id = ? AND reserved = ? LIMIT 1",
+                    (str(account_id), int(fan_id), True),
                 ).fetchone()
             if row is not None:
                 con.execute("ROLLBACK")
                 return _WRITER_RESERVED
         con.execute(
-            "INSERT OR REPLACE INTO twin_bridge_writes "
-            "(account_id, fan_id, holder, expires_at, state) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO twin_bridge_writes "
+            "(account_id, fan_id, holder, expires_at, state) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (account_id, fan_id, holder) DO UPDATE SET "
+            "expires_at = excluded.expires_at, state = excluded.state",
             (str(account_id), 0 if broadcast else int(fan_id), str(holder),
              _marker_expiry_iso(), MARKER_HELD),
         )
         con.execute("COMMIT")
         return _WRITER_OK
-    except sqlite3.Error:
+    except DB_ERRORS:
         try:
             con.execute("ROLLBACK")
-        except sqlite3.Error:
+        except DB_ERRORS:
             pass
         return _WRITER_UNAVAILABLE
     finally:
@@ -434,13 +459,15 @@ def _durable_write_enter(account_id: object, fan_id: object, holder: str,
         return
     try:
         con.execute(
-            "INSERT OR REPLACE INTO twin_bridge_writes "
-            "(account_id, fan_id, holder, expires_at, state) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO twin_bridge_writes "
+            "(account_id, fan_id, holder, expires_at, state) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (account_id, fan_id, holder) DO UPDATE SET "
+            "expires_at = excluded.expires_at, state = excluded.state",
             (str(account_id), int(fan_id), str(holder), _marker_expiry_iso(ttl_s),
              MARKER_HELD),
         )
         con.commit()
-    except sqlite3.Error:
+    except DB_ERRORS:
         pass
     finally:
         con.close()
@@ -475,7 +502,7 @@ def _durable_write_exit(account_id: object, fan_id: object, holder: str, *,
                 (MARKER_UNRESOLVED, str(account_id), int(fan_id), str(holder)),
             )
         con.commit()
-    except sqlite3.Error:
+    except DB_ERRORS:
         pass
     finally:
         con.close()
@@ -500,7 +527,7 @@ def _durable_write_fresh(account_id: object, fan_id: object) -> bool:
             "WHERE account_id = ? AND fan_id = ?",
             (str(account_id), int(fan_id)),
         ).fetchall()
-    except sqlite3.Error:
+    except DB_ERRORS:
         return True
     finally:
         con.close()
@@ -533,7 +560,7 @@ def reconcile_writes(*, account_id: object, fan_id: object | None = None) -> int
         cleared = int(cur.rowcount or 0)
         con.commit()
         return cleared
-    except sqlite3.Error:
+    except DB_ERRORS:
         return 0
     finally:
         con.close()
@@ -880,7 +907,7 @@ async def ensure_conversation(
 ) -> TwinBridgeConversation:
     """Insert the conversation row if it is missing; never overwrite state."""
     await session.execute(
-        sqlite_insert(TwinBridgeConversation)
+        dialect_insert(TwinBridgeConversation)
         .values(
             account_id=account_id,
             fan_id=int(fan_id),
@@ -913,12 +940,12 @@ def _reserve_atomic(account_id: object, fan_id: object, owner_token: str,
     Returns None when there is no SQLite coordination store (the caller treats
     that as unavailable and refuses rather than silently downgrading).
     """
-    path = _sqlite_path()
+    path = _store_target()
     if not path:
         return None
     try:
-        con = sqlite3.connect(path, timeout=5.0, isolation_level=None)
-    except sqlite3.Error:
+        con = _connect(path, timeout=5.0, isolation_level=None)
+    except DB_ERRORS:
         return False
     try:
         _ensure_marker_table(con)
@@ -949,23 +976,23 @@ def _reserve_atomic(account_id: object, fan_id: object, owner_token: str,
             return False
         cur = con.execute(
             "UPDATE twin_bridge_conversations SET "
-            "reserved = 1, owner_token = ?, owner_expires_at = ?, "
-            "revision = revision + (CASE WHEN reserved = 0 THEN 1 ELSE 0 END), "
+            "reserved = ?, owner_token = ?, owner_expires_at = ?, "
+            "revision = revision + (CASE WHEN reserved THEN 0 ELSE 1 END), "
             "updated_at = ? "
             "WHERE account_id = ? AND fan_id = ? AND state = ? "
             "AND (owner_token IS NULL OR owner_token = ? "
             "     OR owner_expires_at IS NULL OR owner_expires_at <= ?)",
-            (str(owner_token), _sql_dt(expires), _sql_dt(now),
+            (True, str(owner_token), _sql_dt(expires), _sql_dt(now),
              str(account_id), int(fan_id), CONV_ACTIVE,
              str(owner_token), _sql_dt(now)),
         )
         got = (cur.rowcount or 0) > 0
         con.execute("COMMIT" if got else "ROLLBACK")
         return got
-    except sqlite3.Error:
+    except DB_ERRORS:
         try:
             con.execute("ROLLBACK")
-        except sqlite3.Error:
+        except DB_ERRORS:
             pass
         return False
     finally:

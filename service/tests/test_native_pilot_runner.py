@@ -102,12 +102,12 @@ async def suite(root):
     import dotenv
     dotenv.load_dotenv = lambda *args, **kwargs: False
     dotenv.dotenv_values = lambda *args, **kwargs: {"OPENROUTER_API_KEY": "synthetic-unused-key"}
-    os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + (root / "bootstrap.db").as_posix()
+    import test_native_pilot_ledger as fixtures
+    os.environ["DATABASE_URL"] = fixtures.database_url(root / "bootstrap.db")
     os.environ["TWIN_BRIDGE_ENABLED"] = "0"
     os.environ["TWIN_BRIDGE_SEND_ENABLED"] = "0"
     logging.disable(logging.CRITICAL)
 
-    import test_native_pilot_ledger as fixtures
     from native_pilot import runner
     from native_pilot.ledger import Refused
     from of_client import OFClient
@@ -134,7 +134,7 @@ async def suite(root):
         f.sql("CREATE TABLE pending_offer(account_id TEXT,fan_id INTEGER)")
         f.sql("ALTER TABLE messages ADD COLUMN automation_kind TEXT")
         f.sql("CREATE TABLE automation_runs(id INTEGER PRIMARY KEY,account_id TEXT,kind TEXT,started_at TEXT,completed_at TEXT,status TEXT,stats_json TEXT,error_text TEXT)")
-        os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + f.path.as_posix()
+        os.environ["DATABASE_URL"] = fixtures.database_url(f.path)
         p = f.activate()
         for i in range(count):
             f.source(100 + i, body=f"neutral source {i}", created_at=(fixtures.NOW + timedelta(seconds=i + 1)).isoformat(sep=" "))

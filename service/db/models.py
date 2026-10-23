@@ -3434,6 +3434,11 @@ class OfMessageDelivery(Base):
 
 # ── Twin bridge intake (Stage 1C part 1) ──────────────────────────────
 
+# The five twin_bridge_* tables exist on PostgreSQL only from migration 0092
+# (db/snapshots/0092_native_pilot_storage.sql); check_schema therefore requires
+# them only at that revision or later. On SQLite create_all still builds them.
+_BRIDGE_TABLE_INFO = {"info": {"onlyfans_since": "0092_native_pilot_storage"}}
+
 class TwinBridgeInput(Base):
     """One durable, account-scoped intake row for the Twin reply bridge.
 
@@ -3486,18 +3491,16 @@ class TwinBridgeInput(Base):
     admitted_at: Mapped[datetime] = _ts_now()
 
     __table_args__ = (
-        # Explicit, stably-named uniqueness for the dedupe/conflict path (the
-        # composite PK is the same tuple; this names it for the readers).
-        UniqueConstraint(
-            "account_id", "fan_id", "provider_message_id",
-            name="uq_twin_bridge_inputs_message",
-        ),
+        # Dedupe/conflict uniqueness IS the composite primary key. (A second
+        # UNIQUE over the same columns was redundant and PostgreSQL reflection
+        # does not report it, which check_schema reads as a missing constraint.)
         # Backs reconciliation paging: enabled account, pending state, in
         # provider-time order so equal timestamps still advance deterministically.
         Index(
             "ix_twin_bridge_inputs_account_state_time",
             "account_id", "state", "occurred_at", "provider_message_id",
         ),
+        _BRIDGE_TABLE_INFO,
     )
 
 
@@ -3574,6 +3577,7 @@ class TwinBridgeTurn(Base):
     __table_args__ = (
         Index("ix_twin_bridge_turns_state_next", "account_id", "state", "next_action_at"),
         Index("ix_twin_bridge_turns_conversation", "account_id", "fan_id", "created_at"),
+        _BRIDGE_TABLE_INFO,
     )
 
 
@@ -3596,6 +3600,7 @@ class TwinBridgeTurnMember(Base):
 
     __table_args__ = (
         Index("ix_twin_bridge_turn_members_turn", "account_id", "fan_id", "turn_id", "position"),
+        _BRIDGE_TABLE_INFO,
     )
 
 
@@ -3609,6 +3614,7 @@ class TwinBridgeConversation(Base):
     back to the older automation writers.
     """
     __tablename__ = "twin_bridge_conversations"
+    __table_args__ = (_BRIDGE_TABLE_INFO,)
 
     account_id: Mapped[str] = mapped_column(String, primary_key=True)
     fan_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -3638,7 +3644,7 @@ class TwinBridgeConversation(Base):
     # conversation resolving with no unresolved turn, or a recorded human
     # takeover. Releasing it never deletes the row or its delivery evidence.
     reserved: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default=text("1")
+        Boolean, nullable=False, default=True, server_default=true()
     )
 
     # Positive pilot send budget. Reserved durably at dispatch, and unknown or
@@ -3682,4 +3688,5 @@ class TwinBridgeSendAttempt(Base):
             name="uq_twin_bridge_send_attempt",
         ),
         Index("ix_twin_bridge_send_attempts_state", "account_id", "state", "created_at"),
+        _BRIDGE_TABLE_INFO,
     )

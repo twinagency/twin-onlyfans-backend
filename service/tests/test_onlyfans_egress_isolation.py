@@ -268,6 +268,10 @@ import onlyfans_runtime.native_worker
 import onlyfans_runtime.native_connector
 import onlyfans_runtime.native_protocol
 import onlyfans_runtime.text_delivery
+import onlyfans_runtime.configuration
+import onlyfans_runtime.launch_personality.policy
+from model_selection import explicit_model
+assert explicit_model.__module__ == "model_selection"
 if (root / "onlyfans_runtime" / "loopback_transport.py").is_file():
     import onlyfans_runtime.loopback_transport
 for route in onlyfans_app.app.routes:

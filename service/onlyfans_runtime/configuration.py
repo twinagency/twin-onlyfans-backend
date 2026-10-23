@@ -63,7 +63,7 @@ def object_value(raw):
 def editable(row,runtime,session):
     """Only approved fields and catalogue IDs; no arbitrary config or credentials."""
     from automations._voice import fact_labels
-    from automations._model_selection import explicit_model
+    from model_selection import explicit_model
     labels=fact_labels(row.voice)
     facts_valid=True;models_valid=True
     from .creator_facts import source_view
@@ -228,7 +228,7 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
             row.model_by_purpose=canonical(purpose) if purpose else None
             changed=changed or canonical(purpose)!=previous_purpose
         if "defaultModel" in patch or "replyModelOverride" in patch:
-            from automations._model_selection import explicit_model
+            from model_selection import explicit_model
             try:explicit_model(row,"ai_chatter",MODELS)
             except (ValueError,RecursionError) as exc:raise InvalidConfiguration("The resulting saved reply model must resolve to a supported explicit choice.") from exc
         if not changed:raise InvalidConfiguration("No configuration change was needed.")

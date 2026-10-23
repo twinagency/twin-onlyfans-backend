@@ -7,6 +7,7 @@ worker stops between durable phases; bounded HTTP/DB calls may finish first.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 import os
@@ -56,7 +57,9 @@ def _process_content_sync(store, tenant, *, limit, stop):
     # Bounded read of the creator's own paid feed posts (read-only, one pass per 300s).
     processed += process_posts(store, tenant, limit=limit, stop=stop)
     try:
-        from onlyfans_runtime import content_sync_media
+        # import_module consults sys.modules, so a release without the upload
+        # module is detected even after the package attribute was cached.
+        content_sync_media = importlib.import_module("onlyfans_runtime.content_sync_media")
     except ModuleNotFoundError as exc:
         if exc.name != "onlyfans_runtime.content_sync_media":
             raise

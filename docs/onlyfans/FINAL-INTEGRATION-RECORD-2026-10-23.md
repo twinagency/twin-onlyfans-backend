@@ -10,7 +10,7 @@ This record is in progress. No completion or deployment is claimed.
 - Concurrent combined work was reconciled through backend `e7eae43485a053bb74b9efef3f13b577cee41f48` (18 additional commits) and dashboard `710005d67c99db46e62c6b133a7e259821aa8846` (six additional commits). The selected implementation also retains the newer OnlyFans UI input `28fd0038966550c733c11fbfe5c53d52403eed1f` and current production-main contributions. Exact final ancestry is recorded with the immutable release pair.
 - Backend deployment branch has three merge ancestors absent from combined. A real git merge-tree rehearsal against deployment1614696 returned the unchanged combined tree61ca0699428ff8e27aab7b0e4543eaf1fac97765, proving those merge ancestors can be preserved without dropping content.
 - Current implementation starts from byte-verified combined snapshots. Acquisition excludes unrelated legacy frontend assets; no deployable full-source artifact has yet been built.
-- Paired dashboard: `1805ebd7e046537f047d31212fdd5fda4454fed1`, tree `1a01d21b633000e833e05e7873c02107da0c944d`, published on `codex/onlyfans-final-release-20261023` and pinned in `ACCEPTANCE-DASHBOARD-SHA`. Its parents preserve the prior integrated candidate, UI input and latest production main `979e097946dad0c1aa3cb83680dc584cb28e6533`. The earlier `363d9d40694c6847f5bf7644db3e09e3729ee005` candidate is superseded. Full acceptance remains pending.
+- Paired dashboard: `a0d5dedbfba98f1dd63e67cd08278e961263fe1e`, tree `f124a22d896bcce8b876801e0df5ad6538ad688e`, published on `codex/onlyfans-final-release-20261023` and pinned in `ACCEPTANCE-DASHBOARD-SHA`. Its parents preserve the prior hybrid `1805ebd7e046537f047d31212fdd5fda4454fed1` and latest inspected main `dbfc42d402745ee603dabfe58277e1ce6d24484c`. Both new main mobile files are retained exactly. The hybrid retains the earlier combined, UI and production-main contributions. Full acceptance remains pending.
 - PostgreSQL16.15, Python3.12.14 and Chromium153.0.8010.0 are available. The actual hybrid dashboard/backend rehearsal passed all four cases with zero failures, errors or skips, including backup/restore and retained unknown outcomes. Its tab-hydration race was reproduced and corrected before the passing run. A clean production dashboard build and subsequent TypeScript check also passed. These targeted results do not substitute for exact-pair full acceptance.
 
 ## Checklist
@@ -77,6 +77,29 @@ Bash shell with pipeline failure propagation. The intermediate corrected
 backend `d51526f624f20116a1df2fb48ea6a71d48ba9bf8` collected 1,920 nodes, but
 root interrupted it before completion for these required workflow corrections.
 Its exit 130 is incomplete. The next full run must use the final clean source.
+
+The subsequent `198bd45f75b6ddf7c81716977e3da17f5c617e88` diagnostic
+collected 1,920 nodes and flushed 502 passing and two failing outcomes before
+termination; it has no complete JUnit/summary and is not acceptance. One restore
+case lacked the explicitly required PostgreSQL client-directory variable. The
+other isolated Python child exposed user-site dependency leakage in the local
+test interpreter. Both restore cases then passed with explicit PostgreSQL16
+clients, and the isolated-child case passed in a self-contained pinned sibling
+interpreter. Required acceptance now validates and records the exact client
+directory and passes it to every child; hosted CI supplies its installed
+PostgreSQL16 path. Tests and backup/restore assertions remain intact. The final
+full run must use that self-contained interpreter and the clean published pair.
+
+Dashboard PR browser setup stalled twice on the runner's Azure Ubuntu package
+mirror before application checks. The final dashboard uses the existing
+deployment's verified primary HTTPS mirror recovery and bounded dependency and
+browser installation, retaining all required gates. Its two new mobile files
+are exact latest-main contributions. Local Next development startup also made
+an optional package-version query to the blocked npm registry. An explicitly
+recorded local offline preload rejects only that exact update probe before
+network access, exercising Next's normal unknown-version fallback; all
+application and local HTTP requests remain real. The installed application
+dependencies and repository source are unchanged by this environment setup.
 
 ## Reconciliation decisions
 

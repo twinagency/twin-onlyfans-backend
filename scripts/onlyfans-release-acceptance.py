@@ -96,6 +96,14 @@ def main() -> int:
             raise ValueError("PYTEST_ADDOPTS is not permitted in required release acceptance")
         if not all(os.environ.get(key) for key in ("ONLYFANS_TEST_PG_URL", "ONLYFANS_PERSONALITY_TEST_DATABASE_URL")):
             raise ValueError("Both disposable PostgreSQL URL configurations are required; no PostgreSQL proof may skip")
+        configured_pg_bin = os.environ.get("ONLYFANS_TEST_PG_BIN")
+        if not configured_pg_bin:
+            raise ValueError("ONLYFANS_TEST_PG_BIN must name the matching PostgreSQL client directory for restore proof")
+        pg_bin = Path(configured_pg_bin)
+        if not pg_bin.is_absolute() or any(not (pg_bin / name).is_file() or not os.access(pg_bin / name, os.X_OK)
+                                            for name in ("pg_dump", "pg_restore")):
+            raise ValueError("ONLYFANS_TEST_PG_BIN must be an absolute directory containing executable pg_dump and pg_restore")
+        pg_bin = pg_bin.resolve()
         dashboard = args.dashboard_dir.resolve()
         for name in ("node_modules/next/dist/bin/next", "preview/onlyfans-integration/package.json",
                      "scripts/check-onlyfans-http-browser.mjs"):
@@ -107,8 +115,9 @@ def main() -> int:
         report["dashboard"] = source_proof(dashboard, args.dashboard_sha)
         versions = {"python": sys.version, "executable": sys.executable}
         for name, command in {"node": ["node", "--version"], "npm": ["npm", "--version"],
-                              "pg_dump": ["pg_dump", "--version"], "pg_restore": ["pg_restore", "--version"]}.items():
+                              "pg_dump": [str(pg_bin / "pg_dump"), "--version"], "pg_restore": [str(pg_bin / "pg_restore"), "--version"]}.items():
             versions[name] = subprocess.check_output(command, text=True, stderr=subprocess.STDOUT).strip()
+        versions["postgresClientDirectory"] = str(pg_bin)
         report["environment"] = versions
         (evidence / "python-versions.txt").write_text(subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True))
         manifest = json.loads(MANIFEST.read_text())[args.suite]
@@ -127,6 +136,7 @@ def main() -> int:
         (evidence / "expanded-manifest.json").write_text(json.dumps({"pytestFiles": files, "separateScripts": separate}, indent=2) + "\n")
         env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "scripts"), str(ROOT / "service"), str(ROOT))),
                "ONLYFANS_TEST_DASHBOARD": str(dashboard), "ONLYFANS_TEST_EVIDENCE": str(evidence),
+               "ONLYFANS_TEST_PG_BIN": str(pg_bin),
                "ONLYFANS_TEST_CONTENT": "1", "ONLYFANS_TEST_OFFER_IMPORT": "1", "ONLYFANS_TEST_CONTENT_SYNC": "1",
                "ONLYFANS_TEST_ONLY_OFFER_IMPORT": "0", "PYTHONDONTWRITEBYTECODE": "1"}
         base = [sys.executable, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider", "-p", "onlyfans_acceptance_plugin"]

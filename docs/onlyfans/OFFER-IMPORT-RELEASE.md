@@ -31,6 +31,10 @@ Install the backend pins, the exact paired dashboard lockfile and its browser.
 Use only disposable PostgreSQL, with compatible `pg_dump`/`pg_restore`. Supply
 `ONLYFANS_TEST_PG_URL` and a separate
 `ONLYFANS_PERSONALITY_TEST_DATABASE_URL`; missing PostgreSQL proofs must fail.
+Set `ONLYFANS_TEST_PG_BIN` to the absolute directory containing matching,
+executable `pg_dump` and `pg_restore` clients. Install the pinned Python
+requirements into a self-contained interpreter: the required isolated-child
+proof must not rely on user-site packages.
 Set `PREVIEW_CHROME` if using an explicitly installed supported browser.
 
 Run from a clean recorded candidate:

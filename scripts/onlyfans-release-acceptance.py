@@ -67,6 +67,12 @@ def execute(command: list[str], logfile: Path, env: dict) -> int:
         return process.wait()
 
 
+def python_versions() -> str:
+    """Installed distributions (pip freeze equivalent; works in pip-less virtual environments)."""
+    from importlib import metadata
+    return "".join(sorted(f"{item.metadata['Name']}=={item.version}\n" for item in metadata.distributions()))
+
+
 def junit_counts(path: Path) -> dict:
     cases = list(ET.parse(path).getroot().iter("testcase"))
     failed = sum(case.find("failure") is not None for case in cases)
@@ -104,7 +110,7 @@ def main() -> int:
             # Collection-only ground truth for the merger: no database, browser or dashboard install is needed.
             report["backend"] = source_proof(ROOT, args.backend_sha)
             report["dashboard"] = {"method": "pin", "sha": args.dashboard_sha}
-            (evidence / "python-versions.txt").write_text(subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True))
+            (evidence / "python-versions.txt").write_text(python_versions())
             dashboard = pg_bin = None
         else:
             if os.environ.get("PYTEST_ADDOPTS"):
@@ -134,7 +140,7 @@ def main() -> int:
                 versions[name] = subprocess.check_output(command, text=True, stderr=subprocess.STDOUT).strip()
             versions["postgresClientDirectory"] = str(pg_bin)
             report["environment"] = versions
-            (evidence / "python-versions.txt").write_text(subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True))
+            (evidence / "python-versions.txt").write_text(python_versions())
         manifest = json.loads(MANIFEST.read_text())[args.suite]
         plan = shards.plan(ROOT, manifest, count)
         all_files, all_scripts = plan["allFiles"], plan["allScripts"]

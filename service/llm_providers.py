@@ -46,6 +46,9 @@ PROVIDERS: dict[str, LLMProvider] = {
     # caller that trusts the status code sees a successful request with no
     # choices rather than a routing error. Probed 2026-08-27.
     "zai": LLMProvider("zai", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY"),
+    # OpenRouter, the same route the Oct 20 native pilot and the Telegram V2
+    # worker use. Native accounts still need their own saved credential.
+    "openrouter": LLMProvider("openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
 }
 
 

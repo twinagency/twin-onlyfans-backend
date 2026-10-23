@@ -173,6 +173,18 @@ MODELS: dict[str, LLMModel] = {
         input_per_1k_cents=0.044, input_cache_hit_per_1k_cents=0.0014,
         output_per_1k_cents=0.132, reasoning_body=_body(thinking={"type": "disabled"}),
     ),
+    # Pilot parity (twin-bot deploy/telegram-worker/apply_private_model.py):
+    # pinned providers, no fallbacks, reasoning off. Priced at the conservative
+    # full-input bound; no cache saving assumed.
+    "openrouter/deepseek-v4.1-flash": LLMModel(
+        "openrouter/deepseek-v4.1-flash", "openrouter",
+        api_model="deepseek/deepseek-v4.1-flash",
+        input_per_1k_cents=0.044, input_cache_hit_per_1k_cents=0.044,
+        output_per_1k_cents=0.132,
+        reasoning_body=_body(reasoning={"enabled": False},
+                             provider={"allow_fallbacks": False, "only": ["deepinfra/fp8", "together"],
+                                       "order": ["deepinfra/fp8", "together"]}),
+    ),
     "deepseek-v4-pro": LLMModel(
         "deepseek-v4-pro", "deepseek",
         input_per_1k_cents=0.132, input_cache_hit_per_1k_cents=0.0044,

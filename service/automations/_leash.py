@@ -31,7 +31,7 @@ from random import Random
 from typing import NamedTuple, Protocol
 
 from sqlalchemy import String, func, or_, select, type_coerce
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from db.upsert import dialect_insert as sqlite_insert  # dialect-aware: sqlite or postgresql
 
 from db.engine import get_session
 from db.models import ContentOffer, Message, QuotaAudit, Transaction, parse_ts

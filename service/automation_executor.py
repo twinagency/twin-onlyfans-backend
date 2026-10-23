@@ -48,7 +48,7 @@ from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, NamedTuple
 
 from sqlalchemy import delete, func, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from db.upsert import dialect_insert as sqlite_insert  # dialect-aware: sqlite or postgresql
 
 from db.engine import get_session
 from db.models import (

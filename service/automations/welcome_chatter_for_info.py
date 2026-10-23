@@ -66,7 +66,7 @@ import re
 from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from db.upsert import dialect_insert as sqlite_insert  # dialect-aware: sqlite or postgresql
 
 import automation_executor as ax  # _make_client / _parse_iso / fan-lease seams
 import llm_client                  # call .chat at runtime so tests can patch it

@@ -70,7 +70,7 @@ from datetime import datetime, timedelta
 from typing import Literal, NamedTuple
 
 from sqlalchemy import and_, func, or_, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from db.upsert import dialect_insert as sqlite_insert  # dialect-aware: sqlite or postgresql
 
 import automation_executor as ax  # _make_client / lease / cooldown seams
 import llm_client                  # call .chat at runtime so tests can patch it

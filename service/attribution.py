@@ -27,7 +27,7 @@ import re
 import unicodedata
 
 from sqlalchemy import and_, delete, func, or_, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from db.upsert import dialect_insert as sqlite_insert  # dialect-aware: sqlite or postgresql
 
 from db.engine import get_session
 from db.models import Chat, Message, Transaction

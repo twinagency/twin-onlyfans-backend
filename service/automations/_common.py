@@ -31,7 +31,7 @@ from tip_ledger import TIP_LEDGER_PREFIX
 from db.engine import get_session
 from db.models import AccountAiConfig, Fan, Message, SkipList, Transaction
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from db.upsert import dialect_insert as sqlite_insert  # dialect-aware: sqlite or postgresql
 
 
 # The per-fan state blob lives in its own leaf module — see fan_state.py for why

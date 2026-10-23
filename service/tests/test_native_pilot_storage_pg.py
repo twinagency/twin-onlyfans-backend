@@ -5,10 +5,13 @@ ONLYFANS_TEST_PG_URL must be an admin URL of a disposable server on which this
 script may create and drop its own uniquely named database (prefix from
 ONLYFANS_TEST_DB_PREFIX, default ``of_test_``). Run as a plain script.
 
-It proves, against the real schema produced by ``bootstrap`` (migration 0092):
+It proves, against the real schema produced by ``bootstrap`` (application revision 0091,
+which this change deliberately does NOT advance):
 
-1. the schema check passes and the five bridge tables, the writer markers and
-   the pilot ledger exist, with the boolean default fixed for PostgreSQL;
+1. the schema check passes AT 0091 both before and after the nine bridge/pilot tables are
+   created idempotently in the separate ``fastt_runtime`` schema (none in ``public``), with the
+   boolean default fixed for PostgreSQL; the ORIGINAL release (8a427a3) ``check_schema`` still
+   passes on that database (rollback compatibility, run in a subprocess from a clean copy);
 2. the ENTIRE existing ledger suite (admission before each provider POST, unknown
    outcome stops and is never resent, send allowance, model-call reservation,
    receipts surviving stop/deadline, races) passes unchanged on PostgreSQL;
@@ -38,7 +41,7 @@ SERVICE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sqlalchemy import create_engine, inspect, text  # noqa: E402
+from sqlalchemy import bindparam, create_engine, inspect, text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
 
 ADMIN_URL = os.environ.get("ONLYFANS_TEST_PG_URL")
@@ -156,13 +159,53 @@ class PgFixture(ledger_test.Fixture):
             check(values["created_at"] == "bad")
 
 
+RELEASE_SERVICE = os.environ.get(
+    "ONLYFANS_RELEASE_SERVICE_DIR",
+    "/tmp/claude-1000/-home-ronan-twin/1f28717a-be90-4d45-ac41-136eed78da59/scratchpad/rel/service")
+LIVE_REVISION = "0091_launch_controls"
+
+
+def original_release_check():
+    """Run the ORIGINAL release's check_schema (clean 8a427a3 copy) against this database."""
+    import subprocess
+    if not (Path(RELEASE_SERVICE) / "db" / "schema.py").is_file():
+        sys.exit("FAILED: ONLYFANS_RELEASE_SERVICE_DIR (clean 8a427a3 service dir) is required for the rollback check")
+    code = ("import sys; from sqlalchemy import create_engine; from db.schema import HEAD, check_schema; "
+            "e=create_engine(sys.argv[1]); c=e.connect(); check_schema(c); print('release-check-ok', HEAD)")
+    env = {"PATH": os.environ.get("PATH", ""), "PYTHON_DOTENV_DISABLED": "1", "DATABASE_URL": ASYNC_URL}
+    done = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv.pop(1)); exec(sys.argv.pop(1))",
+                           RELEASE_SERVICE, code, SYNC_URL],
+                          cwd=RELEASE_SERVICE, env=env, capture_output=True, text=True, timeout=120)
+    check(done.returncode == 0 and f"release-check-ok {LIVE_REVISION}" in done.stdout, done.stdout + done.stderr)
+
+
 def schema_checks():
-    from db.schema import HEAD, check_schema
+    from db.schema import HEAD, _metadata, check_schema
+    check(HEAD == LIVE_REVISION, "application schema head stays at 0091")
+    check(not set(TABLES) & set(_metadata().tables), "app metadata/check_schema must not include the pilot tables")
+    with create_engine(SYNC_URL).connect() as conn:
+        check_schema(conn)  # fresh 0091 database, pilot tables not created yet
+        check(set(inspect(conn).get_schema_names()) >= {"public"} and "fastt_runtime" not in inspect(conn).get_schema_names())
+    original_release_check()
+    # Fail-open: with the fastt_runtime schema absent the OFClient writer-marker path (guarded_send) still
+    # lets an ordinary, bridge-disabled send through exactly as on a database that never had the table.
+    from twin_bridge import coordination as co
+    with co.guarded_send("1", 2, purpose="other"):
+        check(True)
+    check(co.in_flight_count("1", 2) == 0)
+    # Idempotent creation by the runner/control/bridge entry points.
+    store.ensure_runtime_schema(SYNC_URL)
+    store.dispose_pools()  # force a second creation attempt
+    store.ensure_runtime_schema(SYNC_URL)
     with create_engine(SYNC_URL).connect() as conn:
         check_schema(conn)
-        check(conn.scalar(text("SELECT version_num FROM alembic_version")) == HEAD)
-        tables = set(inspect(conn).get_table_names())
-        check(set(TABLES) <= tables)
+        check(conn.scalar(text("SELECT version_num FROM alembic_version")) == LIVE_REVISION)
+        check(set(inspect(conn).get_table_names(schema="fastt_runtime")) == set(TABLES))
+        check(not set(TABLES) & set(inspect(conn).get_table_names()), "no pilot table in public")
+        check(conn.scalar(text("SELECT count(*) FROM information_schema.tables WHERE table_name IN :t "
+                               "AND table_schema<>'fastt_runtime'").bindparams(bindparam("t", expanding=True)),
+                          {"t": list(TABLES)}) == 0)
+    original_release_check()  # rollback compatibility: the previous image's own schema check still passes
     # The default is PostgreSQL-valid: a conversation inserted without `reserved` is reserved.
     reset()
     rows("INSERT INTO twin_bridge_conversations(account_id,fan_id,creator_slug,conversation_id,scope_fingerprint,state,"

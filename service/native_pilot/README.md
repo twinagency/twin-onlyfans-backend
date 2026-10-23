@@ -16,12 +16,17 @@ prompts, temperature and response format are Fastt's. No Twin draft/status/ack e
 ## Storage
 
 The ledger, ownership reservation and writer markers run on the application database
-(`DATABASE_URL`): a SQLite file as before, or PostgreSQL at schema 0092
-(`0092_native_pilot_storage` creates `native_pilots`, `native_pilot_inputs`,
+(`DATABASE_URL`): a SQLite file as before, or PostgreSQL. The application schema stays at
+revision 0091 (no migration): `native_pilots`, `native_pilot_inputs`,
 `native_pilot_receipts`, `twin_bridge_writes` and the five `twin_bridge_*` control
-tables). Every write is one serialised transaction on both backends
-(`twin_bridge/store.py`). PostgreSQL never runs runtime DDL; the runner refuses
-(`pilot-schema-missing`) if a table is absent. `tests/test_native_pilot_storage_pg.py`
+tables live in their own PostgreSQL schema, `fastt_runtime`, defined by
+`db/onlyfans_pilot_models.py` (a separate metadata, not in `check_schema`). The runner and
+`native_pilot.control` create the schema and tables idempotently on start
+(`store.ensure_runtime_schema`; additive, advisory-locked); the API/worker start-up and the
+send boundary never do, and the runner refuses (`pilot-schema-missing`) if a table is still
+absent. Rollback needs no schema change: the previous images' 0091 check ignores the extra
+schema. Raw SQL reaches the tables through `search_path = fastt_runtime, public`. Every
+write is one serialised transaction on both backends (`twin_bridge/store.py`). `tests/test_native_pilot_storage_pg.py`
 runs the whole ledger and runner suites unchanged against a real PostgreSQL.
 
 ## Boundaries

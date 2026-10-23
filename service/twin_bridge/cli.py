@@ -25,7 +25,7 @@ from datetime import datetime
 from sqlalchemy import select
 
 from db.engine import get_session
-from db.models import TwinBridgeConversation, TwinBridgeTurn
+from db.onlyfans_pilot_models import TwinBridgeConversation, TwinBridgeTurn
 
 from . import turns as turns_mod
 from .coordination import (
@@ -263,6 +263,10 @@ def main(argv: list[str] | None = None) -> int:
                         "reconcile-writes") and args.fan is None:
         print(json.dumps({"error": "--fan is required"}))
         return 2
+    # PostgreSQL: the bridge tables live in the separate fastt_runtime schema; create them if absent.
+    from . import store
+    from .coordination import store_target
+    store.ensure_runtime_schema(store_target())
     result = asyncio.run(HANDLERS[args.command](args))
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
     if isinstance(result, dict) and (

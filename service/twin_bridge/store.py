@@ -9,6 +9,12 @@ guarantees on PostgreSQL:
 * ``BEGIN IMMEDIATE`` takes one transaction-scoped advisory lock, so every
   "read the guards, then write" admission is serialised exactly as SQLite does.
   The lock is released by COMMIT/ROLLBACK; nothing is held across a network call.
+* On PostgreSQL the pilot/bridge tables live in the separate ``fastt_runtime`` schema
+  (the application schema stays at revision 0091). Every connection sets
+  ``search_path = fastt_runtime, public``, so the unchanged raw SQL finds those tables
+  and still reads/writes the public ones (messages, catalog_items, ...). Nothing here
+  creates them: only ``ensure_runtime_schema`` (runner/control/bridge entry points) does,
+  and a connection made while they are absent simply fails on the missing table.
 * ``?`` placeholders, tuple-like rows with name access, ``lastrowid`` (via
   ``insert_id``) and naive-UTC timestamps rendered as ISO strings are identical on
   both backends, so comparisons and hashes behave the same.
@@ -27,7 +33,8 @@ from pathlib import Path
 
 # One lock for every coordination / pilot-ledger write transaction.
 PG_LOCK_KEY = 7811092
-_PG_OPTIONS = "-c timezone=UTC -c lock_timeout=5000"
+RUNTIME_SCHEMA = "fastt_runtime"
+_PG_OPTIONS = f"-c timezone=UTC -c lock_timeout=5000 -c search_path={RUNTIME_SCHEMA},public"
 
 try:  # psycopg2 is an application dependency; SQLite-only tools may lack it.
     import psycopg2
@@ -198,6 +205,7 @@ def dispose_pools() -> None:
     with _ENGINES_LOCK:
         engines = list(_ENGINES.values())
         _ENGINES.clear()
+        _ENSURED.clear()
     for eng in engines:
         eng.dispose()
 
@@ -216,9 +224,33 @@ def connect_sqlite(path, *, mode: str = "rw", timeout: float = 5.0) -> sqlite3.C
 
 def has_table(con, name: str) -> bool:
     if isinstance(con, PgConnection):
-        return bool(con.execute("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname=current_schema() "
-                                "AND tablename=?", (name,)).fetchone())
+        # to_regclass honours the connection's search_path (fastt_runtime, public).
+        return bool(con.execute("SELECT 1 WHERE to_regclass(?) IS NOT NULL", (name,)).fetchone())
     return bool(con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone())
+
+
+_ENSURED: set[str] = set()
+
+
+def ensure_runtime_schema(target) -> None:
+    """Create the ``fastt_runtime`` schema and its nine tables on PostgreSQL, idempotently.
+
+    No-op for SQLite (those tables are created by ``Ledger``/``init_db`` in the same
+    file). Additive only (CREATE ... IF NOT EXISTS semantics, advisory-locked); it never
+    touches a public table, so the application schema revision is unchanged. Called once
+    per process per target by the pilot runner, control and bridge entry points, NOT by
+    the send boundary (``guarded_send`` stays fail-open when the schema is absent).
+    """
+    if not is_pg(target) or target in _ENSURED:
+        return
+    from sqlalchemy import create_engine
+    from db.onlyfans_pilot_models import ensure_tables
+    eng = create_engine(target, connect_args={"options": "-c timezone=UTC -c lock_timeout=10000"})
+    try:
+        ensure_tables(eng)
+    finally:
+        eng.dispose()
+    _ENSURED.add(target)
 
 
 def insert_id(con, sql: str, params=()) -> int:

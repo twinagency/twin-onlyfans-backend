@@ -39,7 +39,8 @@ threading.stack_size(0)
 from twin_bridge import cli, coordination, delivery, platform, turns, worker  # noqa: E402
 from twin_bridge.delivery import HistoryUnreadable, external_outbound_ids  # noqa: E402
 
-from db.models import Account, Fan, Message, TwinBridgeSendAttempt  # noqa: E402
+from db.models import Account, Fan, Message  # noqa: E402
+from db.onlyfans_pilot_models import TwinBridgeSendAttempt  # noqa: E402
 from sqlalchemy import update  # noqa: E402
 
 ACCOUNT = _h.ACCOUNT
@@ -316,7 +317,7 @@ async def r3_recovery() -> None:
         from sqlalchemy import update
         await s.execute(update(TwinBridgeTurn).where(
             TwinBridgeTurn.turn_id == turn.turn_id).values(state="dispatching"))
-        from db.models import TwinBridgeSendAttempt
+        from db.onlyfans_pilot_models import TwinBridgeSendAttempt
         s.add(TwinBridgeSendAttempt(
             account_id=ACCOUNT, fan_id=FAN, turn_id=turn.turn_id, attempt_no=1,
             state="sent", owner_token="crashed", revision=1,
@@ -535,7 +536,7 @@ async def rr1_admission_race() -> None:
     # The conversation starts OWNED BY NOBODY so the older writer may enter
     # transport; the competition is the reservation racing that writer.
     async with get_session() as s:
-        from db.models import TwinBridgeConversation
+        from db.onlyfans_pilot_models import TwinBridgeConversation
         await s.execute(
             update(TwinBridgeConversation)
             .where(TwinBridgeConversation.account_id == ACCOUNT,
@@ -858,7 +859,7 @@ async def rr1_cross_process_admission() -> None:
             conversation_id=str(FAN), scope_fingerprint="x", now=BASE_TIME,
             send_budget_limit=5)
     async with get_session() as s:
-        from db.models import TwinBridgeConversation
+        from db.onlyfans_pilot_models import TwinBridgeConversation
         await s.execute(
             update(TwinBridgeConversation)
             .where(TwinBridgeConversation.account_id == ACCOUNT,
@@ -1009,7 +1010,7 @@ async def _open_conversation(*, reserved: bool) -> None:
             conversation_id=str(FAN), scope_fingerprint="x", now=BASE_TIME,
             send_budget_limit=5)
     if not reserved:
-        from db.models import TwinBridgeConversation
+        from db.onlyfans_pilot_models import TwinBridgeConversation
         async with get_session() as s:
             await s.execute(
                 update(TwinBridgeConversation)

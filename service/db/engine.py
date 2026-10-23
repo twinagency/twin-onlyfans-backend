@@ -165,6 +165,12 @@ async def init_db() -> None:
                 conn.exec_driver_sql("PRAGMA foreign_keys=ON")
                 conn.commit()
 
+        if _is_sqlite:
+            # Twin bridge / native pilot tables are not in the shared metadata (they live
+            # in their own schema on PostgreSQL); on SQLite they sit in this same file.
+            from .onlyfans_pilot_models import ensure_tables as _ensure_pilot_tables
+            _ensure_pilot_tables(sync_engine)
+
         inspector = inspect(sync_engine)
         has_alembic = "alembic_version" in inspector.get_table_names()
 

@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import case, select, update
 
 from db.engine import get_session
-from db.models import TwinBridgeConversation, TwinBridgeSendAttempt, TwinBridgeTurn
+from db.onlyfans_pilot_models import TwinBridgeConversation, TwinBridgeSendAttempt, TwinBridgeTurn
 
 from . import store
 from .store import DB_ERRORS, dialect_insert
@@ -282,7 +282,8 @@ def _marker_expiry_iso(ttl_s: float | None = None) -> str:
 def _ensure_marker_table(con) -> None:
     """Create the marker table, and add the `state` column to an older one.
 
-    PostgreSQL never runs runtime DDL: its table is created by migration 0092.
+    On PostgreSQL the table is created by store.ensure_runtime_schema (fastt_runtime schema),
+    never from the send boundary, so an absent table leaves guarded_send fail-open.
     """
     if isinstance(con, store.PgConnection):
         return

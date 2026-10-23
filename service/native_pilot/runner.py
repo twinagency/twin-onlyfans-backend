@@ -68,14 +68,16 @@ def check_local(path, account, fan):
 
 
 def require_store_schema(path):
-    """PostgreSQL has no runtime DDL: refuse unless migration 0092 supplied every table.
+    """PostgreSQL: create the separate ``fastt_runtime`` schema's tables if absent, then verify them.
 
-    Without the writer-marker table the transport boundary could not prove that
-    no other local writer is in flight, so a missing table is a refusal, never a
-    silent fallback.
+    The application schema (revision 0091) is untouched; only the nine pilot/bridge tables
+    in ``fastt_runtime`` are added (idempotent, additive). Without the writer-marker table
+    the transport boundary could not prove that no other local writer is in flight, so a
+    table still missing afterwards is a refusal, never a silent fallback.
     """
     if not store.is_pg(path):
         return
+    store.ensure_runtime_schema(path)
     with readonly(path) as con:
         for table in ("twin_bridge_conversations", "twin_bridge_send_attempts", "twin_bridge_turns",
                       "twin_bridge_writes", "native_pilots", "native_pilot_inputs", "native_pilot_receipts"):

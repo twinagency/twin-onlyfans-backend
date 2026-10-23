@@ -85,7 +85,13 @@ explicit `false`. Free posts are not offers. Older pages use
 `beforePublishTime=<tailMarker>` (web-client convention; only page 1 was read live).
 
 Observations use `source_kind='post'`, `source_context='feed'`, no fan. The
-worker (`ONLYFANS_CONTENT_SYNC_ENABLED=1`, account sync on) reads at most 20
-pages per account every 300 s, newest first, and stops at already-known posts.
-A malformed page is refused whole and shows partial coverage. Drafts from posts
-go through the same reviewed, disabled, fixed-price creation.
+worker (`ONLYFANS_CONTENT_SYNC_ENABLED=1`, account sync on) reads the newest
+pages every 300 s until a page shows nothing new **or changed** (an edited known
+post is a new observation), at most 20 pages per pass, each page under the
+account's provider-read lease and pace. A durable cursor
+(`posts_cursor`) continues into older pages across passes until the end of the
+feed (coverage stays partial until then), and a full re-read starts every 24 h
+so edits to old posts are noticed. A malformed page is refused whole and shows
+partial coverage. A post seen for the first time (or with a new attachment set)
+joins the account's candidate list, so it is reviewed and turned into a
+disabled, fixed-price draft exactly like a message offer.

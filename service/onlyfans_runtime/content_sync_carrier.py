@@ -29,11 +29,23 @@ def _run_id(account, upload_token):
 
 
 class CarrierTransport:
-    def __init__(self, connection, tenant, account):
+    """`authority` is a callable that raises Refused unless the caller still holds the exact scope that
+    permits a write (asset lease, binding, connection). Without one every write is refused."""
+
+    def __init__(self, connection, tenant, account, authority=None):
         from .connections import _open
         self.account, self.revision, self.binding = account, connection.revision, connection.binding_id
         self.owner, self.expires = connection.owner_id, connection.expires_at
         self.clear = _open(connection, tenant)
+        self.authority = authority
+
+    def _authorize(self):
+        """Checked by the native uploader (vault_upload_transport) before every provider write."""
+        if not approved(self.account):
+            raise Refused("carrier upload is not approved for this account")
+        if not callable(self.authority):
+            raise Refused("upload authority required")
+        self.authority()
 
     def _client(self, upload_token):
         from .provider_connector import session_from_capture
@@ -41,8 +53,7 @@ class CarrierTransport:
         session = session_from_capture(account_id=self.account, owner_id=self.owner, policy_revision=1,
             capture=self.clear["capture"], x_hash=self.clear["xHash"], proxy_url=self.clear["proxyUrl"],
             expires_at=self.expires.replace(tzinfo=timezone.utc))
-        # Authority is the content-sync asset lease, rechecked by its owner after I/O.
-        return NativeVaultUpload(session, authorize=lambda: None, job_id=upload_token)
+        return NativeVaultUpload(session, authorize=self._authorize, job_id=upload_token)
 
     def lookup(self, *, upload_token):
         import vault_upload
@@ -70,7 +81,7 @@ class CarrierTransport:
         except NativeAuthenticationError:
             raise AuthRequired("connection required") from None
         except Refused:
-            raise TransientUpload("upload refused") from None
+            raise self._refused(run_id) from None
         except Exception:
             raise UploadUnknown("carrier upload outcome uncertain") from None
         item = (result.get("items") or [None])[0]
@@ -80,13 +91,31 @@ class CarrierTransport:
             raise UploadUnknown("carrier left for the sweep")
         raise TransientUpload((item or {}).get("error") or "upload failed")
 
+    def _refused(self, run_id):
+        """A refusal before any write is retryable; one after a carrier may exist stays unconfirmed."""
+        import vault_upload
+        from .content_sync_media import TransientUpload, UploadUnknown
+        try:
+            state = vault_upload.read_state(run_id)
+        except Exception:
+            return UploadUnknown("carrier outcome not established")
+        item = ((state or {}).get("items") or [None])[0]
+        if state is not None and (state.get("status") == "running"
+                or (item and item.get("carrier_intent") and not item.get("carrier_deleted"))):
+            return UploadUnknown("carrier outcome not established")
+        return TransientUpload("upload refused")
+
     def verify(self, *, provider_media_id):
         # Sendability is proven by the account's own vault observation, which
         # content_sync_media requires before marking an asset synced.
         return "ready"
 
 
-def transport_for(connection, tenant, account):
+def transport_for(connection, tenant, account, authority=None):
     if not approved(account):
         return None
-    return CarrierTransport(connection, tenant, account)
+    return CarrierTransport(connection, tenant, account, authority)
+
+
+# The upload worker passes its live lease authority only to providers that ask for it.
+transport_for.needs_authority = True

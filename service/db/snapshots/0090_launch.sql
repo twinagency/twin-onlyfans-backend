@@ -291,3 +291,45 @@ CREATE TABLE of_ledger_retry_command (
 );
 CREATE FUNCTION of_ledger_retry_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'ledger retry evidence is append-only'; END; $$;
 CREATE TRIGGER of_ledger_retry_immutable BEFORE UPDATE OR DELETE ON of_ledger_retry_command FOR EACH ROW EXECUTE FUNCTION of_ledger_retry_immutable();
+
+-- Content-sync review fixes (additive; same unpublished launch revision).
+-- A source returning to an earlier state is a new sighting, so the observation identity gains an occurrence.
+ALTER TABLE of_offer_observation ADD COLUMN occurrence INTEGER DEFAULT 0 NOT NULL;
+ALTER TABLE of_offer_observation DROP CONSTRAINT uq_of_offer_observation_source;
+ALTER TABLE of_offer_observation ADD CONSTRAINT uq_of_offer_observation_sighting UNIQUE (account_id, binding_id, source_kind, source_id, fingerprint, occurrence);
+
+ALTER TABLE of_content_sync_account ADD COLUMN posts_cursor VARCHAR(64);
+ALTER TABLE of_content_sync_account ADD COLUMN posts_history_complete BOOLEAN DEFAULT false NOT NULL;
+ALTER TABLE of_content_sync_account ADD COLUMN posts_audit_after TIMESTAMP WITHOUT TIME ZONE;
+ALTER TABLE of_content_sync_account ADD COLUMN late_through_at TIMESTAMP WITHOUT TIME ZONE;
+ALTER TABLE of_content_sync_account ADD COLUMN reconcile_priority_after_item_id INTEGER;
+
+CREATE TABLE of_content_sync_source (
+	account_id VARCHAR NOT NULL, 
+	binding_id VARCHAR NOT NULL, 
+	fan_id BIGINT NOT NULL, 
+	message_id BIGINT NOT NULL, 
+	refresh_pending BOOLEAN NOT NULL, 
+	refresh_attempts INTEGER NOT NULL, 
+	folded_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, 
+	CONSTRAINT pk_of_content_sync_source PRIMARY KEY (account_id, binding_id, fan_id, message_id), 
+	CONSTRAINT ck_of_content_sync_source_attempts CHECK (refresh_attempts >= 0), 
+	CONSTRAINT fk_of_content_sync_source_account_id_of_runtime FOREIGN KEY(account_id) REFERENCES of_runtime (account_id) ON DELETE RESTRICT, 
+	CONSTRAINT fk_of_content_sync_source_binding_id_of_creator_bindings FOREIGN KEY(binding_id) REFERENCES of_creator_bindings (id) ON DELETE RESTRICT
+);
+CREATE INDEX ix_of_content_sync_source_refresh ON of_content_sync_source (account_id, binding_id, message_id) WHERE refresh_pending;
+
+CREATE TABLE of_provider_read_gate (
+	account_id VARCHAR NOT NULL, 
+	holder VARCHAR(32), 
+	lease_token VARCHAR(36), 
+	lease_until TIMESTAMP WITHOUT TIME ZONE, 
+	next_read_at TIMESTAMP WITHOUT TIME ZONE, 
+	updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, 
+	CONSTRAINT pk_of_provider_read_gate PRIMARY KEY (account_id), 
+	CONSTRAINT ck_of_provider_read_gate_lease CHECK ((lease_token IS NULL) = (lease_until IS NULL)), 
+	CONSTRAINT fk_of_provider_read_gate_account_id_of_runtime FOREIGN KEY(account_id) REFERENCES of_runtime (account_id) ON DELETE RESTRICT
+);
+
+-- Late-import detection reads recently ingested outgoing rows per account.
+CREATE INDEX ix_messages_account_ingested ON messages (account_id, ingested_at);

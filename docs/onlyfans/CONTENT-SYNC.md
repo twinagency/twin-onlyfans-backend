@@ -161,8 +161,22 @@ existing explicit content v2 action and its checks.
   refresh job (<= 50 sources, new sources lacking observations) and the existing vault sync
   job (re-read at most every 240 s). Provider reads stay in `process_refresh_jobs` /
   `process_vault_jobs` (1 extra page per account per 5 s).
-* Fold cursor is `message_id`: an older-id message ingested late (after the initial scan
-  passed it) is not folded; it still gets observations from normal history sync.
+* Fold cursor is `message_id`. A message imported late with an older provider id is found by ingestion time
+  (`messages.ingested_at`, window `late_through_at`, 120 s overlap) and folded through the same ledger
+  (`of_content_sync_source`) the cursor fold and the initial scan use, so every message is counted exactly once
+  and nothing older than the moment sync was enabled is re-folded (that history belongs to the initial scan).
+* Sources that still need provider details are a durable queue (`of_content_sync_source.refresh_pending`), not a
+  by-product of one pass: each pass requests the newest 50, sources beyond the cap or deferred because another
+  refresh job occupies the account stay queued, each is requested at most 3 times, and an observation removes it.
+* Daily reconcile rotates the priority set (enabled + conflicted) on its own cursor
+  (`reconcile_priority_after_item_id`) as well as the whole-catalogue rotation.
+* Observations are append-only sightings: an unchanged re-read is not stored again, but a source returning to an
+  earlier state after a different one is a new sighting (`occurrence`), so A -> B -> A opens a conflict again.
+* Provider reads (refresh pages, paid posts, vault pages) each take the account's read lease and pace
+  (`of_provider_read_gate`, default 5 s, `ONLYFANS_PROVIDER_READ_INTERVAL_SECONDS`): one reader per account at a
+  time across all workers, and the next reader of that account waits for the pace.
+* The carrier upload client authorizes every provider write: account approval, then the asset lease, binding and
+  connection revision (`content_sync_media.lease_authority`); without an authority it refuses all writes.
 * Conflicts are detected by the scheduler (and held live by `catalog_terms` once sync is on):
   a NEW observation (observed later, different fingerprint) of the selected source id.
   `accept_source` writes price/media/previews with an `of_content_change` audit row and stays
@@ -172,7 +186,7 @@ existing explicit content v2 action and its checks.
   account/binding, with a catalogue item) is skipped by the fold and inventory, never opens a
   conflict, is refused as a draft source, and appears in `GET .../candidates/{id}` observations
   with the additive keys `crmOriginated: true` and `itemId` (absent for other observations).
-* Paid-post coverage is always `unsupported`. Sync-now returns the active operation instead of
+* Paid-post coverage follows the bounded post reader (`partial` until the history walk reaches the end of the feed). Sync-now returns the active operation instead of
   a duplicate and is refused with `connection_unavailable` when auth is expired.
 * Agency scope: `content-sync/v1` is allowed like `offer-import/v1`; POST/PUT need `canManage`,
   the draft chunk `PUT` is the only PUT, and `GET /operations` is readable.

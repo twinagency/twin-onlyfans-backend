@@ -21,6 +21,7 @@ from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_offer_import_models import OfOfferImportCursor, OfOfferImportJob
 from .native_context import canonical
 from .native_protocol import NativeProtocolError
+from . import provider_read_gate as gate
 from .offer_import import LEASE_SECONDS, REFRESH_PAGES_PER_CHAT, _terminal
 from .store import PAGE_LIMIT, Refused, utcnow
 
@@ -71,7 +72,9 @@ def process_refresh_jobs(store, tenant, *, limit=1, stop=None, transport_factory
                     OfOfferImportJob.mode == "refresh",
                     or_(OfOfferImportJob.next_attempt_at.is_(None), OfOfferImportJob.next_attempt_at <= now),
                     or_(OfOfferImportJob.status == "pending",
-                        and_(OfOfferImportJob.status == "running", OfOfferImportJob.lease_until <= now)))
+                        and_(OfOfferImportJob.status == "running", OfOfferImportJob.lease_until <= now)),
+                    # An account another worker (or another kind of reader) holds or has just read waits its turn.
+                    ~gate.blocked(OfOfferImportJob.account_id, now))
                 .order_by(OfOfferImportJob.updated_at).limit(1).with_for_update(skip_locked=True, of=OfOfferImportJob))
             if job is None:
                 break
@@ -97,22 +100,28 @@ def process_refresh_jobs(store, tenant, *, limit=1, stop=None, transport_factory
             except Refused:
                 _terminal(job, "failed", "connection_unavailable")
                 continue
+            read = gate.acquire_in(s, account, "refresh", now=now)
+            if read is None:
+                continue
             token = str(uuid.uuid4())
             job.status, job.lease_token = "running", token
             job.lease_until = now + timedelta(seconds=LEASE_SECONDS)
             job.next_attempt_at = now + timedelta(seconds=ACCOUNT_INTERVAL_SECONDS)
             job.updated_at = now
             fan, before = cursor.fan_id, cursor.before_id
-        if stop is not None and stop.is_set():
-            break
         page, error = None, None
         try:
-            page = transport.messages(fan_id=fan, before_id=before, limit=PAGE_LIMIT)
-        except NativeProtocolError as exc:
-            from .provider_connector import NativeAuthenticationError
-            error = "authentication_rejected" if isinstance(exc, NativeAuthenticationError) else "unsupported_history"
-        except Exception:
-            error = "history_read_failed"
+            if stop is not None and stop.is_set():
+                break
+            try:
+                page = transport.messages(fan_id=fan, before_id=before, limit=PAGE_LIMIT)
+            except NativeProtocolError as exc:
+                from .provider_connector import NativeAuthenticationError
+                error = "authentication_rejected" if isinstance(exc, NativeAuthenticationError) else "unsupported_history"
+            except Exception:
+                error = "history_read_failed"
+        finally:
+            gate.release(store, account, read)
         with Session(store.engine) as s, s.begin():
             try:
                 runtime = store._runtime(s, tenant, account)

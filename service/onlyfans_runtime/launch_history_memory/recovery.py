@@ -2,7 +2,7 @@
 
 Only an explicitly injected account-bound reader can perform external work.
 No schema is registered with the shared Base, and no startup DDL runs here.
-Claude must migrate ``RecoveryBase.metadata`` and mount the worker seam.
+Tables ship in migration 0090_launch.
 Archive completeness deliberately never clears or sets runtime.recovery_needed.
 """
 from __future__ import annotations
@@ -16,13 +16,14 @@ import uuid
 from sqlalchemy import (BigInteger, Boolean, CheckConstraint, Column, DateTime,
                         ForeignKey, Index, Integer, String, and_, func, or_, select,
                         text)
-from sqlalchemy.orm import Session, declarative_base
+from sqlalchemy.orm import Session
 
-from db.models import Fan, Message, OfCreatorBinding
+from db.models import Base, Fan, Message, OfCreatorBinding
 from db.onlyfans_models import OfIngress, OfRuntime, OfWork
 from onlyfans_runtime.store import Event, LEASE_SECONDS, MAX_PENDING, PAGE_LIMIT, Refused, _id, utcnow
 
-RecoveryBase = declarative_base()
+RecoveryBase = Base  # shared registry (see models.MemoryBase)
+INFO = {"onlyfans_since": "0090_launch"}
 MAX_SCAN_PAGES = 10_000
 RETRY_SECONDS = 5
 LIVE_RESERVE = PAGE_LIMIT
@@ -32,8 +33,8 @@ ERROR_CODES = frozenset({"provider_read_failed", "invalid_page", "backpressure",
 
 class OfHistoryScan(RecoveryBase):
     __tablename__ = "of_launch_history_scan"
-    __table_args__ = (CheckConstraint("status IN ('needed','running','complete')",
-                                      name="ck_launch_history_scan_status"),)
+    __table_args__ = (CheckConstraint("status IN ('needed','running','complete')", name="status"),
+                      {"info": INFO})
     account_id = Column(String, ForeignKey(OfRuntime.account_id, ondelete="RESTRICT"), primary_key=True)
     binding_id = Column(String, ForeignKey(OfCreatorBinding.id, ondelete="RESTRICT"), nullable=False)
     status = Column(String(16), nullable=False, server_default=text("'needed'"))
@@ -53,10 +54,11 @@ class OfHistoryScan(RecoveryBase):
 class OfHistoryCursor(RecoveryBase):
     __tablename__ = "of_launch_history_cursor"
     __table_args__ = (
-        CheckConstraint("status IN ('needed','running','complete')", name="ck_launch_history_cursor_status"),
+        CheckConstraint("status IN ('needed','running','complete')", name="status"),
         CheckConstraint("pages_completed >= 0 AND messages_observed >= 0 AND messages_added >= 0",
-                        name="ck_launch_history_cursor_counts"),
+                        name="counts"),
         Index("ix_launch_history_cursor_due", "account_id", "status", "retry_at", "generation", "fan_id"),
+        {"info": INFO},
     )
     account_id = Column(String, ForeignKey(OfRuntime.account_id, ondelete="RESTRICT"), primary_key=True)
     fan_id = Column(BigInteger, primary_key=True)

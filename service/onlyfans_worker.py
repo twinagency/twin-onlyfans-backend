@@ -63,8 +63,11 @@ def _process_content_sync(store, tenant, *, limit, stop):
 
 def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
              load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None,facts_reader=None,enrollment_jobs=None,
-             offer_jobs=None, content_sync_jobs=None):
+             offer_jobs=None, content_sync_jobs=None, worker_options=None):
     """Refresh bounded ordered cohorts without starving accounts after row 32.
+
+    ``worker_options`` carries the launch feature flags (history_recovery, history_memory, engagement);
+    absent means every launch feature is off.
 
     Cursor advancement is over scanned candidates, including invalid/expired
     credentials. Verified inactive accounts import history without sending.
@@ -125,7 +128,7 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
                         continue
                 if stop.is_set():
                     break
-                worker = worker_type(store, tenant, tuple(accounts),**({"facts_reader":facts_reader} if facts_reader is not None else {}))
+                worker = worker_type(store, tenant, tuple(accounts),**({"facts_reader":facts_reader} if facts_reader is not None else {}),**(worker_options or {}))
                 # Finish at least one pass over the selected cohort before
                 # advancing its DB cursor, even for a short refresh interval.
                 # --once intentionally performs one bounded four-account cycle.
@@ -199,11 +202,16 @@ def main(argv=None):
             from onlyfans_runtime.vault_media_worker import MediaWorker
             media_worker = MediaWorker(store, tenant, stop)
             media_worker.start()
+        # Launch features stay off unless explicitly enabled; engagement additionally needs saved per-account settings.
+        worker_options = {name: True for name, flag in (("history_recovery", "ONLYFANS_HISTORY_RECOVERY_ENABLED"),
+            ("history_memory", "ONLYFANS_HISTORY_MEMORY_ENABLED"), ("engagement", "ONLYFANS_ENGAGEMENT_ENABLED"))
+            if os.environ.get(flag) == "1"}
         return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,facts_reader=facts_reader,
                         vault_jobs=_process_vault_jobs, enrollment_jobs=_process_connection_enrollments,
                         ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None,
                         offer_jobs=_process_offer_jobs if os.environ.get("ONLYFANS_OFFER_IMPORT_ENABLED") == "1" else None,
-                        content_sync_jobs=_process_content_sync if os.environ.get("ONLYFANS_CONTENT_SYNC_ENABLED") == "1" else None)
+                        content_sync_jobs=_process_content_sync if os.environ.get("ONLYFANS_CONTENT_SYNC_ENABLED") == "1" else None,
+                        worker_options=worker_options)
     finally:
         stop.set()
         if media_worker is not None:

@@ -278,7 +278,12 @@ class Store:
             runtime.recovery_needed = True
             runtime.pending_events -= 1
             return
-        state.input_revision += 1
+        historical = history_only or row.source == "import" or stamp < runtime.activated_at
+        # Older imports outside the latest-100 prompt window cannot change a reply; they must not
+        # invalidate a live claim. Anything live, or inside the window, still advances the revision.
+        from .launch_history_memory.recovery import affects_recent_context
+        if not historical or affects_recent_context(s, account, event.fan_id, event):
+            state.input_revision += 1
         s.add(Message(account_id=account, fan_id=event.fan_id, message_id=event.message_id,
                       direction=event.direction, body=event.body, media_ids=json.dumps(event.media_ids),
                       media_count=len(event.media_ids), price_cents=event.price_cents,
@@ -289,7 +294,6 @@ class Store:
             s.add(chat)
         if chat.last_message_at is None or (stamp, event.message_id) > (chat.last_message_at, chat.last_message_id or 0):
             chat.last_message_id, chat.last_message_at, chat.last_message_preview = event.message_id, stamp, event.body[:500]
-        historical = history_only or row.source == "import" or stamp < runtime.activated_at
         if new_fan and new_state and event.direction == "in" and not historical and runtime.enabled and not fan.is_muted:
             from db.onlyfans_connection_models import OfProviderConnection
             connection=s.get(OfProviderConnection,account)

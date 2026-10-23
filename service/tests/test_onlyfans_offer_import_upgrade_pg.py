@@ -11,12 +11,26 @@ from test_onlyfans_foundation_pg import database
 from test_onlyfans_connections_pg import ACTOR, TENANT
 from test_onlyfans_offer_import_pg import (ready, refresh, raw, observation, draft, key, history)
 from db.models import CatalogItem
-from db.schema import VAULT_MEDIA, SchemaMismatch, check_schema, upgrade
+from db.schema import OFFER_IMPORT, VAULT_MEDIA, SchemaMismatch, check_schema, upgrade
 from onlyfans_commands.content_api import router as v1_router, HEADER as CONTENT_HEADER, SCHEMA as V1
 from onlyfans_commands.content_api_v2 import router as v2_router, SCHEMA as V2
 from onlyfans_commands.offer_import_api import router as import_router, HEADER, SCHEMA
 from onlyfans_runtime.content_management import get_content
 from onlyfans_runtime.offer_import import create_draft
+
+
+def drop_0090(c):
+    """Rewind a test database from 0090_launch to 0089 (test databases only)."""
+    c.exec_driver_sql("DROP TABLE of_engagement_action, of_engagement_settings_change, of_engagement_settings,"
+                      " of_history_memory_correction, of_history_memory_evidence, of_history_memory_receipt, of_history_memory_state,"
+                      " of_launch_history_cursor, of_launch_history_scan, of_history_recent_bootstrap,"
+                      " of_personality_revision, of_personality_head;"
+                      " DROP FUNCTION of_engagement_action_guard(); DROP FUNCTION of_engagement_settings_immutable();"
+                      " DROP FUNCTION of_history_memory_evidence_immutable(); DROP FUNCTION of_history_memory_correction_immutable();"
+                      " DROP FUNCTION of_personality_immutable();"
+                      " ALTER TABLE of_text_intent DROP CONSTRAINT ck_of_text_intent_origin;"
+                      " ALTER TABLE of_text_intent ADD CONSTRAINT ck_of_text_intent_origin CHECK (origin IN ('automated','manual','campaign'))")
+    c.execute(text("UPDATE alembic_version SET version_num=:v"), {"v": OFFER_IMPORT})
 
 
 def test_populated_0088_upgrade_keeps_existing_items_dynamic_and_unchanged(database):
@@ -27,6 +41,7 @@ def test_populated_0088_upgrade_keeps_existing_items_dynamic_and_unchanged(datab
         s.add(CatalogItem(account_id="legacy-acc", kind="image", media_ids="[1]", price_cents=1007, enabled=True))
     with engine.begin() as c:
         before = [{k: v for k, v in r.items() if k != "pricing_mode"} for r in c.execute(text("SELECT * FROM catalog_items")).mappings()]
+        drop_0090(c)
         c.exec_driver_sql("DROP TABLE of_content_sync_decision, of_content_sync_conflict, of_content_sync_draft, of_content_sync_asset,"
                           " of_content_sync_operation, of_content_sync_account;"
                           " DROP FUNCTION of_content_sync_decision_immutable(); DROP FUNCTION of_content_sync_asset_frozen(); DROP FUNCTION of_content_sync_conflict_frozen();"
@@ -41,6 +56,74 @@ def test_populated_0088_upgrade_keeps_existing_items_dynamic_and_unchanged(datab
         after = [dict(r) for r in c.execute(text("SELECT * FROM catalog_items")).mappings()]
         assert [r.pop("pricing_mode") for r in after] == ["dynamic"]
         assert after == before, "no repricing, enabling or other change on upgrade"
+
+
+def test_populated_0089_upgrade_adds_launch_tables_and_keeps_all_prior_state(database):
+    _, engine = database
+    populated_sync(database)
+    before = snapshot(engine)
+    with engine.begin() as c:
+        drop_0090(c)
+        check_schema(c, expected=OFFER_IMPORT)
+        with pytest.raises(SchemaMismatch, match="not supported"):
+            check_schema(c)
+        upgrade(c); upgrade(c); check_schema(c)
+        assert c.execute(text("SELECT count(*) FROM of_engagement_action")).scalar() == 0
+        assert c.execute(text("SELECT count(*) FROM pg_constraint WHERE conname='ck_of_text_intent_origin' AND pg_get_constraintdef(oid) LIKE '%engagement%'")).scalar() == 1
+    assert snapshot(engine) == before
+
+
+LAUNCH_PROTECTION = [
+    ("of_history_memory_evidence", "of_history_memory_evidence_immutable", "append-only protection"),
+    ("of_history_memory_correction", "of_history_memory_correction_immutable", "append-only protection"),
+    ("of_personality_revision", "of_personality_immutable", "append-only protection"),
+    ("of_engagement_settings_change", "of_engagement_settings_immutable", "append-only protection"),
+]
+
+
+@pytest.mark.parametrize("table,trigger,message", LAUNCH_PROTECTION)
+@pytest.mark.parametrize("change", ["drop", "disable", "replace_function"])
+def test_startup_refuses_weakened_launch_evidence_protection(database, table, trigger, message, change):
+    _, engine = database
+    with engine.begin() as c:
+        if change == "drop":
+            c.exec_driver_sql(f'DROP TRIGGER "{trigger}" ON "{table}"')
+        elif change == "disable":
+            c.exec_driver_sql(f'ALTER TABLE "{table}" DISABLE TRIGGER "{trigger}"')
+        else:
+            c.exec_driver_sql(f"CREATE OR REPLACE FUNCTION {trigger}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN OLD; END $$")
+        with pytest.raises(SchemaMismatch, match=message):
+            check_schema(c)
+
+
+@pytest.mark.parametrize("change", ["drop", "disable", "replace_function"])
+def test_startup_refuses_weakened_engagement_action_guard(database, change):
+    _, engine = database
+    with engine.begin() as c:
+        if change == "drop":
+            c.exec_driver_sql('DROP TRIGGER of_engagement_action_guard ON of_engagement_action')
+        elif change == "disable":
+            c.exec_driver_sql('ALTER TABLE of_engagement_action DISABLE TRIGGER of_engagement_action_guard')
+        else:
+            c.exec_driver_sql("CREATE OR REPLACE FUNCTION of_engagement_action_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$")
+        with pytest.raises(SchemaMismatch, match="frozen-identity protection of_engagement_action"):
+            check_schema(c)
+
+
+@pytest.mark.parametrize("statement,message", [
+    ("ALTER TABLE of_engagement_action DROP CONSTRAINT ck_of_engagement_action_status", "missing check constraint"),
+    ("ALTER TABLE of_engagement_action DROP CONSTRAINT uq_of_engagement_action_anchor", "missing unique constraint"),
+    ("DROP INDEX uq_of_engagement_active_fan", "incompatible index"),
+    ("ALTER TABLE of_engagement_action DROP CONSTRAINT fk_of_engagement_action_account_id_of_text_intent", "missing foreign key"),
+    ("ALTER TABLE of_personality_revision DROP CONSTRAINT uq_of_personality_command", "missing unique constraint"),
+    ("DROP TABLE of_history_recent_bootstrap", "missing table"),
+])
+def test_check_schema_detects_missing_launch_objects(database, statement, message):
+    _, engine = database
+    with engine.begin() as c:
+        c.exec_driver_sql(statement)
+        with pytest.raises(SchemaMismatch, match=message):
+            check_schema(c)
 
 
 @pytest.mark.parametrize("table,trigger", [("of_offer_observation", "of_offer_observation_immutable"),

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from db.models import Message, OfCreatorBinding
 from db.onlyfans_models import OfIngress, OfRecovery, OfRuntime
 from onlyfans_runtime.store import Event, PAGE_LIMIT, MAX_PENDING, RecoveryClaim, Refused, utcnow
-from .recovery import HistoryRecovery, RecoveryBase
+from .recovery import INFO, HistoryRecovery, RecoveryBase
 
 
 class RecentBootstrap(RecoveryBase):
@@ -23,7 +23,8 @@ class RecentBootstrap(RecoveryBase):
     __tablename__ = "of_history_recent_bootstrap"
     __table_args__ = (
         ForeignKeyConstraint(["account_id", "fan_id"], [OfRecovery.account_id, OfRecovery.fan_id], ondelete="RESTRICT"),
-        CheckConstraint("observed_count >= 0 AND observed_count < 200", name="ck_history_recent_count"),
+        CheckConstraint("observed_count >= 0 AND observed_count < 200", name="count"),
+        {"info": INFO},
     )
     account_id = Column(String, ForeignKey(OfRuntime.account_id, ondelete="RESTRICT"), primary_key=True)
     fan_id = Column(BigInteger, primary_key=True)

@@ -35,8 +35,9 @@ CREATOR_FACTS = "0085_shared_creator_facts"
 VAULT_EDITS = "0086_vault_edits"
 ENROLLMENT = "0087_creator_enrollment"
 VAULT_MEDIA = "0088_native_vault_media"
-HEAD = "0089_offer_import"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, HEAD:89}
+OFFER_IMPORT = "0089_offer_import"
+HEAD = "0090_launch"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, HEAD:90}
 HERE = Path(__file__).resolve().parent
 
 
@@ -52,6 +53,7 @@ def _metadata():
     from . import onlyfans_vault_models, onlyfans_ledger_models, onlyfans_creator_facts_models, onlyfans_vault_edit_models  # noqa: F401
     from . import onlyfans_media_models  # noqa: F401
     from . import onlyfans_offer_import_models  # noqa: F401
+    from . import onlyfans_launch_models  # noqa: F401
     return Base.metadata
 
 
@@ -159,6 +161,10 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         (89, "of_offer_observation", "of_offer_observation_immutable", "offer observation evidence is append-only"),
         (89, "of_offer_import_decision", "of_offer_decision_immutable", "offer import decisions are append-only"),
         (89, "of_content_sync_decision", "of_content_sync_decision_immutable", "content sync decisions are append-only"),
+        (90, "of_history_memory_evidence", "of_history_memory_evidence_immutable", "historical memory evidence is append-only"),
+        (90, "of_history_memory_correction", "of_history_memory_correction_immutable", "historical memory corrections are append-only"),
+        (90, "of_personality_revision", "of_personality_immutable", "personality evidence is append-only"),
+        (90, "of_engagement_settings_change", "of_engagement_settings_immutable", "engagement settings evidence is append-only"),
     ]:
         if expected_rank < rank:
             continue
@@ -193,6 +199,16 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27 or guard[0][2] != trigger
                     or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != digest):
                 failures.append(f"missing frozen-identity protection {table}")
+    if expected_rank >= 90:
+        # Engagement actions: frozen definition, retained intent link/cancellation, terminal states stay terminal.
+        guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+            WHERE t.tgrelid=to_regclass('of_engagement_action') AND t.tgname='of_engagement_action_guard'
+            AND NOT t.tgisinternal""")).all()
+        if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+                or guard[0][2] != "of_engagement_action_guard"
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "fec38663e2d7b442e4f29bd56d1f22d4a521bda9eb1a80f4eaeb1e97b9693850"):
+            failures.append("missing frozen-identity protection of_engagement_action")
     if "per_employee_revenue_with_attribution" not in inspector.get_view_names():
         failures.append("missing revenue view")
     if failures:

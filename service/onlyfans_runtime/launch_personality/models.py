@@ -10,8 +10,8 @@ from db.models import Base
 
 class PersonalityHead(Base):
     __tablename__ = "of_personality_head"
-    __table_args__ = (CheckConstraint("revision > 0", name="of_personality_head_revision"),
-        {"info": {"onlyfans_since": "0089_offer_import"}})
+    __table_args__ = (CheckConstraint("revision > 0", name="revision"),
+        {"info": {"onlyfans_since": "0090_launch"}})
     account_id = Column(String, ForeignKey("of_runtime.account_id", ondelete="RESTRICT"), primary_key=True)
     binding_id = Column(String, ForeignKey("of_creator_bindings.id", ondelete="RESTRICT"), nullable=False)
     revision = Column(Integer, nullable=False)
@@ -20,10 +20,10 @@ class PersonalityHead(Base):
 class PersonalityRevision(Base):
     __tablename__ = "of_personality_revision"
     __table_args__ = (
-        CheckConstraint("revision > 0 AND previous_revision >= 0 AND revision = previous_revision + 1", name="of_personality_revision_sequence"),
-        CheckConstraint("state IN ('draft','approved')", name="of_personality_revision_state"),
+        CheckConstraint("revision > 0 AND previous_revision >= 0 AND revision = previous_revision + 1", name="sequence"),
+        CheckConstraint("state IN ('draft','approved')", name="state"),
         UniqueConstraint("account_id", "command_key", name="uq_of_personality_command"),
-        {"info": {"onlyfans_since": "0089_offer_import"}},
+        {"info": {"onlyfans_since": "0090_launch"}},
     )
     account_id = Column(String, ForeignKey("of_personality_head.account_id", ondelete="RESTRICT"), primary_key=True)
     revision = Column(Integer, primary_key=True)

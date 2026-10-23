@@ -19,7 +19,6 @@ from onlyfans_runtime import native_context, native_memory, native_planning
 from onlyfans_runtime.native_context import canonical
 from onlyfans_runtime.native_planning import SyntheticNativeModel
 from onlyfans_runtime.launch_history_memory.memory import HistoricalMemory, enrich_snapshot, augment_prompt
-from onlyfans_runtime.launch_history_memory.models import MemoryBase
 from onlyfans_runtime.store import utcnow
 
 TENANT, ACCOUNT, FAN = "tenant-a", "acc-a", 101
@@ -45,7 +44,6 @@ def wire_test_seams(monkeypatch):
 def history_ready(database, monkeypatch):
     store, authority, _, planner = ready(database, monkeypatch)
     _, engine = database
-    MemoryBase.metadata.create_all(engine)
     old = utcnow() - timedelta(days=40)
     with Session(engine) as s, s.begin():
         s.add_all(Message(account_id=ACCOUNT, fan_id=FAN, message_id=mid,

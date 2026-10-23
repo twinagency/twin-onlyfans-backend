@@ -36,7 +36,8 @@ class BoundReader(Protocol):
     def messages(self, *, fan_id: int, before_id: int | None, limit: int) -> MessagePage: ...
 
 
-def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader, *, connection_revision=None) -> ReadProgress:
+def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader, *, connection_revision=None,
+              recent_cutover=False) -> ReadProgress:
     if reader.account_id != account_id:
         raise Refused("reader scope mismatch")
     scope = {"connection_revision": connection_revision} if connection_revision is not None else {}
@@ -50,14 +51,24 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
         discovered = 1
     recovery = store.claim_recovery(tenant_id, account_id, **scope)
     if recovery:
+        before_id = recovery.before_id
+        if recent_cutover:
+            # Initial head = newest page even after a legacy deep cursor; the remainder goes to archive recovery.
+            from .launch_history_memory.recent import request_before
+            before_id = request_before(store, tenant_id, recovery, **scope)
         try:
-            page = reader.messages(fan_id=recovery.fan_id, before_id=recovery.before_id, limit=PAGE_LIMIT)
+            page = reader.messages(fan_id=recovery.fan_id, before_id=before_id, limit=PAGE_LIMIT)
         except Exception as error:
             from .history_diagnostics import record_history_failure
             record_history_failure(error)
             raise
-        store.recovery_page(tenant_id, recovery, page.events, has_more=page.has_more,
-                            observations=page.observations, **scope)
+        if recent_cutover:
+            from .launch_history_memory.recent import commit_recent_page
+            commit_recent_page(store, tenant_id, recovery, page.events, has_more=page.has_more,
+                               observations=page.observations, **scope)
+        else:
+            store.recovery_page(tenant_id, recovery, page.events, has_more=page.has_more,
+                                observations=page.observations, **scope)
         recovered = 1
     return ReadProgress(applied, discovered, recovered)
 

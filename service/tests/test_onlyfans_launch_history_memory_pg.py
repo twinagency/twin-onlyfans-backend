@@ -18,8 +18,7 @@ from onlyfans_read.agency_scope import AgencyScope, current_scope
 from onlyfans_runtime.store import Store, Refused, utcnow
 from onlyfans_runtime.launch_history_memory import memory as memory_module
 from onlyfans_runtime.launch_history_memory.memory import HistoricalMemory, augment_prompt, enrich_snapshot, locked_fields
-from onlyfans_runtime.launch_history_memory.models import MemoryBase, MemoryCorrection, MemoryEvidence, MemoryReceipt, MemoryState
-from onlyfans_runtime.launch_history_memory.schema_contract import EVIDENCE_GUARDS_SQL
+from onlyfans_runtime.launch_history_memory.models import MemoryCorrection, MemoryEvidence, MemoryReceipt, MemoryState
 
 TENANT, ACCOUNT, FAN = "tenant-a", "acc-a", 101
 ACTOR = "op-session:" + "a" * 64
@@ -30,9 +29,6 @@ START = datetime(2025, 1, 1)
 def memory_db(database, monkeypatch):
     url, engine = database
     store = seed(url, engine)
-    MemoryBase.metadata.create_all(engine)
-    with engine.begin() as connection:
-        connection.exec_driver_sql(EVIDENCE_GUARDS_SQL)
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "worker")
     try:
         yield url, engine, store, HistoricalMemory(store)

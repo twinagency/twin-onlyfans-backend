@@ -28,7 +28,6 @@ def head():
 @pytest.fixture
 def initial(database):
     url, engine = database
-    RecoveryBase.metadata.create_all(engine)
     store = seed(url, engine)
     store.begin_scan(TENANT, ACCOUNT)
     scan = store.claim_scan(TENANT, ACCOUNT)

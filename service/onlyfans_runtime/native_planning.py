@@ -98,6 +98,12 @@ def _native_messages(context):
                                          bot_accused=bot_accused, kind=kind,
                                          v=_voice.blocks(cfg.voice, sell_customs=False),
                                          lang=language)
+    memory = context.get("historicalMemory")
+    # Older source excerpts and operator overrides only; canonical facts already reach the composer above.
+    if memory and (memory["interactions"] or memory["overrides"]
+                   or any(fact["source"] != "canonical" for fact in memory["facts"].values())):
+        from .launch_history_memory.memory import augment_prompt
+        messages = augment_prompt(messages, memory)
     return messages
 
 

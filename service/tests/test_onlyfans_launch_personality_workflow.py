@@ -33,15 +33,38 @@ ACK = {"mixedAuthorship": True, "runtimeRules": True, "factsVerified": True}
 def key(n): return f"{n:064x}"
 
 
+PG = "ONLYFANS_TEST_PG_URL"
+
+
+@pytest.fixture(scope="module")
+def pg_template():
+    # One bootstrapped (real migration chain, 0090 tables and triggers) disposable template per module.
+    if not os.environ.get(PG):
+        yield None
+        return
+    from test_onlyfans_foundation_pg import database
+    lifecycle = database.__wrapped__()
+    template = next(lifecycle)
+    template[1].dispose()
+    yield template[1].url.database
+    try:
+        next(lifecycle)
+    except StopIteration:
+        pass
+
+
 @pytest.fixture
-def env(tmp_path):
-    url = os.environ.get("ONLYFANS_PERSONALITY_TEST_DATABASE_URL")
-    if url:
-        # Explicit disposable URL only; never DATABASE_URL from a deployment.
-        from sqlalchemy.engine import make_url
-        target = make_url(url)
-        assert target.host in {"127.0.0.1", "localhost"} and target.database.startswith("personality_test_"), "Disposable local test DB required"
-    engine = create_engine(url or "sqlite:///" + str(tmp_path / "synthetic.sqlite"))
+def env(tmp_path, pg_template):
+    admin = database = None
+    if pg_template is not None:
+        import uuid
+        admin = create_engine(os.environ[PG], isolation_level="AUTOCOMMIT")
+        database = "of_test_personality_" + uuid.uuid4().hex
+        with admin.connect() as c: c.exec_driver_sql(f'CREATE DATABASE "{database}" TEMPLATE "{pg_template}"')
+        url = admin.url.set(database=database).render_as_string(hide_password=False)
+        engine = create_engine(url, connect_args={"options": "-c timezone=UTC"})
+    else:
+        engine = create_engine("sqlite:///" + str(tmp_path / "synthetic.sqlite"))
     if engine.dialect.name == "sqlite":
         # pysqlite's legacy mode otherwise commits a released SAVEPOINT before
         # the SELECT-only outer transaction has physically started.
@@ -59,7 +82,8 @@ def env(tmp_path):
                 wanted.add(other)
                 dependencies(other)
     for table in list(wanted): dependencies(table)
-    Base.metadata.create_all(engine, tables=list(wanted))
+    if database is None:
+        Base.metadata.create_all(engine, tables=list(wanted))
     with Session(engine) as s, s.begin():
         s.add(Account(id=ACCOUNT)); s.flush()
         s.add(OfCreatorBinding(id=BINDING, tenant_id=TENANT, creator_id=CREATOR, account_id=ACCOUNT)); s.flush()
@@ -71,8 +95,12 @@ def env(tmp_path):
         s.add(Fan(account_id=ACCOUNT, fan_id=101))
     store = SimpleNamespace(engine=engine, _runtime=Store._runtime)
     yield store, PersonalityWorkflow(store)
-    Base.metadata.drop_all(engine, tables=list(wanted))
+    if database is None:
+        Base.metadata.drop_all(engine, tables=list(wanted))
     engine.dispose()
+    if admin is not None:
+        with admin.connect() as c: c.exec_driver_sql(f'DROP DATABASE "{database}" WITH (FORCE)')
+        admin.dispose()
 
 
 def sample():
@@ -307,7 +335,7 @@ def test_other_configuration_edit_invalidates_readiness_of_approved_personality(
     assert not data["readiness"]["ready"] and "approved_configuration_changed" in data["readiness"]["blockers"]
 
 
-@pytest.mark.skipif(not os.environ.get("ONLYFANS_PERSONALITY_TEST_DATABASE_URL"), reason="Disposable PostgreSQL required for row-lock concurrency proof")
+@pytest.mark.skipif(not os.environ.get(PG), reason="ONLYFANS_TEST_PG_URL required for the row-lock concurrency proof")
 def test_concurrent_edits_only_one_expected_revision_wins(env):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
@@ -326,7 +354,7 @@ def test_concurrent_edits_only_one_expected_revision_wins(env):
     assert w.get(TENANT, ACCOUNT)["revision"] == 2
 
 
-@pytest.mark.skipif(not os.environ.get("ONLYFANS_PERSONALITY_TEST_DATABASE_URL"), reason="Disposable PostgreSQL required for row-lock concurrency proof")
+@pytest.mark.skipif(not os.environ.get(PG), reason="ONLYFANS_TEST_PG_URL required for the row-lock concurrency proof")
 def test_concurrent_approval_retry_applies_configuration_once(env):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
@@ -373,20 +401,13 @@ def test_real_api_import_review_approve_and_readback(env, monkeypatch):
         assert not s.get(OfRuntime, ACCOUNT).enabled
 
 
-@pytest.mark.skipif(not os.environ.get("ONLYFANS_PERSONALITY_TEST_DATABASE_URL"), reason="Disposable PostgreSQL required for trigger proof")
+@pytest.mark.skipif(not os.environ.get(PG), reason="ONLYFANS_TEST_PG_URL required for the migration trigger proof")
 def test_exact_migration_evidence_trigger_rejects_update_and_delete(env):
     from sqlalchemy import text
     from sqlalchemy.exc import DBAPIError
-    from onlyfans_runtime.launch_personality.schema_contract import IMMUTABLE_EVIDENCE_SQL
     store, w = env
     imported(w)
-    try:
-        with store.engine.begin() as connection:
-            for statement in IMMUTABLE_EVIDENCE_SQL: connection.execute(text(statement))
-        for statement in ("UPDATE of_personality_revision SET state='approved'", "DELETE FROM of_personality_revision"):
-            with pytest.raises(DBAPIError, match="append-only"):
-                with store.engine.begin() as connection: connection.execute(text(statement))
-    finally:
-        with store.engine.begin() as connection:
-            connection.execute(text("DROP TRIGGER IF EXISTS of_personality_immutable ON of_personality_revision"))
-            connection.execute(text("DROP FUNCTION IF EXISTS of_personality_immutable()"))
+    # The trigger is installed by migration 0090_launch, not by this fixture.
+    for statement in ("UPDATE of_personality_revision SET state='approved'", "DELETE FROM of_personality_revision"):
+        with pytest.raises(DBAPIError, match="append-only"):
+            with store.engine.begin() as connection: connection.execute(text(statement))

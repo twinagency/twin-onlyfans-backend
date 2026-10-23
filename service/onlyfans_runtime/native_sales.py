@@ -198,8 +198,8 @@ def record_quote(s, intent, message_id, now):
     terms = json.loads(intent.catalog_snapshot_json)
     q = terms.get("native_quote")
     # Fixed offers are recorded where the seller would record a quote (its own
-    # automated sends); manual and campaign sends keep their existing ledger.
-    fixed = terms["item"].get("pricing_mode") == "fixed" and intent.origin == "automated"
+    # automated and engagement sends); manual and campaign sends keep their existing ledger.
+    fixed = terms["item"].get("pricing_mode") == "fixed" and intent.origin in {"automated", "engagement"}
     if q is None and not fixed:
         return
     lad = s.get(LadderState, (intent.account_id, intent.fan_id))

@@ -34,8 +34,6 @@ def history(mid, fan=FAN, *, body=None, days=2, direction="in", media_ids=(), pr
 @pytest.fixture
 def ready(database):
     url, engine = database
-    assert not set(RecoveryBase.metadata.tables) & set(Base.metadata.tables)
-    RecoveryBase.metadata.create_all(engine)  # Only this fixture's owned tables.
     store = seed(url, engine)
     with Session(engine) as session, session.begin():
         session.get(OfRuntime, ACCOUNT).recovery_needed = False

@@ -1,7 +1,6 @@
 """Disposable PostgreSQL, synthetic history, no provider or production access.
 
-The test-only origin constraint change rehearses Claude's integration migration;
-no shared source file, migration or startup registration is changed here.
+Schema comes from the real 0090_launch migration (tables, guards, engagement origin).
 """
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -22,7 +21,7 @@ from db.models import (AccountAiConfig, CatalogItem, ContentOffer, Fan, LadderSt
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_delivery_models import OfTextIntent, OfDeliveryPolicy
 from onlyfans_runtime.launch_engagement.contracts import digest, intent_key, load_object
-from onlyfans_runtime.launch_engagement.models import EngagementBase, Action
+from onlyfans_runtime.launch_engagement.models import Action
 from onlyfans_runtime.launch_engagement.service import EngagementService
 from onlyfans_runtime.native_context import canonical
 from onlyfans_runtime.store import Refused, Store, utcnow
@@ -68,14 +67,6 @@ def rig(database, monkeypatch):
     media_policy(authority)
     now = utcnow()
     monkeypatch.setattr(TextAuthority, "_db_now", staticmethod(lambda s: now))
-    EngagementBase.metadata.create_all(engine)
-    with engine.begin() as c:
-        c.exec_driver_sql((Path(__file__).resolve().parents[1] / "onlyfans_runtime/launch_engagement/schema_contract.sql").read_text())
-        # ONLY this throwaway database; the branch ships no migration.
-        checks = c.execute(text("SELECT conname FROM pg_constraint WHERE conrelid='of_text_intent'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%origin%'" )).scalars().all()
-        for name in checks:
-            c.exec_driver_sql('ALTER TABLE of_text_intent DROP CONSTRAINT "' + name + '"')
-            c.exec_driver_sql('ALTER TABLE of_text_intent ADD CONSTRAINT "' + name + '" CHECK (origin IN (\'automated\',\'manual\',\'campaign\',\'engagement\'))')
     with Session(engine) as s, s.begin():
         s.get(CatalogItem, item).pricing_mode = "fixed"
         s.get(CatalogItem, item).tags = '["scenic"]'

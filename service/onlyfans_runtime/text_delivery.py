@@ -132,6 +132,13 @@ class TextAuthority:
         self.store = store
         self.engine = store.engine
 
+    def _engagement(self):
+        # Hooks share this authority's clock and the caller's open transaction.
+        from .launch_engagement.service import EngagementService
+        service = EngagementService(self.store)
+        service.authority = self
+        return service
+
     @staticmethod
     def _db_now(s):
         return s.scalar(select(func.clock_timestamp())).astimezone(timezone.utc).replace(tzinfo=None)
@@ -241,7 +248,7 @@ class TextAuthority:
             return "contact_blocked"
         if state.takeover_state == "requested":
             return "takeover_pending"
-        if origin in {"automated", "campaign"} and (state.mode != "automated" or state.takeover_state != "none"):
+        if origin in {"automated", "campaign", "engagement"} and (state.mode != "automated" or state.takeover_state != "none"):
             return "owner_changed"
         if origin == "manual" and (state.mode != "human_controlled" or state.takeover_state not in {"none", "effective"}):
             return "human_control_required"
@@ -260,18 +267,23 @@ class TextAuthority:
 
     def prepare(self, tenant_id, account_id, fan_id, *, command_key, expected_revision,
                 body, origin, actor, work: Claim | None = None, ttl_seconds=300, native_plan_id=None,
-                catalog_item_id=None, quoted_price_cents=None, campaign_id=None):
+                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None):
         _id(fan_id)
         if (not isinstance(command_key, str) or not 1 <= len(command_key) <= 64
                 or type(expected_revision) is not int or expected_revision < 0
                 or not isinstance(body, str) or not body.strip() or len(body.encode()) > 20000
-                or origin not in {"automated", "manual", "campaign"}
+                or origin not in {"automated", "manual", "campaign", "engagement"}
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 600):
             raise Refused("invalid text intent")
         if (origin == "campaign" and (campaign_id is None or work is not None or native_plan_id is not None)
                 or origin != "campaign" and campaign_id is not None):
             raise Refused("invalid campaign intent")
+        if (origin == "engagement") != (engagement_action_id is not None) or (
+                origin == "engagement" and (type(engagement_action_id) is not str or len(engagement_action_id) != 36
+                    or work is not None or native_plan_id is not None or campaign_id is not None
+                    or quoted_price_cents is not None)):
+            raise Refused("invalid engagement intent")
         if work is not None and (not isinstance(work, Claim) or work.account_id != account_id or work.fan_id != fan_id):
             raise Refused("work scope mismatch")
         if catalog_item_id is not None:
@@ -285,6 +297,8 @@ class TextAuthority:
                        actor=actor, work=asdict(work) if work else None, ttl_seconds=ttl_seconds)
         if campaign_id is not None:
             request["campaign_id"] = campaign_id
+        if engagement_action_id is not None:
+            request["engagement_action_id"] = engagement_action_id
         if native_plan_id is not None:
             if type(native_plan_id) is not str or len(native_plan_id) != 36 or origin != "automated" or work is None:
                 raise Refused("invalid native plan reference")
@@ -322,6 +336,10 @@ class TextAuthority:
                 from .campaigns import validate_prepare
                 recipient = validate_prepare(s, runtime, fan_id=fan_id, body=body, campaign_id=campaign_id,
                     command_key=command_key, actor=actor, now=now, catalog_item_id=catalog_item_id)
+            engagement = None
+            if origin == "engagement":
+                # Same transaction as the intent below: validation and attach commit together.
+                engagement = self._engagement()
             terms = None
             if catalog_item_id is not None:
                 from .media_delivery import catalog_terms, assert_unowned
@@ -359,10 +377,16 @@ class TextAuthority:
                 row.lease_token = row.lease_until = None
             elif work is not None:
                 raise Refused("manual intent cannot consume automated work")
+            action = None
+            if engagement is not None:
+                action = engagement.validate_prepare(s, runtime, action_id=engagement_action_id, fan_id=fan_id,
+                    command_key=command_key, body=body, terms=terms, now=now)
+                if (action.fan_id != fan_id or action.expires_at <= now):
+                    raise Refused("engagement_delivery_changed")
             identity = str(uuid.uuid4())
             if native_plan_id is not None:
                 plan.status, plan.intent_id = "queued", identity
-            s.add(OfTextIntent(account_id=account_id, intent_id=identity, binding_id=runtime.binding_id,
+            intent = OfTextIntent(account_id=account_id, intent_id=identity, binding_id=runtime.binding_id,
                                fan_id=fan_id, command_key=command_key, actor=actor, origin=origin,
                                body=body, command_hash=fingerprint,
                                payload_hash=self._wire_hash(account_id, fan_id, body,
@@ -370,16 +394,22 @@ class TextAuthority:
                                input_revision=state.input_revision, policy_revision=policy.revision,
                                work_generation=work.generation if work else None,
                                work_token=work.token if work else None, status="queued", created_at=now,
-                               updated_at=now, expires_at=min(now + timedelta(seconds=ttl_seconds), plan.expires_at) if native_plan_id is not None else now + timedelta(seconds=ttl_seconds), wire_version=1,
+                               updated_at=now, expires_at=(min(now + timedelta(seconds=ttl_seconds), plan.expires_at) if native_plan_id is not None
+                                   else min(now + timedelta(seconds=ttl_seconds), action.expires_at) if action is not None
+                                   else now + timedelta(seconds=ttl_seconds)), wire_version=1,
                                native_plan_id=native_plan_id, catalog_item_id=catalog_item_id,
                                catalog_snapshot_json=_json(terms) if terms else None,
                                media_json=_json(terms["media_ids"]) if terms else "[]",
                                preview_json=_json(terms["preview_ids"]) if terms else "[]",
-                               price_cents=terms["price_cents"] if terms else 0))
+                               price_cents=terms["price_cents"] if terms else 0)
+            s.add(intent)
             policy.queued_count += 1
             if recipient is not None:
                 from .campaigns import attach
                 attach(s, recipient, identity, now)
+            if action is not None:
+                s.flush()
+                engagement.attach(s, runtime, action, intent, now)
             return identity
 
     @staticmethod
@@ -424,6 +454,8 @@ class TextAuthority:
             if not obsolete and intent.origin == "campaign":
                 from .campaigns import current
                 obsolete = not current(s, intent, runtime, now)
+            if not obsolete and intent.origin == "engagement":
+                obsolete = not self._engagement().current(s, intent, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now)
             if reason:
                 intent.status = "cancelled" if obsolete else "refused"
@@ -468,7 +500,7 @@ class TextAuthority:
                   (grant.token, 36), (grant.body, 20000), (grant.payload_hash, 64))
         if (any(type(value) is not str or not 1 <= len(value.encode()) <= limit for value, limit in fields)
                 or len(grant.payload_hash) != 64 or any(c not in "0123456789abcdef" for c in grant.payload_hash)
-                or type(grant.origin) is not str or grant.origin not in {"automated", "manual", "campaign"}
+                or type(grant.origin) is not str or grant.origin not in {"automated", "manual", "campaign", "engagement"}
                 or type(grant.deadline) is not datetime or grant.deadline.tzinfo is not None
                 or type(grant.policy_revision) is not int or grant.policy_revision < 0
                 or type(grant.wire_version) is not int or grant.wire_version not in {0, 1}):
@@ -540,6 +572,8 @@ class TextAuthority:
             if not obsolete and row.origin == "campaign":
                 from .campaigns import current
                 obsolete = not current(s, row, runtime, now)
+            if not obsolete and row.origin == "engagement":
+                obsolete = not self._engagement().current(s, row, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(
                 s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id)
             if reason is None and (policy.active_intent_id != row.intent_id or not row.reservation_held
@@ -733,6 +767,7 @@ class TextAuthority:
                               media_ids=row.media_json, media_count=len(json.loads(row.media_json)),
                               price_cents=row.price_cents, is_paid=False if row.price_cents else None,
                               automation_kind="onlyfans_campaign" if row.origin == "campaign" else
+                                "onlyfans_engagement" if row.origin == "engagement" else
                                 ("onlyfans_media" if row.catalog_item_id is not None else "onlyfans_text") if row.origin == "automated" else None))
                 state.input_revision += 1
                 s.flush()
@@ -742,7 +777,7 @@ class TextAuthority:
                 receipt = OfMessageDelivery(account_id=account_id, fan_id=row.fan_id, message_id=proof.message_id)
                 s.add(receipt)
             receipt.outcome, receipt.attempt_id = "sent", row.attempt_id
-            receipt.origin = "ai" if row.origin == "automated" else "human"
+            receipt.origin = "ai" if row.origin in {"automated", "engagement"} else "human"
             receipt.evidence_ref, receipt.recorded_at = row.evidence_ref, stamp
             receipt.detail = "The transport accepted this exact message. This is not a purchase or read receipt."
             chat = s.get(Chat, (account_id, row.fan_id))

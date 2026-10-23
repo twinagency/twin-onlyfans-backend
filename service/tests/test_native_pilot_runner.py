@@ -130,7 +130,7 @@ async def suite(root):
         f.sql("CREATE TABLE automation_rules(account_id TEXT,is_enabled INTEGER)")
         f.sql("CREATE TABLE scheduled_jobs(account_id TEXT,status TEXT,kind TEXT)")
         f.sql("CREATE TABLE account_ai_config(account_id TEXT,persona TEXT,chatter_config_json TEXT)")
-        f.sql("CREATE TABLE content_offers(account_id TEXT,fan_id INTEGER,status TEXT)")
+        f.sql("CREATE TABLE content_offers(account_id TEXT,fan_id INTEGER,status TEXT,mode TEXT,item_id INTEGER)")
         f.sql("CREATE TABLE pending_offer(account_id TEXT,fan_id INTEGER)")
         f.sql("ALTER TABLE messages ADD COLUMN automation_kind TEXT")
         f.sql("CREATE TABLE automation_runs(id INTEGER PRIMARY KEY,account_id TEXT,kind TEXT,started_at TEXT,completed_at TEXT,status TEXT,stats_json TEXT,error_text TEXT)")

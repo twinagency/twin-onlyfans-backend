@@ -215,7 +215,8 @@ class Service:
     # ── ownership ─────────────────────────────────────────────────────────
     async def acquire(self):
         from twin_bridge.coordination import reserve_ownership
-        profile = runner.check_local(self.path, self.db, self.args.fan)
+        profile = runner.check_local(self.path, self.db, self.args.fan,
+                                         approved_item=self.content.item["catalog_id"] if self.content else None)
         if not self.ensured:
             await ensure_fan_conversation(self.scope, self.args.fan)
             self.ensured = True

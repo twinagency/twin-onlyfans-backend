@@ -34,7 +34,7 @@ def emit(event):
 readonly = store.readonly
 
 
-def check_local(path, account, fan):
+def check_local(path, account, fan, approved_item=None):
     """Inspect only the chosen account's configuration and delivery metadata."""
     with readonly(path) as con:
         if not con.execute("SELECT 1 FROM accounts WHERE id=?", (account,)).fetchone():
@@ -55,7 +55,10 @@ def check_local(path, account, fan):
                     if value.get("enabled"):
                         raise Refused("account-automation-enabled")
         # Suppressing the offer resolver is permitted only with no obligation.
-        if con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status IN ('open','paid','delivering') LIMIT 1", (account, fan)).fetchone():
+        # An open PPV of the one approved item is settled by OnlyFans itself (the fan unlocks it).
+        approved = (" AND NOT (mode='ppv' AND status='open' AND item_id=?)", (approved_item,)) if approved_item else ("", ())
+        if con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status IN ('open','paid','delivering')"
+                       + approved[0] + " LIMIT 1", (account, fan, *approved[1])).fetchone():
             raise Refused("chat-offer-open")
         if con.execute("SELECT 1 FROM pending_offer WHERE account_id=? AND fan_id=? LIMIT 1", (account, fan)).fetchone():
             raise Refused("chat-offer-open")
@@ -211,7 +214,8 @@ class Gateway:
             receipts = self.ledger.receipts(pilot_id=self.pilot.pilot_id, input_key=self.input_key)
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
             check_provider_history(history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
-            check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id)
+            check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
+                            approved_item=self.content.item["catalog_id"] if self.content else None)
             if self.hold_check is not None:
                 held = await asyncio.to_thread(self.hold_check)
                 if held:

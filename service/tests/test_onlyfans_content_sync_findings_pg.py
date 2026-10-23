@@ -436,3 +436,67 @@ def test_f8_process_uploads_hands_the_carrier_a_live_authority(world):
             return "ready"
     csm.process_uploads(world.store, TENANT, limit=1, transport_for=lambda *a: Quiet())
     assert len(seen) == 1 and callable(seen[0][0])
+
+
+@pytest.mark.parametrize("terminal_status", ["partial", "failed"])
+def test_terminal_source_detail_failure_stays_partial_until_authoritative_success(synced, terminal_status, monkeypatch):
+    """Scheduling completion and unresolved provider detail coverage are distinct."""
+    from db.models import OfCreatorBinding
+    from db.onlyfans_content_sync_progress_models import OfContentSyncSource as Source
+    from test_onlyfans_offer_import_pg import refresh
+    from onlyfans_runtime.provider_connector import NativeAuthenticationError
+    store, account = synced
+    enable(store, account)
+    while offer_import.process_inventory_jobs(store, TENANT):
+        pass
+    if terminal_status == "partial":
+        monkeypatch.setattr(offer_import, "REFRESH_PAGES_PER_CHAT", 1)
+    history(store, account, sales([(640, 2000, [15], 1007)]))
+    at = clock()
+    assert process_due(store, TENANT, now=at) == 1
+    view = content_sync.get_status(store, TENANT, account, now=at + timedelta(seconds=1))["sync"]
+    assert view["initial"]["status"] == "complete" and view["backlog"] == 0
+    assert view["coverage"]["paidMessages"]["state"] == "partial"
+    assert "waiting for provider detail checks" in view["coverage"]["paidMessages"]["detail"]
+    assert json.loads(ops(store, account, "incremental")[-1].coverage_json)["pendingSourceDetails"] == 1
+    assert ops(store, account, "incremental")[-1].status == "complete", "the scheduling pass completed durably"
+    with Session(store.engine) as s, s.begin():
+        job = s.scalar(select(OfOfferImportJob).where(OfOfferImportJob.account_id == account,
+            OfOfferImportJob.mode == "refresh", OfOfferImportJob.status == "pending"))
+        identity, binding = job.job_id, job.binding_id
+        # Historical errors from an ended binding, even for the same source
+        # identity, must not hold the current creator's coverage.
+        s.add(OfCreatorBinding(id="ended-source-binding", tenant_id=TENANT, creator_id="prior-creator",
+            account_id=account, channel="onlyfans", revoked_at=utcnow()))
+        s.flush()
+        s.add(Source(account_id=account, binding_id="ended-source-binding", source_kind="message", source_id=2000,
+            fan_id=640, occurrence=0, refresh_requested_at=at, refresh_completed_at=at,
+            refresh_error="prior_binding_detail_failure"))
+    if terminal_status == "partial":
+        reader = FakeHistory({(640, None): ([raw(3000, [15], 1007, previews=[], locked=False, fan=640)], True)})
+    else:
+        class Rejected:
+            def messages(self, **kw):
+                raise NativeAuthenticationError("synthetic authentication refusal")
+        reader = Rejected()
+    assert process_refresh_jobs(store, TENANT, transport_factory=factory(reader)) == 1
+    with Session(store.engine) as s:
+        job = s.get(OfOfferImportJob, (account, identity))
+        audit = (job.status, job.last_error, job.completed_at)
+        source = s.get(Source, (account, binding, "message", 2000))
+        assert job.status == terminal_status and source.refresh_completed_at is not None and source.refresh_error
+        assert source.refresh_job_id is None
+    detail = content_sync.get_status(store, TENANT, account, now=at + timedelta(seconds=1))["sync"]["coverage"]["paidMessages"]
+    assert detail["state"] == "partial", "terminal unresolved detail is not current coverage"
+    assert "unresolved" in detail["detail"] and "waiting" not in detail["detail"]
+    assert "page_budget" not in detail["detail"] and "authentication_rejected" not in detail["detail"]
+    assert count(store, OfOfferImportJob, OfOfferImportJob.mode == "refresh") == 1, "reading unresolved coverage never retries provider work"
+    refresh(store, account, [(640, 2000)], {(640, None): ([raw(2000, [15], 1007,
+        previews=[], locked=False, fan=640)], False)}, n=9400)
+    detail = content_sync.get_status(store, TENANT, account, now=at + timedelta(seconds=1))["sync"]["coverage"]["paidMessages"]
+    assert detail["state"] == "current", "fresh successful evidence clears only the current binding's failed receipt"
+    with Session(store.engine) as s:
+        assert s.get(Source, (account, binding, "message", 2000)).refresh_error is None
+        assert s.get(Source, (account, "ended-source-binding", "message", 2000)).refresh_error == "prior_binding_detail_failure"
+        job = s.get(OfOfferImportJob, (account, identity))
+        assert (job.status, job.last_error, job.completed_at) == audit, "prior terminal job evidence is retained"

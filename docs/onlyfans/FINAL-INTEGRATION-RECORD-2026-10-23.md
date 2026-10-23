@@ -39,6 +39,36 @@ This record is in progress. No completion or deployment is claimed.
 
 Tests, final SHAs, immutable artifacts, actual versions and real-account observations will be recorded only when obtained.
 
+## Final coverage correction
+
+The first exact-pair candidate was backend
+`abd3c03e4d9c7aa263c60a02268d78906c2cf8b8` with the dashboard pin above.
+Its full manifest collected 1,918 nodes without collection errors or
+deselections. Root interrupted execution after observing 72 passing nodes
+because a separate source review confirmed a reporting defect. Exit 130 and
+the missing final JUnit/summary are incomplete acceptance, never a pass.
+
+A terminal partial or failed source-detail refresh retains its outcome but
+previously disappeared from the aggregate pending count. A fresh local scan
+could therefore label imported paid messages current while provider details
+remained unresolved. Coverage now remains partial with fixed operator text
+until authoritative successful observation clears that current source receipt's
+error. Prior terminal job outcomes and other bindings remain intact. Scheduling
+completion still means all work was persisted, rather than provider recovery
+completed. Real database regressions exercise both terminal paths and recovery.
+Both regressions failed at the intended false-current assertion before the
+product fix, then passed afterward. The focused 30-case queue, coverage, auth,
+API and findings run passed with zero failures, errors or skips. These runs
+overlap and are not a unique release total.
+
+The corrected backend requires its own exact-SHA full acceptance. Dashboard
+`1805ebd7e046537f047d31212fdd5fda4454fed1` is unchanged. Existing repository
+and dashboard checks, artifact preparation, deployment, live verification and
+autonomous observation remain separate evidence. Automatic approval review
+blocked private source export to the existing S3 release bucket and the image
+build; neither operation was executed. Unaffected local and existing-repository
+checks continue before any missing release authorization is requested.
+
 ## Reconciliation decisions
 
 The canonical flat ledger read remains GET `/onlyfans/api/v1/accounts/{id}/ledger`

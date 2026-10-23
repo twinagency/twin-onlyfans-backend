@@ -172,6 +172,7 @@ def record_current_observations(s, runtime, offers, now):
         if source.refresh_requested_at is not None:
             source.refresh_completed_at = now
             source.refresh_job_id = None
+            source.refresh_error = None
         # Posts have no Message row. Complete their navigation path here while
         # retaining unknown previews/terms as blocked observations for review.
         if offer.source_kind == "post" and job is not None and (
@@ -466,7 +467,7 @@ def _posts_coverage(row, enabled, now, progress=None):
     return coverage(row, enabled, now, progress=progress)
 
 
-def _message_coverage(row, job, enabled, now, paused, pending_details=0):
+def _message_coverage(row, job, enabled, now, paused, pending_details=0, unresolved_details=0):
     if not enabled:
         return {"state": "not_started", "checkedAt": None, "detail": "Automatic sync is off."}
     initial_done = job is not None and job.status == "complete"
@@ -474,12 +475,15 @@ def _message_coverage(row, job, enabled, now, paused, pending_details=0):
         scanning = job is not None and job.status in {"pending", "running"}
         return {"state": "partial" if scanning else "not_started", "checkedAt": None,
             "detail": "Scanning imported history." if scanning else "The first check has not run yet."}
-    partial = row.backlog > 0 or not initial_done or pending_details > 0
+    partial = row.backlog > 0 or not initial_done or pending_details > 0 or unresolved_details > 0
     state = _coverage_state(now, row.last_incremental_at, partial=partial)
     if state == "delayed":
         detail = "The account connection is required to continue." if paused else "The last successful check is more than ten minutes old."
     elif row.backlog > 0:
         detail = f"{row.backlog} newer paid messages are waiting to be checked."
+    elif unresolved_details > 0:
+        noun = "source" if unresolved_details == 1 else "sources"
+        detail = f"Provider detail checks remain unresolved for {unresolved_details} imported paid {noun}. Review or refresh source details."
     elif pending_details > 0:
         detail = f"{pending_details} imported paid sources are waiting for provider detail checks."
     elif not initial_done:
@@ -511,6 +515,9 @@ def _sync_view(s, runtime, row, now):
     pending_details = s.scalar(select(func.count()).select_from(Source).where(Source.account_id == account,
         Source.binding_id == runtime.binding_id, Source.refresh_requested_at.is_not(None),
         Source.refresh_completed_at.is_(None))) or 0
+    unresolved_details = s.scalar(select(func.count()).select_from(Source).where(Source.account_id == account,
+        Source.binding_id == runtime.binding_id, Source.source_kind == "message",
+        Source.refresh_completed_at.is_not(None), Source.refresh_error.is_not(None))) or 0
     return {"enabled": enabled, "status": status, "revision": 0 if zero else row.revision, "blockedReason": reason,
         "lastIncrementalAt": None if zero else _date(row.last_incremental_at),
         "nextIncrementalAt": _date(row.incremental_due_at) if enabled else None,
@@ -523,7 +530,7 @@ def _sync_view(s, runtime, row, now):
             "rowsScanned": job.rows_scanned if job else 0, "complete": job is not None and job.status == "complete"},
         "coverage": {
             "media": _vault_coverage(s, account, enabled, now),
-            "paidMessages": _message_coverage(row, job, enabled, now, status == "paused_auth", pending_details) if row is not None else
+            "paidMessages": _message_coverage(row, job, enabled, now, status == "paused_auth", pending_details, unresolved_details) if row is not None else
                 {"state": "not_started", "checkedAt": None, "detail": "Automatic sync is off."},
             # Paid feed posts retain account-bound cursor verification evidence.
             "paidPosts": _posts_coverage(row, enabled, now, s.get(OfContentPostProgress, account))},

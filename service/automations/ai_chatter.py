@@ -253,6 +253,19 @@ async def _runtime_teaser(account_id: str, kind: str, native_loader):
     return await native_loader(account_id)
 
 
+async def _runtime_prompt_context(account_id: str, fan_id: int, last_inbound: str):
+    """The ONE prompt hook for Twin's approved persona/creator facts and fan memory.
+
+    Returns the capability's `PromptContext`, or None when no capability (or one
+    without Twin context) is active, in which case the native persona and prompt
+    are used exactly as before."""
+    cap = active_telegram_capabilities()
+    hook = getattr(cap, "prompt_context", None) if cap is not None else None
+    if hook is None:
+        return None
+    return await hook(account_id, fan_id, last_inbound=last_inbound)
+
+
 async def _runtime_hold(account_id: str, fan_id: int, seconds: float, **kwargs):
     cap = active_telegram_capabilities()
     if cap is not None:
@@ -6200,6 +6213,11 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     onlyfans_text_only: bool = False,
                     onlyfans_memory: bool = False,
                     onlyfans_sales: list | None = None,
+                    # Twin's approved-context wording on the FASTT path (see
+                    # `_runtime_prompt_context`). It swaps ONLY the lines that claim
+                    # to be human and the self-invention allowance; selling blocks,
+                    # offer contract and pacing are untouched.
+                    twin_context: bool = False,
                     ) -> tuple[list[dict], list[str]]:
     """Compose the (system, user) pair — welcome_chatter_for_info's girly info-gather prompt
     with one structural difference: `sell`. `_NO_SELL` (M2) → the no-offers line
@@ -6214,6 +6232,9 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     `_SellSurface` exists — see its docstring. Adding a way to sell means one
     more construction there, not four more branches here."""
     questions = _questions_still_needed(f, asked)
+    # One flag for "answer identity questions honestly": Twin's scoped text path
+    # and the FASTT path with Twin context share the same identity wording.
+    truthful = onlyfans_text_only or twin_context
     if onlyfans_memory and not onlyfans_text_only:
         raise ValueError("OnlyFans memory requires the scoped text contract")
     if onlyfans_sales is not None and (not onlyfans_text_only or not onlyfans_memory or type(onlyfans_sales) is not list):
@@ -6377,7 +6398,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         need_block = ("He asked about AI identity: answer honestly and directly "
             "that you are an AI chat clone, not the creator personally typing. "
             "Do not brush off or dodge this question. No sale or follow-up question."
-            if onlyfans_text_only else (
+            if truthful else (
             "He thinks you might be a bot — defending is what a bot does. ONE "
             "breezy brush-off, then something HE told you. No sell, no ask."
         ))
@@ -6452,6 +6473,10 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             # The rating is the proof, so it replaces the brush-off rather than joining
             # it — naming the accusation out loud is the defensiveness §6.4 bans.
             need_block += (
+                "\nHe ALSO asked whether you're an AI: say honestly, in one short "
+                "line, that you are the creator's AI chat clone and not her "
+                "personally typing, then give the rating."
+                if twin_context else
                 "\nHe ALSO just questioned whether you're real — don't defend, "
                 "don't bring it up: the rating IS the answer."
             )
@@ -6692,14 +6717,16 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     # silently dropped that account's register line back to the 22yo default.
     persona_head, bio_facts = (
         (persona, "") if canon == "keep" else _prompt_shape.split_facts(persona))
-    register_intro = ("HOW YOU TEXT (the approved creator's casual voice):\n" if onlyfans_text_only else
+    register_intro = ("HOW YOU TEXT (the approved creator's casual voice):\n" if truthful else
                       f"HOW YOU TEXT (a real {persona_register_age(persona)}yo {v.texter_noun}, not an assistant):\n")
     bio_rule = ("CREATOR FACTS: use only the approved profile. Do not invent "
                 "personal events or unknown details. Explain your AI identity honestly when asked."
-                if onlyfans_text_only else BIO_CONSISTENCY_GUARDRAIL)
+                + (" Never state what a photo or video shows unless it is described to you "
+                   "here or by the fan." if twin_context else "")
+                if truthful else BIO_CONSISTENCY_GUARDRAIL)
     narration_rule = ("- Do not narrate actions or invent personal experiences. "
-                      "Answer identity questions honestly.\n" if onlyfans_text_only else NO_NARRATION_RULE)
-    if onlyfans_text_only:
+                      "Answer identity questions honestly.\n" if truthful else NO_NARRATION_RULE)
+    if truthful:
         # Same accepted native text behavior as the repaired Telegram source,
         # without importing its capability context or SQLite projection runtime.
         humanizer = humanizer.replace("TEXT LIKE A REAL PERSON, NOT AN AI:",
@@ -6721,6 +6748,12 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
            "creator facts and casual voice. If asked, explain your AI identity "
            "honestly; never claim the creator is personally typing. "
            if onlyfans_text_only else
+           "You're texting a fan as the creator's AI chat clone — flirting, getting "
+           "to know him, quietly making him feel like the only one. Use the approved "
+           "creator facts. If he asks whether you are an AI or a bot, answer honestly "
+           "that you are the creator's AI chat clone, never claim to be human or "
+           "deny it, and never claim the creator is personally typing. "
+           if twin_context else
            "You're texting a fan — flirting, getting to know him, quietly making "
            "him feel like the only one. 100% human, never a bot or an assistant. ")
         # THE BAN, conditional. "don't share your own info unless he asks" is what
@@ -6805,7 +6838,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     # matters most here: it has NO turn cap, so the 383- and 966-turn threads that
     # produced the contradictions all live in this engine, not welcome_chatter_for_info's
     # (_MAX_TURNS=30 / _MAX_FAN_MESSAGES=10 / $1 spend gate).
-    claims_block = fan_claims_block(f)
+    # Generated earlier creator claims cannot outrank the approved creator facts.
+    claims_block = "" if twin_context else fan_claims_block(f)
     # 🙋 HER CANON, ONLY WHEN HE ASKED. In the USER message, not the system: it is
     # now per-fan text, and per-fan text in the system prompt fragments the shared
     # cached prefix and costs multiples of its own tokens (the rule `_daylog` and
@@ -8064,6 +8098,11 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # read below this line is per-fan, and a mix of the two names inside one
             # loop body is exactly how a prompt ends up half-narrowed.
             v = _voice.for_fan(voice_blocks, f)
+            # The ONE Twin prompt hook: approved persona + creator facts (replacing
+            # the native `persona` for this fan) and Twin's fan memory. None unless
+            # a capability supplies it; then everything below is unchanged.
+            twin_ctx = await _runtime_prompt_context(account_id, fan_id, c.last_in_text or "")
+            fan_persona = twin_ctx.persona if twin_ctx is not None else persona
 
             # Did he UNLOCK the ask that's sitting in front of him? `is_paid` is stamped
             # at ingest and never re-read, so a PPV he paid for reads as unpaid until the
@@ -8381,7 +8420,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             try:
                 f = await _extract_and_fill(account_id, fan_id, f, c, model,
                                             _EXTRACT_HISTORY_TAIL, purpose=_PURPOSE,
-                                            persona=persona,
+                                            persona=fan_persona,
                                             claims_only=extract_claims_only)
             except LLMCapExceeded:
                 cap_hit = True
@@ -9204,7 +9243,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                if d == "in")
             canon = ("keep" if not bio_gate_on
                      else "show" if (bio_was_asked or bio_asks_now) else "hide")
-            msgs, presented = _build_messages(persona, f, c, asked, tail,
+            msgs, presented = _build_messages(fan_persona, f, c, asked, tail,
                                               shape=_shape,
                                               canon=canon,
                                               custom_owed=_customs.is_owed(f),
@@ -9238,7 +9277,10 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                               clock=clock_line(clock_tz),
                                               day=day,
                                               sell_signal=signal_on,
-                                              v=v)
+                                              v=v,
+                                              twin_context=twin_ctx is not None)
+            if twin_ctx is not None and twin_ctx.finish is not None:
+                msgs = twin_ctx.finish(msgs)
             try:
                 res = await _runtime_chat(
                     model=model,
@@ -9514,7 +9556,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             raw, _leak = await finalize_draft(
                 raw, account_id=account_id, fan_id=fan_id, purpose=_PURPOSE,
                 consistency=ConsistencyCtx(
-                    fan=f, persona=persona, model=model,
+                    fan=f, persona=fan_persona, model=model,
                     last_inbound=c.last_body or "") if consistency_on else None,
                 strip_emoji=strip_emoji_on, v=v)
             if _leak:

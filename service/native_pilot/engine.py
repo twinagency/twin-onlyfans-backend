@@ -71,7 +71,7 @@ class NativeEngine:
 
     _active = False
 
-    def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None):
+    def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None):
         if (not isinstance(account_id, str) or not account_id.isdecimal()
                 or type(fan_id) is not int or fan_id <= 0):
             raise ValueError("invalid-pilot-identity")
@@ -81,6 +81,8 @@ class NativeEngine:
             raise ValueError("invalid-pilot-model")
         self.model = model
         self.content = content
+        # Optional Twin approved-context source for the single prompt hook.
+        self.context = context
         self._chat = chat
         self._send = send
         self._emit = emit or (lambda event: None)
@@ -117,7 +119,25 @@ class NativeEngine:
             # the vault-wide resolver and all other media writers stay off.
             result.update(prompt_sell_catalog=True, ppv_caption_1to1=False,
                           min_fan_msgs_between_offers=0, max_offers_per_fan_per_day=2)
+        if self.context:
+            # Approved creator facts ride the system prompt on every turn, not
+            # only when the fan asks about her (FASTT's token-saving default).
+            result.update(persona_facts_on_ask_only=False)
         return result
+
+    async def prompt_context(self, account_id, fan_id, *, last_inbound):
+        """The single prompt hook (see ai_chatter._runtime_prompt_context)."""
+        self._account(account_id)
+        if type(fan_id) is not int or fan_id != self.fan_id:
+            self._refuse("wrong-fan")
+        if not self.context:
+            return None
+        try:
+            return await self.context.prompt_context(account_id, fan_id, last_inbound=last_inbound)
+        except Exception as exc:
+            # Fixed public reasons only: never carry persona, fact or storage text.
+            from .twin_context import TwinContextRefused
+            self._refuse(str(exc) if isinstance(exc, TwinContextRefused) else "twin-context-unavailable")
 
     async def resolve_model(self, account_id, purpose, requested=None):
         self._account(account_id)

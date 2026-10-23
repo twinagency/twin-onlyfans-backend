@@ -33,7 +33,7 @@ def safe_integer(value):
     return value
 
 
-async def read_earnings(session,*,tenant_id,start,end):
+async def read_earnings(session,*,tenant_id,start,end,include_pending=False):
     begin,finish=window(start,end)
     await session.connection(execution_options={"isolation_level":"REPEATABLE READ"})
     await session.execute(text("SET LOCAL statement_timeout='3000ms'"))
@@ -48,6 +48,7 @@ async def read_earnings(session,*,tenant_id,start,end):
         "accountCount":len(ids),"coveredAccountCount":0,"status":"unavailable","reasons":[],"currency":"USD",
         "clearedGrossCents":None,"clearedNetCents":None,"clearedCount":None,"pendingCount":None,"refundedCount":None,
         "recentLedgerAt":None,"fullLedgerAt":None}
+    if include_pending:result["recorded"]=None
     if not ids:result["reasons"]=["no_bound_accounts"];return result
     rows=(await session.execute(select(OfLedgerScan,OfRuntime.binding_id.label("runtime_binding"),
         OfProviderConnection.binding_id.label("connection_binding"),OfProviderConnection.owner_id.label("connection_owner"),
@@ -71,7 +72,14 @@ async def read_earnings(session,*,tenant_id,start,end):
         if begin<scan.last_full_at-timedelta(days=90):reasons.add("outside_coverage");continue
         result["coveredAccountCount"]+=1
     if len(recent)==len(ids):result["recentLedgerAt"]=stamp(min(recent));result["fullLedgerAt"]=stamp(min(full))
-    if reasons:result["reasons"]=sorted(reasons);return result
+    result["reasons"]=sorted(reasons)
+    # A delayed poll does not erase observed sales. Optional recorded totals
+    # retain their own last-success timestamp and never become current totals.
+    recorded_coverage=(include_pending and len(recent)==len(ids)
+        and not reasons-{"ledger_stale","ledger_held"}
+        and all(timedelta(0)<=now-value<=timedelta(hours=24) for value in recent)
+        and all(timedelta(0)<=now-value<=timedelta(hours=26) and begin>=value-timedelta(days=90) for value in full))
+    if reasons and not recorded_coverage:return result
     # Existing provider-ID index makes this evidence check bounded per
     # transaction. Multiple observations never multiply one canonical payment.
     applied=select(OfLedgerEvidence.evidence_hash).where(OfLedgerEvidence.account_id==Transaction.account_id,
@@ -88,6 +96,17 @@ async def read_earnings(session,*,tenant_id,start,end):
         result["reasons"]=["unsupported_status"];return result
     values={status:(count,gross,net,net_count) for _,status,count,gross,net,net_count in groups}
     cleared,gross,net,net_count=values.get("cleared",(0,0,0,0))
+    if include_pending:
+        pending_count,pending_gross,pending_net,pending_net_count=values.get("pending",(0,0,0,0))
+        result["recorded"]={
+            "grossCents":safe_integer(int(gross)+int(pending_gross)),
+            "netCents":safe_integer(int(net or 0)+int(pending_net or 0)) if net_count==cleared and pending_net_count==pending_count else None,
+            "pendingGrossCents":safe_integer(int(pending_gross)),
+            "pendingNetCents":safe_integer(int(pending_net or 0)) if pending_net_count==pending_count else None,
+            "paymentCount":safe_integer(cleared+pending_count),
+            "lastSuccessfulSyncAt":result["recentLedgerAt"],
+        }
+    if reasons:return result
     result.update(status="current",clearedGrossCents=safe_integer(int(gross)),
         clearedNetCents=safe_integer(int(net or 0)) if net_count==cleared else None,
         clearedCount=safe_integer(cleared),pendingCount=safe_integer(sum(values.get(k,(0,))[0] for k in ("pending","refund_pending"))),

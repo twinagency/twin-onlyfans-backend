@@ -280,8 +280,12 @@ for route in onlyfans_app.app.routes:
         assert methods == {"POST"}, route.path
     elif route.path == "/onlyfans/content/v1/accounts/{account_id}/vault/videos/{media_id}/stream":
         assert methods == {"GET", "HEAD"}, route.path
+    elif route.path == "/onlyfans/content-sync/v1/accounts/{account_id}/drafts/{draft_id}/files/{file_id}/chunks/{index}":
+        assert methods == {"PUT"}, route.path   # reviewed: idempotent chunk upload into a local draft, no provider write
     elif route.path.startswith(("/onlyfans/configuration/v1/", "/onlyfans/campaign/v1/",
-                                "/onlyfans/content/v1/", "/onlyfans/connection/v1/")):
+                                "/onlyfans/content/v1/", "/onlyfans/connection/v1/",
+                                # reviewed 2026-10-23: authenticated single-verb command/read routes
+                                "/onlyfans/content/v2/", "/onlyfans/offer-import/v1/", "/onlyfans/content-sync/v1/")):
         assert methods in ({"GET"},{"POST"}), route.path
     else:
         assert methods <= {"GET", "HEAD"}, route.path

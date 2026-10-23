@@ -42,9 +42,41 @@ jobs:
             service/tests/test_onlyfans_worker_media_pg.py service/tests/test_onlyfans_campaign_media_pg.py \
             service/tests/test_onlyfans_vault_offer_availability.py service/tests/test_onlyfans_vault_previews_pg.py \
             service/tests/test_onlyfans_provider_pg.py service/tests/test_onlyfans_connections_pg.py \
-            service/tests/test_onlyfans_worker_entry.py service/tests/test_onlyfans_release_rehearsal_pg.py \
+            service/tests/test_onlyfans_worker_entry.py \
             2>&1 | tee pytest.log; test "${PIPESTATUS[0]}" -eq 0
           # A skipped required PostgreSQL test is a failure, not a pass.
           ! tail -n 1 pytest.log | grep -qE '[0-9]+ skipped'
+      - name: Check out the combined dashboard beside the backend
+        uses: actions/checkout@v4
+        with:
+          repository: jesse98/twin-dashboard
+          ref: codex/onlyfans-final-integration-20261023
+          path: twin-dashboard
+          token: ${{ secrets.DASHBOARD_CHECKOUT_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the complete rehearsal environment (dashboard, preview harness, browser)
+        run: |
+          # The rehearsal resolves the dashboard as ../twin-dashboard from the backend checkout.
+          ln -s "$GITHUB_WORKSPACE/twin-dashboard" "$GITHUB_WORKSPACE/../twin-dashboard"
+          (cd twin-dashboard && npm ci)
+          (cd twin-dashboard/preview/onlyfans-integration && npm ci && npx playwright install --with-deps chromium)
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg postgresql-client
+          pip install -r requirements.txt pytest==8.3.5
+      - name: One-command demo rehearsal against the combined dashboard
+        shell: bash
+        run: |
+          # The demo only accepts a loopback database; client tools must match the server major.
+          PG_MAJOR=$(pg_dump --version | sed -E 's/.* ([0-9]+)\..*/\1/')
+          docker run -d --name rehearsal-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=synthetic-pilot-only postgres:$PG_MAJOR-alpine
+          for i in $(seq 1 30); do docker exec rehearsal-pg pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
+          cd service && ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres:synthetic-pilot-only@127.0.0.1:55432/postgres \
+            PYTHONPATH="$PWD:$PWD/.." timeout 600 python -m pytest -q -rs tests/test_onlyfans_release_rehearsal_pg.py 2>&1 | tee ../rehearsal.log
+          test "${PIPESTATUS[0]}" -eq 0
+          ! tail -n 1 ../rehearsal.log | grep -qE '[0-9]+ skipped'
       - name: Record the tested candidate image
         run: cat candidate-image-id.txt

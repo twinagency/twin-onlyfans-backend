@@ -200,21 +200,12 @@ def test_populated_0078_upgrade_retains_every_existing_public_row(database):
         command_key="synthetic-retained-control",actor="synthetic",reason="Retained stop")
     store.close()
     with database[1].begin() as c:
-        # Recreate the actual older schema, rather than relabelling a database
-        # that still contains every later release's tables.
-        from db.schema import _metadata, _table_rank, REVISION_RANK
-        for table in reversed(_metadata().sorted_tables):
-            if _table_rank(table)>REVISION_RANK[CONTROLS]:table.drop(c)
-        for function in ("of_configuration_immutable","of_campaign_immutable","of_connection_immutable",
-                "of_content_immutable","of_vault_product_immutable","of_vault_sync_frozen","of_ledger_immutable","of_vault_edit_immutable"):
-            c.exec_driver_sql(f'DROP FUNCTION "{function}"()')
-        c.exec_driver_sql("ALTER TABLE of_runtime DROP COLUMN configuration_revision")
-        c.exec_driver_sql("ALTER TABLE of_text_intent DROP CONSTRAINT ck_of_text_intent_origin; ALTER TABLE of_text_intent ADD CONSTRAINT ck_of_text_intent_origin CHECK (origin IN ('automated','manual'))")
-        c.execute(text("UPDATE alembic_version SET version_num=:head"),{"head":CONTROLS});check_schema(c,expected=CONTROLS)
-        tables=c.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename!='alembic_version' ORDER BY tablename")).scalars().all()
-        def values():return {table:[dict(row) for row in c.exec_driver_sql(f'SELECT * FROM "{table}"').mappings()] for table in tables}
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical=historical_schema(c,CONTROLS)
+        tables=[table for table in historical.sorted_tables if table.name!="alembic_version"]
+        def values():return {table.name:[dict(row) for row in c.execute(table.select().order_by(*table.primary_key.columns)).mappings()] for table in tables}
         before=values();upgrade(c);upgrade(c);check_schema(c);after=values()
-        for row in after["of_runtime"]:assert row.pop("configuration_revision")==0
+        assert c.scalar(text("SELECT configuration_revision FROM of_runtime"))==0
         assert after==before and c.scalar(text("SELECT count(*) FROM of_configuration_change"))==0
 
 

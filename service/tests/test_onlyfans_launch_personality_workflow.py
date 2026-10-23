@@ -234,6 +234,45 @@ def test_rebind_hides_prior_evidence_and_allows_new_owner_import(env):
         expected_revision=1, command_key=key(8), actor=ACTOR)["revision"] == 2
 
 
+@pytest.mark.parametrize("operation", ["import_existing", "edit", "approve"])
+def test_displayed_binding_is_fenced_atomically_before_personality_mutation(env, operation):
+    store, workflow = env
+    revision = 0
+    extra = {}
+    if operation == "edit":
+        imported(workflow)
+        revision, extra = 1, {"review": {"persona": "Stale browser edit."}}
+    elif operation == "approve":
+        reviewed(workflow)
+        revision, extra = 2, {"acknowledgements": ACK}
+    with Session(store.engine) as session, session.begin():
+        original = session.get(AccountAiConfig, ACCOUNT).persona
+        count = session.scalar(select(func.count()).select_from(PersonalityRevision))
+        session.get(OfCreatorBinding, BINDING).revoked_at = datetime(2026, 10, 23)
+        session.flush()
+        session.add(OfCreatorBinding(id="replacement-binding", account_id=ACCOUNT,
+            tenant_id=TENANT, creator_id="replacement-creator"))
+        session.flush()
+        session.get(OfRuntime, ACCOUNT).binding_id = "replacement-binding"
+    with pytest.raises(Refused, match="binding conflict"):
+        getattr(workflow, operation)(TENANT, ACCOUNT, expected_revision=revision,
+            command_key=key(99), actor=ACTOR, expected_binding_id=BINDING, **extra)
+    with Session(store.engine) as session:
+        assert session.scalar(select(func.count()).select_from(PersonalityRevision)) == count
+        assert session.get(AccountAiConfig, ACCOUNT).persona == original
+        assert session.scalar(select(func.count()).select_from(OfConfigurationChange)) == 0
+
+
+def test_displayed_binding_participates_in_exact_command_replay(env):
+    _, workflow = env
+    kwargs = {"expected_revision": 0, "command_key": key(98), "actor": ACTOR,
+              "expected_binding_id": BINDING}
+    first = workflow.import_existing(TENANT, ACCOUNT, **kwargs)
+    assert workflow.import_existing(TENANT, ACCOUNT, **kwargs) == first
+    with pytest.raises(Refused, match="binding conflict"):
+        workflow.import_existing(TENANT, ACCOUNT, **{**kwargs, "expected_binding_id": "another-binding"})
+
+
 def test_rebind_does_not_reattribute_previous_creator_facts(env):
     store, w = env
     imported(w)

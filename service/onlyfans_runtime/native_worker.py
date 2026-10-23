@@ -133,6 +133,38 @@ class NativeWorker:
                 and (policy.next_dispatch_at is None or policy.next_dispatch_at<=now)
                 and (not hasattr(account.transport,"policy_revision") or account.transport.policy_revision==policy.revision))
 
+    def _heartbeat(self, account, *, failed=False):
+        """Record actual bounded-cycle execution without claiming provider coverage."""
+        self._role()
+        from .launch_operations_models import OfLaunchWorkerHealth
+        from .native_context import canonical
+        from .provider_connector import NativeProviderConnector
+        from .store import utcnow
+        with Session(self.store.engine) as s, s.begin():
+            runtime=self.store._runtime(s,self.tenant_id,account.account_id)
+            generation=0
+            if type(account.transport) is NativeProviderConnector:
+                generation=getattr(account.reader,"connection_revision",None)
+                if account.read_connection_revision is not None:
+                    if generation is not None and generation!=account.read_connection_revision:
+                        raise Refused("worker connection generation changed")
+                    generation=account.read_connection_revision
+                if type(generation) is not int or generation<1:
+                    raise Refused("worker connection generation unavailable")
+                # A stale cohort cannot attest to the replacement session or
+                # creator binding just because a refused turn reached finally.
+                self.store._read_connection(s,runtime,generation)
+            row=s.get(OfLaunchWorkerHealth,account.account_id)
+            if row is None:
+                row=OfLaunchWorkerHealth(account_id=account.account_id)
+                s.add(row)
+            row.binding_id=runtime.binding_id
+            row.observed_at=utcnow()
+            row.capabilities_json=canonical({"history_recovery":self.history_recovery,
+                "history_memory":self.history_memory,"engagement":self.engagement_service is not None,
+                "connection_revision":generation})
+            row.last_error="cycle_failed" if failed else None
+
     def _deliver(self,account,report):
         self._role()
         with Session(self.store.engine) as s,s.begin():
@@ -181,6 +213,7 @@ class NativeWorker:
             self._cursor=(self._cursor+count)%len(self.accounts)
             for account in selected:
                 if stop.is_set():break
+                account_errors=report.errors
                 try:
                     if account.read_connection_revision is not None:
                         from .worker import read_step
@@ -275,6 +308,9 @@ class NativeWorker:
                     # Keep private bodies/SQL/credential-bearing exceptions out
                     # of public health. Durable leases/markers handle recovery.
                     report.errors+=1
+                finally:
+                    try:self._heartbeat(account,failed=report.errors>account_errors)
+                    except (Refused,SQLAlchemyError):pass
             return report
         finally:self._lock.release()
 

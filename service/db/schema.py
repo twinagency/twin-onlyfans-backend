@@ -36,8 +36,9 @@ VAULT_EDITS = "0086_vault_edits"
 ENROLLMENT = "0087_creator_enrollment"
 VAULT_MEDIA = "0088_native_vault_media"
 OFFER_IMPORT = "0089_offer_import"
-HEAD = "0090_launch"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, HEAD:90}
+LAUNCH = "0090_launch"
+HEAD = "0091_launch_controls"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, HEAD:91}
 HERE = Path(__file__).resolve().parent
 
 
@@ -54,6 +55,9 @@ def _metadata():
     from . import onlyfans_media_models  # noqa: F401
     from . import onlyfans_offer_import_models  # noqa: F401
     from . import onlyfans_launch_models  # noqa: F401
+    from . import onlyfans_content_sync_progress_models  # noqa: F401
+    from onlyfans_runtime import launch_operations_models  # noqa: F401
+    from onlyfans_runtime.launch_ledger import models as _ledger_retry_models  # noqa: F401
     return Base.metadata
 
 
@@ -140,9 +144,12 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 failures.append(f"missing foreign key {table.name}")
         actual_uniques = {tuple(c["column_names"]) for c in inspector.get_unique_constraints(table.name)}
         for constraint in table.constraints:
-            if constraint.__class__.__name__ == "UniqueConstraint" and all(_since_rank(c) <= expected_rank for c in constraint.columns):
+            if constraint.__class__.__name__ == "UniqueConstraint" and _since_rank(constraint) <= expected_rank and all(_since_rank(c) <= expected_rank for c in constraint.columns):
                 if tuple(c.name for c in constraint.columns) not in actual_uniques:
                     failures.append(f"missing unique constraint {table.name}")
+        if table.name == "of_content_sync_conflict" and 89 <= expected_rank < 91:
+            if ("account_id", "item_id", "observation_id") not in actual_uniques:
+                failures.append("missing historical unique constraint of_content_sync_conflict")
         expected_checks = {c.name for c in table.constraints if c.__class__.__name__ == "CheckConstraint" and c.name and _since_rank(c) <= expected_rank}
         actual_checks = {c["name"] for c in inspector.get_check_constraints(table.name)}
         if not expected_checks.issubset(actual_checks):
@@ -165,7 +172,10 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         (90, "of_history_memory_correction", "of_history_memory_correction_immutable", "historical memory corrections are append-only"),
         (90, "of_personality_revision", "of_personality_immutable", "personality evidence is append-only"),
         (90, "of_engagement_settings_change", "of_engagement_settings_immutable", "engagement settings evidence is append-only"),
-        (90, "of_ledger_retry_command", "of_ledger_retry_immutable", "ledger retry evidence is append-only"),
+        (91, "of_launch_command", "of_launch_command_immutable", "launch command evidence is append-only"),
+        (91, "of_ledger_resolution", "of_ledger_resolution_immutable", "ledger resolution evidence is append-only"),
+        (91, "of_content_sync_occurrence", "of_content_sync_occurrence_immutable", "content source occurrence evidence is append-only"),
+        (91, "of_ledger_retry_command", "of_ledger_retry_command_immutable", "ledger retry command evidence is append-only"),
     ]:
         if expected_rank < rank:
             continue
@@ -191,7 +201,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         for table, trigger, digest in [
             ("of_offer_import_job", "of_offer_import_job_frozen", "a5ad24a783c3e0320b384e8493840e48eac853fb1f7f68264b86afe7f0abb755"),
             ("of_content_sync_asset", "of_content_sync_asset_frozen", "42da1a4289a67c7959f80e2362dbc058a4f8b21588970c5097e6a618f0cf0a36"),
-            ("of_content_sync_conflict", "of_content_sync_conflict_frozen", "3f46cf1266e826e98203ad807c53abcef7d9512ab26658915102a02acf450538"),
+            ("of_content_sync_conflict", "of_content_sync_conflict_frozen", ("7cbb8f8248aa39ddd6f97b82acfc35b49afde2883f89354f951f86a8fece5e97" if expected_rank >=91 else "3f46cf1266e826e98203ad807c53abcef7d9512ab26658915102a02acf450538")),
         ]:
             guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text
                 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid

@@ -27,6 +27,16 @@ SECRET = "synthetic-model-key-" + "x" * 20
 KEYS = {"accountId", "modelId", "configured", "expiresAt"}
 
 
+def verified(database, monkeypatch, **kwargs):
+    # Capturing a scoped key does not select a reply model. Save that explicit
+    # configuration independently, as required by the combined authority.
+    result = C.verified(database, monkeypatch, **kwargs)
+    store, account, _ = result
+    with Session(store.engine) as s, s.begin():
+        s.get(AccountAiConfig, account).model = MODEL
+    return result
+
+
 def model(**overrides):
     return {"modelId": MODEL, "apiKey": SECRET, **overrides}
 
@@ -61,7 +71,7 @@ def arm(monkeypatch):
 
 
 def test_verified_matching_binding_with_model_is_configured(database, monkeypatch):
-    store, account, payload = C.verified(database, monkeypatch, model=model())
+    store, account, payload = verified(database, monkeypatch, model=model())
     for name in ("OPENROUTER_API_KEY", "XAI_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.setenv(name, "environment-fallback-must-be-ignored")
     arm(monkeypatch)
@@ -72,13 +82,13 @@ def test_verified_matching_binding_with_model_is_configured(database, monkeypatc
 
 
 def test_no_provider_or_client_is_touched(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=model())
+    store, account, _ = verified(database, monkeypatch, model=model())
     arm(monkeypatch)
     assert read(store, account)["configured"] is True
 
 
 def test_missing_connection_or_wrong_binding_is_unverified(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=model())
+    store, account, _ = verified(database, monkeypatch, model=model())
     with Session(store.engine) as s, s.begin():
         assert reader(s, account, "someone-elses-binding") is None
         assert reader(s, "of-999", s.get(OfRuntime, account).binding_id) is None
@@ -88,7 +98,7 @@ def test_missing_connection_or_wrong_binding_is_unverified(database, monkeypatch
 
 
 def test_connection_row_bound_to_another_binding_is_unverified(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=model())
+    store, account, _ = verified(database, monkeypatch, model=model())
     with Session(store.engine) as s, s.begin():
         runtime = s.get(OfRuntime, account)
         binding = s.get(OfCreatorBinding, runtime.binding_id)
@@ -102,7 +112,7 @@ def test_connection_row_bound_to_another_binding_is_unverified(database, monkeyp
 
 
 def test_unverified_pending_expired_and_paused_connections_are_not_configured(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=model())
+    store, account, _ = verified(database, monkeypatch, model=model())
     for status in ("pending", "failed", "paused", "expired"):
         with Session(store.engine) as s, s.begin():
             s.get(OfProviderConnection, account).status = status
@@ -115,7 +125,7 @@ def test_unverified_pending_expired_and_paused_connections_are_not_configured(da
 
 
 def test_lapsed_lease_is_not_configured(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=model())
+    store, account, _ = verified(database, monkeypatch, model=model())
     # Sealed expiry must still match the column, so lapse both through the sealing authority.
     past = (utcnow() - timedelta(minutes=5)).replace(microsecond=0)
     reseal(store, account, lambda v: v.__setitem__("expiresAt", past.isoformat() + "Z"))
@@ -126,7 +136,7 @@ def test_lapsed_lease_is_not_configured(database, monkeypatch):
 
 
 def test_missing_or_unusable_model_selection_is_not_configured(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=None)
+    store, account, _ = verified(database, monkeypatch, model=None)
     meta = read(store, account)
     assert meta["configured"] is False and meta["modelId"] == "" and set(meta) == KEYS
     for bad in (model(apiKey=""), model(modelId="not-a-known-model"), {"modelId": MODEL},
@@ -138,7 +148,7 @@ def test_missing_or_unusable_model_selection_is_not_configured(database, monkeyp
 
 
 def test_undecryptable_credentials_are_unverified(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=model())
+    store, account, _ = verified(database, monkeypatch, model=model())
     with Session(store.engine) as s, s.begin():
         row = s.get(OfProviderConnection, account)
         row.sealed_config = row.sealed_config[:-4] + ("AAAA" if not row.sealed_config.endswith("AAAA") else "BBBB")
@@ -146,7 +156,7 @@ def test_undecryptable_credentials_are_unverified(database, monkeypatch):
 
 
 def test_missing_or_wrong_encryption_key_is_unverified_without_env_fallback(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=model())
+    store, account, _ = verified(database, monkeypatch, model=model())
     monkeypatch.setenv("ONLYFANS_CONNECTION_KEY", "43" * 32)
     assert read(store, account) is None
     monkeypatch.delenv("ONLYFANS_CONNECTION_KEY")
@@ -154,7 +164,7 @@ def test_missing_or_wrong_encryption_key_is_unverified_without_env_fallback(data
 
 
 def test_sealed_config_is_bound_to_the_binding_tenant(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=model())
+    store, account, _ = verified(database, monkeypatch, model=model())
     with Session(store.engine) as s, s.begin():
         s.get(OfCreatorBinding, s.get(OfRuntime, account).binding_id).tenant_id = "another-tenant"
     assert read(store, account) is None
@@ -195,7 +205,7 @@ def credential_view(client, headers, account):
 
 
 def test_api_readiness_uses_the_reader_and_is_unverified_without_it(database, monkeypatch):
-    store, account, _ = C.verified(database, monkeypatch, model=model())
+    store, account, _ = verified(database, monkeypatch, model=model())
     import_draft(store, account)
     arm(monkeypatch)
     app, headers = harness(store, monkeypatch, reader)

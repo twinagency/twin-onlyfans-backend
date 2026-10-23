@@ -150,6 +150,68 @@ def get_connection(store,tenant,account,*,include_sync=False):
                 'lastCompleteSyncAt':runtime.last_sync_at.isoformat()+'Z' if runtime.last_sync_at else None}
         return result
 
+def personality_credential_status(s,account,binding_id,*,_unavailable_as_none=False):
+    """Read non-secret readiness through the existing credential authority.
+
+    The personality callback already runs inside its scoped transaction. Resolve
+    that same live binding, then use the normal runtime/agency guard before
+    opening encrypted data. This projection never verifies with a provider,
+    renews a lease, enables sending, or consults environment model credentials.
+    """
+    from .store import Store
+    from model_selection import explicit_model
+    from llm_models import MODELS
+
+    if (type(account) is not str or not ID_PATTERN.fullmatch(account)
+            or type(binding_id) is not str or not ID_PATTERN.fullmatch(binding_id)):
+        raise Refused('scope unavailable')
+    binding=s.get(OfCreatorBinding,binding_id)
+    if (binding is None or binding.account_id!=account or binding.channel!='onlyfans'
+            or binding.revoked_at is not None or type(binding.tenant_id) is not str
+            or not ID_PATTERN.fullmatch(binding.tenant_id)):
+        raise Refused('scope unavailable')
+    runtime=Store._runtime(s,binding.tenant_id,account)
+    if runtime.binding_id!=binding_id:raise Refused('scope unavailable')
+    config=s.get(AccountAiConfig,account)
+    try:selected=explicit_model(config,'ai_chatter',MODELS)
+    except (ValueError,TypeError,RecursionError):selected=''
+    metadata={'accountId':account,'modelId':'','configured':False,
+        'expiresAt':'1970-01-01T00:00:00Z'}
+    row=s.get(OfProviderConnection,account)
+    if row is None or row.binding_id!=runtime.binding_id:
+        return None if _unavailable_as_none else metadata
+    metadata['expiresAt']=row.expires_at.isoformat()+'Z'
+    if (not selected or row.status!='verified' or row.verified_at is None
+            or row.last_error is not None or row.expires_at<=utcnow()):return metadata
+    try:clear=_open(row,binding.tenant_id)
+    except Refused:
+        return None if _unavailable_as_none else metadata
+    try:
+        model=clear.get('model')
+        if (type(model) is not dict or set(model)!={'modelId','apiKey'}
+                or type(model['modelId']) is not str):return metadata
+        # Validate the same explicit registry/credential/deadline requirements
+        # as the native adapter without constructing a model or provider client.
+        from llm_client import _resolve
+        from .provider_connector import _deadline, _header
+        import httpx
+        _,provider=_resolve(model['modelId'])
+        endpoint=httpx.URL(provider.base_url.rstrip('/')+'/chat/completions')
+        if (endpoint.scheme!='https' or endpoint.username or endpoint.password
+                or endpoint.query or endpoint.fragment):return metadata
+        _header(model['apiKey'],'model credential',4096)
+        _deadline(row.expires_at.replace(tzinfo=timezone.utc))
+        metadata['modelId']=model['modelId']
+        # "configured" means this exact scoped key is stored and valid. The
+        # readiness policy compares this actual modelId with the saved/reviewed
+        # selection and reports model_mismatch; presence never means usable.
+        metadata['configured']=True
+    except Exception:
+        # Ciphertext/key/shape errors are readiness failures. Never expose the
+        # decryption error or a credential-derived exception in an API result.
+        return metadata
+    return metadata
+
 def save_connection(store,tenant,account,*,payload,expected_revision,command_key,actor,session_only=False,expected_network_fingerprint=None):
     _validate_identity(command_key,actor,expected_revision)
     required={'ownerId','capture','xHash','expiresAt'} if session_only else {'ownerId','capture','xHash','proxyUrl','expiresAt','model'}
@@ -203,6 +265,8 @@ def save_connection(store,tenant,account,*,payload,expected_revision,command_key
         row.verified_at=None;row.last_error=None;row.updated_at=utcnow();runtime.enabled=False;runtime.recovery_needed=True
         if policy:policy.enabled=False;policy.revision+=1
         _audit(s,row,command_key,actor,action,fingerprint)
+        from .launch_engagement.service import invalidate
+        invalidate(s,runtime,reason='connection_changed',actor=actor)
     store.begin_scan(tenant,account)
     return revision
 
@@ -250,6 +314,8 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
         clear=_open(row,tenant);row.revision+=1
         row.sealed_config=_seal(clear,tenant,account,runtime.binding_id,row.revision);row.updated_at=utcnow()
         _audit(s,row,command_key,actor,action,fingerprint)
+        from .launch_engagement.service import invalidate
+        invalidate(s,runtime,reason='connection_changed',actor=actor)
         revision=row.revision
     if action in {'verify','activate'}:store.begin_scan(tenant,account)
     return revision
@@ -317,19 +383,30 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                 capture=clear['capture'],x_hash=clear['xHash'],proxy_url=clear['proxyUrl'],expires_at=probe_expiry))
             if status=='pending' or check_due:
                 if stop is not None and stop.is_set():break
-                transport.verify_identity()
-                with Session(store.engine) as s,s.begin():
-                    runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
-                    if (row is None or row.binding_id!=runtime.binding_id or row.revision!=generation
-                        or row.sealed_config!=snapshot or row.status!=status
-                        or status=='pending' and row.expires_at<=utcnow()):continue
-                    if check_due:
-                        expires=(utcnow()+CONNECTION_LEASE).replace(tzinfo=timezone.utc)
-                        clear={**clear,'expiresAt':expires.isoformat()}
-                        row.sealed_config=_seal(clear,tenant,account,runtime.binding_id,generation)
-                        row.expires_at=expires.replace(tzinfo=None)
-                        row.updated_at=utcnow()
-                    row.status='verified';row.verified_at=utcnow();row.last_error=None
+                from .provider_read_budget import acquire,current,release,native_reader
+                budget=check_error=None
+                try:
+                    if native_reader(transport):
+                        budget=acquire(store,tenant,account,connection_revision=generation,kind='connection_check')
+                    transport.verify_identity()
+                    with Session(store.engine) as s,s.begin():
+                        runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
+                        if (row is None or row.binding_id!=runtime.binding_id or row.revision!=generation
+                            or row.sealed_config!=snapshot or row.status!=status
+                            or status=='pending' and row.expires_at<=utcnow()):continue
+                        if budget is not None:current(store,tenant,budget,session=s)
+                        if check_due:
+                            expires=(utcnow()+CONNECTION_LEASE).replace(tzinfo=timezone.utc)
+                            clear={**clear,'expiresAt':expires.isoformat()}
+                            row.sealed_config=_seal(clear,tenant,account,runtime.binding_id,generation)
+                            row.expires_at=expires.replace(tzinfo=None)
+                            row.updated_at=utcnow()
+                        row.status='verified';row.verified_at=utcnow();row.last_error=None
+                except Exception as error:
+                    check_error=error
+                    raise
+                finally:
+                    if budget is not None:release(store,tenant,budget,retry_after=getattr(check_error,'retry_after',None))
                 if check_due:
                     transport=NativeProviderConnector(session_from_capture(account_id=account,owner_id=clear['ownerId'],policy_revision=policy_revision,
                         capture=clear['capture'],x_hash=clear['xHash'],proxy_url=clear['proxyUrl'],expires_at=expires))
@@ -346,6 +423,10 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                     or row.status!='verified' or row.verified_at is None or row.expires_at<=utcnow()):continue
                 outgoing=bool(runtime.enabled and policy is not None and policy.enabled
                     and policy.transport_kind=='native' and policy.revision==policy_revision)
+            # This is the connection generation, distinct from delivery policy
+            # revision. Every account-bound read retains this snapshot through
+            # the shared provider lease and its atomic result commit.
+            transport.connection_revision=generation
             if not outgoing:
                 if include_read_only:result.append(WorkerAccount(account,None,transport,transport,generation))
                 continue

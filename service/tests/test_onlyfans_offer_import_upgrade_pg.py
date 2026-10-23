@@ -1,17 +1,19 @@
 """Schema upgrade, append-only protection, v1/v2 content contracts and import API."""
 import json
+from pathlib import Path
 
+from alembic import command
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import MetaData, text
 from sqlalchemy.orm import Session
 
 from test_onlyfans_foundation_pg import database
 from test_onlyfans_connections_pg import ACTOR, TENANT
 from test_onlyfans_offer_import_pg import (ready, refresh, raw, observation, draft, key, history)
 from db.models import CatalogItem
-from db.schema import OFFER_IMPORT, VAULT_MEDIA, SchemaMismatch, check_schema, upgrade
+from db.schema import BASELINE, OFFER_IMPORT, VAULT_MEDIA, SchemaMismatch, _config, check_schema, upgrade
 from onlyfans_commands.content_api import router as v1_router, HEADER as CONTENT_HEADER, SCHEMA as V1
 from onlyfans_commands.content_api_v2 import router as v2_router, SCHEMA as V2
 from onlyfans_commands.offer_import_api import router as import_router, HEADER, SCHEMA
@@ -19,36 +21,54 @@ from onlyfans_runtime.content_management import get_content
 from onlyfans_runtime.offer_import import create_draft
 
 
+def historical_schema(c, revision):
+    """Build an actual historical fixture using its published migrations.
+
+    Keep values in columns that existed at that revision, including sequence
+    positions. Never leave a later table, column, constraint or trigger behind
+    while merely stamping the old revision. This helper is test-only and the
+    caller owns its disposable database transaction.
+    """
+    current = MetaData()
+    current.reflect(bind=c)
+    prior = {name: [dict(row) for row in c.execute(table.select()).mappings()]
+             for name, table in current.tables.items() if name != "alembic_version"}
+    quote = c.dialect.identifier_preparer.quote
+    sequences = {}
+    for name in c.execute(text("SELECT sequencename FROM pg_sequences WHERE schemaname='public'")).scalars():
+        sequences[name] = c.exec_driver_sql(f"SELECT last_value,is_called FROM {quote(name)}").one()
+    c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+    snapshot = Path(__file__).resolve().parents[1] / "db/snapshots/0070_postgresql.sql"
+    c.exec_driver_sql(snapshot.read_text())
+    command.stamp(_config(c), BASELINE)
+    command.upgrade(_config(c), revision)
+    historical = MetaData()
+    historical.reflect(bind=c)
+    for table in historical.sorted_tables:
+        if table.name == "alembic_version":
+            continue
+        values = [{name: row[name] for name in table.columns.keys() if name in row}
+                  for row in prior.get(table.name, [])]
+        if values:
+            c.execute(table.insert(), values)
+    names = c.execute(text("SELECT sequencename FROM pg_sequences WHERE schemaname='public'")).scalars().all()
+    for name in names:
+        if name in sequences:
+            value, called = sequences[name]
+            c.execute(text("SELECT setval(CAST(:name AS regclass),:value,:called)"),
+                      {"name": name, "value": value, "called": called})
+    check_schema(c, expected=revision)
+    return historical
+
+
 def drop_0090(c):
-    """Rewind a test database from 0090_launch to 0089 (test databases only)."""
-    c.exec_driver_sql("DROP TABLE of_engagement_action, of_engagement_settings_change, of_engagement_settings,"
-                      " of_history_memory_correction, of_history_memory_evidence, of_history_memory_receipt, of_history_memory_state,"
-                      " of_launch_history_cursor, of_launch_history_scan, of_history_recent_bootstrap,"
-                      " of_personality_revision, of_personality_head, of_ledger_retry_command;"
-                      " DROP FUNCTION of_ledger_retry_immutable(); DROP FUNCTION of_engagement_action_guard(); DROP FUNCTION of_engagement_settings_immutable();"
-                      " DROP FUNCTION of_history_memory_evidence_immutable(); DROP FUNCTION of_history_memory_correction_immutable();"
-                      " DROP FUNCTION of_personality_immutable();"
-                      " ALTER TABLE of_text_intent DROP CONSTRAINT ck_of_text_intent_origin;"
-                      " ALTER TABLE of_text_intent ADD CONSTRAINT ck_of_text_intent_origin CHECK (origin IN ('automated','manual','campaign'));"
-                      # Content-sync review fixes (also shipped by 0090_launch).
-                      " DROP TABLE of_content_sync_source, of_provider_read_gate; DROP INDEX ix_messages_account_ingested;"
-                      " ALTER TABLE of_content_sync_account DROP COLUMN posts_cursor, DROP COLUMN posts_history_complete,"
-                      " DROP COLUMN posts_audit_after, DROP COLUMN late_through_at, DROP COLUMN reconcile_priority_after_item_id;"
-                      " ALTER TABLE of_offer_observation DROP CONSTRAINT uq_of_offer_observation_sighting, DROP COLUMN occurrence;"
-                      " ALTER TABLE of_offer_observation ADD CONSTRAINT uq_of_offer_observation_source"
-                      " UNIQUE (account_id, binding_id, source_kind, source_id, fingerprint)")
-    c.execute(text("UPDATE alembic_version SET version_num=:v"), {"v": OFFER_IMPORT})
+    """Reconstruct 0089, removing every newer migration (test databases only)."""
+    historical_schema(c, OFFER_IMPORT)
 
 
 def rewind_to_0088(c):
-    """Remove every 0090 and 0089 object (test databases only); the caller stamps the revision."""
-    drop_0090(c)
-    c.exec_driver_sql("DROP TABLE of_content_sync_decision, of_content_sync_conflict, of_content_sync_draft, of_content_sync_asset,"
-                      " of_content_sync_operation, of_content_sync_account;"
-                      " DROP FUNCTION of_content_sync_decision_immutable(); DROP FUNCTION of_content_sync_asset_frozen(); DROP FUNCTION of_content_sync_conflict_frozen();"
-                      " DROP TABLE of_offer_import_decision, of_offer_import_candidate, of_offer_import_cursor, of_offer_import_job, of_offer_observation;"
-                      " DROP FUNCTION of_offer_observation_immutable(); DROP FUNCTION of_offer_decision_immutable(); DROP FUNCTION of_offer_import_job_frozen();"
-                      " ALTER TABLE catalog_items DROP CONSTRAINT ck_catalog_items_pricing_mode, DROP COLUMN pricing_mode")
+    """Reconstruct 0088 rather than retaining any newer schema objects."""
+    historical_schema(c, VAULT_MEDIA)
 
 
 def test_populated_0088_upgrade_keeps_existing_items_dynamic_and_unchanged(database):
@@ -90,7 +110,10 @@ LAUNCH_PROTECTION = [
     ("of_history_memory_correction", "of_history_memory_correction_immutable", "append-only protection"),
     ("of_personality_revision", "of_personality_immutable", "append-only protection"),
     ("of_engagement_settings_change", "of_engagement_settings_immutable", "append-only protection"),
-    ("of_ledger_retry_command", "of_ledger_retry_immutable", "append-only protection"),
+    ("of_launch_command", "of_launch_command_immutable", "append-only protection"),
+    ("of_ledger_resolution", "of_ledger_resolution_immutable", "append-only protection"),
+    ("of_content_sync_occurrence", "of_content_sync_occurrence_immutable", "append-only protection"),
+    ("of_ledger_retry_command", "of_ledger_retry_command_immutable", "append-only protection"),
 ]
 
 

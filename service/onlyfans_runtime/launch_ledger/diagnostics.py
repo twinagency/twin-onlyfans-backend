@@ -200,6 +200,7 @@ def collect_diagnostic(store, tenant, account, *, expected_offset=40):
             from ..connections import _open
             clear = _open(connection, tenant)
             owner, expiry = connection.owner_id, connection.expires_at
+            connection_revision=connection.revision
             start, end = scan.window_start, scan.window_end
     except _DiagnosticRefused as exc:
         result["error_code"] = exc.args[0]
@@ -207,30 +208,46 @@ def collect_diagnostic(store, tenant, account, *, expected_offset=40):
     except Exception:
         result["error_code"] = "diagnostic_scope_unavailable"
         return result
-    raw, read_failed = None, False
+    raw, read_failed, budget, failure = None, False, None, None
     try:
-        from ..provider_connector import NativeProviderConnector, session_from_capture
-        transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
-            policy_revision=1, capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"],
-            expires_at=expiry.replace(tzinfo=timezone.utc)))
-        result["collection"]["attempted"] = True
-        raw = transport.transaction_page(offset=expected_offset, limit=ledger.PAGE_SIZE, start=start, end=end)
-    except Exception:
-        read_failed = True
+        try:
+            from ..provider_connector import NativeProviderConnector, session_from_capture
+            transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
+                policy_revision=1, capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"],
+                expires_at=expiry.replace(tzinfo=timezone.utc)))
+            from ..worker import _provider_claim
+            budget=_provider_claim(store,tenant,account,transport,connection_revision,'ledger')
+            result["collection"]["attempted"] = True
+            raw = transport.transaction_page(offset=expected_offset, limit=ledger.PAGE_SIZE, start=start, end=end)
+        except Exception as error:
+            failure=error
+            read_failed = True
+        finally:
+            clear = None
+        try:
+            with Session(store.engine) as session, session.begin():
+                _, _, after = _scope(store, session, tenant, account, expected_offset)
+                if budget is not None:
+                    from ..provider_read_budget import current
+                    current(store,tenant,budget,session=session)
+            if after != before:
+                raise _DiagnosticRefused("diagnostic_state_changed")
+        except Exception:
+            result["error_code"] = "diagnostic_state_changed"
+            return result
+        result["collection"]["snapshot_unchanged"] = True
+        if read_failed:
+            result["error_code"] = "diagnostic_read_failed"
+            return result
+        inspected = inspect_page(raw, owner_id=owner, start=start, end=end)
+        inspected["collection"] = result["collection"]
+        return inspected
     finally:
-        clear = None
-    try:
-        with Session(store.engine) as session:
-            _, _, after = _scope(store, session, tenant, account, expected_offset)
-        if after != before:
-            raise _DiagnosticRefused("diagnostic_state_changed")
-    except Exception:
-        result["error_code"] = "diagnostic_state_changed"
-        return result
-    result["collection"]["snapshot_unchanged"] = True
-    if read_failed:
-        result["error_code"] = "diagnostic_read_failed"
-        return result
-    inspected = inspect_page(raw, owner_id=owner, start=start, end=end)
-    inspected["collection"] = result["collection"]
-    return inspected
+        if budget is not None:
+            from ..worker import _release_provider
+            try:_release_provider(store,tenant,budget,failure)
+            except Exception:
+                # Revocation or database loss cannot expose scope/credential
+                # details through a read-only diagnostic. The durable lease
+                # expires; no send, financial write or retry is authorized.
+                pass

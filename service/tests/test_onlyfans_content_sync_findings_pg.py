@@ -1,4 +1,9 @@
-"""Regression tests for the eight outstanding content-sync review findings.
+"""Preserved concurrent Claude findings scenarios from e7eae43485a053bb74b9efef3f13b577cee41f48.
+
+The native adapter boundary replaces the upstream global pace-off fixture.
+A/B/A preserves two immutable snapshots plus three ordered occurrences.
+Shared rate-limit backoff/reserved intake replaces the alternate fixed-interval
+read gate; no second provider authority or historical schema rewrite is used.
 
 Owned PostgreSQL, a controlled clock and fake providers only. No credential,
 network, send, post or model call (the real connector entry points fail the
@@ -6,7 +11,6 @@ test if reached, via the `synced` fixture).
 """
 import json
 import threading
-import time
 from datetime import timedelta
 
 import pytest
@@ -55,10 +59,11 @@ def test_f1_sources_beyond_fifty_are_requested_by_a_later_refresh(synced, monkey
     assert process_due(store, TENANT, now=clock()) == 1
     pages = {(650 + n, None): ([raw(9500 + n, [11], 500, previews=[], locked=False, fan=650 + n)], False) for n in range(60)}
     drain_refresh(store, FakeHistory(pages))
-    assert count(store, OfOfferObservation) == 50
+    assert count(store, OfOfferObservation) == 60, "durable dispatch immediately drains both bounded batches"
     assert process_due(store, TENANT, now=clock(900)) == 1
     jobs = refresh_jobs(store, account)
-    assert len(jobs) == 2 and jobs[1][1] == list(range(650, 660)), "the ten sources beyond the cap are requested next"
+    assert len(jobs) == 2 and [len(fans) for _, fans in jobs] == [50, 10]
+    assert sorted(fan for _, fans in jobs for fan in fans) == list(range(650, 710)), "oldest-first batches preserve all sources exactly once"
     drain_refresh(store, FakeHistory(pages))
     assert count(store, OfOfferObservation) == 60
 
@@ -72,7 +77,9 @@ def test_f1_sources_are_kept_when_another_refresh_job_already_occupies_the_accou
         sources=[{"fanId": "501", "messageId": "1001"}])
     assert process_due(store, TENANT, now=clock()) == 1
     assert json.loads(ops(store, account, "incremental")[0].coverage_json)["refresh"] == "active"
-    drain_refresh(store, FakeHistory({(501, None): ([raw(1001, [11, 12], 1999, previews=[], locked=False, fan=501)], False)}))
+    drain_refresh(store, FakeHistory({
+        (501, None): ([raw(1001, [11, 12], 1999, previews=[], locked=False, fan=501)], False),
+        (640, None): ([raw(9001, [12, 11], 1999, previews=[], locked=False, fan=640)], False)}))
     assert process_due(store, TENANT, now=clock(900)) == 1
     assert [fans for _, fans in refresh_jobs(store, account)] == [[501], [640]], "the deferred source is requested once the account is free"
 
@@ -144,7 +151,9 @@ def test_f4_a_source_changing_back_to_an_earlier_state_is_still_a_change(synced)
     assert process_due(store, TENANT, now=clock(900)) == 1
     open_now = list_conflicts(store, TENANT, account)["items"]
     assert len(open_now) == 1 and open_now[0]["source"]["priceCents"] == 1999
-    assert count(store, OfOfferObservation, OfOfferObservation.source_id == 1001) == 3, "every distinct sighting is retained"
+    assert count(store, OfOfferObservation, OfOfferObservation.source_id == 1001) == 2, "immutable snapshot A is reused"
+    from db.onlyfans_content_sync_progress_models import OfContentSyncOccurrence
+    assert count(store, OfContentSyncOccurrence, OfContentSyncOccurrence.source_id == 1001) == 3, "every ordered occurrence is retained"
 
 
 # ── 5: paid posts reach the catalogue through a candidate ───────────────
@@ -167,6 +176,11 @@ def test_f5_a_paid_post_is_a_reviewable_candidate_and_becomes_an_exact_draft(syn
         "expectedFingerprint": obs["fingerprint"], "label": "Post set", "description": "One photo and one video.",
         "reuseConfirmed": True, "descriptionApproved": True})
     assert result["priceCents"] == 1999
+    from db.models import CatalogItem
+    with Session(store.engine) as s:
+        item = s.get(CatalogItem, int(result["itemId"]))
+        assert item.price_cents == 1999 and item.pricing_mode == "fixed" and item.enabled is False
+        assert json.loads(item.media_ids) == [12, 13] and json.loads(item.preview_media_ids) == [12]
     # Reading the same post again never adds a second source to the candidate.
     assert posts.process_posts(store, TENANT, transport_factory=lambda *a: fake, now=utcnow() + timedelta(seconds=400)) == 1
     assert get_candidate(store, TENANT, account, job, mkey)["sourceCount"] == 1
@@ -185,12 +199,18 @@ def test_f6_the_walk_continues_into_older_pages_across_passes(synced, monkeypatc
                       older: raw_page([post(903, [(13, "video")], "5.00", preview=[])])})
     now = utcnow()
     for n in range(3):
+        before = len(fake.calls)
         assert posts.process_posts(store, TENANT, transport_factory=lambda *a: fake, now=now + timedelta(seconds=301 * n)) == 1
+        assert len(fake.calls) - before <= 2, "one head plus one continuation remains bounded"
     with Session(store.engine) as s:
         seen = sorted(s.scalars(select(OfOfferObservation.source_id).where(OfOfferObservation.source_kind == "post")))
         assert seen == [901, 902, 903], "a bounded pass resumes from its durable cursor instead of rereading the newest page"
         row = s.get(Account, account)
-        assert posts.coverage(row, True, now + timedelta(seconds=602))["state"] in {"current", "delayed"}
+        from db.onlyfans_content_sync_progress_models import OfContentPostProgress
+        progress = s.get(OfContentPostProgress, account)
+        assert progress.history_checked_at is not None, "the initial historical walk reached its end"
+        if progress.history_marker is not None:
+            assert posts.coverage(row, True, now + timedelta(seconds=602), progress)["state"] == "partial", "a later revisit stays honest"
 
 
 def test_f6_an_edited_known_post_is_a_new_observation(synced, monkeypatch):
@@ -209,105 +229,103 @@ def test_f6_an_edited_known_post_is_a_new_observation(synced, monkeypatch):
 
 # ── 7: coordinated provider-read leases and throttling ──────────────────
 
+def _native_reader(account):
+    from onlyfans_runtime.provider_connector import NativeProviderConnector
+    from test_onlyfans_provider_adapters import credential
+    return NativeProviderConnector(credential(account_id=account))
+
+
 def test_f7_two_readers_never_read_one_account_at_the_same_time(synced, monkeypatch):
-    as_worker(monkeypatch)
+    """The upstream concurrent refresh/posts invariant uses real native adapters."""
+    from concurrent.futures import ThreadPoolExecutor
+    from onlyfans_runtime.offer_import import process_inventory_jobs
     store, account = synced
     enable(store, account)
+    while process_inventory_jobs(store, TENANT):
+        pass
     history(store, account, sales([(640, 9001, [12, 11], 1999)]))
-    assert process_due(store, TENANT, now=clock()) == 1          # queues a refresh job for fan 640
-    inside, peak, lock = [0], [0], threading.Lock()
-    release = threading.Event()
-
-    def enter():
+    assert process_due(store, TENANT, now=clock()) == 1
+    reader, entered, release = _native_reader(account), threading.Event(), threading.Event()
+    calls, active, peak, lock = [], [0], [0], threading.Lock()
+    parsed = FakeHistory({(640, None): ([raw(9001, [12, 11], 1999, previews=[], locked=False, fan=640)], False)})
+    def messages(**kw):
         with lock:
-            inside[0] += 1
-            peak[0] = max(peak[0], inside[0])
-
-    def leave():
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        entered.set()
+        try:
+            assert release.wait(5), "concurrent test did not release the bounded read"
+            return parsed.messages(**kw)
+        finally:
+            with lock:
+                active[0] -= 1
+    def post_page(**kw):
         with lock:
-            inside[0] -= 1
-
-    class SlowHistory(FakeHistory):
-        def messages(self, *, fan_id, before_id, limit):
-            enter()
-            try:
-                release.wait(3)
-                return super().messages(fan_id=fan_id, before_id=before_id, limit=limit)
-            finally:
-                leave()
-
-    class SlowPosts(FakePosts):
-        def posts_page(self, *, before_marker=None, limit=10):
-            enter()
-            try:
-                release.wait(3)
-                return super().posts_page(before_marker=before_marker, limit=limit)
-            finally:
-                leave()
-
-    history_reader = SlowHistory({(640, None): ([raw(9001, [12, 11], 1999, previews=[], locked=False, fan=640)], False)})
-    posts_reader = SlowPosts({None: raw_page([post(901, [(11, "photo")], "3.00", preview=[])])})
-    a = threading.Thread(target=lambda: process_refresh_jobs(store, TENANT, transport_factory=factory(history_reader)))
-    a.start()
-    for _ in range(100):
-        if inside[0]:
-            break
-        time.sleep(0.02)
-    b = threading.Thread(target=lambda: posts.process_posts(store, TENANT, transport_factory=lambda *x: posts_reader, now=utcnow()))
-    b.start()
-    time.sleep(0.5)
-    release.set()
-    a.join(); b.join()
-    assert peak[0] == 1, "one account is read by one worker at a time"
+            peak[0] = max(peak[0], active[0] + 1)
+        calls.append(kw)
+        return raw_page([post(901, [(11, "photo")], "3.00", preview=[])])
+    monkeypatch.setattr(reader, "messages", messages)
+    monkeypatch.setattr(reader, "posts_page", post_page)
+    # Detail reads are separately covered; this scenario isolates overlapping
+    # native refresh/head ownership, without opening any HTTP connection.
+    monkeypatch.setattr(reader, "post_by_id", None)
+    now = utcnow()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(process_refresh_jobs, store, TENANT, transport_factory=factory(reader))
+        assert entered.wait(5)
+        try:
+            b = pool.submit(posts.process_posts, store, TENANT, transport_factory=lambda *a: reader, now=now)
+            assert b.result(timeout=5) == 1
+            assert calls == [], "the second native lane must defer before provider I/O"
+        finally:
+            release.set()
+        assert a.result(timeout=5) == 1
+    assert peak[0] == 1
+    assert posts.process_posts(store, TENANT, transport_factory=lambda *a: reader, now=now + timedelta(seconds=301)) == 1
+    assert len(calls) == 1 and peak[0] == 1, "the deferred post read resumes after release"
 
 
 def test_f7_two_post_workers_do_not_read_the_same_account_together(synced, monkeypatch):
-    as_worker(monkeypatch)
+    from concurrent.futures import ThreadPoolExecutor
     store, account = synced
     enable(store, account)
-    inside, peak, lock, release = [0], [0], threading.Lock(), threading.Event()
-
-    class Slow(FakePosts):
-        def posts_page(self, *, before_marker=None, limit=10):
-            with lock:
-                inside[0] += 1
-                peak[0] = max(peak[0], inside[0])
-            try:
-                release.wait(3)
-                return super().posts_page(before_marker=before_marker, limit=limit)
-            finally:
-                with lock:
-                    inside[0] -= 1
-
-    reader = Slow({None: raw_page([post(901, [(11, "photo")], "3.00", preview=[])])})
+    reader, entered, release = _native_reader(account), threading.Event(), threading.Event()
+    calls = []
+    def page(**kw):
+        calls.append(kw)
+        entered.set()
+        assert release.wait(5)
+        return raw_page([post(901, [(11, "photo")], "3.00", preview=[])])
+    monkeypatch.setattr(reader, "posts_page", page)
+    monkeypatch.setattr(reader, "post_by_id", None)
     now = utcnow()
-    threads = [threading.Thread(target=lambda: posts.process_posts(store, TENANT, transport_factory=lambda *x: reader, now=now))
-               for _ in range(2)]
-    threads[0].start()
-    for _ in range(100):
-        if inside[0]:
-            break
-        time.sleep(0.02)
-    threads[1].start()
-    time.sleep(0.5)
-    release.set()
-    for t in threads:
-        t.join()
-    assert peak[0] == 1 and len(reader.calls) == 1
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a = pool.submit(posts.process_posts, store, TENANT, transport_factory=lambda *a: reader, now=now)
+        assert entered.wait(5)
+        try:
+            b = pool.submit(posts.process_posts, store, TENANT, transport_factory=lambda *a: reader, now=now)
+            assert b.result(timeout=5) == 0
+        finally:
+            release.set()
+        assert a.result(timeout=5) == 1
+    assert len(calls) == 1
 
 
-def test_f7_a_recent_read_throttles_the_next_reader_of_the_same_account(synced, monkeypatch):
-    as_worker(monkeypatch)
-    monkeypatch.setenv("ONLYFANS_PROVIDER_READ_INTERVAL_SECONDS", "5")
+def test_f7_a_rate_limited_read_throttles_the_next_reader_of_the_same_account(synced, monkeypatch):
+    """Preserve shared pacing via current backoff rather than a second fixed gate."""
+    from onlyfans_runtime.provider_read_budget import acquire, release
+    from db.onlyfans_connection_models import OfProviderConnection
     store, account = synced
     enable(store, account)
-    history(store, account, sales([(640, 9001, [12, 11], 1999)]))
-    assert process_due(store, TENANT, now=clock()) == 1
-    reader = FakeHistory({(640, None): ([raw(9001, [12, 11], 1999, previews=[], locked=False, fan=640)], False)})
-    assert process_refresh_jobs(store, TENANT, transport_factory=factory(reader)) == 1
-    fake = FakePosts({None: raw_page([post(901, [(11, "photo")], "3.00", preview=[])])})
-    assert posts.process_posts(store, TENANT, transport_factory=lambda *x: fake, now=utcnow()) == 0
-    assert fake.calls == [], "the account was read a moment ago; the post reader waits its turn"
+    with Session(store.engine) as s:
+        revision = s.get(OfProviderConnection, account).revision
+    claim = acquire(store, TENANT, account, connection_revision=revision, kind="recent")
+    release(store, TENANT, claim, retry_after=5)
+    reader = _native_reader(account)
+    monkeypatch.setattr(reader, "posts_page", lambda **kw: pytest.fail("native post read ignored the shared backoff"))
+    assert posts.process_posts(store, TENANT, transport_factory=lambda *a: reader, now=utcnow()) == 1
+    with Session(store.engine) as s:
+        assert s.get(Account, account).posts_error == "shared_provider_read_budget"
 
 
 # ── 8: the carrier's authorization is a real scope/permission check ─────
@@ -338,30 +356,29 @@ def spied_client(monkeypatch):
 def test_f8_a_carrier_without_authority_refuses_every_write(spied_client, monkeypatch):
     monkeypatch.setenv(carrier.ENV, "acc-a")
     transport = carrier.CarrierTransport(CARRIER_CONNECTION, "tenant-a", "acc-a")
-    transport._client(UPLOAD_TOKEN)
-    with pytest.raises(Refused):
-        spied_client["authorize"]()
+    with pytest.raises(csm.PermissionRequired):
+        transport._client(UPLOAD_TOKEN)
+    assert spied_client == {}, "authority is required even before opening the native client"
 
 
 def test_f8_the_carrier_consults_its_authority_and_the_account_approval_at_every_write(spied_client, monkeypatch):
     monkeypatch.setenv(carrier.ENV, "acc-a")
     calls = []
-    transport = carrier.CarrierTransport(CARRIER_CONNECTION, "tenant-a", "acc-a", authority=lambda: calls.append(1))
+    transport = carrier.CarrierTransport(CARRIER_CONNECTION, "tenant-a", "acc-a")
+    transport.set_authority(lambda: calls.append(1), upload_token=UPLOAD_TOKEN)
     transport._client(UPLOAD_TOKEN)
     spied_client["authorize"]()
     spied_client["authorize"]()
-    assert len(calls) == 2
+    assert len(calls) == 3, "client creation and each adapter boundary require current authority"
     monkeypatch.setenv(carrier.ENV, "acc-b")
-    with pytest.raises(Refused):
+    with pytest.raises(csm.PermissionRequired):
         spied_client["authorize"]()
-    assert len(calls) == 2, "an account that is no longer approved is refused before anything else is consulted"
+    assert len(calls) == 3, "removed account approval refuses before consulting the callback"
     monkeypatch.setenv(carrier.ENV, "acc-a")
-
-    def lost():
-        raise Refused("lease lost")
-    gone = carrier.CarrierTransport(CARRIER_CONNECTION, "tenant-a", "acc-a", authority=lost)
-    gone._client(UPLOAD_TOKEN)
-    with pytest.raises(Refused):
+    spied_client["authorize"]()
+    assert len(calls) == 4
+    transport.set_authority(lambda: (_ for _ in ()).throw(Refused("lease lost")), upload_token=UPLOAD_TOKEN)
+    with pytest.raises(csm.PermissionRequired):
         spied_client["authorize"]()
 
 
@@ -378,7 +395,8 @@ def _leased_asset(w):
 
 def test_f8_lease_authority_follows_the_asset_lease_and_the_connection(world):
     lease = _leased_asset(world)
-    authorize = csm.lease_authority(world.store, TENANT, lease)
+    world.store.content_upload_permission_reader = lambda **kw: True
+    authorize = lambda: csm._authorize_upload_boundary(world.store, TENANT, lease)
     authorize()                                                       # the leased, unchanged scope is allowed
     with world.engine.begin() as c:
         c.execute(text("UPDATE of_provider_connection SET revision = revision + 1"))
@@ -403,21 +421,18 @@ def test_f8_process_uploads_hands_the_carrier_a_live_authority(world):
     draft = saved(world, files, blobs)
     commit(world, draft)
     seen = []
+    world.store.content_upload_permission_reader = lambda **kw: True
 
     class Quiet:
+        def set_authority(self, authority, **scope):
+            seen.append((authority, scope))
         def lookup(self, *, upload_token):
             return None
-
         def upload(self, *, upload_token, path, kind):
-            seen[0]()                                                 # a write boundary: allowed while the lease is held
+            assert seen[0][1]["upload_token"] == upload_token
+            seen[0][0]()  # a real worker lease and current staff callback at the write boundary
             return 101
-
         def verify(self, *, provider_media_id):
             return "ready"
-
-    def provide(connection, tenant, account, authority):
-        seen.append(authority)
-        return Quiet()
-    provide.needs_authority = True
-    csm.process_uploads(world.store, TENANT, limit=1, transport_for=provide)
-    assert len(seen) == 1 and callable(seen[0])
+    csm.process_uploads(world.store, TENANT, limit=1, transport_for=lambda *a: Quiet())
+    assert len(seen) == 1 and callable(seen[0][0])

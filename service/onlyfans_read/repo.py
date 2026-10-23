@@ -26,7 +26,7 @@ Two rules this module exists to keep:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Protocol
 
 from sqlalchemy import and_, or_, select, func, case
@@ -249,7 +249,7 @@ class SqlOnlyFansReadRepo:
                 if await s.scalar(binding.with_for_update(read=True)) is None:
                     return None
                 now = await s.scalar(select(func.clock_timestamp()))
-                naive_now = now.replace(tzinfo=None)
+                naive_now = now.astimezone(timezone.utc).replace(tzinfo=None)
                 runtime = await s.get(OfRuntime, account_id)
                 connection = await s.get(OfProviderConnection, account_id)
                 policy = await s.get(OfDeliveryPolicy, account_id)

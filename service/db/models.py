@@ -532,9 +532,8 @@ class Message(Base):
             "ix_messages_account_provider_id", "account_id", "message_id",
             info={"onlyfans_since": "0072_onlyfans_text_delivery"},
         ),
-        # Late-import detection for content sync: recently ingested rows per account.
         Index("ix_messages_account_ingested", "account_id", "ingested_at",
-              info={"onlyfans_since": "0090_launch"}),
+              info={"onlyfans_since": "0091_launch_controls"}),
         # Backs the All-Messages tab's wider scan (direction-scoped per
         # account, no fan filter) — see 18_stats_per_fan_csv.md §SQL impact
         # and migration 0017_phase_g_messages_dir_index.

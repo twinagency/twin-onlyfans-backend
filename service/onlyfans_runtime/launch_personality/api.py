@@ -52,12 +52,16 @@ async def _body(request, extra):
         body = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_keys, parse_constant=_nonfinite)
     except (ValueError, TypeError, UnicodeError, RecursionError):
         raise InvalidConfiguration("invalid JSON") from None
-    if type(body) is not dict or set(body) != {"expectedRevision", "commandKey", "actor", *extra}:
+    required = {"expectedRevision", "commandKey", "actor", *extra}
+    if type(body) is not dict or not required <= set(body) <= required | {"expectedBindingId"}:
         raise InvalidConfiguration("invalid fields")
     if (type(body["expectedRevision"]) is not int or not 0 <= body["expectedRevision"] < 2**31-1
             or type(body["commandKey"]) is not str or re.fullmatch(r"[a-f0-9]{64}", body["commandKey"]) is None
             or not actor_allowed(body["actor"])):
         raise InvalidConfiguration("invalid managing actor or command")
+    if "expectedBindingId" in body and (type(body["expectedBindingId"]) is not str
+            or not 1 <= len(body["expectedBindingId"]) <= 128):
+        raise InvalidConfiguration("invalid binding")
     return body
 
 
@@ -83,6 +87,8 @@ async def _run(request, account_id, operation, *, extra=(), revision=None):
                 return body
             kwargs = {"expected_revision": body["expectedRevision"], "command_key": body["commandKey"],
                       "actor": body["actor"], **{key: body[key] for key in extra}}
+            if "expectedBindingId" in body:
+                kwargs["expected_binding_id"] = body["expectedBindingId"]
         workflow = _workflow(request, store)
         result = await asyncio.to_thread(getattr(workflow, operation), tenant, account_id, **kwargs)
     except InvalidConfiguration:

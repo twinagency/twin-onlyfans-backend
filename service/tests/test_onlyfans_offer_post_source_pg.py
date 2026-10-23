@@ -124,10 +124,10 @@ def test_worker_reads_paid_posts_bounded_and_idempotently_then_drafts_exactly(re
                 for r in rows] == [(901, 1999, [12, 13], [12], False, None), (903, 300, [11], [], False, None)]
         assert s.get(OfContentSyncAccount, account).posts_checked_at == now
     # Inside the 300 s interval nothing is read; after it, the newest page is
-    # read and the walk stops at already-known posts (no double counting).
+    # read and known sources are revisited so older edits cannot be starved.
     assert posts.process_posts(store, TENANT, transport_factory=lambda *a: fake, now=now + timedelta(seconds=60)) == 0
     assert posts.process_posts(store, TENANT, transport_factory=lambda *a: fake, now=now + timedelta(seconds=301)) == 1
-    assert fake.calls == [None, "1760900000.000000", None]
+    assert fake.calls == [None, "1760900000.000000", None, "1760900000.000000"]
     with Session(store.engine) as s:
         assert s.scalar(select(OfOfferObservation.observation_id).where(OfOfferObservation.source_id == 901)) is not None
         assert len(s.scalars(select(OfOfferObservation).where(OfOfferObservation.source_kind == "post")).all()) == 2

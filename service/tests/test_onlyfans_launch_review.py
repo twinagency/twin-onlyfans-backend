@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
+from starlette.datastructures import QueryParams
 
 from db.onlyfans_delivery_models import OfTextIntent
 from db.onlyfans_offer_import_models import OfContentSyncDraft as Draft
@@ -80,8 +81,10 @@ def test_actions_list_excludes_retained_previous_binding_rows(engine, monkeypatc
     with Session(engine) as s, s.begin():
         s.add_all([current, old])
     monkeypatch.setattr(launch_api, "authenticate", lambda *args: (store_for(engine), "tenant-a"))
-    result = asyncio.run(launch_api.engagement_actions(object(), "acc-a"))
+    request = SimpleNamespace(query_params=QueryParams())
+    result = asyncio.run(launch_api.engagement_actions(request, "acc-a"))
     payload = json.loads(result.body)
+    assert result.status_code == 200, payload
     assert [x["actionId"] for x in payload["actions"]] == [current_id]
 
 

@@ -26,7 +26,8 @@ from .models import LedgerRetryCommand
 SCHEMA = "of-ledger.v1"
 # Static public codes only; anything else (a future or corrupt value) is reported as unknown_error.
 ERRORS = frozenset({"connection_unavailable", "connection_changed", "unsupported_ledger_response",
-                    "unsupported_ledger_pagination", "ledger_read_failed"})
+                    "unsupported_ledger_pagination", "ledger_read_failed", "provider_read_deferred",
+                    "provider_read_stale", "provider_rate_limited"})
 INVESTIGATE = frozenset({"unsupported_ledger_response", "unsupported_ledger_pagination"})
 KEY = re.compile(r"[a-f0-9]{64}")
 
@@ -37,7 +38,7 @@ def fingerprint(runtime, connection, scan):
         return None
     snapshot = dict(schema=SCHEMA, runtime_binding=runtime.binding_id,
         connection=None if connection is None else {key: getattr(connection, key) for key in (
-            "binding_id", "owner_id", "revision", "status", "verified_at", "expires_at")},
+            "binding_id", "owner_id", "revision", "status", "verified_at", "expires_at", "last_error")},
         scan={column.name: getattr(scan, column.name) for column in OfLedgerScan.__table__.columns})
     return hashlib.sha256(canonical(snapshot).encode()).hexdigest()
 
@@ -46,20 +47,25 @@ def read_ledger(s, tenant, account, *, now=None):
     """The selected account only; None (non-disclosing) when it is not this tenant's live binding."""
     from ..commerce import held
     now = now or utcnow()
-    binding = select(OfCreatorBinding.id).where(OfCreatorBinding.account_id == account,
+    binding = select(OfCreatorBinding).where(OfCreatorBinding.account_id == account,
         OfCreatorBinding.channel == "onlyfans", OfCreatorBinding.revoked_at.is_(None))
     if tenant is not None:
         binding = binding.where(OfCreatorBinding.tenant_id == tenant)
-    if s.scalar(binding.with_for_update(read=True)) is None:
+    binding = s.scalar(binding.with_for_update(read=True))
+    if binding is None:
         return None
     runtime, connection, scan = s.get(OfRuntime, account), s.get(OfProviderConnection, account), s.get(OfLedgerScan, account)
-    if runtime is None:
+    if runtime is None or runtime.binding_id != binding.id:
         return None
-    conflicts = s.scalar(select(func.count()).select_from(OfLedgerEvidence).where(
-        OfLedgerEvidence.account_id == account, OfLedgerEvidence.outcome == "conflict"))
-    unlinked = s.scalar(select(func.count()).select_from(Transaction).where(Transaction.account_id == account,
-        Transaction.source == "ledger", Transaction.kind == "ppv_message", Transaction.message_id.is_(None),
-        Transaction.status.in_(tuple(ledger.PAID))))
+    # A replaced creator binding must never reveal its predecessor's window,
+    # cursor, diagnostics or evidence counts to the newly assigned creator.
+    if scan is not None and scan.binding_id != runtime.binding_id:
+        scan = None
+    if connection is not None and connection.binding_id != runtime.binding_id:
+        connection = None
+    from ..launch_operations import _ledger_core
+    core = _ledger_core(s, runtime, now=now)
+    conflicts, unlinked = core["conflictingEvidence"], core["unresolvedTransactions"]
     error = None if scan is None or scan.last_error is None else scan.last_error if scan.last_error in ERRORS else "unknown_error"
     return {"schemaVersion": SCHEMA, "accountId": account,
         "status": "not_started" if scan is None else scan.status,
@@ -77,9 +83,10 @@ def read_ledger(s, tenant, account, *, now=None):
 
 def retry(store, tenant, account, *, command_key, expected_revision, expected_fingerprint, actor):
     """Record the command, then make the held scan due, in one transaction. Never a reconciliation."""
+    from onlyfans_read.agency_scope import actor_allowed
     if (type(command_key) is not str or not KEY.fullmatch(command_key) or type(expected_revision) is not int
             or not 0 <= expected_revision < 2**31 - 1 or type(expected_fingerprint) is not str
-            or not KEY.fullmatch(expected_fingerprint) or type(actor) is not str or not 1 <= len(actor) <= 128):
+            or not KEY.fullmatch(expected_fingerprint) or not actor_allowed(actor)):
         raise Refused("invalid ledger retry request")
     request_hash = hashlib.sha256(canonical({"expectedConnectionRevision": expected_revision,
         "expectedScanFingerprint": expected_fingerprint}).encode()).hexdigest()

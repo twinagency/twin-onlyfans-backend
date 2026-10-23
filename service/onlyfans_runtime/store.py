@@ -333,8 +333,8 @@ class Store:
             work.status = "waiting" if eligible else "blocked"
             work.lease_token = work.lease_until = None
         if event.direction == "in" and advances:
-            # A fan reply makes unsent proactive work obsolete (reactive planner owns it).
-            # Same transaction/runtime lock; dispatch validation remains authoritative.
+            # Event notification shares the runtime lock; final dispatch still
+            # revalidates if best-effort cancellation could not be recorded.
             s.flush()
             from .launch_engagement.events import cancel_for_fan
             cancel_for_fan(s, account, event.fan_id, "reply", now=now)
@@ -355,7 +355,7 @@ class Store:
         if not 1 <= len(command_key) <= 64 or not 1 <= len(actor) <= 128 or not 1 <= len(reason) <= 512 or (consent_ref is not None and not 1 <= len(consent_ref) <= 128):
             raise Refused("invalid audit evidence")
         with Session(self.engine) as s, s.begin():
-            self._runtime(s, tenant_id, account_id)
+            runtime = self._runtime(s, tenant_id, account_id)
             prior = s.get(OfControlAudit, (account_id, command_key))
             if prior:
                 if (prior.fan_id, prior.mode, prior.previous_revision, prior.actor, prior.reason, prior.consent_ref, prior.action) != (fan_id, mode, expected_revision, actor, reason, consent_ref, action):
@@ -537,7 +537,7 @@ class Store:
             return RecoveryClaim(account_id, row.fan_id, row.generation, row.lease_token, row.high_water, row.upper_bound, row.before_id)
 
     def recovery_page(self, tenant_id, claim: RecoveryClaim, events: list[Event], *, has_more: bool, connection_revision=None,
-                      observations=()):
+                      observations=(), provider_read_claim=None):
         if type(has_more) is not bool or len(events) > PAGE_LIMIT or (has_more and not events):
             raise Refused("invalid recovery page")
         normalized = [event.normalized() for event in events]
@@ -556,6 +556,9 @@ class Store:
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, claim.account_id)
             self._read_connection(s, runtime, connection_revision)
+            if provider_read_claim is not None:
+                from .provider_read_budget import current
+                current(self,tenant_id,provider_read_claim,session=s)
             row = s.get(OfRecovery, (claim.account_id, claim.fan_id))
             if row is None or row.status != "running" or row.generation != claim.generation or row.lease_token != claim.token or row.lease_until <= utcnow():
                 raise Refused("stale recovery claim")
@@ -588,44 +591,25 @@ class Store:
 
     @staticmethod
     def _observe_offers(s, runtime, offers):
-        """Append what a source shows now. Seeing the same terms again is not new; returning to an
-        earlier state after a different one IS a new sighting (so A -> B -> A is three observations)."""
         if not offers:
-            return []
-        from sqlalchemy import func, select as sql_select
+            return
         from sqlalchemy.dialects.postgresql import insert
-        from db.onlyfans_offer_import_models import OfOfferObservation as Observation
+        from db.onlyfans_offer_import_models import OfOfferObservation
         from .native_context import canonical
         from .offer_terms import PARSER_VERSION
         now = utcnow()
-        rows, latest = [], {}
-        for o in offers:
-            identity = (o.source_kind, o.source_id)
-            fingerprint = o.fingerprint()
-            if identity not in latest:
-                last = s.execute(sql_select(Observation.fingerprint).where(Observation.account_id == runtime.account_id,
-                    Observation.binding_id == runtime.binding_id, Observation.source_kind == o.source_kind,
-                    Observation.source_id == o.source_id).order_by(Observation.observed_at.desc(),
-                    Observation.occurrence.desc()).limit(1)).scalar()
-                latest[identity] = last
-            if latest[identity] == fingerprint:
-                continue
-            seen = s.scalar(sql_select(func.max(Observation.occurrence)).where(Observation.account_id == runtime.account_id,
-                Observation.binding_id == runtime.binding_id, Observation.source_kind == o.source_kind,
-                Observation.source_id == o.source_id, Observation.fingerprint == fingerprint))
-            latest[identity] = fingerprint
-            rows.append(dict(account_id=runtime.account_id, observation_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
-                source_kind=o.source_kind, source_id=o.source_id, fan_id=o.fan_id, source_context=o.source_context,
-                source_at=datetime.fromisoformat(o.source_at).replace(tzinfo=None), observed_at=now,
-                media_json=canonical(list(o.media_ids)),
-                preview_json=None if o.preview_ids is None else canonical(list(o.preview_ids)),
-                locked_text=o.locked_text, price_cents=o.price_cents, currency=o.currency,
-                parser_version=PARSER_VERSION, fingerprint=fingerprint, media_key=o.media_key,
-                reasons_json=canonical(list(o.reasons)), occurrence=0 if seen is None else seen + 1))
-        if rows:
-            s.execute(insert(Observation).values(rows).on_conflict_do_nothing(
-                constraint="uq_of_offer_observation_sighting"))
-        return rows
+        rows = [dict(account_id=runtime.account_id, observation_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
+            source_kind=o.source_kind, source_id=o.source_id, fan_id=o.fan_id, source_context=o.source_context,
+            source_at=datetime.fromisoformat(o.source_at).replace(tzinfo=None), observed_at=now,
+            media_json=canonical(list(o.media_ids)),
+            preview_json=None if o.preview_ids is None else canonical(list(o.preview_ids)),
+            locked_text=o.locked_text, price_cents=o.price_cents, currency=o.currency,
+            parser_version=PARSER_VERSION, fingerprint=o.fingerprint(), media_key=o.media_key,
+            reasons_json=canonical(list(o.reasons))) for o in offers]
+        s.execute(insert(OfOfferObservation).values(rows).on_conflict_do_nothing(
+            constraint="uq_of_offer_observation_source"))
+        from .content_sync import record_current_observations
+        record_current_observations(s, runtime, offers, now)
 
     @staticmethod
     def _begin_cycle(s, scan):
@@ -710,7 +694,8 @@ class Store:
             scan.known_fan_after = ids[-1]
         scan.known_fans_complete = len(ids) < PAGE_LIMIT
 
-    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None, connection_revision=None):
+    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None, connection_revision=None,
+                  provider_read_claim=None):
         if len(fan_ids) > PAGE_LIMIT or len(set(fan_ids)) != len(fan_ids):
             raise Refused("invalid discovery page")
         for fan in fan_ids: _id(fan)
@@ -719,6 +704,9 @@ class Store:
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, claim.account_id)
             self._read_connection(s, runtime, connection_revision)
+            if provider_read_claim is not None:
+                from .provider_read_budget import current
+                current(self,tenant_id,provider_read_claim,session=s)
             scan = s.get(OfScan, claim.account_id)
             if scan is None or scan.status != "running" or scan.generation != claim.generation or scan.lease_token != claim.token or scan.lease_until <= utcnow():
                 raise Refused("stale discovery claim")

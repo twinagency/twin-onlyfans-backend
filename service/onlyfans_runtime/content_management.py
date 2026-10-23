@@ -197,7 +197,7 @@ def update_content(store, tenant_id, account_id, item_id, *, patch, expected_rev
         raise InvalidContent("The content version or command identity is invalid.")
     request_hash = digest(patch) if version == 1 else digest({"patch": patch, "acknowledgeOverride": acknowledge_override})
     with Session(store.engine) as session, session.begin():
-        store._runtime(session, tenant_id, account_id)
+        runtime=store._runtime(session, tenant_id, account_id)
         # Scope is rechecked even for a historical replay, while the recorded
         # acknowledgement continues to describe its original event, not the
         # latest catalogue state. A retry never reapplies the old patch.

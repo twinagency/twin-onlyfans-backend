@@ -10,6 +10,7 @@ from test_onlyfans_connections_pg import verified, change, LIMITS, TENANT, setti
 from db.onlyfans_connection_models import OfProviderConnection, OfConnectionChange
 from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_models import OfRuntime
+from db.onlyfans_content_sync_progress_models import OfProviderReadBudget
 from db.models import OfCreatorBinding
 from onlyfans_runtime import connections as module
 from onlyfans_runtime.connections import _open, _seal, get_connection, load_worker_accounts
@@ -26,6 +27,11 @@ def due(store, account, *, elapsed=False, status='verified'):
         row.expires_at=expiry
         row.sealed_config=_seal(clear,TENANT,account,row.binding_id,row.revision)
         row.verified_at=utcnow()-timedelta(minutes=20)
+        # This fixture simulates an elapsed verification interval. Its shared
+        # provider budget must observe the same elapsed interval so a tight
+        # test loop does not model ten real probes in a single second.
+        budget=s.get(OfProviderReadBudget,account)
+        if budget is not None:budget.refilled_at=utcnow()-timedelta(minutes=20)
         row.status=status
         row.last_error=None
         return clear

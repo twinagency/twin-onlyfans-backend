@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from db.onlyfans_delivery_models import OfTextIntent
+from db.onlyfans_models import OfRuntime
 from .contracts import load_object
 from .models import Action
 
@@ -61,6 +62,8 @@ def cancel_for_fan(s, account_id, fan_id, reason, *, now=None):
         return 0
     try:
         rows = s.scalars(select(Action).where(Action.account_id == account_id, Action.fan_id == fan_id,
+                                              Action.binding_id == select(OfRuntime.binding_id).where(
+                                                  OfRuntime.account_id == account_id).scalar_subquery(),
                                               Action.status.in_(CANCELLABLE))).all()
     except SQLAlchemyError:
         log.warning("engagement event lookup failed; dispatch validation still applies", exc_info=True)
@@ -83,6 +86,8 @@ def cancel_for_item(s, account_id, item_id, reason="catalogue_changed", *, now=N
     """Cancel active offer/follow-up actions whose frozen terms or source use this item."""
     try:
         rows = s.scalars(select(Action).where(Action.account_id == account_id, Action.status.in_(CANCELLABLE),
+                                              Action.binding_id == select(OfRuntime.binding_id).where(
+                                                  OfRuntime.account_id == account_id).scalar_subquery(),
                                               Action.kind.in_(("offer", "follow_up")))).all()
     except SQLAlchemyError:
         log.warning("engagement event lookup failed; dispatch validation still applies", exc_info=True)

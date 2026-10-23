@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import math
 import re
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urlsplit
 
 from of_signer import sign
@@ -27,6 +28,27 @@ APP_TOKEN = "33d57ade8c02dbc5a333db99ff9ae26a"
 
 class NativeAuthenticationError(NativeProtocolError):
     """The provider rejected authentication or returned another account."""
+
+
+class NativeRateLimitError(NativeProtocolError):
+    """Bounded non-secret pacing hint, shared by every provider read owner."""
+    def __init__(self, retry_after=60):
+        self.retry_after = min(3600, max(1, int(retry_after)))
+        super().__init__('native provider rate limit')
+
+
+def _rate_limit_seconds(value):
+    try:
+        if type(value) is not str or len(value) > 128:
+            return 60
+        if value.isascii() and value.isdecimal():
+            return min(3600, max(1, int(value)))
+        stamp = parsedate_to_datetime(value)
+        if stamp.tzinfo is None:
+            return 60
+        return min(3600, max(1, math.ceil((stamp - datetime.now(timezone.utc)).total_seconds())))
+    except (TypeError, ValueError, OverflowError):
+        return 60
 
 
 def validate_cdn_url(url):
@@ -266,6 +288,8 @@ class NativeProviderConnector(NativeLoopbackConnector):
                     content_callback=bounded, discard_cookies=True)
                 if response.status_code in {401, 403}:
                     raise NativeAuthenticationError("native provider rejected authentication")
+                if response.status_code == 429:
+                    raise NativeRateLimitError(_rate_limit_seconds(response.headers.get('retry-after')))
                 if response.status_code not in accepted_statuses:
                     raise NativeProtocolError("native HTTPS status is not delivery evidence")
                 if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
@@ -320,6 +344,19 @@ class NativeProviderConnector(NativeLoopbackConnector):
             params["beforePublishTime"] = before_marker
         return self._signed_request("GET", API_PATH + f"/users/{self._handle.owner_id}/posts?" + urlencode(params),
                                     b"{}", max_response_bytes=self._vault_max_bytes)
+
+    def post_by_id(self, post_id):
+        """Bounded read of one known creator-post source, including explicit 404.
+
+        Callers validate the returned identity/owner and hold their account read
+        lease through the resulting domain commit. Missing list rows alone are
+        never treated as proof of deletion.
+        """
+        self._ready()
+        _id(post_id)
+        self.verify_identity()
+        return self._signed_request("GET", API_PATH + f"/posts/{post_id}", b"{}",
+            max_response_bytes=self._vault_max_bytes, accepted_statuses=(200, 404), with_status=True)
 
     def still_bytes(self, url):
         """One credential-free CDN image GET, through this account's fixed proxy.

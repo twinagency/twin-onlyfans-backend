@@ -14,11 +14,79 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import onlyfans_worker as entry
 
 
+def test_background_turns_rotate_while_preserving_bounded_stop_checks():
+    import threading
+    stop = threading.Event()
+    stop.wait = lambda _seconds: None
+    observed = []
+    rounds = []
+    def job(name):
+        def run(_store, _tenant, *, limit, stop):
+            assert limit == 1 and not stop.is_set()
+            observed.append(name)
+        return run
+    def load(_store, _tenant, **kwargs):
+        rounds.append(observed[-4:])
+        if len(rounds) == 4:
+            stop.set()
+        return [], None, 0
+    assert entry.run_loop(object(), "tenant-a", stop, load_cohort=load,
+        vault_jobs=job("vault"), ledger_jobs=job("ledger"), offer_jobs=job("offer"),
+        content_sync_jobs=job("sync"), observe=lambda _value: None) == 0
+    assert [row[0] for row in rounds] == ["vault", "ledger", "offer", "sync"]
+    assert all(set(row) == {"vault", "ledger", "offer", "sync"} for row in rounds)
+
+
 def configured(monkeypatch):
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE","worker")
     monkeypatch.setenv("ONLYFANS_WORKER_TENANT","tenant-a")
     monkeypatch.setenv("ONLYFANS_CONNECTION_KEY","ab"*32)
     monkeypatch.setenv("DATABASE_URL","postgresql://synthetic:synthetic-password@127.0.0.1:65432/synthetic")
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_post_cursor_verification_mode_never_starts_normal_work_and_redacts_failure(monkeypatch, capsys, fail):
+    configured(monkeypatch)
+    monkeypatch.setenv("ONLYFANS_VAULT_MEDIA_ENABLED", "1")
+    monkeypatch.setenv("ONLYFANS_ENGAGEMENT_ENABLED", "1")
+    import onlyfans_runtime.store
+    import onlyfans_runtime.offer_post_source
+    closed, calls = [], []
+    class FakeStore:
+        def __init__(self, _url): pass
+        def close(self): closed.append(True)
+    monkeypatch.setattr(onlyfans_runtime.store, "Store", FakeStore)
+    monkeypatch.setattr(entry, "run_loop", lambda *_, **__: pytest.fail("must not enter normal worker"))
+    def verify(store, tenant, account, **kwargs):
+        calls.append((tenant, account, kwargs))
+        if fail:
+            raise RuntimeError("private provider body synthetic-password")
+        return {"verified": True, "contract": "beforePublishTime.v1", "connectionRevision": 7}
+    monkeypatch.setattr(onlyfans_runtime.offer_post_source, "verify_cursor_contract", verify)
+    actor = "op-session:" + "a" * 64
+    result = entry.main(["--verify-post-cursor-account", "synthetic-account", "--command-key", "b" * 64,
+                         "--actor", actor])
+    assert result == int(fail) and closed == [True]
+    assert calls == [("tenant-a", "synthetic-account", {"command_key": "b" * 64, "actor": actor})]
+    output = capsys.readouterr()
+    assert json.loads(output.out)["state"] == ("post_cursor_verification_unavailable" if fail else "post_cursor_contract_verified")
+    assert "private provider" not in output.out + output.err and "synthetic-password" not in output.out + output.err
+
+
+@pytest.mark.parametrize("args", [
+    ["--verify-post-cursor-account", "synthetic-account"],
+    ["--command-key", "b" * 64],
+    ["--actor", "op-session:" + "a" * 64],
+    ["--verify-post-cursor-account", "../wrong", "--command-key", "b" * 64, "--actor", "op-session:" + "a" * 64],
+    ["--once", "--verify-post-cursor-account", "synthetic-account", "--command-key", "b" * 64, "--actor", "op-session:" + "a" * 64],
+])
+def test_invalid_cursor_command_refuses_before_store(monkeypatch, args):
+    configured(monkeypatch)
+    import onlyfans_runtime.store
+    monkeypatch.setattr(onlyfans_runtime.store, "Store", lambda *_: pytest.fail("must not construct store"))
+    with pytest.raises(SystemExit) as result:
+        entry.main(args)
+    assert result.value.code == 2
 
 
 @pytest.mark.parametrize("name,value",[

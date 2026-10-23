@@ -133,9 +133,8 @@ def test_api_auth_exact_commands_and_historical_acknowledgements(database,monkey
 def test_populated_shared_fact_upgrade_preserves_metadata_and_checks_immutable_commands(database):
     store=setup(database);store.close()
     with database[1].begin() as c:
-        c.exec_driver_sql("DROP TABLE of_vault_media_job; DROP FUNCTION of_vault_media_guard(); "
-            "DROP TABLE of_connection_enrollment; DROP TABLE of_vault_edit; DROP FUNCTION of_vault_edit_immutable()")
-        c.execute(text("UPDATE alembic_version SET version_num=:head"),{"head":CREATOR_FACTS});check_schema(c,expected=CREATOR_FACTS)
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical_schema(c,CREATOR_FACTS)
         before=c.exec_driver_sql("SELECT row_to_json(t) FROM vault_items t ORDER BY media_id").scalars().all()
         upgrade(c);upgrade(c);check_schema(c)
         assert before==c.exec_driver_sql("SELECT row_to_json(t) FROM vault_items t ORDER BY media_id").scalars().all()

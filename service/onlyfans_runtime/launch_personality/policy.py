@@ -11,8 +11,8 @@ import re
 from types import SimpleNamespace
 import unicodedata
 
-from llm_models import MODELS
 from model_selection import explicit_model
+from llm_models import MODELS
 
 
 def _normal(value):

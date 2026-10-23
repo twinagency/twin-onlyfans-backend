@@ -57,7 +57,7 @@ ACTIVE = ("queued", "uploading", "verifying", "retrying")
 RANK = ("outcome_unconfirmed", "needs_review", "connection_required", "retrying",
         "queued", "uploading", "verifying", "synced")
 RETRYABLE_REASONS = {"unpublished_upload_unavailable", "retries_exhausted", "processing_timeout",
-                     "observation_timeout", "scope_unavailable", "upload_failed"}
+                     "observation_timeout", "scope_unavailable", "upload_failed", "upload_permission_required"}
 
 
 class InvalidSync(ValueError):
@@ -75,6 +75,10 @@ class TransientUpload(Exception):
 
 class AuthRequired(Exception):
     """The connection is expired or rejected; no provider work until it is verified again."""
+
+
+class PermissionRequired(Exception):
+    """The uploading operator no longer has current write authority."""
 
 
 class SyncTransport(Protocol):
@@ -544,13 +548,19 @@ def retry_asset(store, tenant, account, operation_id, *, command_key, actor):
         if asset.binding_id != runtime.binding_id or not _retryable(asset) or asset.lease_token:
             raise Refused("sync operation not retryable")
         _connection(s, runtime)
-        now, before = utcnow(), asset.state
+        now, before, prior_actor = utcnow(), asset.state, op.actor
         if asset.attempts >= MAX_ATTEMPTS:
             asset.attempts = 0
         _set(s, asset, "queued", now=now)
+        # An explicit scoped retry is a new audited upload authority. Keep the
+        # original Save decision and previous actor in immutable retry evidence;
+        # dispatch still checks the new actor's live permission at every step.
+        op.actor = actor
         s.add(Decision(account_id=account, command_key=command_key, binding_id=runtime.binding_id, action="retry",
-            request_hash=request_hash, actor=actor, subject_id=op.operation_id, before_json=canonical({"state": before}),
-            after_json=canonical({"state": "queued"}), result_json=canonical({"operationId": op.operation_id}), created_at=now))
+            request_hash=request_hash, actor=actor, subject_id=op.operation_id,
+            before_json=canonical({"state": before, "actor": prior_actor}),
+            after_json=canonical({"state": "queued", "actor": actor}),
+            result_json=canonical({"operationId": op.operation_id}), created_at=now))
         s.flush()
         _settle(s, runtime, [asset.asset_id], pending)
         return operation_view(op, asset)
@@ -580,7 +590,7 @@ class _Lease:
 
 def _usable(connection, binding, now):
     return (connection is not None and connection.binding_id == binding and connection.status == "verified"
-            and connection.verified_at is not None and connection.expires_at > now)
+            and connection.last_error is None and connection.verified_at is not None and connection.expires_at > now)
 
 
 def _delay(attempts, hint=None):
@@ -596,7 +606,7 @@ def _candidates(store, tenant, now, skip):
         rows = s.execute(select(Asset.account_id, Asset.asset_id).join(OfCreatorBinding, OfCreatorBinding.id == Asset.binding_id)
             .outerjoin(OfProviderConnection, and_(OfProviderConnection.account_id == Asset.account_id,
                 OfProviderConnection.binding_id == Asset.binding_id, OfProviderConnection.status == "verified",
-                OfProviderConnection.expires_at > now))
+                OfProviderConnection.last_error.is_(None), OfProviderConnection.expires_at > now))
             .where(OfCreatorBinding.tenant_id == tenant, or_(and_(Asset.state.in_(ACTIVE), due),
                 and_(Asset.state == "connection_required", OfProviderConnection.account_id.is_not(None),
                      or_(Asset.next_attempt_at.is_(None), Asset.next_attempt_at <= now,
@@ -661,12 +671,19 @@ def _commit(store, tenant, lease, change):
         except Refused:
             runtime = None
         asset = s.scalar(select(Asset).where(Asset.account_id == lease.account, Asset.asset_id == lease.asset_id).with_for_update())
-        if asset is None or asset.lease_token != lease.token:
+        if asset is None or asset.lease_token != lease.token or asset.lease_until <= utcnow():
             return False
         connection = s.get(OfProviderConnection, lease.account)
         if runtime is None or runtime.binding_id != lease.binding or connection is None or connection.binding_id != lease.binding \
-                or connection.owner_id != lease.owner:
-            _set(s, asset, "needs_review", error="binding_changed" if runtime is None or runtime.binding_id != lease.binding else "connection_changed")
+                or connection.owner_id != lease.owner or connection.revision != lease.revision \
+                or not _usable(connection, lease.binding, utcnow()):
+            held = (runtime is not None and runtime.binding_id == lease.binding and connection is not None
+                and connection.binding_id == lease.binding and connection.owner_id == lease.owner
+                and connection.revision == lease.revision and connection.last_error is not None)
+            if held:
+                _set(s, asset, "connection_required", error="connection_required", delay=AUTH_PAUSE)
+            else:
+                _set(s, asset, "needs_review", error="binding_changed" if runtime is None or runtime.binding_id != lease.binding else "connection_changed")
         else:
             change(s, asset, runtime, connection)
         s.flush()
@@ -725,32 +742,32 @@ def _sweep(store, tenant):
     return count
 
 
-def lease_authority(store, tenant, lease):
-    """Callable for a provider write boundary: raises Refused unless this exact leased asset, binding and
-    connection (owner, revision, unexpired) still hold. Evaluated against the database every time."""
-    def authorize():
-        now = utcnow()
-        with Session(store.engine) as s, s.begin():
-            try:
-                runtime = store._runtime(s, tenant, lease.account)
-            except Refused:
-                raise Refused("upload scope changed") from None
-            asset = s.get(Asset, (lease.account, lease.asset_id))
-            connection = s.get(OfProviderConnection, lease.account)
-            if (asset is None or asset.lease_token != lease.token or asset.lease_until is None or asset.lease_until <= now
-                    or asset.state not in ACTIVE or asset.binding_id != lease.binding or runtime.binding_id != lease.binding
-                    or not _usable(connection, lease.binding, now) or connection.owner_id != lease.owner
-                    or connection.revision != lease.revision):
-                raise Refused("upload authority lost")
-    return authorize
+def _authorize_upload_boundary(store, tenant, lease):
+    """Revalidate durable upload authority and fresh staff permission per I/O."""
+    if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
+        raise Refused("content sync uploads require the worker role")
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, lease.account)
+        connection = s.get(OfProviderConnection, lease.account)
+        asset = s.get(Asset, (lease.account, lease.asset_id), with_for_update=True)
+        binding = s.get(OfCreatorBinding, runtime.binding_id)
+        op = _op(s, asset) if asset is not None else None
+        if (runtime.binding_id != lease.binding or binding is None or binding.revoked_at is not None
+                or asset is None or asset.binding_id != lease.binding or asset.upload_token != lease.upload_token
+                or asset.lease_token != lease.token or asset.lease_until <= utcnow()
+                or op is None or op.actor != lease.actor or not _usable(connection, lease.binding, utcnow())
+                or connection.revision != lease.revision or connection.owner_id != lease.owner):
+            raise Refused("carrier upload scope changed")
+        creator = binding.creator_id
+    authority = getattr(store, "content_upload_permission_reader", None)
+    if not callable(authority) or authority(tenant_id=tenant, account_id=lease.account,
+            binding_id=lease.binding, creator_id=creator, actor=lease.actor, permission="content.upload") is not True:
+        raise Refused("carrier upload permission unavailable")
 
 
 def _step(store, tenant, lease, provide, stop):
     try:
-        if getattr(provide, "needs_authority", False):
-            transport = provide(lease.connection, tenant, lease.account, lease_authority(store, tenant, lease))
-        else:
-            transport = provide(lease.connection, tenant, lease.account)
+        transport = provide(lease.connection, tenant, lease.account)
     except AuthRequired:
         transport = AuthRequired
     except Exception:
@@ -761,6 +778,9 @@ def _step(store, tenant, lease, provide, stop):
         return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "connection_required", error="connection_required", delay=AUTH_PAUSE))
     if transport is TransientUpload:
         return _commit(store, tenant, lease, lambda s, a, rt, c: _retry(s, a, None))
+    if hasattr(transport, "set_authority"):
+        transport.set_authority(lambda: _authorize_upload_boundary(store, tenant, lease),
+            upload_token=lease.upload_token, provider_media_id=lease.provider_id)
     if lease.provider_id is not None:
         return _verify(store, tenant, lease, transport)
     if lease.started:
@@ -768,9 +788,25 @@ def _step(store, tenant, lease, provide, stop):
         try:
             found = transport.lookup(upload_token=lease.upload_token)
         except UploadUnknown:
+            # Cleanup is a scoped, authority-checked recovery operation. It
+            # never authorizes another upload while the outcome stays unknown.
+            if hasattr(transport, "cleanup"):
+                try:
+                    transport.cleanup(upload_token=lease.upload_token)
+                    recovered = transport.lookup(upload_token=lease.upload_token)
+                    if recovered is not None:
+                        return _record(store, tenant, lease, recovered)
+                except AuthRequired:
+                    return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "connection_required", error="connection_required", delay=AUTH_PAUSE))
+                except PermissionRequired:
+                    return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "needs_review", error="upload_permission_required"))
+                except (UploadUnknown, Refused):
+                    pass
             return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "outcome_unconfirmed", error="outcome_unconfirmed"))
         except AuthRequired:
             return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "connection_required", error="connection_required", delay=AUTH_PAUSE))
+        except PermissionRequired:
+            return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "needs_review", error="upload_permission_required"))
         except TransientUpload as exc:
             return _commit(store, tenant, lease, lambda s, a, rt, c: _retry(s, a, exc))
         if found is not None:
@@ -829,12 +865,16 @@ def _upload(store, tenant, lease, transport):
             return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "outcome_unconfirmed", error="outcome_unconfirmed"))
         except AuthRequired:
             return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "connection_required", error="connection_required", delay=AUTH_PAUSE))
+        except PermissionRequired:
+            return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "needs_review", error="upload_permission_required"))
         except TransientUpload as exc:
             return _commit(store, tenant, lease, lambda s, a, rt, c: _retry(s, a, exc))
         if found is None:
             return _commit(store, tenant, lease, lambda s, a, rt, c: _retry(s, a, None))
     except AuthRequired:
         return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "connection_required", error="connection_required", delay=AUTH_PAUSE))
+    except PermissionRequired:
+        return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "needs_review", error="upload_permission_required"))
     except TransientUpload as exc:
         return _commit(store, tenant, lease, lambda s, a, rt, c: _retry(s, a, exc))
     return _record(store, tenant, lease, found)
@@ -857,6 +897,8 @@ def _verify(store, tenant, lease, transport):
         verdict = transport.verify(provider_media_id=lease.provider_id)
     except AuthRequired:
         return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "connection_required", error="connection_required", delay=AUTH_PAUSE))
+    except PermissionRequired:
+        return _commit(store, tenant, lease, lambda s, a, rt, c: _set(s, a, "needs_review", error="upload_permission_required"))
     except (TransientUpload, UploadUnknown) as exc:
         return _commit(store, tenant, lease, lambda s, a, rt, c: _retry(s, a, exc))
     def apply(s, asset, runtime, connection):

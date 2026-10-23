@@ -57,8 +57,6 @@ def _process_content_sync(store, tenant, *, limit, stop):
     # Bounded read of the creator's own paid feed posts (read-only, one pass per 300s).
     processed += process_posts(store, tenant, limit=limit, stop=stop)
     try:
-        # import_module consults sys.modules, so a release without the upload
-        # module is detected even after the package attribute was cached.
         content_sync_media = importlib.import_module("onlyfans_runtime.content_sync_media")
     except ModuleNotFoundError as exc:
         if exc.name != "onlyfans_runtime.content_sync_media":
@@ -91,6 +89,7 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
         worker_type = NativeWorker
     observe = _emit if observe is None else observe
     cursor = None
+    maintenance_cursor = 0
     while not stop.is_set():
         failed = False
         try:
@@ -101,20 +100,17 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
                 enrollment_jobs(store, tenant, limit=1, stop=stop)
                 if stop.is_set():
                     break
-            if vault_jobs is not None:
-                vault_jobs(store, tenant, limit=1, stop=stop)
-                if stop.is_set():
-                    break
-            if ledger_jobs is not None:
-                ledger_jobs(store, tenant, limit=1, stop=stop)
-                if stop.is_set():
-                    break
-            if offer_jobs is not None:
-                offer_jobs(store, tenant, limit=1, stop=stop)
-                if stop.is_set():
-                    break
-            if content_sync_jobs is not None:
-                content_sync_jobs(store, tenant, limit=1, stop=stop)
+            # Rotate the first background turn so a long vault/archive catch-up
+            # cannot repeatedly consume the shared spare token before ledger or
+            # content work. Recent intake retains its separate token reserve.
+            maintenance = tuple(job for job in (vault_jobs, ledger_jobs, offer_jobs, content_sync_jobs) if job is not None)
+            if maintenance:
+                first = maintenance_cursor % len(maintenance)
+                maintenance_cursor += 1
+                for job in maintenance[first:] + maintenance[:first]:
+                    job(store, tenant, limit=1, stop=stop)
+                    if stop.is_set():
+                        break
                 if stop.is_set():
                     break
             accounts, next_cursor, scanned = load_cohort(store, tenant, limit=32, after_account=cursor, stop=stop,
@@ -165,7 +161,18 @@ def main(argv=None):
     parser.add_argument("--once", action="store_true", help="One bounded credential refresh and four-account cycle")
     parser.add_argument("--refresh-seconds", type=float, default=15,
                         help="Minimum refresh window in seconds; a cohort completes its bounded pass first")
+    parser.add_argument("--verify-post-cursor-account", help="Only verify the scoped account's paid-post cursor using two read pages")
+    parser.add_argument("--command-key", help="Exact durable command identity for paid-post cursor verification")
+    parser.add_argument("--actor", help="Existing revocable operator identity for paid-post cursor verification")
     args = parser.parse_args(argv)
+    if args.verify_post_cursor_account is not None:
+        from onlyfans_read.agency_scope import actor_allowed
+        if (args.once or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", args.verify_post_cursor_account)
+                or type(args.command_key) is not str or re.fullmatch(r"[a-f0-9]{64}", args.command_key) is None
+                or not actor_allowed(args.actor)):
+            parser.error("Cursor verification requires an account, exact command key and managing actor; it cannot run with --once")
+    elif args.command_key is not None or args.actor is not None:
+        parser.error("Command identity requires --verify-post-cursor-account")
     if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
         parser.error("ONLYFANS_PROCESS_ROLE=worker is required")
     tenant = os.environ.get("ONLYFANS_WORKER_TENANT", "")
@@ -200,6 +207,31 @@ def main(argv=None):
         except Exception:
             _emit({"schemaVersion":"of-worker.v1", "state":"startup_unavailable"})
             return 1
+        if args.verify_post_cursor_account is not None:
+            # This mode never enters ordinary intake, planning, uploads or
+            # dispatch, even if their feature flags are configured. The owner
+            # performs two bounded read pages and records session-bound proof.
+            from onlyfans_runtime.offer_post_source import verify_cursor_contract
+            try:
+                if stop.is_set():
+                    return 1
+                result = verify_cursor_contract(store, tenant, args.verify_post_cursor_account,
+                    command_key=args.command_key, actor=args.actor)
+                if (result.get("verified") is not True or result.get("contract") != "beforePublishTime.v1"
+                        or type(result.get("connectionRevision")) is not int):
+                    raise ValueError("unconfirmed proof")
+            except Exception:
+                _emit({"schemaVersion":"of-worker.v1", "state":"post_cursor_verification_unavailable"})
+                return 1
+            _emit({"schemaVersion":"of-worker.v1", "state":"post_cursor_contract_verified",
+                   "contract": result["contract"], "connectionRevision": result["connectionRevision"]})
+            return 0
+        # The same private Twin admin connection can revalidate upload roles.
+        # Missing configuration leaves uploads held; it never creates authority.
+        if os.environ.get("TWIN_FACTS_BASE_URL") and os.environ.get("TWIN_ADMIN_API_KEY"):
+            from onlyfans_runtime.upload_permission import UploadPermissionReader
+            store.content_upload_permission_reader=UploadPermissionReader(
+                os.environ["TWIN_FACTS_BASE_URL"],os.environ["TWIN_ADMIN_API_KEY"])
         facts_reader=None
         if os.environ.get("ONLYFANS_TWIN_FACTS_ENABLED")=="1":
             from onlyfans_runtime.creator_facts import TwinFactsReader

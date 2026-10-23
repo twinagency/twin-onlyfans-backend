@@ -238,6 +238,13 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                 assert diagnostics["providerConnectionVerified"] is False
                 assert "delivery_unresolved" in diagnostics["reasons"]
                 assert "commerce_evidence_conflict" in diagnostics["reasons"]
+                # The deployment monitor consumes the real scoped projection,
+                # not a separate source of account state or fixture fallback.
+                from onlyfans_runtime.launch_monitoring import evaluate
+                alert = evaluate(operations.json())
+                assert alert["state"] == "attention"
+                assert {"connection_unavailable", "transport_unresolved", "commerce_evidence_conflict"} <= {
+                    item["code"] for item in alert["alerts"]}
                 assert "http-synthetic-payment" not in operations.text and "http-synthetic-tx" not in operations.text
                 assert MANUAL_REPLY not in operations.text and AMBIGUOUS_REPLY not in operations.text
                 assert "synthetic-of-token" not in operations.text and unknown_attempt not in operations.text

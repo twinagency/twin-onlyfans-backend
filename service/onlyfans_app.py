@@ -28,8 +28,8 @@ from onlyfans_commands.connection_api import router as connection_router,configu
 from onlyfans_commands.vault_api import router as vault_router
 from onlyfans_commands.vault_media_api import router as vault_media_router
 from onlyfans_runtime.launch_personality.api import router as personality_router
-from onlyfans_runtime.launch_personality_credentials import personality_credential_status
 from onlyfans_commands.launch_api import engagement_router, history_router
+from onlyfans_commands.launch_control_api import read_router as launch_read_router, control_router as launch_control_router
 
 
 @asynccontextmanager
@@ -37,7 +37,9 @@ async def lifespan(app):
     try:
         await init_db()
         app.state.control_store = None
-        if any(value() is not None for value in (control_configured,configuration_configured,campaign_configured,content_configured,connection_configured)):
+        # Constructing a Store grants no read or mutation authority. Readiness
+        # and ledger projections also need it when only read-purpose auth exists.
+        if os.environ.get("DATABASE_URL"):
             from onlyfans_runtime.store import Store
             app.state.control_store = await asyncio.to_thread(Store, os.environ["DATABASE_URL"])
         yield
@@ -51,13 +53,16 @@ async def lifespan(app):
 app = FastAPI(title="Twin OnlyFans read service", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 from onlyfans_read.agency_scope import AgencyScopeMiddleware
 app.add_middleware(AgencyScopeMiddleware)
+from onlyfans_runtime.launch_personality_credentials import personality_credential_status
+app.state.personality_credential_status_reader = personality_credential_status
 app.include_router(router)
 app.include_router(control_router)
 app.include_router(configuration_router)
 app.include_router(personality_router)
-app.state.personality_credential_status_reader = personality_credential_status
 app.include_router(engagement_router)
 app.include_router(history_router)
+app.include_router(launch_read_router)
+app.include_router(launch_control_router)
 app.include_router(campaign_router)
 app.include_router(content_router)
 app.include_router(content_v2_router)

@@ -32,7 +32,7 @@ ACTOR = "synthetic-operator"
 CONTENT_ACTOR = "op-session:" + "a" * 64
 
 
-def plant(engine, account, fan, item, *, anchor, status="scheduled", kind="offer", key=None):
+def plant(engine, account, fan, item, *, anchor, status="scheduled", kind="offer", key=None, binding_id=None):
     """A bystander action row (only status/fan/item matter to the hooks)."""
     now = utcnow()
     snapshot = canonical({"version": 1, "account": account, "fan": fan, "kind": kind, "anchor": anchor,
@@ -40,7 +40,7 @@ def plant(engine, account, fan, item, *, anchor, status="scheduled", kind="offer
                           "source": {"item": item} if kind == "follow_up" else None})
     action = str(uuid.uuid4())
     with Session(engine) as s, s.begin():
-        s.add(Action(account_id=account, action_id=action, binding_id="binding-" + account, fan_id=fan,
+        s.add(Action(account_id=account, action_id=action, binding_id=binding_id or "binding-" + account, fan_id=fan,
             kind=kind, anchor_message_id=anchor, command_key=key or digest(action), request_hash=digest("r"),
             snapshot_json=snapshot, snapshot_hash=digest(snapshot), status=status,
             due_at=now, expires_at=now + timedelta(hours=24), created_at=now, updated_at=now))

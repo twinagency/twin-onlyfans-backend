@@ -13,7 +13,7 @@ class LedgerRetryCommand(Base):
     __table_args__ = (
         CheckConstraint("result IN ('queued')", name="result"),
         CheckConstraint("expected_connection_revision >= 0", name="revision"),
-        {"info": {"onlyfans_since": "0090_launch"}},
+        {"info": {"onlyfans_since": "0091_launch_controls"}},
     )
     account_id = Column(String, ForeignKey("of_runtime.account_id", ondelete="RESTRICT"), primary_key=True)
     command_key = Column(String(64), primary_key=True)

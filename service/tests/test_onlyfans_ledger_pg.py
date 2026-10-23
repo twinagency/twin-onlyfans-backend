@@ -218,6 +218,9 @@ def test_expired_lease_is_recovered_and_old_reader_cannot_commit(database, monke
         assert entered.wait(10)
         with database[1].begin() as c:
             c.exec_driver_sql("UPDATE of_ledger_scan SET lease_until=CURRENT_TIMESTAMP-INTERVAL '1 second'")
+            # A takeover requires expiry of both the domain checkpoint and the
+            # shared account read lease introduced for cross-worker fencing.
+            c.exec_driver_sql("UPDATE of_provider_read_budget SET lease_until=CURRENT_TIMESTAMP-INTERVAL '1 second'")
         assert process_ledger_pages(store, TENANT) == 1
         release.set()
         assert old.result(timeout=15) == 0
@@ -283,12 +286,9 @@ def test_populated_0083_upgrade_preserves_disabled_state_and_adds_checked_eviden
     from db.schema import check_schema, upgrade
     store, account, _ = verified(database, monkeypatch)
     with database[1].begin() as c:
-        # Recreate the published 0083 shape, including removal of newer media admission.
-        from test_onlyfans_offer_import_upgrade_pg import rewind_to_0088
-        rewind_to_0088(c)  # 0090 and 0089 objects first, then the older shapes below
-        c.exec_driver_sql("DROP TABLE of_vault_media_job; DROP FUNCTION of_vault_media_guard()")
-        c.exec_driver_sql("DROP TABLE of_connection_enrollment; DROP TABLE of_vault_edit; DROP FUNCTION of_vault_edit_immutable(); DROP TABLE of_creator_facts_source; DROP TABLE of_ledger_evidence; DROP TABLE of_ledger_scan; DROP FUNCTION of_ledger_immutable()")
-        c.exec_driver_sql("UPDATE alembic_version SET version_num='0083_vault_management'")
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical = historical_schema(c, "0083_vault_management")
+        assert "of_ledger_scan" not in historical.tables and "of_ledger_evidence" not in historical.tables
         upgrade(c)
         check_schema(c)
     from db.onlyfans_models import OfRuntime

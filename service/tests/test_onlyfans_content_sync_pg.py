@@ -258,6 +258,11 @@ def test_t23_partial_delayed_and_paused_coverage_is_honest(synced, monkeypatch):
     while process_inventory_jobs(store, TENANT):
         pass
     last = pick(store, Account, account).last_incremental_at
+    waiting = get_status(store, TENANT, account, now=last + timedelta(seconds=599))["sync"]["coverage"]["paidMessages"]
+    assert waiting["state"] == "partial" and "provider detail" in waiting["detail"], "queued refresh is not verified source coverage"
+    reader = FakeHistory({(601, None): ([raw(2000 + n, [11], 500 + n, previews=[], locked=False, fan=601)
+        for n in reversed(range(5))], False)})
+    assert process_refresh_jobs(store, TENANT, transport_factory=factory(reader)) == 1
     assert get_status(store, TENANT, account, now=last + timedelta(seconds=599))["sync"]["coverage"]["paidMessages"]["state"] == "current"
     late = get_status(store, TENANT, account, now=last + timedelta(seconds=601))["sync"]
     assert late["coverage"]["paidMessages"]["state"] == "delayed", "older than 2 x 300 s"
@@ -647,7 +652,8 @@ def test_t31_changed_selected_source_holds_only_that_item_until_one_explicit_dec
     assert len(listed) == 1
     conflict = listed[0]
     assert set(conflict) == {"conflictId", "itemId", "revision", "status", "createdAt", "current", "source",
-        "itemFingerprint", "resolution", "resolvedAt"}
+        "itemFingerprint", "resolution", "resolvedAt", "kind", "sourceIssue"}
+    assert conflict["kind"] == "source_changed" and conflict["sourceIssue"] is None
     assert conflict["itemId"] == str(item) and conflict["status"] == "open" and conflict["revision"] == 1
     assert conflict["current"]["priceCents"] == 1999 and conflict["current"]["mediaCount"] == 2 and conflict["current"]["previewCount"] == 1
     assert conflict["source"]["priceCents"] == 2500 and conflict["source"]["lockedText"] is False and conflict["source"]["mediaCount"] == 2
@@ -1137,6 +1143,9 @@ def test_worker_tolerates_a_release_without_the_upload_module(monkeypatch):
     import onlyfans_runtime
     monkeypatch.setattr(onlyfans_runtime, "content_sync", fake_sync, raising=False)
     monkeypatch.setattr(onlyfans_runtime, "offer_post_source", fake_posts, raising=False)
+    # Earlier tests can leave the imported module on its parent package. A
+    # sys.modules sentinel alone does not hide that cached package attribute.
+    monkeypatch.delattr(onlyfans_runtime, "content_sync_media", raising=False)
     monkeypatch.setitem(sys.modules, "onlyfans_runtime.content_sync_media", None)   # import raises ModuleNotFoundError
     assert entry._process_content_sync(object(), "tenant-a", limit=1, stop=threading.Event()) == 1
 

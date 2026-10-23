@@ -22,6 +22,22 @@ from . import readers
 ACTIVE = ("scheduled", "queued", "dispatching", "unknown")
 
 
+def invalidate(s, runtime, *, reason, actor="system", fan_id=None, now=None):
+    """Record cancellation in the event writer's existing runtime transaction.
+
+    Final dispatch still revalidates the snapshot. An attempt which has already
+    started remains dispatching/unknown; cancellation cannot invent non-delivery.
+    """
+    from ..store import utcnow
+    query = select(Action).where(Action.account_id == runtime.account_id,
+        Action.binding_id == runtime.binding_id,
+        Action.status.in_(ACTIVE))
+    if fan_id is not None:
+        query = query.where(Action.fan_id == fan_id)
+    for row in s.scalars(query):
+        EngagementService._cancel(s, row, now or utcnow(), actor, reason)
+
+
 class EngagementService:
     def __init__(self, store):
         self.store, self.engine = store, store.engine

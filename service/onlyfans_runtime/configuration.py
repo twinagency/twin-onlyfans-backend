@@ -91,7 +91,10 @@ def editable(row,runtime,session):
         "creatorFacts":values,"factFields":[{"key":key,"label":labels.get(key,label)} for key,label in fact_fields()],
         "factsValid":facts_valid,"readOnlyFacts":readonly,"modelsValid":models_valid,"sharedFacts":source,
         "defaultModel":row.model,"replyModelOverride":override,"replyOverridePresent":models_valid and "ai_chatter" in purpose,"resolvedReplyModel":resolved,
-        "modelOptions":sorted(MODELS), "salesConfigurationValid":sales_valid,
+        "modelOptions":sorted(MODELS),
+        "dailyCostCapCents":row.daily_cost_cap_cents, "reasoningEffort":row.reasoning_effort,
+        "reasoningOptions":{key:list(model.effort_choices) for key,model in MODELS.items()},
+        "salesConfigurationValid":sales_valid,
         "onRequestSalesEnabled":sales_valid and all(sales.get(key) is True for key in SALES_FLAGS)}
 
 
@@ -104,9 +107,19 @@ def get_configuration(store,tenant_id,account_id):
 
 
 def validate_patch(patch):
-    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled"}:
-        raise InvalidConfiguration("Only creator persona, facts, model choices and on-request sales may be edited here.")
+    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort"}:
+        raise InvalidConfiguration("Only creator persona, facts, model, budget, reasoning and on-request sales settings may be edited here.")
     result={}
+    if "dailyCostCapCents" in patch:
+        value=patch["dailyCostCapCents"]
+        if type(value) is not int or not 0<=value<=1000000:
+            raise InvalidConfiguration("Use a whole daily budget between 0 and 1000000 cents.")
+        result["dailyCostCapCents"]=value
+    if "reasoningEffort" in patch:
+        value=patch["reasoningEffort"]
+        if value is not None and (type(value) is not str or not value or len(value)>32):
+            raise InvalidConfiguration("Choose a supported reasoning effort or the model default.")
+        result["reasoningEffort"]=value
     if "onRequestSalesEnabled" in patch:
         if type(patch["onRequestSalesEnabled"]) is not bool:
             raise InvalidConfiguration("The on-request sales setting must be an explicit boolean.")
@@ -227,6 +240,25 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
             else:purpose["ai_chatter"]=patch["replyModelOverride"]
             row.model_by_purpose=canonical(purpose) if purpose else None
             changed=changed or canonical(purpose)!=previous_purpose
+        if "dailyCostCapCents" in patch:
+            value=patch["dailyCostCapCents"]
+            before["dailyCostCapCents"]=row.daily_cost_cap_cents
+            after["dailyCostCapCents"]=value
+            changed=changed or row.daily_cost_cap_cents!=value
+            row.daily_cost_cap_cents=value
+        if "reasoningEffort" in patch:
+            value=patch["reasoningEffort"]
+            if value is not None:
+                from model_selection import explicit_model
+                try:model=MODELS[explicit_model(row,"ai_chatter",MODELS)]
+                except (ValueError,RecursionError) as exc:
+                    raise InvalidConfiguration("Choose a supported model before its reasoning effort.") from exc
+                if value not in model.effort_choices:
+                    raise InvalidConfiguration("That reasoning effort is not supported by the selected model.")
+            before["reasoningEffort"]=row.reasoning_effort
+            after["reasoningEffort"]=value
+            changed=changed or row.reasoning_effort!=value
+            row.reasoning_effort=value
         if "defaultModel" in patch or "replyModelOverride" in patch:
             from model_selection import explicit_model
             try:explicit_model(row,"ai_chatter",MODELS)

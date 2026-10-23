@@ -28,7 +28,6 @@ from .content_management import digest, editable, validate_patch
 from .native_context import canonical
 from .native_protocol import MAX_VAULT_BYTES, NativeProtocolError, load
 from .store import Refused, _id, utcnow
-from . import provider_read_gate as read_gate
 
 PAGE_SIZE = 24
 MAX_PAGES = 200
@@ -420,8 +419,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 OfCreatorBinding, OfCreatorBinding.id == OfVaultSyncJob.binding_id).where(
                 OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
                 OfCreatorBinding.channel == "onlyfans", or_(OfVaultSyncJob.status == "pending",
-                    and_(OfVaultSyncJob.status == "running", OfVaultSyncJob.lease_until <= now)),
-                ~read_gate.blocked(OfVaultSyncJob.account_id, now))
+                    and_(OfVaultSyncJob.status == "running", OfVaultSyncJob.lease_until <= now)))
                 .order_by(OfVaultSyncJob.updated_at, OfVaultSyncJob.account_id).limit(1)).first()
         if candidate is None:
             break
@@ -444,75 +442,96 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             except Refused:
                 _terminal(job, "failed", "connection_unavailable")
                 continue
-            reading = read_gate.acquire_in(s, account, "vault", now=now)
-            if reading is None:
-                continue
             token = str(uuid.uuid4())
             job.status, job.lease_token = "running", token
             job.lease_until, job.updated_at = utcnow() + timedelta(seconds=60), utcnow()
             offset, owner, expires, binding = job.page_offset, job.owner_id, connection.expires_at, runtime.binding_id
+            connection_revision=connection.revision
         if stop is not None and stop.is_set():
-            read_gate.release(store, account, reading)
             break
-        error = None
+        error = budget = failure = deferred = None
         try:
             from .provider_connector import NativeProviderConnector, session_from_capture
             transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
                 policy_revision=1, capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"],
                 expires_at=expires.replace(tzinfo=timezone.utc)))
+            from .worker import _provider_claim
+            budget=_provider_claim(store,tenant,account,transport,connection_revision,'vault')
             raw = transport.vault_page(offset=offset, limit=PAGE_SIZE)
             rows, more = parse_vault_page(raw, owner_id=owner)
             if os.environ.get("ONLYFANS_VAULT_PREVIEWS_ENABLED") == "1":
                 from .vault_previews import warm_page
                 warm_page(transport, rows, binding_id=binding, owner_id=owner, stop=stop)
-        except NativeProtocolError:
-            error = "unsupported_vault_response"
-        except Exception:
-            error = "vault_read_failed"
-        finally:
-            read_gate.release(store, account, reading)
-        with Session(store.engine) as s, s.begin():
-            runtime = store._runtime(s, tenant, account)
-            job = s.get(OfVaultSyncJob, (account, identity))
-            if job.status != "running" or job.lease_token != token:
-                continue
-            if not _current(runtime, s.get(OfProviderConnection, account), job):
-                _terminal(job, "superseded", "connection_changed")
-                continue
-            if error:
-                _terminal(job, "failed", error)
-                continue
-            page_hash = hashlib.sha256(raw).hexdigest()
-            if more and page_hash == job.last_page_hash:
-                _terminal(job, "failed", "unsupported_vault_pagination")
-                continue
-            for media in rows:
-                values = row_values(account, media)
-                values["created_at"] = _stamp(media["createdAt"]).replace(tzinfo=None)
-                row = s.get(VaultItem, (account, media["id"]))
-                if row is None:
-                    row = VaultItem(**values)
-                    s.add(row)
+        except Exception as problem:
+            from .provider_read_budget import ReadDeferred
+            failure=problem
+            if isinstance(problem,ReadDeferred):deferred=problem.retry_at;error='provider_read_deferred'
+            elif isinstance(problem,NativeProtocolError):error='provider_rate_limited' if hasattr(problem,'retry_after') else 'unsupported_vault_response'
+            else:error='vault_read_failed'
+        try:
+            with Session(store.engine) as s, s.begin():
+                runtime = store._runtime(s, tenant, account)
+                job = s.get(OfVaultSyncJob, (account, identity))
+                if job.status != "running" or job.lease_token != token:
+                    continue
+                if not _current(runtime, s.get(OfProviderConnection, account), job):
+                    _terminal(job, "superseded", "connection_changed")
+                    continue
+                if budget is not None:
+                    from .provider_read_budget import current
+                    try:current(store,tenant,budget,session=s)
+                    except Refused:
+                        job.status='pending';job.last_error='provider_read_stale'
+                        job.lease_token=job.lease_until=None
+                        continue
+                if deferred:
+                    # Reuse the durable job lease as a bounded retry deadline. No
+                    # provider result or cursor advancement is acknowledged.
+                    job.status='running';job.last_error='provider_read_deferred'
+                    job.lease_until=deferred;job.updated_at=utcnow()
+                    continue
+                if failure is not None and hasattr(failure,'retry_after'):
+                    job.status='running';job.last_error='provider_rate_limited'
+                    job.lease_until=utcnow()+timedelta(seconds=min(3600,max(1,int(failure.retry_after))))
+                    job.updated_at=utcnow()
+                    continue
+                if error:
+                    _terminal(job, "failed", error)
+                    continue
+                page_hash = hashlib.sha256(raw).hexdigest()
+                if more and page_hash == job.last_page_hash:
+                    _terminal(job, "failed", "unsupported_vault_pagination")
+                    continue
+                for media in rows:
+                    values = row_values(account, media)
+                    values["created_at"] = _stamp(media["createdAt"]).replace(tzinfo=None)
+                    row = s.get(VaultItem, (account, media["id"]))
+                    if row is None:
+                        row = VaultItem(**values)
+                        s.add(row)
+                    else:
+                        for field in MIRROR_REFRESH_FIELDS:
+                            setattr(row, field, values[field])
+                    s.flush()
+                    observation = s.get(OfVaultObservation, (account, media["id"]))
+                    if observation is None:
+                        observation = OfVaultObservation(account_id=account, media_id=media["id"])
+                        s.add(observation)
+                    observation.job_id, observation.raw_hash, observation.observed_at = identity, digest(row.raw_json), utcnow()
+                job.page_offset += len(rows)
+                job.items_seen += len(rows)
+                job.pages_read += 1
+                job.last_page_hash, job.updated_at = page_hash, utcnow()
+                job.lease_token = job.lease_until = None
+                if not more:
+                    _terminal(job, "complete")
+                elif job.pages_read >= job.max_pages:
+                    _terminal(job, "failed", "vault_page_limit")
                 else:
-                    for field in MIRROR_REFRESH_FIELDS:
-                        setattr(row, field, values[field])
-                s.flush()
-                observation = s.get(OfVaultObservation, (account, media["id"]))
-                if observation is None:
-                    observation = OfVaultObservation(account_id=account, media_id=media["id"])
-                    s.add(observation)
-                observation.job_id, observation.raw_hash, observation.observed_at = identity, digest(row.raw_json), utcnow()
-            job.page_offset += len(rows)
-            job.items_seen += len(rows)
-            job.pages_read += 1
-            job.last_page_hash, job.updated_at = page_hash, utcnow()
-            job.lease_token = job.lease_until = None
-            if not more:
-                _terminal(job, "complete")
-            elif job.pages_read >= job.max_pages:
-                _terminal(job, "failed", "vault_page_limit")
-            else:
-                job.status = "pending"
-            processed += 1
+                    job.status = "pending"
+                processed += 1
+        finally:
+            from .worker import _release_provider
+            _release_provider(store,tenant,budget,failure)
     return processed
 

@@ -7,7 +7,7 @@ A paid post has an int id, postedAt, a decimal price, ordered media and
 text is public on the feed, so it is recorded as an explicit False. Free posts
 (no price) are not offers. Nothing here sends, publishes or edits a post.
 """
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import json
 
 from sqlalchemy import select
@@ -20,6 +20,7 @@ from .store import Refused, _id, utcnow
 
 PAGE_LIMIT = 10
 PAGES_PER_PASS = 20
+DETAILS_PER_PASS = 2
 INTERVAL_SECONDS = 300
 MAX_PAGE_BYTES = 1024 * 1024
 
@@ -77,80 +78,32 @@ def from_post(row):
         cents(price), "USD", tuple(reasons)).normalized()
 
 
-AUDIT_SECONDS = 24 * 3600
-_KEEP = object()
-
-
-def _deeper(marker, current):
-    """Whether `marker` reaches further back in time than `current` (markers are decreasing publish times)."""
-    if current is None:
-        return True
+def parse_post(raw, *, owner_id, post_id):
+    """A known post's detail must name that exact source and the current owner."""
     try:
-        return float(marker) < float(current)
-    except (TypeError, ValueError):
-        return False
+        row = load(raw, max_bytes=MAX_PAGE_BYTES)
+        if (type(row) is not dict or row.get("responseType") != "post" or _id(row.get("id")) != post_id
+                or type(row.get("author")) is not dict or row["author"].get("id") != owner_id):
+            raise ValueError()
+        return from_post(row)
+    except (KeyError, TypeError, ValueError, Refused):
+        raise NativeProtocolError("unsupported native post detail") from None
 
 
-def _candidate(s, account, job_id, row, now):
-    """One review candidate per attachment set, counted once per post and attachment set."""
-    from db.onlyfans_offer_import_models import OfOfferImportCandidate
-    from .native_context import canonical
-    from .offer_import import _date, _merge
-    media = json.loads(row["media_json"])
-    candidate = s.get(OfOfferImportCandidate, (account, job_id, row["media_key"]), with_for_update=True)
-    if candidate is None:
-        candidate = OfOfferImportCandidate(account_id=account, job_id=job_id, media_key=row["media_key"],
-            media_json=canonical(sorted(media)), source_count=0, variants_json="[]", samples_json="[]",
-            revision=0, updated_at=now)
-        s.add(candidate)
-    _merge(candidate, media, row["price_cents"], {"fanId": None, "messageId": row["source_id"], "sourceKind": "post",
-        "priceCents": row["price_cents"], "sentAt": _date(row["source_at"])})
-    candidate.updated_at = now
-
-
-def record(store, tenant, account, observations, *, connection_revision, now=None, state=None):
-    """Persist observations under the current binding and connection revision; idempotent.
-
-    A post seen for the first time (or with a new attachment set) also joins the account's candidate list, so
-    it can be reviewed and turned into a draft like any message offer. `state` updates the durable walk
-    position atomically with the observations it was read from.
-    """
+def record(store, tenant, account, observations, *, connection_revision, now=None):
+    """Persist observations under the current binding and connection revision; idempotent."""
     from db.onlyfans_connection_models import OfProviderConnection
-    from db.onlyfans_offer_import_models import OfOfferObservation, OfOfferImportJob
-    now = now or utcnow()
-    state = state or {}
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
         connection = s.get(OfProviderConnection, account)
         if (connection is None or connection.binding_id != runtime.binding_id
-                or connection.revision != connection_revision or connection.status != "verified"):
+                or connection.revision != connection_revision or connection.status != "verified"
+                or connection.last_error is not None or connection.verified_at is None or connection.expires_at <= utcnow()):
             raise Refused("connection changed")
-        offers = [o.normalized() for o in observations]
+        store._observe_offers(s, runtime, [o.normalized() for o in observations])
         row = s.get(OfContentSyncAccount, account, with_for_update=True)
-        known = set()
-        if offers:
-            known = set(s.execute(select(OfOfferObservation.source_id, OfOfferObservation.media_key).where(
-                OfOfferObservation.account_id == account, OfOfferObservation.binding_id == runtime.binding_id,
-                OfOfferObservation.source_kind == "post", OfOfferObservation.source_id.in_([o.source_id for o in offers]))).all())
-        inserted = store._observe_offers(s, runtime, offers)
         if row is not None and row.binding_id == runtime.binding_id:
-            job = s.get(OfOfferImportJob, (account, row.initial_job_id)) if row.initial_job_id else None
-            for fresh in inserted:
-                if (fresh["source_id"], fresh["media_key"]) in known:
-                    continue
-                known.add((fresh["source_id"], fresh["media_key"]))
-                if job is not None and job.binding_id == runtime.binding_id:
-                    _candidate(s, account, job.job_id, fresh, now)
-            if state.get("checked"):
-                row.posts_checked_at = now
-            if "error" in state:
-                row.posts_error = state["error"]
-            elif observations or state.get("checked") or "cursor" in state:
-                row.posts_error = None
-            for column in ("cursor", "complete", "audit_after"):
-                if column in state:
-                    setattr(row, {"cursor": "posts_cursor", "complete": "posts_history_complete",
-                                  "audit_after": "posts_audit_after"}[column], state[column])
+            row.posts_checked_at, row.posts_error = now or utcnow(), None
         return len(observations)
 
 
@@ -159,162 +112,350 @@ def _transport(connection, tenant, account):
     return history_transport(connection, tenant, account)
 
 
-def process_posts(store, tenant, *, limit=1, stop=None, transport_factory=_transport, now=None):
-    """Worker step: read paid posts for due enabled accounts, one gated page at a time.
+def verify_cursor_contract(store, tenant, account, *, command_key, actor, transport_factory=_transport):
+    """Two bounded read-only pages establish the actual account's cursor contract.
 
-    * Head: the newest pages, until a page shows nothing new or changed (an edited known post counts as
-      changed), at most PAGES_PER_PASS pages.
-    * History: a durable cursor continues into older pages across passes until the end of the feed; a full
-      re-read starts every AUDIT_SECONDS so edits to old posts are noticed too. Each pass advances history by
-      at least one page even when the head used its whole budget.
-    * Every page needs the account's provider-read lease and pace (provider_read_gate), so concurrent
-      workers and other readers of the same account never overlap or exceed the intended rate. When the
-      account is busy the pass simply ends; the saved position resumes later.
+    This is an explicit worker/operator command for release validation, never a
+    convention inferred from an API parameter name. The evidence is audited
+    and bound to the current verified session; a reconnect invalidates it.
     """
-    from sqlalchemy import and_, or_
+    from hashlib import sha256
+    import os
+    from decimal import Decimal
     from db.onlyfans_connection_models import OfProviderConnection
-    from db.onlyfans_offer_import_models import OfOfferObservation
-    from . import provider_read_gate as gate
+    from db.onlyfans_content_sync_progress_models import OfContentPostProgress
+    from db.onlyfans_offer_import_models import OfContentSyncDecision
+    from .content_sync import _identity, _key_taken
+    from .native_context import canonical
+    from .provider_read_budget import acquire, current_in_session, release, native_reader
+    _identity(command_key, actor)
+    if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
+        raise Refused("paid-post verification requires the worker role")
+    request = sha256(canonical({"postCursor": "beforePublishTime.v1"}).encode()).hexdigest()
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        prior = s.get(OfContentSyncDecision, (account, command_key))
+        if prior is not None:
+            if (prior.binding_id, prior.actor, prior.request_hash) != (runtime.binding_id, actor, request):
+                raise Refused("sync idempotency conflict")
+            return json.loads(prior.result_json)
+        _key_taken(s, account, command_key, OfContentSyncDecision)
+        connection = s.get(OfProviderConnection, account)
+        if (connection is None or connection.binding_id != runtime.binding_id or connection.status != "verified"
+                or connection.last_error is not None or connection.verified_at is None or connection.expires_at <= utcnow()):
+            raise Refused("verified connection unavailable")
+        revision, binding, owner = connection.revision, runtime.binding_id, connection.owner_id
+        s.expunge(connection)
+    transport, pages, marker = transport_factory(connection, tenant, account), [], None
+    read_claim, retry_after = None, None
+    try:
+        for index in range(2):
+            read_claim = acquire(store, tenant, account, connection_revision=revision, kind="posts") if native_reader(transport) else None
+            raw = transport.posts_page(before_marker=marker)
+            _, more, tail = parse_page(raw, owner_id=owner)
+            value = load(raw, max_bytes=MAX_PAGE_BYTES)
+            rows = value["list"]
+            pages.append({"responseHash": sha256(raw).hexdigest(), "requestedMarker": marker,
+                "tailMarker": tail, "ids": [r["id"] for r in rows],
+                "times": [r["postedAt"] for r in rows], "hasMore": more})
+            if index == 0:
+                if not more or not tail or not rows:
+                    raise Refused("post cursor cannot be verified without a historical boundary")
+                marker = tail
+                if read_claim is not None:
+                    with Session(store.engine) as s, s.begin():
+                        current_in_session(store, s, tenant, read_claim)
+                    release(store, tenant, read_claim)
+                    read_claim = None
+            else:
+                first = pages[0]
+                if not rows or not set(pages[1]["ids"]) - set(first["ids"]):
+                    raise Refused("post cursor did not reach older records")
+                if more and (tail is None or Decimal(tail) >= Decimal(marker)):
+                    raise Refused("post cursor did not advance")
+                first_end = min(datetime.fromisoformat(stamp.replace("Z", "+00:00")) for stamp in first["times"])
+                if any(datetime.fromisoformat(stamp.replace("Z", "+00:00")) > first_end for stamp in pages[1]["times"]):
+                    raise Refused("post cursor historical ordering is unsupported")
+        now = utcnow()
+        evidence = {"contract": "beforePublishTime.v1", "accountId": account, "bindingId": binding,
+            "connectionRevision": revision, "checkedAt": now.isoformat() + "Z", "actor": actor, "pages": pages}
+        with Session(store.engine) as s, s.begin():
+            runtime = store._runtime(s, tenant, account)
+            current_connection = s.get(OfProviderConnection, account)
+            if (runtime.binding_id != binding or current_connection is None or current_connection.binding_id != binding
+                    or current_connection.revision != revision or current_connection.status != "verified"
+                    or current_connection.last_error is not None or current_connection.verified_at is None
+                    or current_connection.expires_at <= now or current_connection.owner_id != owner):
+                raise Refused("post read scope changed")
+            if read_claim is not None:
+                current_in_session(store, s, tenant, read_claim)
+            progress = s.get(OfContentPostProgress, account, with_for_update=True)
+            if progress is None:
+                progress = OfContentPostProgress(account_id=account, binding_id=binding,
+                    connection_revision=revision, history_complete=False)
+                s.add(progress)
+            if progress.lease_token and progress.lease_until > now:
+                raise Refused("post read lease occupied")
+            before = {"contract": progress.cursor_contract}
+            if (progress.binding_id, progress.connection_revision) != (binding, revision):
+                progress.binding_id, progress.connection_revision = binding, revision
+                progress.history_marker, progress.history_complete = None, False
+                progress.history_checked_at = None
+            progress.cursor_contract, progress.cursor_evidence_json = "beforePublishTime.v1", canonical(evidence)
+            result = {"verified": True, "contract": progress.cursor_contract, "connectionRevision": revision}
+            s.add(OfContentSyncDecision(account_id=account, command_key=command_key, binding_id=binding,
+                action="settings", request_hash=request, actor=actor, subject_id="post-cursor-contract",
+                before_json=canonical(before), after_json=canonical(evidence), result_json=canonical(result), created_at=now))
+            return result
+    except Exception as exc:
+        retry_after = getattr(exc, "retry_after", None)
+        raise
+    finally:
+        if read_claim is not None:
+            release(store, tenant, read_claim, retry_after=retry_after)
+
+
+def _claim(store, tenant, account, now):
+    from db.onlyfans_connection_models import OfProviderConnection
+    from db.onlyfans_content_sync_progress_models import OfContentPostProgress
+    import uuid
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        sync = s.get(OfContentSyncAccount, account, with_for_update=True)
+        connection = s.get(OfProviderConnection, account)
+        if (sync is None or not sync.enabled or sync.binding_id != runtime.binding_id
+                or connection is None or connection.binding_id != runtime.binding_id
+                or connection.status != "verified" or connection.last_error is not None
+                or connection.verified_at is None or connection.expires_at <= now):
+            return None
+        progress = s.get(OfContentPostProgress, account, with_for_update=True)
+        if progress is None:
+            progress = OfContentPostProgress(account_id=account, binding_id=runtime.binding_id,
+                connection_revision=connection.revision, history_complete=False)
+            s.add(progress)
+        if progress.lease_token and progress.lease_until > now:
+            return None
+        if progress.next_attempt_at and progress.next_attempt_at > now:
+            return None
+        if (progress.binding_id, progress.connection_revision) != (runtime.binding_id, connection.revision):
+            progress.binding_id, progress.connection_revision = runtime.binding_id, connection.revision
+            progress.history_marker, progress.history_complete = None, False
+            progress.history_checked_at = None
+            progress.cursor_contract = progress.cursor_evidence_json = None
+        progress.lease_token, progress.lease_until = str(uuid.uuid4()), now + timedelta(seconds=60)
+        progress.next_attempt_at = now + timedelta(seconds=INTERVAL_SECONDS)
+        result = (progress.lease_token, connection.revision, connection.owner_id,
+            runtime.binding_id, progress.history_marker, progress.cursor_contract, progress.cursor_evidence_json)
+        s.expunge(connection)
+        return result + (connection,)
+
+
+def _commit_page(store, tenant, account, token, revision, binding, observations, raw, *, marker, more,
+                 now, read_claim=None, error=None, advance=True, unavailable_ids=(), unavailable_reason="post_no_longer_paid"):
+    from db.onlyfans_connection_models import OfProviderConnection
+    from db.onlyfans_content_sync_progress_models import OfContentPostProgress, OfContentSyncSource
+    from .provider_read_budget import current_in_session
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        progress = s.get(OfContentPostProgress, account, with_for_update=True)
+        sync = s.get(OfContentSyncAccount, account)
+        connection = s.get(OfProviderConnection, account)
+        if (progress is None or progress.lease_token != token or progress.lease_until <= utcnow()
+                or runtime.binding_id != binding or sync is None or not sync.enabled or sync.binding_id != binding
+                or connection is None or connection.binding_id != binding or connection.revision != revision
+                or connection.status != "verified" or connection.last_error is not None
+                or connection.verified_at is None or connection.expires_at <= utcnow()):
+            raise Refused("post read scope changed")
+        if read_claim is not None:
+            current_in_session(store, s, tenant, read_claim)
+        if observations:
+            store._observe_offers(s, runtime, observations)
+        for source_id in unavailable_ids:
+            source = s.get(OfContentSyncSource, (account, binding, "post", source_id))
+            if source is not None:
+                from .content_sync import mark_source_unavailable
+                mark_source_unavailable(s, runtime, source, now, unavailable_reason)
+        # Free/retracted known posts cannot leave their former paid terms usable.
+        if raw is not None:
+            parsed = load(raw, max_bytes=MAX_PAGE_BYTES)
+            priced = {o.source_id for o in observations}
+            for post in parsed["list"]:
+                if post["id"] not in priced:
+                    source = s.get(OfContentSyncSource, (account, binding, "post", post["id"]))
+                    if source is not None:
+                        from .content_sync import mark_source_unavailable
+                        mark_source_unavailable(s, runtime, source, now, "post_no_longer_paid")
+        if advance:
+            progress.last_error, sync.posts_error = error, error
+        sync.posts_checked_at = now
+        if error is None and advance:
+            progress.history_marker = marker if more else None
+            if not more:
+                progress.history_complete, progress.history_checked_at = True, now
+        progress.lease_until = utcnow() + timedelta(seconds=60)
+
+
+def _revisit_posts(store, tenant, account, token, revision, binding, owner, transport, now, exclude=()):
+    """Fair, bounded direct reads detect old edits and verified source deletion."""
+    from db.onlyfans_content_sync_progress_models import OfContentSyncSource
+    from .provider_read_budget import acquire, release, native_reader
+    if not callable(getattr(transport, "post_by_id", None)):
+        return
+    with Session(store.engine) as s:
+        wanted = s.scalars(select(OfContentSyncSource.source_id).where(
+            OfContentSyncSource.account_id == account, OfContentSyncSource.binding_id == binding,
+            OfContentSyncSource.source_kind == "post", OfContentSyncSource.current_observation_id.is_not(None),
+            OfContentSyncSource.source_id.notin_(exclude),
+            (OfContentSyncSource.last_checked_at.is_(None)) | (OfContentSyncSource.last_checked_at < now))
+            .order_by(OfContentSyncSource.last_checked_at.asc().nulls_first(), OfContentSyncSource.source_id)
+            .limit(DETAILS_PER_PASS)).all()
+    for post_id in wanted:
+        read_claim, retry_after = None, None
+        try:
+            read_claim = acquire(store, tenant, account, connection_revision=revision, kind="posts") if native_reader(transport) else None
+            status, raw = transport.post_by_id(post_id)
+            if status == 404:
+                observed, absent, reason = [], [post_id], "post_deleted"
+            elif status == 200:
+                offer = parse_post(raw, owner_id=owner, post_id=post_id)
+                observed, absent, reason = ([offer] if offer else []), ([] if offer else [post_id]), "post_no_longer_paid"
+            else:
+                raise NativeProtocolError("unsupported native post status")
+            _commit_page(store, tenant, account, token, revision, binding, observed, None,
+                marker=None, more=False, now=now, read_claim=read_claim, advance=False,
+                unavailable_ids=absent, unavailable_reason=reason)
+        except Exception as exc:
+            retry_after = getattr(exc, "retry_after", None)
+            raise
+        finally:
+            if read_claim is not None:
+                release(store, tenant, read_claim, retry_after=retry_after)
+
+
+def process_posts(store, tenant, *, limit=1, stop=None, transport_factory=_transport, now=None):
+    """Durable newest-page intake plus a fair bounded historical/revisit walk.
+
+    Native historical reads require a recorded verified cursor contract. Known
+    IDs never stop the walk: they may have changed since their last observation.
+    """
+    from db.models import OfCreatorBinding
+    from db.onlyfans_content_sync_progress_models import OfContentPostProgress
+    from .provider_connector import NativeProviderConnector, NativeRateLimitError
+    from .provider_read_budget import acquire, current, release, ReadDeferred, native_reader
     import os
     if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
         raise Refused("paid-post reading requires the worker role")
+    if type(limit) is not int or not 1 <= limit <= 4:
+        raise Refused("invalid paid-post work bound")
     now = now or utcnow()
-    Account = OfContentSyncAccount
     with Session(store.engine) as s:
-        due = s.execute(select(Account.account_id).where(Account.enabled.is_(True), Account.status == "active",
-            or_(Account.posts_checked_at.is_(None), Account.posts_checked_at <= now - timedelta(seconds=INTERVAL_SECONDS),
-                and_(Account.posts_history_complete.is_(False), Account.posts_cursor.is_not(None), Account.posts_error.is_(None)),
-                and_(Account.posts_history_complete.is_(True), Account.posts_audit_after <= now)),
-            ~gate.blocked(Account.account_id, utcnow()))
-            .order_by(Account.posts_checked_at.asc().nulls_first()).limit(limit)).scalars().all()
+        due = s.scalars(select(OfContentSyncAccount.account_id).join(OfCreatorBinding,
+            OfCreatorBinding.id == OfContentSyncAccount.binding_id).where(OfContentSyncAccount.enabled.is_(True),
+            OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
+            OfContentSyncAccount.status == "active",
+            (OfContentSyncAccount.posts_checked_at.is_(None))
+            | (OfContentSyncAccount.posts_checked_at <= now - timedelta(seconds=INTERVAL_SECONDS)))
+            .order_by(OfContentSyncAccount.posts_checked_at.asc().nulls_first(), OfContentSyncAccount.account_id)
+            .limit(limit)).all()
     done = 0
     for account in due:
         if stop is not None and stop.is_set():
             break
-        with Session(store.engine) as s:
-            runtime = store._runtime(s, tenant, account)
-            connection = s.get(OfProviderConnection, account)
-            row = s.get(Account, account)
-            if (row is None or connection is None or connection.binding_id != runtime.binding_id or connection.status != "verified"
-                    or connection.expires_at <= now or row.binding_id != runtime.binding_id):
-                continue
-            revision, owner, binding = connection.revision, connection.owner_id, runtime.binding_id
-            cursor, complete, audit = row.posts_cursor, row.posts_history_complete, row.posts_audit_after
-            head_due = row.posts_checked_at is None or row.posts_checked_at <= now - timedelta(seconds=INTERVAL_SECONDS)
+        claimed = _claim(store, tenant, account, now)
+        if claimed is None:
+            continue
+        token, revision, owner, binding, continuation, contract, proof, connection = claimed
+        try:
             transport = transport_factory(connection, tenant, account)
-        if complete and audit is not None and audit <= now:
-            complete, cursor = False, None          # periodic full re-read: catches edits to old posts
-            audit_state = {"complete": False, "cursor": None}
-        else:
-            audit_state = {}
-
-        def latest(ids):
-            with Session(store.engine) as s:
-                found = {}
-                for source_id, fingerprint in s.execute(select(OfOfferObservation.source_id, OfOfferObservation.fingerprint).where(
-                        OfOfferObservation.account_id == account, OfOfferObservation.binding_id == binding,
-                        OfOfferObservation.source_kind == "post", OfOfferObservation.source_id.in_(ids))
-                        .order_by(OfOfferObservation.observed_at.desc(), OfOfferObservation.occurrence.desc())):
-                    found.setdefault(source_id, fingerprint)
-                return found
-
-        def read(marker):
-            """One gated page: (observations, more, tail) | 'paced' | error string. No database session is open across I/O."""
-            lease = gate.acquire(store, account, "posts")
-            if lease is None:
-                return "paced"
-            try:
-                return parse_page(transport.posts_page(before_marker=marker), owner_id=owner)
-            except NativeProtocolError:
-                return "unsupported_posts_response"
-            except Exception:
-                return "posts_read_failed"
-            finally:
-                gate.release(store, account, lease)
-
-        attempted, aborted = False, False
-        pages_used, reached_end = 0, False
-
-        def save(found, **state):
-            record(store, tenant, account, found, connection_revision=revision, now=now, state={**audit_state, **state})
-            audit_state.clear()
-
-        # Head: newest first, until nothing is new or changed.
-        if head_due:
-            marker, head_state = None, {}
-            while pages_used < PAGES_PER_PASS:
-                page = read(marker)
-                if page == "paced":
-                    aborted = True
+            # Injected synthetic readers exercise the continuation contract;
+            # native sessions require account-bound evidence from live validation.
+            supported = not native_reader(transport) or (
+                contract == "beforePublishTime.v1" and proof is not None)
+            marker, error = None, None
+            # Keep one bounded continuation slot after the mandatory head even
+            # at the minimum configured/tested budget. Otherwise a one-page
+            # pass would revisit the head forever and never reach its cursor.
+            for page_index in range(max(2, PAGES_PER_PASS)):
+                if stop is not None and stop.is_set():
                     break
-                attempted = True
-                pages_used += 1
-                if type(page) is str:
-                    head_state = {"error": page, "checked": True}
+                read_claim, retry_after = None, None
+                try:
+                    read_claim = acquire(store, tenant, account, connection_revision=revision, kind="posts") if native_reader(transport) else None
+                    raw = transport.posts_page(before_marker=marker)
+                    observations, more, tail = parse_page(raw, owner_id=owner)
+                    if read_claim is not None:
+                        current(store, tenant, read_claim)
+                    if more and (not tail or tail == marker):
+                        raise NativeProtocolError("posts cursor did not advance")
+                    # The head is always revisited for prompt edit/new-post intake.
+                    # After it, continue the prior archive position rather than
+                    # repeatedly re-reading only the first bounded block.
+                    next_marker = continuation if page_index == 0 and continuation else tail
+                    error = "post_cursor_contract_unverified" if more and not supported else None
+                    _commit_page(store, tenant, account, token, revision, binding, observations, raw,
+                        marker=next_marker, more=more, now=now, read_claim=read_claim, error=error)
+                    if page_index == 0:
+                        # Release the head page's shared lease before bounded
+                        # detail reads; every detail keeps its own commit fence.
+                        if read_claim is not None:
+                            release(store, tenant, read_claim)
+                            read_claim = None
+                        _revisit_posts(store, tenant, account, token, revision, binding, owner, transport, now,
+                            [row["id"] for row in load(raw, max_bytes=MAX_PAGE_BYTES)["list"]])
+                    marker = next_marker
+                    if not more or error:
+                        break
+                except ReadDeferred:
+                    error = "shared_provider_read_budget"
                     break
-                found_obs, more, tail = page
-                seen = latest([o.source_id for o in found_obs]) if found_obs else {}
-                fresh = [o for o in found_obs if seen.get(o.source_id) != o.fingerprint()]
-                if not more or not tail:
-                    head_state = {"checked": True, "cursor": None, "complete": True, "audit_after": now + timedelta(seconds=AUDIT_SECONDS)}
-                    reached_end = True
-                    save(fresh, **head_state)
+                except NativeRateLimitError as exc:
+                    error, retry_after = "provider_rate_limit", exc.retry_after
                     break
-                if found_obs and not fresh:
-                    head_state = {"checked": True}
-                    save([], **head_state)
+                except NativeProtocolError:
+                    error = "unsupported_posts_response"
                     break
-                marker = tail
-                step = {"cursor": tail} if not complete and _deeper(tail, cursor) else {}
-                if step:
-                    cursor = tail
-                save(fresh, **step)
-            else:
-                # Budget spent while pages were still new: history continues from where the head stopped.
-                head_state = {"checked": True, "complete": False}
-                if marker is not None and _deeper(marker, cursor):
-                    head_state["cursor"] = cursor = marker
-                save([], **head_state)
-                complete = False
-            if "error" in head_state:
-                save([], **head_state)
-                aborted = True
-        # History: continue into older pages from the durable cursor.
-        if not aborted and not reached_end and not complete:
-            budget, marker = max(1, PAGES_PER_PASS - pages_used), cursor
-            while budget > 0:
-                page = read(marker)
-                if page == "paced":
+                except Refused:
+                    error = "post_read_scope_changed"
                     break
-                attempted = True
-                budget -= 1
-                if type(page) is str:
-                    save([], error=page)
+                except Exception:
+                    error = "posts_read_failed"
                     break
-                found_obs, more, tail = page
-                seen = latest([o.source_id for o in found_obs]) if found_obs else {}
-                fresh = [o for o in found_obs if seen.get(o.source_id) != o.fingerprint()]
-                if not more or not tail:
-                    save(fresh, cursor=None, complete=True, audit_after=now + timedelta(seconds=AUDIT_SECONDS))
-                    break
-                marker = tail
-                save(fresh, cursor=tail)
-        if audit_state and attempted:
-            save([])
-        done += 1 if attempted else 0
+                finally:
+                    if read_claim is not None:
+                        release(store, tenant, read_claim, retry_after=retry_after)
+            with Session(store.engine) as s, s.begin():
+                runtime = store._runtime(s, tenant, account)
+                progress = s.get(OfContentPostProgress, account, with_for_update=True)
+                sync = s.get(OfContentSyncAccount, account)
+                if progress is not None and progress.lease_token == token and runtime.binding_id == binding:
+                    progress.lease_token = progress.lease_until = None
+                    progress.last_error, sync.posts_error = error, error
+                    sync.posts_checked_at = now
+                    # A bounded unfinished archive is honest partial coverage.
+                    if progress.history_marker is not None and not progress.history_complete and error is None:
+                        progress.last_error = sync.posts_error = "historical_posts_in_progress"
+            done += 1
+        except Refused:
+            continue
     return done
 
 
-def coverage(row, enabled, now):
+def coverage(row, enabled, now, progress=None):
     if not enabled or row is None:
         return {"state": "not_started", "checkedAt": None, "detail": "Automatic sync is off."}
     if row.posts_checked_at is None:
         return {"state": "not_started", "checkedAt": None, "detail": "Paid posts have not been read yet."}
     stamp = row.posts_checked_at.replace(tzinfo=None).isoformat() + "Z"
     if row.posts_error:
-        return {"state": "partial", "checkedAt": stamp, "detail": "The latest paid-post read stopped early."}
-    if not row.posts_history_complete:
-        return {"state": "partial", "checkedAt": stamp, "detail": "Older paid posts are still being read."}
+        detail = {"post_cursor_contract_unverified": "Only the newest page is checked; the historical cursor still requires provider verification.",
+            "historical_posts_in_progress": "The newest page is checked; the historical paid-post walk is still running.",
+            "shared_provider_read_budget": "Paid-post recovery is waiting for the shared provider read budget.",
+            "provider_rate_limit": "Paid-post recovery is waiting for provider rate-limit backoff."}.get(
+                row.posts_error, "The latest paid-post read stopped early.")
+        return {"state": "partial", "checkedAt": stamp, "detail": detail}
+    if progress is not None and progress.history_marker is not None:
+        return {"state": "partial", "checkedAt": stamp,
+            "detail": "The newest page is checked; bounded historical revisits are still running."}
     stale = now - row.posts_checked_at > timedelta(seconds=2 * INTERVAL_SECONDS)
     return {"state": "delayed" if stale else "current", "checkedAt": stamp,
         "detail": "The last paid-post read is more than ten minutes old." if stale else "Paid posts are up to date."}

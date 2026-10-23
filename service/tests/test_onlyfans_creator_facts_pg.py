@@ -184,9 +184,8 @@ def test_missing_source_holds_before_model_and_inherit_requires_cache(database,m
 def test_populated_ledger_upgrade_preserves_rows_and_registers_fact_projection(database):
     store=setup(database);store.close()
     with database[1].begin() as c:
-        c.exec_driver_sql("DROP TABLE of_vault_edit; DROP FUNCTION of_vault_edit_immutable(); DROP TABLE of_creator_facts_source")
-        c.execute(text("UPDATE alembic_version SET version_num=:head"),{"head":LEDGER})
-        check_schema(c,expected=LEDGER)
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical_schema(c,LEDGER)
         before=c.exec_driver_sql("SELECT row_to_json(t) FROM account_ai_config t").scalars().all()
         upgrade(c);upgrade(c);check_schema(c)
         assert before==c.exec_driver_sql("SELECT row_to_json(t) FROM account_ai_config t").scalars().all()

@@ -170,11 +170,20 @@ class PersonalityWorkflow:
                 "createdAt": r.created_at.isoformat() + "Z"} for r in rows[:20]],
                 "nextBefore": rows[19].revision if len(rows) > 20 else None}
 
-    def _change(self, tenant, account, expected_revision, command_key, actor, request, build):
+    def _change(self, tenant, account, expected_revision, command_key, actor, request, build, *, expected_binding_id=None):
         _identity(expected_revision, command_key, actor)
+        if expected_binding_id is not None:
+            if type(expected_binding_id) is not str or not 1 <= len(expected_binding_id) <= 128:
+                raise InvalidConfiguration("A valid displayed binding is required.")
+            request = {**request, "expectedBindingId": expected_binding_id}
         request_hash = digest({"expectedRevision": expected_revision, **request})
         with Session(self.store.engine) as s, s.begin():
             runtime, config = self._scope(s, tenant, account)
+            # Compare after the existing runtime/binding lock, before replay,
+            # source reads or configuration writes. A same-agency rebind must
+            # not turn an old browser command into a command for a new creator.
+            if expected_binding_id is not None and runtime.binding_id != expected_binding_id:
+                raise Refused("personality binding conflict")
             prior = s.scalar(select(PersonalityRevision).where(PersonalityRevision.account_id == account,
                 PersonalityRevision.command_key == command_key))
             if prior is not None:
@@ -217,7 +226,7 @@ class PersonalityWorkflow:
         return self._change(tenant, account, expected_revision, command_key, actor,
             {"action": "import", "profile": profile, "messages": messages}, build)
 
-    def import_existing(self, tenant, account, *, expected_revision, command_key, actor):
+    def import_existing(self, tenant, account, *, expected_revision, command_key, actor, expected_binding_id=None):
         """Read bounded canonical history, never poll a live account.
 
         Only messages with applied ingress evidence under the current binding
@@ -270,9 +279,10 @@ class PersonalityWorkflow:
                 "unverifiedPriorCreatorFactKeys": unverified_keys,
                 "profileSource": "effective_saved_creator_facts", "sharedFactsState": source["state"] if source else "unconfigured"})
             return {"draft": draft, "review": {}, "source": "canonical_history"}, "draft"
-        return self._change(tenant, account, expected_revision, command_key, actor, {"action": "import_existing"}, build)
+        return self._change(tenant, account, expected_revision, command_key, actor, {"action": "import_existing"}, build,
+                            expected_binding_id=expected_binding_id)
 
-    def edit(self, tenant, account, *, review, expected_revision, command_key, actor):
+    def edit(self, tenant, account, *, review, expected_revision, command_key, actor, expected_binding_id=None):
         review = _review(review)
         def build(s, runtime, config, previous):
             if previous is None:
@@ -286,9 +296,9 @@ class PersonalityWorkflow:
             document.pop("approval", None)
             return document, "draft"
         return self._change(tenant, account, expected_revision, command_key, actor,
-            {"action": "edit", "review": review}, build)
+            {"action": "edit", "review": review}, build, expected_binding_id=expected_binding_id)
 
-    def approve(self, tenant, account, *, acknowledgements, expected_revision, command_key, actor):
+    def approve(self, tenant, account, *, acknowledgements, expected_revision, command_key, actor, expected_binding_id=None):
         if type(acknowledgements) is not dict or set(acknowledgements) != ACKS or any(v is not True for v in acknowledgements.values()):
             raise InvalidConfiguration("Review authorship, creator facts and runtime rules before approval.")
         def build(s, runtime, config, previous):
@@ -326,4 +336,4 @@ class PersonalityWorkflow:
                 "configurationCommandKey": config_key, "appliedConfigurationRevision": result[0]}
             return document, "approved"
         return self._change(tenant, account, expected_revision, command_key, actor,
-            {"action": "approve", "acknowledgements": acknowledgements}, build)
+            {"action": "approve", "acknowledgements": acknowledgements}, build, expected_binding_id=expected_binding_id)

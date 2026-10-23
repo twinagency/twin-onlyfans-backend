@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from onlyfans_read.agency_scope import actor_allowed
 from onlyfans_read.contract import ID_PATTERN
 from db.models import CatalogItem, CATALOG_IS_SINGLE, ContentOffer, Message, OfCreatorBinding, VaultItem
-from db.onlyfans_offer_import_models import (OfContentSyncSource, OfOfferImportCandidate, OfOfferImportCursor,
+from db.onlyfans_offer_import_models import (OfOfferImportCandidate, OfOfferImportCursor,
     OfOfferImportDecision, OfOfferImportJob, OfOfferObservation)
 from .content_management import digest, editable, fingerprint as item_fingerprint, validate_patch
 from .native_context import canonical
@@ -239,41 +239,57 @@ def inventory_batch(store, tenant, account, job_id, *, token=None):
             return None
         cursor = (job.after_fan_id or 0, job.after_message_id or 0)
         rows = s.execute(select(Message.fan_id, Message.message_id, Message.media_ids, Message.price_cents,
-                Message.created_at, Message.ingested_at).where(Message.account_id == account, Message.direction == "out",
+                Message.created_at, Message.is_unsent).where(Message.account_id == account, Message.direction == "out",
                 Message.price_cents > 0, Message.message_id <= job.upper_message_id,
                 tuple_(Message.fan_id, Message.message_id) > cursor)
             .order_by(Message.fan_id, Message.message_id).limit(BATCH_ROWS)).all()
         now = utcnow()
-        touched = {}
-        from .content_sync import echo_map, LATE_OVERLAP_SECONDS
-        # A CRM-originated paid message is the same offer we sent: no candidate.
-        echoes = echo_map(s, account, runtime.binding_id, [r[1] for r in rows])
-        # Rows imported after this scan began (older provider ids imported late) may also be reached by the
-        # content-sync late fold; the shared ledger makes whichever comes second a no-op.
-        window = job.requested_at - timedelta(seconds=LATE_OVERLAP_SECONDS)
-        recent = [dict(account_id=account, binding_id=runtime.binding_id, fan_id=r[0], message_id=r[1],
-                       refresh_pending=False, refresh_attempts=0, folded_at=now) for r in rows if r[5] >= window]
-        counted = None
-        if recent:
-            from sqlalchemy.dialects.postgresql import insert
-            counted = set(s.execute(insert(OfContentSyncSource).values(recent).on_conflict_do_nothing()
-                .returning(OfContentSyncSource.fan_id, OfContentSyncSource.message_id)).all())
-            counted |= {(r[0], r[1]) for r in rows if r[5] < window}
-        for fan, mid, raw, price, created, _ingested in rows:
-            media = _ids(raw)
-            if not media or mid in echoes or (counted is not None and (fan, mid) not in counted):
-                continue
-            mkey = media_key(media)
-            candidate = touched.get(mkey) or s.get(OfOfferImportCandidate, (account, job_id, mkey), with_for_update=True)
-            if candidate is None:
-                candidate = OfOfferImportCandidate(account_id=account, job_id=job_id, media_key=mkey,
-                    media_json=canonical(sorted(media)), source_count=0, variants_json="[]", samples_json="[]",
-                    revision=0, updated_at=now)
-                s.add(candidate)
-            touched[mkey] = candidate
-            _merge(candidate, media, price, {"fanId": str(fan), "messageId": mid, "priceCents": price,
-                "sentAt": _date(created)})
-            candidate.updated_at = now
+        from .content_sync import echo_map
+        from db.onlyfans_content_sync_progress_models import OfContentSyncSource
+        ids = [mid for _, mid, _, _, _, _ in rows]
+        echoes = echo_map(s, account, runtime.binding_id, ids)
+        receipts = {r.source_id: r for r in s.scalars(select(OfContentSyncSource).where(
+            OfContentSyncSource.account_id == account, OfContentSyncSource.binding_id == runtime.binding_id,
+            OfContentSyncSource.source_kind == "message", OfContentSyncSource.source_id.in_(ids)).with_for_update())} if ids else {}
+        parsed = [(fan, mid, raw, price, created, unsent, _ids(raw)) for fan, mid, raw, price, created, unsent in rows]
+        mkeys = {media_key(media) for _, mid, _, _, _, unsent, media in parsed if media and not unsent and mid not in echoes}
+        candidates = {r.media_key: r for r in s.scalars(select(OfOfferImportCandidate).where(
+            OfOfferImportCandidate.account_id == account, OfOfferImportCandidate.job_id == job_id,
+            OfOfferImportCandidate.media_key.in_(mkeys)).with_for_update())} if mkeys else {}
+        # One receipt query and one candidate query per bounded batch, rather
+        # than one round trip/autoflush per source at historical scale.
+        with s.no_autoflush:
+            for fan, mid, raw, price, created, unsent, media in parsed:
+                receipt = receipts.get(mid)
+                if receipt is None:
+                    receipt = OfContentSyncSource(account_id=account, binding_id=runtime.binding_id,
+                        source_kind="message", source_id=mid, fan_id=fan, occurrence=0)
+                    s.add(receipt)
+                    receipts[mid] = receipt
+                elif receipt.fan_id != fan:
+                    raise Refused("source fan changed")
+                receipt.folded_message_media_json, receipt.folded_message_price_cents = raw, price
+                receipt.folded_message_unsent, receipt.folded_at = unsent, now
+                if not media or mid in echoes or unsent:
+                    if (unsent or not media) and receipt.current_observation_id is not None:
+                        from .content_sync import mark_source_unavailable
+                        mark_source_unavailable(s, runtime, receipt, now,
+                            "source_retracted" if unsent else "source_terms_unusable")
+                    continue
+                mkey = media_key(media)
+                if receipt.candidate_job_id == job_id and receipt.candidate_media_key == mkey:
+                    continue
+                candidate = candidates.get(mkey)
+                if candidate is None:
+                    candidate = OfOfferImportCandidate(account_id=account, job_id=job_id, media_key=mkey,
+                        media_json=canonical(sorted(media)), source_count=0, variants_json="[]", samples_json="[]",
+                        revision=0, updated_at=now)
+                    s.add(candidate)
+                    candidates[mkey] = candidate
+                _merge(candidate, media, price, {"fanId": str(fan), "messageId": mid, "sourceKind": "message",
+                    "priceCents": price, "sentAt": _date(created)})
+                receipt.candidate_job_id, receipt.candidate_media_key = job_id, mkey
+                candidate.updated_at = now
         job.rows_scanned += len(rows)
         job.pages_read += 1
         job.updated_at = now
@@ -396,6 +412,11 @@ def list_candidates(store, tenant, account, job_id, *, after=None, limit=25):
 def _candidate_summary(s, account, runtime, row):
     variants = json.loads(row.variants_json)
     prices = sorted({v["priceCents"] for v in variants if v["priceCents"] is not None})
+    # Edits are immutable observations of an existing source, not another
+    # source to count. Their exact prices must still remain visible in review.
+    prices = sorted(set(prices) | set(s.scalars(select(OfOfferObservation.price_cents).where(
+        OfOfferObservation.account_id == account, OfOfferObservation.binding_id == runtime.binding_id,
+        OfOfferObservation.media_key == row.media_key))))
     verified = s.scalar(select(func.count()).select_from(OfOfferObservation).where(
         OfOfferObservation.account_id == account, OfOfferObservation.binding_id == runtime.binding_id,
         OfOfferObservation.media_key == row.media_key))
@@ -434,6 +455,12 @@ def get_candidate(store, tenant, account, job_id, candidate_id):
         observations = s.scalars(select(OfOfferObservation).where(OfOfferObservation.account_id == account,
             OfOfferObservation.binding_id == runtime.binding_id, OfOfferObservation.media_key == candidate_id)
             .order_by(OfOfferObservation.source_at.desc(), OfOfferObservation.source_id.desc()).limit(50)).all()
+        from db.onlyfans_content_sync_progress_models import OfContentSyncSource
+        current = {(source.source_kind, source.source_id): source for source in s.scalars(
+            select(OfContentSyncSource).where(OfContentSyncSource.account_id == account,
+                OfContentSyncSource.binding_id == runtime.binding_id,
+                tuple_(OfContentSyncSource.source_kind, OfContentSyncSource.source_id).in_(
+                    [(o.source_kind, o.source_id) for o in observations])))} if observations else {}
         existing = _existing(s, account, media)
         from .content_sync import echo_map
         echoes = echo_map(s, account, runtime.binding_id, [o.source_id for o in observations if o.source_kind == "message"])
@@ -442,7 +469,11 @@ def get_candidate(store, tenant, account, job_id, candidate_id):
             OfOfferImportDecision.action == "create"))
         return {**_candidate_summary(s, account, runtime, row),
             "variants": json.loads(row.variants_json), "samples": json.loads(row.samples_json),
-            "observations": [observation_view(o, kinds, asset_reasons, echoes.get(o.source_id)) for o in observations],
+            "observations": [observation_view(o, kinds, set(asset_reasons) | (
+                {"superseded_source"} if (o.source_kind, o.source_id) in current and (
+                    current[(o.source_kind, o.source_id)].current_fingerprint != o.fingerprint
+                    or current[(o.source_kind, o.source_id)].source_unavailable) else set()),
+                echoes.get(o.source_id)) for o in observations],
             "assetReasons": sorted(asset_reasons),
             "existingItem": None if existing is None else {"itemId": str(existing.id), "priceCents": existing.price_cents,
                 "enabled": existing.enabled, "pricingMode": existing.pricing_mode,
@@ -539,6 +570,11 @@ def _create_draft(store, tenant, account, *, draft, actor):
         if observation is None or observation.binding_id != runtime.binding_id:
             raise Refused("import source unavailable")
         if observation.fingerprint != draft["expectedFingerprint"]:
+            raise Refused("source terms changed")
+        from db.onlyfans_content_sync_progress_models import OfContentSyncSource
+        current = s.get(OfContentSyncSource, (account, runtime.binding_id,
+            observation.source_kind, observation.source_id))
+        if current is not None and (current.current_fingerprint != observation.fingerprint or current.source_unavailable):
             raise Refused("source terms changed")
         media = _ids(observation.media_json)
         previews = None if observation.preview_json is None else _ids(observation.preview_json)

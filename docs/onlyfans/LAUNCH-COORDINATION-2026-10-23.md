@@ -1,5 +1,10 @@
 # OnlyFans launch coordination, 23 October 2026
 
+> Preserved historical coordination record. The current coordinated execution
+> is recorded in `FINAL-INTEGRATION-RECORD-2026-10-23.md`. The ownership, schema,
+> deployment and account observations below describe the earlier checkpoint;
+> they are not a fresh running-version or live-account verification.
+
 Owner of this file, shared files, schema and integration: Claude (head dev,
 `codex/onlyfans-offer-import`). Updated whenever a pin, owner or status changes.
 

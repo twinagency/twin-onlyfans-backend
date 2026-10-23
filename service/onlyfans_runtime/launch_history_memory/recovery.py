@@ -28,7 +28,7 @@ MAX_SCAN_PAGES = 10_000
 RETRY_SECONDS = 5
 LIVE_RESERVE = PAGE_LIMIT
 ERROR_CODES = frozenset({"provider_read_failed", "invalid_page", "backpressure", "live_input_pending",
-                         "conflicting_history", "discovery_budget_exhausted"})
+                         "conflicting_history", "discovery_budget_exhausted", "provider_read_deferred"})
 
 
 class OfHistoryScan(RecoveryBase):
@@ -235,7 +235,7 @@ class HistoryRecovery:
             return ArchiveScanClaim(account_id, runtime.binding_id, row.generation, row.lease_token,
                                     row.cursor, connection_revision)
 
-    def scan_page(self, tenant_id, claim, fan_ids, *, next_cursor):
+    def scan_page(self, tenant_id, claim, fan_ids, *, next_cursor, provider_read_claim=None):
         if type(claim) is not ArchiveScanClaim:
             raise Refused("invalid historical scan claim")
         if type(fan_ids) not in {list, tuple} or len(fan_ids) > PAGE_LIMIT:
@@ -254,6 +254,9 @@ class HistoryRecovery:
                 raise Refused("invalid historical discovery cursor")
         with Session(self.store.engine) as session, session.begin():
             runtime = self._runtime(session, tenant_id, claim.account_id, claim.connection_revision)
+            if provider_read_claim is not None:
+                from onlyfans_runtime.provider_read_budget import current
+                current(self.store,tenant_id,provider_read_claim,session=session)
             row = self._check_claim(session, runtime, claim)
             for fan_id in fan_ids:
                 self._ensure_fan(session, runtime, fan_id)
@@ -285,7 +288,7 @@ class HistoryRecovery:
             return ArchiveClaim(account_id, runtime.binding_id, row.fan_id, row.generation,
                                 row.lease_token, row.before_id, connection_revision)
 
-    def page(self, tenant_id, claim, events, *, has_more, observations=()):
+    def page(self, tenant_id, claim, events, *, has_more, observations=(), provider_read_claim=None):
         if type(claim) is not ArchiveClaim:
             raise Refused("invalid historical recovery claim")
         if (type(events) not in {list, tuple} or type(has_more) is not bool or len(events) > PAGE_LIMIT
@@ -313,6 +316,9 @@ class HistoryRecovery:
             raise Refused("duplicate historical offer observation")
         with Session(self.store.engine) as session, session.begin():
             runtime = self._runtime(session, tenant_id, claim.account_id, claim.connection_revision)
+            if provider_read_claim is not None:
+                from onlyfans_runtime.provider_read_budget import current
+                current(self.store,tenant_id,provider_read_claim,session=session)
             row = self._check_claim(session, runtime, claim)
             if runtime.pending_events + len(normalized) > MAX_PENDING - LIVE_RESERVE:
                 self._release(row, error="backpressure")
@@ -424,7 +430,9 @@ class HistoryRecovery:
                 "discoveryLastError": scan.last_error if scan is not None else None,
                 "conversationsDiscovered": sum(states.values()), "conversationsComplete": states.get("complete", 0),
                 "conversationsRetrying": retrying, "conversationsDeferredForLiveInput": deferred,
-                "pagesCommitted": totals[0], "messagesObserved": totals[1], "messagesAdded": totals[2],
+                # PostgreSQL SUM(bigint) returns NUMERIC/Decimal. These are
+                # exact integral counters, not money or floating-point values.
+                "pagesCommitted": int(totals[0]), "messagesObserved": int(totals[1]), "messagesAdded": int(totals[2]),
                 "totalMessages": None, "percentComplete": None, "proof": "available_provider_history",
                 "recentRecoveryNeeded": runtime.recovery_needed}
             if fan_id is not None:
@@ -448,40 +456,65 @@ class HistoryRecovery:
         """
         if reader.account_id != account_id:
             raise Refused("historical reader scope mismatch")
+        from onlyfans_runtime.worker import _provider_claim, _release_provider
+        from onlyfans_runtime.provider_read_budget import ReadDeferred
         completed = 0
         scan_error = None
         scan = self.claim_scan(tenant_id, account_id, connection_revision=connection_revision)
         if scan is not None:
+            budget=error=None
             try:
+                try:budget=_provider_claim(self.store,tenant_id,account_id,reader,connection_revision,'history')
+                except ReadDeferred:
+                    self.fail(tenant_id,scan,code='provider_read_deferred')
+                    raise
                 try:
                     page = reader.chats(cursor=scan.cursor, limit=PAGE_LIMIT)
                 except Exception:
                     self.fail(tenant_id, scan)
                     raise
                 try:
-                    self.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor)
+                    fenced={'provider_read_claim':budget} if budget is not None else {}
+                    self.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor,**fenced)
                 except (Refused, AttributeError):
                     self.fail(tenant_id, scan, code="invalid_page")
                     raise
                 completed += 1
-            except Exception as error:
+            except ReadDeferred:
+                pass
+            except Exception as failure:
                 # A failed discovery offset must not starve known fan archives.
                 # Each lane still gets at most one call; propagate the error to
                 # the shared worker after committing any independent progress.
-                scan_error = error
+                error=scan_error=failure
+            finally:_release_provider(self.store,tenant_id,budget,error)
         claim = self.claim(tenant_id, account_id, connection_revision=connection_revision)
         if claim is not None:
+            budget=error=None
             try:
-                page = reader.messages(fan_id=claim.fan_id, before_id=claim.before_id, limit=PAGE_LIMIT)
-            except Exception:
-                self.fail(tenant_id, claim)
+                try:budget=_provider_claim(self.store,tenant_id,account_id,reader,connection_revision,'history')
+                except ReadDeferred:
+                    self.fail(tenant_id,claim,code='provider_read_deferred')
+                    raise
+                try:
+                    page = reader.messages(fan_id=claim.fan_id, before_id=claim.before_id, limit=PAGE_LIMIT)
+                except Exception:
+                    self.fail(tenant_id, claim)
+                    raise
+                try:
+                    fenced={'provider_read_claim':budget} if budget is not None else {}
+                    result = self.page(tenant_id, claim, page.events, has_more=page.has_more,
+                        observations=page.observations,**fenced)
+                except (Refused, AttributeError):
+                    self.fail(tenant_id, claim, code="invalid_page")
+                    raise
+                completed += result in {"continue", "complete"}
+            except ReadDeferred:
+                pass
+            except Exception as failure:
+                error=failure
                 raise
-            try:
-                result = self.page(tenant_id, claim, page.events, has_more=page.has_more, observations=page.observations)
-            except (Refused, AttributeError):
-                self.fail(tenant_id, claim, code="invalid_page")
-                raise
-            completed += result in {"continue", "complete"}
+            finally:_release_provider(self.store,tenant_id,budget,error)
         if scan_error is not None:
             raise scan_error
         return completed

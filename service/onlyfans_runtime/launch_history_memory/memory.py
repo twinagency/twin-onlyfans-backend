@@ -197,6 +197,56 @@ class HistoricalMemory:
     def __init__(self, store):
         self.store = store
 
+    def list_fans(self, tenant_id, account_id, *, cursor=None, limit=25):
+        """Three bounded aggregate reads per page, never one request per fan.
+
+        Fan IDs provide a deterministic tie breaker and a frozen upper bound.
+        Provider totals remain unknown; counts concern canonical stored rows.
+        """
+        from ..launch_pagination import decode, encode
+        from .recovery import OfHistoryCursor
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise Refused("invalid memory page limit")
+        with Session(self.store.engine) as s, s.begin():
+            runtime = self.store._runtime(s, tenant_id, account_id)
+            position = decode(cursor, "memory-fans", account_id, runtime.binding_id)
+            if position is None:
+                upper = s.scalar(select(func.max(Fan.fan_id)).where(Fan.account_id == account_id)) or 0
+                after = 0
+            elif (type(position) is list and len(position) == 2
+                    and all(type(x) is int and 0 <= x < 2**63 for x in position)
+                    and position[0] <= position[1]):
+                after, upper = position
+            else:
+                raise Refused("invalid memory cursor")
+            rows = s.execute(select(Fan, MemoryState, OfHistoryCursor).outerjoin(MemoryState, and_(
+                MemoryState.account_id == Fan.account_id, MemoryState.fan_id == Fan.fan_id))
+                .outerjoin(OfHistoryCursor, and_(OfHistoryCursor.account_id == Fan.account_id,
+                    OfHistoryCursor.fan_id == Fan.fan_id, OfHistoryCursor.binding_id == runtime.binding_id))
+                .where(Fan.account_id == account_id, Fan.fan_id > after, Fan.fan_id <= upper)
+                .order_by(Fan.fan_id).limit(limit + 1)).all()
+            page = rows[:limit]
+            ids = [fan.fan_id for fan, _, _ in page]
+            counts = dict(s.execute(select(Message.fan_id, func.count()).where(
+                Message.account_id == account_id, Message.fan_id.in_(ids)).group_by(Message.fan_id)).all())
+            processed = dict(s.execute(select(Message.fan_id, func.count()).join(MemoryReceipt, _receipt_matches())
+                .where(Message.account_id == account_id, Message.fan_id.in_(ids))
+                .group_by(Message.fan_id)).all())
+            def z(value):
+                return value.isoformat() + "Z" if value is not None else None
+            fans = [{"fanId": str(fan.fan_id), "displayName": fan.of_display_name,
+                "username": fan.of_username, "storedMessages": int(counts.get(fan.fan_id, 0)),
+                "processedMessages": int(processed.get(fan.fan_id, 0)),
+                "memoryRevision": int(state.revision) if state else 0,
+                "lastProcessedAt": z(state.last_processed_at) if state else None,
+                "archive": {"status": archive.status, "pagesCompleted": int(archive.pages_completed),
+                    "messagesObserved": int(archive.messages_observed),
+                    "completedAt": z(archive.completed_at)} if archive else None}
+                for fan, state, archive in page]
+            return {"memoryVersion": "of-history-memory.v1", "fans": fans,
+                "nextCursor": encode("memory-fans", account_id, runtime.binding_id, [ids[-1], upper])
+                    if len(rows) > limit else None}
+
     def _scope(self, s, tenant_id, account_id, fan_id):
         _id(fan_id)
         self.store._runtime(s, tenant_id, account_id)

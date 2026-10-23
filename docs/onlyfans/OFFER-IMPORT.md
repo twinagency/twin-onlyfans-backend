@@ -85,13 +85,13 @@ explicit `false`. Free posts are not offers. Older pages use
 `beforePublishTime=<tailMarker>` (web-client convention; only page 1 was read live).
 
 Observations use `source_kind='post'`, `source_context='feed'`, no fan. The
-worker (`ONLYFANS_CONTENT_SYNC_ENABLED=1`, account sync on) reads the newest
-pages every 300 s until a page shows nothing new **or changed** (an edited known
-post is a new observation), at most 20 pages per pass, each page under the
-account's provider-read lease and pace. A durable cursor
-(`posts_cursor`) continues into older pages across passes until the end of the
-feed (coverage stays partial until then), and a full re-read starts every 24 h
-so edits to old posts are noticed. A malformed page is refused whole and shows
-partial coverage. A post seen for the first time (or with a new attachment set)
-joins the account's candidate list, so it is reviewed and turned into a
-disabled, fixed-price draft exactly like a message offer.
+worker (`ONLYFANS_CONTENT_SYNC_ENABLED=1`, account sync on) uses bounded head
+reads, durable older-page continuation and bounded known-post detail revisits.
+An unchanged head does not erase archive progress. A one-page pass still reserves
+an archive turn when continuation exists. Each native read uses the shared
+account budget and remains fenced through commit. Cursor coverage stays partial
+until the actual account/session passes the explicit two-page read-only cursor
+verification; the parameter convention alone does not establish support.
+Malformed pages and duplicate/stalled boundaries remain partial. Eligible new or
+edited sources reach reviewed, disabled fixed-price drafts with exact terms,
+bundle order and previews; verified unusable/deleted sources hold existing sales.

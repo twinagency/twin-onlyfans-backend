@@ -7,10 +7,11 @@ settings default off and a send still needs the worker flag, saved settings and 
 import asyncio
 import json
 import re
+from datetime import datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from onlyfans_read.agency_scope import actor_allowed
@@ -20,6 +21,7 @@ from onlyfans_runtime.launch_engagement.service import EngagementService
 from onlyfans_runtime.launch_history_memory.memory import HistoricalMemory
 from onlyfans_runtime.launch_history_memory.recovery import HistoryRecovery
 from onlyfans_runtime.store import Refused
+from onlyfans_runtime.launch_pagination import decode, encode, query_bounds
 from .api import unique_keys
 from .configuration_api import authenticate, refuse, response
 
@@ -118,12 +120,28 @@ async def engagement_configure(request: Request, account_id: str):
 @engagement_router.get("/actions")
 async def engagement_actions(request: Request, account_id: str):
     def work(store, tenant, _):
+        cursor, limit = query_bounds(request.query_params)
         with Session(store.engine) as s, s.begin():
             runtime = store._runtime(s, tenant, account_id)
-            rows = s.scalars(select(Action).where(Action.account_id == account_id,
-                Action.binding_id == runtime.binding_id)
-                .order_by(Action.created_at.desc(), Action.action_id).limit(50)).all()
-            return {"engagementVersion": "of-engagement.v1", "actions": [action_view(row) for row in rows]}
+            position = decode(cursor, "engagement-actions", account_id, runtime.binding_id)
+            query = select(Action).where(Action.account_id == account_id, Action.binding_id == runtime.binding_id)
+            if position is not None:
+                if (type(position) is not list or len(position) != 2 or type(position[0]) is not str
+                        or type(position[1]) is not str or re.fullmatch(r"[a-f0-9-]{36}", position[1]) is None):
+                    raise Refused("invalid action cursor")
+                try:
+                    stamp = datetime.fromisoformat(position[0])
+                except ValueError:
+                    raise Refused("invalid action cursor") from None
+                if stamp.tzinfo is not None:
+                    raise Refused("invalid action cursor")
+                query = query.where(or_(Action.created_at < stamp,
+                    and_(Action.created_at == stamp, Action.action_id > position[1])))
+            rows = s.scalars(query.order_by(Action.created_at.desc(), Action.action_id).limit(limit + 1)).all()
+            page = rows[:limit]
+            return {"engagementVersion": "of-engagement.v1", "actions": [action_view(row) for row in page],
+                "nextCursor": encode("engagement-actions", account_id, runtime.binding_id,
+                    [page[-1].created_at.isoformat(), page[-1].action_id]) if len(rows) > limit else None}
     return await _run(request, account_id, work)
 
 
@@ -167,6 +185,13 @@ async def engagement_cancel(request: Request, account_id: str, action_id: str):
 
 
 # ── history recovery and memory ─────────────────────────────────────────
+
+@history_router.get("/fans")
+async def history_fans(request: Request, account_id: str):
+    def work(store, tenant, _):
+        cursor, limit = query_bounds(request.query_params)
+        return HistoricalMemory(store).list_fans(tenant, account_id, cursor=cursor, limit=limit)
+    return await _run(request, account_id, work)
 
 @history_router.get("/progress")
 async def history_progress(request: Request, account_id: str):

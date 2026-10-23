@@ -161,22 +161,26 @@ existing explicit content v2 action and its checks.
   refresh job (<= 50 sources, new sources lacking observations) and the existing vault sync
   job (re-read at most every 240 s). Provider reads stay in `process_refresh_jobs` /
   `process_vault_jobs` (1 extra page per account per 5 s).
-* Fold cursor is `message_id`. A message imported late with an older provider id is found by ingestion time
-  (`messages.ingested_at`, window `late_through_at`, 120 s overlap) and folded through the same ledger
-  (`of_content_sync_source`) the cursor fold and the initial scan use, so every message is counted exactly once
-  and nothing older than the moment sync was enabled is re-folded (that history belongs to the initial scan).
-* Sources that still need provider details are a durable queue (`of_content_sync_source.refresh_pending`), not a
-  by-product of one pass: each pass requests the newest 50, sources beyond the cap or deferred because another
-  refresh job occupies the account stay queued, each is requested at most 3 times, and an observation removes it.
-* Daily reconcile rotates the priority set (enabled + conflicted) on its own cursor
-  (`reconcile_priority_after_item_id`) as well as the whole-catalogue rotation.
-* Observations are append-only sightings: an unchanged re-read is not stored again, but a source returning to an
-  earlier state after a different one is a new sighting (`occurrence`), so A -> B -> A opens a conflict again.
-* Provider reads (refresh pages, paid posts, vault pages) each take the account's read lease and pace
-  (`of_provider_read_gate`, default 5 s, `ONLYFANS_PROVIDER_READ_INTERVAL_SECONDS`): one reader per account at a
-  time across all workers, and the next reader of that account waits for the pace.
-* The carrier upload client authorizes every provider write: account approval, then the asset lease, binding and
-  connection revision (`content_sync_media.lease_authority`); without an authority it refuses all writes.
+* Provider-ID continuation and local ingestion are separate. Durable source receipts
+  find late lower-ID messages by `messages.ingested_at` plus bounded anti-join repair;
+  the indexed ingestion lookup does not assume that provider IDs arrive in order.
+  Initial inventory owns its captured baseline; later local arrivals are processed once.
+* Refresh requests are persisted before acknowledgement, including sources beyond the
+  immediate 50-source batch or an occupied account. Terminal jobs release queued work
+  for the next batch. An unresolved read remains queued/held with its recorded error.
+* Priority and ordinary catalogue reconciliation have independent durable keyset
+  positions. Enabled/conflicted items cannot monopolize the priority prefix, and
+  ordinary items still receive their bounded turn.
+* Immutable snapshot identity is separate from source occurrence. A -> B -> A
+  records all three occurrences while reusing snapshot A, preserving holds,
+  conflicts and decisions without rewriting old observations.
+* Recent/discovery/history, ledger, refresh, posts and vault reads use one account
+  lease/budget authority, with session fencing through the result commit, shared
+  rate-limit backoff and reserved capacity for recent intake and maintenance.
+* Carrier writes require the existing explicit account allowlist, current worker
+  role/binding/connection, asset lease and a fresh current dashboard permission at
+  each write boundary. Recovery reconciles every prior receipt and cleanup before
+  a bounded deterministic retry; unresolved writes never permit a new upload.
 * Conflicts are detected by the scheduler (and held live by `catalog_terms` once sync is on):
   a NEW observation (observed later, different fingerprint) of the selected source id.
   `accept_source` writes price/media/previews with an `of_content_change` audit row and stays
@@ -186,7 +190,11 @@ existing explicit content v2 action and its checks.
   account/binding, with a catalogue item) is skipped by the fold and inventory, never opens a
   conflict, is refused as a draft source, and appears in `GET .../candidates/{id}` observations
   with the additive keys `crmOriginated: true` and `itemId` (absent for other observations).
-* Paid-post coverage follows the bounded post reader (`partial` until the history walk reaches the end of the feed). Sync-now returns the active operation instead of
-  a duplicate and is refused with `connection_unavailable` when auth is expired.
+* Paid-post continuation and known-post revisits are durable. Coverage remains
+  partial until the current account/session has audited provider cursor proof and
+  the history walk completes. Edits/deletions create explicit source holds;
+  reappearance cannot silently clear a hold. Eligible observations reach review
+  and disabled fixed-price drafts. Sync-now returns the active operation instead
+  of a duplicate and refuses an expired or held connection.
 * Agency scope: `content-sync/v1` is allowed like `offer-import/v1`; POST/PUT need `canManage`,
   the draft chunk `PUT` is the only PUT, and `GET /operations` is readable.

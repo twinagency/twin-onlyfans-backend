@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 
 from test_onlyfans_foundation_pg import database, seed
 from test_onlyfans_text_delivery_pg import ACCOUNT, TENANT
-from test_onlyfans_offer_import_upgrade_pg import rewind_to_0088
 from db.models import CatalogItem, CatalogScript, OfCreatorBinding
 from db.onlyfans_content_models import OfContentChange
 from db.schema import SchemaMismatch, check_schema, upgrade
@@ -287,26 +286,14 @@ store.close()
 def test_populated_0081_upgrade_preserves_native_catalogue_and_all_prior_evidence(database):
     store, item = setup(database); store.close()
     with database[1].begin() as connection:
-        # Recreate the actual 0081 shape, including removal of every later
-        # revision. Merely changing the version row leaves 0083+ tables behind.
-        rewind_to_0088(connection)
-        connection.exec_driver_sql("DROP TABLE of_vault_media_job; DROP FUNCTION of_vault_media_guard()")      # 0088
-        connection.exec_driver_sql("DROP TABLE of_connection_enrollment")                                    # 0087
-        connection.exec_driver_sql("DROP TABLE of_vault_edit; DROP FUNCTION of_vault_edit_immutable()")      # 0086
-        connection.exec_driver_sql("DROP TABLE of_creator_facts_source")                                     # 0085
-        connection.exec_driver_sql("DROP TABLE of_ledger_evidence, of_ledger_scan; DROP FUNCTION of_ledger_immutable()")  # 0084
-        connection.exec_driver_sql("DROP TABLE of_vault_product_create, of_vault_observation, of_vault_sync_job; "
-            "DROP FUNCTION of_vault_product_immutable(); DROP FUNCTION of_vault_sync_frozen()")
-        connection.exec_driver_sql("DROP TABLE of_content_change; DROP FUNCTION of_content_immutable()")
-        connection.execute(text("UPDATE alembic_version SET version_num=:head"), {"head": "0081_native_connection"})
-        check_schema(connection, expected="0081_native_connection")
-        tables = connection.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename!='alembic_version' ORDER BY tablename")).scalars().all()
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical = historical_schema(connection, "0081_native_connection")
+        tables = [table for table in historical.sorted_tables if table.name != "alembic_version"]
+        assert "of_ledger_scan" not in historical.tables
+        assert "of_offer_observation" not in historical.tables
         def values():
-            return {table: [dict(row) for row in connection.exec_driver_sql(f'SELECT * FROM "{table}"').mappings()] for table in tables}
+            return {table.name: [dict(row) for row in connection.execute(table.select().order_by(*table.primary_key.columns)).mappings()]
+                    for table in tables}
         before = values(); upgrade(connection); upgrade(connection); check_schema(connection)
-        after = values()
-        # Later revisions may add columns (0089 adds catalog_items.pricing_mode);
-        # every prior value must survive exactly.
-        assert {t: [{k: r[k] for k in row} for row, r in zip(rows, after[t])] for t, rows in before.items()} == before
-        assert all(len(after[t]) == len(rows) for t, rows in before.items())
+        assert values() == before
         assert connection.scalar(text("SELECT count(*) FROM of_content_change")) == 0

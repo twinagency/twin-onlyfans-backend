@@ -1,7 +1,4 @@
-"""The explicit native model selector, without a provider client.
-
-Neutral module: the native OnlyFans runtime imports it directly so the API
-process never loads the legacy automations package."""
+"""Pure explicit saved-model selection shared by native runtime and automation."""
 import json
 
 

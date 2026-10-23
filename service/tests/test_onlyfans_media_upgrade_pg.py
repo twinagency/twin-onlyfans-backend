@@ -21,14 +21,8 @@ def test_populated_memory_upgrade_preserves_unknown_delivery_and_model_allowance
         "of_native_plan","of_runtime","grok_calls","grok_daily_cost","of_native_memory_change"]
     def values(c):return {name:[dict(r) for r in c.execute(text(f'SELECT * FROM "{name}"')).mappings()] for name in names}
     with engine.begin() as c:
-        c.exec_driver_sql("DROP TABLE of_configuration_change; DROP FUNCTION of_configuration_immutable(); ALTER TABLE of_runtime DROP COLUMN configuration_revision")
-        c.exec_driver_sql("DROP TRIGGER of_control_immutable ON of_control_audit; DROP FUNCTION of_control_immutable(); ALTER TABLE of_control_audit DROP COLUMN action, DROP COLUMN takeover_from, DROP COLUMN takeover_to")
-        c.exec_driver_sql("DROP TABLE of_commerce_evidence; DROP FUNCTION of_commerce_immutable()")
-        c.exec_driver_sql("ALTER TABLE of_text_intent DROP CONSTRAINT ck_of_text_intent_media_shape, DROP COLUMN media_json, DROP COLUMN preview_json, DROP COLUMN price_cents, DROP COLUMN catalog_item_id, DROP COLUMN catalog_snapshot_json, DROP COLUMN offer_id")
-        c.exec_driver_sql("ALTER TABLE of_delivery_policy DROP COLUMN media_enabled")
-        c.exec_driver_sql("ALTER TABLE of_native_plan DROP COLUMN sale_json")
-        c.execute(text("UPDATE alembic_version SET version_num=:v"),{"v":MEMORY})
-        check_schema(c,expected=MEMORY)
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical_schema(c,MEMORY)
         before=values(c);upgrade(c);upgrade(c);check_schema(c);after=values(c)
         for row in after["of_delivery_policy"]:assert row.pop("media_enabled") is False
         for row in after["of_native_plan"]:assert row.pop("sale_json") is None

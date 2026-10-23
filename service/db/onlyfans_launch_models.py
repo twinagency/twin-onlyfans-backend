@@ -1,4 +1,4 @@
-"""Launch tables (0090_launch): history memory, personality and proactive engagement.
+"""Launch metadata: 0090 features and the additive 0091 retry command.
 
 Each package defines its tables beside its code on the shared Base; this module
 only registers them so schema checks see one metadata. Never create_all at runtime.

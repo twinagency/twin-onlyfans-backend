@@ -39,6 +39,8 @@ class SyntheticCommerceEvent:
 
 def held(s, account_id):
     from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
+    from .launch_operations_models import OfLedgerResolution
+    from db.onlyfans_models import OfRuntime
     from db.onlyfans_delivery_models import OfDeliveryPolicy
     from .ledger import PAID
     from .store import utcnow
@@ -51,7 +53,11 @@ def held(s, account_id):
     return (s.scalar(select(OfCommerceEvidence.evidence_hash).where(
         OfCommerceEvidence.account_id == account_id, OfCommerceEvidence.status == "conflict").limit(1)) is not None
         or s.scalar(select(OfLedgerEvidence.evidence_hash).where(OfLedgerEvidence.account_id == account_id,
-            OfLedgerEvidence.outcome == "conflict").limit(1)) is not None
+            OfLedgerEvidence.outcome == "conflict", ~select(OfLedgerResolution.evidence_hash).join(
+                OfRuntime,OfRuntime.account_id==OfLedgerResolution.account_id).where(
+                    OfLedgerResolution.account_id==OfLedgerEvidence.account_id,
+                    OfLedgerResolution.evidence_hash==OfLedgerEvidence.evidence_hash,
+                    OfLedgerResolution.binding_id==OfRuntime.binding_id).exists()).limit(1)) is not None
         or s.scalar(select(Transaction.id).where(Transaction.account_id == account_id,
             Transaction.source == "ledger", Transaction.kind == "ppv_message",
             Transaction.message_id.is_(None), Transaction.status.in_(tuple(PAID))).limit(1)) is not None

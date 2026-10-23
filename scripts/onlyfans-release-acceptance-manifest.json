@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "of-release-acceptance.v1",
+  "combined": {
+    "patterns": ["service/tests/test_onlyfans*.py"],
+    "separateScripts": ["service/tests/test_onlyfans_read.py", "service/tests/test_onlyfans_migration_pg.py"]
+  },
+  "commerce": {
+    "patterns": [
+      "service/tests/test_onlyfans_offer*.py",
+      "service/tests/test_onlyfans_fixed_price_pg.py",
+      "service/tests/test_onlyfans_content*.py",
+      "service/tests/test_onlyfans_egress_isolation.py",
+      "service/tests/test_onlyfans_native_protocol.py",
+      "service/tests/test_onlyfans_native_history*.py",
+      "service/tests/test_onlyfans_foundation_pg.py",
+      "service/tests/test_onlyfans_recovery_pg.py",
+      "service/tests/test_onlyfans_vault*.py",
+      "service/tests/test_onlyfans_media*.py",
+      "service/tests/test_onlyfans_worker_media_pg.py",
+      "service/tests/test_onlyfans_campaign_media_pg.py",
+      "service/tests/test_onlyfans_provider*.py",
+      "service/tests/test_onlyfans_connections_pg.py",
+      "service/tests/test_onlyfans_connection_renewal_pg.py",
+      "service/tests/test_onlyfans_launch_provider_budget_pg.py",
+      "service/tests/test_onlyfans_launch_provider_rate_limit.py",
+      "service/tests/test_onlyfans_ledger_pg.py",
+      "service/tests/test_onlyfans_worker_entry.py",
+      "service/tests/test_onlyfans_http_pg.py",
+      "service/tests/test_onlyfans_release_rehearsal_pg.py"
+    ],
+    "separateScripts": ["service/tests/test_onlyfans_read.py", "service/tests/test_onlyfans_migration_pg.py"]
+  }
+}

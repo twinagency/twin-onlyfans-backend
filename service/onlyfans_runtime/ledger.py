@@ -220,7 +220,6 @@ def apply_observation(s, account, observation, *, now):
             settle_media_purchase(s, account_id=account, fan_id=fan_id, message=message,
                 offer=offer, paid=paid, was_paid=was_paid, stamp=occurred, now=now)
         if moved and fan_id is not None:
-            # Purchase, refund or reversal: unsent proactive work for this fan is obsolete.
             s.flush()
             from .launch_engagement.events import cancel_for_fan
             cancel_for_fan(s, account, fan_id, "purchase", now=now)
@@ -296,52 +295,65 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
             scan.status, scan.lease_token, scan.last_error = "running", token, None
             scan.lease_until, scan.next_poll_at, scan.updated_at = now + timedelta(seconds=60), now, now
             start, end, offset, owner, expiry = scan.window_start, scan.window_end, scan.page_offset, scan.owner_id, connection.expires_at
+            connection_revision=connection.revision
         if stop is not None and stop.is_set():
             break
-        error = None
+        error = budget = failure = deferred = None
         try:
             from .provider_connector import NativeProviderConnector, session_from_capture
             transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
                 policy_revision=1, capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"],
                 expires_at=expiry.replace(tzinfo=timezone.utc)))
+            from .worker import _provider_claim
+            budget=_provider_claim(store,tenant,account,transport,connection_revision,'ledger')
             raw = transport.transaction_page(offset=offset, limit=PAGE_SIZE, start=start, end=end)
             rows, more = parse_page(raw, owner_id=owner, start=start, end=end)
-        except NativeProtocolError:
-            error = "unsupported_ledger_response"
-        except Exception:
-            error = "ledger_read_failed"
-        with Session(store.engine) as s, s.begin():
-            runtime = store._runtime(s, tenant, account)
-            scan = s.get(OfLedgerScan, account)
-            if scan.lease_token != token or scan.status != "running":
-                continue
-            now = utcnow()
-            if not _current(runtime, s.get(OfProviderConnection, account), scan, now):
-                error = "connection_changed"
-            # Detect repeated provider identities regardless of JSON formatting,
-            # row order, optional metadata or a changed terminal-page flag.
-            page_hash = hashlib.sha256(canonical(sorted(row["provider_transaction_id"]
-                for row in rows)).encode()).hexdigest() if error is None else None
-            legacy_hash = hashlib.sha256(raw).hexdigest() if error is None else None
-            if error is None and (offset + len(rows) > MAX_OFFSET
-                    or rows and scan.last_page_hash in {page_hash, legacy_hash}):
-                error = "unsupported_ledger_pagination"
-            scan.lease_token = scan.lease_until = None
-            scan.updated_at = now
-            if error:
-                scan.status, scan.last_error, scan.next_poll_at = "held", error, now + timedelta(minutes=5)
-                continue
-            for row in rows:
-                apply_observation(s, account, row, now=now)
-            scan.page_offset, scan.last_page_hash = offset + len(rows), page_hash
-            scan.next_poll_at = now + timedelta(seconds=1 if more else 300)
-            if not more:
-                # Freshness describes the frozen provider query cutoff, not
-                # the later wall-clock time at which a long scan finished.
-                scan.status, scan.last_complete_at = "idle", end
-                if end - start == timedelta(days=90):
-                    scan.last_full_at = end
-                if now - end > timedelta(minutes=5):
-                    scan.next_poll_at = now + timedelta(seconds=1)
-            processed += 1
+        except Exception as problem:
+            from .provider_read_budget import ReadDeferred
+            failure=problem
+            if isinstance(problem,ReadDeferred):deferred=problem.retry_at;error='provider_read_deferred'
+            elif isinstance(problem,NativeProtocolError):error='provider_rate_limited' if hasattr(problem,'retry_after') else 'unsupported_ledger_response'
+            else:error='ledger_read_failed'
+        try:
+            with Session(store.engine) as s, s.begin():
+                runtime = store._runtime(s, tenant, account)
+                scan = s.get(OfLedgerScan, account)
+                if scan.lease_token != token or scan.status != "running":
+                    continue
+                now = utcnow()
+                if not _current(runtime, s.get(OfProviderConnection, account), scan, now):
+                    error = "connection_changed"
+                if budget is not None:
+                    from .provider_read_budget import current
+                    try:current(store,tenant,budget,session=s)
+                    except Refused:error=error or 'provider_read_stale'
+                # Detect repeated provider identities regardless of JSON formatting,
+                # row order, optional metadata or a changed terminal-page flag.
+                page_hash = hashlib.sha256(canonical(sorted(row["provider_transaction_id"]
+                    for row in rows)).encode()).hexdigest() if error is None else None
+                legacy_hash = hashlib.sha256(raw).hexdigest() if error is None else None
+                if error is None and (offset + len(rows) > MAX_OFFSET
+                        or rows and scan.last_page_hash in {page_hash, legacy_hash}):
+                    error = "unsupported_ledger_pagination"
+                scan.lease_token = scan.lease_until = None
+                scan.updated_at = now
+                if error:
+                    scan.status, scan.last_error, scan.next_poll_at = ("running" if deferred else "held"), error, deferred or now + timedelta(minutes=5)
+                    continue
+                for row in rows:
+                    apply_observation(s, account, row, now=now)
+                scan.page_offset, scan.last_page_hash = offset + len(rows), page_hash
+                scan.next_poll_at = now + timedelta(seconds=1 if more else 300)
+                if not more:
+                    # Freshness describes the frozen provider query cutoff, not
+                    # the later wall-clock time at which a long scan finished.
+                    scan.status, scan.last_complete_at = "idle", end
+                    if end - start == timedelta(days=90):
+                        scan.last_full_at = end
+                    if now - end > timedelta(minutes=5):
+                        scan.next_poll_at = now + timedelta(seconds=1)
+                processed += 1
+        finally:
+            from .worker import _release_provider
+            _release_provider(store,tenant,budget,failure)
     return processed

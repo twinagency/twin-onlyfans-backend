@@ -16,8 +16,7 @@ import os
 import re
 import uuid
 
-from sqlalchemy import and_, exists, func, or_, select, true, tuple_, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import and_, exists, func, or_, select, true, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,10 +28,11 @@ from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_content_models import OfContentChange
 from db.onlyfans_delivery_models import OfTextIntent
 from db.onlyfans_vault_models import OfVaultObservation, OfVaultSyncJob
+from db.onlyfans_content_sync_progress_models import (OfContentSyncSource as Source,
+    OfContentSyncOccurrence as Occurrence, OfContentPostProgress)
 from db.onlyfans_offer_import_models import (OfContentSyncAccount as Account, OfContentSyncConflict as Conflict,
     OfContentSyncDecision as Decision, OfContentSyncDraft as Draft, OfContentSyncOperation as Operation,
-    OfContentSyncSource as Source, OfOfferImportCandidate, OfOfferImportCursor, OfOfferImportDecision, OfOfferImportJob,
-    OfOfferObservation)
+    OfOfferImportCandidate, OfOfferImportCursor, OfOfferImportDecision, OfOfferImportJob, OfOfferObservation)
 from .content_management import digest, fingerprint as item_fingerprint, _revision
 from .native_context import canonical
 from .offer_terms import MAX_ATTACHMENTS, MAX_PRICE_CENTS, MIN_PRICE_CENTS, media_key
@@ -52,15 +52,10 @@ VAULT_MIN_INTERVAL_SECONDS = 240
 PRIORITY_QUOTA = 100
 ROTATION_QUOTA = 100
 BACKOFF_CAP_SECONDS = 3600
-# Messages imported late (older provider id than the fold cursor) are found by ingestion time: the window
-# reaches back this far so a slow writer's row is still seen, and a ledger row stops double counting.
-LATE_OVERLAP_SECONDS = 120
-# Sources still waiting for a detail refresh are retried at most this many times, then reported as given up.
-MAX_REFRESH_ATTEMPTS = 3
-REFRESH_RETRY_SECONDS = 60
 SYNC_KINDS = ("incremental", "reconcile")
 PASS_KINDS = ("incremental", "reconcile", "sync_now")
 RETRYABLE_ERRORS = {"pass_failed", "connection_unavailable"}
+UNUSABLE_SOURCE_KINDS = ("source_unusable", "post_deleted", "post_free", "source_retracted")
 
 
 class InvalidSync(ValueError):
@@ -118,7 +113,8 @@ def _worker_guard(tenant, limit):
 
 def _auth_ok(runtime, connection, now):
     return (connection is not None and connection.binding_id == runtime.binding_id
-        and connection.status == "verified" and connection.verified_at is not None and connection.expires_at > now)
+        and connection.status == "verified" and connection.last_error is None
+        and connection.verified_at is not None and connection.expires_at > now)
 
 
 def _connection(s, runtime):
@@ -128,6 +124,74 @@ def _connection(s, runtime):
 
 # ── Identities: echoes and holds ────────────────────────────────────────
 
+def _source(s, runtime, kind, source_id, *, fan_id=None):
+    row = s.get(Source, (runtime.account_id, runtime.binding_id, kind, source_id), with_for_update=True)
+    if row is None:
+        row = Source(account_id=runtime.account_id, binding_id=runtime.binding_id,
+            source_kind=kind, source_id=source_id, fan_id=fan_id, occurrence=0)
+        s.add(row)
+    elif row.fan_id != fan_id:
+        raise Refused("source fan changed")
+    return row
+
+
+def record_current_observations(s, runtime, offers, now):
+    """Record occurrence order independently of immutable snapshot identity.
+
+    Called in the same transaction as native observation insertion, including
+    duplicate snapshots. A/B/A creates three occurrences and two snapshots.
+    """
+    from .offer_import import _merge
+    sync = s.get(Account, runtime.account_id)
+    job = s.get(OfOfferImportJob, (runtime.account_id, sync.initial_job_id)) if (
+        sync is not None and sync.binding_id == runtime.binding_id and sync.initial_job_id) else None
+    if (job is None and sync is not None and sync.enabled and sync.binding_id == runtime.binding_id
+            and any(offer.source_kind == "post" for offer in offers)):
+        job = _ensure_initial(s, runtime, sync, now, "paid-post-observation")
+    changed_sources = []
+    for offer in offers:
+        observed = s.scalar(select(OfOfferObservation).where(
+            OfOfferObservation.account_id == runtime.account_id,
+            OfOfferObservation.binding_id == runtime.binding_id,
+            OfOfferObservation.source_kind == offer.source_kind,
+            OfOfferObservation.source_id == offer.source_id,
+            OfOfferObservation.fingerprint == offer.fingerprint()))
+        if observed is None:
+            raise Refused("source snapshot unavailable")
+        source = _source(s, runtime, offer.source_kind, offer.source_id, fan_id=offer.fan_id)
+        if source.current_fingerprint != observed.fingerprint or source.source_unavailable:
+            changed_sources.append((offer.source_kind, offer.source_id))
+            source.occurrence += 1
+            source.current_observation_id, source.current_fingerprint = observed.observation_id, observed.fingerprint
+            source.observed_at = now
+            s.add(Occurrence(account_id=runtime.account_id, binding_id=runtime.binding_id,
+                source_kind=offer.source_kind, source_id=offer.source_id, occurrence=source.occurrence,
+                observation_id=observed.observation_id, observed_at=now))
+        source.last_checked_at = now
+        source.source_unavailable, source.unavailable_reason = False, None
+        if source.refresh_requested_at is not None:
+            source.refresh_completed_at = now
+            source.refresh_job_id = None
+        # Posts have no Message row. Complete their navigation path here while
+        # retaining unknown previews/terms as blocked observations for review.
+        if offer.source_kind == "post" and job is not None and (
+                source.candidate_job_id != job.job_id or source.candidate_media_key != offer.media_key):
+            candidate = s.get(OfOfferImportCandidate, (runtime.account_id, job.job_id, offer.media_key), with_for_update=True)
+            if candidate is None:
+                candidate = OfOfferImportCandidate(account_id=runtime.account_id, job_id=job.job_id,
+                    media_key=offer.media_key, media_json=canonical(sorted(offer.media_ids)), source_count=0,
+                    variants_json="[]", samples_json="[]", revision=0, updated_at=now)
+                s.add(candidate)
+            _merge(candidate, list(offer.media_ids), offer.price_cents,
+                {"fanId": None, "messageId": offer.source_id, "sourceKind": "post",
+                 "priceCents": offer.price_cents, "sentAt": _date(observed.source_at)})
+            candidate.updated_at = now
+            source.candidate_job_id, source.candidate_media_key = job.job_id, offer.media_key
+    s.flush()
+    if changed_sources and _changed_sources(s, runtime.account_id, runtime.binding_id, sources=changed_sources):
+        from .launch_engagement.service import invalidate
+        invalidate(s, runtime, reason="catalogue_source_changed", now=now)
+
 def echo_map(s, account, binding_id, source_ids):
     """{provider message id: catalogue item} for messages this CRM itself sent."""
     ids = [i for i in set(source_ids) if type(i) is int]
@@ -136,6 +200,36 @@ def echo_map(s, account, binding_id, source_ids):
     return dict(s.execute(select(OfTextIntent.provider_message_id, OfTextIntent.catalog_item_id).where(
         OfTextIntent.account_id == account, OfTextIntent.binding_id == binding_id,
         OfTextIntent.catalog_item_id.is_not(None), OfTextIntent.provider_message_id.in_(ids))).all())
+
+
+def mark_source_unavailable(s, runtime, source, now, reason):
+    """An authoritative unusable-source event opens an audited, sticky hold.
+
+    Reappearance can update observed state, but an open conflict still requires
+    an explicit decision. A retained vault item is never deleted or enabled.
+    """
+    if not source.source_unavailable and source.current_observation_id is not None:
+        source.occurrence += 1
+        s.add(Occurrence(account_id=runtime.account_id, binding_id=runtime.binding_id,
+            source_kind=source.source_kind, source_id=source.source_id, occurrence=source.occurrence,
+            observation_id=source.current_observation_id, observed_at=now))
+        items = s.scalars(select(OfOfferImportDecision.item_id).join(OfOfferObservation, and_(
+            OfOfferObservation.account_id == OfOfferImportDecision.account_id,
+            OfOfferObservation.observation_id == OfOfferImportDecision.observation_id)).where(
+            OfOfferImportDecision.account_id == runtime.account_id,
+            OfOfferImportDecision.binding_id == runtime.binding_id, OfOfferImportDecision.action == "create",
+            OfOfferObservation.source_kind == source.source_kind, OfOfferObservation.source_id == source.source_id)).all()
+        for item_id in items:
+            selected = selected_observation(s, runtime.account_id, runtime.binding_id, item_id)
+            if selected is not None:
+                s.add(Conflict(account_id=runtime.account_id, conflict_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
+                    item_id=item_id, kind={"post_deleted": "post_deleted", "post_no_longer_paid": "post_free",
+                        "source_retracted": "source_retracted"}.get(reason, "source_unusable"), prior_fingerprint=selected.fingerprint,
+                    observation_id=source.current_observation_id, source_occurrence=source.occurrence,
+                    status="open", revision=1, created_at=now, updated_at=now))
+    source.source_unavailable, source.unavailable_reason, source.last_checked_at = True, reason, now
+    from .launch_engagement.service import invalidate
+    invalidate(s, runtime, reason="catalogue_source_changed", now=now)
 
 
 def echo_item(session, account, binding_id, source_id):
@@ -155,11 +249,12 @@ def selected_observation(s, account, binding_id, item_id):
     if withdrawn:
         return None
     accepted = s.scalar(select(Conflict.observation_id).where(Conflict.account_id == account, Conflict.item_id == item_id,
-        Conflict.status == "resolved", Conflict.resolution == "accept_source").order_by(Conflict.resolved_at.desc()).limit(1))
+        Conflict.status == "resolved", Conflict.resolution == "accept_source").order_by(
+            Conflict.source_occurrence.desc(), Conflict.resolved_at.desc(), Conflict.conflict_id.desc()).limit(1))
     return s.get(OfOfferObservation, (account, accepted or create.observation_id))
 
 
-def _changed_sources(s, account, binding_id, *, item_id=None, limit=1000):
+def _changed_sources(s, account, binding_id, *, item_id=None, limit=1000, sources=None):
     """(item id, selected observation, new observation) for unrecorded source changes.
 
     A change is a NEW observation (never seen before, so observed after the
@@ -168,12 +263,26 @@ def _changed_sources(s, account, binding_id, *, item_id=None, limit=1000):
     """
     query = select(OfOfferImportDecision.item_id).where(OfOfferImportDecision.account_id == account,
         OfOfferImportDecision.binding_id == binding_id, OfOfferImportDecision.action == "create")
+    if sources is not None:
+        query = query.join(OfOfferObservation, and_(OfOfferObservation.account_id == OfOfferImportDecision.account_id,
+            OfOfferObservation.observation_id == OfOfferImportDecision.observation_id)).where(
+                tuple_(OfOfferObservation.source_kind, OfOfferObservation.source_id).in_(sources))
     if item_id is not None:
         query = query.where(OfOfferImportDecision.item_id == item_id)
     found = []
     for (item,) in s.execute(query.order_by(OfOfferImportDecision.item_id).limit(limit)).all():
         selected = selected_observation(s, account, binding_id, item)
         if selected is None:
+            continue
+        source = s.get(Source, (account, binding_id, selected.source_kind, selected.source_id))
+        if source is not None and source.current_observation_id:
+            new = s.get(OfOfferObservation, (account, source.current_observation_id))
+            recorded = s.scalar(select(Conflict.conflict_id).where(Conflict.account_id == account,
+                Conflict.item_id == item, Conflict.observation_id == source.current_observation_id,
+                Conflict.source_occurrence == source.occurrence).limit(1))
+            if new is not None and new.fingerprint != selected.fingerprint and recorded is None:
+                if new.source_kind != "message" or echo_item(s, account, binding_id, new.source_id) is None:
+                    found.append((item, selected, new, source.occurrence))
             continue
         for new in s.scalars(select(OfOfferObservation).where(OfOfferObservation.account_id == account,
                 OfOfferObservation.binding_id == binding_id, OfOfferObservation.source_kind == selected.source_kind,
@@ -184,20 +293,24 @@ def _changed_sources(s, account, binding_id, *, item_id=None, limit=1000):
                 .order_by(OfOfferObservation.observed_at, OfOfferObservation.observation_id).limit(5)):
             if new.source_kind == "message" and echo_item(s, account, binding_id, new.source_id) is not None:
                 continue
-            found.append((item, selected, new))
+            found.append((item, selected, new, 0))
     return found
 
 
 def detect_conflicts(s, account, binding_id, now):
     """Open one conflict per newly observed change to a selected source; returns the count."""
     opened = 0
-    for item, selected, new in _changed_sources(s, account, binding_id):
+    for item, selected, new, occurrence in _changed_sources(s, account, binding_id):
         s.add(Conflict(account_id=account, conflict_id=str(uuid.uuid4()), binding_id=binding_id, item_id=item,
             kind="source_changed", prior_fingerprint=selected.fingerprint, observation_id=new.observation_id,
-            status="open", revision=1, created_at=now, updated_at=now))
+            source_occurrence=occurrence, status="open", revision=1, created_at=now, updated_at=now))
         opened += 1
     if opened:
         s.flush()
+        runtime = s.get(OfRuntime, account)
+        if runtime is not None and runtime.binding_id == binding_id:
+            from .launch_engagement.service import invalidate
+            invalidate(s, runtime, reason="catalogue_source_changed", now=now)
     return opened
 
 
@@ -252,11 +365,24 @@ def sale_hold(session, account, item):
         return "open_conflict"
     if media_unusable(session, account, item):
         return "media_unusable"
+    runtime = session.get(OfRuntime, account)
+    selected = selected_observation(session, account, runtime.binding_id, item.id) if runtime else None
+    source = session.get(Source, (account, runtime.binding_id, selected.source_kind, selected.source_id)) if selected else None
+    if source is not None and source.source_unavailable:
+        approved = session.scalar(select(Conflict.conflict_id).where(Conflict.account_id == account,
+            Conflict.item_id == item.id, Conflict.binding_id == runtime.binding_id,
+            Conflict.source_occurrence == source.occurrence, Conflict.kind.in_(UNUSABLE_SOURCE_KINDS),
+            Conflict.status == "resolved", Conflict.resolution == "keep_crm").limit(1))
+        if approved is None:
+            return source.unavailable_reason or "source_unavailable"
     return None
 
 
 def source_state(s, account, observation):
     """'observed' | 'unavailable' | 'unverified' for the item's selected source message."""
+    if observation is not None and observation.source_kind == "post":
+        source = s.get(Source, (account, observation.binding_id, "post", observation.source_id))
+        return "unavailable" if source is not None and source.source_unavailable else "observed" if source is not None else "unverified"
     if observation is None or observation.source_kind != "message" or observation.fan_id is None:
         return "unverified"
     message = s.get(Message, (account, observation.fan_id, observation.source_id))
@@ -335,12 +461,12 @@ def _vault_coverage(s, account, enabled, now):
     return {"state": state, "checkedAt": _date(done.completed_at), "detail": detail}
 
 
-def _posts_coverage(row, enabled, now):
+def _posts_coverage(row, enabled, now, progress=None):
     from .offer_post_source import coverage
-    return coverage(row, enabled, now)
+    return coverage(row, enabled, now, progress=progress)
 
 
-def _message_coverage(row, job, enabled, now, paused):
+def _message_coverage(row, job, enabled, now, paused, pending_details=0):
     if not enabled:
         return {"state": "not_started", "checkedAt": None, "detail": "Automatic sync is off."}
     initial_done = job is not None and job.status == "complete"
@@ -348,12 +474,14 @@ def _message_coverage(row, job, enabled, now, paused):
         scanning = job is not None and job.status in {"pending", "running"}
         return {"state": "partial" if scanning else "not_started", "checkedAt": None,
             "detail": "Scanning imported history." if scanning else "The first check has not run yet."}
-    partial = row.backlog > 0 or not initial_done
+    partial = row.backlog > 0 or not initial_done or pending_details > 0
     state = _coverage_state(now, row.last_incremental_at, partial=partial)
     if state == "delayed":
         detail = "The account connection is required to continue." if paused else "The last successful check is more than ten minutes old."
     elif row.backlog > 0:
         detail = f"{row.backlog} newer paid messages are waiting to be checked."
+    elif pending_details > 0:
+        detail = f"{pending_details} imported paid sources are waiting for provider detail checks."
     elif not initial_done:
         detail = "Older imported history is still being scanned." if job is not None and job.status in {"pending", "running"} \
             else "The initial history scan stopped at its limit."
@@ -380,6 +508,9 @@ def _sync_view(s, runtime, row, now):
     job = s.get(OfOfferImportJob, (account, row.initial_job_id)) if row is not None and row.initial_job_id else None
     openers = s.scalar(select(func.count()).select_from(Conflict).where(Conflict.account_id == account, Conflict.status == "open")) or 0
     zero = row is None
+    pending_details = s.scalar(select(func.count()).select_from(Source).where(Source.account_id == account,
+        Source.binding_id == runtime.binding_id, Source.refresh_requested_at.is_not(None),
+        Source.refresh_completed_at.is_(None))) or 0
     return {"enabled": enabled, "status": status, "revision": 0 if zero else row.revision, "blockedReason": reason,
         "lastIncrementalAt": None if zero else _date(row.last_incremental_at),
         "nextIncrementalAt": _date(row.incremental_due_at) if enabled else None,
@@ -392,10 +523,10 @@ def _sync_view(s, runtime, row, now):
             "rowsScanned": job.rows_scanned if job else 0, "complete": job is not None and job.status == "complete"},
         "coverage": {
             "media": _vault_coverage(s, account, enabled, now),
-            "paidMessages": _message_coverage(row, job, enabled, now, status == "paused_auth") if row is not None else
+            "paidMessages": _message_coverage(row, job, enabled, now, status == "paused_auth", pending_details) if row is not None else
                 {"state": "not_started", "checkedAt": None, "detail": "Automatic sync is off."},
-            # Paid feed posts: bounded read-only adapter (offer_post_source), contract verified 23 Oct.
-            "paidPosts": _posts_coverage(row, enabled, now)},
+            # Paid feed posts retain account-bound cursor verification evidence.
+            "paidPosts": _posts_coverage(row, enabled, now, s.get(OfContentPostProgress, account))},
         "openConflicts": openers,
         "uploads": upload_counts(s, account, runtime.binding_id)}
 
@@ -426,8 +557,6 @@ def _ensure_initial(s, runtime, row, now, seed):
             and job.status in {"pending", "running", "complete", "partial"}):
         if row.covered_through_message_id is None:
             row.covered_through_message_id = job.upper_message_id
-        if row.late_through_at is None:
-            row.late_through_at = now
         return job
     job = s.scalar(select(OfOfferImportJob).where(OfOfferImportJob.account_id == account,
         OfOfferImportJob.mode == "inventory", OfOfferImportJob.status.in_(("pending", "running"))).limit(1).with_for_update())
@@ -442,8 +571,6 @@ def _ensure_initial(s, runtime, row, now, seed):
         job = create_inventory_job(s, runtime, command_key=key, request_hash=digest({"mode": "inventory", "sources": []}),
             actor=row.actor, now=now)
     row.initial_job_id, row.covered_through_message_id = job.job_id, job.upper_message_id
-    # History before this moment belongs to the initial scan; only later imports are "late".
-    row.late_through_at = now
     s.add(Operation(account_id=account, operation_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
         command_key=digest(["initial-operation", account, job.job_id]), request_hash=digest({"initial": job.job_id}),
         actor=row.actor, kind="initial", status="queued", connection_revision=row.connection_revision,
@@ -464,10 +591,8 @@ def _park(s, row, runtime, now, reason):
     _cancel_active(s, row.account_id, now, reason)
     row.enabled, row.status, row.blocked_reason = False, "blocked", reason
     row.initial_job_id = row.covered_through_message_id = row.reconcile_after_item_id = None
+    row.reconcile_priority_after_item_id = None
     row.reconcile_cycle_started_at = row.last_incremental_at = row.last_reconcile_at = row.last_full_reconcile_at = None
-    row.late_through_at = row.reconcile_priority_after_item_id = None
-    row.posts_cursor = row.posts_audit_after = row.posts_checked_at = row.posts_error = None
-    row.posts_history_complete = False
     row.incremental_due_at = row.reconcile_due_at = None
     row.lease_token = row.lease_until = None
     row.backlog, row.updated_at = 0, now
@@ -691,9 +816,7 @@ def _finish(store, tenant, claim, outcome):
         row.failures = 0
         if claim.sync_kind == "incremental":
             row.last_incremental_at, row.backlog = now, backlog
-            row.incremental_due_at = (now + timedelta(seconds=DRAIN_SECONDS) if backlog > 0 or outcome.get("drain")
-                else now + timedelta(seconds=REFRESH_RETRY_SECONDS) if outcome.get("pendingRefresh")
-                else _next_incremental(claim.account, now))
+            row.incremental_due_at = now + timedelta(seconds=DRAIN_SECONDS) if backlog > 0 else _next_incremental(claim.account, now)
         else:
             row.last_reconcile_at = now
             row.reconcile_due_at = now + timedelta(seconds=RECONCILE_SECONDS)
@@ -750,21 +873,64 @@ def _fail(store, tenant, claim):
 
 
 def _queue_refresh(store, tenant, claim, actor, sources):
-    """Enqueue one bounded refresh job for sources lacking observations (provider reads stay in its worker)."""
+    """Persist every requested source before attempting the bounded provider queue."""
+    with Session(store.engine) as s, s.begin():
+        runtime, row, op = _check(store, tenant, s, claim)
+        for fan, mid in sources:
+            source = _source(s, runtime, "message", mid, fan_id=fan)
+            if source.refresh_requested_at is None or source.refresh_completed_at is not None:
+                source.refresh_requested_at = max(claim.now, source.refresh_requested_at + timedelta(microseconds=1)) if source.refresh_requested_at else claim.now
+                source.refresh_completed_at = None
+                source.refresh_job_id, source.refresh_error = None, None
+    return dispatch_refresh_queue(store, tenant, claim.account, actor)
+
+
+def dispatch_refresh_queue(store, tenant, account, actor):
+    """Drain one stable bounded batch; an occupied account never loses work."""
     from .offer_import import InvalidImport, request_job
-    if not sources:
-        return "none"
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        # Failed/partial jobs retain their precise outcome; a later explicit
+        # reconciliation may request them again, never a blind infinite retry.
+        sync = s.get(Account, account)
+        if sync is None or not sync.enabled or sync.binding_id != runtime.binding_id:
+            return "off"
+        # A crash or authentication/scope failure may terminate the provider
+        # job before its normal cursor finalizer runs. Preserve that terminal
+        # outcome and free the next durable batch on every dispatcher restart.
+        completed = s.execute(select(Source, OfOfferImportJob).join(OfOfferImportJob,
+            and_(OfOfferImportJob.account_id == Source.account_id,
+                OfOfferImportJob.job_id == Source.refresh_job_id)).where(Source.account_id == account,
+            Source.binding_id == runtime.binding_id, Source.refresh_completed_at.is_(None),
+            OfOfferImportJob.status.notin_(("pending", "running")))).all()
+        for source, job in completed:
+            source.refresh_completed_at, source.refresh_job_id = utcnow(), None
+            source.refresh_error = job.last_error or (None if job.status == "complete" else "source_unresolved")
+        s.flush()
+        pending = s.scalars(select(Source).where(Source.account_id == account,
+            Source.binding_id == runtime.binding_id, Source.source_kind == "message",
+            Source.refresh_requested_at.is_not(None), Source.refresh_job_id.is_(None),
+            Source.refresh_completed_at.is_(None))
+            .order_by(Source.refresh_requested_at, Source.source_id).limit(REFRESH_SOURCES)).all()
+        if not pending:
+            return "none"
+        wanted = [(r.fan_id, r.source_id, r.refresh_requested_at) for r in pending]
+    identity = digest(["durable-refresh", account, [(f, m, at.isoformat()) for f, m, at in wanted]])
     try:
-        request_job(store, tenant, claim.account, mode="refresh", command_key=digest(["refresh", claim.operation_id]),
-            actor=actor, sources=[{"fanId": str(f), "messageId": str(m)} for f, m in sources])
-        return "queued"
+        job = request_job(store, tenant, account, mode="refresh", command_key=identity, actor=actor,
+            sources=[{"fanId": str(f), "messageId": str(m)} for f, m, _ in wanted])
     except Refused as exc:
-        if str(exc) == "verified connection unavailable":
-            return "auth"
-        # An active refresh (manual or earlier) already owns the account's extra page budget.
-        return "active" if str(exc) == "import job already active" else "unavailable"
+        return ("auth" if str(exc) == "verified connection unavailable" else
+            "active" if str(exc) == "import job already active" else "unavailable")
     except (InvalidImport, IntegrityError):
         return "unavailable"
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        for fan, mid, requested in wanted:
+            source = s.get(Source, (account, runtime.binding_id, "message", mid), with_for_update=True)
+            if source is not None and source.refresh_requested_at == requested and source.refresh_job_id is None:
+                source.refresh_job_id = job["jobId"]
+    return "queued"
 
 
 def _queue_vault(store, tenant, claim, actor):
@@ -783,140 +949,123 @@ def _queue_vault(store, tenant, claim, actor):
         return "unavailable"
 
 
-def _fold_rows(s, claim, runtime, job, rows):
-    """Merge never-considered outgoing paid messages into the initial job's candidates.
-
-    The ledger insert is the idempotency point: a message already considered (by the cursor fold, the late
-    fold or the initial scan) is never counted twice. Messages with media that carry no observation yet are
-    queued (durably) for a detail refresh.
-    """
-    from .offer_import import _date as day, _merge
-    if not rows:
-        return 0
-    ids = [r[1] for r in rows]
-    echoes = echo_map(s, claim.account, runtime.binding_id, ids)
-    seen = set(s.scalars(select(OfOfferObservation.source_id).where(OfOfferObservation.account_id == claim.account,
-        OfOfferObservation.binding_id == runtime.binding_id, OfOfferObservation.source_kind == "message",
-        OfOfferObservation.source_id.in_(ids))))
-    values = [dict(account_id=claim.account, binding_id=runtime.binding_id, fan_id=fan, message_id=mid,
-        refresh_pending=bool(_ids(raw)) and mid not in echoes and mid not in seen, refresh_attempts=0, folded_at=claim.now)
-        for fan, mid, raw, _price, _created in rows]
-    inserted = set(s.execute(insert(Source).values(values).on_conflict_do_nothing().returning(Source.fan_id, Source.message_id)).all())
-    touched, merged = {}, 0
-    for fan, mid, raw, price, created in rows:
-        media = _ids(raw)
-        if (fan, mid) not in inserted or not media or mid in echoes:
-            continue
-        mkey = media_key(media)
-        candidate = touched.get(mkey) or s.get(OfOfferImportCandidate, (claim.account, job.job_id, mkey), with_for_update=True)
-        if candidate is None:
-            candidate = OfOfferImportCandidate(account_id=claim.account, job_id=job.job_id, media_key=mkey,
-                media_json=canonical(sorted(media)), source_count=0, variants_json="[]", samples_json="[]",
-                revision=0, updated_at=claim.now)
-            s.add(candidate)
-        touched[mkey] = candidate
-        _merge(candidate, media, price, {"fanId": str(fan), "messageId": mid, "priceCents": price, "sentAt": day(created)})
-        candidate.updated_at = claim.now
-        merged += 1
-    return merged
-
-
-def _refresh_queue(s, claim, binding):
-    """Drop queue entries that no longer need a refresh, then list the newest waiting ones.
-
-    Returns (sources to request now, total waiting). Nothing waiting is ever forgotten because the cursor
-    moved on: only an observation (done) or the retry cap (given up) removes an entry.
-    """
-    mine = (Source.account_id == claim.account, Source.binding_id == binding, Source.refresh_pending.is_(True))
-    s.execute(update(Source).where(*mine, exists().where(OfOfferObservation.account_id == Source.account_id,
-        OfOfferObservation.binding_id == Source.binding_id, OfOfferObservation.source_kind == "message",
-        OfOfferObservation.source_id == Source.message_id)).values(refresh_pending=False))
-    s.execute(update(Source).where(*mine, Source.refresh_attempts >= MAX_REFRESH_ATTEMPTS).values(refresh_pending=False))
-    total = s.scalar(select(func.count()).select_from(Source).where(*mine)) or 0
-    rows = s.execute(select(Source.fan_id, Source.message_id).where(*mine)
-        .order_by(Source.message_id.desc(), Source.fan_id).limit(REFRESH_SOURCES)).all()
-    return [tuple(r) for r in rows], total
+def _unfolded(runtime, job=None, covered=None):
+    joined = and_(Source.account_id == Message.account_id, Source.binding_id == runtime.binding_id,
+        Source.source_kind == "message", Source.source_id == Message.message_id)
+    changed = or_(Source.folded_at.is_(None),
+        Source.folded_message_media_json.is_distinct_from(Message.media_ids),
+        Source.folded_message_price_cents.is_distinct_from(Message.price_cents),
+        Source.folded_message_unsent.is_distinct_from(Message.is_unsent))
+    if job is not None and job.status in {"pending", "running"}:
+        # The bounded initial inventory owns rows present when it started.
+        # Local ingestion time admits late old provider IDs immediately; once
+        # the initial scan ends, the anti-join also repairs any absent receipt
+        # irrespective of clock ordering or the provider high-water.
+        changed = and_(changed, or_(Source.folded_at.is_not(None),
+            Message.message_id > (covered if covered is not None else job.upper_message_id or 0),
+            Message.ingested_at > job.requested_at,
+            and_(Source.current_observation_id.is_not(None), or_(Message.is_unsent.is_(True), Message.price_cents <= 0))))
+    return joined, changed
 
 
 def _fold(store, tenant, claim):
-    """DB-only fold of new outgoing paid messages into the initial job's candidates."""
-    folded, start = 0, None
+    """Fold durable local work, including old provider IDs ingested after a cursor.
+
+    The provider high-water remains a display marker only. Per-source receipts
+    make replay and partial-batch restart safe without assuming provider order
+    equals local observation order.
+    """
+    from .offer_import import _date as day, _merge
+    folded, lacking, last = 0, {}, None
     for _ in range(FOLD_BATCHES):
         with Session(store.engine) as s, s.begin():
             runtime, row, op = _check(store, tenant, s, claim)
             job = _ensure_initial(s, runtime, row, claim.now, claim.operation_id)
-            if start is None:
-                start = row.covered_through_message_id or 0
+            joined, changed = _unfolded(runtime, job, row.covered_through_message_id)
             rows = s.execute(select(Message.fan_id, Message.message_id, Message.media_ids, Message.price_cents,
-                    Message.created_at).where(Message.account_id == claim.account, Message.direction == "out",
-                    Message.price_cents > 0, Message.message_id > (row.covered_through_message_id or 0))
+                    Message.created_at, Message.is_unsent).outerjoin(Source, joined)
+                .where(Message.account_id == claim.account, Message.direction == "out",
+                    or_(Message.price_cents > 0, Source.folded_at.is_not(None), Source.current_observation_id.is_not(None)), changed)
                 .order_by(Message.message_id, Message.fan_id).limit(FOLD_ROWS)).all()
-            _fold_rows(s, claim, runtime, job, rows)
+            ids = [r[1] for r in rows]
+            echoes = echo_map(s, claim.account, runtime.binding_id, ids)
+            touched = {}
+            for fan, mid, raw, price, created, unsent in rows:
+                source = _source(s, runtime, "message", mid, fan_id=fan)
+                media = _ids(raw)
+                if media and price > 0 and not unsent and mid not in echoes:
+                    mkey = media_key(media)
+                    if source.candidate_job_id != job.job_id or source.candidate_media_key != mkey:
+                        candidate = touched.get(mkey) or s.get(OfOfferImportCandidate,
+                            (claim.account, job.job_id, mkey), with_for_update=True)
+                        if candidate is None:
+                            candidate = OfOfferImportCandidate(account_id=claim.account, job_id=job.job_id,
+                                media_key=mkey, media_json=canonical(sorted(media)), source_count=0,
+                                variants_json="[]", samples_json="[]", revision=0, updated_at=claim.now)
+                            s.add(candidate)
+                        touched[mkey] = candidate
+                        _merge(candidate, media, price, {"fanId": str(fan), "messageId": mid,
+                            "sourceKind": "message", "priceCents": price, "sentAt": day(created)})
+                        candidate.updated_at = claim.now
+                        source.candidate_job_id, source.candidate_media_key = job.job_id, mkey
+                    changed_payload = source.folded_at is not None and (
+                        source.folded_message_media_json != raw or source.folded_message_price_cents != price
+                        or source.folded_message_unsent != unsent)
+                    if source.current_observation_id is None or changed_payload:
+                        lacking[(fan, mid)] = None
+                        if source.refresh_requested_at is None or source.refresh_completed_at is not None:
+                            source.refresh_requested_at = max(claim.now, source.refresh_requested_at + timedelta(microseconds=1)) if source.refresh_requested_at else claim.now
+                            source.refresh_completed_at = None
+                            source.refresh_job_id, source.refresh_error = None, None
+                source.folded_message_media_json, source.folded_message_price_cents = raw, price
+                source.folded_message_unsent, source.folded_at = unsent, claim.now
+                if unsent or price <= 0 or not media:
+                    mark_source_unavailable(s, runtime, source, claim.now,
+                        "source_retracted" if unsent else "source_terms_unusable")
             if rows:
-                row.covered_through_message_id = rows[-1][1]
+                row.covered_through_message_id = max(row.covered_through_message_id or 0, max(r[1] for r in rows))
+                last = rows[-1][1]
             row.updated_at = claim.now
             folded += len(rows)
             more = len(rows) == FOLD_ROWS
         if not more:
             break
-    late_more = False
     with Session(store.engine) as s, s.begin():
         runtime, row, op = _check(store, tenant, s, claim)
-        job = _ensure_initial(s, runtime, row, claim.now, claim.operation_id)
-        # Rows with a provider id at or below the cursor that were imported after the window opened and were
-        # never considered: late imports. Ingestion order (not provider id) decides what is new here.
-        since = row.late_through_at or claim.now - timedelta(seconds=LATE_OVERLAP_SECONDS)
-        late = s.execute(select(Message.fan_id, Message.message_id, Message.media_ids, Message.price_cents,
-                Message.created_at, Message.ingested_at).where(Message.account_id == claim.account,
-                Message.direction == "out", Message.price_cents > 0, Message.message_id <= start,
-                Message.ingested_at >= since,
-                ~exists().where(Source.account_id == Message.account_id, Source.binding_id == runtime.binding_id,
-                    Source.fan_id == Message.fan_id, Source.message_id == Message.message_id))
-            .order_by(Message.ingested_at, Message.message_id, Message.fan_id).limit(FOLD_ROWS)).all()
-        _fold_rows(s, claim, runtime, job, [r[:5] for r in late])
-        folded += len(late)
-        late_more = len(late) == FOLD_ROWS
-        # Never move the window past rows a slow writer may not have committed yet.
-        row.late_through_at = late[-1][5] if late_more else max(since, claim.now - timedelta(seconds=LATE_OVERLAP_SECONDS))
-    with Session(store.engine) as s, s.begin():
-        runtime, row, op = _check(store, tenant, s, claim)
-        backlog = s.scalar(select(func.count()).select_from(select(Message.message_id).where(
-            Message.account_id == claim.account, Message.direction == "out", Message.price_cents > 0,
-            Message.message_id > (row.covered_through_message_id or 0)).limit(BACKLOG_PROBE).subquery())) or 0
+        job = s.get(OfOfferImportJob, (claim.account, row.initial_job_id))
+        joined, changed = _unfolded(runtime, job, row.covered_through_message_id)
+        backlog = s.scalar(select(func.count()).select_from(select(Message.message_id).outerjoin(Source, joined).where(
+            Message.account_id == claim.account, Message.direction == "out",
+            or_(Message.price_cents > 0, Source.folded_at.is_not(None), Source.current_observation_id.is_not(None)), changed)
+            .limit(BACKLOG_PROBE).subquery())) or 0
         conflicts = detect_conflicts(s, claim.account, runtime.binding_id, claim.now)
-        wanted, waiting = _refresh_queue(s, claim, runtime.binding_id)
-        actor = row.actor
-        covered = row.covered_through_message_id
-    return folded, wanted, waiting, backlog, conflicts, actor, covered, late_more
-
-
-def _requested(store, tenant, claim, sources):
-    """The refresh job exists: count the attempt for each source it covers."""
-    if not sources:
-        return
-    with Session(store.engine) as s, s.begin():
-        runtime, row, op = _check(store, tenant, s, claim)
-        s.execute(update(Source).where(Source.account_id == claim.account, Source.binding_id == runtime.binding_id,
-            Source.refresh_pending.is_(True), tuple_(Source.fan_id, Source.message_id).in_(sources)).values(refresh_attempts=Source.refresh_attempts + 1))
+        actor, covered = row.actor, row.covered_through_message_id
+    return folded, lacking, backlog, conflicts, actor, covered, last
 
 
 def _incremental(store, tenant, claim):
-    folded, sources, waiting, backlog, conflicts, actor, covered, late_more = _fold(store, tenant, claim)
+    folded, lacking, backlog, conflicts, actor, covered, _ = _fold(store, tenant, claim)
+    wanted = sorted(lacking, key=lambda t: t[1], reverse=True)
+    sources = wanted
     refresh = _queue_refresh(store, tenant, claim, actor, sources)
-    if refresh == "queued":
-        _requested(store, tenant, claim, sources)
+    with Session(store.engine) as s:
+        pending_details = s.scalar(select(func.count()).select_from(Source).where(Source.account_id == claim.account,
+            Source.binding_id == claim.binding_id, Source.refresh_requested_at.is_not(None),
+            Source.refresh_completed_at.is_(None))) or 0
     vault = _queue_vault(store, tenant, claim, actor)
-    truncated = waiting > len(sources)
+    truncated = len(wanted) > REFRESH_SOURCES
     coverage = {"foldedRows": folded, "foldedThroughMessageId": None if covered is None else str(covered),
-        "backlog": backlog, "bounded": backlog > 0 or late_more, "newSourcesWithoutDetails": waiting,
-        "refreshSources": len(sources), "refresh": refresh, "refreshTruncated": truncated, "vaultRead": vault,
-        "conflictsOpened": conflicts}
+        "backlog": backlog, "bounded": backlog > 0, "newSourcesWithoutDetails": len(wanted),
+        "refreshSources": min(len(sources), REFRESH_SOURCES), "refresh": refresh, "refreshTruncated": truncated,
+        "refreshQueuedSources": len(sources), "refreshDeferredSources": max(0, len(sources) - REFRESH_SOURCES), "vaultRead": vault,
+        "conflictsOpened": conflicts, "pendingSourceDetails": pending_details}
     result = {"syncKind": "incremental"} if claim.kind == "sync_now" else {}
     if "auth" in (refresh, vault):
         return {"status": "cancelled", "error": "connection_unavailable", "coverage": coverage, "result": result}
-    status = "partial" if backlog > 0 or truncated or late_more else "complete"
-    return {"status": status, "backlog": backlog, "coverage": coverage, "result": result, "drain": late_more,
-        "pendingRefresh": waiting > (len(sources) if refresh == "queued" else 0)}
+    # Completion records that this scheduling pass persisted all its work.
+    # Source-detail completion is reported separately, never inferred here.
+    status = "partial" if backlog > 0 or truncated else "complete"
+    return {"status": status, "backlog": backlog, "coverage": coverage, "result": result}
 
 
 def _reconcile(store, tenant, claim):
@@ -928,13 +1077,13 @@ def _reconcile(store, tenant, claim):
         total = s.scalar(select(func.count()).select_from(CatalogItem).where(*base)) or 0
         conflicted = exists().where(Conflict.account_id == account, Conflict.item_id == CatalogItem.id, Conflict.status == "open")
         priority_all = s.scalar(select(func.count()).select_from(CatalogItem).where(*base, or_(CatalogItem.enabled.is_(True), conflicted))) or 0
-        # Enabled and conflicted items are the priority set. It rotates on its own durable cursor, so a set
-        # larger than the quota is covered over successive passes instead of rechecking the same first items.
-        priority_ids = list(s.scalars(select(CatalogItem.id).where(*base, or_(CatalogItem.enabled.is_(True), conflicted))
-            .order_by(CatalogItem.id).limit(20001)))
+        priority_base = (*base, or_(CatalogItem.enabled.is_(True), conflicted))
         priority_after = row.reconcile_priority_after_item_id or 0
-        priority = list(dict.fromkeys([i for i in priority_ids if i > priority_after] + priority_ids))[:PRIORITY_QUOTA]
-        next_priority = priority[-1] if priority and len(priority_ids) > PRIORITY_QUOTA else None
+        priority = list(s.scalars(select(CatalogItem.id).where(*priority_base, CatalogItem.id > priority_after)
+            .order_by(CatalogItem.id).limit(PRIORITY_QUOTA)))
+        if len(priority) < PRIORITY_QUOTA and priority_after:
+            priority.extend(s.scalars(select(CatalogItem.id).where(*priority_base, CatalogItem.id <= priority_after)
+                .order_by(CatalogItem.id).limit(PRIORITY_QUOTA - len(priority))))
         after = row.reconcile_after_item_id or 0
         rotation = list(s.scalars(select(CatalogItem.id).where(*base, CatalogItem.id > after)
             .order_by(CatalogItem.id).limit(ROTATION_QUOTA + 1)))
@@ -959,12 +1108,12 @@ def _reconcile(store, tenant, claim):
                     and echo_item(s, account, binding, selected.source_id) is None:
                 sources.append((selected.fan_id, selected.source_id))
         conflicts = detect_conflicts(s, account, binding, claim.now)
-    refresh = _queue_refresh(store, tenant, claim, actor, sources[:REFRESH_SOURCES])
+    refresh = _queue_refresh(store, tenant, claim, actor, sources)
     coverage = {"itemsChecked": len(checked), "priorityChecked": len(priority), "rotationChecked": len(rotation),
         "rotationFromItemId": rotation[0] if rotation else None, "rotationThroughItemId": rotation[-1] if rotation else None,
         "priorityFromItemId": priority[0] if priority else None, "priorityThroughItemId": priority[-1] if priority else None,
-        "totalItems": total, "priorityTotal": priority_all, "wrapped": wrapped, "refreshSources": len(sources[:REFRESH_SOURCES]),
-        "refresh": refresh, "refreshTruncated": len(sources) > REFRESH_SOURCES, "conflictsOpened": conflicts,
+        "totalItems": total, "priorityTotal": priority_all, "wrapped": wrapped, "refreshSources": len(sources),
+        "refresh": refresh, "refreshTruncated": False, "conflictsOpened": conflicts,
         "note": "Items and their selected sources only; historical messages are not re-read."}
     result = {"unusableItems": [str(i) for i in unusable[:100]], "unverifiedItems": unverified,
         "sourceUnavailableItems": [str(i) for i in unavailable[:100]]}
@@ -973,7 +1122,8 @@ def _reconcile(store, tenant, claim):
     if refresh == "auth":
         return {"status": "cancelled", "error": "connection_unavailable", "coverage": coverage, "result": result}
     return {"status": "complete" if wrapped else "partial", "coverage": coverage, "result": result,
-        "nextAfter": None if wrapped else rotation[-1], "nextPriorityAfter": next_priority, "wrapped": wrapped}
+        "nextAfter": None if wrapped else rotation[-1],
+        "nextPriorityAfter": priority[-1] if priority and priority_all > PRIORITY_QUOTA else None, "wrapped": wrapped}
 
 
 # ── Sync now, operations ────────────────────────────────────────────────
@@ -1128,7 +1278,9 @@ def conflict_view(s, row):
         OfOfferObservation.binding_id == row.binding_id, OfOfferObservation.source_kind == new.source_kind,
         OfOfferObservation.source_id == new.source_id, OfOfferObservation.fingerprint == row.prior_fingerprint))
     previews = _ids(item.preview_media_ids) or []
+    current_source = s.get(Source, (row.account_id, row.binding_id, new.source_kind, new.source_id))
     return {"conflictId": row.conflict_id, "itemId": str(row.item_id), "revision": row.revision, "status": row.status,
+        "kind": row.kind, "sourceIssue": current_source.unavailable_reason if current_source and current_source.source_unavailable else None,
         "createdAt": _date(row.created_at),
         "current": {"priceCents": item.price_cents, "mediaCount": len(_ids(item.media_ids) or []),
             "previewCount": len(previews), "sourceAt": _date(prior.source_at) if prior else None},
@@ -1217,6 +1369,13 @@ def resolve_conflict(store, tenant, account, conflict_id, *, resolution, expecte
         if conflict.status != "open" or conflict.revision != expected_revision or item_fingerprint(item) != expected_item_fingerprint:
             raise Refused("sync revision conflict")
         observation = s.get(OfOfferObservation, (account, conflict.observation_id))
+        current = s.get(Source, (account, runtime.binding_id, observation.source_kind, observation.source_id))
+        if current is not None and conflict.source_occurrence > 0 and resolution != "disable":
+            restored_same_terms = (conflict.kind in UNUSABLE_SOURCE_KINDS and not current.source_unavailable
+                and current.current_fingerprint == observation.fingerprint)
+            if ((current.occurrence != conflict.source_occurrence and not restored_same_terms)
+                    or (current.source_unavailable and resolution == "accept_source")):
+                raise Refused("source terms changed")
         before_item, before_fingerprint = _terms(item), item_fingerprint(item)
         if resolution == "accept_source":
             _apply_source(s, runtime, item, observation)
@@ -1230,6 +1389,8 @@ def resolve_conflict(store, tenant, account, conflict_id, *, resolution, expecte
                 revision=revision + 1, fingerprint_before=before_fingerprint, fingerprint_after=item_fingerprint(item),
                 request_hash=request_hash, actor=actor, before_json=canonical(before_item), after_json=canonical(_terms(item)),
                 created_at=now))
+            from .launch_engagement.service import invalidate
+            invalidate(s, runtime, reason="catalogue_changed", actor=actor, now=now)
         before_conflict = {"status": conflict.status, "revision": conflict.revision}
         conflict.status, conflict.resolution, conflict.resolved_by, conflict.resolved_command_key = "resolved", resolution, actor, command_key
         conflict.resolved_at = conflict.updated_at = now

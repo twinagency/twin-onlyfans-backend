@@ -53,7 +53,7 @@ def request_before(store, tenant_id, claim, *, connection_revision=None):
 
 
 def commit_recent_page(store, tenant_id, claim, events, *, has_more,
-                       observations=(), connection_revision=None):
+                       observations=(), connection_revision=None, provider_read_claim=None):
     """Replace worker.py's recovery_page call together with request_before.
 
     The initial head, offers, archive handoff and recent completion are one
@@ -76,7 +76,8 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
         initial = existing_recovery is not None and existing_recovery.high_water == 0 and existing_recovery.last_complete_at is None
     if not initial:
         return store.recovery_page(tenant_id, claim, events, has_more=has_more,
-            observations=observations, connection_revision=connection_revision)
+            observations=observations, connection_revision=connection_revision,
+            provider_read_claim=provider_read_claim)
     if (type(events) not in {list, tuple} or type(has_more) is not bool
             or len(events) > PAGE_LIMIT or (has_more and not events)
             or any(type(e) is not Event for e in events)):
@@ -102,6 +103,9 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant_id, claim.account_id)
         store._read_connection(s, runtime, connection_revision)
+        if provider_read_claim is not None:
+            from onlyfans_runtime.provider_read_budget import current
+            current(store,tenant_id,provider_read_claim,session=s)
         row = s.get(OfRecovery, (claim.account_id, claim.fan_id))
         if (row is None or row.status != "running" or row.generation != claim.generation
                 or row.lease_token != claim.token or row.lease_until <= utcnow()

@@ -95,9 +95,25 @@ def test_complete_workspace_evidence_restores_only_to_quarantine(database,tmp_pa
     assert len(model.calls)==1
     with Session(engine) as s:assert s.scalar(select(OfNativeMemoryChange.change_id)) is not None
     memory_store.close()
+    # Back up actual 0091 operator command evidence as well as the old native
+    # controls. Stopping the runtime must retain the ambiguous send verbatim.
+    from onlyfans_runtime.launch_operations import account_state,control_account
+    unknown_intents=[row for row in rows(engine)["of_text_intent"]
+        if row["account_id"]=="acc-a" and row["status"]=="unknown"]
+    assert unknown_intents
+    with Session(engine) as s:
+        fingerprint=account_state(s,s.get(OfRuntime,"acc-a"))["fingerprint"]
+    stopped=control_account(store,"tenant-a","acc-a",action="emergency_stop",
+        expected_fingerprint=fingerprint,command_key="e"*64,actor="op-session:"+"f"*64,
+        reason="Synthetic release backup evidence")
+    assert stopped["recorded"] is True and stopped["enabled"] is False
+    assert stopped["unresolvedOutgoing"]==len(unknown_intents)
     before=rows(engine)
     assert before["of_commerce_evidence"] and before["grok_calls"] and before["of_control_audit"]
     assert before["of_configuration_change"]
+    assert before["of_launch_command"]
+    assert [row for row in before["of_text_intent"]
+        if row["account_id"]=="acc-a" and row["status"]=="unknown"]==unknown_intents
     archive=tmp_path/"synthetic-release.twinof"
     operations.backup(url,archive,key=KEY,pg_bin=pg_bin)
     with empty_database() as (target,restored):
@@ -118,10 +134,21 @@ def test_complete_workspace_evidence_restores_only_to_quarantine(database,tmp_pa
     store.close();other.close()
 
 
+def paired_dashboard():
+    paired=os.environ.get("ONLYFANS_TEST_DASHBOARD")
+    assert paired,"Set ONLYFANS_TEST_DASHBOARD to the exact installed dashboard candidate"
+    dashboard=Path(paired).resolve()
+    assert Path(paired).is_absolute(),"The paired dashboard checkout must be explicit and absolute"
+    for required in ("package.json","node_modules/next/dist/bin/next",
+                     "preview/onlyfans-integration/package.json","scripts/check-onlyfans-http-browser.mjs"):
+        assert (dashboard/required).is_file(),f"Paired dashboard checkout incomplete: {required}; install its lockfile dependencies"
+    return dashboard
+
+
 def test_one_command_demo_smoke_runs_current_screens_and_removes_its_database(database):
     url,engine=database
     backend=Path(__file__).resolve().parents[2]
-    dashboard=backend.parent/"twin-dashboard"
+    dashboard=paired_dashboard()
     with engine.connect() as c:
         before=set(c.execute(text("SELECT datname FROM pg_database WHERE datname LIKE 'of_demo_%'")).scalars())
     env={**os.environ,"ONLYFANS_TEST_PG_URL":url,
@@ -130,11 +157,30 @@ def test_one_command_demo_smoke_runs_current_screens_and_removes_its_database(da
         "DASHBOARD_SESSION_SECRET":"inherited-real-session-must-not-be-used",
         "OPENAI_API_KEY":"inherited-real-model-key-must-not-be-used"}
     result=subprocess.run([sys.executable,"service/tests/onlyfans_demo.py","--dashboard",str(dashboard),"--port",str(port()),"--smoke"],
-        cwd=backend,env=env,capture_output=True,text=True,timeout=110)
+        cwd=backend,env=env,capture_output=True,text=True,timeout=330)
+    with engine.connect() as c:
+        after=set(c.execute(text("SELECT datname FROM pg_database WHERE datname LIKE 'of_demo_%'")).scalars())
+    assert after==before
     assert result.returncode==0,result.stdout+result.stderr
     assert "Synthetic demo smoke passed" in result.stdout
     assert "native catalogue paging" in result.stdout
     assert "inherited-real" not in result.stdout+result.stderr
+
+
+def test_one_command_demo_removes_its_database_after_frontend_start_failure(database,tmp_path):
+    url,engine=database
+    backend=Path(__file__).resolve().parents[2]
+    dashboard=paired_dashboard()
+    with engine.connect() as c:
+        before=set(c.execute(text("SELECT datname FROM pg_database WHERE datname LIKE 'of_demo_%'")).scalars())
+    # Fail after the owned database, worker scenario and API have started.
+    # Exercise real ExitStack/finally cleanup rather than replacing the cleanup.
+    missing_node=str(tmp_path/"missing-synthetic-node")
+    result=subprocess.run([sys.executable,"service/tests/onlyfans_demo.py","--dashboard",str(dashboard),"--port",str(port()),"--smoke"],
+        cwd=backend,env={**os.environ,"ONLYFANS_TEST_PG_URL":url,"CODEX_PRIMARY_RUNTIME_NODE":missing_node},
+        capture_output=True,text=True,timeout=60)
     with engine.connect() as c:
         after=set(c.execute(text("SELECT datname FROM pg_database WHERE datname LIKE 'of_demo_%'")).scalars())
-    assert after==before
+    assert after==before,"failed frontend startup leaked its owned demo database"
+    assert result.returncode!=0 and "missing-synthetic-node" in result.stderr
+    assert "Synthetic demo smoke passed" not in result.stdout

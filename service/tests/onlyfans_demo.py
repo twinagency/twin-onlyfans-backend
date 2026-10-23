@@ -9,6 +9,7 @@ import argparse
 import os
 from pathlib import Path
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -68,7 +69,9 @@ def main():
                "ONLYFANS_API_TOKEN":secrets.token_urlsafe(32), "ONLYFANS_API_TENANT":"tenant-a",
                "ONLYFANS_CONTROL_TOKEN":secrets.token_urlsafe(32), "ONLYFANS_CONTROL_TENANT":"tenant-a",
                "ONLYFANS_CONFIGURATION_TOKEN":secrets.token_urlsafe(32), "ONLYFANS_CONFIGURATION_TENANT":"tenant-a", "ONLYFANS_TEST_CONFIGURATION":"1", "ONLYFANS_TEST_WORKER":"1",
+               "ONLYFANS_TEST_DISPOSABLE":"1",
                "ONLYFANS_API_BASE_URL":f"http://127.0.0.1:{api_port}",
+               "DASHBOARD_PUBLIC_ORIGIN":f"http://127.0.0.1:{args.port}",
                "DASHBOARD_SESSION_SECRET":secrets.token_urlsafe(32), "SYNTHETIC_DEMO_LOGIN_TOKEN":login,
                "SUPABASE_SERVICE_KEY":"synthetic-service-key", "NEXT_TELEMETRY_DISABLED":"1", "TZ":"UTC"}
         with tempfile.TemporaryDirectory(prefix="of-demo-logs-") as logs, ExitStack() as stack:
@@ -83,13 +86,36 @@ def main():
             web = stack.enter_context(process([node,str(dashboard/"node_modules/next/dist/bin/next"),"dev","--hostname","127.0.0.1","--port",str(args.port)],cwd=dashboard/"preview/onlyfans-integration",env=env,log=Path(logs)/"next.log"))
             wait_http(f"http://127.0.0.1:{args.port}/api/onlyfans/accounts", web)
             if args.smoke:
+                # The actual configuration browser exercises shared-fact
+                # inheritance. Mirror the HTTP fixture's scoped fresh cache;
+                # there is no external Twin/provider read in this rehearsal.
+                from datetime import datetime, timezone
+                import hashlib
+                from sqlalchemy.orm import Session
+                from db.models import AccountAiConfig
+                from db.onlyfans_creator_facts_models import OfCreatorFactsSource
+                from onlyfans_runtime.creator_facts import SOURCE_COLUMNS
+                from onlyfans_runtime.native_context import canonical
+                with Session(engine) as session, session.begin():
+                    source=dict.fromkeys(key for key in SOURCE_COLUMNS if key!="updated_at")
+                    source.update(id="creator-acc-a",current_city="Shared Twin city",tattoo_details=[],turn_ons=[],hard_limits=[])
+                    now=datetime.now(timezone.utc).replace(tzinfo=None)
+                    session.add(OfCreatorFactsSource(account_id="acc-a",binding_id="binding-acc-a",source_json=canonical(source),
+                        source_hash=hashlib.sha256(canonical(source).encode()).hexdigest(),source_updated_at=now,checked_at=now,
+                        overrides_json=session.get(AccountAiConfig,"acc-a").persona_facts_json))
                 with httpx.Client(timeout=30,trust_env=False) as client:
                     response=client.get(f"http://127.0.0.1:{args.port}/test-login",params={"token":login},follow_redirects=False)
                     cookie=response.cookies.get("allie_admin_session")
                     if response.status_code not in {302,303,307} or not cookie:raise RuntimeError("Synthetic demo session failed")
-                subprocess.run([node,str(dashboard/"scripts/check-onlyfans-http-browser.mjs")],cwd=dashboard,
-                    env={**env,"ONLYFANS_TEST_WEB_URL":f"http://127.0.0.1:{args.port}","ONLYFANS_TEST_COOKIE":cookie,
-                         "ONLYFANS_TEST_EVIDENCE":logs},check=True,timeout=100)
+                try:
+                    subprocess.run([node,str(dashboard/"scripts/check-onlyfans-http-browser.mjs")],cwd=dashboard,
+                        env={**env,"ONLYFANS_TEST_WEB_URL":f"http://127.0.0.1:{args.port}","ONLYFANS_TEST_COOKIE":cookie,
+                             "ONLYFANS_TEST_EVIDENCE":logs},check=True,timeout=300)
+                finally:
+                    evidence=os.environ.get("ONLYFANS_TEST_EVIDENCE")
+                    if evidence:
+                        destination=Path(evidence).resolve()/f"one-command-demo-{name}"
+                        shutil.copytree(logs,destination,dirs_exist_ok=False)
                 print("Synthetic demo smoke passed; stopping servers and removing its owned database.",flush=True)
                 return
             print(f"Synthetic demo ready: http://127.0.0.1:{args.port}/test-login?token={login}", flush=True)

@@ -73,7 +73,8 @@ class NativeEngine:
 
     _active = False
 
-    def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None):
+    def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
+                 own_offers_only=False):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
@@ -86,6 +87,8 @@ class NativeEngine:
         self.content = content
         # Optional Twin approved-context source for the single prompt hook.
         self.context = context
+        # All-fans runner: another fan's open offer is that fan's business, not this turn's obligation.
+        self.own_offers_only = bool(own_offers_only)
         self._chat = chat
         self._send = send
         self._emit = emit or (lambda event: None)
@@ -109,6 +112,8 @@ class NativeEngine:
             ContentOffer.account_id == self.account_id,
             ContentOffer.status.in_(("open", "unlocked")),
         )
+        if self.own_offers_only:
+            query = query.where(ContentOffer.fan_id == self.fan_id)
         item = getattr(self.content, "item", None) if self.content is not None else None
         if item is not None:
             # An open PPV for the one approved item, to this fan, is not an obligation the

@@ -554,7 +554,7 @@ class Ledger:
     # its own pilot once the old lease has lapsed and nothing is unresolved.
 
     def activate_service(self, *, pilot_id: str, account_id: str, fan_id: int, owner_token: str,
-                         now: datetime | str, ttl_s: float) -> Pilot:
+                         now: datetime | str, ttl_s: float, cutoff: datetime | str | None = None) -> Pilot:
         """Create or adopt the ONE stable service pilot for an account/fan.
 
         Refuses (never waits, never forces) while another owner's lease is live,
@@ -564,6 +564,10 @@ class Ledger:
         original ``cutoff`` and every used count; it only issues a new fenced
         token and revision. A claim abandoned by a crash is stopped, never
         regenerated (no receipt can exist for it, or ``_unsettled`` would refuse).
+
+        ``cutoff`` (all-fans mode only) sets a NEW pilot's cutoff to an earlier instant (the
+        runner's start) so a fan first seen mid-run can still be answered for a message that
+        arrived since then; it can never be in the future and never changes an adopted pilot.
         """
         if not isinstance(pilot_id, str) or not SERVICE_ID.fullmatch(pilot_id):
             raise Refused("invalid-pilot-id")
@@ -576,6 +580,9 @@ class Ledger:
             raise Refused("invalid-ttl")
         now_s = _dt(now)
         lease_s = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=ttl_s))
+        cutoff_s = now_s if cutoff is None else _dt(cutoff)
+        if cutoff_s > now_s:
+            raise Refused("invalid-cutoff")
         with self._tx(initialize=True) as con:
             c = con.execute("SELECT * FROM twin_bridge_conversations WHERE account_id=? AND fan_id=?",
                             (account_id, fan_id)).fetchone()
@@ -610,7 +617,7 @@ class Ledger:
                 con.execute("INSERT INTO native_pilots(pilot_id,account_id,fan_id,owner_token,cutoff,deadline,"
                             "grant_limit,baseline_used,end_limit,revision,state,created_at,updated_at) "
                             "VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?)",
-                            (pilot_id, account_id, fan_id, owner_token, now_s, lease_s, SERVICE_BUDGET_CEILING,
+                            (pilot_id, account_id, fan_id, owner_token, cutoff_s, lease_s, SERVICE_BUDGET_CEILING,
                              used, end, revision, now_s, now_s))
             con.execute("UPDATE twin_bridge_conversations SET send_budget_limit=?,owner_token=?,owner_expires_at=?,"
                         "reserved=?,revision=?,updated_at=? WHERE account_id=? AND fan_id=?",

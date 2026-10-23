@@ -14,7 +14,11 @@ engine and the verified-connection loader are replaced):
    re-adoption) and a restart adopts the same pilot;
 5. an operator stop (skip_list manual_restrict / conversation mode) pauses sending
    while the process keeps running;
-6. live intake (fake socket) persists only the scoped fan's plain text, once.
+6. live intake (fake socket) persists only the scoped fan's plain text, once;
+7. ALL-FANS mode (one runner per account): every automated fan is answered, a paused /
+   stopped / never-enabled / non-owned fan never is, an unknown send holds only that fan,
+   the delivery allowance is shared and enforced, and a human send for fan B goes out
+   while fan A is being answered.
 
 The SQLite backend uses scratch tables; test_native_pilot_service_pg.py runs the
 same suite on a real PostgreSQL schema through the ``Backend`` seam below.
@@ -96,6 +100,26 @@ class SqliteBackend:
         else:
             f.sql("INSERT INTO of_conversation_state(account_id,fan_id,mode,takeover_state) VALUES(?,?,?,?)",
                   (L.ACCT, L.FAN, mode, takeover))
+
+
+    # Multi-fan helpers (all-fans mode): one conversation row + control state per fan.
+    def add_fan(self, f, fan):
+        L = self.L
+        f.sql("INSERT INTO twin_bridge_conversations VALUES(?,?,'active',NULL,4,NULL,NULL,1,3,3,?)", (L.ACCT, fan, L.NOW.isoformat()))
+
+    def fan_state(self, f, fan, mode, takeover="none"):
+        L = self.L
+        if f.sql("SELECT 1 FROM of_conversation_state WHERE fan_id=?", (fan,)):
+            f.sql("UPDATE of_conversation_state SET mode=?,takeover_state=? WHERE fan_id=?", (mode, takeover, fan))
+        else:
+            f.sql("INSERT INTO of_conversation_state(account_id,fan_id,mode,takeover_state) VALUES(?,?,?,?)",
+                  (L.ACCT, fan, mode, takeover))
+
+    def fan_skip(self, f, fan, reason):
+        L = self.L
+        f.sql("DELETE FROM skip_list WHERE fan_id=?", (fan,))
+        if reason:
+            f.sql("INSERT INTO skip_list(account_id,fan_id,reason) VALUES(?,?,?)", (L.ACCT, fan, reason))
 
 
 def refuses(L, reason, fn):
@@ -627,6 +651,355 @@ async def intake_level(backend, root):
     check(await h.handle(msg(7008, createdAt="not-a-date")) == "invalid")
 
 
+async def multi_intake_level(backend, root):
+    """Account-wide intake: every fan's plain text, never our own echoes, still idempotent."""
+    L = backend.L
+    from native_pilot.intake import Intake
+    from native_pilot.scope import AccountScope
+    scope, stored, out = AccountScope.parse(L.ACCT), [], []
+    f = backend.fixture(root, "multi-intake")
+
+    async def transcode(account, message):
+        stored.append((message["fromUser"]["id"], message["id"]))
+        f.source(message["id"], fan_id=message["fromUser"]["id"], body="hi", created_at="2026-10-24 01:02:03.123000")
+
+    def msg(mid, sender, **extra):
+        return {"api2_chat_message": {"id": mid, "text": "<p>hi</p>", "createdAt": "2026-10-24T01:02:03.123000+00:00",
+                                      "fromUser": {"id": sender}, **extra}}
+    intake = Intake(scope, None, f.path, transcode=transcode, emit=out.append)
+    check(await intake.handle(msg(8101, L.FAN + 5)) == "persisted")
+    check(await intake.handle(msg(8102, L.FAN + 6)) == "persisted")
+    check(await intake.handle(msg(8102, L.FAN + 6)) == "duplicate")
+    check(await intake.handle(msg(8103, int(L.ACCT))) == "other-sender", "our own echo is never filed as a fan's inbound")
+    check(await intake.handle(msg(8104, L.FAN + 7, mediaCount=1, media=[{"id": 1}])) == "unsupported")
+    check(await intake.handle(msg(8105, "not-an-id")) == "other-sender")
+    check(stored == [(L.FAN + 5, 8101), (L.FAN + 6, 8102)], stored)
+
+
+# ── all-fans mode ─────────────────────────────────────────────────────────────
+
+async def multi_level(backend, root):
+    import dotenv
+    dotenv.load_dotenv = lambda *a, **k: False
+    dotenv.dotenv_values = lambda *a, **k: {"OPENROUTER_API_KEY": "synthetic-unused-key"}
+    L = backend.L
+    import copy
+    from urllib.parse import urlsplit
+    import test_native_pilot_runner as R
+    from curl_cffi.requests.exceptions import ProxyError
+    from native_pilot import attribution, connection as conn_mod, engine as engine_mod, runner, service
+    from native_pilot.attribution import Sentinels
+    from native_pilot.scope import AccountScope
+    from of_client import OFClient
+
+    logging.disable(logging.CRITICAL)
+    A = L.ACCT
+    FA, FB, FC, FD, FE, FF = (L.FAN + n for n in range(6))  # A,B automated; C paused; D skip_list stop; E no state row; F not FASTT-owned
+    OWNED = {FA, FB, FC, FD, FE}
+    events = []
+    clock = Clock(datetime.now(timezone.utc).replace(tzinfo=None, microsecond=123000))
+
+    async def no_report(ledger, pilot, run_error=None):
+        pass
+
+    async def no_ensure(scope, fan):
+        pass
+
+    async def fast_idle(self, seconds):
+        clock.add(seconds)
+        try:
+            await asyncio.wait_for(self.stop.wait(), 0.002)
+        except asyncio.TimeoutError:
+            pass
+
+    class LiveHTTP:
+        """One account socket, many fans: history and POSTs are routed by the fan in the URL."""
+
+        def __init__(self, f):
+            self.f, self.sent, self.posts, self.fail_for, self.closed = f, [], [], {}, False
+
+        @staticmethod
+        def fan_of(url):
+            return int(urlsplit(url).path.split("/")[-2])
+
+        def get(self, url, **kwargs):
+            fan = self.fan_of(url)
+            rows = self.f.sql("SELECT message_id,body,created_at FROM messages WHERE direction='in' AND fan_id=?", (fan,))
+            inbound = [{"id": mid, "text": body, "createdAt": str(created).replace(" ", "T") + "Z", "isFromMe": False,
+                        "fromUser": {"id": fan}, "withUser": {"id": fan}} for mid, body, created in rows]
+            history = sorted([m for m in self.sent if m["withUser"]["id"] == fan] + inbound,
+                             key=lambda m: (m["createdAt"], m["id"]), reverse=True)
+            return R.FakeResponse({"list": copy.deepcopy(history), "hasMore": False})
+
+        def request(self, method, url, json=None, **kwargs):
+            fan = self.fan_of(url)
+            if fan in self.fail_for:
+                self.posts.append((fan, json["text"]))
+                raise self.fail_for[fan]
+            self.posts.append((fan, json["text"]))
+            result = {"id": 7000 + len(self.posts), "text": json["text"], "isFromMe": True, "fromUser": {"id": int(A)},
+                      "withUser": {"id": fan}, "createdAt": clock().isoformat() + "Z", "price": 0, "media": []}
+            self.sent.append(result)
+            return R.FakeResponse(result)
+
+        def close(self):
+            self.closed = True
+
+    class FakeIntake:
+        scopes = []
+
+        def __init__(self, scope, fan, path):
+            FakeIntake.scopes.append(fan)
+
+        def start(self, client):
+            pass
+
+        async def stop(self):
+            pass
+
+    holder = {}
+
+    class FakeEngine:
+        def __init__(self, account, fan, *, chat, send, emit, content, context, own_offers_only=False):
+            self.send, self.fan = send, fan
+            check(own_offers_only is True, "all-fans turns scope open offers to their own fan")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        async def run(self, run_id):
+            f = holder["f"]
+            raw = await asyncio.to_thread(self.send, self.fan, "neutral reply", {})
+            f.source(raw["id"], fan_id=self.fan, direction="out", body=raw["text"], created_at=clock().isoformat(sep=" "))
+            f.sql("UPDATE messages SET automation_kind='ai_chatter',sent_by_employee_id=5 WHERE message_id=?", (raw["id"],))
+            return {}
+
+    def make(name, **policy):
+        f = backend.fixture(root, name)
+        backend.prepare(f)
+        backend.policy(f, **{"limit": 100, "used": 4, "throttle": 20, **policy})
+        for fan in (FB, FC, FD, FE, FF):
+            backend.add_fan(f, fan)
+        holder["f"] = f
+        http = LiveHTTP(f)
+        client = OFClient.__new__(OFClient)
+        client.account_id, client.user_id, client.platform = A, A, "onlyfans"
+        client.http, client.timeout_s, client.proxy_url, client.proxy_label = http, 1, None, None
+        client._signed_headers = lambda url: {}
+        client.me = lambda: {"id": int(A), "username": "synthetic-creator"}
+        backend.fan_state(f, FA, "automated")
+        backend.fan_state(f, FB, "automated")
+        backend.fan_state(f, FC, "paused")
+        backend.fan_state(f, FD, "automated")
+        backend.fan_skip(f, FD, "manual_restrict")
+        backend.fan_state(f, FF, "automated")  # E has no row at all
+        return f, http, client
+
+    fake_conn = conn_mod.PilotConnection(
+        scope=AccountScope.parse(A), tenant_id="synthetic-tenant", revision=3, owner_id=int(A),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30), capture={}, x_hash="x", proxy_url=None,
+        model_id="openrouter/deepseek-v4.1-flash", model_api_key="synthetic-key", daily_cost_cap_cents=100)
+
+    async def fake_load(scope):
+        return fake_conn
+
+    async def fake_sentinels():
+        return Sentinels(automation=5, human=6)
+
+    args = argparse.Namespace(account=A, fan=None, all_fans=True, handle="synthetic-creator", enable_send=True,
+                              twin_context=False, content_manifest=None, service_id=None)
+    ids = iter(range(5000, 9000))
+
+    def says(f, fan, text="neutral fan text"):
+        clock.add(1)
+        mid = next(ids)
+        f.source(mid, fan_id=fan, body=text, created_at=clock().isoformat(sep=" "), ingested_at=clock().isoformat(sep=" "))
+        return mid
+
+    def posted(http, fan):
+        return [p for p in http.posts if p[0] == fan]
+
+    def kinds(name):
+        return [e for e in events if e.get("event") == name]
+
+    def pilots(f):
+        return sorted(r[0] for r in f.sql("SELECT pilot_id FROM native_pilots"))
+
+    async def settle(n=60):
+        for _ in range(n):
+            await asyncio.sleep(0.003)
+
+    refuses_args = argparse.Namespace(**{**vars(args), "fan": FA})  # both scopes at once is refused
+    try:
+        service.Service(refuses_args)
+        check(False, "--fan together with --all-fans must be refused")
+    except service.Refused as exc:
+        check(exc.reason == "fan-scope-invalid")
+
+    with patch.object(runner, "emit", events.append), patch.object(runner, "now", clock), \
+            patch.object(runner, "report_to_twin", no_report), patch.object(service, "ensure_fan_conversation", no_ensure), \
+            patch.object(service.Service, "idle", fast_idle), patch.object(engine_mod, "NativeEngine", FakeEngine), \
+            patch.object(service.Service, "_owned", lambda self, fan: fan in OWNED), \
+            patch.object(conn_mod, "load_verified_connection", fake_load), patch.object(attribution, "require_sentinels", fake_sentinels):
+
+        async def start(client):
+            # Returns once the account socket is up: only messages after that moment are answerable.
+            patcher = patch.object(conn_mod, "build_client", return_value=client)
+            patcher.start()
+            before = len(FakeIntake.scopes)
+            options = dict(ttl_s=120, renew_s=30, poll_s=2, hold_s=15, quiet_s=0, intake_factory=FakeIntake)
+            task = asyncio.get_running_loop().create_task(service.serve(args, **options))
+            await until(lambda: len(FakeIntake.scopes) > before, "intake started", events)
+            return task, patcher
+
+        async def stop(task, patcher):
+            os.kill(os.getpid(), signal.SIGTERM)
+            await asyncio.wait_for(task, 20)
+            patcher.stop()
+
+        # ── two automated fans are both answered; paused / stopped / never-enabled / non-owned never ──
+        f, http, client = make("multi-main", limit=100, used=4, throttle=20)
+        events.clear()
+        FakeIntake.scopes.clear()
+        task, patcher = await start(client)
+        check(FakeIntake.scopes == [None], "the socket covers the whole account (no single-fan filter)")
+        mb = says(f, FB, "from b")      # B writes first: oldest first
+        ma = says(f, FA, "from a")
+        for fan in (FC, FD, FE, FF):
+            says(f, fan, "from someone who must not be answered")
+        await until(lambda: len(posted(http, FA)) == 1 and len(posted(http, FB)) == 1, "A and B answered", events)
+        check([p[0] for p in http.posts[:2]] == [FB, FA], "oldest inbound first")
+        await settle()
+        check(all(not posted(http, fan) for fan in (FC, FD, FE, FF)), "paused / stopped / no-state / non-owned: no POST")
+        check(pilots(f) == sorted([f"svc-{A}-{FA}", f"svc-{A}-{FB}"]), pilots(f))
+        used, nxt = f.sql("SELECT used_units,next_dispatch_at FROM of_delivery_policy")[0]
+        check(used == 6 and nxt is not None, "one allowance unit per send, shared by both fans")
+        admitted = [ts(r[0]) for r in f.sql("SELECT created_at FROM twin_bridge_send_attempts WHERE turn_id LIKE 'native-pilot-%' ORDER BY id")]
+        check(len(admitted) == 2 and admitted[1] - admitted[0] >= timedelta(seconds=20), "the account throttle spans fans")
+        check(not task.done() and not kinds("lease-lost"))
+        # Each fan has its own conversation reservation, claim and receipt.
+        check(f.sql("SELECT count(*) FROM native_pilot_inputs")[0][0] == 2)
+        check(f.sql("SELECT count(DISTINCT pilot_id) FROM native_pilot_receipts WHERE state='sent'")[0][0] == 2)
+
+        # An operator stop appearing later is honoured; Twin enabling C later makes it answerable.
+        backend.fan_state(f, FA, "human_controlled")
+        says(f, FA, "a again while human controlled")
+        await settle()
+        check(len(posted(http, FA)) == 1, "a fan moved to human_controlled is not answered")
+        backend.fan_state(f, FC, "automated")
+        await until(lambda: len(posted(http, FC)) == 1, "C answered once Twin enables it", events)
+        backend.fan_state(f, FA, "automated")
+        await until(lambda: len(posted(http, FA)) == 2, "A answered again after Twin resumes it", events)
+        await stop(task, patcher)
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 8)
+
+        # ── an unknown send on fan A holds A only; B keeps being answered; nothing is resent ──
+        f, http, client = make("multi-unknown", limit=100, used=4, throttle=1)
+        events.clear()
+        http.fail_for[FA] = ProxyError("synthetic transport failure")
+        task, patcher = await start(client)
+        says(f, FA, "a first")
+        await until(lambda: any(e.get("event") == "stopped" for e in events), "A unknown stop", events)
+        check(len(posted(http, FA)) == 1 and f.sql("SELECT state FROM native_pilots WHERE pilot_id=?", (f"svc-{A}-{FA}",))[0][0] == "stopped")
+        check(f.sql("SELECT state FROM twin_bridge_conversations WHERE fan_id=?", (FA,))[0][0] == "attention")
+        says(f, FB, "b while a is held")
+        await until(lambda: len(posted(http, FB)) == 1, "B still answered", events)
+        http.fail_for.clear()
+        says(f, FA, "a second")
+        says(f, FB, "b second")
+        await until(lambda: len(posted(http, FB)) == 2, "B answered again", events)
+        await settle()
+        check(len(posted(http, FA)) == 1, "the unknown send is never resent and A stays held")
+        check(f.sql("SELECT state FROM native_pilots WHERE pilot_id=?", (f"svc-{A}-{FB}",))[0][0] == "active")
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 7, "the unknown send kept its unit")
+        await stop(task, patcher)
+
+        # ── the allowance is shared across fans and refuses when exhausted ──
+        f, http, client = make("multi-allowance", limit=6, used=4, throttle=1)
+        events.clear()
+        task, patcher = await start(client)
+        says(f, FA)
+        says(f, FB)
+        await until(lambda: len(http.posts) == 2, "both answered", events)
+        says(f, FA)
+        says(f, FB)
+        await settle(120)
+        check(len(http.posts) == 2, "limit_units is the cap for the whole account")
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 6)
+        check(any(str(e.get("reason", "")).startswith("allowance-") for e in kinds("held")))
+        await stop(task, patcher)
+
+        # ── Twin's controls run for every fan with activity; a human send for B goes out while A chats ──
+        f, http, client = make("multi-human", limit=100, used=4, throttle=1)
+        events.clear()
+        calls, grants = [], []
+
+        class FakeStore:
+            def __init__(self, url):
+                self.engine = self
+
+            def connect(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, *a, **k):
+                return self
+
+            def scalar(self):
+                return 3
+
+            def reconcile_runtime_stop(self, tenant, account, fan):
+                calls.append(("reconcile", fan))
+
+            def admit_new_conversation(self, tenant, account, fan):
+                calls.append(("admit", fan))
+
+        def fake_dispatch(authority, tenant, account, transport):
+            if not grants:
+                return None
+            grant = grants.pop(0)
+            try:
+                transport.post_once(grant)
+            except Exception as exc:
+                return type(exc).__name__
+            return "accepted"
+
+        class Grant:
+            def __init__(self, fan, body):
+                self.fan_id, self.body = fan, body
+
+        import onlyfans_runtime.fastt_manual as manual
+        import onlyfans_runtime.store as twin_store
+        import onlyfans_runtime.text_delivery as delivery
+        env = {"DATABASE_URL": "postgresql://synthetic/synthetic", "ONLYFANS_WORKER_TENANT": "synthetic-tenant"}
+        with patch.dict(os.environ, env), patch.object(twin_store, "Store", FakeStore), \
+                patch.object(delivery, "TextAuthority", lambda store: store), \
+                patch.object(manual, "dispatch_next_manual", fake_dispatch):
+            task, patcher = await start(client)
+            says(f, FA, "a is chatting")
+            grants.extend([Grant(FB, "human hello for B"), Grant(FF, "never sent: not FASTT-owned")])
+            await until(lambda: len(posted(http, FA)) == 1 and (FB, "<p>human hello for B</p>") in http.posts,
+                        "A answered and the human message for B sent", events)
+            await settle()
+            check(not posted(http, FF), "a queued message for a non-owned fan is never sent by this runner")
+            check(("reconcile", FA) in calls and ("admit", FA) in calls, "controls run for the fan with activity")
+            says(f, FB, "b answers the human")
+            await until(lambda: len(posted(http, FB)) == 2, "B (now with human history) is answered too", events)
+            check(("reconcile", FB) in calls)
+            check(not any(c[1] in (FC, FD, FF) for c in calls), "no controls for fans without activity or not owned")
+            await stop(task, patcher)
+    from db.engine import engine
+    await engine.dispose()
+
+
 def main():
     import test_native_pilot_ledger as L
     backend = SqliteBackend(L)
@@ -640,6 +1013,8 @@ def main():
         asyncio.run(loop_level(backend, root))
         print("loop level ok", CHECKS)
         asyncio.run(intake_level(backend, root))
+        asyncio.run(multi_level(backend, root))
+        asyncio.run(multi_intake_level(backend, root))
     print(f"native pilot service: all cases passed ({CHECKS} checks)")
 
 

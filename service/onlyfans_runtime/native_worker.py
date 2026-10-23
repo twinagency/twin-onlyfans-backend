@@ -129,8 +129,8 @@ class NativeWorker:
                 (now-runtime.last_sync_at).total_seconds()>=-300 and
                 (now-runtime.last_sync_at).total_seconds()<=MAX_SYNC_AGE_SECONDS)
             # Per-fan eligibility still requires that fan's own recovery (text_delivery).
-            return bool(runtime.enabled and not runtime.pending_events
-                and (current or bool(fan_current_override(account.account_id)))
+            return bool(runtime.enabled and ((current and not runtime.pending_events)
+                or bool(fan_current_override(account.account_id)))
                 and policy is not None and policy.enabled and policy.transport_kind==kind
                 and policy.used_units<policy.limit_units and not policy.active_intent_id and policy.queued_count==0
                 and (policy.next_dispatch_at is None or policy.next_dispatch_at<=now)

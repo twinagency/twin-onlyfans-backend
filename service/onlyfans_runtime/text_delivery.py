@@ -239,8 +239,7 @@ class TextAuthority:
                 or runtime.last_sync_at < now - timedelta(seconds=MAX_SYNC_AGE_SECONDS)
                 or runtime.last_sync_at > now + timedelta(minutes=5)):
             from .store import fan_history_current
-            if not (fan is not None and not runtime.pending_events
-                    and fan_history_current(s, runtime.account_id, fan.fan_id)):
+            if not (fan is not None and fan_history_current(s, runtime.account_id, fan.fan_id)):
                 return "history_not_current"
         if s.scalar(select(OfIngress.event_key).where(
                 OfIngress.account_id == runtime.account_id, OfIngress.status == "quarantined").limit(1)) is not None:

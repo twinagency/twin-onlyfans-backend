@@ -125,7 +125,11 @@ def fan_history_current(s, account_id, fan_id):
     row = s.get(OfRecovery, (account_id, fan_id))
     quarantined = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account_id,
         OfIngress.fan_id == fan_id, OfIngress.status == "quarantined").limit(1)) if hasattr(OfIngress, "fan_id") else None
-    return row is not None and row.status == "complete" and quarantined is None
+    # The fan's own ingress must be fully applied (account-wide pending events
+    # from other fans do not block this fan).
+    unapplied = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account_id,
+        OfIngress.fan_id == fan_id, OfIngress.status != "applied").limit(1))
+    return row is not None and row.status == "complete" and quarantined is None and unapplied is None
 
 class Store:
     def __init__(self, url: str):

@@ -20,6 +20,7 @@ def main():
         path = store_target()
         if not path:
             raise Refused("pilot-store-required")
+        store.ensure_runtime_schema(path)
         ledger = Ledger(path)
         if args.action == "stop":
             # Ownership is used privately; never expose the token in output or

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from db.engine import engine, get_session
-from db.models import TwinBridgeConversation, TwinBridgeTurn
+from db.onlyfans_pilot_models import TwinBridgeConversation, TwinBridgeTurn
 
 from . import worker
 from .platform import OnlyFansTextAdapter

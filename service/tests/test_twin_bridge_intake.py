@@ -71,7 +71,8 @@ from sqlalchemy import select  # noqa: E402
 from sqlalchemy import text as _sa_text  # noqa: E402
 
 from db.engine import engine, get_session, init_db  # noqa: E402
-from db.models import Account, Message, TwinBridgeInput  # noqa: E402
+from db.models import Account, Message  # noqa: E402
+from db.onlyfans_pilot_models import TwinBridgeInput  # noqa: E402
 from twin_bridge import contract, normalize  # noqa: E402
 from twin_bridge.errors import ContractError, IntakeConflictError  # noqa: E402
 from twin_bridge.intake import enqueue_inbound_if_enabled, fetch_row_view  # noqa: E402
@@ -713,7 +714,7 @@ sys.setrecursionlimit(50000)
 threading.stack_size(64 * 1024 * 1024)
 from sqlalchemy import select
 from db.engine import get_session
-from db.models import TwinBridgeInput
+from db.onlyfans_pilot_models import TwinBridgeInput
 
 async def main():
     async with get_session() as s:

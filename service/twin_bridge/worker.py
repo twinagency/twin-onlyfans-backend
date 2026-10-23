@@ -30,7 +30,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, update
 
 from db.engine import get_session
-from db.models import Message, TwinBridgeInput, TwinBridgeTurn, TwinBridgeTurnMember
+from db.models import Message
+from db.onlyfans_pilot_models import TwinBridgeInput, TwinBridgeTurn, TwinBridgeTurnMember
 
 from . import turns as turns_mod
 from . import contract

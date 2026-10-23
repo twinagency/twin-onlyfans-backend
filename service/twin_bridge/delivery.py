@@ -25,7 +25,8 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from db.engine import get_session
-from db.models import Message, TwinBridgeConversation, TwinBridgeSendAttempt, TwinBridgeTurn
+from db.models import Message
+from db.onlyfans_pilot_models import TwinBridgeConversation, TwinBridgeSendAttempt, TwinBridgeTurn
 
 from .coordination import (
     CONV_ACTIVE,

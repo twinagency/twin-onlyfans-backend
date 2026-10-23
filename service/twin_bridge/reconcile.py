@@ -39,7 +39,8 @@ from sqlalchemy import and_, exists, or_, select, type_coerce
 from sqlalchemy import String as SAString
 
 from db.engine import get_session
-from db.models import Message, TwinBridgeInput
+from db.models import Message
+from db.onlyfans_pilot_models import TwinBridgeInput
 
 from .errors import IntakeConflictError
 from .intake import (

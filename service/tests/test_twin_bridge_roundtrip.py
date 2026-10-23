@@ -42,8 +42,9 @@ from sqlalchemy import select  # noqa: E402
 
 from db.engine import engine, get_session, init_db  # noqa: E402
 from db.models import (  # noqa: E402
-    Account, Fan, Message, TwinBridgeTurn,
+    Account, Fan, Message,
 )
+from db.onlyfans_pilot_models import TwinBridgeTurn  # noqa: E402
 from twin_bridge import worker  # noqa: E402
 from twin_bridge.client import TwinBridgeClient  # noqa: E402
 from twin_bridge.intake import enqueue_inbound_if_enabled  # noqa: E402

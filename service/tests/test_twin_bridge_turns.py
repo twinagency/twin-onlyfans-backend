@@ -35,7 +35,7 @@ sys.modules["relay_cache"] = _relay_cache
 from sqlalchemy import select  # noqa: E402
 
 from db.engine import engine, get_session, init_db  # noqa: E402
-from db.models import (  # noqa: E402
+from db.onlyfans_pilot_models import (  # noqa: E402
     TwinBridgeConversation, TwinBridgeInput, TwinBridgeSendAttempt,
     TwinBridgeTurn, TwinBridgeTurnMember,
 )

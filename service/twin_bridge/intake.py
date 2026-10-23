@@ -31,7 +31,8 @@ from sqlalchemy import select, type_coerce
 from sqlalchemy import String as SAString
 from .store import dialect_insert
 
-from db.models import Message, TwinBridgeInput
+from db.models import Message
+from db.onlyfans_pilot_models import TwinBridgeInput
 
 from . import contract
 from .errors import IntakeConflictError

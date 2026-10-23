@@ -139,7 +139,7 @@ class Ledger:
     def _tx(self, *, initialize: bool = False) -> Iterator[object]:
         self._check_target()
         with store.transaction(self.path) as con:
-            # PostgreSQL tables come from migration 0092, never from runtime DDL.
+            # PostgreSQL: fastt_runtime tables are created by store.ensure_runtime_schema (runner/control), not here.
             if initialize and not self.pg:
                 for statement in _SCHEMA:
                     con.execute(statement)

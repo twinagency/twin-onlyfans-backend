@@ -32,7 +32,7 @@ from sqlalchemy import and_, or_, select, update
 from .store import dialect_insert
 
 from db.engine import get_session
-from db.models import TwinBridgeConversation, TwinBridgeInput, TwinBridgeTurn, TwinBridgeTurnMember
+from db.onlyfans_pilot_models import TwinBridgeConversation, TwinBridgeInput, TwinBridgeTurn, TwinBridgeTurnMember
 
 from . import contract
 from .errors import ContractError

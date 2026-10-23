@@ -41,6 +41,10 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None):
     if (type(price) is not int or type(item.price_cents) is not int
             or not OF_PRICE_FLOOR_CENTS <= item.price_cents <= price <= OF_PRICE_MAX_CENTS):
         raise Refused("invalid catalogue price")
+    fixed = item.pricing_mode == "fixed"
+    if item.pricing_mode not in {"dynamic", "fixed"} or (fixed and price != item.price_cents):
+        # A fixed item's saved amount is the offer; no override may change it.
+        raise Refused("fixed catalogue price differs")
     ids = media_ids(item.media_ids)
     try:
         previews = json.loads(item.preview_media_ids)
@@ -61,6 +65,15 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None):
         "media_ids": ids, "preview_ids": previews, "price_cents": price,
         "files": [{key: getattr(r, key) for key in ("media_id", "kind", "content_hash",
             "updated_at", "removed_at")} for r in rows]}
+    if fixed:
+        # Added only for fixed items so every existing dynamic snapshot, queued
+        # intent and campaign stays byte-identical and is never reinterpreted.
+        from .offer_import import provenance
+        source = provenance(session, account_id, item.id)
+        if source is not None and source["withdrawn"]:
+            raise Refused("approved catalogue terms unavailable")
+        snapshot["item"]["pricing_mode"] = "fixed"
+        snapshot["source"] = None if source is None else {"decision": source["decision"], "fingerprint": source["fingerprint"]}
     return json.loads(canonical(snapshot))
 
 

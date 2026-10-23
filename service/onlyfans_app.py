@@ -21,6 +21,8 @@ from onlyfans_commands.settings import configured as control_configured
 from onlyfans_commands.configuration_api import router as configuration_router,configured as configuration_configured
 from onlyfans_commands.campaign_api import router as campaign_router,configured as campaign_configured
 from onlyfans_commands.content_api import router as content_router,configured as content_configured
+from onlyfans_commands.content_api_v2 import router as content_v2_router
+from onlyfans_commands.offer_import_api import router as offer_import_router
 from onlyfans_commands.connection_api import router as connection_router,configured as connection_configured
 from onlyfans_commands.vault_api import router as vault_router
 from onlyfans_commands.vault_media_api import router as vault_media_router
@@ -50,6 +52,8 @@ app.include_router(control_router)
 app.include_router(configuration_router)
 app.include_router(campaign_router)
 app.include_router(content_router)
+app.include_router(content_v2_router)
+app.include_router(offer_import_router)
 app.include_router(connection_router)
 app.include_router(vault_router)
 app.include_router(vault_media_router)
@@ -59,7 +63,7 @@ app.include_router(vault_media_router)
 async def private_responses(request, call_next):
     response = await call_next(request)
     response.headers["Cache-Control"] = "private, no-store"
-    response.headers["Vary"] = "Authorization, X-OnlyFans-Schema-Version, X-OnlyFans-Control-Version, X-OnlyFans-Configuration-Version, X-OnlyFans-Campaign-Version, X-OnlyFans-Content-Version, X-OnlyFans-Connection-Version"
+    response.headers["Vary"] = "Authorization, X-OnlyFans-Schema-Version, X-OnlyFans-Control-Version, X-OnlyFans-Configuration-Version, X-OnlyFans-Campaign-Version, X-OnlyFans-Content-Version, X-OnlyFans-Connection-Version, X-OnlyFans-Offer-Import-Version"
     return response
 
 

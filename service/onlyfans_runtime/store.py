@@ -521,7 +521,8 @@ class Store:
             row.lease_until = now + timedelta(seconds=LEASE_SECONDS)
             return RecoveryClaim(account_id, row.fan_id, row.generation, row.lease_token, row.high_water, row.upper_bound, row.before_id)
 
-    def recovery_page(self, tenant_id, claim: RecoveryClaim, events: list[Event], *, has_more: bool, connection_revision=None):
+    def recovery_page(self, tenant_id, claim: RecoveryClaim, events: list[Event], *, has_more: bool, connection_revision=None,
+                      observations=()):
         if type(has_more) is not bool or len(events) > PAGE_LIMIT or (has_more and not events):
             raise Refused("invalid recovery page")
         normalized = [event.normalized() for event in events]
@@ -530,6 +531,13 @@ class Store:
             raise Refused("invalid recovery order or scope")
         if claim.before_id is not None and any(i >= claim.before_id for i in ids):
             raise Refused("recovery cursor did not advance")
+        from .offer_terms import OfferObservation
+        if (type(observations) not in {list, tuple} or len(observations) > len(normalized)
+                or any(type(o) is not OfferObservation for o in observations)):
+            raise Refused("invalid offer observations")
+        offers = [o.normalized() for o in observations]
+        if any(o.source_kind != "message" or o.fan_id != claim.fan_id or o.source_id not in ids for o in offers):
+            raise Refused("offer observation outside this recovery page")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, claim.account_id)
             self._read_connection(s, runtime, connection_revision)
@@ -540,6 +548,9 @@ class Store:
                 return "backpressure"
             if row.upper_bound is None:
                 row.upper_bound = max(ids, default=row.high_water)
+            # Commercial evidence only: no reply work, revision, takeover,
+            # ownership or high-water change. Duplicates are idempotent.
+            self._observe_offers(s, runtime, offers)
             for event in normalized:
                 if event.message_id > row.high_water:
                     # Imports stay historical even if activation happens before
@@ -559,6 +570,26 @@ class Store:
             # a separate completeness obligation, not inferred from one page.
             self._mark_current(s, runtime)
             return "complete" if finished else "continue"
+
+    @staticmethod
+    def _observe_offers(s, runtime, offers):
+        if not offers:
+            return
+        from sqlalchemy.dialects.postgresql import insert
+        from db.onlyfans_offer_import_models import OfOfferObservation
+        from .native_context import canonical
+        from .offer_terms import PARSER_VERSION
+        now = utcnow()
+        rows = [dict(account_id=runtime.account_id, observation_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
+            source_kind=o.source_kind, source_id=o.source_id, fan_id=o.fan_id, source_context=o.source_context,
+            source_at=datetime.fromisoformat(o.source_at).replace(tzinfo=None), observed_at=now,
+            media_json=canonical(list(o.media_ids)),
+            preview_json=None if o.preview_ids is None else canonical(list(o.preview_ids)),
+            locked_text=o.locked_text, price_cents=o.price_cents, currency=o.currency,
+            parser_version=PARSER_VERSION, fingerprint=o.fingerprint(), media_key=o.media_key,
+            reasons_json=canonical(list(o.reasons))) for o in offers]
+        s.execute(insert(OfOfferObservation).values(rows).on_conflict_do_nothing(
+            constraint="uq_of_offer_observation_source"))
 
     @staticmethod
     def _begin_cycle(s, scan):

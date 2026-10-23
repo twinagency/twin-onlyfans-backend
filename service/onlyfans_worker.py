@@ -38,8 +38,18 @@ def _process_ledger_jobs(store, tenant, *, limit, stop):
     return process_ledger_pages(store, tenant, limit=limit, stop=stop)
 
 
+def _process_offer_jobs(store, tenant, *, limit, stop):
+    # Inventory needs no provider session; refresh reads one bounded history
+    # page per account interval. Neither sends, plans or calls a model.
+    from onlyfans_runtime.offer_import import process_inventory_jobs
+    from onlyfans_runtime.offer_import_worker import process_refresh_jobs
+    return (process_inventory_jobs(store, tenant, limit=limit, stop=stop)
+            + process_refresh_jobs(store, tenant, limit=limit, stop=stop))
+
+
 def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
-             load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None,facts_reader=None,enrollment_jobs=None):
+             load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None,facts_reader=None,enrollment_jobs=None,
+             offer_jobs=None):
     """Refresh bounded ordered cohorts without starving accounts after row 32.
 
     Cursor advancement is over scanned candidates, including invalid/expired
@@ -71,6 +81,10 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
                     break
             if ledger_jobs is not None:
                 ledger_jobs(store, tenant, limit=1, stop=stop)
+                if stop.is_set():
+                    break
+            if offer_jobs is not None:
+                offer_jobs(store, tenant, limit=1, stop=stop)
                 if stop.is_set():
                     break
             accounts, next_cursor, scanned = load_cohort(store, tenant, limit=32, after_account=cursor, stop=stop,
@@ -169,7 +183,8 @@ def main(argv=None):
             media_worker.start()
         return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,facts_reader=facts_reader,
                         vault_jobs=_process_vault_jobs, enrollment_jobs=_process_connection_enrollments,
-                        ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None)
+                        ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None,
+                        offer_jobs=_process_offer_jobs if os.environ.get("ONLYFANS_OFFER_IMPORT_ENABLED") == "1" else None)
     finally:
         stop.set()
         if media_worker is not None:

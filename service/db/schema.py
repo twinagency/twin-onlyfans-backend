@@ -34,8 +34,9 @@ LEDGER = "0084_native_ledger"
 CREATOR_FACTS = "0085_shared_creator_facts"
 VAULT_EDITS = "0086_vault_edits"
 ENROLLMENT = "0087_creator_enrollment"
-HEAD = "0088_native_vault_media"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, HEAD:88}
+VAULT_MEDIA = "0088_native_vault_media"
+HEAD = "0089_offer_import"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, HEAD:89}
 HERE = Path(__file__).resolve().parent
 
 
@@ -50,6 +51,7 @@ def _metadata():
     from . import onlyfans_campaign_models,onlyfans_connection_models,onlyfans_content_models  # noqa: F401
     from . import onlyfans_vault_models, onlyfans_ledger_models, onlyfans_creator_facts_models, onlyfans_vault_edit_models  # noqa: F401
     from . import onlyfans_media_models  # noqa: F401
+    from . import onlyfans_offer_import_models  # noqa: F401
     return Base.metadata
 
 
@@ -154,6 +156,9 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         (83, "of_vault_product_create", "of_vault_product_immutable", "vault product evidence is append-only"),
         (86, "of_vault_edit", "of_vault_edit_immutable", "vault edit evidence is append-only"),
         (84, "of_ledger_evidence", "of_ledger_immutable", "ledger evidence is append-only"),
+        (89, "of_offer_observation", "of_offer_observation_immutable", "offer observation evidence is append-only"),
+        (89, "of_offer_import_decision", "of_offer_decision_immutable", "offer import decisions are append-only"),
+        (89, "of_content_sync_decision", "of_content_sync_decision_immutable", "content sync decisions are append-only"),
     ]:
         if expected_rank < rank:
             continue

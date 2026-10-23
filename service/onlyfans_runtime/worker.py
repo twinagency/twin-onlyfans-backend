@@ -3,7 +3,7 @@
 There is deliberately no real provider construction or planner/send import.
 Production transport/session integration remains a separately gated adapter.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 from .store import Event, PAGE_LIMIT, Refused, Store
 
@@ -18,6 +18,9 @@ class ChatPage:
 class MessagePage:
     events: list[Event]
     has_more: bool
+    # Commercial terms of outgoing paid offers on this page, captured from the
+    # original rows. Optional so existing readers stay compatible.
+    observations: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -53,7 +56,8 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
             from .history_diagnostics import record_history_failure
             record_history_failure(error)
             raise
-        store.recovery_page(tenant_id, recovery, page.events, has_more=page.has_more, **scope)
+        store.recovery_page(tenant_id, recovery, page.events, has_more=page.has_more,
+                            observations=page.observations, **scope)
         recovered = 1
     return ReadProgress(applied, discovered, recovered)
 

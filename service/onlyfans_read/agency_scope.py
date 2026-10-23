@@ -96,7 +96,7 @@ class AgencyScopeMiddleware:
             if grant is not None:
                 path = scope["path"]
                 allowed = path == "/onlyfans/api/v1/status" or bool(re.fullmatch(
-                    r"/onlyfans/(?:api|control|content|configuration|campaign)/v1/accounts(?:/[A-Za-z0-9._:-]{1,64}(?:/.*)?)?", path))
+                    r"/onlyfans/(?:(?:api|control|content|configuration|campaign|offer-import)/v1|content/v2)/accounts(?:/[A-Za-z0-9._:-]{1,64}(?:/.*)?)?", path))
                 if not allowed or path.endswith("/operations") or scope["method"] not in {"GET", "HEAD", "POST"} or (scope["method"] == "POST" and not grant.can_manage):
                     raise ValueError("agency action unavailable")
         except (ValueError, TypeError, RecursionError):

@@ -321,45 +321,65 @@ def create_product(store, tenant, account, *, product, command_key, actor):
                 raise Refused("vault idempotency conflict")
             return json.loads(prior.acknowledgement_json)
         connection = _connection(s, runtime)
-        assets = []
-        for mid in media:
-            row = s.scalar(select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id == mid).with_for_update(read=True))
-            observation = s.get(OfVaultObservation, (account, mid))
-            job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
-            if row is None or not _ready(row, observation, job, connection, runtime.binding_id)[0]:
-                raise Refused("vault media unavailable")
-            if mid in previews and row.kind != "photo":
-                raise InvalidVault("Only included photos may be free preview assets.")
-            assets.append(row)
-        paid = [row for row in assets if row.media_id not in previews]
-        videos = [row for row in paid if row.kind == "video"]
-        if videos and (len(paid) != 1 or len(videos) != 1):
-            raise InvalidVault("A video product has one paid video and optional included photo previews.")
-        # Existing legacy/native products remain canonical. A new command must
-        # not create a duplicate shelf entry for the same assets, in any order.
-        existing = s.scalars(select(CatalogItem.media_ids).where(CatalogItem.account_id == account,
-            CATALOG_IS_SINGLE).limit(CATALOGUE_BOUND + 1)).all()
-        if len(existing) > CATALOGUE_BOUND:
-            raise Refused("catalogue creation bound exceeded")
-        for raw in existing:
-            try:
-                ids = json.loads(raw)
-            except (ValueError, TypeError):
-                continue
-            if type(ids) is list and all(type(mid) is int for mid in ids) and sorted(ids) == sorted(media):
-                raise Refused("catalogue assets already present")
-        now = utcnow()
-        row = CatalogItem(account_id=account, kind="video" if videos else "image" if len(media) == 1 else "image_set",
-            label=product["label"], description_for_ai=product["description"], media_ids=canonical(media),
-            preview_media_ids=canonical(previews), duration_sec=videos[0].duration_seconds if videos else None,
-            price_cents=product["priceCents"], enabled=product["enabled"], is_free_teaser=False, created_at=now, updated_at=now)
-        s.add(row)
-        s.flush()
+        row = create_catalog_single(s, runtime, connection, media=media, previews=previews,
+            label=product["label"], description=product["description"], price_cents=product["priceCents"],
+            enabled=product["enabled"], pricing_mode="dynamic")
+        now = row.created_at
         acknowledgement = {"itemId": str(row.id), "commandKey": command_key, "item": editable(row, 0)}
         s.add(OfVaultProductCreate(account_id=account, command_key=command_key, item_id=row.id,
             request_hash=fingerprint, media_hash=media_hash, actor=actor, product_json=canonical(product),
             acknowledgement_json=canonical(acknowledgement), created_at=now))
         return acknowledgement
+
+
+def create_catalog_single(s, runtime, connection, *, media, previews, label, description, price_cents,
+                          enabled, pricing_mode):
+    """Transaction-scoped validated creator shared by manual and import paths.
+
+    The caller owns the runtime lock, command evidence and acknowledgement.
+    Bundles may hold several paid photos and/or videos sold for one total;
+    free previews must be included photos and at least one asset stays paid.
+    """
+    account = runtime.account_id
+    if (pricing_mode not in {"dynamic", "fixed"} or type(price_cents) is not int
+            or not 300 <= price_cents <= 20000 or not 1 <= len(media) <= 20
+            or len(set(media)) != len(media) or not set(previews) < set(media)):
+        raise InvalidVault("Select 1-20 vault assets, leave one paid asset and set a paid price.")
+    assets = []
+    for mid in media:
+        row = s.scalar(select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id == mid).with_for_update(read=True))
+        observation = s.get(OfVaultObservation, (account, mid))
+        job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
+        if row is None or not _ready(row, observation, job, connection, runtime.binding_id)[0]:
+            raise Refused("vault media unavailable")
+        if mid in previews and row.kind != "photo":
+            raise InvalidVault("Only included photos may be free preview assets.")
+        assets.append(row)
+    paid = [row for row in assets if row.media_id not in previews]
+    videos = [row for row in paid if row.kind == "video"]
+    # Existing legacy/native products remain canonical. A new command must
+    # not create a duplicate shelf entry for the same assets, in any order.
+    existing = s.scalars(select(CatalogItem.media_ids).where(CatalogItem.account_id == account,
+        CATALOG_IS_SINGLE).limit(CATALOGUE_BOUND + 1)).all()
+    if len(existing) > CATALOGUE_BOUND:
+        raise Refused("catalogue creation bound exceeded")
+    for raw in existing:
+        try:
+            ids = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if type(ids) is list and all(type(mid) is int for mid in ids) and sorted(ids) == sorted(media):
+            raise Refused("catalogue assets already present")
+    now = utcnow()
+    # One video keeps its duration; a multi-video bundle has no single duration.
+    row = CatalogItem(account_id=account, kind="video" if videos else "image" if len(media) == 1 else "image_set",
+        label=label, description_for_ai=description, media_ids=canonical(media),
+        preview_media_ids=canonical(previews), duration_sec=videos[0].duration_seconds if len(videos) == 1 else None,
+        price_cents=price_cents, enabled=enabled, is_free_teaser=False, pricing_mode=pricing_mode,
+        created_at=now, updated_at=now)
+    s.add(row)
+    s.flush()
+    return row
 
 
 def _terminal(row, status, error=None):

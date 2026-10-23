@@ -31,6 +31,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     case,
     Date,
@@ -1867,11 +1868,20 @@ class CatalogItem(Base):
     is_free_teaser: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # dynamic = existing native quote arithmetic may set the offered amount.
+    # fixed = the saved price_cents is the offer (paid-offer import). Only the
+    # backend sets fixed; existing rows migrate as dynamic and are not repriced.
+    pricing_mode: Mapped[str] = mapped_column(
+        String, nullable=False, default="dynamic", server_default=text("'dynamic'"),
+        info={"onlyfans_since": "0089_offer_import"},
+    )
     created_at: Mapped[datetime] = _ts_now()
     updated_at: Mapped[datetime] = _ts_now()
 
     __table_args__ = (
         Index("ix_catalog_items_script", "account_id", "script_id", "position"),
+        CheckConstraint("pricing_mode IN ('dynamic','fixed')", name="pricing_mode",
+                        info={"onlyfans_since": "0089_offer_import"}),
     )
 
 
@@ -2949,7 +2959,7 @@ class LadderQuote(Base):
     price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pre_clamp_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     clamped_by: Mapped[str | None] = mapped_column(String)  # library|history|cold_ceiling|band|none
-    kind: Mapped[str] = mapped_column(String, nullable=False, default="rung")  # rung|discount
+    kind: Mapped[str] = mapped_column(String, nullable=False, default="rung")  # rung|discount|fixed (native fixed-price offer)
     message_id: Mapped[int | None] = mapped_column(BigInteger)
     sent_at: Mapped[datetime] = _ts_now()
     paid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

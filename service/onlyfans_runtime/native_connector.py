@@ -140,7 +140,11 @@ class NativeLoopbackConnector:
         ids = [event.message_id for event in events]
         if ids != sorted(set(ids), reverse=True) or (before_id is not None and any(value >= before_id for value in ids)):
             raise NativeProtocolError("native message cursor did not advance")
-        return MessagePage(events, more)
+        # Paid-offer terms come from the same validated rows before previews and
+        # lockedText are discarded. Event identity and payloads are unchanged.
+        from .offer_terms import from_history
+        observations = [value for value in (from_history(row, event) for row, event in zip(rows, events)) if value is not None]
+        return MessagePage(events, more, observations)
 
     def send(self, dispatch, *, authority, tenant_id):
         self._ready()

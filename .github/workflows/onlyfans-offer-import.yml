@@ -1,0 +1,43 @@
+name: OnlyFans offer import acceptance
+on:
+  push:
+    branches: [codex/onlyfans-offer-import]
+    paths: ['service/**', 'Dockerfile.onlyfans', 'requirements*.txt', '.github/workflows/onlyfans-offer-import.yml']
+  pull_request:
+    paths: ['service/onlyfans_runtime/**', 'service/onlyfans_commands/**', 'service/db/**', '.github/workflows/onlyfans-offer-import.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the runtime and disposable test image
+        run: |
+          docker build --label org.opencontainers.image.revision="$GITHUB_SHA" -f Dockerfile.onlyfans -t offer-import-candidate .
+          printf '%s\n' 'FROM offer-import-candidate' 'RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/* && pip install pytest==8.3.5' > Dockerfile.offer-check
+          docker build -f Dockerfile.offer-check -t offer-import-tests .
+          docker image inspect offer-import-candidate --format '{{.Id}}' | tee candidate-image-id.txt
+      - name: Start isolated PostgreSQL
+        run: |
+          docker network create offer-import-check
+          PG_MAJOR=$(docker run --rm offer-import-tests pg_dump --version | sed -E 's/.* ([0-9]+)\..*/\1/')
+          docker run -d --name offer-import-pg --network offer-import-check -e POSTGRES_PASSWORD=synthetic-pilot-only postgres:$PG_MAJOR-alpine
+          for i in $(seq 1 30); do docker exec offer-import-pg pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
+          docker exec offer-import-pg pg_isready -h 127.0.0.1 -U postgres
+      - name: Offer import, fixed price and regression acceptance
+        run: |
+          timeout 2400 docker run --rm --network offer-import-check -e ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres:synthetic-pilot-only@offer-import-pg:5432/postgres offer-import-tests \
+            python -m pytest -q -rs \
+            service/tests/test_onlyfans_offer_import.py service/tests/test_onlyfans_offer_import_pg.py \
+            service/tests/test_onlyfans_fixed_price_pg.py service/tests/test_onlyfans_offer_import_upgrade_pg.py \
+            service/tests/test_onlyfans_native_protocol.py service/tests/test_onlyfans_native_history.py \
+            service/tests/test_onlyfans_native_history_links_pg.py service/tests/test_onlyfans_foundation_pg.py \
+            service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_content_pg.py \
+            service/tests/test_onlyfans_vault_pg.py service/tests/test_onlyfans_media_pg.py \
+            service/tests/test_onlyfans_worker_media_pg.py service/tests/test_onlyfans_campaign_media_pg.py \
+            service/tests/test_onlyfans_vault_offer_availability.py service/tests/test_onlyfans_vault_previews_pg.py \
+            service/tests/test_onlyfans_provider_pg.py service/tests/test_onlyfans_connections_pg.py \
+            service/tests/test_onlyfans_worker_entry.py service/tests/test_onlyfans_release_rehearsal_pg.py

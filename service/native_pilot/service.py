@@ -30,7 +30,7 @@ import os
 import secrets
 import signal
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from twin_bridge import store
 
@@ -341,6 +341,11 @@ class Service:
         if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id) \
                 or (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < self.quiet_s:
             return await self.idle(self.poll_s)
+        wait = self.cooldown_left()
+        if wait > 0:
+            # FASTT's own short post-send cooldown (fans.automation_paused_until) would make
+            # ai_chatter skip the fan; wait it out instead of claiming and abandoning the input.
+            return await self.idle(min(wait + 0.5, self.poll_s * 10))
         try:
             sources = runner.read_sources(self.path, self.db, args.fan, getattr(snap, "member_ids", (snap.message_id,)))
             key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now())
@@ -391,6 +396,23 @@ class Service:
         if not receipts:
             runner.emit({"event": "native-no-reply", "skip_counts": {k: v for k, v in (stats or {}).items()
                                                                      if k.startswith("skipped_") and isinstance(v, int) and v}})
+
+    def cooldown_left(self) -> float:
+        """Seconds left on FASTT's per-fan cooldown (fans.automation_paused_until), 0 when none."""
+        with runner.readonly(self.path) as con:
+            if not store.has_table(con, "fans"):
+                return 0.0
+            row = con.execute("SELECT automation_paused_until FROM fans WHERE account_id=? AND fan_id=?",
+                              (self.db, self.args.fan)).fetchone()
+        if not row or not row[0]:
+            return 0.0
+        until = row[0] if isinstance(row[0], datetime) else datetime.fromisoformat(str(row[0]))
+        now = runner.now()
+        if until.tzinfo is not None:
+            until = until.astimezone(timezone.utc).replace(tzinfo=None)
+        if now.tzinfo is not None:
+            now = now.astimezone(timezone.utc).replace(tzinfo=None)
+        return max(0.0, (until - now).total_seconds())
 
     async def card_delivered(self, receipts):
         """True when a confirmed bubble of this turn is the priced card (its canonical row carries a price)."""

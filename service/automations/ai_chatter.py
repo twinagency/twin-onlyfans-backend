@@ -2121,6 +2121,7 @@ async def _gather(account_id: str,
         pending, copy_rows = _splice_plan(rows, runs, bcast_keys,
                                           automation_emp_id=automation_emp_id)
         pending = await _tombstoned(s, account_id, pending, bcast_keys)
+        twin_ai_ids = await _twin_ai_message_ids(s, account_id, rows)
     if stats is not None:
         # The runs themselves, by id, for the one caller that logs WHICH blast a
         # reply was rendered against. `c.splices` carries the ids; the text,
@@ -2133,6 +2134,7 @@ async def _gather(account_id: str,
     # falsely gains broadcast status silences the engine on a live chatter.
     broadcast_bodies = _broadcast_bodies(rows, bcast_keys,
                                          automation_emp_id=automation_emp_id)
+    twin_controls = _twin_controls_on()
     for row, _spliced in _with_splices(rows, pending):
         (fan_id, direction, body, created_at_raw, automation_kind, mass_run_id,
          image_desc, media_count, message_id, sent_by_employee_id) = row
@@ -2245,9 +2247,15 @@ async def _gather(account_id: str,
         # and one that silently agreed would hide the drift instead of pricing it
         # at zero. A mass row is excluded here exactly as `mass_run_id.is_(None)`
         # excludes it there.
+        # Twin: a human reply recorded in canonical rows (staff send, or an
+        # external one it cannot attribute) is an answer, exactly as the wire's
+        # `_thread_moved_on` counts it. Not a NAMED chatter: broadcast detection
+        # above is untouched and no chatter identity is asserted.
+        twin_human = (direction == "out" and mass_run_id is None and automation_kind is None
+                      and not broadcast and bool(twin_controls) and message_id not in twin_ai_ids)
         if direction == "out" and mass_run_id is None and (
-                automation_kind is not None or named_chatter):
-            c.answered_after_in.append((automation_kind, named_chatter))
+                automation_kind is not None or named_chatter or twin_human):
+            c.answered_after_in.append((automation_kind, named_chatter or twin_human))
         if direction == "in":
             c.fan_msg_n += 1
             c.last_in_at = created_at
@@ -2352,7 +2360,7 @@ async def _gather(account_id: str,
             # message_id, so that split is a race between two writers of one message.)
             c.last_out_was_gif = (hers and not (body or "").strip()
                                   and int(media_count or 0) == 0)
-            if automation_kind is None and not broadcast:
+            if automation_kind is None and not broadcast and message_id not in twin_ai_ids:
                 c.last_human_out_at = created_at
             if hers and created_at is not None:
                 # Another bubble of the reply we already counted, or a new reply?
@@ -3606,9 +3614,32 @@ async def _send_free_bubble(client, account_id: str, fan_id: int, line: str,
     return int(msg_id)
 
 
+def _twin_controls_on() -> bool:
+    """Twin's canonical-row attribution and control authority apply only in an
+    OnlyFans process role (PostgreSQL, Twin tables present). Stock FASTT on
+    SQLite never takes these branches."""
+    import os
+    return bool(os.environ.get("ONLYFANS_PROCESS_ROLE"))
+
+
+async def _twin_ai_message_ids(s, account_id: str, rows) -> frozenset[int]:
+    """Message ids among `rows` that Twin knows an AI origin sent, though the row
+    carries no automation kind. They must not read as a human reply."""
+    if not _twin_controls_on():
+        return frozenset()
+    # rows: (fan_id, direction, body, created_at, automation_kind, mass_run_id, ..., message_id, ...)
+    untagged = {int(r[0]) for r in rows if r[1] == "out" and r[4] is None and r[5] is None}
+    if not untagged:
+        return frozenset()
+    from onlyfans_runtime.fastt_controls import ai_message_ids
+    return frozenset(int(r[0]) for r in (await s.execute(ai_message_ids(str(account_id), untagged))).all()
+                     if r[0] is not None)
+
+
 async def _thread_moved_on(account_id: str, fan_id: int,
                            inbound_at: datetime | None,
-                           *, ignore_welcome: bool = False) -> str:
+                           *, ignore_welcome: bool = False,
+                           exclude_message_ids: frozenset[int] = frozenset()) -> str:
     """Between generation and the wire, did this turn stop being ours to answer?
 
     Two ways it can, and they are different failures. HE WROTE AGAIN: the reply we
@@ -3704,19 +3735,54 @@ async def _thread_moved_on(account_id: str, fan_id: int,
         # Resolved HERE rather than at the top: the two early exits above take most
         # calls, and a fan who wrote again never needs to know who we are.
         automation_emp_id = await _automation_emp_id()
-        answered = (await s.execute(
-            select(Message.message_id).where(
-                Message.account_id == str(account_id),
-                Message.fan_id == int(fan_id),
-                Message.direction == "out",
-                Message.is_unsent.is_(False),
-                Message.created_at > inbound_at,
-                Message.mass_run_id.is_(None),
-                or_(automation_answered,
-                    _named_chatter_clause(automation_emp_id)),
-            ).limit(1)
-        )).first()
+        who = [automation_answered, _named_chatter_clause(automation_emp_id)]
+        if _twin_controls_on():
+            # A human reply Twin recorded (staff send, or an external send it
+            # cannot attribute) has no employee id; it still answered him.
+            from onlyfans_runtime.fastt_controls import human_out_clause
+            who.append(human_out_clause())
+        conds = [
+            Message.account_id == str(account_id),
+            Message.fan_id == int(fan_id),
+            Message.direction == "out",
+            Message.is_unsent.is_(False),
+            Message.created_at > inbound_at,
+            Message.mass_run_id.is_(None),
+            or_(*who),
+        ]
+        if exclude_message_ids:
+            # Bubbles THIS turn already sent are not someone else answering.
+            conds.append(Message.message_id.not_in(sorted(exclude_message_ids)))
+        answered = (await s.execute(select(Message.message_id).where(*conds).limit(1))).first()
     return "already_answered" if answered is not None else ""
+
+
+async def _last_look(account_id: str, fan_id: int, inbound_at: datetime | None,
+                     *, sent_ids: frozenset[int] = frozenset(),
+                     ignore_welcome: bool = False) -> str:
+    """The last look before a bubble reaches the wire. "" = still ours.
+
+    Asked after every pacing/typing wait and before EVERY bubble, because
+    `_thread_moved_on` alone runs once, before the waits. Three questions:
+    an operator stop (skip_list), Twin's control authority (pause, takeover,
+    unresolved send; only in an OnlyFans role), and `_thread_moved_on` (newer
+    inbound, or a human/other automation answered), ignoring the bubbles this
+    turn already sent. Does not change what is sent, only whether it still is.
+    """
+    from ._common import OPERATOR_STOP_REASONS
+    async with get_session() as s:
+        reason = (await s.execute(
+            select(SkipList.reason).where(SkipList.account_id == str(account_id),
+                                          SkipList.fan_id == int(fan_id)))).scalar_one_or_none()
+        if reason in OPERATOR_STOP_REASONS:
+            return f"stopped_{reason}"
+        if _twin_controls_on():
+            from onlyfans_runtime.fastt_controls import stop_reason
+            why = await s.run_sync(lambda ss: stop_reason(ss, str(account_id), int(fan_id)))
+            if why:
+                return f"stopped_{why}"
+    return await _thread_moved_on(account_id, fan_id, inbound_at,
+                                  ignore_welcome=ignore_welcome, exclude_message_ids=sent_ids)
 
 
 def _is_404(exc: Exception) -> bool:
@@ -9972,7 +10038,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # On a TURN HANDOFF the welcome bubble that ate his reply is newer
             # than his inbound BY CONSTRUCTION, so without the exemption this last
             # look would drop every handoff reply the turn gate just admitted.
-            _moved = await _thread_moved_on(
+            _moved = await _last_look(
                 account_id, fan_id, c.last_in_at,
                 ignore_welcome=(fan_id in turn_handoff_ids))
             if _moved:
@@ -9993,6 +10059,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             teaser_msg_id: int | None = None
             send_failed = False
             first_no_id = False
+            look_stopped = False
+            sent_ids: set[int] = set()   # bubbles THIS turn already sent
             for idx, part in enumerate(parts):
                 # The LAST bubble carries the offer attach: free media for a
                 # teaser; locked media + free pitch text (locked_text=False —
@@ -10100,6 +10168,18 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                        quiet_s=pace.quiet_s,
                                        think_at_s=pace.think_at_s,
                                        think_for_s=pace.think_for_s)
+                # LAST LOOK, AFTER THE WAIT AND BEFORE THIS BUBBLE. The one above
+                # ran before the typing/pacing holds; a pause, a human reply or a
+                # new message from him during them is caught here, bubble by bubble.
+                _look = await _last_look(
+                    account_id, fan_id, c.last_in_at, sent_ids=frozenset(sent_ids),
+                    ignore_welcome=(fan_id in turn_handoff_ids))
+                if _look:
+                    stale_drops[_look] += 1
+                    log.info("ai_chatter stopped before bubble %d account=%s fan=%s "
+                             "reason=%s", idx, account_id, fan_id, _look)
+                    look_stopped = True
+                    break
                 try:
                     result = await asyncio.to_thread(
                         lambda p=part, kw=kwargs: client.send_message(fan_id, p, **kw))
@@ -10158,6 +10238,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         emit_live=True,
                     )
                     sent_ok = True
+                    sent_ids.add(int(msg_id))
                     if offer_item is not None and idx == len(parts) - 1:
                         offer_msg_id = int(msg_id)  # the unlock watcher's anchor
                     if teaser is not None and idx == len(parts) - 1:
@@ -10165,6 +10246,13 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 elif idx == 0:
                     first_no_id = True
                     break
+            if look_stopped:
+                # Stopped mid-reply: what already landed stays (and counts as a
+                # reply for the cadence), the rest — offer, sticker, pack — is
+                # not sent. `finally` still rests the fan if anything was sent.
+                if sent_ok:
+                    await _mark_reply_sent(account_id, fan_id, now)
+                continue
             if send_failed:
                 continue
             if first_no_id and not sent_ok:
@@ -10200,6 +10288,17 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     await hold_with_typing(account_id, fan_id, s_pace.total_s,
                                            typing_indicator=typing_indicator,
                                            quiet_s=s_pace.quiet_s)
+                    _look = await _last_look(
+                        account_id, fan_id, c.last_in_at, sent_ids=frozenset(sent_ids),
+                        ignore_welcome=(fan_id in turn_handoff_ids))
+                    if _look:
+                        stale_drops[_look] += 1
+                        log.info("ai_chatter stopped before sticker account=%s fan=%s "
+                                 "reason=%s", account_id, fan_id, _look)
+                        if not parts:
+                            continue
+                        gid = None
+                if gid is not None:
                     try:
                         result = await asyncio.to_thread(
                             lambda g=gid: client.send_message(fan_id, "",

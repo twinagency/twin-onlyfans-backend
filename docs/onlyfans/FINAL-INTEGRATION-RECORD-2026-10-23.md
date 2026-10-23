@@ -10,7 +10,7 @@ This record is in progress. No completion or deployment is claimed.
 - Concurrent combined work was reconciled through backend `e7eae43485a053bb74b9efef3f13b577cee41f48` (18 additional commits) and dashboard `710005d67c99db46e62c6b133a7e259821aa8846` (six additional commits). The selected implementation also retains the newer OnlyFans UI input `28fd0038966550c733c11fbfe5c53d52403eed1f` and current production-main contributions. Exact final ancestry is recorded with the immutable release pair.
 - Backend deployment branch has three merge ancestors absent from combined. A real git merge-tree rehearsal against deployment1614696 returned the unchanged combined tree61ca0699428ff8e27aab7b0e4543eaf1fac97765, proving those merge ancestors can be preserved without dropping content.
 - Current implementation starts from byte-verified combined snapshots. Acquisition excludes unrelated legacy frontend assets; no deployable full-source artifact has yet been built.
-- Paired dashboard: `aa6bae552bb5539a695b7c96a74682ce476ee86f`, tree `43e932a24d97bb82e14f62cd7383c8b2b50fec0d`, published on `codex/onlyfans-final-release-20261023` and pinned in `ACCEPTANCE-DASHBOARD-SHA`. Its ancestry preserves the prior hybrid `1805ebd7e046537f047d31212fdd5fda4454fed1`, latest inspected main `dbfc42d402745ee603dabfe58277e1ce6d24484c`, and concurrent candidate commits through `156ecdd35b42ac2adf93039ea7dfff6776fe592d`. Both new main mobile files are retained exactly. The hybrid retains the earlier combined, UI and production-main contributions. Full acceptance remains pending.
+- Paired dashboard: `4a860a5eb13f5130ff42768e6d5ed44dea065837`, tree `1eb755ecd320deac4e83beee10bc5a0b4b1dcf52`, published on `codex/onlyfans-final-release-20261023` and pinned in `ACCEPTANCE-DASHBOARD-SHA`. Its two parents preserve candidate `aa6bae552bb5539a695b7c96a74682ce476ee86f` and reviewed main `18115d0a61550adefa1706eb67d551f0000eb1c0`. The hybrid retains earlier combined, UI and production-main contributions, including concurrent candidate commits through `156ecdd35b42ac2adf93039ea7dfff6776fe592d`. This is the reviewed main cutoff for exact-pair acceptance; later source drift is recorded separately. Full acceptance remains pending.
 - PostgreSQL16.15, Python3.12.14 and Chromium153.0.8010.0 are available. The actual hybrid dashboard/backend rehearsal passed all four cases with zero failures, errors or skips, including backup/restore and retained unknown outcomes. Its tab-hydration race was reproduced and corrected before the passing run. A clean production dashboard build and subsequent TypeScript check also passed. These targeted results do not substitute for exact-pair full acceptance.
 
 ## Checklist
@@ -126,6 +126,26 @@ errors, skips or deselections. Timed capacity runs alone, while one serial
 command owns the actual HTTP/rehearsal browser runtime. Both historical scripts
 remain separate required commands. This local evidence does not establish the
 separately required hosted combined/commerce workflows, image build or release.
+
+Dashboard main subsequently advanced to
+`18115d0a61550adefa1706eb67d551f0000eb1c0` with three render/layout commits.
+The reviewed reconciliation preserves all 17 changed paths and the added CI
+render gate. Controlled Vault/Offers tabs retain the hydration guard and mounted
+drafts; native import, launch, multi-asset validation and durable upload controls
+remain available. Browser interactions visit each control's actual visible tab;
+existing content-sync assertions and upstream render assertions are unchanged.
+The earlier `8e81944`/`aa6bae5` local collection contained 1,922 nodes, but no full
+execution command started before this newer source was reconciled. That
+collection is superseded rather than reported as completed acceptance.
+
+The inherited render check now waits for the Campaigns component's explicit
+settled state: its legitimate five-second polling cannot reach global network
+idleness. All original assertions and timeouts remain. The unchanged desktop
+media-position assertion exposed excess inherited Card spacing; a desktop-only
+Vault row-gap correction restores first-viewport media without changing mobile
+styles. The strict picker fixture now supplies only the two exact native sync
+read contracts used by the retained mounted save component. Its assertions and
+unexpected-request guard remain intact; no new write allowance was introduced.
 
 ## Reconciliation decisions
 

@@ -80,3 +80,19 @@ def test_observation_validation_rejects_forgery():
                   {"reasons": ("made_up",)}]:
         with pytest.raises(Refused):
             OfferObservation(**{**good.__dict__, **patch}).normalized()
+
+
+def test_observed_real_row_shape_parses_exactly():
+    """Synthetic rows with the key set seen on a real session: exact terms, unknown kept unknown."""
+    from pathlib import Path
+    from onlyfans_runtime.native_protocol import load, message
+    raw = (Path(__file__).parent / "fixtures/onlyfans_offer_import.json").read_bytes()
+    doc = load(raw, max_bytes=len(raw))
+    for case in doc["cases"]:
+        event = message(case["row"], owner_id=doc["ownerId"], fan_id=doc["fanId"], history=True)
+        offer = from_history(case["row"], event)
+        want = case["expect"]
+        assert list(offer.media_ids) == want["mediaIds"], case["name"]
+        assert (None if offer.preview_ids is None else list(offer.preview_ids)) == want["previewIds"], case["name"]
+        assert offer.locked_text is want["lockedText"] and offer.price_cents == want["priceCents"], case["name"]
+        assert offer.source_context == want["context"] and list(offer.reasons) == want["reasons"], case["name"]

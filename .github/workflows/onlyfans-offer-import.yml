@@ -1,4 +1,4 @@
-name: OnlyFans offer import acceptance
+name: OnlyFans offer import and content sync acceptance
 on:
   push:
     branches: [codex/onlyfans-offer-import]
@@ -28,11 +28,13 @@ jobs:
           for i in $(seq 1 30); do docker exec offer-import-pg pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
           docker exec offer-import-pg pg_isready -h 127.0.0.1 -U postgres
       - name: Offer import, fixed price and regression acceptance
+        shell: bash
         run: |
           timeout 2400 docker run --rm --network offer-import-check -e ONLYFANS_TEST_PG_URL=postgresql+psycopg2://postgres:synthetic-pilot-only@offer-import-pg:5432/postgres offer-import-tests \
             python -m pytest -q -rs \
             service/tests/test_onlyfans_offer_import.py service/tests/test_onlyfans_offer_import_pg.py \
             service/tests/test_onlyfans_fixed_price_pg.py service/tests/test_onlyfans_offer_import_upgrade_pg.py \
+            service/tests/test_onlyfans_content_sync_pg.py service/tests/test_onlyfans_content_sync_delivery_pg.py \
             service/tests/test_onlyfans_native_protocol.py service/tests/test_onlyfans_native_history.py \
             service/tests/test_onlyfans_native_history_links_pg.py service/tests/test_onlyfans_foundation_pg.py \
             service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_content_pg.py \
@@ -40,4 +42,9 @@ jobs:
             service/tests/test_onlyfans_worker_media_pg.py service/tests/test_onlyfans_campaign_media_pg.py \
             service/tests/test_onlyfans_vault_offer_availability.py service/tests/test_onlyfans_vault_previews_pg.py \
             service/tests/test_onlyfans_provider_pg.py service/tests/test_onlyfans_connections_pg.py \
-            service/tests/test_onlyfans_worker_entry.py service/tests/test_onlyfans_release_rehearsal_pg.py
+            service/tests/test_onlyfans_worker_entry.py service/tests/test_onlyfans_release_rehearsal_pg.py \
+            2>&1 | tee pytest.log; test "${PIPESTATUS[0]}" -eq 0
+          # A skipped required PostgreSQL test is a failure, not a pass.
+          ! tail -n 1 pytest.log | grep -qE '[0-9]+ skipped'
+      - name: Record the tested candidate image
+        run: cat candidate-image-id.txt

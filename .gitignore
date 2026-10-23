@@ -196,3 +196,4 @@ service/.probe_vault_carriers_*.json
 # Vault batch-upload spool: creator media in transit to OnlyFans, plus run
 # state carrying real account ids and OF post ids. Host-only, never committed.
 service/vault_spool/
+offer-import-evidence/

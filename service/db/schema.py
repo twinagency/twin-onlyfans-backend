@@ -165,6 +165,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         (90, "of_history_memory_correction", "of_history_memory_correction_immutable", "historical memory corrections are append-only"),
         (90, "of_personality_revision", "of_personality_immutable", "personality evidence is append-only"),
         (90, "of_engagement_settings_change", "of_engagement_settings_immutable", "engagement settings evidence is append-only"),
+        (90, "of_ledger_retry_command", "of_ledger_retry_immutable", "ledger retry evidence is append-only"),
     ]:
         if expected_rank < rank:
             continue

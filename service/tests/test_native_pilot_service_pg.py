@@ -1,4 +1,4 @@
-"""The persistent FASTT runner on REAL PostgreSQL (schema 0092 from ``bootstrap``).
+"""The persistent FASTT runner on REAL PostgreSQL (schema 0091 from ``bootstrap`` + fastt_runtime).
 
 Runs test_native_pilot_service.py's ledger, supervised-loop and intake suites
 unchanged through a PostgreSQL ``Backend`` (typed rows for the account's
@@ -132,6 +132,7 @@ def main():
             conn.exec_driver_sql("INSERT INTO employees(id,display_name,is_active) VALUES "
                                  "(5,'Automation',false),(6,'Twin staff',false),(9,'Other',false)")
         engine.dispose()
+        base.store.ensure_runtime_schema(base.SYNC_URL)  # runner tables live in fastt_runtime (schema stays 0091)
         L.database_url = lambda path: base.ASYNC_URL
         backend = PgBackend(L)
         with tempfile.TemporaryDirectory(prefix="native-pilot-service-pg-") as root:

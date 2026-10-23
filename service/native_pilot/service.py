@@ -346,9 +346,31 @@ class Service:
             raise
         await runner.report_to_twin(ledger, pilot)
         ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+        if getattr(args, "stop_after_card", False) and await self.card_delivered(receipts):
+            await self.stop_after_card()
         if not receipts:
             runner.emit({"event": "native-no-reply", "skip_counts": {k: v for k, v in (stats or {}).items()
                                                                      if k.startswith("skipped_") and isinstance(v, int) and v}})
+
+    async def card_delivered(self, receipts):
+        """True when a confirmed bubble of this turn is the priced card (its canonical row carries a price)."""
+        ids = [int(r["provider_message_id"]) for r in receipts if r.get("state") == "sent" and r.get("provider_message_id")]
+        if not ids:
+            return False
+        with runner.readonly(self.path) as con:
+            marks = ",".join("?" * len(ids))
+            row = con.execute(f"SELECT 1 FROM messages WHERE account_id=? AND fan_id=? AND direction='out' "
+                              f"AND price_cents>0 AND message_id IN ({marks}) LIMIT 1", (self.db, self.args.fan, *ids)).fetchone()
+        return row is not None
+
+    async def stop_after_card(self):
+        """The approved test ends after the paid card: set the one runtime stop (shown as paused by s5's projection)."""
+        from db.engine import get_session
+        from onlyfans_runtime import runtime_stop
+        async with get_session() as session:
+            await session.run_sync(lambda s: runtime_stop.hold(s, self.db, self.args.fan, runner.now()))
+            await session.commit()
+        runner.emit({"event": "stopped-after-card", "account_id": self.db, "fan_id": self.args.fan})
 
     async def after_failure(self, reason, key):
         """A failed turn: stop for the fan if the ledger says so, else abandon only this input."""
@@ -483,6 +505,8 @@ def main(argv=None):
     parser.add_argument("--enable-send", action="store_true", help="without it: read-only preflight, then exit")
     parser.add_argument("--twin-context", action="store_true")
     parser.add_argument("--content-manifest")
+    parser.add_argument("--stop-after-card", action="store_true",
+                        help="Set the fan's runtime stop once the paid card is confirmed (approved test scope)")
     args = parser.parse_args(argv)
     from .ledger import SERVICE_ID
     if not AccountScope.valid(args.account) or args.fan <= 0 or (args.service_id and not SERVICE_ID.fullmatch(args.service_id)):

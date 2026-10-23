@@ -25,8 +25,10 @@ Rules, all in one place:
   missing is re-written; a stop found without a Twin command (set by FASTT's own
   restrict route) is shown as ``paused``. Nothing here ever releases a stop.
 
-Account ids: Twin keys conversations as ``of-<id>``; FASTT's tables use ``<id>``.
-``to_fastt_account_id`` is the single translation point.
+Account ids: live FASTT tables (messages, fans, skip_list) are keyed by the same
+DB id as Twin (``of-<id>``), which is also what ai_chatter queries with (see
+native_pilot.scope). The stop row therefore uses the account id unchanged.
+``to_fastt_account_id`` only normalises ids for scope matching.
 """
 from __future__ import annotations
 
@@ -56,7 +58,7 @@ def stop_wanted(state) -> bool:
 def current(s, account_id, fan_id):
     """The fan's skip_list reason, or None."""
     return s.scalar(select(SkipList.reason).where(
-        SkipList.account_id == to_fastt_account_id(account_id), SkipList.fan_id == fan_id))
+        SkipList.account_id == account_id, SkipList.fan_id == fan_id))
 
 
 def stronger_hold(s, account_id, fan_id):
@@ -67,7 +69,7 @@ def stronger_hold(s, account_id, fan_id):
 def hold(s, account_id, fan_id, now):
     """Upsert the durable stop; never demote a stronger decision."""
     s.execute(pg_insert(SkipList).values(
-        account_id=to_fastt_account_id(account_id), fan_id=fan_id, reason=MANUAL_RESTRICT, added_at=now,
+        account_id=account_id, fan_id=fan_id, reason=MANUAL_RESTRICT, added_at=now,
     ).on_conflict_do_update(
         index_elements=["account_id", "fan_id"],
         set_={"reason": MANUAL_RESTRICT, "added_at": now},
@@ -77,7 +79,7 @@ def hold(s, account_id, fan_id, now):
 
 def release(s, account_id, fan_id, now):
     """Remove ONLY the manual stop, restoring an auto mute it displaced."""
-    fastt = to_fastt_account_id(account_id)
+    fastt = account_id
     s.execute(delete(SkipList).where(SkipList.account_id == fastt, SkipList.fan_id == fan_id,
                                      SkipList.reason == MANUAL_RESTRICT))
     fan = s.get(Fan, (account_id, fan_id))

@@ -75,7 +75,7 @@ def command(store, action, revision, key=None, *, actor=STAFF):
 def stop_row(engine, account=ACCOUNT, fan=FAN):
     with Session(engine) as s:
         return s.scalar(select(SkipList.reason).where(
-            SkipList.account_id == runtime_stop.to_fastt_account_id(account), SkipList.fan_id == fan))
+            SkipList.account_id == account, SkipList.fan_id == fan))
 
 
 def display(engine):
@@ -86,7 +86,7 @@ def display(engine):
 
 def set_row(engine, reason, account=ACCOUNT, fan=FAN):
     with Session(engine) as s, s.begin():
-        s.merge(SkipList(account_id=runtime_stop.to_fastt_account_id(account), fan_id=fan, reason=reason))
+        s.merge(SkipList(account_id=account, fan_id=fan, reason=reason))
 
 
 def test_account_id_translation_is_one_function():
@@ -131,7 +131,7 @@ def test_the_real_account_id_shape_is_written_for_fastt(database):
                   expected_revision=0, command_key="k" * 8, actor=STAFF, reason="Dashboard operator: pause")
     assert stop_row(engine, "of-176774528", 318022380) == "manual_restrict"
     with Session(engine) as s:
-        assert s.scalar(select(SkipList.account_id)) == "176774528"
+        assert s.scalar(select(SkipList.account_id)) == "of-176774528"  # live FASTT tables key by the Twin DB id (see runtime_stop)
     store.close()
 
 

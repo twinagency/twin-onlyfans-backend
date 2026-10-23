@@ -4,6 +4,9 @@ This record is in progress. No completion or deployment is claimed.
 
 ## Candidate inputs
 
+- Current paired dashboard: `1e7bd2102ae1b4cb6f365a1b03fb58c05cb5f42c`, tree `6157907612ab8f7bde457a883a189a0b4961233f`, preserving c75/main656 ancestry. Its only additional change makes browser acceptance await a validated correction acknowledgement and the saved-value paragraph, so the editing textarea cannot falsely satisfy readiness. The failed beaf/c75 smoke is retained (4 passed/1 failed), with logs proving read-before-ack; no backend memory defect was demonstrated. Full affected acceptance must execute on this new pair.
+- Generic backend CI now reuses the byte-identical, previously passed dashboard encoder installer, with primary HTTPS mirror recovery and a seven-minute bound. This addresses the observed slow Azure package downloads without omitting dependency/service checks. Native product, migrations, requirements and test modules remain unchanged.
+
 - Backend combined input: `aeac726061c046aaa10916b5d7df5fa731e89656` (PR19).
 - Dashboard combined input: `c64fe11abf3be5fde9b6bedaadd7345ad6ecfa40` (PR252).
 - Recent branches were inventoried across 30 backend refs (28 distinct heads) and 428 dashboard refs (414 distinct heads). No branch was deleted.

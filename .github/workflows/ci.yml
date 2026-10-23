@@ -23,7 +23,8 @@ jobs:
         # .can_shrink() returns False without it, so an oversized video is
         # skipped rather than compressed — which changes what the batch-cap
         # tests observe. A runner without ffmpeg is not this project's runtime.
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        timeout-minutes: 7
+        run: bash scripts/install-ci-video-tools.sh
       - name: Install pinned deps
         # Test-only dependencies remain separate from the production image.
         run: |

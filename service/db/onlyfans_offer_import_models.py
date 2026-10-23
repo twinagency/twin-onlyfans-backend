@@ -17,7 +17,7 @@ class OfOfferObservation(Base):
         UniqueConstraint("account_id", "binding_id", "source_kind", "source_id", "fingerprint",
                          name="uq_of_offer_observation_source"),
         CheckConstraint("source_kind IN ('message','post')", name="kind"),
-        CheckConstraint("source_context IN ('direct','queue','unknown')", name="context"),
+        CheckConstraint("source_context IN ('direct','queue','unknown','feed')", name="context"),
         CheckConstraint("source_id > 0 AND price_cents > 0 AND currency = 'USD'", name="terms"),
         Index("ix_of_offer_observation_media", "account_id", "media_key"),
         {"info": INFO},
@@ -190,6 +190,9 @@ class OfContentSyncAccount(Base):
     # Rotating daily reconciliation position over catalogue items.
     reconcile_after_item_id = Column(Integer)
     reconcile_cycle_started_at = Column(DateTime)
+    # Last bounded read of the creator's own paid feed posts (offer_post_source).
+    posts_checked_at = Column(DateTime)
+    posts_error = Column(String(64))
     backlog = Column(Integer, nullable=False)
     failures = Column(Integer, nullable=False)
     blocked_reason = Column(String(64))

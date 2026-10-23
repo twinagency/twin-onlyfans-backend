@@ -161,8 +161,8 @@ def test_t23_enable_scans_initial_history_then_300s_cadence_and_daily_reconcile(
     assert (view["enabled"], view["status"], view["revision"]) == (True, "active", 1)
     assert view["initial"]["status"] == "pending" and view["initial"]["complete"] is False
     assert view["coveredThroughMessageId"] == "1004", "new activity folds in from beyond the backfill boundary"
-    assert view["coverage"]["paidPosts"] == {"state": "unsupported", "checkedAt": None,
-        "detail": "Paid-post reading is not verified yet."}
+    assert view["coverage"]["paidPosts"] == {"state": "not_started", "checkedAt": None,
+        "detail": "Paid posts have not been read yet."}, "an unread source never looks complete"
     assert view["coverage"]["paidMessages"]["state"] == "partial", "first check has not run; backfill pending"
     with Session(store.engine) as s:
         assert s.get(OfRuntime, account).enabled is False, "settings never activate outgoing sales"
@@ -261,7 +261,7 @@ def test_t23_partial_delayed_and_paused_coverage_is_honest(synced, monkeypatch):
     assert get_status(store, TENANT, account, now=last + timedelta(seconds=599))["sync"]["coverage"]["paidMessages"]["state"] == "current"
     late = get_status(store, TENANT, account, now=last + timedelta(seconds=601))["sync"]
     assert late["coverage"]["paidMessages"]["state"] == "delayed", "older than 2 x 300 s"
-    assert late["coverage"]["paidMessages"]["checkedAt"] is not None and late["coverage"]["paidPosts"]["state"] == "unsupported"
+    assert late["coverage"]["paidMessages"]["checkedAt"] is not None and late["coverage"]["paidPosts"]["state"] == "not_started"
 
 
 def test_t23_lease_exclusivity_and_crash_recovery_reuse_the_same_operation(synced):

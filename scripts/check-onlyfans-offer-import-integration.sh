@@ -59,6 +59,7 @@ suites=(
   service/tests/test_onlyfans_offer_import_upgrade_pg.py
   service/tests/test_onlyfans_content_sync_pg.py
   service/tests/test_onlyfans_content_sync_delivery_pg.py
+  service/tests/test_onlyfans_offer_post_source_pg.py
   service/tests/test_onlyfans_http_pg.py
 )
 cd "$root"

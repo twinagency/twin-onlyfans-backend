@@ -74,8 +74,8 @@ Proposed tables to fold into 0090:
   window; `parse_page` refuses the whole page, scan held. Response has
   `marker`/`nextMarker`. 52 applied ownership rows, 0 messages marked paid.
   Sent to Jesse for Chat 1.
-- Paid messages carry `previews` and `lockedText`. Paid-post read contract
-  not yet verified (first request non-200).
+- Paid messages carry `previews` and `lockedText`. Paid-post read contract verified
+  later the same day (see OFFER-IMPORT.md, posts section); adapter built.
 - History recovery (23 Oct ~17:00 AEST): runtime enabled=false,
   recovery_needed=true, never synced. Chat discovery complete (1,195 pages,
   all known fans). Per-chat backfill: 141 of 12,505 chats complete (1.1%),

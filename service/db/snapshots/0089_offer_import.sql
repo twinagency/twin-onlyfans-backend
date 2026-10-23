@@ -25,7 +25,7 @@ CREATE TABLE of_offer_observation (
     CONSTRAINT pk_of_offer_observation PRIMARY KEY (account_id,observation_id),
     CONSTRAINT uq_of_offer_observation_source UNIQUE (account_id,binding_id,source_kind,source_id,fingerprint),
     CONSTRAINT ck_of_offer_observation_kind CHECK (source_kind IN ('message','post')),
-    CONSTRAINT ck_of_offer_observation_context CHECK (source_context IN ('direct','queue','unknown')),
+    CONSTRAINT ck_of_offer_observation_context CHECK (source_context IN ('direct','queue','unknown','feed')),
     CONSTRAINT ck_of_offer_observation_terms CHECK (source_id > 0 AND price_cents > 0 AND currency = 'USD'),
     CONSTRAINT fk_of_offer_observation_account_id_of_runtime FOREIGN KEY(account_id) REFERENCES of_runtime(account_id) ON DELETE RESTRICT,
     CONSTRAINT fk_of_offer_observation_binding_id_of_creator_bindings FOREIGN KEY(binding_id) REFERENCES of_creator_bindings(id) ON DELETE RESTRICT
@@ -172,6 +172,8 @@ CREATE TABLE of_content_sync_account (
 	covered_through_message_id BIGINT, 
 	reconcile_after_item_id INTEGER, 
 	reconcile_cycle_started_at TIMESTAMP WITHOUT TIME ZONE, 
+	posts_checked_at TIMESTAMP WITHOUT TIME ZONE, 
+	posts_error VARCHAR(64), 
 	backlog INTEGER NOT NULL, 
 	failures INTEGER NOT NULL, 
 	blocked_reason VARCHAR(64), 

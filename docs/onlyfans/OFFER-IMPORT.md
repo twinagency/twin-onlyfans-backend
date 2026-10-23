@@ -72,3 +72,20 @@ An old binary refuses 0089. Do not roll the image back after the schema bump.
 Stop or cancel import jobs, keep imported drafts disabled or withdraw them
 through the audited withdraw command, and ship a forward fix. Evidence is never
 discarded to start an old image.
+
+## Paid feed posts (`offer_post_source.py`)
+
+Contract verified read-only on a real creator session, 23 Oct 2026:
+`GET /users/{owner}/posts?limit=10&order=publish_date_desc&skip_users=all&format=infinite&pinned=0&counters=0`
+with JSON body `{}` (an empty body is refused with 400 "Invalid JSON request").
+Response `{list, hasMore, headMarker, tailMarker}`; a paid post has an int `id`,
+`postedAt`, decimal `price`, ordered `media` and `preview` (list of media ids
+shown free). Posts have no `lockedText`; feed text is public, recorded as an
+explicit `false`. Free posts are not offers. Older pages use
+`beforePublishTime=<tailMarker>` (web-client convention; only page 1 was read live).
+
+Observations use `source_kind='post'`, `source_context='feed'`, no fan. The
+worker (`ONLYFANS_CONTENT_SYNC_ENABLED=1`, account sync on) reads at most 20
+pages per account every 300 s, newest first, and stops at already-known posts.
+A malformed page is refused whole and shows partial coverage. Drafts from posts
+go through the same reviewed, disabled, fixed-price creation.

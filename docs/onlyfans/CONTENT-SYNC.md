@@ -40,10 +40,10 @@ def commit_draft(store, tenant, account, draft_id: str, *, command_key: str, act
 def get_draft(store, tenant, account, draft_id: str) -> dict
 def list_drafts(store, tenant, account, *, after: str | None, limit: int) -> dict
 def retry_asset(store, tenant, account, operation_id: str, *, command_key: str, actor: str) -> dict
-def upload_counts(session, account: str, binding_id: str) -> dict
 def process_uploads(store, tenant, *, limit=1, stop=None, transport_for=None) -> int
 
 # content_sync.py
+def upload_counts(session, account: str, binding_id: str) -> dict   # counts of_content_sync_draft rows by state
 def echo_item(session, account: str, binding_id: str, source_id: int) -> int | None
 def open_conflict(session, account: str, item_id: int) -> bool
 def process_due(store, tenant, *, limit=1, stop=None, now=None) -> int
@@ -150,3 +150,26 @@ existing explicit content v2 action and its checks.
   (bounded). `last_full_reconcile_at` set only when the rotation wraps.
 * Lost auth: status `paused_auth`, no new provider work, resume from cursors
   after reconnection. Binding change: old mappings never reused.
+
+## Implementation notes (scheduler / status / conflict / echo half)
+
+* `upload_counts` lives in `content_sync.py` and counts `of_content_sync_draft` rows by state.
+* Everything `process_due` does is database work; it enqueues only the existing bounded
+  refresh job (<= 50 sources, new sources lacking observations) and the existing vault sync
+  job (re-read at most every 240 s). Provider reads stay in `process_refresh_jobs` /
+  `process_vault_jobs` (1 extra page per account per 5 s).
+* Fold cursor is `message_id`: an older-id message ingested late (after the initial scan
+  passed it) is not folded; it still gets observations from normal history sync.
+* Conflicts are detected by the scheduler (and held live by `catalog_terms` once sync is on):
+  a NEW observation (observed later, different fingerprint) of the selected source id.
+  `accept_source` writes price/media/previews with an `of_content_change` audit row and stays
+  fixed; `keep_crm`/`disable` leave or disable the item. Holds are `Refused("open_conflict")`
+  and `Refused("media_unusable")` (media removed/deleted at the current verified connection).
+* Echo: an observed message whose id equals an `OfTextIntent.provider_message_id` (same
+  account/binding, with a catalogue item) is skipped by the fold and inventory, never opens a
+  conflict, is refused as a draft source, and appears in `GET .../candidates/{id}` observations
+  with the additive keys `crmOriginated: true` and `itemId` (absent for other observations).
+* Paid-post coverage is always `unsupported`. Sync-now returns the active operation instead of
+  a duplicate and is refused with `connection_unavailable` when auth is expired.
+* Agency scope: `content-sync/v1` is allowed like `offer-import/v1`; POST/PUT need `canManage`,
+  the draft chunk `PUT` is the only PUT, and `GET /operations` is readable.

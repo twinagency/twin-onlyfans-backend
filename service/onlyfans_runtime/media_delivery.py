@@ -45,6 +45,13 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None):
     if item.pricing_mode not in {"dynamic", "fixed"} or (fixed and price != item.price_cents):
         # A fixed item's saved amount is the offer; no override may change it.
         raise Refused("fixed catalogue price differs")
+    # An unresolved source change or verified unusable media holds new sales of
+    # this item only; the snapshot itself is untouched, so queued intents of
+    # other items and every dynamic snapshot stay byte-identical.
+    from .content_sync import sale_hold
+    hold = sale_hold(session, account_id, item)
+    if hold:
+        raise Refused(hold)
     ids = media_ids(item.media_ids)
     try:
         previews = json.loads(item.preview_media_ids)

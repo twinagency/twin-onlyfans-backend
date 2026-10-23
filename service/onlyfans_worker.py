@@ -47,9 +47,23 @@ def _process_offer_jobs(store, tenant, *, limit, stop):
             + process_refresh_jobs(store, tenant, limit=limit, stop=stop))
 
 
+def _process_content_sync(store, tenant, *, limit, stop):
+    # Scheduling is DB-only and enqueues the bounded refresh/vault jobs above;
+    # uploads run through the media owner. Neither sends a message or publishes.
+    from onlyfans_runtime.content_sync import process_due
+    processed = process_due(store, tenant, limit=limit, stop=stop)
+    try:
+        from onlyfans_runtime import content_sync_media
+    except ModuleNotFoundError as exc:
+        if exc.name != "onlyfans_runtime.content_sync_media":
+            raise
+        return processed
+    return processed + content_sync_media.process_uploads(store, tenant, limit=limit, stop=stop)
+
+
 def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
              load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None,facts_reader=None,enrollment_jobs=None,
-             offer_jobs=None):
+             offer_jobs=None, content_sync_jobs=None):
     """Refresh bounded ordered cohorts without starving accounts after row 32.
 
     Cursor advancement is over scanned candidates, including invalid/expired
@@ -85,6 +99,10 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
                     break
             if offer_jobs is not None:
                 offer_jobs(store, tenant, limit=1, stop=stop)
+                if stop.is_set():
+                    break
+            if content_sync_jobs is not None:
+                content_sync_jobs(store, tenant, limit=1, stop=stop)
                 if stop.is_set():
                     break
             accounts, next_cursor, scanned = load_cohort(store, tenant, limit=32, after_account=cursor, stop=stop,
@@ -184,7 +202,8 @@ def main(argv=None):
         return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,facts_reader=facts_reader,
                         vault_jobs=_process_vault_jobs, enrollment_jobs=_process_connection_enrollments,
                         ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None,
-                        offer_jobs=_process_offer_jobs if os.environ.get("ONLYFANS_OFFER_IMPORT_ENABLED") == "1" else None)
+                        offer_jobs=_process_offer_jobs if os.environ.get("ONLYFANS_OFFER_IMPORT_ENABLED") == "1" else None,
+                        content_sync_jobs=_process_content_sync if os.environ.get("ONLYFANS_CONTENT_SYNC_ENABLED") == "1" else None)
     finally:
         stop.set()
         if media_worker is not None:

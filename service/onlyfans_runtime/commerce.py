@@ -163,6 +163,9 @@ class CommerceIntake:
                 fan.lifetime_spend_cents = max(0, fan.lifetime_spend_cents + (event.amount_cents if paid else -event.amount_cents))
             settle_media_purchase(s, account_id=account_id, fan_id=event.fan_id,
                 message=message, offer=offer, paid=paid, was_paid=was_paid, stamp=stamp, now=now)
+            s.flush()
+            from .launch_engagement.events import cancel_for_fan
+            cancel_for_fan(s, account_id, event.fan_id, "purchase", now=now)
             # Monetary context moving makes queued drafts obsolete through the
             # same native fact fingerprint. No claim, model or send is created.
             return status

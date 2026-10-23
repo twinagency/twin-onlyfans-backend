@@ -19,7 +19,8 @@ from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
 from transaction_contract import STATUS_MAP, classify_kind, strip_html
 from .native_context import canonical
-from .native_protocol import NativeProtocolError, cents, load
+from .native_protocol import MAX_BYTES, NativeProtocolError, cents, load
+from .launch_ledger.validation import LedgerValidationError
 from .store import Refused, _id, utcnow
 
 PAGE_SIZE = 20
@@ -42,71 +43,96 @@ def timestamp(value):
 
 
 def parse_page(raw, *, owner_id, start, end):
-    """Validate a complete page before advancing the cursor or applying money."""
+    """Validate a complete page; diagnostics expose fixed codes, never values."""
     _id(owner_id)
-    value = load(raw)
+    if (type(start) is not datetime or type(end) is not datetime
+            or start.tzinfo is not None or end.tzinfo is not None or start > end):
+        raise Refused("invalid ledger validation window")
+    if type(raw) is not bytes or len(raw) > MAX_BYTES:
+        raise LedgerValidationError("invalid_response_size", "$")
     try:
-        rows, more = value["list"], value["hasMore"]
-        if (type(rows) is not list or len(rows) > PAGE_SIZE or type(more) is not bool
-                or more and not rows):
-            raise ValueError()
-        result, seen = [], set()
-        for row in rows:
-            if type(row) is not dict:
-                raise ValueError()
-            provider = row.get("id")
-            if type(provider) is int and provider > 0:
-                provider = str(provider)
-            if (type(provider) is not str or not re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", provider)
-                    or provider in seen):
-                raise ValueError()
-            seen.add(provider)
-            if "ownerId" in row and _id(row["ownerId"]) != owner_id:
-                raise ValueError()
-            user = row.get("user")
-            if user is not None and type(user) is not dict:
-                raise ValueError()
-            fan = _id(user["id"]) if user is not None else None
-            if fan == owner_id:
-                raise ValueError()
-            description = row.get("description")
-            if type(description) is not str or len(description.encode()) > 4000:
-                raise ValueError()
-            kind = classify_kind(description)
-            if kind == "unknown":
-                raise ValueError()
-            status = row.get("status")
-            if type(status) is not str:
-                raise ValueError()
-            status = STATUS_MAP.get(status, status)
-            if status not in STATUSES or row.get("currency") != "USD":
-                raise ValueError()
-            amount = cents(row.get("amount"))
-            occurred = timestamp(row.get("createdAt"))
-            if not start <= occurred <= end or amount <= 0:
-                raise ValueError()
-            message = row.get("messageId")
-            if message is not None:
-                message = _id(message)
-                if kind != "ppv_message" or fan is None:
-                    raise ValueError()
-            if kind == "ppv_message" and fan is None:
-                raise ValueError()
-            cleared = timestamp(row["clearedAt"]) if row.get("clearedAt") is not None else None
-            if cleared is not None and cleared < occurred:
-                raise ValueError()
-            days = row.get("payoutPendingDays")
-            if days is not None and (type(days) is not int or not 0 <= days <= 366):
-                raise ValueError()
+        value = load(raw)
+    except NativeProtocolError:
+        raise LedgerValidationError("invalid_json", "$") from None
+    rows, more = value.get("list"), value.get("hasMore")
+    if type(rows) is not list or len(rows) > PAGE_SIZE:
+        raise LedgerValidationError("invalid_page_list", "list")
+    if type(more) is not bool:
+        raise LedgerValidationError("invalid_has_more", "hasMore")
+    if more and not rows:
+        raise LedgerValidationError("empty_nonterminal_page", "list")
+    result, seen, dates = [], set(), []
+    for index, row in enumerate(rows):
+        def require(condition, code, path):
+            if not condition:
+                raise LedgerValidationError(code, path, index)
+
+        def checked(convert, value, code, path):
+            try:
+                return convert(value)
+            except (ValueError, TypeError, KeyError, OverflowError, UnicodeError):
+                raise LedgerValidationError(code, path, index) from None
+
+        require(type(row) is dict, "invalid_row", "list")
+        provider = row.get("id")
+        if type(provider) is int and provider > 0:
+            # Bound before conversion, including Python's integer string limit.
+            require(provider < 10**64, "invalid_provider_id", "id")
+            provider = str(provider)
+        require(type(provider) is str and re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", provider),
+                "invalid_provider_id", "id")
+        require(provider not in seen, "duplicate_provider_id", "id")
+        seen.add(provider)
+        if "ownerId" in row:
+            owner = checked(_id, row["ownerId"], "invalid_owner_id", "ownerId")
+            require(owner == owner_id, "owner_mismatch", "ownerId")
+        user = row.get("user")
+        require(user is None or type(user) is dict, "invalid_user", "user")
+        fan = checked(_id, user.get("id"), "invalid_fan_id", "user.id") if user is not None else None
+        require(fan != owner_id, "fan_is_owner", "user.id")
+        description = row.get("description")
+        require(type(description) is str, "invalid_description", "description")
+        encoded_description = checked(lambda v: v.encode(), description, "invalid_description", "description")
+        require(len(encoded_description) <= 4000, "invalid_description", "description")
+        kind = classify_kind(description)
+        require(kind != "unknown", "unknown_kind", "description")
+        status = row.get("status")
+        require(type(status) is str, "invalid_status", "status")
+        status = STATUS_MAP.get(status, status)
+        require(status in STATUSES, "invalid_status", "status")
+        require(row.get("currency") == "USD", "invalid_currency", "currency")
+        amount = checked(cents, row.get("amount"), "invalid_amount", "amount")
+        require(amount > 0, "nonpositive_amount", "amount")
+        occurred = checked(timestamp, row.get("createdAt"), "invalid_created_at", "createdAt")
+        require(occurred <= end, "outside_window", "createdAt")
+        dates.append(occurred)
+        message = row.get("messageId")
+        if message is not None:
+            message = checked(_id, message, "invalid_message_id", "messageId")
+            require(kind == "ppv_message" and fan is not None, "unexpected_message_id", "messageId")
+        require(kind != "ppv_message" or fan is not None, "missing_fan", "user.id")
+        cleared = checked(timestamp, row["clearedAt"], "invalid_cleared_at", "clearedAt") if row.get("clearedAt") is not None else None
+        require(cleared is None or cleared >= occurred, "cleared_before_created", "clearedAt")
+        days = row.get("payoutPendingDays")
+        require(days is None or type(days) is int and 0 <= days <= 366, "invalid_pending_days", "payoutPendingDays")
+        optional = {field + "_cents": checked(cents, row[key], "invalid_" + field, key) if row.get(key) is not None else None
+                    for field, key in [("net", "net"), ("fee", "fee"), ("vat", "vatAmount")]}
+        # The provider's descending page can include an older tail despite the
+        # requested start bound. Validate every field even in that tail; only
+        # in-window observations may reach the transaction/ownership writer.
+        if occurred >= start:
             result.append(dict(provider_transaction_id=provider, fan_id=fan, kind=kind,
                 message_id=message, amount_cents=amount, currency="USD", status=status,
                 occurred_at=occurred.isoformat(), cleared_at=cleared.isoformat() if cleared else None,
-                payout_pending_days=days, description=strip_html(description),
-                **{field + "_cents": cents(row[key]) if row.get(key) is not None else None
-                   for field, key in [("net", "net"), ("fee", "fee"), ("vat", "vatAmount")]}))
-        return result, more
-    except (ValueError, TypeError, KeyError, OverflowError, UnicodeError):
-        raise NativeProtocolError("unsupported native transaction page") from None
+                payout_pending_days=days, description=strip_html(description), **optional))
+    if any(date < start for date in dates):
+        # A boundary may end this window only with a fully validated newest-first
+        # page. Never silently truncate an interleaved or out-of-order page.
+        for index in range(1, len(dates)):
+            if dates[index] > dates[index - 1]:
+                raise LedgerValidationError("invalid_window_order", "createdAt", index)
+        more = False
+    return result, more
 
 
 def _status(previous, incoming):
@@ -152,10 +178,16 @@ def apply_observation(s, account, observation, *, now):
                 Transaction.provider_transaction_id.is_(None))).limit(1))
         offers = s.scalars(select(ContentOffer).where(ContentOffer.account_id == account,
             ContentOffer.fan_id == fan_id, ContentOffer.offer_message_id == mid).with_for_update()).all()
-        if (message is None or message.direction != "out" or message.is_unsent
-                or message.price_cents != observation["amount_cents"] or occurred < message.created_at
-                or other is not None or len(offers) > 1
-                or offers and offers[0].price_cents != observation["amount_cents"]):
+        # A terminal update to an already bound transaction revokes that exact
+        # purchase. Later unsends or price edits cannot veto its reversal.
+        # Immutable transaction identity was checked above; this never grants
+        # a new ownership link or permits a changed fan/amount/message.
+        bound_reversal = (tx is not None and tx.message_id == mid
+            and observation["status"] in TERMINAL)
+        if (message is None or other is not None or len(offers) > 1
+                or not bound_reversal and (message.direction != "out" or message.is_unsent
+                    or message.price_cents != observation["amount_cents"] or occurred < message.created_at
+                    or offers and offers[0].price_cents != observation["amount_cents"])):
             outcome = "conflict"
         else:
             offer = offers[0] if offers else None
@@ -167,7 +199,8 @@ def apply_observation(s, account, observation, *, now):
             s.add(tx)
             s.flush()
         tx.status, tx.message_id, tx.raw_json = observation["status"], mid, encoded
-        tx.cleared_at = datetime.fromisoformat(observation["cleared_at"]) if observation["cleared_at"] else None
+        if observation["cleared_at"] is not None:
+            tx.cleared_at = datetime.fromisoformat(observation["cleared_at"])
         for field in ("net_cents", "fee_cents", "vat_cents", "payout_pending_days", "description"):
             # A later observation missing optional fields cannot erase evidence.
             if observation[field] is not None:
@@ -238,7 +271,7 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
             if scan is None:
                 scan = OfLedgerScan(account_id=account, last_complete_at=None)
                 s.add(scan)
-            if scan.status != "running" or not _current(runtime, connection, scan, now):
+            if scan.status not in {"running", "held"} or not _current(runtime, connection, scan, now):
                 scan.binding_id, scan.connection_revision, scan.owner_id = runtime.binding_id, connection.revision, connection.owner_id
                 # Revisit the full supported history daily: a refund can arrive
                 # long after a sale leaves the frequent seven-day window.
@@ -279,8 +312,13 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
             now = utcnow()
             if not _current(runtime, s.get(OfProviderConnection, account), scan, now):
                 error = "connection_changed"
-            page_hash = hashlib.sha256(raw).hexdigest() if error is None else None
-            if error is None and more and (page_hash == scan.last_page_hash or offset + len(rows) > MAX_OFFSET):
+            # Detect repeated provider identities regardless of JSON formatting,
+            # row order, optional metadata or a changed terminal-page flag.
+            page_hash = hashlib.sha256(canonical(sorted(row["provider_transaction_id"]
+                for row in rows)).encode()).hexdigest() if error is None else None
+            legacy_hash = hashlib.sha256(raw).hexdigest() if error is None else None
+            if error is None and (offset + len(rows) > MAX_OFFSET
+                    or rows and scan.last_page_hash in {page_hash, legacy_hash}):
                 error = "unsupported_ledger_pagination"
             scan.lease_token = scan.lease_until = None
             scan.updated_at = now

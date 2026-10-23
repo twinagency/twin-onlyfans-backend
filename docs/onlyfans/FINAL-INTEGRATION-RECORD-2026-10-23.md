@@ -10,7 +10,7 @@ This record is in progress. No completion or deployment is claimed.
 - Concurrent combined work was reconciled through backend `e7eae43485a053bb74b9efef3f13b577cee41f48` (18 additional commits) and dashboard `710005d67c99db46e62c6b133a7e259821aa8846` (six additional commits). The selected implementation also retains the newer OnlyFans UI input `28fd0038966550c733c11fbfe5c53d52403eed1f` and current production-main contributions. Exact final ancestry is recorded with the immutable release pair.
 - Backend deployment branch has three merge ancestors absent from combined. A real git merge-tree rehearsal against deployment1614696 returned the unchanged combined tree61ca0699428ff8e27aab7b0e4543eaf1fac97765, proving those merge ancestors can be preserved without dropping content.
 - Current implementation starts from byte-verified combined snapshots. Acquisition excludes unrelated legacy frontend assets; no deployable full-source artifact has yet been built.
-- Paired dashboard: `4a860a5eb13f5130ff42768e6d5ed44dea065837`, tree `1eb755ecd320deac4e83beee10bc5a0b4b1dcf52`, published on `codex/onlyfans-final-release-20261023` and pinned in `ACCEPTANCE-DASHBOARD-SHA`. Its two parents preserve candidate `aa6bae552bb5539a695b7c96a74682ce476ee86f` and reviewed main `18115d0a61550adefa1706eb67d551f0000eb1c0`. The hybrid retains earlier combined, UI and production-main contributions, including concurrent candidate commits through `156ecdd35b42ac2adf93039ea7dfff6776fe592d`. This is the reviewed main cutoff for exact-pair acceptance; later source drift is recorded separately. Full acceptance remains pending.
+- Paired dashboard: `c75e101a69a07aa5a095261d1516c552741403e1`, tree `a8f32972458acbc953f23d974e2f3e4f2c1b85d9`, prepared for `codex/onlyfans-final-release-20261023` and pinned in `ACCEPTANCE-DASHBOARD-SHA`. Its two parents preserve the fully reconciled candidate `4a860a5eb13f5130ff42768e6d5ed44dea065837` and subsequently reviewed main `656216336f1f1c2c3415a6e85cf03ec9f698add0`. Earlier combined, UI and production-main contributions remain ancestors. Full native acceptance on backend `65d3ef5d3541ddff8d67397a992ac0c4c2b845b3` and dashboard `4a860a5eb13f5130ff42768e6d5ed44dea065837` is recorded separately from validation of this four-path successor. All backend product, test, manifest, migration, dependency and build inputs are unchanged; only this record and the dashboard pin change. Full release acceptance remains pending.
 - PostgreSQL16.15, Python3.12.14 and Chromium153.0.8010.0 are available. The actual hybrid dashboard/backend rehearsal passed all four cases with zero failures, errors or skips, including backup/restore and retained unknown outcomes. Its tab-hydration race was reproduced and corrected before the passing run. A clean production dashboard build and subsequent TypeScript check also passed. These targeted results do not substitute for exact-pair full acceptance.
 
 ## Checklist
@@ -146,6 +146,18 @@ Vault row-gap correction restores first-viewport media without changing mobile
 styles. The strict picker fixture now supplies only the two exact native sync
 read contracts used by the retained mounted save component. Its assertions and
 unexpected-request guard remain intact; no new write allowance was introduced.
+
+Known main subsequently advanced through six commits to
+`656216336f1f1c2c3415a6e85cf03ec9f698add0`. Its four-path reconciliation
+preserves the exact upstream Users chat-header, Telegram desktop-height and
+OnlyFans manual-reply placeholder changes. Send, takeover and pending-command
+guards remain unchanged. The render helper retains every local and upstream
+assertion, including both the original first-cover position and the stronger
+complete-portrait-in-viewport check, plus explicit Campaigns/font readiness.
+The upstream bounded cold-route wait and content-item readiness are retained.
+Original full-run results must stay attributed to their original clean SHA pair;
+successor validation, complete non-exception blob/mode equivalence, unchanged
+node inventory and final artifact identities are separate required evidence.
 
 ## Reconciliation decisions
 

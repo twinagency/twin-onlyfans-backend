@@ -1,8 +1,4 @@
-"""Rehearsal of Claude-owned integration seams, without editing shared files.
-
-Uses the real native composer/planner with its registered synthetic model. The
-patches below are test-local adapters, NOT evidence production is integrated.
-"""
+"""Real native composer/planner with its registered synthetic model and the integrated memory hooks."""
 import hashlib
 import json
 from datetime import timedelta
@@ -26,19 +22,7 @@ ACTOR = "op-session:" + "a" * 64
 
 
 def wire_test_seams(monkeypatch):
-    original_versions = native_context.versions
-    original_compose = native_planning._native_messages
-
-    def versions(session, account_id, fan_id):
-        _, base = original_versions(session, account_id, fan_id)
-        extended = enrich_snapshot(session, account_id, fan_id, base)
-        return hashlib.sha256(canonical(extended).encode()).hexdigest(), extended
-
-    monkeypatch.setattr(native_context, "versions", versions)
-    monkeypatch.setattr(native_planning, "versions", versions)
-    monkeypatch.setattr(native_memory, "versions", versions)
-    monkeypatch.setattr(native_planning, "_native_messages",
-        lambda context: augment_prompt(original_compose(context), context["historicalMemory"]))
+    """The shared hooks are integrated (versions, prompt addon, override filter); nothing is patched here."""
 
 
 def history_ready(database, monkeypatch):

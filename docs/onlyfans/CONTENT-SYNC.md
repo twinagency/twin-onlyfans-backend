@@ -5,17 +5,20 @@ same unpublished `0089_offer_import` revision (`service/db/onlyfans_offer_import
 `service/db/snapshots/0089_offer_import.sql`). Nothing here deploys, enables an
 item or account, uploads to a production creator, sends a message or publishes a post.
 
-## Known blocker: no verified unpublished upload path
+## Upload path (decision 23 Oct 2026: option b)
 
-The existing native upload owner (`service/vault_upload.py`,
-`service/onlyfans_runtime/vault_upload_transport.py`, `vault_media.py`,
-`vault_media_worker.py`, `of_client.materialize_to_vault`) gets media into the
-vault by creating a scheduled carrier post and deleting it afterwards. Section
-15.3 forbids silently using posting. The Save path therefore runs through a
-`SyncTransport` interface (below). Production construction returns no transport
-until an unpublished path is verified, so assets stay visibly in `needs_review`
-with reason `unpublished_upload_unavailable` and the item cannot be enabled.
-The Save path never imports or calls the carrier uploader.
+OnlyFans has no unpublished "save to vault" call; the existing native uploader
+(`vault_upload.py`, `vault_upload_transport.py`, `of_client.materialize_to_vault`)
+gets media into the vault through a far-future scheduled carrier post marked
+"DO NOT PUBLISH" that is deleted at once (intent recorded first, sweep removes
+orphans). Ronan approved using it for CRM Save, per account only:
+`content_sync_carrier.transport_for` returns the carrier transport solely for
+accounts listed in `ONLYFANS_CARRIER_UPLOAD_ACCOUNTS`. Every other account
+keeps the no-transport default: assets show `needs_review` /
+`unpublished_upload_unavailable` and the item cannot be enabled.
+`content_sync_media` itself still never imports the carrier code. A lost
+acknowledgement is reconciled from the vault_upload run receipt (keyed by the
+asset's upload token) before any retry. No fan message is sent.
 
 ## Module ownership
 

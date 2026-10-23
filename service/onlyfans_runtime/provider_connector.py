@@ -300,6 +300,27 @@ class NativeProviderConnector(NativeLoopbackConnector):
             {"limit":limit,"offset":offset,"sort":"desc","field":"recent","list":"all"})
         return self._call("GET", path)
 
+    def posts_page(self, *, before_marker=None, limit=10):
+        """One bounded page of this creator's own feed posts, newest first.
+
+        Verified read-only on 23 Oct 2026: the endpoint parses the request body
+        as JSON, so the GET carries "{}" (an empty body is refused with 400).
+        The page returns headMarker/tailMarker; older pages pass the tail marker
+        as beforePublishTime (the web client's convention, not yet re-verified).
+        """
+        self._ready()
+        if (type(limit) is not int or not 1 <= limit <= 10
+                or before_marker is not None and (type(before_marker) is not str
+                    or re.fullmatch(r"[0-9]{1,12}(\.[0-9]{1,6})?", before_marker) is None)):
+            raise Refused("invalid bounded native posts page")
+        self.verify_identity()
+        params = {"limit": limit, "order": "publish_date_desc", "skip_users": "all", "format": "infinite",
+                  "pinned": 0, "counters": 0}
+        if before_marker is not None:
+            params["beforePublishTime"] = before_marker
+        return self._signed_request("GET", API_PATH + f"/users/{self._handle.owner_id}/posts?" + urlencode(params),
+                                    b"{}", max_response_bytes=self._vault_max_bytes)
+
     def still_bytes(self, url):
         """One credential-free CDN image GET, through this account's fixed proxy.
 

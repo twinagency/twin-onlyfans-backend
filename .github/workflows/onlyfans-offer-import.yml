@@ -34,7 +34,7 @@ jobs:
             python -m pytest -q -rs \
             service/tests/test_onlyfans_offer_import.py service/tests/test_onlyfans_offer_import_pg.py \
             service/tests/test_onlyfans_fixed_price_pg.py service/tests/test_onlyfans_offer_import_upgrade_pg.py \
-            service/tests/test_onlyfans_content_sync_pg.py service/tests/test_onlyfans_content_sync_delivery_pg.py \
+            service/tests/test_onlyfans_content_sync_pg.py service/tests/test_onlyfans_content_sync_delivery_pg.py service/tests/test_onlyfans_offer_post_source_pg.py \
             service/tests/test_onlyfans_native_protocol.py service/tests/test_onlyfans_native_history.py \
             service/tests/test_onlyfans_native_history_links_pg.py service/tests/test_onlyfans_foundation_pg.py \
             service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_content_pg.py \

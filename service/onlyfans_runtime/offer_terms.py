@@ -18,7 +18,7 @@ MAX_ATTACHMENTS = 20
 MIN_PRICE_CENTS = 300
 MAX_PRICE_CENTS = 20000
 SOURCE_KINDS = frozenset({"message", "post"})
-CONTEXTS = frozenset({"direct", "queue", "unknown"})
+CONTEXTS = frozenset({"direct", "queue", "unknown", "feed"})
 # Intrinsic reasons a source cannot become a draft. Asset availability is
 # rechecked at review time against the current vault, never stored as fact.
 REASONS = frozenset({"previews_unknown", "locked_text_unknown", "locked_text",

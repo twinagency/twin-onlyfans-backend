@@ -52,7 +52,6 @@ ROTATION_QUOTA = 100
 BACKOFF_CAP_SECONDS = 3600
 SYNC_KINDS = ("incremental", "reconcile")
 PASS_KINDS = ("incremental", "reconcile", "sync_now")
-PAID_POSTS_DETAIL = "Paid-post reading is not verified yet."
 RETRYABLE_ERRORS = {"pass_failed", "connection_unavailable"}
 
 
@@ -328,6 +327,11 @@ def _vault_coverage(s, account, enabled, now):
     return {"state": state, "checkedAt": _date(done.completed_at), "detail": detail}
 
 
+def _posts_coverage(row, enabled, now):
+    from .offer_post_source import coverage
+    return coverage(row, enabled, now)
+
+
 def _message_coverage(row, job, enabled, now, paused):
     if not enabled:
         return {"state": "not_started", "checkedAt": None, "detail": "Automatic sync is off."}
@@ -382,8 +386,8 @@ def _sync_view(s, runtime, row, now):
             "media": _vault_coverage(s, account, enabled, now),
             "paidMessages": _message_coverage(row, job, enabled, now, status == "paused_auth") if row is not None else
                 {"state": "not_started", "checkedAt": None, "detail": "Automatic sync is off."},
-            # Reading paid feed posts needs an authenticated, verified contract first.
-            "paidPosts": {"state": "unsupported", "checkedAt": None, "detail": PAID_POSTS_DETAIL}},
+            # Paid feed posts: bounded read-only adapter (offer_post_source), contract verified 23 Oct.
+            "paidPosts": _posts_coverage(row, enabled, now)},
         "openConflicts": openers,
         "uploads": upload_counts(s, account, runtime.binding_id)}
 

@@ -49,7 +49,8 @@ fi
 
 export PYTHONPATH="$root/service:$root"
 export ONLYFANS_TEST_DASHBOARD="$dashboard" ONLYFANS_TEST_EVIDENCE="$evidence"
-export ONLYFANS_TEST_CONTENT=1 ONLYFANS_TEST_OFFER_IMPORT=1 ONLYFANS_TEST_CONTENT_SYNC=1
+export ONLYFANS_TEST_CONTENT=1 ONLYFANS_TEST_OFFER_IMPORT=1 ONLYFANS_TEST_CONTENT_SYNC=1 ONLYFANS_TEST_ONLY_OFFER_IMPORT="${ONLYFANS_TEST_ONLY_OFFER_IMPORT:-1}"
+if [ -z "${PREVIEW_CHROME:-}" ]; then for c in "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux64/chrome; do [ -x "$c" ] && export PREVIEW_CHROME="$c"; done; fi
 
 suites=(
   service/tests/test_onlyfans_offer_import.py
@@ -58,6 +59,7 @@ suites=(
   service/tests/test_onlyfans_offer_import_upgrade_pg.py
   service/tests/test_onlyfans_content_sync_pg.py
   service/tests/test_onlyfans_content_sync_delivery_pg.py
+  service/tests/test_onlyfans_offer_post_source_pg.py
   service/tests/test_onlyfans_http_pg.py
 )
 cd "$root"

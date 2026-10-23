@@ -51,14 +51,20 @@ def _process_content_sync(store, tenant, *, limit, stop):
     # Scheduling is DB-only and enqueues the bounded refresh/vault jobs above;
     # uploads run through the media owner. Neither sends a message or publishes.
     from onlyfans_runtime.content_sync import process_due
+    from onlyfans_runtime.offer_post_source import process_posts
     processed = process_due(store, tenant, limit=limit, stop=stop)
+    # Bounded read of the creator's own paid feed posts (read-only, one pass per 300s).
+    processed += process_posts(store, tenant, limit=limit, stop=stop)
     try:
         from onlyfans_runtime import content_sync_media
     except ModuleNotFoundError as exc:
         if exc.name != "onlyfans_runtime.content_sync_media":
             raise
         return processed
-    return processed + content_sync_media.process_uploads(store, tenant, limit=limit, stop=stop)
+    # Uploads use the approved scheduled-carrier path only for accounts listed in
+    # ONLYFANS_CARRIER_UPLOAD_ACCOUNTS; every other account keeps "needs review".
+    from onlyfans_runtime.content_sync_carrier import transport_for
+    return processed + content_sync_media.process_uploads(store, tenant, limit=limit, stop=stop, transport_for=transport_for)
 
 
 def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,

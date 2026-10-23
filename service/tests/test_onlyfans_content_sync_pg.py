@@ -161,8 +161,8 @@ def test_t23_enable_scans_initial_history_then_300s_cadence_and_daily_reconcile(
     assert (view["enabled"], view["status"], view["revision"]) == (True, "active", 1)
     assert view["initial"]["status"] == "pending" and view["initial"]["complete"] is False
     assert view["coveredThroughMessageId"] == "1004", "new activity folds in from beyond the backfill boundary"
-    assert view["coverage"]["paidPosts"] == {"state": "unsupported", "checkedAt": None,
-        "detail": "Paid-post reading is not verified yet."}
+    assert view["coverage"]["paidPosts"] == {"state": "not_started", "checkedAt": None,
+        "detail": "Paid posts have not been read yet."}, "an unread source never looks complete"
     assert view["coverage"]["paidMessages"]["state"] == "partial", "first check has not run; backfill pending"
     with Session(store.engine) as s:
         assert s.get(OfRuntime, account).enabled is False, "settings never activate outgoing sales"
@@ -261,7 +261,7 @@ def test_t23_partial_delayed_and_paused_coverage_is_honest(synced, monkeypatch):
     assert get_status(store, TENANT, account, now=last + timedelta(seconds=599))["sync"]["coverage"]["paidMessages"]["state"] == "current"
     late = get_status(store, TENANT, account, now=last + timedelta(seconds=601))["sync"]
     assert late["coverage"]["paidMessages"]["state"] == "delayed", "older than 2 x 300 s"
-    assert late["coverage"]["paidMessages"]["checkedAt"] is not None and late["coverage"]["paidPosts"]["state"] == "unsupported"
+    assert late["coverage"]["paidMessages"]["checkedAt"] is not None and late["coverage"]["paidPosts"]["state"] == "not_started"
 
 
 def test_t23_lease_exclusivity_and_crash_recovery_reuse_the_same_operation(synced):
@@ -1102,29 +1102,41 @@ def test_worker_runs_scheduler_then_uploads_only_behind_its_flag(monkeypatch):
     fake_sync = types.ModuleType("onlyfans_runtime.content_sync")
     fake_sync.process_due = lambda store, tenant, *, limit, stop: calls.append(("due", limit)) or 2
     fake_media = types.ModuleType("onlyfans_runtime.content_sync_media")
-    fake_media.process_uploads = lambda store, tenant, *, limit, stop: calls.append(("uploads", limit)) or 3
+    from onlyfans_runtime.content_sync_carrier import transport_for as carrier
+    fake_media.process_uploads = lambda store, tenant, *, limit, stop, transport_for: (
+        calls.append(("uploads", limit, transport_for is carrier)) or 3)
+    fake_posts = types.ModuleType("onlyfans_runtime.offer_post_source")
+    fake_posts.process_posts = lambda store, tenant, *, limit, stop: calls.append(("posts", limit)) or 1
     monkeypatch.setitem(sys.modules, "onlyfans_runtime.content_sync", fake_sync)
     monkeypatch.setitem(sys.modules, "onlyfans_runtime.content_sync_media", fake_media)
+    monkeypatch.setitem(sys.modules, "onlyfans_runtime.offer_post_source", fake_posts)
     import onlyfans_runtime
     monkeypatch.setattr(onlyfans_runtime, "content_sync", fake_sync, raising=False)
     monkeypatch.setattr(onlyfans_runtime, "content_sync_media", fake_media, raising=False)
-    assert entry._process_content_sync(object(), "tenant-a", limit=1, stop=threading.Event()) == 5
-    assert calls == [("due", 1), ("uploads", 1)]
+    monkeypatch.setattr(onlyfans_runtime, "offer_post_source", fake_posts, raising=False)
+    assert entry._process_content_sync(object(), "tenant-a", limit=1, stop=threading.Event()) == 6
+    # Uploads always receive the per-account carrier gate, never an ungated transport.
+    calls_after = [("due", 1), ("posts", 1), ("uploads", 1, True)]
+    assert calls == calls_after
     seen = []
     load = lambda *_, **__: ([], None, 0)
     assert entry.run_loop(object(), "tenant-a", threading.Event(), once=True, load_cohort=load, observe=lambda _: None) == 0
     assert entry.run_loop(object(), "tenant-a", threading.Event(), once=True, load_cohort=load, observe=lambda _: None,
         content_sync_jobs=lambda store, tenant, *, limit, stop: seen.append(tenant)) == 0
-    assert seen == ["tenant-a"] and calls == [("due", 1), ("uploads", 1)], "off unless wired by ONLYFANS_CONTENT_SYNC_ENABLED=1"
+    assert seen == ["tenant-a"] and calls == calls_after, "off unless wired by ONLYFANS_CONTENT_SYNC_ENABLED=1"
 
 
 def test_worker_tolerates_a_release_without_the_upload_module(monkeypatch):
     import onlyfans_worker as entry
     fake_sync = types.ModuleType("onlyfans_runtime.content_sync")
     fake_sync.process_due = lambda store, tenant, *, limit, stop: 1
+    fake_posts = types.ModuleType("onlyfans_runtime.offer_post_source")
+    fake_posts.process_posts = lambda store, tenant, *, limit, stop: 0
     monkeypatch.setitem(sys.modules, "onlyfans_runtime.content_sync", fake_sync)
+    monkeypatch.setitem(sys.modules, "onlyfans_runtime.offer_post_source", fake_posts)
     import onlyfans_runtime
     monkeypatch.setattr(onlyfans_runtime, "content_sync", fake_sync, raising=False)
+    monkeypatch.setattr(onlyfans_runtime, "offer_post_source", fake_posts, raising=False)
     monkeypatch.setitem(sys.modules, "onlyfans_runtime.content_sync_media", None)   # import raises ModuleNotFoundError
     assert entry._process_content_sync(object(), "tenant-a", limit=1, stop=threading.Event()) == 1
 

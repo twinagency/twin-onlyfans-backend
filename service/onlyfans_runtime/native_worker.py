@@ -172,8 +172,12 @@ class NativeWorker:
         self._role()
         with Session(self.store.engine) as s,s.begin():
             self.store._runtime(s,self.tenant_id,account.account_id)
-            identity=s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id==account.account_id,
-                OfTextIntent.status=="queued").order_by(OfTextIntent.created_at,OfTextIntent.intent_id).limit(1))
+            from .fastt_manual import fastt_owned
+            # A fan the FASTT runner owns is never sent by this worker's connector.
+            identity=next((i for i,f in s.execute(select(OfTextIntent.intent_id,OfTextIntent.fan_id).where(
+                OfTextIntent.account_id==account.account_id,OfTextIntent.status=="queued")
+                .order_by(OfTextIntent.created_at,OfTextIntent.intent_id).limit(50)).all()
+                if not fastt_owned(account.account_id,f)),None)
         if identity is None:return
         result=self.authority.dispatch(self.tenant_id,account.account_id,identity,account.transport)
         if result in {"accepted","not_accepted","unknown"}:setattr(report,result,getattr(report,result)+1)

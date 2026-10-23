@@ -69,7 +69,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Literal, NamedTuple
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, true, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 import automation_executor as ax  # _make_client / lease / cooldown seams
@@ -131,6 +131,7 @@ from . import _sell_signal  # the model's own "he asked to buy" line (shadow)
 # second ceiling / a second ownership notion here is deliberate.
 from .ppv_send import price_bounds
 from ._common import (
+    HARD_SKIP_REASONS,
     CONTENT_ASK_RE, ESCALATION_RE, NONNATIVE_OUTPUTS, NONNATIVE_REGISTER,
     BIO_CONSISTENCY_GUARDRAIL,
     nonempty,
@@ -3686,7 +3687,8 @@ async def _send_free_bubble(client, account_id: str, fan_id: int, line: str,
 
 async def _thread_moved_on(account_id: str, fan_id: int,
                            inbound_at: datetime | None,
-                           *, ignore_welcome: bool = False) -> str:
+                           *, ignore_welcome: bool = False,
+                           exclude_ids: tuple[int, ...] = ()) -> str:
     """Between generation and the wire, did this turn stop being ours to answer?
 
     Two ways it can, and they are different failures. HE WROTE AGAIN: the reply we
@@ -3790,11 +3792,60 @@ async def _thread_moved_on(account_id: str, fan_id: int,
                 Message.is_unsent.is_(False),
                 Message.created_at > inbound_at,
                 Message.mass_run_id.is_(None),
+                # Bubbles of THIS reply that already went out are not "somebody
+                # else answered" (the per-bubble look at the wire passes them).
+                Message.message_id.not_in(list(exclude_ids)) if exclude_ids else true(),
                 or_(automation_answered,
                     _named_chatter_clause(automation_emp_id)),
             ).limit(1)
         )).first()
     return "already_answered" if answered is not None else ""
+
+
+async def _stopped_at_wire(account_id: str, fan_id: int,
+                           inbound_at: datetime | None, turn_started: datetime,
+                           own_ids: tuple[int, ...], *, ignore_welcome: bool = False) -> str:
+    """The look immediately before ONE bubble goes out, after its pacing wait.
+
+    `_thread_moved_on` runs once, before the pacing/typing hold, so a pause, a
+    takeover or a human answer that lands during the hold (or between bubbles)
+    was never seen. This runs per bubble, right before `send_message`, and
+    returns "" only if the turn is still ours:
+
+      * a durable operator stop (skip_list manual_restrict / of_restricted /
+        muted_creator / ladder_stop) appeared — Twin's pause, takeover and
+        no-contact all land here (`onlyfans_runtime/runtime_stop.py`);
+      * he wrote again, or a named chatter / another automation answered
+        (`_thread_moved_on`, minus the bubbles of this very reply);
+      * an UNATTRIBUTED outbound (no automation_kind, not a mass send) appeared
+        since this turn began: a person typing in the official app or Twin's
+        manual path, whose employee is not reliably known. It is only trusted as
+        "somebody else is talking" for rows born after `turn_started`, so the
+        selection pass (which never saw them) cannot re-admit the fan in a loop.
+    """
+    async with get_session() as s:
+        stop = (await s.execute(
+            select(SkipList.reason).where(
+                SkipList.account_id == str(account_id),
+                SkipList.fan_id == int(fan_id)))).scalar_one_or_none()
+        if stop in HARD_SKIP_REASONS:
+            return "operator_stop"
+        human = (await s.execute(
+            select(Message.message_id).where(
+                Message.account_id == str(account_id),
+                Message.fan_id == int(fan_id),
+                Message.direction == "out",
+                Message.is_unsent.is_(False),
+                Message.created_at > turn_started,
+                Message.automation_kind.is_(None),
+                Message.mass_run_id.is_(None),
+                Message.message_id.not_in(list(own_ids)) if own_ids else true(),
+            ).limit(1))).first()
+        if human is not None:
+            return "manual_activity"
+    return await _thread_moved_on(account_id, fan_id, inbound_at,
+                                  ignore_welcome=ignore_welcome,
+                                  exclude_ids=own_ids)
 
 
 def _is_404(exc: Exception) -> bool:
@@ -10082,6 +10133,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             teaser_msg_id: int | None = None
             send_failed = False
             first_no_id = False
+            wire_stopped = False
+            own_ids: list[int] = []     # bubbles of this reply already on the wire
             for idx, part in enumerate(parts):
                 # The LAST bubble carries the offer attach: free media for a
                 # teaser; locked media + free pitch text (locked_text=False —
@@ -10189,6 +10242,21 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                        quiet_s=pace.quiet_s,
                                        think_at_s=pace.think_at_s,
                                        think_for_s=pace.think_for_s)
+                # LAST LOOK AT THE WIRE, per bubble and AFTER the hold: the
+                # `_thread_moved_on` above ran before any pacing, so a pause, a
+                # takeover or a human answer during the hold or between bubbles
+                # would otherwise still be talked over. Nothing after this line
+                # waits before the POST.
+                _wire = await _stopped_at_wire(
+                    account_id, fan_id, c.last_in_at, now, tuple(own_ids),
+                    ignore_welcome=(fan_id in turn_handoff_ids))
+                if _wire:
+                    stale_drops[_wire] += 1
+                    log.info("ai_chatter stopped at the wire account=%s fan=%s "
+                             "bubble=%d/%d reason=%s", account_id, fan_id,
+                             idx + 1, len(parts), _wire)
+                    wire_stopped = True
+                    break
                 try:
                     result = await asyncio.to_thread(
                         lambda p=part, kw=kwargs: client.send_message(fan_id, p, **kw))
@@ -10224,6 +10292,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         break
                 msg_id = result.get("id") if isinstance(result, dict) else None
                 if msg_id:
+                    own_ids.append(int(msg_id))
                     await write_outbound_attribution(
                         account_id=account_id,
                         fan_id=int(fan_id),
@@ -10254,6 +10323,12 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 elif idx == 0:
                     first_no_id = True
                     break
+            if wire_stopped:
+                # Dropped (nothing sent) or cut short after earlier bubbles. Like
+                # a failed send, the rest of the reply's bookkeeping is skipped;
+                # the thread now ends on our outbound or on theirs, so the turn
+                # gate does not re-admit the fan.
+                continue
             if send_failed:
                 continue
             if first_no_id and not sent_ok:

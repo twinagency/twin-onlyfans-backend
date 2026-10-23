@@ -239,7 +239,11 @@ class TextAuthority:
                 or runtime.last_sync_at < now - timedelta(seconds=MAX_SYNC_AGE_SECONDS)
                 or runtime.last_sync_at > now + timedelta(minutes=5)):
             from .store import fan_history_current
-            if not (fan is not None and fan_history_current(s, runtime.account_id, fan.fan_id)):
+            from .fastt_manual import fastt_owned
+            # A human message on a fan the FASTT runner owns is not composed from a
+            # transcript, so the account-wide sync gate does not apply to it.
+            human_on_fastt_fan = origin == "manual" and fan is not None and fastt_owned(runtime.account_id, fan.fan_id)
+            if not (fan is not None and fan_history_current(s, runtime.account_id, fan.fan_id)) and not human_on_fastt_fan:
                 return "history_not_current"
         if s.scalar(select(OfIngress.event_key).where(
                 OfIngress.account_id == runtime.account_id, OfIngress.status == "quarantined").limit(1)) is not None:
@@ -794,8 +798,20 @@ class TextAuthority:
 
     def dispatch(self, tenant_id, account_id, intent_id, transport):
         from .provider_connector import NativeProviderConnector
+        from .fastt_manual import FasttManualTransport, fastt_owned
+        # One sender per owned fan: only the FASTT runner's transport may send a
+        # human message for it, and that transport sends nothing else.
+        with Session(self.engine) as s:
+            queued = s.get(OfTextIntent, (account_id, intent_id))
+            if queued is not None:
+                owned_fan = fastt_owned(account_id, queued.fan_id)
+                is_fastt = type(transport) is FasttManualTransport
+                if (is_fastt and not (owned_fan and queued.origin == "manual")) or (owned_fan and not is_fastt):
+                    return "queued"
         transport_generation = None
-        if type(transport) is not SyntheticTextTransport:
+        if type(transport) is FasttManualTransport:
+            transport_generation = transport.policy_revision
+        elif type(transport) is not SyntheticTextTransport:
             try:
                 from .loopback_transport import LoopbackTextTransport
                 from .native_connector import NativeLoopbackConnector
@@ -809,7 +825,7 @@ class TextAuthority:
         with Session(self.engine) as s:
             self.store._runtime(s, tenant_id, account_id)
             policy = s.get(OfDeliveryPolicy, account_id)
-            expected = "native" if type(transport) is NativeProviderConnector else "synthetic"
+            expected = "native" if type(transport) in {NativeProviderConnector, FasttManualTransport} else "synthetic"
             if policy is None or policy.transport_kind != expected:
                 raise Refused("transport does not match the account delivery mode")
         grant = self.admit(tenant_id, account_id, intent_id, transport_generation=transport_generation)

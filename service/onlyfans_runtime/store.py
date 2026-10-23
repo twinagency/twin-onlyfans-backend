@@ -410,6 +410,13 @@ class Store:
                     raise Refused("explicit hand-back is required")
                 if action == "release_takeover" and state.takeover_state != "effective":
                     raise Refused("takeover is not effective")
+            if mode == "automated" and state.mode != "automated":
+                # Release ONLY the manual stop. A stronger runtime restriction
+                # (of_restricted / ladder_stop) stays in force, and the dashboard
+                # must not claim "automated" while the runtime would stay silent.
+                from . import runtime_stop
+                if runtime_stop.stronger_hold(s, account_id, fan_id) is not None:
+                    raise Refused("a stronger restriction holds")
             if action == "request_takeover":
                 if state.takeover_state != "none":
                     raise Refused("takeover already requested")
@@ -417,6 +424,11 @@ class Store:
             elif action == "release_takeover":
                 state.takeover_state = "none"
             state.mode, state.revision, state.updated_at = mode, state.revision + 1, utcnow()
+            # One transaction: the runtime stop (enforced authority) and the Twin
+            # state (its display projection) commit together or not at all. For a
+            # takeover this happens before any manual-send state can be observed.
+            from . import runtime_stop
+            runtime_stop.project(s, account_id, fan_id, state, utcnow())
             # Never clear an unresolved send or takeover as a side effect of resume.
             work = s.get(OfWork, (account_id, fan_id))
             if work:
@@ -433,6 +445,41 @@ class Store:
             cancel_for_fan(s, account_id, fan_id, {"human_controlled": "takeover", "paused": "pause",
                 "no_contact": "no_contact"}.get(mode, "operator_cancelled"), now=utcnow())
             return state.revision
+
+    def reconcile_runtime_stop(self, tenant_id, account_id, fan_id):
+        """Repair drift between Twin's state and the runtime stop; fail closed.
+
+        Call before the FASTT runner selects a fan. A wanted stop that is missing
+        is re-written. A stop with no Twin command behind it (FASTT's own restrict
+        route, an of_restricted row) is shown as ``paused``. This never releases
+        a stop: only an explicit resume/release command does."""
+        _id(fan_id)
+        from . import runtime_stop
+        with Session(self.engine) as s, s.begin():
+            self._runtime(s, tenant_id, account_id)
+            if s.get(Fan, (account_id, fan_id)) is None:
+                raise Refused("conversation unavailable")
+            state = self._state(s, account_id, fan_id)
+            now = utcnow()
+            reason = runtime_stop.current(s, account_id, fan_id)
+            if runtime_stop.stop_wanted(state):
+                runtime_stop.project(s, account_id, fan_id, state, now)
+                reason = runtime_stop.current(s, account_id, fan_id)
+            elif reason in {runtime_stop.MANUAL_RESTRICT, *runtime_stop.STRONGER}:
+                previous = state.revision
+                state.mode, state.revision, state.updated_at = "paused", previous + 1, now
+                key = hashlib.sha256(f"runtime-stop:{account_id}:{fan_id}:{previous}".encode()).hexdigest()
+                s.add(OfControlAudit(account_id=account_id, command_key=key, fan_id=fan_id, mode="paused",
+                    previous_revision=previous, revision=state.revision, actor="runtime-stop",
+                    reason="Runtime stop (" + reason + ") has no matching Twin command", action="runtime_stop",
+                    takeover_from=state.takeover_state, takeover_to=state.takeover_state, created_at=now))
+                work = s.get(OfWork, (account_id, fan_id))
+                if work:
+                    work.generation += 1
+                    work.status = "blocked"
+                    work.lease_token = work.lease_until = None
+            return {"mode": state.mode, "takeoverState": state.takeover_state, "revision": state.revision,
+                    "stopped": reason in runtime_stop.HARD, "stopReason": reason}
 
     @staticmethod
     def complete_takeover(s, account_id, fan_id):

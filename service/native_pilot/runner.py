@@ -56,7 +56,10 @@ def check_local(path, account, fan, approved_item=None):
                         raise Refused("account-automation-enabled")
         # Suppressing the offer resolver is permitted only with no obligation.
         # An open PPV of the one approved item is settled by OnlyFans itself (the fan unlocks it).
-        approved = (" AND NOT (mode='ppv' AND status='open' AND item_id=?)", (approved_item,)) if approved_item else ("", ())
+        # approved_item: one catalogue id, or an iterable of listed ids.
+        ids = sorted({approved_item} if isinstance(approved_item, int) else set(approved_item or ()))
+        approved = (" AND NOT (mode='ppv' AND status='open' AND item_id IN (%s))" % ",".join("?" * len(ids)),
+                    tuple(ids)) if ids else ("", ())
         if con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status IN ('open','paid','delivering')"
                        + approved[0] + " LIMIT 1", (account, fan, *approved[1])).fetchone():
             raise Refused("chat-offer-open")

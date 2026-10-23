@@ -369,3 +369,24 @@ def test_owned_fan_human_send_is_cancelled_by_a_later_control_and_unknown_is_hel
         command(store, "release_takeover", 3)             # unresolved holds the hand-back
     assert stop_row(engine) == "manual_restrict"
     store.close()
+
+
+def test_account_wide_scope_owns_every_fan_and_refuses_the_worker_connector(database, monkeypatch):
+    from onlyfans_runtime.fastt_manual import FasttManualTransport, SCOPE_ENV, dispatch_next_manual, fastt_owned
+    from onlyfans_runtime.text_delivery import SyntheticTextTransport
+    _, engine = database
+    store, authority = configured(database)
+    live_like(engine)
+    monkeypatch.setenv(SCOPE_ENV, f"{ACCOUNT}:*")
+    assert fastt_owned(ACCOUNT, FAN) and fastt_owned(ACCOUNT, FAN + 1)
+    assert not fastt_owned("of-999999999", FAN)
+    command(store, "request_takeover", 0)
+    native_policy(authority)
+    intent = prepare(authority, key="wide-1", revision=1, body="account wide human")
+    wire = SyntheticTextTransport(ACCOUNT)
+    assert authority.dispatch(TENANT, ACCOUNT, intent, wire) == "queued" and not wire.calls
+    seen = []
+    t = FasttManualTransport(ACCOUNT, lambda g: seen.append(g.fan_id) or {"id": 777, "createdAt": utcnow_iso()},
+                             policy_revision=2)
+    assert dispatch_next_manual(authority, TENANT, ACCOUNT, t) == "accepted" and seen == [FAN]
+    store.close()

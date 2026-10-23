@@ -120,6 +120,18 @@ def test_source_refuses_unsafe_archive_before_writing_files(tmp_path, monkeypatc
     assert not target.exists() and not (tmp_path / "escaped").exists()
 
 
+def test_source_keeps_a_contained_tracked_symlink(tmp_path, monkeypatch):
+    # The dashboard tracks preview/onlyfans-integration/public -> ../../public (git symlink).
+    info = tarfile.TarInfo("preview/onlyfans-integration/public"); info.type = tarfile.SYMTYPE
+    info.linkname = "../../public"; info.size = 0
+    data = archive((info, b"")); deliver(monkeypatch, data)
+    target = tmp_path / "paired"
+    proof = source.extract_archive(target, SHA, hashlib.sha256(data).hexdigest())
+    link = target / "preview/onlyfans-integration/public"
+    assert link.is_symlink() and os.readlink(link) == "../../public"
+    assert proof["files"]["preview/onlyfans-integration/public"] == {"symlink": "../../public"}
+
+
 @pytest.mark.parametrize("defect", ["wrong_digest", "wrong_commit", "download_limit", "unpacked_limit", "file_limit"])
 def test_source_rejects_unverified_or_unbounded_archive(tmp_path, monkeypatch, defect):
     data = archive(revision="b" * 40 if defect == "wrong_commit" else SHA)

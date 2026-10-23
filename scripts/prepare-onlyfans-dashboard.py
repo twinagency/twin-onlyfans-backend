@@ -143,7 +143,7 @@ def extract_archive(destination: Path, sha: str, digest: str) -> dict:
                 if (path.is_absolute() or ".." in path.parts or "\\" in member.name or "\x00" in member.name
                         or not path.parts or path.parts[0] in {".git", "node_modules"}
                         or path.as_posix() == MARKER or path.as_posix() in names
-                        or not (member.isdir() or member.isfile())):
+                        or not (member.isdir() or member.isfile() or _contained_symlink(member))):
                     raise SourceRefused("Dashboard archive contains an unsafe or duplicate entry")
                 names.add(path.as_posix())
             required = {"package.json", "package-lock.json", "preview/onlyfans-integration/package.json",
@@ -158,6 +158,10 @@ def extract_archive(destination: Path, sha: str, digest: str) -> dict:
                     target.mkdir(parents=True, exist_ok=True)
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
+                if member.issym():
+                    os.symlink(member.linkname, target)
+                    files[member.name] = {"symlink": member.linkname}
+                    continue
                 stream = source.extractfile(member)
                 if stream is None:
                     raise SourceRefused("Dashboard archive file could not be read")
@@ -171,6 +175,26 @@ def extract_archive(destination: Path, sha: str, digest: str) -> dict:
                  "archiveBytes": length, "files": files}
         (destination / MARKER).write_text(json.dumps(proof, sort_keys=True, indent=2) + "\n")
         return proof
+
+
+def _contained_symlink(member) -> bool:
+    """A relative symlink whose target stays inside the archive root (tracked git symlink, e.g.
+    preview/onlyfans-integration/public -> ../../public). Absolute, escaping or .git/node_modules
+    targets are refused."""
+    if not member.issym():
+        return False
+    link = member.linkname
+    if not link or link.startswith("/") or "\\" in link or "\x00" in link:
+        return False
+    parts = list(PurePosixPath(member.name).parent.parts)
+    for part in PurePosixPath(link).parts:
+        if part == "..":
+            if not parts:
+                return False
+            parts.pop()
+        elif part != ".":
+            parts.append(part)
+    return bool(parts) and parts[0] not in {".git", "node_modules"}
 
 
 def main() -> int:

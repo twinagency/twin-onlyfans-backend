@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
+
+from twin_bridge import store
 
 from .ledger import Ledger, Refused
 
@@ -16,20 +16,16 @@ def main():
     parser.add_argument("--pilot-id", required=True)
     args = parser.parse_args()
     try:
-        from twin_bridge.coordination import sqlite_path
-        path = sqlite_path()
+        from twin_bridge.coordination import store_target
+        path = store_target()
         if not path:
-            raise Refused("sqlite-required-for-pilot")
+            raise Refused("pilot-store-required")
         ledger = Ledger(path)
         if args.action == "stop":
             # Ownership is used privately; never expose the token in output or
             # pass it through command-line arguments/process listings.
-            con = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
-            try:
-                con.execute("PRAGMA query_only=ON")
+            with store.readonly(path) as con:
                 row = con.execute("SELECT owner_token FROM native_pilots WHERE pilot_id=?", (args.pilot_id,)).fetchone()
-            finally:
-                con.close()
             if row is None:
                 raise Refused("pilot-missing")
             ledger.stop(pilot_id=args.pilot_id, owner_token=row[0], reason="operator-stop",

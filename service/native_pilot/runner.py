@@ -11,11 +11,11 @@ import asyncio
 import json
 import logging
 import secrets
-import sqlite3
 import time
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from twin_bridge import store
 
 from .ledger import Ledger, Refused
 
@@ -28,17 +28,9 @@ def emit(event):
     print(json.dumps(event, sort_keys=True, allow_nan=False), flush=True)
 
 
-@contextmanager
-def readonly(path):
-    con = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    try:
-        con.execute("PRAGMA query_only=ON")
-        con.execute("BEGIN")
-        yield con
-    finally:
-        con.rollback()
-        con.close()
+# ``path`` throughout this module is the pilot store target: a SQLite file path
+# or the PostgreSQL URL of the application database (see twin_bridge.store).
+readonly = store.readonly
 
 
 def check_local(path, account, fan):
@@ -46,7 +38,7 @@ def check_local(path, account, fan):
     with readonly(path) as con:
         if not con.execute("SELECT 1 FROM accounts WHERE id=?", (account,)).fetchone():
             raise Refused("account-missing")
-        if con.execute("SELECT 1 FROM automation_rules WHERE account_id=? AND is_enabled=1 LIMIT 1", (account,)).fetchone():
+        if con.execute("SELECT 1 FROM automation_rules WHERE account_id=? AND is_enabled LIMIT 1", (account,)).fetchone():
             raise Refused("account-rules-enabled")
         # gen_info only updates fan profiles; it cannot dispatch messages.
         # Keep all sending, unknown and unclassified jobs blocking admission.
@@ -72,6 +64,22 @@ def check_local(path, account, fan):
             raise Refused("twin-work-open")
         return {"creator_profile": "configured" if row and (row["persona"] or "").strip() else "native-default",
                 "account_id": account, "fan_id": fan}
+
+
+def require_store_schema(path):
+    """PostgreSQL has no runtime DDL: refuse unless migration 0092 supplied every table.
+
+    Without the writer-marker table the transport boundary could not prove that
+    no other local writer is in flight, so a missing table is a refusal, never a
+    silent fallback.
+    """
+    if not store.is_pg(path):
+        return
+    with readonly(path) as con:
+        for table in ("twin_bridge_conversations", "twin_bridge_send_attempts", "twin_bridge_turns",
+                      "twin_bridge_writes", "native_pilots", "native_pilot_inputs", "native_pilot_receipts"):
+            if not store.has_table(con, table):
+                raise Refused("pilot-schema-missing")
 
 
 def read_sources(path, account, fan, ids):
@@ -204,7 +212,7 @@ class Gateway:
             if terms:
                 # Retain the frozen media/price intent even if the POST outcome
                 # is unknown. No new table and no automatic delivery recovery.
-                with sqlite3.connect(self.ledger.path) as con:
+                with store.transaction(self.ledger.path) as con:
                     con.execute("UPDATE native_pilot_receipts SET evidence_json=? WHERE attempt_id=? AND state='dispatching'",
                                 (json.dumps({"content_intent": terms}, sort_keys=True), attempt.id))
 
@@ -261,16 +269,15 @@ class Gateway:
 
 def begin_native_run(path, account):
     """Create the native audit row without invoking the automation scheduler."""
-    with sqlite3.connect(Path(path).resolve().as_uri() + "?mode=rw", uri=True) as con:
-        cursor = con.execute("INSERT INTO automation_runs(account_id,kind,started_at,status) VALUES(?,'ai_chatter',?,'running')",
-                             (account, now().isoformat(sep=" ")))
-        return int(cursor.lastrowid)
+    with store.transaction(path) as con:
+        return store.insert_id(con, "INSERT INTO automation_runs(account_id,kind,started_at,status) VALUES(?,'ai_chatter',?,'running')",
+                               (account, now().isoformat(sep=" ")))
 
 
 def finish_native_run(path, run_id, stats, reason=None):
     # Only aggregate counters/fixed reasons, never native prompt/error text.
     counters = {k: v for k, v in (stats or {}).items() if isinstance(k, str) and type(v) in (int, bool)}
-    with sqlite3.connect(Path(path).resolve().as_uri() + "?mode=rw", uri=True) as con:
+    with store.transaction(path) as con:
         con.execute("UPDATE automation_runs SET completed_at=?,status=?,stats_json=?,error_text=? WHERE id=?",
                     (now().isoformat(sep=" "), "error" if reason else "done", json.dumps(counters), reason, run_id))
 
@@ -293,14 +300,15 @@ def verify_attribution(path, account, fan, receipts, content=None):
 async def run(args):
     from dotenv import dotenv_values
     from db.engine import engine
-    from twin_bridge.coordination import sqlite_path, reserve_ownership, clear_owner
+    from twin_bridge.coordination import store_target, reserve_ownership, clear_owner
     from .engine import NativeEngine
     from .model import NativePilotModel, MODEL
     from of_client import OFClient
 
-    path = sqlite_path()
+    path = store_target()
     if not path:
-        raise Refused("sqlite-required-for-pilot")
+        raise Refused("pilot-store-required")
+    require_store_schema(path)
     profile = check_local(path, args.account, args.fan)
     from .content import ContentPlan
     content = ContentPlan(args.content_manifest, args.account, args.fan) if getattr(args, "content_manifest", None) else None
@@ -388,8 +396,8 @@ async def run(args):
                         reason = "paid-card-sent-test-complete"
                         break
                     if any(x and x["price_cents"] == 0 for x in sent_media):
-                        with sqlite3.connect(path) as con:
-                            con.execute("UPDATE catalog_items SET enabled=1 WHERE account_id=? AND id=?", (args.account, content.paid["catalog_id"]))
+                        with store.transaction(path) as con:
+                            con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?", (True, args.account, content.paid["catalog_id"]))
                 if not receipts:
                     # Native last-look can discard a draft when a newer inbound
                     # arrives during generation. Consume the old claim, then
@@ -416,9 +424,9 @@ async def run(args):
                     clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
                 emit({"event": "finished", **ledger.status(pilot.pilot_id)})
                 if content:
-                    with sqlite3.connect(path) as con:
+                    with store.transaction(path) as con:
                         for item in content.items.values():
-                            con.execute("UPDATE catalog_items SET enabled=0 WHERE account_id=? AND id=?", (args.account, item["catalog_id"]))
+                            con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?", (False, args.account, item["catalog_id"]))
         finally:
             try:
                 if client is not None:

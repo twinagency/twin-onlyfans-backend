@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, or_, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from .store import dialect_insert
 
 from db.engine import get_session
 from db.models import TwinBridgeConversation, TwinBridgeInput, TwinBridgeTurn, TwinBridgeTurnMember
@@ -515,7 +515,7 @@ async def _freeze(session, report: FormReport, burst: list[_Input], scope: Bridg
     turn_id = event["messageId"]
 
     inserted = await session.execute(
-        sqlite_insert(TwinBridgeTurn)
+        dialect_insert(TwinBridgeTurn)
         .values(
             account_id=scope.account_id,
             fan_id=fan_id,
@@ -547,7 +547,7 @@ async def _freeze(session, report: FormReport, burst: list[_Input], scope: Bridg
 
     for position, member in enumerate(members):
         claimed = await session.execute(
-            sqlite_insert(TwinBridgeTurnMember)
+            dialect_insert(TwinBridgeTurnMember)
             .values(
                 account_id=member.account_id,
                 fan_id=member.fan_id,

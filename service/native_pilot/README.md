@@ -12,6 +12,17 @@ The OpenRouter key is read privately from the existing Twin environment file. Th
 model and provider order match Twin; prompts, temperature and response format are
 Fastt's. No Twin draft/status/ack endpoint or Twin persona is involved.
 
+## Storage
+
+The ledger, ownership reservation and writer markers run on the application database
+(`DATABASE_URL`): a SQLite file as before, or PostgreSQL at schema 0092
+(`0092_native_pilot_storage` creates `native_pilots`, `native_pilot_inputs`,
+`native_pilot_receipts`, `twin_bridge_writes` and the five `twin_bridge_*` control
+tables). Every write is one serialised transaction on both backends
+(`twin_bridge/store.py`). PostgreSQL never runs runtime DDL; the runner refuses
+(`pilot-schema-missing`) if a table is absent. `tests/test_native_pilot_storage_pg.py`
+runs the whole ledger and runner suites unchanged against a real PostgreSQL.
+
 ## Boundaries
 
 - Fresh input only, after activation; seven seconds of quiet before generation.

@@ -451,8 +451,11 @@ already passed its own eligibility check is still stopped.
   test chat. This code does not claim exactly-once delivery or atomic remote
   takeover.
 - Cross-process admission uses SQLite write transactions (`BEGIN IMMEDIATE`) as
-  its ordering boundary and is SQLite-only by design. On an unsupported backend
-  an ENABLED bridge refuses rather than silently degrading. A local writer whose
+  its ordering boundary. On PostgreSQL (schema 0092) the same SQL runs through
+  `twin_bridge/store.py`, where `BEGIN IMMEDIATE` takes one transaction-scoped
+  advisory lock, so admission serialises identically; tables come from migration
+  0092, never from runtime DDL. On an unsupported backend or with the tables
+  missing, an ENABLED bridge refuses rather than silently degrading. A local writer whose
   provider outcome is UNKNOWN (post-send exception, or a crash mid-POST) keeps a
   durable `unresolved` marker that admission honours until an operator runs
   `reconcile-writes` for that fan: this is deliberately fail-closed, so an

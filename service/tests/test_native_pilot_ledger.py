@@ -26,6 +26,11 @@ def check(value: object, label: str = "") -> None:
     CHECKS += 1
 
 
+def database_url(path) -> str:
+    """Application DATABASE_URL for a fixture path (the PG suite overrides this)."""
+    return "sqlite+aiosqlite:///" + Path(path).as_posix()
+
+
 def refuses(reason: str, fn) -> None:
     try:
         fn()

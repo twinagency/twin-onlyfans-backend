@@ -1,0 +1,139 @@
+{
+  "backendSha": "8e81944ff6d92988568cf1eb31214b8a5a75f9d5",
+  "backendTree": "99b5c1cf1dde51e3091853a1490d8782adb0b3ac",
+  "sourceUnchanged": true,
+  "sourceFiles": [
+    {
+      "path": "service/onlyfans_runtime/store.py",
+      "blob": "763c565c45256b94c8ccd73ff6c17c0759f49ed1"
+    },
+    {
+      "path": "service/tests/test_onlyfans_capacity_pg.py",
+      "blob": "e7bd9e5e6057d0556198d6305d0df803f4373436"
+    }
+  ],
+  "reviewFindings": [],
+  "reviewReasoning": [
+    "Retry retains the same tenant and optional account filter, due predicate and fairness ordering.",
+    "Each empty candidate remains runtime-locked in this short transaction; the next READ COMMITTED statement gets a fresh eligibility snapshot.",
+    "Binding validation and runtime-first lock ordering are preserved. No provider or model call occurs while locks are held.",
+    "Only a real eligible work row advances claim generation or fairness timestamps.",
+    "Both deterministic barrier regressions fail against the exact prior store implementation and pass with the new loop."
+  ],
+  "capacitySuite": {
+    "passed": 5,
+    "failed": 0,
+    "errored": 0,
+    "skipped": 0,
+    "deselected": 0,
+    "seconds": 74.65,
+    "tests": [
+      {
+        "node": "service/tests/test_onlyfans_capacity_pg.py::test_claim_rechecks_exhausted_account_without_losing_fairness_or_scope[None]",
+        "seconds": 3.858,
+        "passed": true
+      },
+      {
+        "node": "service/tests/test_onlyfans_capacity_pg.py::test_claim_rechecks_exhausted_account_without_losing_fairness_or_scope[account_scope1]",
+        "seconds": 3.234,
+        "passed": true
+      },
+      {
+        "node": "service/tests/test_onlyfans_capacity_pg.py::test_measured_account_fairness_competing_processes_and_real_db_outage",
+        "seconds": 17.108,
+        "passed": true
+      },
+      {
+        "node": "service/tests/test_onlyfans_capacity_pg.py::test_measured_native_preparation_cost_and_one_use_delivery_across_workers",
+        "seconds": 34.75,
+        "passed": true
+      },
+      {
+        "node": "service/tests/test_onlyfans_capacity_pg.py::test_hot_account_bounded_backpressure_recovers_missing_events_without_starving_cold",
+        "seconds": 14.71,
+        "passed": true
+      }
+    ],
+    "junit": "/workspace/scratch/55a7baafffae/acceptance/evidence/capacity-8e81944.xml",
+    "log": "/workspace/scratch/55a7baafffae/acceptance/evidence/capacity-8e81944.log",
+    "collectionProof": "/workspace/scratch/55a7baafffae/acceptance/evidence/capacity-8e81944-execution.json"
+  },
+  "negativeControl": {
+    "expectedFailed": 2,
+    "scope": "Latest two new tests with only store.py restored to unchanged predecessor implementation in separate snapshot",
+    "results": [
+      {
+        "node": "service/tests/test_onlyfans_capacity_pg.py::test_claim_rechecks_exhausted_account_without_losing_fairness_or_scope[None]",
+        "expectedFailure": "AttributeError: 'NoneType' object has no attribute 'fan_id'"
+      },
+      {
+        "node": "service/tests/test_onlyfans_capacity_pg.py::test_claim_rechecks_exhausted_account_without_losing_fairness_or_scope[account_scope1]",
+        "expectedFailure": "AttributeError: 'NoneType' object has no attribute 'fan_id'"
+      }
+    ],
+    "junit": "/workspace/scratch/55a7baafffae/acceptance/evidence/capacity-negative-control.xml"
+  },
+  "completeManifestCollection": {
+    "backendSha": "8e81944ff6d92988568cf1eb31214b8a5a75f9d5",
+    "tree": "99b5c1cf1dde51e3091853a1490d8782adb0b3ac",
+    "files": 102,
+    "collected": 1922,
+    "added": [
+      "service/tests/test_onlyfans_capacity_pg.py::test_claim_rechecks_exhausted_account_without_losing_fairness_or_scope[None]",
+      "service/tests/test_onlyfans_capacity_pg.py::test_claim_rechecks_exhausted_account_without_losing_fairness_or_scope[account_scope1]"
+    ],
+    "removed": [],
+    "duplicates": 0,
+    "deselected": 0,
+    "collectionErrors": [],
+    "original1920Preserved": true
+  },
+  "full1922NodeExecution": false,
+  "releaseAcceptanceEstablished": false,
+  "applicationEditsMadeByReviewer": false,
+  "evidenceMetrics": {
+    "native-preparation-delivery": {
+      "acceptedCanonicalMessages": 192,
+      "accounts": 12,
+      "competingProcesses": 4,
+      "completedPerSecond": 9.224,
+      "conversations": 192,
+      "costMillicents": 1344,
+      "deliveryUnitsPerAccount": 16,
+      "elapsedSeconds": 20.816,
+      "limitUnitsPerAccount": 20,
+      "limits": "shared ephemeral sandbox; synthetic zero-latency model/transport; real one-second account pacing retained; excludes initial quiet window; no paid-provider latency or production/fleet capacity claim",
+      "nativeInvocations": 192,
+      "providerRequests": 0,
+      "scope": "synthetic native planning, known synthetic cost and one-use acceptance; no external model/provider",
+      "syntheticWireCalls": 192
+    },
+    "overload-catchup": {
+      "backpressuredEvents": 25,
+      "coldAccountProgressedBeforeHotRecovery": true,
+      "elapsedSeconds": 11.121,
+      "limits": "single hot account; bounded rehearsal, not a soak or full product capacity test",
+      "pendingBound": 1000,
+      "providerRequests": 0,
+      "recoveredCanonicalMessages": 1025,
+      "recoveryTicks": 12,
+      "scope": "synthetic intake and recovery; no provider"
+    },
+    "fairness-outage": {
+      "accounts": 12,
+      "canonicalMessagesAfterRecovery": 193,
+      "competingProcesses": 4,
+      "conversations": 192,
+      "databaseOutageAndRecoverySeconds": 0.035,
+      "duplicateClaims": 0,
+      "firstTwelveClaimsCoverTwelveAccounts": true,
+      "ingestionIncludingSetupSeconds": 12.526,
+      "limits": "shared ephemeral sandbox; quiet window advanced by test fixture; no end-to-end reply latency or production capacity claim",
+      "providerRequests": 0,
+      "remainingClaimsPerSecond": 61.315,
+      "remainingClaimsSeconds": 2.936,
+      "scope": "synthetic database/intake/claim rehearsal; no model or provider",
+      "uniqueCompletedClaims": 192
+    }
+  }
+}

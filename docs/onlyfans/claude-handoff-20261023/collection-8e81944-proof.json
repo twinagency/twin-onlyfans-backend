@@ -1,0 +1,15 @@
+{
+  "backendSha": "8e81944ff6d92988568cf1eb31214b8a5a75f9d5",
+  "tree": "99b5c1cf1dde51e3091853a1490d8782adb0b3ac",
+  "files": 102,
+  "collected": 1922,
+  "added": [
+    "service/tests/test_onlyfans_capacity_pg.py::test_claim_rechecks_exhausted_account_without_losing_fairness_or_scope[None]",
+    "service/tests/test_onlyfans_capacity_pg.py::test_claim_rechecks_exhausted_account_without_losing_fairness_or_scope[account_scope1]"
+  ],
+  "removed": [],
+  "duplicates": 0,
+  "deselected": 0,
+  "collectionErrors": [],
+  "original1920Preserved": true
+}

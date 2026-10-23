@@ -764,13 +764,18 @@ class TextAuthority:
                 return False
             state = s.get(OfConversationState, (account_id, row.fan_id))
             if existing is None:
+                kind = ("onlyfans_campaign" if row.origin == "campaign" else
+                        "onlyfans_engagement" if row.origin == "engagement" else
+                        ("onlyfans_media" if row.catalog_item_id is not None else "onlyfans_text") if row.origin == "automated" else None)
+                # A human send is stamped with the Twin-staff sentinel when an operator has
+                # created it, so FASTT can tell it from the AI; absent, the column stays NULL.
+                from .staff_sentinels import human_employee_id
                 s.add(Message(account_id=account_id, fan_id=row.fan_id, message_id=proof.message_id,
                               direction="out", body=row.body, created_at=stamp, raw_json=row.receipt_json,
                               media_ids=row.media_json, media_count=len(json.loads(row.media_json)),
                               price_cents=row.price_cents, is_paid=False if row.price_cents else None,
-                              automation_kind="onlyfans_campaign" if row.origin == "campaign" else
-                                "onlyfans_engagement" if row.origin == "engagement" else
-                                ("onlyfans_media" if row.catalog_item_id is not None else "onlyfans_text") if row.origin == "automated" else None))
+                              automation_kind=kind,
+                              sent_by_employee_id=human_employee_id(s) if kind is None else None))
                 state.input_revision += 1
                 s.flush()
             from .media_delivery import project

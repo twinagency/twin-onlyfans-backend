@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .ledger import Ledger, Refused
+from .scope import AccountScope
 
 
 def now():
@@ -138,11 +139,14 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan):
 
 
 class Gateway:
-    def __init__(self, ledger, pilot, client, loop, content=None):
+    def __init__(self, ledger, pilot, client, loop, content=None, scope=None):
         self.ledger, self.pilot, self.client, self.loop = ledger, pilot, client, loop
         self.content = content
+        # pilot.account_id is the Twin/DB-side id; everything said to or read from
+        # OnlyFans (history, receipts, client identity) uses the provider-side id.
+        self.scope = scope or AccountScope.parse(pilot.account_id)
         from twin_bridge.platform import OnlyFansTextAdapter
-        self.reader = OnlyFansTextAdapter(pilot.account_id, client=client)
+        self.reader = OnlyFansTextAdapter(self.scope.provider_id, client=client)
         self.input_key = None
         self.sources = {}
         self.bubble = 0
@@ -183,7 +187,7 @@ class Gateway:
             history = await self.reader.preflight_history(self.pilot.fan_id, since=since, source_ids=set(self.sources))
             receipts = self.ledger.receipts(pilot_id=self.pilot.pilot_id, input_key=self.input_key)
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
-            check_provider_history(history, self.sources, known, account=self.pilot.account_id, fan=self.pilot.fan_id)
+            check_provider_history(history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id)
             if self.content:
                 with readonly(self.ledger.path) as con:
@@ -193,9 +197,11 @@ class Gateway:
                         if not row or not row["enabled"]:
                             raise Refused("content-item-disabled")
                 if terms:
-                    asset = await asyncio.to_thread(self.client.vault_media_by_id, terms["media_id"])
-                    if str(asset.get("id")) != str(terms["media_id"]) or asset.get("type") != terms["kind"] or asset.get("canView") is not True:
-                        raise Refused("content-asset-unavailable")
+                    for media_id in terms["media_ids"]:
+                        asset = await asyncio.to_thread(self.client.vault_media_by_id, media_id)
+                        if (str(asset.get("id")) != str(media_id) or asset.get("type") != terms["media_types"][str(media_id)]
+                                or asset.get("canView") is not True):
+                            raise Refused("content-asset-unavailable")
             self.bubble += 1
             attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                 input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
@@ -225,15 +231,17 @@ class Gateway:
                     if terms:
                         from of_client import API_BASE
                         body = {"text": escape_plain_text(text), "lockedText": False,
-                                "mediaFiles": [terms["media_id"]], "price": terms["price_cents"] / 100,
-                                "previews": [], "rfTag": [], "rfGuest": [], "rfPartner": [], "isForward": False}
-                        return self.client.post_json(f"{API_BASE}/chats/{self.pilot.fan_id}/messages", json_body=body, proxy_tries=1)
+                                "mediaFiles": list(terms["media_ids"]), "price": terms["price_cents"] / 100,
+                                "previews": list(terms["preview_ids"]), "rfTag": [], "rfGuest": [], "rfPartner": [],
+                                "isForward": False}
+                        return self.client.post_json(f"{API_BASE}/chats/{self.pilot.fan_id}/messages", json_body=body, proxy_tries=1,
+                                                    allow_redirects=False)
                     return self.client.send_text_once_body(self.pilot.fan_id, escape_plain_text(text))
             try:
                 raw = await asyncio.to_thread(physical_post)
             finally:
                 revoke_dispatch(self.pilot.account_id, self.pilot.fan_id, token)
-            validated = validate_created_message(raw, chat_id=self.pilot.fan_id, creator_id=self.pilot.account_id)
+            validated = validate_created_message(raw, chat_id=self.pilot.fan_id, creator_id=self.scope.provider_id)
             if terms:
                 content_evidence = self.content.evidence(raw, terms)
                 if not isinstance(raw.get("text"), str) or html_to_text(raw["text"]) != html_to_text(escape_plain_text(text)):
@@ -264,10 +272,8 @@ CLEAN_STOPS = frozenset({"preflight-only", "time-limit-reached", "send-limit-rea
 
 
 def db_account_id(account):
-    """The ONE call site where the pilot/FASTT account id becomes the canonical DB id.
-
-    Identity today; the runtime-mapping helper (`to_live_account_id`) replaces the body."""
-    return account
+    """The ONE call site where the pilot/FASTT account id becomes the canonical DB id."""
+    return AccountScope.parse(account).db_id
 
 
 async def report_to_twin(ledger, pilot, run_error=None):
@@ -299,12 +305,19 @@ def finish_native_run(path, run_id, stats, reason=None):
                     (now().isoformat(sep=" "), "error" if reason else "done", json.dumps(counters), reason, run_id))
 
 
-def verify_attribution(path, account, fan, receipts, content=None):
+NO_EMPLOYEE_CHECK = object()
+
+
+def verify_attribution(path, account, fan, receipts, content=None, automation_employee_id=NO_EMPLOYEE_CHECK):
+    """Every accepted send must be a stored AI row; with an employee id given it must
+    carry exactly the Automation sentinel (never NULL, never a human's id)."""
     with readonly(path) as con:
         for receipt in receipts:
             if receipt["state"] != "sent":
                 raise Refused("delivery-unresolved")
-            row = con.execute("SELECT direction,automation_kind,price_cents,media_count FROM messages WHERE account_id=? AND fan_id=? AND message_id=?",
+            row = con.execute("SELECT direction,automation_kind,price_cents,media_count"
+                              + ("" if automation_employee_id is NO_EMPLOYEE_CHECK else ",sent_by_employee_id")
+                              + " FROM messages WHERE account_id=? AND fan_id=? AND message_id=?",
                               (account, fan, int(receipt["provider_message_id"]))).fetchone()
             stored = con.execute("SELECT response_json FROM native_pilot_receipts WHERE attempt_id=?", (receipt["attempt_id"],)).fetchone() if content else None
             raw = json.loads(stored[0]) if stored else {}
@@ -312,63 +325,82 @@ def verify_attribution(path, account, fan, receipts, content=None):
             kinds = ("ai_chatter", "ai_upseller") if content else ("ai_chatter",)
             if not row or row["direction"] != "out" or row["automation_kind"] not in kinds or row["price_cents"] != cents or (not content and row["media_count"] != 0):
                 raise Refused("native-attribution-missing")
+            if automation_employee_id is not NO_EMPLOYEE_CHECK and row["sent_by_employee_id"] != automation_employee_id:
+                raise Refused("native-attribution-employee")
 
 
 async def run(args):
-    from dotenv import dotenv_values
     from db.engine import engine
     from twin_bridge.coordination import sqlite_path, reserve_ownership, clear_owner
+    from .attribution import read_sentinels, require_sentinels
+    from .budget import DailyBudget
+    from .connection import build_client, load_verified_connection
     from .engine import NativeEngine
-    from .model import NativePilotModel, MODEL
-    from of_client import OFClient
+    from .model import NativePilotModel, MODEL, ENDPOINT
 
+    # The one account-id boundary: `db` for Twin's tables/FASTT's queries/the ledger,
+    # `scope.provider_id` for OnlyFans. Live data keeps its `of-<owner>` ids.
+    scope = AccountScope.parse(args.account)
+    db = scope.db_id
     path = sqlite_path()
     if not path:
         raise Refused("sqlite-required-for-pilot")
-    profile = check_local(path, args.account, args.fan)
+    profile = check_local(path, db, args.fan)
     from .content import ContentPlan
-    content = ContentPlan(args.content_manifest, args.account, args.fan) if getattr(args, "content_manifest", None) else None
+    content = ContentPlan(args.content_manifest, db, args.fan) if getattr(args, "content_manifest", None) else None
     if content:
         with readonly(path) as con:
-            content.check_catalog(con, args.account)
-    key = dotenv_values(Path(args.twin_env)).get("OPENROUTER_API_KEY")
-    if not key:
-        raise Refused("existing-model-key-missing")
+            content.check_catalog(con, db)
     client = None
     pilot = None
     gateway = None
     model = None
+    prior_catalog = None
     ledger = Ledger(path)
     reason = "preflight-only"
     try:
-        client = await asyncio.to_thread(OFClient.from_account, args.account, timeout_s=20)
-        if str(client.account_id) != args.account or str(client.user_id) != args.account:
-            raise Refused("session-account-mismatch")
+        # Current verified session + proxy + account-scoped model credential,
+        # read-only from Twin's encrypted connection record. Fails closed.
+        connection = await load_verified_connection(scope)
+        client = await asyncio.to_thread(build_client, connection)
         me = await asyncio.to_thread(client.me)
-        if str(me.get("id")) != args.account or str(me.get("username", "")).lstrip("@").casefold() != args.handle.casefold():
+        if str(me.get("id")) != scope.provider_id or str(me.get("username", "")).lstrip("@").casefold() != args.handle.casefold():
             raise Refused("live-account-mismatch")
-        emit({"event": "preflight-ok", **profile, "model": MODEL, "creator_handle": args.handle})
+        found = await read_sentinels()
+        emit({"event": "preflight-ok", **profile, "model": MODEL, "model_id": connection.model_id,
+              "daily_cost_cap_cents": connection.daily_cost_cap_cents,
+              "proxy": "configured" if connection.proxy_url else "none", "creator_handle": args.handle,
+              "attribution": {"automation": found.automation is not None, "human": found.human is not None}})
         if not args.enable_send:
             return
+        sentinels = await require_sentinels()
         start = now()
-        pilot = ledger.activate(pilot_id=args.pilot_id, account_id=args.account, fan_id=args.fan,
+        pilot = ledger.activate(pilot_id=args.pilot_id, account_id=db, fan_id=args.fan,
             owner_token="native-" + secrets.token_hex(24), cutoff=start,
             deadline=start + timedelta(seconds=args.max_seconds), limit=args.send_limit, now=start)
-        if not await reserve_ownership(account_id=args.account, fan_id=args.fan, owner_token=pilot.owner_token,
+        if not await reserve_ownership(account_id=db, fan_id=args.fan, owner_token=pilot.owner_token,
                                        now=now(), ttl_s=max(1, (datetime.fromisoformat(pilot.deadline) - now()).total_seconds())):
             raise Refused("ownership-unavailable")
-        gateway = Gateway(ledger, pilot, client, asyncio.get_running_loop(), content=content)
-        model = NativePilotModel(api_key=key, account_id=args.account, fan_id=args.fan,
+        gateway = Gateway(ledger, pilot, client, asyncio.get_running_loop(), content=content, scope=scope)
+        model = NativePilotModel(api_key=connection.model_api_key, account_id=db, fan_id=args.fan,
             deadline=time.monotonic() + args.max_seconds, should_stop=gateway.stopped, on_event=emit,
-            reserve_call=lambda: ledger.reserve_model_call(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=now()))
+            reserve_call=lambda: ledger.reserve_model_call(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=now()),
+            budget=DailyBudget(scope, connection.model_id, endpoint=ENDPOINT))
+        if content:
+            # The reviewed card must be sellable for this run. Remember the live
+            # flag so it is restored, not forced, when the pilot ends.
+            with sqlite3.connect(path) as con:
+                prior_catalog = con.execute("SELECT enabled FROM catalog_items WHERE account_id=? AND id=?",
+                                            (db, content.item["catalog_id"])).fetchone()[0]
+                con.execute("UPDATE catalog_items SET enabled=1 WHERE account_id=? AND id=?", (db, content.item["catalog_id"]))
         reason = "time-limit-reached"
         context = None
         if getattr(args, "twin_context", False):
             from .twin_context import TwinPromptContext
             context = TwinPromptContext()
-        with NativeEngine(args.account, args.fan, chat=model.chat, send=gateway.send, emit=emit, content=content,
+        with NativeEngine(db, args.fan, chat=model.chat, send=gateway.send, emit=emit, content=content,
                           context=context) as native:
-            emit({"event": "ready", "pilot_id": pilot.pilot_id, "account_id": args.account, "fan_id": args.fan,
+            emit({"event": "ready", "pilot_id": pilot.pilot_id, "account_id": db, "fan_id": args.fan,
                   "engine": "fastt-native", "limit": args.send_limit, "deadline_utc": pilot.deadline,
                   "fresh_messages_only": True, "creator_profile": profile["creator_profile"]})
             while now() < datetime.fromisoformat(pilot.deadline):
@@ -388,11 +420,11 @@ async def run(args):
                 if (now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < 7:
                     await asyncio.sleep(2)
                     continue
-                gateway.sources = read_sources(path, args.account, args.fan, getattr(snap, "member_ids", (snap.message_id,)))
+                gateway.sources = read_sources(path, db, args.fan, getattr(snap, "member_ids", (snap.message_id,)))
                 gateway.input_key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=now())
                 gateway.bubble = 0
                 emit({"event": "generating", "source_message_id": str(snap.message_id), "engine": "fastt-native"})
-                run_id = begin_native_run(path, args.account)
+                run_id = begin_native_run(path, db)
                 stats = None
                 run_error = None
                 try:
@@ -407,7 +439,8 @@ async def run(args):
                 finally:
                     finish_native_run(path, run_id, stats, run_error)
                 receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=gateway.input_key)
-                verify_attribution(path, args.account, args.fan, receipts, content=content)
+                verify_attribution(path, db, args.fan, receipts, content=content,
+                                   automation_employee_id=sentinels.automation)
                 await report_to_twin(ledger, pilot)
                 ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=gateway.input_key, now=now())
                 if content:
@@ -417,9 +450,6 @@ async def run(args):
                     if any(x and x["price_cents"] == 300 for x in sent_media):
                         reason = "paid-card-sent-test-complete"
                         break
-                    if any(x and x["price_cents"] == 0 for x in sent_media):
-                        with sqlite3.connect(path) as con:
-                            con.execute("UPDATE catalog_items SET enabled=1 WHERE account_id=? AND id=?", (args.account, content.paid["catalog_id"]))
                 if not receipts:
                     # Native last-look can discard a draft when a newer inbound
                     # arrives during generation. Consume the old claim, then
@@ -446,10 +476,10 @@ async def run(args):
                 finally:
                     clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
                 emit({"event": "finished", **ledger.status(pilot.pilot_id)})
-                if content:
+                if content and prior_catalog is not None:
                     with sqlite3.connect(path) as con:
-                        for item in content.items.values():
-                            con.execute("UPDATE catalog_items SET enabled=0 WHERE account_id=? AND id=?", (args.account, item["catalog_id"]))
+                        con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
+                                    (prior_catalog, db, content.item["catalog_id"]))
         finally:
             try:
                 if client is not None:
@@ -460,19 +490,18 @@ async def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--account", required=True)
+    parser.add_argument("--account", required=True, help="Twin account id (of-<owner>) or the bare owner id")
     parser.add_argument("--fan", type=int, required=True)
     parser.add_argument("--handle", required=True)
-    parser.add_argument("--twin-env", required=True)
     parser.add_argument("--pilot-id", required=True)
     parser.add_argument("--send-limit", type=int, default=10)
     parser.add_argument("--max-seconds", type=int, default=1800)
     parser.add_argument("--enable-send", action="store_true")
     parser.add_argument("--twin-context", action="store_true",
                         help="Feed Twin's approved persona, creator facts and fan memory through the single prompt hook")
-    parser.add_argument("--content-manifest", help="Explicit private two-card pilot manifest; text only when omitted")
+    parser.add_argument("--content-manifest", help="Explicit private single-card ($3) pilot manifest; text only when omitted")
     args = parser.parse_args()
-    if not args.account.isdecimal() or args.fan <= 0 or not 1 <= args.send_limit <= 30 or not 60 <= args.max_seconds <= 1800:
+    if not AccountScope.valid(args.account) or args.fan <= 0 or not 1 <= args.send_limit <= 30 or not 60 <= args.max_seconds <= 1800:
         parser.error("invalid pilot scope or bounds")
     # Application logs can contain provider errors/private context; pilot emits
     # its own fixed metadata only. This changes only this dedicated process.

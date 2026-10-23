@@ -428,7 +428,8 @@ class OFClient:
 
     def _http_call(self, method: str, url: str, *,
                    json_body: dict | None = None,
-                   proxy_tries: int | None = None) -> requests.Response:
+                   proxy_tries: int | None = None,
+                   allow_redirects: bool | None = None) -> requests.Response:
         """All outbound OF calls funnel here so failures (proxy 403, TLS, DNS,
         timeout) get a single structured log line with the context we need to
         debug: which account, which proxy, which OF endpoint.
@@ -441,8 +442,14 @@ class OFClient:
         ONE call. The Twin bridge's message POST passes 1: a single bridge send
         must not be able to hide several message POSTs behind a wrapper, and
         every other caller keeps the default byte-for-byte (None).
+
+        `allow_redirects=False` is the same kind of override for ONE call: libcurl
+        re-sends a POST body on a 307/308, which is a hidden second message POST.
+        The single-attempt senders pass False so a redirect surfaces as an error
+        (an unknown outcome the caller must not retry) instead of a second POST.
+        None keeps the session default for everyone else.
         """
-        require_legacy_provider_role()
+        require_legacy_provider_role(getattr(self, "account_id", None))
         headers = self._signed_headers(url)
         if json_body is not None:
             headers["Content-Type"] = "application/json"
@@ -451,11 +458,12 @@ class OFClient:
             # under load; the same IP works again ~400ms later. _proxy_retry()
             # retries a few times against the SAME self.http session (sticky IP,
             # no rotation) — shared with every raw self.http call below.
+            extra = {} if allow_redirects is None else {"allow_redirects": allow_redirects}
             def _do() -> requests.Response:
                 if method == "GET":
-                    return self.http.get(url, headers=headers, timeout=self.timeout_s)
+                    return self.http.get(url, headers=headers, timeout=self.timeout_s, **extra)
                 return self.http.request(method, url, json=json_body,
-                                         headers=headers, timeout=self.timeout_s)
+                                         headers=headers, timeout=self.timeout_s, **extra)
             tries = 3 if proxy_tries is None else max(1, int(proxy_tries))
             r = self._proxy_retry(_do, tries=tries, what=f"{method} {_short_path(url)}")
             # Opportunistic rev capture. OF echoes their current build in
@@ -515,7 +523,7 @@ class OFClient:
         download, /users/list, convert upload) funnel through it, so one
         half-second proxy blip can no longer hard-fail a request."""
         for attempt in range(tries):
-            require_legacy_provider_role()
+            require_legacy_provider_role(getattr(self, "account_id", None))
             try:
                 return fn()
             except requests.exceptions.ProxyError as e:
@@ -541,12 +549,13 @@ class OFClient:
     def request(self, method: str, path_or_url: str, *,
                 json_body: dict | None = None,
                 params: dict | None = None,
-                proxy_tries: int | None = None) -> requests.Response:
+                proxy_tries: int | None = None,
+                allow_redirects: bool | None = None) -> requests.Response:
         """Generic signed request. `method` in {GET, POST, PUT, PATCH, DELETE}.
         OF's sign algorithm is body-independent, so the same headers work for all methods."""
         url = self._build_url(path_or_url, params)
         return self._http_call(method.upper(), url, json_body=json_body,
-                               proxy_tries=proxy_tries)
+                               proxy_tries=proxy_tries, allow_redirects=allow_redirects)
 
     def request_json(self, method: str, path_or_url: str, **kw) -> Any:
         """request() + raise OFAPIError on non-2xx + .json() the success body.
@@ -1623,6 +1632,7 @@ class OFClient:
         log_of.info("send_text_once chat=%s (bridge: single POST, no retry)", chat_id)
         return self.post_json(
             f"{API_BASE}/chats/{chat_id}/messages", json_body=body, proxy_tries=1,
+            allow_redirects=False,
         )
 
     # ── Chat message-level writes — VERIFIED LIVE ──────────────
@@ -2710,7 +2720,7 @@ class OFClient:
         return out
 
     def _require_upload_transport(self):
-        require_legacy_provider_role()
+        require_legacy_provider_role(getattr(self, "account_id", None))
 
     def _upload_part_session(self):
         self._require_upload_transport()

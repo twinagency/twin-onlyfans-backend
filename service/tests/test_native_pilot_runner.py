@@ -69,7 +69,7 @@ class FakeHTTP:
     def __init__(self, history, account, fan, at):
         self.history = history
         self.account, self.fan, self.at = account, fan, at
-        self.posts, self.gets = [], []
+        self.posts, self.gets, self.post_kwargs = [], [], []
         self.fail = None
         self.change_result = None
         self.closed = False
@@ -82,6 +82,7 @@ class FakeHTTP:
     def request(self, method, url, json=None, **kwargs):
         assert method == "POST" and urlsplit(url).path == f"/api2/v2/chats/{self.fan}/messages"
         self.posts.append(copy.deepcopy(json))
+        self.post_kwargs.append(kwargs)
         if self.fail:
             raise self.fail
         result = {"id": 1000 + len(self.posts), "text": json["text"], "isFromMe": True,
@@ -119,7 +120,9 @@ async def suite(root):
     events = []
     runner.emit = events.append
 
-    def make(name, count=1, limit=10):
+    def make(name, count=1, limit=10, provider=None):
+        # `provider` is the OnlyFans-side id when the DB-side account is Twin-keyed.
+        provider = provider or fixtures.ACCT
         f = fixtures.Fixture(root, name)
         f.args["limit"] = limit
         f.sql("CREATE TABLE accounts(id TEXT)")
@@ -141,9 +144,9 @@ async def suite(root):
         history = [{"id": mid, "text": row["body"], "createdAt": row["created_at"].replace(" ", "T") + "Z",
                     "isFromMe": False, "fromUser": {"id": fixtures.FAN}, "withUser": {"id": fixtures.FAN}}
                    for mid, row in sorted(sources.items(), reverse=True)]
-        http = FakeHTTP(history, fixtures.ACCT, fixtures.FAN, current.isoformat() + "Z")
+        http = FakeHTTP(history, provider, fixtures.FAN, current.isoformat() + "Z")
         client = OFClient.__new__(OFClient)
-        client.account_id, client.user_id, client.platform = fixtures.ACCT, fixtures.ACCT, "onlyfans"
+        client.account_id, client.user_id, client.platform = provider, provider, "onlyfans"
         client.http, client.timeout_s, client.proxy_url, client.proxy_label = http, 1, None, None
         client._signed_headers = lambda url: {}
         gateway = runner.Gateway(f.ledger, p, client, asyncio.get_running_loop())
@@ -158,6 +161,7 @@ async def suite(root):
         check(reply["id"] == 1001 + i)
         check(http.posts[-1]["text"] == "<p>literal &lt;hello&gt; &amp; neutral</p>")
         check(http.posts[-1]["price"] == 0 and http.posts[-1]["mediaFiles"] == [])
+        check(http.post_kwargs[-1].get("allow_redirects") is False, "a redirect must never re-POST a message")
         # Production native attribution happens AFTER the gateway returns.
         f.source(reply["id"], direction="out", body=reply["text"], created_at=current.isoformat(sep=" "))
         f.sql("UPDATE messages SET automation_kind='ai_chatter' WHERE message_id=?", (reply["id"],))
@@ -271,55 +275,152 @@ async def suite(root):
             check(h.posts == [])
 
     from native_pilot.content import ContentPlan
-    for case in ("content-free", "content-paid", "content-unknown", "content-bad-receipt"):
+    MEDIA = [{"id": 7101, "type": "photo"}, {"id": 7102, "type": "video"}]
+    TYPES = {m["id"]: m["type"] for m in MEDIA}
+    for case in ("content-paid", "content-unknown", "content-bad-receipt", "content-bad-previews"):
         f, p, g, c, h = make(case)
-        f.sql("CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,price_cents INTEGER,is_free_teaser INTEGER,enabled INTEGER)")
-        f.sql("INSERT INTO catalog_items VALUES(1,?,'photo','[7101]',0,1,1)", (fixtures.ACCT,))
-        f.sql("INSERT INTO catalog_items VALUES(2,?,'video','[7102]',300,0,1)", (fixtures.ACCT,))
+        f.sql("CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,preview_media_ids TEXT,price_cents INTEGER,is_free_teaser INTEGER,enabled INTEGER,pricing_mode TEXT)")
+        f.sql("INSERT INTO catalog_items VALUES(1,?,'video','[7101, 7102]','[7101]',300,0,1,'fixed')", (fixtures.ACCT,))
         manifest=root/(case+".json")
         manifest.write_text(json.dumps({"account_id":fixtures.ACCT,"fan_id":fixtures.FAN,"items":[
-          {"catalog_id":1,"media_id":7101,"kind":"photo","price_cents":0},
-          {"catalog_id":2,"media_id":7102,"kind":"video","price_cents":300}]}))
+          {"catalog_id":1,"kind":"video","price_cents":300,"media":MEDIA,"preview_ids":[7101]}]}))
         plan=ContentPlan(manifest,fixtures.ACCT,fixtures.FAN);g.content=plan
-        selected=plan.free if case=="content-free" else plan.paid
-        c.vault_media_by_id=lambda mid:{"id":mid,"type":selected["kind"],"canView":True}
+        c.vault_media_by_id=lambda mid:{"id":mid,"type":TYPES[mid],"canView":True}
         def media_receipt(result):
-            result.update(price=h.posts[-1]["price"],media=[{"id":selected["media_id"],"type":selected["kind"]}],mediaCount=1)
+            result.update(price=h.posts[-1]["price"],media=[dict(m) for m in MEDIA],mediaCount=2,previews=[7101])
             if case=="content-bad-receipt":result["price"]=10
+            if case=="content-bad-previews":result["previews"]=[7102]
         h.change_result=media_receipt
-        terms=plan.terms({"media_files":[selected["media_id"]],"price":selected["price_cents"]/100})
+        # exactly the shape FASTT's catalogue path produced in the real-model replay
+        terms=plan.terms({"price":3.0,"locked_text":False,"media_files":[7101,7102],"previews":[7101]})
         if case=="content-unknown":
             h.fail=ProxyError("synthetic uncertainty")
-        if case in ("content-unknown","content-bad-receipt"):
+        if case in ("content-unknown","content-bad-receipt","content-bad-previews"):
             await async_refuses("delivery-unknown",lambda:g._send("neutral caption",terms))
             await async_refuses("delivery-unknown",lambda:g._send("no retry",terms))
             check(len(h.posts)==1)
             check(f.ledger.status(p.pilot_id)["attempts"]=={"delivery_unknown":1})
             if case=="content-unknown":
                 saved=json.loads(f.sql("SELECT evidence_json FROM native_pilot_receipts WHERE pilot_id=?",(p.pilot_id,))[0][0])
-                check(saved["content_intent"]["price_cents"]==300)
+                check(saved["content_intent"]["price_cents"]==300 and saved["content_intent"]["preview_ids"]==[7101])
         else:
             reply=await g._send("neutral caption",terms)
-            check(len(h.posts)==1 and h.posts[0]["mediaFiles"]==[selected["media_id"]])
-            check(h.posts[0]["price"]==selected["price_cents"]/100)
-            check(h.posts[0]["lockedText"] is False and h.posts[0]["previews"]==[])
+            check(len(h.posts)==1 and h.posts[0]["mediaFiles"]==[7101,7102])
+            check(h.posts[0]["price"]==3.0 and h.posts[0]["previews"]==[7101])
+            check(h.posts[0]["lockedText"] is False and h.posts[0]["text"]=="<p>neutral caption</p>")
+            check(h.post_kwargs[0].get("allow_redirects") is False, "card POST must not follow redirects")
             check(f.ledger.status(p.pilot_id)["attempts"]=={"sent":1})
             check(f.sql("SELECT count(*) FROM twin_bridge_writes")[0][0]==0)
             f.source(reply["id"],direction="out",body=reply["text"],created_at=current.isoformat(sep=" "))
-            f.sql("UPDATE messages SET automation_kind='ai_upseller',price_cents=? WHERE message_id=?",(selected["price_cents"],reply["id"]))
+            f.sql("UPDATE messages SET automation_kind='ai_upseller',price_cents=300 WHERE message_id=?",(reply["id"],))
             runner.verify_attribution(f.path,fixtures.ACCT,fixtures.FAN,f.ledger.receipts(pilot_id=p.pilot_id),content=plan)
 
-    # Default preflight executes the assembled run() import path but never
-    # activates a ledger, constructs the model transport, or sends anything.
+    # A card whose media cannot be viewed, or whose catalogue row drifted or is
+    # disabled, never reaches the wire.
+    for case, mutate, reason in (("asset-gone", lambda c, f: setattr(c, "vault_media_by_id", lambda mid: {"id": mid, "type": TYPES[mid], "canView": False}), "content-asset-unavailable"),
+                                 ("asset-type", lambda c, f: setattr(c, "vault_media_by_id", lambda mid: {"id": mid, "type": "video", "canView": True}), "content-asset-unavailable"),
+                                 ("row-disabled", lambda c, f: f.sql("UPDATE catalog_items SET enabled=0"), "content-item-disabled"),
+                                 ("row-drift", lambda c, f: f.sql("UPDATE catalog_items SET preview_media_ids='[]'"), "content-catalog-drift")):
+        f, p, g, c, h = make("content-guard-" + case)
+        f.sql("CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,preview_media_ids TEXT,price_cents INTEGER,is_free_teaser INTEGER,enabled INTEGER,pricing_mode TEXT)")
+        f.sql("INSERT INTO catalog_items VALUES(1,?,'video','[7101, 7102]','[7101]',300,0,1,'fixed')", (fixtures.ACCT,))
+        manifest=root/(case+".json")
+        manifest.write_text(json.dumps({"account_id":fixtures.ACCT,"fan_id":fixtures.FAN,"items":[
+          {"catalog_id":1,"kind":"video","price_cents":300,"media":MEDIA,"preview_ids":[7101]}]}))
+        plan=ContentPlan(manifest,fixtures.ACCT,fixtures.FAN);g.content=plan
+        c.vault_media_by_id=lambda mid:{"id":mid,"type":TYPES[mid],"canView":True}
+        mutate(c, f)
+        terms=plan.terms({"price":3.0,"locked_text":False,"media_files":[7101,7102],"previews":[7101]})
+        await async_refuses(reason,lambda:g._send("neutral caption",terms))
+        check(h.posts==[], case)
+
+    # The gateway refuses any card that is not the reviewed item before the wire.
+    f, p, g, c, h = make("content-wrong-card")
+    plan=ContentPlan(root/"content-paid.json",fixtures.ACCT,fixtures.FAN);g.content=plan
+    for kwargs in ({"price":3.0,"media_files":[7101]},{"price":3.0,"media_files":[7101,7102]},
+                   {"price":4.0,"locked_text":False,"media_files":[7101,7102],"previews":[7101]}):
+        refuses_any = False
+        try:
+            g.send(fixtures.FAN,"caption",kwargs)
+        except Refused:
+            refuses_any = True
+        check(refuses_any and h.posts==[], kwargs)
+
+    # Twin-keyed account: DB side `of-<owner>`, OnlyFans side the bare owner id.
+    # One scope object carries both; nothing in live data is renamed.
+    from native_pilot.scope import AccountScope
+    saved_acct = fixtures.ACCT
+    fixtures.ACCT = "of-" + saved_acct
+    try:
+        scope = AccountScope.parse(fixtures.ACCT)
+        check(scope.db_id == "of-" + saved_acct and scope.provider_id == saved_acct)
+        f, p, g, c, h = make("twin-keyed", count=2, provider=saved_acct)
+        check(g.scope == scope and g.reader.account_id == saved_acct)
+        check(runner.check_local(f.path, fixtures.ACCT, fixtures.FAN)["account_id"] == fixtures.ACCT)
+        reply = await g._send("neutral reply")
+        check(reply["fromUser"]["id"] == int(saved_acct) and len(h.posts) == 1)
+        check(f.ledger.status(p.pilot_id)["attempts"] == {"sent": 1})
+        # An outbound message by that same creator that we did not send is still found
+        # through the provider-side id and stops the send.
+        f, p, g, c, h = make("twin-keyed-external", count=2, provider=saved_acct)
+        h.history.insert(0, dict(h.history[0], id=999, isFromMe=True, fromUser={"id": int(saved_acct)}, createdAt=current.isoformat() + "Z"))
+        await async_refuses("external-outbound", lambda: g._send("neutral reply"))
+        check(h.posts == [])
+        # Employee attribution: with the sentinel known, an AI row must carry exactly it.
+        f, p, g, c, h = make("twin-keyed-employee", count=2, provider=saved_acct)
+        f.sql("ALTER TABLE messages ADD COLUMN sent_by_employee_id INTEGER")
+        reply = await g._send("neutral reply")
+        f.source(reply["id"], direction="out", body=reply["text"], created_at=current.isoformat(sep=" "))
+        f.sql("UPDATE messages SET automation_kind='ai_chatter' WHERE message_id=?", (reply["id"],))
+        receipts = f.ledger.receipts(pilot_id=p.pilot_id, input_key=g.input_key)
+        for employee, expect in ((None, "native-attribution-employee"), (9, "native-attribution-employee")):
+            f.sql("UPDATE messages SET sent_by_employee_id=? WHERE message_id=?", (employee, reply["id"]))
+            refuses(expect, lambda: runner.verify_attribution(f.path, fixtures.ACCT, fixtures.FAN, receipts, automation_employee_id=5))
+        f.sql("UPDATE messages SET sent_by_employee_id=5 WHERE message_id=?", (reply["id"],))
+        runner.verify_attribution(f.path, fixtures.ACCT, fixtures.FAN, receipts, automation_employee_id=5)
+        # An AI row stamped with the HUMAN sentinel is refused too.
+        f.sql("UPDATE messages SET sent_by_employee_id=6 WHERE message_id=?", (reply["id"],))
+        refuses("native-attribution-employee", lambda: runner.verify_attribution(f.path, fixtures.ACCT, fixtures.FAN, receipts, automation_employee_id=5))
+    finally:
+        fixtures.ACCT = saved_acct
+
+    # Default preflight executes the assembled run() path with the verified
+    # connection (patched here: no key, no DB row) but never activates a ledger,
+    # constructs the model transport, or sends anything.
+    from native_pilot import attribution, connection as conn_mod
+    from native_pilot.attribution import Sentinels
     f, p, g, c, h = make("preflight")
     c.me = lambda: {"id": int(fixtures.ACCT), "username": "synthetic-creator"}
+    fake_conn = conn_mod.PilotConnection(scope=AccountScope.parse(fixtures.ACCT), tenant_id="synthetic-tenant", revision=3,
+        owner_id=int(fixtures.ACCT), expires_at=datetime.now(timezone.utc) + timedelta(hours=1), capture={}, x_hash="x",
+        proxy_url=None, model_id="openrouter/deepseek-v4.1-flash", model_api_key="synthetic-key", daily_cost_cap_cents=100)
+    async def fake_load(scope):
+        check(scope == AccountScope.parse(fixtures.ACCT))
+        return fake_conn
+    async def fake_read():
+        return Sentinels(automation=None, human=None)
     args = argparse.Namespace(account=fixtures.ACCT, fan=fixtures.FAN, handle="synthetic-creator",
-                              twin_env=root / "nonexistent.env", pilot_id="never-activated",
-                              send_limit=10, max_seconds=60, enable_send=False)
-    with patch.object(OFClient, "from_account", return_value=c), patch.object(fixtures.Ledger, "activate", side_effect=AssertionError("activation forbidden")):
+                              pilot_id="never-activated", send_limit=10, max_seconds=60, enable_send=False)
+    events.clear()
+    with patch.object(conn_mod, "load_verified_connection", fake_load), patch.object(conn_mod, "build_client", return_value=c), \
+            patch.object(attribution, "read_sentinels", fake_read), \
+            patch.object(fixtures.Ledger, "activate", side_effect=AssertionError("activation forbidden")):
         await runner.run(args)
     check(h.posts == [] and h.closed)
     check(not f.sql("SELECT 1 FROM native_pilots WHERE pilot_id='never-activated'"))
+    ok = [e for e in events if e.get("event") == "preflight-ok"][0]
+    check(ok["model_id"] == "openrouter/deepseek-v4.1-flash" and ok["proxy"] == "none"
+          and ok["attribution"] == {"automation": False, "human": False} and "synthetic-key" not in json.dumps(events))
+    # Send mode refuses (before any ledger activation) until the attribution rows exist.
+    send_args = argparse.Namespace(**{**vars(args), "enable_send": True})
+    async def fake_require():
+        from native_pilot.ledger import Refused
+        raise Refused("attribution-sentinels-missing")
+    with patch.object(conn_mod, "load_verified_connection", fake_load), patch.object(conn_mod, "build_client", return_value=c), \
+            patch.object(attribution, "read_sentinels", fake_read), patch.object(attribution, "require_sentinels", fake_require), \
+            patch.object(fixtures.Ledger, "activate", side_effect=AssertionError("activation forbidden")):
+        await async_refuses("attribution-sentinels-missing", lambda: runner.run(send_args))
+    check(h.posts == [])
     await engine.dispose()
 
 

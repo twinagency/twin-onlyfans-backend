@@ -858,6 +858,32 @@ async def _finalize_call(call_id: int | None, **values: Any) -> None:
         log.exception("llm_client: failed to finalize grok_calls id=%s", call_id)
 
 
+# ── Scoped gateway seam (dedicated OnlyFans runner only) ───────────────────
+
+_SCOPED_GATEWAY: Any | None = None
+
+
+def register_scoped_gateway(gateway: Any) -> None:
+    """Route every `chat()` in THIS process through one account-scoped gateway.
+
+    The gateway owns the credential, model pin, budget accounting and the single
+    attempt; there is no house-key or tenant-key fallback behind it. Only the
+    FASTT runner process registers one. Without a registered gateway `chat()`
+    behaves exactly as before (including the dedicated-role refusal below).
+    """
+    global _SCOPED_GATEWAY
+    if _SCOPED_GATEWAY is not None and _SCOPED_GATEWAY is not gateway:
+        raise LLMConfigError("a scoped model gateway is already registered in this process")
+    if not callable(getattr(gateway, "chat", None)):
+        raise LLMConfigError("a scoped model gateway needs an async chat()")
+    _SCOPED_GATEWAY = gateway
+
+
+def clear_scoped_gateway() -> None:
+    global _SCOPED_GATEWAY
+    _SCOPED_GATEWAY = None
+
+
 # ── Public entry point ─────────────────────────────────────────────────────
 
 async def chat(
@@ -905,6 +931,11 @@ async def chat(
     Raises:
         LLMConfigError, LLMCapExceeded, LLMHTTPError.
     """
+    if _SCOPED_GATEWAY is not None:
+        return await _SCOPED_GATEWAY.chat(
+            model=model, messages=messages, purpose=purpose, account_id=account_id,
+            fan_id=fan_id, response_format=response_format, temperature=temperature,
+            reasoning_effort=reasoning_effort)
     import os
     if "ONLYFANS_PROCESS_ROLE" in os.environ:
         raise RuntimeError("Legacy model calls are unavailable in dedicated OnlyFans roles")

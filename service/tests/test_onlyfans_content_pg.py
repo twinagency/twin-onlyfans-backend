@@ -304,5 +304,9 @@ def test_populated_0081_upgrade_preserves_native_catalogue_and_all_prior_evidenc
         def values():
             return {table: [dict(row) for row in connection.exec_driver_sql(f'SELECT * FROM "{table}"').mappings()] for table in tables}
         before = values(); upgrade(connection); upgrade(connection); check_schema(connection)
-        assert values() == before
+        after = values()
+        # Later revisions may add columns (0089 adds catalog_items.pricing_mode);
+        # every prior value must survive exactly.
+        assert {t: [{k: r[k] for k in row} for row, r in zip(rows, after[t])] for t, rows in before.items()} == before
+        assert all(len(after[t]) == len(rows) for t, rows in before.items())
         assert connection.scalar(text("SELECT count(*) FROM of_content_change")) == 0

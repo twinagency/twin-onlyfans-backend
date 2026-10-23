@@ -189,6 +189,10 @@ def test_t35_pending_and_unknown_sync_work_survives_repeated_upgrade(database):
     ("DROP INDEX uq_of_content_sync_asset_provider", "incompatible index"),
     ('DROP TRIGGER "of_content_sync_decision_immutable" ON "of_content_sync_decision"', "append-only protection"),
     ('ALTER TABLE "of_content_sync_decision" DISABLE TRIGGER "of_content_sync_decision_immutable"', "append-only protection"),
+    ('DROP TRIGGER "of_content_sync_asset_frozen" ON "of_content_sync_asset"', "frozen-identity protection of_content_sync_asset"),
+    ('ALTER TABLE "of_content_sync_conflict" DISABLE TRIGGER "of_content_sync_conflict_frozen"', "frozen-identity protection of_content_sync_conflict"),
+    ("CREATE OR REPLACE FUNCTION of_offer_import_job_frozen() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
+     "frozen-identity protection of_offer_import_job"),
 ])
 def test_t35_check_schema_detects_a_missing_sync_constraint_or_trigger(database, statement, message):
     _, engine = database

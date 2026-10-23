@@ -179,6 +179,20 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 or guard[0][2] != "of_vault_media_guard"
                 or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "95986d179ea6a7826b1fa0c8b84407efb8dcd7897a2dcc70bed69938a88ff3b6"):
             failures.append("missing media admission protection")
+    if expected_rank >= 89:
+        # Frozen-identity guards: job inputs, confirmed provider mappings, resolved conflicts.
+        for table, trigger, digest in [
+            ("of_offer_import_job", "of_offer_import_job_frozen", "a5ad24a783c3e0320b384e8493840e48eac853fb1f7f68264b86afe7f0abb755"),
+            ("of_content_sync_asset", "of_content_sync_asset_frozen", "42da1a4289a67c7959f80e2362dbc058a4f8b21588970c5097e6a618f0cf0a36"),
+            ("of_content_sync_conflict", "of_content_sync_conflict_frozen", "3f46cf1266e826e98203ad807c53abcef7d9512ab26658915102a02acf450538"),
+        ]:
+            guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text
+                FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+                WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+                {"table": table, "trigger": trigger}).all()
+            if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27 or guard[0][2] != trigger
+                    or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != digest):
+                failures.append(f"missing frozen-identity protection {table}")
     if "per_employee_revenue_with_attribution" not in inspector.get_view_names():
         failures.append("missing revenue view")
     if failures:

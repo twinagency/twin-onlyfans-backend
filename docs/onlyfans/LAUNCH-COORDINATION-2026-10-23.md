@@ -84,8 +84,8 @@ Proposed tables to fold into 0090:
 |---|---|---|---|---|
 | Offer import + fixed price | yes (offline) | yes | no | read-only shapes only |
 | Content sync (15) | yes (offline); upload transport blocked (no unpublished path) | yes | no | no |
-| Chat 1 ledger | delivered | no | no | no |
-| Chat 2 history/memory | delivered | no | no | no |
-| Chat 3 personality | delivered | no | no | no |
-| Chat 4 engagement | delivered | no | no | no |
+| Chat 1 ledger | delivered | yes (branch codex/onlyfans-launch-integration; schema 0090_launch) | no | no |
+| Chat 2 history/memory | delivered | yes (branch codex/onlyfans-launch-integration; schema 0090_launch) | no | no |
+| Chat 3 personality | delivered | yes (branch codex/onlyfans-launch-integration; schema 0090_launch) | no | no |
+| Chat 4 engagement | delivered | yes (branch codex/onlyfans-launch-integration; schema 0090_launch) | no | no |
 | Chat 5 launch dashboard | in progress (separate session) | no | no | no |

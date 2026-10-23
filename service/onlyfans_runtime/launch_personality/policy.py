@@ -11,7 +11,6 @@ import re
 from types import SimpleNamespace
 import unicodedata
 
-from automations._model_selection import explicit_model
 from llm_models import MODELS
 
 
@@ -125,6 +124,7 @@ def readiness(config, credential_status=None, *, now=None):
     blockers = []
     model_id = None
     try:
+        from automations._model_selection import explicit_model  # lazy: the API process must not import legacy packages at startup
         model_id = explicit_model(SimpleNamespace(model=config.get("model"),
             model_by_purpose=config.get("model_by_purpose")), "ai_chatter", MODELS)
         model = MODELS[model_id]

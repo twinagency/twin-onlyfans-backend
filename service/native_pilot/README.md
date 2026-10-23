@@ -100,3 +100,29 @@ The `tests/test_native_pilot_*.py` scripts run with temporary synthetic database
 stubbed models/transports and no live credentials. They cover the native engine,
 provider adapter, persistent cap/ownership/source gates and assembled sender. They do
 not establish production scale, native paid-media sales or guaranteed conversion.
+
+
+## Persistent service (`native_pilot/service.py`)
+
+The bounded pilot above is unchanged. `python -m native_pilot.service --account of-<owner> --fan <id>
+--handle <name> [--twin-context] [--content-manifest FILE] --enable-send` runs the same gates as a
+supervised process (compose service `fastt-runner`, profile `fastt`; without `--enable-send` it is a read-only
+preflight). It runs until SIGTERM/SIGINT and is never started by itself.
+
+- Cap: the account's existing `of_delivery_policy` (`limit_units`, `used_units`, `throttle_seconds`). Each
+  admission spends one unit in the same transaction as the durable attempt; nothing resets or exceeds it. The
+  conversation budget of the `svc-` pilot is a ceiling above any allowance, never the binding limit.
+- Lease: renewed every 30 s (120 s TTL) instead of a deadline. A lapsed or lost lease stops sending; re-acquiring
+  goes through `Ledger.activate_service`, which refuses a live owner, any unsettled send, or a conversation that is
+  not `active`.
+- Unknown outcome: sending stops for the fan, nothing is resent, the process keeps running and re-acquires only
+  after an operator resolves the attempt (`twin_bridge_send_attempts`) and resumes the conversation.
+- Clean stop releases the lease and keeps state and counts; a claim with no receipt is dropped so that message is
+  answered after restart. A crash never regenerates its claim.
+- Operator stop: `service.fan_hold_reason` (skip_list `manual_restrict` / `of_restricted` / `muted_creator`, or an
+  `of_conversation_state` that is not `automated` / has a takeover) pauses answering; checked every tick, before
+  admission and at the wire.
+- Intake: `native_pilot/intake.py` runs FASTT's `OFWebSocket` on the same verified client and persists the scoped
+  fan's plain text with `event_transcoder._transcode_chat_message` (idempotent upsert, keyed `of-<owner>`).
+- Start: `FASTT_ACCOUNT=of-<owner> FASTT_FAN=<id> FASTT_HANDLE=<name> docker compose -f deploy/onlyfans-compose.yml
+  --profile fastt up -d fastt-runner`.

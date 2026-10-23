@@ -159,6 +159,16 @@ class Gateway:
         self.sources = {}
         self.bubble = 0
         self.stopped_reason = None
+        # The persistent service renews its lease, so the deadline is read from
+        # here (never from the frozen Pilot) and a held fan can refuse a bubble.
+        self.deadline = pilot.deadline
+        self.hold_check = None
+
+    async def pace(self):
+        """Wait point before history/admission; the bounded pilot has no pacing."""
+
+    def limit_label(self):
+        return self.pilot.end_limit - self.pilot.baseline_used
 
     def send(self, fan, text, kwargs):
         if type(fan) is not int or fan != self.pilot.fan_id or (kwargs and not self.content) or not isinstance(text, str) or not text.strip():
@@ -175,7 +185,7 @@ class Gateway:
             self.stopped_reason = state["reason"] or "pilot-stopped"
         elif sum(state["attempts"].values()) >= self.pilot.end_limit - self.pilot.baseline_used:
             self.stopped_reason = "send-limit-reached"
-        elif now() >= datetime.fromisoformat(self.pilot.deadline):
+        elif now() >= datetime.fromisoformat(self.deadline):
             self.stopped_reason = "time-limit-reached"
         return bool(self.stopped_reason)
 
@@ -191,12 +201,19 @@ class Gateway:
                 raise Refused(self.stopped_reason or "pilot-stopped")
             if len(text.encode("utf-16-le")) // 2 > 4000:
                 raise Refused("output-too-long")
+            await self.pace()
+            if self.stopped():
+                raise Refused(self.stopped_reason)
             since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
             history = await self.reader.preflight_history(self.pilot.fan_id, since=since, source_ids=set(self.sources))
             receipts = self.ledger.receipts(pilot_id=self.pilot.pilot_id, input_key=self.input_key)
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
             check_provider_history(history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id)
+            if self.hold_check is not None:
+                held = await asyncio.to_thread(self.hold_check)
+                if held:
+                    raise Refused(held)
             if self.content:
                 with readonly(self.ledger.path) as con:
                     self.content.check_catalog(con, self.pilot.account_id)
@@ -231,8 +248,10 @@ class Gateway:
                     if (not row or row["state"] != "active" or not row["reserved"] or row["owner_token"] != self.pilot.owner_token or
                             row["revision"] != self.pilot.revision or not p or p["state"] != "active" or
                             not row["owner_expires_at"] or now() >= datetime.fromisoformat(row["owner_expires_at"]) or
-                            now() >= datetime.fromisoformat(self.pilot.deadline)):
+                            now() >= datetime.fromisoformat(self.deadline)):
                         raise Refused("authority-lost-before-post")
+                if self.hold_check is not None and self.hold_check():
+                    raise Refused("fan-held-before-post")
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
                     owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
@@ -264,7 +283,7 @@ class Gateway:
             settled = True
             emit({"event": "sent", "engine": "fastt-native", "provider_message_id": validated.provider_message_id,
                   "pilot_sent": len([r for r in self.ledger.receipts(pilot_id=self.pilot.pilot_id) if r["state"] == "sent"]),
-                  "limit": self.pilot.end_limit - self.pilot.baseline_used})
+                  "limit": self.limit_label()})
             return raw
         except Exception as exc:
             self.stopped_reason = exc.reason if isinstance(exc, Refused) else "send-check-failed"

@@ -1110,13 +1110,17 @@ async def _upsert_fan_identity(
                 Fan.account_id == str(account_id), Fan.fan_id == int(fan_id))
         )).scalar_one_or_none()
         if is_muted and (source or "") == "creator_we_follow":
+            from automations._common import _OPERATOR_STOP_ROWS, dialect_insert
             await s.execute(
-                sqlite_insert(SkipList)
+                dialect_insert(s)(SkipList)
                 .values(account_id=str(account_id), fan_id=int(fan_id),
                         reason=MUTED_CREATOR_REASON, added_at=datetime.utcnow())
                 .on_conflict_do_update(
                     index_elements=["account_id", "fan_id"],
                     set_={"reason": MUTED_CREATOR_REASON, "added_at": datetime.utcnow()},
+                    # An operator's stop is never replaced by the auto mute row.
+                    where=(SkipList.reason.is_(None)
+                           | SkipList.reason.not_in(_OPERATOR_STOP_ROWS)),
                 )
             )
         elif not is_muted:

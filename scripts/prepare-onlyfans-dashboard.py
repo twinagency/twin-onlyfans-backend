@@ -146,6 +146,24 @@ def extract_archive(destination: Path, sha: str, digest: str) -> dict:
                         or not (member.isdir() or member.isfile() or _contained_symlink(member))):
                     raise SourceRefused("Dashboard archive contains an unsafe or duplicate entry")
                 names.add(path.as_posix())
+            # Git archives never store descendants underneath a tracked symlink.
+            # Refuse those aliases before writing anything, regardless of entry order.
+            # A lexically contained link must also not resolve through another link.
+            links = {PurePosixPath(m.name).as_posix() for m in members if m.issym()}
+            for member in members:
+                path = PurePosixPath(member.name)
+                if any(parent.as_posix() in links for parent in path.parents):
+                    raise SourceRefused("Dashboard archive contains an unsafe symlink ancestor")
+                if member.issym():
+                    target_parts = list(path.parent.parts)
+                    for part in PurePosixPath(member.linkname).parts:
+                        if part == "..":
+                            target_parts.pop()  # bounded by _contained_symlink above
+                        elif part != ".":
+                            target_parts.append(part)
+                    target = PurePosixPath(*target_parts)
+                    if any(candidate.as_posix() in links for candidate in (target, *target.parents)):
+                        raise SourceRefused("Dashboard archive contains an unsafe symlink chain")
             required = {"package.json", "package-lock.json", "preview/onlyfans-integration/package.json",
                         "scripts/check-onlyfans-http-browser.mjs"}
             if not required.issubset(names):

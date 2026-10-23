@@ -182,6 +182,90 @@ async def exercise():
               "owners unchanged after failed send")
         check(active_telegram_capabilities() is None,
               "capability context restored after failed send")
+
+        # Account runners may continue another fan's conversation, while each fan's
+        # own unreviewed offer obligations still block its turn.
+        plan = SimpleNamespace(catalog_ids={1, 2})
+        multi_engine = NativeEngine(account, fan, chat=chat, send=send,
+                                    content=plan, own_offers_only=True)
+        async with get_session() as session:
+            session.add_all([CatalogItem(id=n, account_id=account, label="Synthetic reviewed item")
+                             for n in (2, 3)])
+            session.add(ContentOffer(id=10, account_id=account, fan_id=fan+1,
+                                     item_id=3, mode="ppv", status="open"))
+            session.add(ContentOffer(id=11, account_id=account, fan_id=fan,
+                                     item_id=2, mode="ppv", status="open"))
+        await multi_engine._no_obligations()
+        check(True, "all-fans turn ignores another fan and accepts the second reviewed PPV")
+        async with get_session() as session:
+            session.add(ContentOffer(id=12, account_id=account, fan_id=fan,
+                                     item_id=3, mode="ppv", status="open"))
+        try:
+            await multi_engine._no_obligations()
+        except PilotBoundaryError as exc:
+            check(str(exc) == "open-offer-obligation", "own unreviewed item remains an obligation")
+        else:
+            raise AssertionError("unreviewed own offer accepted")
+        async with get_session() as session:
+            await session.execute(delete(ContentOffer).where(ContentOffer.id == 12))
+            offer = await session.get(ContentOffer, 11)
+            offer.mode = "tip"
+        try:
+            await multi_engine._no_obligations()
+        except PilotBoundaryError as exc:
+            check(str(exc) == "open-offer-obligation", "reviewed item tip-unlock remains an obligation")
+        else:
+            raise AssertionError("tip obligation accepted")
+
+        # Real persisted timestamps drive explicit Hand back / Resume. Another fan's
+        # command, a stale command, or a failed read must never cancel the human yield.
+        from sqlalchemy import text
+        import importlib
+        db_engine = importlib.import_module("db.engine")
+        resume_account, resume_fan = "900011", 900012
+        async with get_session() as session:
+            session.add(Account(id=resume_account))
+            session.add(Fan(account_id=resume_account, fan_id=resume_fan))
+            session.add(Message(account_id=resume_account, fan_id=resume_fan, message_id=99100000,
+                                direction="out", body="synthetic human reply", created_at=now,
+                                automation_kind=None))
+        async with engine.begin() as connection:
+            await connection.exec_driver_sql(
+                "CREATE TABLE IF NOT EXISTS of_control_audit (account_id TEXT, fan_id BIGINT, "
+                "action TEXT, created_at DATETIME)")
+
+        async def audit(fan_id, action, at):
+            async with engine.begin() as connection:
+                await connection.execute(text("INSERT INTO of_control_audit(account_id,fan_id,action,created_at) "
+                                              "VALUES(:account,:fan,:action,:at)"),
+                                         {"account": resume_account, "fan": fan_id, "action": action, "at": at})
+
+        resume_engine = NativeEngine(resume_account, resume_fan, chat=chat, send=send)
+        baseline = {"resume_after_manual_hours": 1}
+        check(not await resume_engine._resumed_after_last_human(), "no explicit resume preserves human yield")
+        await audit(resume_fan + 1, "release_takeover", now + timedelta(seconds=5))
+        check(not await resume_engine._resumed_after_last_human(), "another fan's Hand back is isolated")
+        await audit(resume_fan, "pause_automation", now + timedelta(seconds=5))
+        check(not await resume_engine._resumed_after_last_human(), "Pause never satisfies human yield")
+        await audit(resume_fan, "resume_automation", now - timedelta(seconds=1))
+        check(not await resume_engine._resumed_after_last_human(), "stale resume preserves newer human message")
+        await audit(resume_fan, "release_takeover", now)
+        check(not await resume_engine._resumed_after_last_human(), "equal timestamps fail closed")
+        await audit(resume_fan, "release_takeover", now + timedelta(seconds=1))
+        check(await resume_engine._resumed_after_last_human(), "later Hand back satisfies human yield")
+        config = await resume_engine.load_config(resume_account, baseline)
+        check(config["resume_after_manual_hours"] == 0, "explicit Hand back reaches the native config")
+        async with get_session() as session:
+            session.add(Message(account_id=resume_account, fan_id=resume_fan, message_id=99100001,
+                                direction="out", body="another synthetic human reply", automation_kind=None,
+                                created_at=now + timedelta(seconds=2)))
+        config = await resume_engine.load_config(resume_account, baseline)
+        check(config["resume_after_manual_hours"] == 1, "newer human message reinstates human yield")
+        def unavailable_session():
+            raise RuntimeError("synthetic database unavailable")
+        with patch.object(db_engine, "get_session", unavailable_session):
+            config = await resume_engine.load_config(resume_account, baseline)
+        check(config["resume_after_manual_hours"] == 1, "database failure leaves human yield intact")
     finally:
         await engine.dispose()
 

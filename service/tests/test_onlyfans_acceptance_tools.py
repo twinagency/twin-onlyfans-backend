@@ -132,6 +132,41 @@ def test_source_keeps_a_contained_tracked_symlink(tmp_path, monkeypatch):
     assert proof["files"]["preview/onlyfans-integration/public"] == {"symlink": "../../public"}
 
 
+@pytest.mark.parametrize("child_first", [False, True])
+def test_source_refuses_files_below_a_symlink_before_writing(tmp_path, monkeypatch, child_first):
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:gz", format=tarfile.PAX_FORMAT, pax_headers={"comment": SHA}) as handle:
+        for name, body in FILES.items():
+            info = tarfile.TarInfo(name); info.size = len(body)
+            handle.addfile(info, io.BytesIO(body))
+        link = tarfile.TarInfo("alias"); link.type = tarfile.SYMTYPE; link.linkname = "public"
+        child = tarfile.TarInfo("alias/config.json"); child.size = 2
+        entries = [(child, b"{}"), (link, b"")] if child_first else [(link, b""), (child, b"{}")]
+        for info, body in entries:
+            handle.addfile(info, io.BytesIO(body))
+    payload = data.getvalue(); deliver(monkeypatch, payload)
+    target = tmp_path / "paired"
+    with pytest.raises(source.SourceRefused, match="symlink ancestor"):
+        source.extract_archive(target, SHA, hashlib.sha256(payload).hexdigest())
+    assert not target.exists()
+
+
+def test_source_refuses_link_targets_that_traverse_another_link(tmp_path, monkeypatch):
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:gz", format=tarfile.PAX_FORMAT, pax_headers={"comment": SHA}) as handle:
+        for name, body in FILES.items():
+            info = tarfile.TarInfo(name); info.size = len(body)
+            handle.addfile(info, io.BytesIO(body))
+        for name, target in [("redirect", "public"), ("shortcut", "redirect/assets")]:
+            info = tarfile.TarInfo(name); info.type = tarfile.SYMTYPE; info.linkname = target
+            handle.addfile(info)
+    payload = data.getvalue(); deliver(monkeypatch, payload)
+    target = tmp_path / "paired"
+    with pytest.raises(source.SourceRefused, match="symlink chain"):
+        source.extract_archive(target, SHA, hashlib.sha256(payload).hexdigest())
+    assert not target.exists()
+
+
 @pytest.mark.parametrize("defect", ["wrong_digest", "wrong_commit", "download_limit", "unpacked_limit", "file_limit"])
 def test_source_rejects_unverified_or_unbounded_archive(tmp_path, monkeypatch, defect):
     data = archive(revision="b" * 40 if defect == "wrong_commit" else SHA)

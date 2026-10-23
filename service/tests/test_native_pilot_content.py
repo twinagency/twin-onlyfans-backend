@@ -71,10 +71,11 @@ def plan_checks(tmp, db_path):
     free = {'catalog_id': 2, 'kind': 'photo', 'price_cents': 0, 'media': [{'id': 1003, 'type': 'photo'}], 'preview_ids': []}
     paid = manifest_spec()['items'][0]
     bad_manifest = {
-        'content-plan-shape': [{**manifest_spec(), 'items': []}, {**manifest_spec(), 'items': [paid, free]}, {**manifest_spec(), 'items': paid}],
+        'content-plan-shape': [{**manifest_spec(), 'items': []}, {**manifest_spec(), 'items': [paid, dict(paid)]}, {**manifest_spec(), 'items': paid}],
         'content-plan-scope': [{**manifest_spec(), 'fan_id': FAN + 1}, {**manifest_spec(), 'account_id': 'of-900009'},
                                {**manifest_spec(), 'account_id': 'abc'}],
-        'content-plan-terms': [manifest_spec(price_cents=0), manifest_spec(price_cents=500), manifest_spec(price_cents=301)],
+        'content-plan-terms': [{**manifest_spec(), 'items': [paid, free]}, {**manifest_spec(), 'price_range_cents': [300, 20000]}, {**manifest_spec(), 'price_range_cents': [100, 500]},
+                               {**manifest_spec(), 'price_range_cents': [500, 300]}, manifest_spec(price_cents=0), manifest_spec(price_cents=500), manifest_spec(price_cents=301)],
         'content-plan-item': [manifest_spec(catalog_id=True), manifest_spec(kind='audio'), manifest_spec(extra=1),
                               manifest_spec(price_cents='300')],
         'content-plan-media': [manifest_spec(media=[]), manifest_spec(media=[{'id': 0, 'type': 'photo'}]),

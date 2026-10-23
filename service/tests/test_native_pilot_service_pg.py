@@ -72,6 +72,33 @@ class PgBackend(suite.SqliteBackend):
                   (mode, takeover, L.ACCT, L.FAN))
 
 
+    def add_fan(self, f, fan):
+        base.seed_conversation(self.L.ACCT, fan)
+        self._fan(fan)
+
+    def _fan(self, fan):
+        from sqlalchemy.orm import Session
+        from db.models import Fan
+        engine = create_engine(base.SYNC_URL)
+        with Session(engine) as session:
+            if session.get(Fan, (self.L.ACCT, fan)) is None:
+                session.add(Fan(account_id=self.L.ACCT, fan_id=fan))
+                session.commit()
+        engine.dispose()
+
+    def fan_state(self, f, fan, mode, takeover="none"):
+        self._fan(fan)
+        base.rows("INSERT INTO of_conversation_state(account_id,fan_id,mode,takeover_state) VALUES(?,?,?,?) "
+                  "ON CONFLICT(account_id,fan_id) DO UPDATE SET mode=EXCLUDED.mode,takeover_state=EXCLUDED.takeover_state",
+                  (self.L.ACCT, fan, mode, takeover))
+
+    def fan_skip(self, f, fan, reason):
+        base.rows("DELETE FROM skip_list WHERE account_id=? AND fan_id=?", (self.L.ACCT, fan))
+        if reason:
+            base.rows("INSERT INTO skip_list(account_id,fan_id,reason,added_at) VALUES(?,?,?,CURRENT_TIMESTAMP)",
+                      (self.L.ACCT, fan, reason))
+
+
 async def real_schema():
     from native_pilot import service
     from native_pilot.intake import Intake
@@ -141,6 +168,9 @@ def main():
             asyncio.run(suite.loop_level(backend, Path(root)))
             print("supervised loop on PostgreSQL ok", suite.CHECKS)
             asyncio.run(suite.intake_level(backend, Path(root)))
+            asyncio.run(suite.multi_level(backend, Path(root)))
+            print("multi-fan supervised loop on PostgreSQL ok", suite.CHECKS)
+            asyncio.run(suite.multi_intake_level(backend, Path(root)))
         asyncio.run(real_schema())
         print(f"native pilot service on PostgreSQL: all cases passed ({suite.CHECKS + base.CHECKS} checks)")
     finally:

@@ -76,7 +76,7 @@ class SqliteBackend:
         f.sql("CREATE TABLE automation_rules(account_id TEXT,is_enabled INTEGER)")
         f.sql("CREATE TABLE scheduled_jobs(account_id TEXT,status TEXT,kind TEXT)")
         f.sql("CREATE TABLE account_ai_config(account_id TEXT,persona TEXT,chatter_config_json TEXT)")
-        f.sql("CREATE TABLE content_offers(account_id TEXT,fan_id INTEGER,status TEXT)")
+        f.sql("CREATE TABLE content_offers(account_id TEXT,fan_id INTEGER,status TEXT,mode TEXT,item_id INTEGER)")
         f.sql("CREATE TABLE pending_offer(account_id TEXT,fan_id INTEGER)")
         f.sql("ALTER TABLE messages ADD COLUMN automation_kind TEXT")
         f.sql("ALTER TABLE messages ADD COLUMN sent_by_employee_id INTEGER")
@@ -658,6 +658,9 @@ async def multi_intake_level(backend, root):
     from native_pilot.scope import AccountScope
     scope, stored, out = AccountScope.parse(L.ACCT), [], []
     f = backend.fixture(root, "multi-intake")
+    backend.prepare(f)
+    for fan in (L.FAN + 5, L.FAN + 6):
+        backend.add_fan(f, fan)
 
     async def transcode(account, message):
         stored.append((message["fromUser"]["id"], message["id"]))
@@ -761,7 +764,7 @@ async def multi_level(backend, root):
 
     class FakeEngine:
         def __init__(self, account, fan, *, chat, send, emit, content, context, own_offers_only=False):
-            self.send, self.fan = send, fan
+            self.send, self.fan, self.content = send, fan, content
             check(own_offers_only is True, "all-fans turns scope open offers to their own fan")
 
         def __enter__(self):
@@ -772,8 +775,13 @@ async def multi_level(backend, root):
 
         async def run(self, run_id):
             f = holder["f"]
+            if self.content is not None:
+                check(self.content.catalog_ids == {71, 72}, "every child receives the reviewed account plan")
+                rows = f.sql("SELECT id,enabled FROM catalog_items ORDER BY id")
+                check(len(rows) == 2 and all(row[1] for row in rows), "all reviewed items enabled before generation")
             raw = await asyncio.to_thread(self.send, self.fan, "neutral reply", {})
-            f.source(raw["id"], fan_id=self.fan, direction="out", body=raw["text"], created_at=clock().isoformat(sep=" "))
+            f.source(raw["id"], fan_id=self.fan, direction="out", body=raw["text"],
+                     created_at=raw["createdAt"].removesuffix("Z").replace("T", " "))
             f.sql("UPDATE messages SET automation_kind='ai_chatter',sent_by_employee_id=5 WHERE message_id=?", (raw["id"],))
             return {}
 
@@ -980,7 +988,8 @@ async def multi_level(backend, root):
         import onlyfans_runtime.store as twin_store
         import onlyfans_runtime.text_delivery as delivery
         env = {"DATABASE_URL": "postgresql://synthetic/synthetic", "ONLYFANS_WORKER_TENANT": "synthetic-tenant"}
-        with patch.dict(os.environ, env), patch.object(twin_store, "Store", FakeStore), \
+        with patch.dict(os.environ, env), patch("twin_bridge.coordination._store_target", return_value=f.path), \
+                patch.object(twin_store, "Store", FakeStore), \
                 patch.object(delivery, "TextAuthority", lambda store: store), \
                 patch.object(manual, "dispatch_next_manual", fake_dispatch):
             task, patcher = await start(client)
@@ -996,6 +1005,28 @@ async def multi_level(backend, root):
             check(("reconcile", FB) in calls)
             check(not any(c[1] in (FC, FD, FF) for c in calls), "no controls for fans without activity or not owned")
             await stop(task, patcher)
+        # The wildcard account plan reaches both children; reviewed catalogue state is
+        # enabled as one account operation and restored once, preserving mixed prior states.
+        f, http, client = make("multi-content", limit=100, used=4, throttle=1)
+        f.sql("CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,"
+              "preview_media_ids TEXT,price_cents INTEGER,is_free_teaser INTEGER,enabled INTEGER,pricing_mode TEXT)")
+        f.sql("INSERT INTO catalog_items VALUES(71,?,'video','[501]','[]',300,0,0,'fixed')", (A,))
+        f.sql("INSERT INTO catalog_items VALUES(72,?,'video','[502]','[]',400,0,1,'fixed')", (A,))
+        manifest = root / "multi-content-plan.json"
+        manifest.write_text(json.dumps({"account_id": A, "fan_id": "*", "price_range_cents": [300, 500], "items": [
+            {"catalog_id": item, "kind": "video", "price_cents": price,
+             "media": [{"id": media, "type": "video"}], "preview_ids": []}
+            for item, media, price in [(71, 501, 300), (72, 502, 400)]
+        ]}))
+        events.clear()
+        with patch.object(args, "content_manifest", str(manifest)):
+            task, patcher = await start(client)
+            says(f, FA)
+            says(f, FB)
+            await until(lambda: len(http.posts) == 2, "both fans served with the account content plan", events)
+            await stop(task, patcher)
+        check([(row[0], bool(row[1])) for row in f.sql("SELECT id,enabled FROM catalog_items ORDER BY id")]
+              == [(71, False), (72, True)], "all reviewed catalogue states restored exactly")
     from db.engine import engine
     await engine.dispose()
 

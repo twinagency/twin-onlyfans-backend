@@ -268,3 +268,17 @@ def test_round_robin_account_window_progresses_without_cross_account_identity_co
     with Session(database[1]) as s:
         assert s.scalar(select(func.count()).select_from(Message).where(Message.direction=="out",Message.message_id==9001))==5
     store.close()
+
+
+def test_account_wide_fastt_scope_makes_the_worker_claim_plan_and_send_nothing(database,monkeypatch):
+    from onlyfans_runtime.fastt_manual import SCOPE_ENV
+    store,_=start(database,monkeypatch);model=SyntheticNativeModel(reported_cost_millicents=7)
+    wire=SyntheticTextTransport(ACCOUNT)
+    monkeypatch.setenv(SCOPE_ENV,f"{ACCOUNT}:*")
+    runtime=worker(store,model=model,transport=wire)
+    for _ in range(3):
+        r=runtime.step();assert (r.claims,r.queued,r.accepted)==(0,0,0)
+    assert not model.calls and not wire.calls
+    with Session(database[1]) as s:
+        assert s.scalar(select(func.count()).select_from(OfTextIntent))==0
+    store.close()

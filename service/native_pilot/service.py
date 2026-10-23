@@ -193,6 +193,7 @@ class Service:
         self.pilot = self.lease = None
         self.content = self.context = None
         self.prior_catalog = None
+        self.catalog_owner = self
         self.next_conn_check = 0.0
         self.started_at = None
         self.turns_started = 0
@@ -260,7 +261,7 @@ class Service:
     async def acquire(self):
         from twin_bridge.coordination import reserve_ownership
         profile = runner.check_local(self.path, self.db, self.args.fan,
-                                         approved_item=self.content.item["catalog_id"] if self.content else None)
+                                         approved_item=self.approved_catalog_ids())
         if not self.ensured:
             await ensure_fan_conversation(self.scope, self.args.fan)
             self.ensured = True
@@ -272,16 +273,44 @@ class Service:
             self.ledger.release_service(pilot_id=self.pilot_id, owner_token=token, now=runner.now())
             raise Refused("ownership-unavailable")
         self.pilot, self.lease = pilot, Lease(pilot.deadline)
-        if self.content and self.prior_catalog is None:
-            with store.transaction(self.path) as con:
-                self.prior_catalog = con.execute("SELECT enabled FROM catalog_items WHERE account_id=? AND id=?",
-                                                 (self.db, self.content.item["catalog_id"])).fetchone()[0]
-                con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
-                            (True, self.db, self.content.item["catalog_id"]))
+        if self.content:
+            self.catalog_owner.enable_catalog()
         self._renew_task = asyncio.get_running_loop().create_task(self._renew_loop(pilot))
         runner.emit({"event": "ready", "pilot_id": pilot.pilot_id, "account_id": self.db, "fan_id": self.args.fan,
                      "engine": "fastt-native", "persistent": True, "lease_utc": pilot.deadline,
                      "creator_profile": profile["creator_profile"]})
+
+    def approved_catalog_ids(self):
+        if self.content is None:
+            return None
+        ids = getattr(self.content, "catalog_ids", None)
+        return tuple(sorted(ids if ids is not None else (self.content.item["catalog_id"],)))
+
+    def enable_catalog(self):
+        """Enable every reviewed item once per account process, retaining its exact prior state."""
+        if self.content is None or self.prior_catalog is not None:
+            return
+        prior = {}
+        with store.transaction(self.path) as con:
+            for item_id in self.approved_catalog_ids():
+                row = con.execute("SELECT enabled FROM catalog_items WHERE account_id=? AND id=?",
+                                  (self.db, item_id)).fetchone()
+                if row is None:
+                    raise Refused("content-catalog-missing")
+                prior[item_id] = row[0]
+            for item_id in prior:
+                con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
+                            (True, self.db, item_id))
+        self.prior_catalog = prior
+
+    def restore_catalog(self):
+        if self.prior_catalog is None:
+            return
+        with store.transaction(self.path) as con:
+            for item_id, enabled in self.prior_catalog.items():
+                con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
+                            (enabled, self.db, item_id))
+        self.prior_catalog = None
 
     async def _renew_loop(self, pilot):
         from twin_bridge.coordination import register_owner
@@ -399,6 +428,7 @@ class Service:
                             hold_s=self.hold_s, quiet_s=self.quiet_s, connection_check_s=self.connection_check_s)
             child.strict, child.cutoff = True, self.started_at
             child.path, child.ledger, child.context = self.path, self.ledger, self.context
+            child.content, child.catalog_owner = self.content, self
             self.children[fan] = child
         child.client, child.conn, child.sentinels = self.client, self.conn, self.sentinels
         return child
@@ -668,11 +698,9 @@ class Service:
             raise Refused("pilot-store-required")
         runner.require_store_schema(self.path)
         self.ledger = Ledger(self.path, allowance=True)
-        if self.all_fans and getattr(self.args, "content_manifest", None):
-            raise Refused("content-manifest-not-supported-with-all-fans")
         if getattr(self.args, "content_manifest", None):
             from .content import ContentPlan
-            self.content = ContentPlan(self.args.content_manifest, self.db, self.args.fan)
+            self.content = ContentPlan(self.args.content_manifest, self.db, None if self.all_fans else self.args.fan)
             with runner.readonly(self.path) as con:
                 self.content.check_catalog(con, self.db)
         if getattr(self.args, "twin_context", False):
@@ -710,10 +738,7 @@ class Service:
                 except Refused:
                     pass
                 clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
-            if self.content and self.prior_catalog is not None:
-                with store.transaction(self.path) as con:
-                    con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
-                                (self.prior_catalog, self.db, self.content.item["catalog_id"]))
+            self.restore_catalog()
             runner.emit({"event": "finished", "persistent": True})
         finally:
             try:
@@ -791,8 +816,6 @@ def main(argv=None):
                         help="Set the fan's runtime stop once the paid card is confirmed (approved test scope)")
     args = parser.parse_args(argv)
     from .ledger import SERVICE_ID
-    if args.all_fans and args.content_manifest:
-        parser.error("--content-manifest is not supported with --all-fans")
     if not AccountScope.valid(args.account) or (args.fan is not None and args.fan <= 0) or (args.service_id and not SERVICE_ID.fullmatch(args.service_id)):
         parser.error("invalid service scope")
     os.environ.setdefault("W7_WEBHOOK_DISPATCH_DISABLED", "1")

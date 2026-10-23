@@ -1,6 +1,8 @@
 """A human's dashboard message for a fan the FASTT runtime owns.
 
 Ownership is a deployment scope, ``ONLYFANS_FASTT_SCOPE="<account>:<fan>[,...]"``
+or an account-wide entry ``<account>:*`` (every fan of that account). Ownership
+only decides WHO sends; whether the AI replies stays Twin's per-fan state.
 (account in Twin form ``of-176774528`` or FASTT form ``176774528``). It is read
 only; nothing here enables a fan.
 
@@ -43,16 +45,32 @@ class NotSent(Exception):
 
 
 def _scope():
-    pairs = set()
+    """(fan pairs, whole accounts) named by the deployment scope."""
+    pairs, accounts = set(), set()
     for item in (os.environ.get(SCOPE_ENV) or "").split(","):
         account, _, fan = item.strip().partition(":")
-        if account and fan.isdecimal():
-            pairs.add((to_fastt_account_id(account), int(fan)))
-    return pairs
+        if not account:
+            continue
+        try:
+            fastt_account = to_fastt_account_id(account)
+        except Exception:
+            continue
+        if fan == "*":
+            accounts.add(fastt_account)
+        elif fan.isdecimal():
+            pairs.add((fastt_account, int(fan)))
+    return pairs, accounts
+
+
+def fastt_account_owned(account_id) -> bool:
+    """True when the whole account is owned (``<account>:*``)."""
+    return to_fastt_account_id(account_id) in _scope()[1]
 
 
 def fastt_owned(account_id, fan_id) -> bool:
-    return (to_fastt_account_id(account_id), fan_id) in _scope()
+    pairs, accounts = _scope()
+    account = to_fastt_account_id(account_id)
+    return account in accounts or (account, fan_id) in pairs
 
 
 class FasttManualTransport:

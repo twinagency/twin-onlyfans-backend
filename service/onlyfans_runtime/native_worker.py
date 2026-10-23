@@ -259,6 +259,10 @@ class NativeWorker:
                     if self.history_recovery:
                         self._history_turn(account,report,memory=False)
                         if stop.is_set():break
+                    # One sender: an account the FASTT runner owns wholesale gets no
+                    # Twin claim, plan, campaign or engagement from this worker.
+                    from .fastt_manual import fastt_account_owned
+                    if fastt_account_owned(account.account_id):continue
                     if not self._can_dispatch_campaign(account):continue
                     if account.model is None:
                         identity=self._queue_due(account)

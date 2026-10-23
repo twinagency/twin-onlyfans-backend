@@ -698,6 +698,7 @@ def _finish(store, tenant, claim, outcome):
             row.last_reconcile_at = now
             row.reconcile_due_at = now + timedelta(seconds=RECONCILE_SECONDS)
             row.reconcile_after_item_id = outcome["nextAfter"]
+            row.reconcile_priority_after_item_id = outcome["nextPriorityAfter"]
             row.reconcile_cycle_started_at = None if outcome["wrapped"] else (row.reconcile_cycle_started_at or now)
             if outcome["wrapped"]:
                 row.last_full_reconcile_at = now
@@ -927,8 +928,13 @@ def _reconcile(store, tenant, claim):
         total = s.scalar(select(func.count()).select_from(CatalogItem).where(*base)) or 0
         conflicted = exists().where(Conflict.account_id == account, Conflict.item_id == CatalogItem.id, Conflict.status == "open")
         priority_all = s.scalar(select(func.count()).select_from(CatalogItem).where(*base, or_(CatalogItem.enabled.is_(True), conflicted))) or 0
-        priority = list(s.scalars(select(CatalogItem.id).where(*base, or_(CatalogItem.enabled.is_(True), conflicted))
-            .order_by(conflicted.desc(), CatalogItem.id).limit(PRIORITY_QUOTA)))
+        # Enabled and conflicted items are the priority set. It rotates on its own durable cursor, so a set
+        # larger than the quota is covered over successive passes instead of rechecking the same first items.
+        priority_ids = list(s.scalars(select(CatalogItem.id).where(*base, or_(CatalogItem.enabled.is_(True), conflicted))
+            .order_by(CatalogItem.id).limit(20001)))
+        priority_after = row.reconcile_priority_after_item_id or 0
+        priority = list(dict.fromkeys([i for i in priority_ids if i > priority_after] + priority_ids))[:PRIORITY_QUOTA]
+        next_priority = priority[-1] if priority and len(priority_ids) > PRIORITY_QUOTA else None
         after = row.reconcile_after_item_id or 0
         rotation = list(s.scalars(select(CatalogItem.id).where(*base, CatalogItem.id > after)
             .order_by(CatalogItem.id).limit(ROTATION_QUOTA + 1)))
@@ -956,6 +962,7 @@ def _reconcile(store, tenant, claim):
     refresh = _queue_refresh(store, tenant, claim, actor, sources[:REFRESH_SOURCES])
     coverage = {"itemsChecked": len(checked), "priorityChecked": len(priority), "rotationChecked": len(rotation),
         "rotationFromItemId": rotation[0] if rotation else None, "rotationThroughItemId": rotation[-1] if rotation else None,
+        "priorityFromItemId": priority[0] if priority else None, "priorityThroughItemId": priority[-1] if priority else None,
         "totalItems": total, "priorityTotal": priority_all, "wrapped": wrapped, "refreshSources": len(sources[:REFRESH_SOURCES]),
         "refresh": refresh, "refreshTruncated": len(sources) > REFRESH_SOURCES, "conflictsOpened": conflicts,
         "note": "Items and their selected sources only; historical messages are not re-read."}
@@ -966,7 +973,7 @@ def _reconcile(store, tenant, claim):
     if refresh == "auth":
         return {"status": "cancelled", "error": "connection_unavailable", "coverage": coverage, "result": result}
     return {"status": "complete" if wrapped else "partial", "coverage": coverage, "result": result,
-        "nextAfter": None if wrapped else rotation[-1], "wrapped": wrapped}
+        "nextAfter": None if wrapped else rotation[-1], "nextPriorityAfter": next_priority, "wrapped": wrapped}
 
 
 # ── Sync now, operations ────────────────────────────────────────────────

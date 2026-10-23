@@ -52,7 +52,17 @@ def _valid(store, s, tenant, account, revision, now, kind):
     else:
         statuses={'verified','paused'} if kind=='ledger' else {'verified'}
         valid=(connection.status in statuses and connection.verified_at is not None
-            and connection.expires_at>now and connection.last_error is None)
+            and connection.expires_at>now)
+        if valid and connection.last_error=='provider_connection_check_retry':
+            # Preserve retry pacing without granting domain read authority while
+            # identity verification is pending. Once backoff ends, the existing
+            # connection-error guard still requires a successful identity check.
+            budget=s.get(OfProviderReadBudget,account,with_for_update=True)
+            if (budget is not None and budget.binding_id==runtime.binding_id
+                    and budget.connection_revision==revision
+                    and budget.backoff_until is not None and budget.backoff_until>now):
+                raise ReadDeferred(budget.backoff_until,'provider read backoff')
+        valid=valid and connection.last_error is None
     if not valid:raise Refused('provider read connection changed')
     return runtime
 

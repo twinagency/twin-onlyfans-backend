@@ -6057,6 +6057,62 @@ def _turn_kind(*, bot_accused: bool, pic_desc: str, content_ask: bool,
     return ""
 
 
+class TurnThreadSignals(NamedTuple):
+    hot_thread: bool
+    rate_pic_turn: bool
+    image_dare_ok: bool
+    pic_offer_turn: bool
+    dare_is_callback: bool
+
+
+_DARE_CALLBACK_TAIL = 8
+
+
+def turn_thread_signals(messages, *, last_body: str, describe_on: bool,
+                        last_in_desc: str | None, last_in_desc_at: datetime | None,
+                        pic_sent: bool, dare_recent: bool,
+                        now: datetime) -> TurnThreadSignals:
+    """The thread-shaped turn inputs, pure over a snapshot. The ONE copy of what
+    `run()` used to compute inline; the native OnlyFans planner calls it too.
+
+    `messages` is (direction, text) oldest->newest. With no image analysis
+    (`describe_on` False or no description) every picture beat stays off: a missing
+    description is unknown, never invented."""
+    return TurnThreadSignals(
+        hot_thread=thread_heat(messages),
+        # The description belongs to a picture inside the burst she has not
+        # answered yet, hence `last_in_desc` alone and not `pic_sent`.
+        rate_pic_turn=bool(describe_on and last_in_desc and _desc_fresh(
+            last_in_desc_at, now)),
+        image_dare_ok=bool(describe_on and not pic_sent and not dare_recent),
+        pic_offer_turn=bool(describe_on and not pic_sent and detect_pic_offer(last_body)),
+        # RECENT: an explicit window, never the whole thread.
+        dare_is_callback=any(_detect_bot_accusation(b)
+                             for d, b in list(messages)[-_DARE_CALLBACK_TAIL:] if d == "in"))
+
+
+def _desc_fresh(at: datetime | None, now: datetime) -> bool:
+    return at is not None and (now - at) < _PIC_DESC_TTL
+
+
+def decide_pitch_turn(*, can_sell: bool, last_body: str, fan_lang: str,
+                      pivot_on_escalation: bool, fan_msg_n: int, esc_min_msgs: int,
+                      bot_accused: bool, pic_desc: str, image_dare: bool,
+                      dare_callback: bool, pic_offer: bool,
+                      hot_thread: bool) -> tuple[bool, bool, str]:
+    """(content_ask, escalation, kind): which beat owns the turn. Pure."""
+    content_ask = bool(can_sell) and _language.is_content_ask(last_body, fan_lang)
+    # Lean-in pivot: an explicit content-ask already owns the pivot.
+    escalation = (bool(can_sell) and bool(pivot_on_escalation) and not content_ask
+                  and fan_msg_n >= esc_min_msgs
+                  and _language.is_escalation(last_body, fan_lang))
+    kind = _turn_kind(bot_accused=bot_accused, pic_desc=pic_desc, content_ask=content_ask,
+                      escalation=escalation, image_dare=image_dare,
+                      dare_callback=dare_callback, hot_thread=hot_thread,
+                      can_sell=bool(can_sell), pic_offer=pic_offer)
+    return content_ask, escalation, kind
+
+
 def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     history_tail: int = _HISTORY_TAIL,
                     # Arm G's three transforms. Defaults to OFF, so every
@@ -8336,7 +8392,13 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # this is a 24.3x lift on the purchase (14.6% of bought PPVs vs 0.6% of
             # unbought), against 1.19x for "was his last line dirty". It is the moment
             # the top closers sell into, and the only moment force_ask fires.
-            hot_thread = thread_heat(c.messages)
+            # ONE shared evaluator (turn_thread_signals), also read by the native
+            # OnlyFans planner, so the two callers cannot drift apart.
+            _sig = turn_thread_signals(
+                c.messages, last_body=c.last_body, describe_on=describe_on,
+                last_in_desc=c.last_in_desc, last_in_desc_at=c.last_in_desc_at,
+                pic_sent=c.pic_sent, dare_recent=_bot_dare_recent(f, now), now=now)
+            hot_thread = _sig.hot_thread
 
             # ── The picture play, both halves. ────────────────────────────────
             # RATE: he sent something and we can read it → she rates it. No cooldown,
@@ -8357,18 +8419,13 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # `c.last_in_desc` alone, NOT `and c.pic_sent`: the description belongs to a
             # picture inside the burst she has not answered yet, and his follow-up text
             # row clears pic_sent while leaving the picture very much unanswered.
-            rate_pic_turn = bool(
-                describe_on and c.last_in_desc
-                and c.last_in_desc_at is not None
-                and (now - c.last_in_desc_at) < _PIC_DESC_TTL)
+            rate_pic_turn = _sig.rate_pic_turn
             # ELIGIBILITY ONLY — whether the dare is AVAILABLE, never whether it wins.
             # `not c.pic_sent`: never dare a man for a picture on a turn he sent one,
             # even one we could not read. The rungs that outrank it (a rating, the
             # brush-off, the wallet) are _turn_kind's job, not this expression's — that
             # split is what stopped the arming and the answer from drifting apart.
-            image_dare_ok = bool(
-                describe_on and not c.pic_sent
-                and not _bot_dare_recent(f, now))
+            image_dare_ok = _sig.image_dare_ok
             # HE OFFERED — read off the same `c.last_body` the bot accusation is, so the
             # two identity-shaped reads of his last message cannot drift apart.
             #
@@ -8382,9 +8439,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # already sitting in front of her. `_TURN_RATE_PIC` outranks this beat and
             # covers the readable ones, but an UNREADABLE picture falls to react_pic,
             # which ranks BELOW this — so the guard has to live here, not in the ladder.
-            pic_offer_turn = bool(
-                describe_on and not c.pic_sent
-                and detect_pic_offer(c.last_body))
+            pic_offer_turn = _sig.pic_offer_turn
             # He has, at some point, questioned whether she is real — the one thing the
             # dare's copy is allowed to CALL BACK to. On a merely-hot thread it must not,
             # because he never said it, and inventing a conversation he doesn't remember
@@ -8399,10 +8454,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # a comment calling it "the loaded tail", which it is NOT: it is the whole
             # loaded thread, so the bug survived the fix and the comment asserted a bound
             # that did not exist. Slice it explicitly and the tense is finally honest.
-            _DARE_CALLBACK_TAIL = 8
-            dare_is_callback = any(
-                _detect_bot_accusation(b)
-                for d, b in c.messages[-_DARE_CALLBACK_TAIL:] if d == "in")
+            dare_is_callback = _sig.dare_is_callback
 
             stale_ask = False   # the FLOOR — computed below, once fan_ladder is loaded
             fan_ladder: LadderState | None = ladders.get(fan_id)
@@ -8736,8 +8788,15 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # fixes the bought-out one: `offerable` is empty there BY DEFINITION, so
             # "show me something" — the strongest buying signal there is — was the
             # one turn guaranteed to sell nothing.
-            content_ask = (bool(sell.close)
-                           and _language.is_content_ask(c.last_body, fan_lang))
+            # content_ask / escalation / kind are decided together by the shared
+            # `decide_pitch_turn` (also read by the native OnlyFans planner).
+            content_ask, escalation, kind = decide_pitch_turn(
+                can_sell=bool(sell.close), last_body=c.last_body, fan_lang=fan_lang,
+                pivot_on_escalation=pivot_on_escalation, fan_msg_n=c.fan_msg_n,
+                esc_min_msgs=esc_min_msgs, bot_accused=bot_accused_turn,
+                pic_desc=c.last_in_desc if rate_pic_turn else "",
+                image_dare=image_dare_ok, dare_callback=dare_is_callback,
+                pic_offer=pic_offer_turn, hot_thread=hot_thread)
             # 🚨 THE VAULT LANE'S OWN TRIGGER — his words, and nothing else.
             # `content_ask` above is AND-ed with `sell.close`, which is only ever
             # set by `_manifest_block` / `_second_offer_block` / `_pending_block`,
@@ -8758,23 +8817,9 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # to sell and HAS chatted a bit — ride it as an offer instead of teasing
             # again. An explicit content-ask already owns the pivot, so don't
             # double-count. Offer pacing caps still gate whether the surface is live.
-            escalation = (bool(sell.close) and pivot_on_escalation
-                          and not content_ask
-                          and c.fan_msg_n >= esc_min_msgs
-                          and _language.is_escalation(c.last_body, fan_lang))
             # ── WHICH BEAT OWNS THIS TURN. Asked ONCE, here, because this is where the
             # last of its inputs (content_ask, escalation, sell.close) finally bind.
             # Everything below reads `kind`; nothing re-derives the ordering.
-            kind = _turn_kind(
-                bot_accused=bot_accused_turn,
-                pic_desc=c.last_in_desc if rate_pic_turn else "",
-                content_ask=content_ask,
-                escalation=escalation,
-                image_dare=image_dare_ok,
-                dare_callback=dare_is_callback,
-                pic_offer=pic_offer_turn,
-                hot_thread=hot_thread,
-                can_sell=bool(sell.close))
             # ── A NO-SALE BEAT SELLS NOTHING, and that is said ONCE, here.
             #
             # Gating the four attach sites individually is how the last one gets

@@ -2,8 +2,11 @@
 
 This does not select a persona, rewrite prompts, register a provider, persist a
 key, or use Twin's conversation engine. Install ``adapter.chat`` only in the
-isolated pilot process. The parent supplies the explicitly authorized key and
-durable reservation/event callbacks. Missing cost is reported as unknown; the
+isolated pilot process. The parent supplies the explicitly authorized key (the
+account-scoped credential from the verified connection, never a house/dotenv
+key), durable reservation/event callbacks and, optionally, the account's daily
+budget (``budget.DailyBudget``: reserve before HTTP, settle after, hold when the
+outcome is unproven). Missing cost is reported as unknown; the
 legacy LLMResult integer cost field alone must not be used as a billing ledger.
 """
 from __future__ import annotations
@@ -16,6 +19,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Callable
 
 import httpx
+
+from .scope import AccountScope
 
 MODEL = "deepseek/deepseek-v4.1-flash"
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
@@ -60,11 +65,12 @@ class NativePilotModel:
         reserve_call: Callable[[], None] | None = None,
         max_calls: int = 80, max_tokens: int = 400,
         transport: httpx.AsyncBaseTransport | None = None,
+        budget: Any = None,
     ) -> None:
         if (not isinstance(api_key, str) or not api_key
                 or any(ord(ch) < 33 or ord(ch) > 126 for ch in api_key)):
             raise NativePilotModelError("model-key-invalid")
-        if not isinstance(account_id, str) or not account_id.isascii() or not account_id.isdecimal():
+        if not AccountScope.valid(account_id):
             raise NativePilotModelError("model-account-invalid")
         if type(fan_id) is not int or fan_id <= 0:
             raise NativePilotModelError("model-fan-invalid")
@@ -86,6 +92,7 @@ class NativePilotModel:
         self.max_calls = max_calls
         self.max_tokens = max_tokens
         self._transport = transport
+        self._budget = budget
         self.calls = 0
         self.stopped_reason: str | None = None
 
@@ -106,6 +113,15 @@ class NativePilotModel:
             self._fail("model-pilot-stopped")
         if time.monotonic() >= self.deadline:
             self._fail("model-deadline")
+
+    async def _hold(self, reservation: Any) -> None:
+        """Unproven outcome: the budget reservation is kept, never released."""
+        if reservation is None or self._budget is None:
+            return
+        try:
+            await asyncio.shield(self._budget.hold(reservation))
+        except (Exception, asyncio.CancelledError):
+            pass
 
     def _event(self, event: dict[str, Any]) -> None:
         try:
@@ -159,6 +175,15 @@ class NativePilotModel:
                 self._reserve_call()
         except Exception:
             self._fail("model-call-reservation-refused")
+        reservation = None
+        if self._budget is not None:
+            # Daily-budget hold BEFORE any HTTP. A refusal means no request is made.
+            try:
+                reservation = await self._budget.reserve(
+                    fan_id=self.fan_id, request_bytes=len(encoded), max_output_tokens=self.max_tokens)
+            except Exception as exc:
+                self._fail("model-budget-exhausted" if type(exc).__name__ == "LLMCapExceeded"
+                           else "model-budget-refused")
         self._event({"event": "model-start", "call": call_number,
                      "provider": "openrouter", "model": MODEL})
         started = time.monotonic()
@@ -187,22 +212,37 @@ class NativePilotModel:
             self._check()
             result, metadata = self._parse(raw_bytes, response_format)
         except asyncio.CancelledError:
+            await self._hold(reservation)
             self.stopped_reason = self.stopped_reason or "model-cancelled"
             self._event({"event": "model-failed", "call": call_number, "code": self.stopped_reason})
             raise
         except NativePilotModelError as exc:
+            await self._hold(reservation)
             code = str(exc)
             self.stopped_reason = self.stopped_reason or code
             self._event({"event": "model-failed", "call": call_number, "code": code})
             raise NativePilotModelError(code) from None
         except (TimeoutError, httpx.TimeoutException):
+            await self._hold(reservation)
             self.stopped_reason = "model-timeout"
             self._event({"event": "model-failed", "call": call_number, "code": self.stopped_reason})
             raise NativePilotModelError(self.stopped_reason) from None
         except Exception:
+            await self._hold(reservation)
             self.stopped_reason = "model-response-failed"
             self._event({"event": "model-failed", "call": call_number, "code": self.stopped_reason})
             raise NativePilotModelError(self.stopped_reason) from None
+        if reservation is not None:
+            try:
+                await self._budget.settle(reservation, cost_usd=metadata.get("cost_usd"),
+                                          tokens_in=metadata.get("prompt_tokens"),
+                                          tokens_out=metadata.get("completion_tokens"))
+            except Exception:
+                # Spend that cannot be recorded stops the pilot; the reservation stays.
+                await self._hold(reservation)
+                self.stopped_reason = self.stopped_reason or "model-budget-settle-failed"
+                self._event({"event": "model-failed", "call": call_number, "code": self.stopped_reason})
+                raise NativePilotModelError(self.stopped_reason) from None
         latency_ms = max(0, round((time.monotonic() - started) * 1000))
         result.latency_ms = latency_ms
         self._event({"event": "model-complete", "call": call_number,

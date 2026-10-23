@@ -170,7 +170,8 @@ class Ledger:
             raise Refused("invalid-limit")
         if not isinstance(pilot_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", pilot_id):
             raise Refused("invalid-pilot-id")
-        if not isinstance(account_id, str) or not account_id.isascii() or not account_id.isdecimal() \
+        from .scope import AccountScope  # Twin "of-<owner>" or bare decimal; see scope.py
+        if not AccountScope.valid(account_id) \
                 or not isinstance(fan_id, int) or isinstance(fan_id, bool) or fan_id <= 0:
             raise Refused("invalid-identity")
         if not isinstance(owner_token, str) or len(owner_token) < 16 or len(owner_token) > 256:

@@ -7,6 +7,8 @@ The runner owns fresh-input admission, transport, durable send cap and recovery.
 """
 from __future__ import annotations
 
+from .scope import AccountScope
+
 MODEL = "deepseek/deepseek-v4.1-flash"
 
 # Independent switches are explicit: disabling the sales catalogue alone does
@@ -72,8 +74,9 @@ class NativeEngine:
     _active = False
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None):
-        if (not isinstance(account_id, str) or not account_id.isdecimal()
-                or type(fan_id) is not int or fan_id <= 0):
+        # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
+        # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
+        if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
             raise ValueError("invalid-pilot-identity")
         self.account_id = account_id
         self.fan_id = fan_id

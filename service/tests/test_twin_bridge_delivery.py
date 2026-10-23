@@ -216,8 +216,9 @@ class FakeSession:
             "id": 4242, "responseType": "message", "isFromMe": True, "text": "<p>x</p>",
         }
 
-    def request(self, method, url, json=None, headers=None, timeout=None):  # noqa: A002
+    def request(self, method, url, json=None, headers=None, timeout=None, allow_redirects=True):  # noqa: A002
         self.calls.append((method, url, json))
+        self.redirects = getattr(self, "redirects", []) + [allow_redirects]
         if self._raise_proxy:
             # `of_client` wraps curl_cffi's requests shim, so the retry
             # classifier matches THAT ProxyError class, not the stdlib one.
@@ -394,6 +395,7 @@ async def _lowest_layer() -> None:
     client = raw_client(session)
     created = client.send_text_once(FAN, "hello & welcome")
     check("a successful send is one POST", len(session.calls), 1)
+    check("and it never follows a redirect (no hidden second POST)", session.redirects, [False])
     check("and it targets the chat messages route",
           session.calls[0][1].endswith(f"/chats/{FAN}/messages"), True)
     body = session.calls[0][2]

@@ -108,34 +108,48 @@ def request_job(store, tenant, account, *, mode, sources=None, command_key, acto
                 OfOfferImportJob.mode == mode, OfOfferImportJob.status.in_(("pending", "running"))).limit(1)):
             raise Refused("import job already active")
         now = utcnow()
+        if mode == "inventory":
+            row = create_inventory_job(s, runtime, command_key=command_key, request_hash=request_hash, actor=actor, now=now)
+            return job_view(row)
         row = OfOfferImportJob(account_id=account, job_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
             command_key=command_key, request_hash=request_hash, actor=actor, mode=mode, status="pending",
             revision=1, rows_scanned=0, pages_read=0, targets_total=len(targets), targets_done=0,
             requested_at=now, updated_at=now)
-        if mode == "inventory":
-            row.upper_message_id = s.scalar(select(func.max(Message.message_id)).where(
-                Message.account_id == account, Message.direction == "out", Message.price_cents > 0)) or 0
-            row.page_budget = INVENTORY_BATCHES
-        else:
-            connection = _connection(s, runtime)
-            # Targets must be existing outgoing priced sources of this account.
-            found = set(s.execute(select(Message.fan_id, Message.message_id).where(
-                Message.account_id == account, Message.direction == "out", Message.price_cents > 0,
-                tuple_(Message.fan_id, Message.message_id).in_(targets))).all())
-            if found != set(targets):
-                raise Refused("import source unavailable")
-            row.connection_revision = connection.revision
-            chats = sorted({fan for fan, _ in targets})
-            row.page_budget = REFRESH_PAGES_PER_CHAT * len(chats)
+        connection = _connection(s, runtime)
+        # Targets must be existing outgoing priced sources of this account.
+        found = set(s.execute(select(Message.fan_id, Message.message_id).where(
+            Message.account_id == account, Message.direction == "out", Message.price_cents > 0,
+            tuple_(Message.fan_id, Message.message_id).in_(targets))).all())
+        if found != set(targets):
+            raise Refused("import source unavailable")
+        row.connection_revision = connection.revision
+        chats = sorted({fan for fan, _ in targets})
+        row.page_budget = REFRESH_PAGES_PER_CHAT * len(chats)
         s.add(row)
         s.flush()
-        if mode == "refresh":
-            for fan in chats:
-                wanted = sorted((m for f, m in targets if f == fan), reverse=True)
-                s.add(OfOfferImportCursor(account_id=account, job_id=row.job_id, fan_id=fan,
-                    targets_json=canonical(wanted), found_json="[]", pages_read=0, attempts=0,
-                    status="pending", updated_at=now))
+        for fan in chats:
+            wanted = sorted((m for f, m in targets if f == fan), reverse=True)
+            s.add(OfOfferImportCursor(account_id=account, job_id=row.job_id, fan_id=fan,
+                targets_json=canonical(wanted), found_json="[]", pages_read=0, attempts=0,
+                status="pending", updated_at=now))
         return job_view(row)
+
+
+def create_inventory_job(s, runtime, *, command_key, request_hash, actor, now):
+    """Pending inventory job over imported history, with a captured upper boundary.
+
+    The caller holds the runtime lock and has checked there is no active job.
+    """
+    account = runtime.account_id
+    row = OfOfferImportJob(account_id=account, job_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
+        command_key=command_key, request_hash=request_hash, actor=actor, mode="inventory", status="pending",
+        revision=1, rows_scanned=0, pages_read=0, targets_total=0, targets_done=0, requested_at=now, updated_at=now,
+        upper_message_id=s.scalar(select(func.max(Message.message_id)).where(
+            Message.account_id == account, Message.direction == "out", Message.price_cents > 0)) or 0,
+        page_budget=INVENTORY_BATCHES)
+    s.add(row)
+    s.flush()
+    return row
 
 
 def _reference(value):
@@ -231,9 +245,12 @@ def inventory_batch(store, tenant, account, job_id, *, token=None):
             .order_by(Message.fan_id, Message.message_id).limit(BATCH_ROWS)).all()
         now = utcnow()
         touched = {}
+        from .content_sync import echo_map
+        # A CRM-originated paid message is the same offer we sent: no candidate.
+        echoes = echo_map(s, account, runtime.binding_id, [mid for _, mid, _, _, _ in rows])
         for fan, mid, raw, price, created in rows:
             media = _ids(raw)
-            if not media:
+            if not media or mid in echoes:
                 continue
             mkey = media_key(media)
             candidate = touched.get(mkey) or s.get(OfOfferImportCandidate, (account, job_id, mkey), with_for_update=True)
@@ -316,7 +333,7 @@ def _asset_state(s, account, runtime, connection, media):
     return kinds, reasons
 
 
-def observation_view(row, kinds=None, asset_reasons=()):
+def observation_view(row, kinds=None, asset_reasons=(), echo_item=None):
     media = _ids(row.media_json) or []
     previews = None if row.preview_json is None else _ids(row.preview_json)
     reasons = set(json.loads(row.reasons_json)) | set(asset_reasons)
@@ -331,7 +348,9 @@ def observation_view(row, kinds=None, asset_reasons=()):
         "previewIds": None if previews is None else [str(m) for m in previews],
         "lockedText": row.locked_text, "priceCents": row.price_cents, "currency": row.currency,
         "attachments": [{"mediaId": str(m), "kind": (kinds or {}).get(m), "freePreview": previews is not None and m in previews} for m in media],
-        "reasons": sorted(reasons), "ready": not reasons}
+        "reasons": sorted(reasons), "ready": not reasons,
+        # Only present for an observed copy of a message this CRM sent itself.
+        **({} if echo_item is None else {"crmOriginated": True, "itemId": str(echo_item)})}
 
 
 def _existing(s, account, media):
@@ -405,12 +424,14 @@ def get_candidate(store, tenant, account, job_id, candidate_id):
             OfOfferObservation.binding_id == runtime.binding_id, OfOfferObservation.media_key == candidate_id)
             .order_by(OfOfferObservation.source_at.desc(), OfOfferObservation.source_id.desc()).limit(50)).all()
         existing = _existing(s, account, media)
+        from .content_sync import echo_map
+        echoes = echo_map(s, account, runtime.binding_id, [o.source_id for o in observations if o.source_kind == "message"])
         decision = s.scalar(select(OfOfferImportDecision).where(OfOfferImportDecision.account_id == account,
             OfOfferImportDecision.binding_id == runtime.binding_id, OfOfferImportDecision.media_key == candidate_id,
             OfOfferImportDecision.action == "create"))
         return {**_candidate_summary(s, account, runtime, row),
             "variants": json.loads(row.variants_json), "samples": json.loads(row.samples_json),
-            "observations": [observation_view(o, kinds, asset_reasons) for o in observations],
+            "observations": [observation_view(o, kinds, asset_reasons, echoes.get(o.source_id)) for o in observations],
             "assetReasons": sorted(asset_reasons),
             "existingItem": None if existing is None else {"itemId": str(existing.id), "priceCents": existing.price_cents,
                 "enabled": existing.enabled, "pricingMode": existing.pricing_mode,
@@ -471,6 +492,7 @@ def _message(exc):
             "import idempotency conflict": "That command was already used with different details.",
             "source terms changed": "The source changed after review. Refresh and review again.",
             "source not ready": "This source cannot become a draft yet.",
+            "crm originated source": "This message was sent from the CRM, so it is already a catalogue item.",
             "verified connection unavailable": "Verify the account connection first.",
             "vault media unavailable": "One or more attachments are not available in the vault."}.get(
             str(exc), "The draft was not created. Refresh and review again.")
@@ -515,6 +537,9 @@ def _create_draft(store, tenant, account, *, draft, actor):
                 or not 1 <= len(media) <= MAX_ATTACHMENTS or set(previews) >= set(media)):
             raise Refused("source not ready")
         connection = _connection(s, runtime)
+        from .content_sync import echo_item
+        if observation.source_kind == "message" and echo_item(s, account, runtime.binding_id, observation.source_id) is not None:
+            raise Refused("crm originated source")
         existing = _existing(s, account, media)
         if existing is not None:
             raise Refused("catalogue assets already present")

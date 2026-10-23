@@ -132,3 +132,67 @@ def test_import_api_contract_scope_and_bounds(ready, monkeypatch):
     cancelled = client.post(base + f"/jobs/{job}/cancel", headers=headers, json={"expectedRevision": 1, "actor": ACTOR})
     assert cancelled.json()["job"]["status"] == "cancelled"
     assert client.get(f"/onlyfans/offer-import/v1/accounts/other-account/jobs/{job}", headers=headers).status_code == 404
+
+
+# ── T35: content-sync state across upgrade, and weakened protection ─────
+
+def populated_sync(database):
+    from datetime import datetime
+    from test_onlyfans_foundation_pg import seed
+    url, engine = database
+    store = seed(url, engine)
+    store.close()
+    now = datetime(2026, 10, 23, 12, 0, 0)
+    with engine.begin() as c:
+        a = "op-session:" + "a" * 64
+        c.execute(text("""
+            INSERT INTO of_content_sync_account (account_id, binding_id, enabled, status, revision, actor, command_key,
+              backlog, failures, created_at, updated_at, covered_through_message_id, reconcile_after_item_id)
+            VALUES ('acc-a','binding-acc-a',true,'paused_auth',3,:a,:k1,7,2,now(),now(),555,12);
+            INSERT INTO of_content_sync_operation (account_id, operation_id, binding_id, command_key, request_hash, actor, kind,
+              status, coverage_json, result_json, attempts, created_at, updated_at)
+            VALUES ('acc-a','00000000-0000-4000-8000-000000000001','binding-acc-a',:k2,:k2,:a,'sync_now','queued','{}','{}',0,now(),now()),
+                   ('acc-a','00000000-0000-4000-8000-000000000002','binding-acc-a',:k3,:k3,:a,'upload','outcome_unconfirmed','{}','{}',1,now(),now());
+            INSERT INTO of_content_sync_asset (account_id, asset_id, binding_id, kind, name, size_bytes, content_hash, upload_token,
+              state, attempts, created_at, updated_at, upload_started_at)
+            VALUES ('acc-a','00000000-0000-4000-8000-000000000003','binding-acc-a','photo','a.jpg',10,:k4,'token-1','outcome_unconfirmed',1,now(),now(),now());
+            INSERT INTO of_content_sync_decision (account_id, command_key, binding_id, action, request_hash, actor, before_json, after_json, result_json, created_at)
+            VALUES ('acc-a',:k1,'binding-acc-a','settings',:k1,:a,'{}','{}','{}',now());
+        """), {"a": a, "k1": "1" * 64, "k2": "2" * 64, "k3": "3" * 64, "k4": "4" * 64})
+    return now
+
+
+def snapshot(engine):
+    with engine.begin() as c:
+        return [[dict(r) for r in c.execute(text(f"SELECT * FROM {t} ORDER BY 1, 2")).mappings()] for t in (
+            "of_content_sync_account", "of_content_sync_operation", "of_content_sync_asset", "of_content_sync_decision")]
+
+
+def test_t35_pending_and_unknown_sync_work_survives_repeated_upgrade(database):
+    _, engine = database
+    populated_sync(database)
+    before = snapshot(engine)
+    with engine.begin() as c:
+        upgrade(c); upgrade(c); check_schema(c)
+    assert snapshot(engine) == before, "pending operations, the unknown upload token and the cursors are untouched"
+    assert before[2][0]["state"] == "outcome_unconfirmed" and before[1][1]["status"] == "outcome_unconfirmed"
+    for statement in ["UPDATE of_content_sync_asset SET upload_token = 'changed'", "UPDATE of_content_sync_asset SET content_hash = 'x'",
+                      "DELETE FROM of_content_sync_asset", "UPDATE of_content_sync_decision SET actor = 'x'"]:
+        with pytest.raises(Exception), engine.begin() as c:
+            c.exec_driver_sql(statement)
+
+
+@pytest.mark.parametrize("statement,message", [
+    ("ALTER TABLE of_content_sync_conflict DROP CONSTRAINT ck_of_content_sync_conflict_resolved", "missing check constraint"),
+    ("ALTER TABLE of_content_sync_operation DROP CONSTRAINT uq_of_content_sync_operation_command", "missing unique constraint"),
+    ("DROP INDEX uq_of_content_sync_operation_active", "incompatible index"),
+    ("DROP INDEX uq_of_content_sync_asset_provider", "incompatible index"),
+    ('DROP TRIGGER "of_content_sync_decision_immutable" ON "of_content_sync_decision"', "append-only protection"),
+    ('ALTER TABLE "of_content_sync_decision" DISABLE TRIGGER "of_content_sync_decision_immutable"', "append-only protection"),
+])
+def test_t35_check_schema_detects_a_missing_sync_constraint_or_trigger(database, statement, message):
+    _, engine = database
+    with engine.begin() as c:
+        c.exec_driver_sql(statement)
+        with pytest.raises(SchemaMismatch, match=message):
+            check_schema(c)

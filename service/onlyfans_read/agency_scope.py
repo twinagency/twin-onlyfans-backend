@@ -96,8 +96,14 @@ class AgencyScopeMiddleware:
             if grant is not None:
                 path = scope["path"]
                 allowed = path == "/onlyfans/api/v1/status" or bool(re.fullmatch(
-                    r"/onlyfans/(?:(?:api|control|content|configuration|campaign|offer-import)/v1|content/v2)/accounts(?:/[A-Za-z0-9._:-]{1,64}(?:/.*)?)?", path))
-                if not allowed or path.endswith("/operations") or scope["method"] not in {"GET", "HEAD", "POST"} or (scope["method"] == "POST" and not grant.can_manage):
+                    r"/onlyfans/(?:(?:api|control|content|configuration|campaign|offer-import|content-sync)/v1|content/v2)/accounts(?:/[A-Za-z0-9._:-]{1,64}(?:/.*)?)?", path))
+                sync = path.startswith("/onlyfans/content-sync/v1/")
+                # content-sync/v1 lists its own operations; a draft chunk upload is the only PUT.
+                chunk = sync and scope["method"] == "PUT" and bool(re.fullmatch(
+                    r"/onlyfans/content-sync/v1/accounts/[A-Za-z0-9._:-]{1,64}/drafts/[0-9a-f-]{36}/files/[0-9a-f-]{36}/chunks/[0-9]{1,6}", path))
+                if (not allowed or (path.endswith("/operations") and not sync)
+                        or scope["method"] not in ({"GET", "HEAD", "POST"} | ({"PUT"} if chunk else set()))
+                        or (scope["method"] in {"POST", "PUT"} and not grant.can_manage)):
                     raise ValueError("agency action unavailable")
         except (ValueError, TypeError, RecursionError):
             return await JSONResponse({"ok": False, "code": "agency_scope_denied", "error": "That agency request is not available."},

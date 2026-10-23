@@ -69,6 +69,15 @@ blocked private source export to the existing S3 release bucket and the image
 build; neither operation was executed. Unaffected local and existing-repository
 checks continue before any missing release authorization is requested.
 
+Hosted CI then exposed two setup defects before tests ran: single quotes in
+the PostgreSQL Docker health option were split by the runner, and the default
+shell could hide the paired-source verifier's failure behind `tee`. The
+workflow now uses the working double-quoted health command and an explicit
+Bash shell with pipeline failure propagation. The intermediate corrected
+backend `d51526f624f20116a1df2fb48ea6a71d48ba9bf8` collected 1,920 nodes, but
+root interrupted it before completion for these required workflow corrections.
+Its exit 130 is incomplete. The next full run must use the final clean source.
+
 ## Reconciliation decisions
 
 The canonical flat ledger read remains GET `/onlyfans/api/v1/accounts/{id}/ledger`

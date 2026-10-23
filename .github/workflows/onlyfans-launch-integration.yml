@@ -55,7 +55,7 @@ jobs:
           POSTGRES_PASSWORD: synthetic-acceptance-only
         ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U postgres'
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
@@ -74,6 +74,7 @@ jobs:
       - name: Validate the exact paired source capability
         id: pair
         working-directory: backend
+        shell: bash
         env:
           ONLYFANS_DASHBOARD_READ_TOKEN: ${{ secrets.ONLYFANS_DASHBOARD_READ_TOKEN }}
           REQUESTED_DASHBOARD_REF: ${{ inputs.dashboard_ref }}

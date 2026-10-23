@@ -182,7 +182,10 @@ def _ready(row, observation, job, connection, binding):
         return False, "removed"
     if row.kind not in {"photo", "video"}:
         return False, "unsupported_kind"
-    if (not _provenance(row, observation, job, connection, binding)
+    # Same binding and owner, unchanged raw item: a credential-only connection
+    # revision (model key save, activation) does not invalidate vault identity,
+    # matching vault_previews. The connection itself must still be verified.
+    if (not _provenance(row, observation, job, connection, binding, current_revision=False)
         or connection.status != "verified" or connection.expires_at <= utcnow()):
         return False, "unverified_owner"
     try:

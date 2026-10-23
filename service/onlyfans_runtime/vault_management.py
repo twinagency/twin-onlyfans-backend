@@ -28,6 +28,7 @@ from .content_management import digest, editable, validate_patch
 from .native_context import canonical
 from .native_protocol import MAX_VAULT_BYTES, NativeProtocolError, load
 from .store import Refused, _id, utcnow
+from . import provider_read_gate as read_gate
 
 PAGE_SIZE = 24
 MAX_PAGES = 200
@@ -419,7 +420,8 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 OfCreatorBinding, OfCreatorBinding.id == OfVaultSyncJob.binding_id).where(
                 OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
                 OfCreatorBinding.channel == "onlyfans", or_(OfVaultSyncJob.status == "pending",
-                    and_(OfVaultSyncJob.status == "running", OfVaultSyncJob.lease_until <= now)))
+                    and_(OfVaultSyncJob.status == "running", OfVaultSyncJob.lease_until <= now)),
+                ~read_gate.blocked(OfVaultSyncJob.account_id, now))
                 .order_by(OfVaultSyncJob.updated_at, OfVaultSyncJob.account_id).limit(1)).first()
         if candidate is None:
             break
@@ -442,11 +444,15 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             except Refused:
                 _terminal(job, "failed", "connection_unavailable")
                 continue
+            reading = read_gate.acquire_in(s, account, "vault", now=now)
+            if reading is None:
+                continue
             token = str(uuid.uuid4())
             job.status, job.lease_token = "running", token
             job.lease_until, job.updated_at = utcnow() + timedelta(seconds=60), utcnow()
             offset, owner, expires, binding = job.page_offset, job.owner_id, connection.expires_at, runtime.binding_id
         if stop is not None and stop.is_set():
+            read_gate.release(store, account, reading)
             break
         error = None
         try:
@@ -463,6 +469,8 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             error = "unsupported_vault_response"
         except Exception:
             error = "vault_read_failed"
+        finally:
+            read_gate.release(store, account, reading)
         with Session(store.engine) as s, s.begin():
             runtime = store._runtime(s, tenant, account)
             job = s.get(OfVaultSyncJob, (account, identity))

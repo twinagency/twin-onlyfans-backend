@@ -588,23 +588,44 @@ class Store:
 
     @staticmethod
     def _observe_offers(s, runtime, offers):
+        """Append what a source shows now. Seeing the same terms again is not new; returning to an
+        earlier state after a different one IS a new sighting (so A -> B -> A is three observations)."""
         if not offers:
-            return
+            return []
+        from sqlalchemy import func, select as sql_select
         from sqlalchemy.dialects.postgresql import insert
-        from db.onlyfans_offer_import_models import OfOfferObservation
+        from db.onlyfans_offer_import_models import OfOfferObservation as Observation
         from .native_context import canonical
         from .offer_terms import PARSER_VERSION
         now = utcnow()
-        rows = [dict(account_id=runtime.account_id, observation_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
-            source_kind=o.source_kind, source_id=o.source_id, fan_id=o.fan_id, source_context=o.source_context,
-            source_at=datetime.fromisoformat(o.source_at).replace(tzinfo=None), observed_at=now,
-            media_json=canonical(list(o.media_ids)),
-            preview_json=None if o.preview_ids is None else canonical(list(o.preview_ids)),
-            locked_text=o.locked_text, price_cents=o.price_cents, currency=o.currency,
-            parser_version=PARSER_VERSION, fingerprint=o.fingerprint(), media_key=o.media_key,
-            reasons_json=canonical(list(o.reasons))) for o in offers]
-        s.execute(insert(OfOfferObservation).values(rows).on_conflict_do_nothing(
-            constraint="uq_of_offer_observation_source"))
+        rows, latest = [], {}
+        for o in offers:
+            identity = (o.source_kind, o.source_id)
+            fingerprint = o.fingerprint()
+            if identity not in latest:
+                last = s.execute(sql_select(Observation.fingerprint).where(Observation.account_id == runtime.account_id,
+                    Observation.binding_id == runtime.binding_id, Observation.source_kind == o.source_kind,
+                    Observation.source_id == o.source_id).order_by(Observation.observed_at.desc(),
+                    Observation.occurrence.desc()).limit(1)).scalar()
+                latest[identity] = last
+            if latest[identity] == fingerprint:
+                continue
+            seen = s.scalar(sql_select(func.max(Observation.occurrence)).where(Observation.account_id == runtime.account_id,
+                Observation.binding_id == runtime.binding_id, Observation.source_kind == o.source_kind,
+                Observation.source_id == o.source_id, Observation.fingerprint == fingerprint))
+            latest[identity] = fingerprint
+            rows.append(dict(account_id=runtime.account_id, observation_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
+                source_kind=o.source_kind, source_id=o.source_id, fan_id=o.fan_id, source_context=o.source_context,
+                source_at=datetime.fromisoformat(o.source_at).replace(tzinfo=None), observed_at=now,
+                media_json=canonical(list(o.media_ids)),
+                preview_json=None if o.preview_ids is None else canonical(list(o.preview_ids)),
+                locked_text=o.locked_text, price_cents=o.price_cents, currency=o.currency,
+                parser_version=PARSER_VERSION, fingerprint=fingerprint, media_key=o.media_key,
+                reasons_json=canonical(list(o.reasons)), occurrence=0 if seen is None else seen + 1))
+        if rows:
+            s.execute(insert(Observation).values(rows).on_conflict_do_nothing(
+                constraint="uq_of_offer_observation_sighting"))
+        return rows
 
     @staticmethod
     def _begin_cycle(s, scan):

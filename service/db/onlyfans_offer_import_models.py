@@ -9,13 +9,16 @@ from sqlalchemy import (BigInteger, Boolean, CheckConstraint, Column, DateTime, 
 from .models import Base
 
 INFO = {"onlyfans_since": "0089_offer_import"}
+# Content-sync review fixes ship in the unpublished launch revision as additive changes.
+INFO90 = {"onlyfans_since": "0090_launch"}
 
 
 class OfOfferObservation(Base):
     __tablename__ = "of_offer_observation"
     __table_args__ = (
-        UniqueConstraint("account_id", "binding_id", "source_kind", "source_id", "fingerprint",
-                         name="uq_of_offer_observation_source"),
+        # A source that returns to an earlier state is a NEW sighting (occurrence), not a duplicate.
+        UniqueConstraint("account_id", "binding_id", "source_kind", "source_id", "fingerprint", "occurrence",
+                         name="uq_of_offer_observation_sighting"),
         CheckConstraint("source_kind IN ('message','post')", name="kind"),
         CheckConstraint("source_context IN ('direct','queue','unknown','feed')", name="context"),
         CheckConstraint("source_id > 0 AND price_cents > 0 AND currency = 'USD'", name="terms"),
@@ -42,6 +45,7 @@ class OfOfferObservation(Base):
     fingerprint = Column(String(64), nullable=False)
     media_key = Column(String(64), nullable=False)
     reasons_json = Column(Text, nullable=False)
+    occurrence = Column(Integer, nullable=False, default=0, server_default=text("0"), info=INFO90)
 
 
 class OfOfferImportJob(Base):
@@ -193,6 +197,14 @@ class OfContentSyncAccount(Base):
     # Last bounded read of the creator's own paid feed posts (offer_post_source).
     posts_checked_at = Column(DateTime)
     posts_error = Column(String(64))
+    # Durable paid-post history position: the next older page, whether the walk reached the end, and when
+    # the next full re-read (to catch edits to known posts) is allowed.
+    posts_cursor = Column(String(64), info=INFO90)
+    posts_history_complete = Column(Boolean, nullable=False, default=False, server_default=text("false"), info=INFO90)
+    posts_audit_after = Column(DateTime, info=INFO90)
+    # Late-import detection window and the second (priority) reconciliation rotation.
+    late_through_at = Column(DateTime, info=INFO90)
+    reconcile_priority_after_item_id = Column(Integer, info=INFO90)
     backlog = Column(Integer, nullable=False)
     failures = Column(Integer, nullable=False)
     blocked_reason = Column(String(64))
@@ -360,3 +372,40 @@ class OfContentSyncDecision(Base):
     after_json = Column(Text, nullable=False)
     result_json = Column(Text, nullable=False)
     created_at = Column(DateTime, nullable=False)
+
+
+class OfContentSyncSource(Base):
+    """One outgoing paid message the content sync (or the initial scan) has considered.
+
+    Makes folding idempotent when an older-id message is imported late, and is the
+    durable queue of sources still waiting for a provider detail refresh.
+    """
+    __tablename__ = "of_content_sync_source"
+    __table_args__ = (
+        CheckConstraint("refresh_attempts >= 0", name="attempts"),
+        Index("ix_of_content_sync_source_refresh", "account_id", "binding_id", "message_id",
+              postgresql_where=text("refresh_pending")),
+        {"info": INFO90},
+    )
+    account_id = Column(String, ForeignKey("of_runtime.account_id", ondelete="RESTRICT"), primary_key=True)
+    binding_id = Column(String, ForeignKey("of_creator_bindings.id", ondelete="RESTRICT"), primary_key=True)
+    fan_id = Column(BigInteger, primary_key=True)
+    message_id = Column(BigInteger, primary_key=True)
+    refresh_pending = Column(Boolean, nullable=False)
+    refresh_attempts = Column(Integer, nullable=False)
+    folded_at = Column(DateTime, nullable=False)
+
+
+class OfProviderReadGate(Base):
+    """Per-account provider read coordination shared by every worker: one lease, one pace."""
+    __tablename__ = "of_provider_read_gate"
+    __table_args__ = (
+        CheckConstraint("(lease_token IS NULL) = (lease_until IS NULL)", name="lease"),
+        {"info": INFO90},
+    )
+    account_id = Column(String, ForeignKey("of_runtime.account_id", ondelete="RESTRICT"), primary_key=True)
+    holder = Column(String(32))
+    lease_token = Column(String(36))
+    lease_until = Column(DateTime)
+    next_read_at = Column(DateTime)
+    updated_at = Column(DateTime, nullable=False)

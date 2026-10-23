@@ -29,7 +29,14 @@ def drop_0090(c):
                       " DROP FUNCTION of_history_memory_evidence_immutable(); DROP FUNCTION of_history_memory_correction_immutable();"
                       " DROP FUNCTION of_personality_immutable();"
                       " ALTER TABLE of_text_intent DROP CONSTRAINT ck_of_text_intent_origin;"
-                      " ALTER TABLE of_text_intent ADD CONSTRAINT ck_of_text_intent_origin CHECK (origin IN ('automated','manual','campaign'))")
+                      " ALTER TABLE of_text_intent ADD CONSTRAINT ck_of_text_intent_origin CHECK (origin IN ('automated','manual','campaign'));"
+                      # Content-sync review fixes (also shipped by 0090_launch).
+                      " DROP TABLE of_content_sync_source, of_provider_read_gate; DROP INDEX ix_messages_account_ingested;"
+                      " ALTER TABLE of_content_sync_account DROP COLUMN posts_cursor, DROP COLUMN posts_history_complete,"
+                      " DROP COLUMN posts_audit_after, DROP COLUMN late_through_at, DROP COLUMN reconcile_priority_after_item_id;"
+                      " ALTER TABLE of_offer_observation DROP CONSTRAINT uq_of_offer_observation_sighting, DROP COLUMN occurrence;"
+                      " ALTER TABLE of_offer_observation ADD CONSTRAINT uq_of_offer_observation_source"
+                      " UNIQUE (account_id, binding_id, source_kind, source_id, fingerprint)")
     c.execute(text("UPDATE alembic_version SET version_num=:v"), {"v": OFFER_IMPORT})
 
 

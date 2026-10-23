@@ -1,10 +1,12 @@
 {
   "schemaVersion": "of-release-acceptance.v1",
   "combined": {
+    "shards": 4,
     "patterns": ["service/tests/test_onlyfans*.py"],
     "separateScripts": ["service/tests/test_onlyfans_read.py", "service/tests/test_onlyfans_migration_pg.py"]
   },
   "commerce": {
+    "shards": 2,
     "patterns": [
       "service/tests/test_onlyfans_offer*.py",
       "service/tests/test_onlyfans_fixed_price_pg.py",

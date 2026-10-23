@@ -45,9 +45,53 @@ concurrency:
   group: onlyfans-acceptance-${{ inputs.suite || 'combined' }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  acceptance:
+  plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Derive the shard matrix from the committed manifest
+        id: plan
+        env:
+          ACCEPTANCE_SUITE: ${{ inputs.suite || 'combined' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          count = json.load(open("scripts/onlyfans-release-acceptance-manifest.json"))[os.environ["ACCEPTANCE_SUITE"]]["shards"]
+          print("shards=" + str(count))
+          print("matrix=" + json.dumps({"shard": list(range(count))}))
+          PY
+  build:
+    # The deployable image is built once from the tested SHA, not once per shard.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: backend
+      - name: Build the deployable backend from the tested SHA
+        working-directory: backend
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/release-evidence"
+          docker build --label org.opencontainers.image.revision="$GITHUB_SHA" -f Dockerfile.onlyfans -t launch-candidate .
+          docker image inspect launch-candidate --format '{{.Id}}' > "$GITHUB_WORKSPACE/release-evidence/candidate-image-id.txt"
+          docker image inspect launch-candidate > "$GITHUB_WORKSPACE/release-evidence/candidate-image.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}-image
+          path: release-evidence/
+          if-no-files-found: error
+  acceptance:
+    needs: plan
+    runs-on: ubuntu-24.04
+    # Each shard is an independent job with its own PostgreSQL service and disposable databases.
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     services:
       postgres:
         image: postgres:16-alpine
@@ -119,29 +163,89 @@ jobs:
         run: |
           npm ci
           node node_modules/playwright/cli.js install --with-deps chromium
-      - name: Build the deployable backend from the tested SHA
-        working-directory: backend
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/release-evidence"
-          docker build --label org.opencontainers.image.revision="$GITHUB_SHA" -f Dockerfile.onlyfans -t launch-candidate .
-          docker image inspect launch-candidate --format '{{.Id}}' > "$GITHUB_WORKSPACE/release-evidence/candidate-image-id.txt"
-          docker image inspect launch-candidate > "$GITHUB_WORKSPACE/release-evidence/candidate-image.json"
-      - name: Run the full declared acceptance with zero exemptions
+      - name: Run this shard of the declared acceptance with zero exemptions
         working-directory: backend
         env:
           DASHBOARD_SHA: ${{ steps.pair.outputs.dashboard_sha }}
           ACCEPTANCE_SUITE: ${{ inputs.suite || 'combined' }}
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ needs.plan.outputs.shards }}
         run: >-
           python scripts/onlyfans-release-acceptance.py
           --suite "$ACCEPTANCE_SUITE"
+          --shard "$SHARD_INDEX/$SHARD_COUNT"
           --dashboard-dir "$GITHUB_WORKSPACE/paired-dashboard"
           --dashboard-sha "$DASHBOARD_SHA"
           --backend-sha "$GITHUB_SHA"
           --evidence-dir "$GITHUB_WORKSPACE/release-evidence"
-      - name: Save exact commands, node identities and release evidence
+      - name: Save exact commands, node identities and shard evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}-shard-${{ matrix.shard }}
+          path: release-evidence/
+          if-no-files-found: error
+  merge:
+    # The only job that may certify release acceptance: union of shards == manifest collected from this commit.
+    needs: [plan, build, acceptance]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: backend
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require every upstream job to have succeeded
+        if: needs.plan.result != 'success' || needs.build.result != 'success' || needs.acceptance.result != 'success'
+        run: |
+          echo "Upstream job did not succeed: plan=${{ needs.plan.result }} build=${{ needs.build.result }} acceptance=${{ needs.acceptance.result }}" >&2
+          exit 1
+      - name: Resolve the paired dashboard pin
+        id: pin
+        working-directory: backend
+        run: echo "dashboard_sha=$(tr -d '[:space:]' < docs/onlyfans/ACCEPTANCE-DASHBOARD-SHA)" >> "$GITHUB_OUTPUT"
+      - name: Install test requirements for collection only
+        working-directory: backend
+        run: python -m pip install -r requirements-onlyfans-test.txt
+      - name: Collect the complete manifest from this commit
+        working-directory: backend
+        env:
+          ACCEPTANCE_SUITE: ${{ inputs.suite || 'combined' }}
+          SHARD_COUNT: ${{ needs.plan.outputs.shards }}
+        run: >-
+          python scripts/onlyfans-release-acceptance.py
+          --suite "$ACCEPTANCE_SUITE"
+          --shard "0/$SHARD_COUNT"
+          --manifest-only
+          --dashboard-dir "$GITHUB_WORKSPACE/unused"
+          --dashboard-sha "${{ steps.pin.outputs.dashboard_sha }}"
+          --backend-sha "$GITHUB_SHA"
+          --evidence-dir "$GITHUB_WORKSPACE/merge-evidence/manifest"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}-shard-*
+          path: shard-evidence
+      - name: Prove the shard union equals the collected manifest
+        working-directory: backend
+        env:
+          ACCEPTANCE_SUITE: ${{ inputs.suite || 'combined' }}
+        run: |
+          args=()
+          for directory in "$GITHUB_WORKSPACE"/shard-evidence/*/; do args+=(--shard-dir "$directory"); done
+          python scripts/onlyfans-acceptance-merge.py \
+            --suite "$ACCEPTANCE_SUITE" \
+            --manifest-dir "$GITHUB_WORKSPACE/merge-evidence/manifest" \
+            "${args[@]}" \
+            --backend-sha "$GITHUB_SHA" \
+            --dashboard-sha "${{ steps.pin.outputs.dashboard_sha }}" \
+            --evidence-dir "$GITHUB_WORKSPACE/merge-evidence"
+      - name: Save merged acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}
-          path: release-evidence/
+          path: merge-evidence/
           if-no-files-found: error

@@ -41,6 +41,7 @@ def held(s, account_id):
     from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
     from .launch_operations_models import OfLedgerResolution
     from db.onlyfans_models import OfRuntime
+    from db.models import OfCreatorBinding
     from db.onlyfans_delivery_models import OfDeliveryPolicy
     from .ledger import PAID
     from .store import utcnow
@@ -58,9 +59,14 @@ def held(s, account_id):
                     OfLedgerResolution.account_id==OfLedgerEvidence.account_id,
                     OfLedgerResolution.evidence_hash==OfLedgerEvidence.evidence_hash,
                     OfLedgerResolution.binding_id==OfRuntime.binding_id).exists()).limit(1)) is not None
-        or s.scalar(select(Transaction.id).where(Transaction.account_id == account_id,
+        # Unlinked purchases from before the current binding was created cannot
+        # be sales this binding made, so they stay visible but do not hold it.
+        or s.scalar(select(Transaction.id).join(OfRuntime, OfRuntime.account_id == Transaction.account_id)
+            .join(OfCreatorBinding, OfCreatorBinding.id == OfRuntime.binding_id).where(
+            Transaction.account_id == account_id,
             Transaction.source == "ledger", Transaction.kind == "ppv_message",
-            Transaction.message_id.is_(None), Transaction.status.in_(tuple(PAID))).limit(1)) is not None
+            Transaction.message_id.is_(None), Transaction.status.in_(tuple(PAID)),
+            Transaction.occurred_at >= OfCreatorBinding.created_at).limit(1)) is not None
         or s.scalar(select(OfLedgerScan.account_id).where(OfLedgerScan.account_id == account_id,
             ((OfLedgerScan.status == "held") | (OfLedgerScan.last_complete_at.is_(None)))).limit(1)) is not None)
 

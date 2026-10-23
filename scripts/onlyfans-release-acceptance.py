@@ -37,6 +37,11 @@ def source_proof(directory: Path, expected: str | None = None) -> dict:
         if Path(name).is_absolute() or ".." in Path(name).parts:
             raise ValueError("Paired archive source manifest contains an unsafe path")
         path = directory / name
+        if "symlink" in record:
+            # A contained tracked symlink kept by prepare-onlyfans-dashboard.py: verify the link itself.
+            if not path.is_symlink() or os.readlink(path) != record["symlink"]:
+                raise ValueError("Paired archive source changed after its digest was verified")
+            continue
         if not path.is_file() or path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]:
             raise ValueError("Paired archive source changed after its digest was verified")
         if bool(path.stat().st_mode & 0o111) != record["executable"]:

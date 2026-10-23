@@ -272,8 +272,47 @@ class Service:
             clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
 
     # ── main loop ─────────────────────────────────────────────────────────
+    def _twin_controls(self):
+        """Twin's dashboard side, run every tick (also while the fan is paused or taken over):
+        repair stop/display drift fail-closed, then send at most one queued human message through
+        this runner's single-attempt boundary. No-op without Twin's PostgreSQL control tables."""
+        import os
+        url, tenant = os.environ.get("DATABASE_URL", ""), os.environ.get("ONLYFANS_WORKER_TENANT", "")
+        if not url.startswith("postgresql") or not tenant:
+            return None
+        from onlyfans_runtime.fastt_manual import FasttManualTransport, NotSent, dispatch_next_manual, fastt_owned
+        from onlyfans_runtime.store import Store
+        from onlyfans_runtime.text_delivery import TextAuthority
+        from sqlalchemy import text as sql
+        if not fastt_owned(self.db, self.args.fan):
+            return None
+        if getattr(self, "_twin_store", None) is None:
+            self._twin_store = Store(url)
+        store = self._twin_store
+        store.reconcile_runtime_stop(tenant, self.db, self.args.fan)
+        with store.engine.connect() as c:
+            rev = c.execute(sql("SELECT revision FROM of_delivery_policy WHERE account_id=:a"), {"a": self.db}).scalar()
+        if rev is None or self.client is None:
+            return None
+        from twin_bridge.platform import escape_plain_text
+
+        def post_once(grant):
+            if grant.fan_id != self.args.fan:
+                raise NotSent()
+            return self.client.send_text_once_body(grant.fan_id, escape_plain_text(grant.body))
+
+        outcome = dispatch_next_manual(TextAuthority(store), tenant, self.db,
+                                       FasttManualTransport(self.db, post_once, policy_revision=int(rev)))
+        if outcome is not None:
+            runner.emit({"event": "human-send", "outcome": outcome})
+        return outcome
+
     async def tick(self):
         await self.ensure_session()
+        try:
+            await asyncio.to_thread(self._twin_controls)
+        except Exception as exc:
+            runner.emit({"event": "twin-controls-error", "reason": (str(exc) or type(exc).__name__)[:120]})
         if self.pilot is None:
             await self.acquire()
         if self.lease.lost:
@@ -365,13 +404,43 @@ class Service:
         return row is not None
 
     async def stop_after_card(self):
-        """The approved test ends after the paid card: set the one runtime stop (shown as paused by s5's projection)."""
+        """The approved test ends after the paid card.
+
+        Goes through Twin's own control path (``Store.control``, action pause_automation) so the
+        runtime stop, the dashboard's conversation state and the control audit change together.
+        If that path is unavailable (no Twin state row, SQLite fixture), the runtime stop alone is
+        still set: fail closed, never keep sending.
+        """
+        import asyncio, hashlib, os
         from db.engine import get_session
         from onlyfans_runtime import runtime_stop
-        async with get_session() as session:
-            await session.run_sync(lambda s: runtime_stop.hold(s, self.db, self.args.fan, runner.now()))
-            await session.commit()
-        runner.emit({"event": "stopped-after-card", "account_id": self.db, "fan_id": self.args.fan})
+        try:
+            from onlyfans_runtime.store import Store
+            from db.onlyfans_models import OfConversationState
+            from sqlalchemy.orm import Session
+            url, tenant = os.environ.get("DATABASE_URL", ""), os.environ.get("ONLYFANS_WORKER_TENANT", "")
+            if not url or not tenant:
+                raise RuntimeError("twin-control-unavailable")
+
+            def pause():
+                store = Store(url)
+                with Session(store.engine) as s:
+                    row = s.get(OfConversationState, (self.db, self.args.fan))
+                    if row is None or row.mode != "automated":
+                        raise RuntimeError("twin-state-not-automated")
+                    rev = row.revision
+                key = hashlib.sha256(f"fastt-stop-after-card:{self.db}:{self.args.fan}:{rev}".encode()).hexdigest()[:64]
+                return store.control(tenant, self.db, self.args.fan, mode="paused", expected_revision=rev,
+                                     command_key=key, actor="fastt-runner", reason="Stopped after the approved paid card",
+                                     action="pause_automation")
+            await asyncio.to_thread(pause)
+            via = "twin-control"
+        except Exception as exc:  # fail closed: the runtime stop is still written
+            async with get_session() as session:
+                await session.run_sync(lambda s: runtime_stop.hold(s, self.db, self.args.fan, runner.now()))
+                await session.commit()
+            via = "runtime-stop-only:" + (str(exc)[:60] or type(exc).__name__)
+        runner.emit({"event": "stopped-after-card", "account_id": self.db, "fan_id": self.args.fan, "via": via})
 
     async def after_failure(self, reason, key):
         """A failed turn: stop for the fan if the ledger says so, else abandon only this input."""

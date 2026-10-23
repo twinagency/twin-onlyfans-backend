@@ -48,6 +48,7 @@ TURN_MAX_S = 600.0
 PACE_MAX_S = 180.0
 
 # skip_list reasons a human (or OnlyFans) wrote to say "stop automating this fan".
+COOLDOWN_WAIT_MAX_S = 120.0
 STOP_REASONS = ("manual_restrict", "of_restricted", "muted_creator")
 
 
@@ -407,12 +408,13 @@ class Service:
         if not row or not row[0]:
             return 0.0
         until = row[0] if isinstance(row[0], datetime) else datetime.fromisoformat(str(row[0]))
-        now = runner.now()
         if until.tzinfo is not None:
             until = until.astimezone(timezone.utc).replace(tzinfo=None)
-        if now.tzinfo is not None:
-            now = now.astimezone(timezone.utc).replace(tzinfo=None)
-        return max(0.0, (until - now).total_seconds())
+        # ai_chatter compares this column with the real UTC clock, so this does too.
+        left = (until - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()
+        # Only FASTT's short post-send cooldown is waited out; a longer pause is a real hold
+        # and is left to ai_chatter's own skip, exactly as before.
+        return left if 0 < left <= COOLDOWN_WAIT_MAX_S else 0.0
 
     async def card_delivered(self, receipts):
         """True when a confirmed bubble of this turn is the priced card (its canonical row carries a price)."""

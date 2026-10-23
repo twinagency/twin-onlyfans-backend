@@ -10,7 +10,7 @@ This record is in progress. No completion or deployment is claimed.
 - Concurrent combined work was reconciled through backend `e7eae43485a053bb74b9efef3f13b577cee41f48` (18 additional commits) and dashboard `710005d67c99db46e62c6b133a7e259821aa8846` (six additional commits). The selected implementation also retains the newer OnlyFans UI input `28fd0038966550c733c11fbfe5c53d52403eed1f` and current production-main contributions. Exact final ancestry is recorded with the immutable release pair.
 - Backend deployment branch has three merge ancestors absent from combined. A real git merge-tree rehearsal against deployment1614696 returned the unchanged combined tree61ca0699428ff8e27aab7b0e4543eaf1fac97765, proving those merge ancestors can be preserved without dropping content.
 - Current implementation starts from byte-verified combined snapshots. Acquisition excludes unrelated legacy frontend assets; no deployable full-source artifact has yet been built.
-- Paired dashboard: `a0d5dedbfba98f1dd63e67cd08278e961263fe1e`, tree `f124a22d896bcce8b876801e0df5ad6538ad688e`, published on `codex/onlyfans-final-release-20261023` and pinned in `ACCEPTANCE-DASHBOARD-SHA`. Its parents preserve the prior hybrid `1805ebd7e046537f047d31212fdd5fda4454fed1` and latest inspected main `dbfc42d402745ee603dabfe58277e1ce6d24484c`. Both new main mobile files are retained exactly. The hybrid retains the earlier combined, UI and production-main contributions. Full acceptance remains pending.
+- Paired dashboard: `aa6bae552bb5539a695b7c96a74682ce476ee86f`, tree `43e932a24d97bb82e14f62cd7383c8b2b50fec0d`, published on `codex/onlyfans-final-release-20261023` and pinned in `ACCEPTANCE-DASHBOARD-SHA`. Its ancestry preserves the prior hybrid `1805ebd7e046537f047d31212fdd5fda4454fed1`, latest inspected main `dbfc42d402745ee603dabfe58277e1ce6d24484c`, and concurrent candidate commits through `156ecdd35b42ac2adf93039ea7dfff6776fe592d`. Both new main mobile files are retained exactly. The hybrid retains the earlier combined, UI and production-main contributions. Full acceptance remains pending.
 - PostgreSQL16.15, Python3.12.14 and Chromium153.0.8010.0 are available. The actual hybrid dashboard/backend rehearsal passed all four cases with zero failures, errors or skips, including backup/restore and retained unknown outcomes. Its tab-hydration race was reproduced and corrected before the passing run. A clean production dashboard build and subsequent TypeScript check also passed. These targeted results do not substitute for exact-pair full acceptance.
 
 ## Checklist
@@ -42,7 +42,8 @@ Tests, final SHAs, immutable artifacts, actual versions and real-account observa
 ## Final coverage correction
 
 The first exact-pair candidate was backend
-`abd3c03e4d9c7aa263c60a02268d78906c2cf8b8` with the dashboard pin above.
+`abd3c03e4d9c7aa263c60a02268d78906c2cf8b8` with dashboard
+`1805ebd7e046537f047d31212fdd5fda4454fed1`.
 Its full manifest collected 1,918 nodes without collection errors or
 deselections. Root interrupted execution after observing 72 passing nodes
 because a separate source review confirmed a reporting defect. Exit 130 and
@@ -100,6 +101,31 @@ recorded local offline preload rejects only that exact update probe before
 network access, exercising Next's normal unknown-version fallback; all
 application and local HTTP requests remain real. The installed application
 dependencies and repository source are unchanged by this environment setup.
+
+The next reconciliation preserves concurrent backend commits through
+`14bc99ebde648c5d77be47d9bd0bf516db9b1959`: existing loggers survive migration
+initialization, connection identity retries retain their shared backoff without
+granting read authority, and the disposable personality fixture supplies the
+memory tables and PostgreSQL-compatible hash function used by the composer.
+The dashboard retains the concurrent screenshot correction and zero console or
+page-error assertions. Its import/content checks reopen the real Offers tab
+after navigation; all existing assertions remain. The actual HTTP fixture now
+declares its exact public origin, preserving the production CSRF checks.
+
+A solo competing-worker test exposed a real claim race: account eligibility can
+come from an older PostgreSQL statement snapshot while the next work query is
+empty. Claim selection now rechecks within the same short transaction and
+retains account order, scope and runtime-first locking. A deterministic database
+barrier regression reproduces that race and checks both continued fair selection
+and explicit account scope. Final complete verification remains pending.
+
+Local full acceptance is coordinated across isolated whole-file commands on one
+clean SHA pair. The complete committed manifest is collected once; recorded node
+identities must partition exactly, with no omissions, duplicates, failures,
+errors, skips or deselections. Timed capacity runs alone, while one serial
+command owns the actual HTTP/rehearsal browser runtime. Both historical scripts
+remain separate required commands. This local evidence does not establish the
+separately required hosted combined/commerce workflows, image build or release.
 
 ## Reconciliation decisions
 

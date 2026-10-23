@@ -442,13 +442,20 @@ class Store:
                 select(OfWork.account_id).where(OfWork.account_id == OfRuntime.account_id, due, OfWork.due_at <= now).exists(),
             )
             if account_ids is not None:query = query.where(OfRuntime.account_id.in_(account_ids))
-            account = s.scalar(query.order_by(OfRuntime.last_claim_at, OfRuntime.account_id).with_for_update(skip_locked=True, of=OfRuntime).limit(1))
-            if account is None:
-                return None
-            # Recheck binding under the lock so a concurrent revocation is ordered.
-            self._runtime(s, tenant_id, account.account_id)
-            work = s.scalar(select(OfWork).where(OfWork.account_id == account.account_id, due, OfWork.due_at <= now)
-                            .order_by(OfWork.last_claim_at, OfWork.first_input_at, OfWork.fan_id).limit(1))
+            while True:
+                account = s.scalar(query.order_by(OfRuntime.last_claim_at, OfRuntime.account_id).with_for_update(skip_locked=True, of=OfRuntime).limit(1))
+                if account is None:
+                    return None
+                # Recheck binding under the lock so a concurrent revocation is ordered.
+                self._runtime(s, tenant_id, account.account_id)
+                work = s.scalar(select(OfWork).where(OfWork.account_id == account.account_id, due, OfWork.due_at <= now)
+                                .order_by(OfWork.last_claim_at, OfWork.first_input_at, OfWork.fan_id).limit(1))
+                if work is not None:
+                    break
+                # READ COMMITTED can select an account from an earlier snapshot
+                # just as another worker exhausts it. Its runtime lock now keeps
+                # it empty; reselect with a fresh snapshot and the same fairness
+                # ordering/scope instead of dropping other eligible accounts.
             state = self._state(s, account.account_id, work.fan_id)
             fan = s.get(Fan, (account.account_id, work.fan_id))
             account.last_claim_at = work.last_claim_at = now

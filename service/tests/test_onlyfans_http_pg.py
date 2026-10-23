@@ -192,7 +192,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
          "ONLYFANS_CONNECTION_TOKEN":"synthetic-connection-only-token","ONLYFANS_CONNECTION_TENANT":"tenant-a",
          "ONLYFANS_CONNECTION_KEY":"17"*32,"ONLYFANS_TEST_CONNECTIONS":"1",
          "ONLYFANS_CONFIGURATION_TOKEN":"synthetic-configuration-only-token","ONLYFANS_CONFIGURATION_TENANT":"tenant-a","ONLYFANS_TEST_CONFIGURATION":"1","ONLYFANS_TEST_WORKER":"1",
-         "DASHBOARD_SESSION_SECRET":"synthetic-local-session-secret","SUPABASE_URL":f"http://127.0.0.1:{identity.server_port}","SUPABASE_SERVICE_KEY":"synthetic-service-key","NEXT_TELEMETRY_DISABLED":"1","TZ":"UTC"}
+         "DASHBOARD_PUBLIC_ORIGIN":web,"DASHBOARD_SESSION_SECRET":"synthetic-local-session-secret","SUPABASE_URL":f"http://127.0.0.1:{identity.server_port}","SUPABASE_SERVICE_KEY":"synthetic-service-key","NEXT_TELEMETRY_DISABLED":"1","TZ":"UTC"}
     node=os.environ.get("CODEX_PRIMARY_RUNTIME_NODE","node")
     log_dir=Path(os.environ.get("ONLYFANS_TEST_EVIDENCE",str(tmp_path)))
     log_dir.mkdir(parents=True,exist_ok=True)

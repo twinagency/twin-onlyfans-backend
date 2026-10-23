@@ -1,4 +1,5 @@
 """Synthetic disposable DB proofs, including the real native prompt composer."""
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -21,6 +22,7 @@ from onlyfans_runtime.configuration import InvalidConfiguration
 from onlyfans_runtime.native_context import versions
 from onlyfans_runtime.native_planning import _native_messages
 from onlyfans_runtime.store import Refused, Store
+from onlyfans_runtime.launch_history_memory.models import MemoryCorrection, MemoryEvidence, MemoryReceipt, MemoryState
 from onlyfans_runtime.launch_personality.models import PersonalityHead, PersonalityRevision
 from onlyfans_runtime.launch_personality.workflow import PersonalityWorkflow
 
@@ -69,12 +71,17 @@ def env(tmp_path, pg_template):
         # pysqlite's legacy mode otherwise commits a released SAVEPOINT before
         # the SELECT-only outer transaction has physically started.
         @event.listens_for(engine, "connect")
-        def sqlite_connect(connection, _): connection.isolation_level = None
+        def sqlite_connect(connection, _):
+            connection.isolation_level = None
+            connection.create_function("md5", 1,
+                lambda value: hashlib.md5(value.encode()).hexdigest() if value is not None else None,
+                deterministic=True)
         @event.listens_for(engine, "begin")
         def sqlite_begin(connection): connection.exec_driver_sql("BEGIN")
     wanted = {m.__table__ for m in (Account, AccountAiConfig, Fan, FanProfile, Message,
         OfCreatorBinding, OfRuntime, OfConfigurationChange, OfCreatorFactsSource,
-        OfIngress, PersonalityHead, PersonalityRevision)}
+        OfIngress, PersonalityHead, PersonalityRevision,
+        MemoryCorrection, MemoryEvidence, MemoryReceipt, MemoryState)}
     def dependencies(table):
         for fk in table.foreign_keys:
             other = fk.column.table

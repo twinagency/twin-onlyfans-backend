@@ -1,4 +1,4 @@
-"""Live inbound for the one scoped fan, through FASTT's existing event machinery.
+"""Live inbound for the one scoped fan (or, with ``fan=None``, every fan of the account), through FASTT's existing event machinery.
 
 One ``of_ws.OFWebSocket`` on the SAME verified client (session + proxy) the
 runner sends with: no second socket, no new WebSocket subsystem. Its own
@@ -9,8 +9,8 @@ Chat/Fan/Message rows (keyed ``of-<owner>``). That upsert is by
 (account, fan, message_id), so it is idempotent with Twin's worker intake and no
 second history exists. Everything else is dropped here:
 
-* frames for another fan (and above all our own account's echoes, which the
-  transcoder would otherwise misfile as inbound);
+* frames for another fan (all-fans mode: none are dropped for that) and above all our own
+  account's echoes, which the transcoder would otherwise misfile as inbound;
 * media / tip / priced / locked / gif input (``unsupported-input``): the ledger
   holds on those, exactly as in the recovered ``tools/intake.py``;
 * messages already stored.
@@ -51,7 +51,7 @@ def unsupported(message: dict) -> bool:
 
 
 class Intake:
-    def __init__(self, scope: AccountScope, fan: int, path, *, socket_factory=_default_socket,
+    def __init__(self, scope: AccountScope, fan: int | None, path, *, socket_factory=_default_socket,
                  transcode=_default_transcode, emit=_emit, backoff_s: float = BACKOFF_MIN_S):
         self.scope, self.fan, self.path = scope, fan, path
         self._factory, self._transcode, self._emit = socket_factory, transcode, emit
@@ -60,10 +60,10 @@ class Intake:
         self._ws = None
         self._stopping = False
 
-    def _exists(self, message_id: int) -> bool:
+    def _exists(self, message_id: int, fan: int | None = None) -> bool:
         with store.readonly(self.path) as con:
             return con.execute("SELECT 1 FROM messages WHERE account_id=? AND fan_id=? AND message_id=?",
-                               (self.scope.db_id, self.fan, message_id)).fetchone() is not None
+                               (self.scope.db_id, self.fan if fan is None else fan, message_id)).fetchone() is not None
 
     async def handle(self, event) -> str:
         """Process one frame; returns a fixed label (also what the tests assert)."""
@@ -76,8 +76,19 @@ class Intake:
         if not isinstance(message, dict):
             return "ignored"
         sender = message.get("fromUser")
-        if not isinstance(sender, dict) or isinstance(sender.get("id"), bool) or str(sender.get("id")) != str(self.fan):
+        if not isinstance(sender, dict) or isinstance(sender.get("id"), bool):
             return "other-sender"
+        if self.fan is None:
+            # All fans of the account: any positive fan id except the account itself (its own
+            # outbound echoes must never be filed as inbound).
+            sid = sender.get("id")
+            if type(sid) is not int or sid <= 0 or str(sid) == self.scope.provider_id:
+                return "other-sender"
+            fan = sid
+        elif str(sender.get("id")) != str(self.fan):
+            return "other-sender"
+        else:
+            fan = self.fan
         mid = message.get("id")
         if type(mid) is not int or mid <= 0:
             return "invalid"
@@ -89,10 +100,10 @@ class Intake:
             self._emit({"event": "unsupported-input", "message_id": mid})
             return "unsupported"
         try:
-            if await asyncio.to_thread(self._exists, mid):
+            if await asyncio.to_thread(self._exists, mid, fan):
                 return "duplicate"
             await self._transcode(self.scope.db_id, message)
-            stored = await asyncio.to_thread(self._exists, mid)
+            stored = await asyncio.to_thread(self._exists, mid, fan)
         except Exception:
             self._emit({"event": "intake-persist-failed", "message_id": mid})
             return "failed"

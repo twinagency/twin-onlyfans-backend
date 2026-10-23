@@ -14,7 +14,7 @@ import json
 import os
 import uuid
 
-from sqlalchemy import case, create_engine, or_, select, update
+from sqlalchemy import case, create_engine, func, or_, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
@@ -445,6 +445,41 @@ class Store:
             cancel_for_fan(s, account_id, fan_id, {"human_controlled": "takeover", "paused": "pause",
                 "no_contact": "no_contact"}.get(mode, "operator_cancelled"), now=utcnow())
             return state.revision
+
+    def admit_new_conversation(self, tenant_id, account_id, fan_id):
+        """The account's own ``automate_new_conversations`` policy, for a conversation whose first
+        inbound reached the shared tables without Twin's worker intake (the FASTT runner's socket).
+
+        Same conditions as ``_apply``: a conversation with NO control row yet, whose whole history
+        is newer than the moment the operator armed future conversations, on a verified, unexpired
+        connection bound to the runtime. Anything else (including an existing row, whatever its
+        mode) changes nothing, so a paused / human / stopped fan is never enabled here. Returns
+        True only when it wrote the initial ``automated`` state."""
+        from db.onlyfans_connection_models import OfProviderConnection
+        with Session(self.engine) as s, s.begin():
+            runtime = self._runtime(s, tenant_id, account_id)
+            now = utcnow()
+            if s.get(OfConversationState, (account_id, fan_id)) is not None or not runtime.enabled:
+                return False
+            fan = s.get(Fan, (account_id, fan_id))
+            connection = s.get(OfProviderConnection, account_id)
+            if fan is None or fan.is_muted or connection is None or runtime.binding_id != connection.binding_id \
+                    or connection.status != "verified" or connection.verified_at is None or connection.expires_at <= now \
+                    or not connection.automate_new_conversations or connection.automation_starts_at is None:
+                return False
+            first = s.scalar(select(func.min(Message.created_at)).where(
+                Message.account_id == account_id, Message.fan_id == fan_id))
+            if first is None or first < connection.automation_starts_at:
+                return False
+            state = self._state(s, account_id, fan_id)
+            state.mode, state.revision, state.requires_attention, state.updated_at = "automated", 1, False, now
+            command = hashlib.sha256(f"initial-automation:{runtime.binding_id}:{fan_id}".encode()).hexdigest()
+            s.add(OfControlAudit(account_id=account_id, command_key=command, fan_id=fan_id, mode="automated",
+                previous_revision=0, revision=1, actor=f"account-policy:{connection.revision}",
+                reason="Operator account policy enabled a new inbound conversation.",
+                consent_ref=f"connection:{connection.revision}", action="initial_automation",
+                takeover_from="none", takeover_to="none", created_at=now))
+            return True
 
     def reconcile_runtime_stop(self, tenant_id, account_id, fan_id):
         """Repair drift between Twin's state and the runtime stop; fail closed.

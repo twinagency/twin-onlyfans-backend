@@ -1,4 +1,5 @@
-"""Persistent, supervised FASTT runner for ONE account and ONE fan.
+"""Persistent, supervised FASTT runner for ONE account and ONE fan (``--fan``), or for ALL fans
+of ONE account (``--all-fans``; see "All-fans mode" below).
 
 ``python -m native_pilot.service --account of-<owner> --fan <id> --handle <name>
 --enable-send [--twin-context] [--content-manifest FILE]`` runs until stopped
@@ -20,6 +21,17 @@ made long-lived, with every safety rule kept:
 * a fan under an operator stop (skip_list manual_restrict, or a conversation
   that is not ``automated``) is not answered - the process keeps running;
 * live inbound arrives through ``intake.Intake`` (FASTT's OFWebSocket).
+
+All-fans mode (``--all-fans``): the same rules, per fan. One process per OnlyFans account,
+one turn at a time. Each tick (1) lets Twin's controls act for every fan with unanswered
+inbound (reconcile the runtime stop, the account's new-conversation policy, queued human sends),
+(2) picks the OLDEST fan whose newest message is an unanswered inbound and answers it through a
+per-fan child ``Service`` (own ``svc-<owner>-<fan>`` pilot, lease, conversation row, input claim,
+unknown-outcome hold). A fan is answered ONLY when its Twin state row exists and reads
+``automated`` / takeover ``none`` with no skip_list stop and the fan is FASTT-owned; no row, or any
+other mode, is never answered and nobody is ever enabled here. The delivery allowance and the
+daily model budget stay account-wide and shared. A new pilot's cutoff is the runner's start, so
+nothing older than this run is answered, and an unknown outcome holds THAT fan only.
 """
 from __future__ import annotations
 
@@ -41,6 +53,10 @@ from .scope import AccountScope
 LEASE_TTL_S = 120.0
 RENEW_S = 30.0
 POLL_S = 2.0
+FAN_IDLE_RELEASE_S = 900.0
+CANDIDATES_MAX = 200
+BUDGET_HOLD_S = 300.0
+HUMAN_SENDS_PER_TICK = 5
 HOLD_S = 15.0
 QUIET_S = 7.0
 CONNECTION_CHECK_S = 300.0
@@ -52,13 +68,14 @@ COOLDOWN_WAIT_MAX_S = 120.0
 STOP_REASONS = ("manual_restrict", "of_restricted", "muted_creator")
 
 
-def fan_hold_reason(path, account: str, fan: int):
+def fan_hold_reason(path, account: str, fan: int, strict: bool = False):
     """The ONE predicate for "this fan must not be answered right now".
 
     Reads the durable operator stop (``skip_list``) and the control projection
     (``of_conversation_state``). Returns a fixed reason string, or None. Kept as a
     single small function so the control wiring (s5) can replace or extend it.
-    A missing projection row is not a stop; the skip_list row is the stop.
+    A missing projection row is not a stop; the skip_list row is the stop. ``strict`` (all-fans
+    mode) inverts that for the projection: no row (or no table) means "never enabled" and holds.
     """
     with runner.readonly(path) as con:
         if store.has_table(con, "skip_list"):
@@ -68,10 +85,14 @@ def fan_hold_reason(path, account: str, fan: int):
         if store.has_table(con, "of_conversation_state"):
             row = con.execute("SELECT mode,takeover_state FROM of_conversation_state WHERE account_id=? AND fan_id=?",
                               (account, fan)).fetchone()
+            if strict and not row:
+                return "fan-not-enabled"
             if row and row[0] != "automated":
                 return "fan-" + str(row[0]).replace("_", "-")
             if row and row[1] not in (None, "none"):
                 return "fan-takeover"
+        elif strict:
+            return "fan-not-enabled"
     return None
 
 
@@ -97,7 +118,7 @@ class ServiceGateway(runner.Gateway):
     def __init__(self, service, pilot, **kwargs):
         super().__init__(service.ledger, pilot, service.client, asyncio.get_running_loop(), **kwargs)
         self.service = service
-        self.hold_check = lambda: fan_hold_reason(service.path, service.db, service.args.fan)
+        self.hold_check = lambda: fan_hold_reason(service.path, service.db, service.args.fan, *service.strict_arg)
 
     @property
     def deadline(self):  # type: ignore[override]
@@ -153,13 +174,19 @@ class ServiceGateway(runner.Gateway):
 class Service:
     def __init__(self, args, *, stop=None, ttl_s=LEASE_TTL_S, renew_s=RENEW_S, poll_s=POLL_S, hold_s=HOLD_S,
                  quiet_s=QUIET_S, connection_check_s=CONNECTION_CHECK_S, intake_factory=None):
+        self.all_fans = bool(getattr(args, "all_fans", False))
+        if self.all_fans == (getattr(args, "fan", None) is not None):
+            raise Refused("fan-scope-invalid")  # exactly one of --fan / --all-fans
+        self.strict = False        # True on a per-fan child of an all-fans runner
+        self.cutoff = None         # a child's new-pilot cutoff (the runner's start)
+        self.children, self.fan_holds, self.owned_check = {}, {}, None
         self.args = args
         self.scope = AccountScope.parse(args.account)
         self.db = self.scope.db_id
         self.stop = stop or asyncio.Event()
         self.ttl_s, self.renew_s, self.poll_s, self.hold_s = ttl_s, renew_s, poll_s, hold_s
         self.quiet_s, self.connection_check_s = quiet_s, connection_check_s
-        self.pilot_id = getattr(args, "service_id", None) or f"svc-{self.scope.provider_id}-{args.fan}"
+        self.pilot_id = getattr(args, "service_id", None) or f"svc-{self.scope.provider_id}-{getattr(args, 'fan', None)}"
         self.path = None
         self.ledger = None
         self.client = self.conn = self.sentinels = self.intake = None
@@ -167,6 +194,9 @@ class Service:
         self.content = self.context = None
         self.prior_catalog = None
         self.next_conn_check = 0.0
+        self.started_at = None
+        self.turns_started = 0
+        self.last_active = runner.now()
         self.last_held = None
         self.ensured = False
         self._renew_task = None
@@ -178,11 +208,22 @@ class Service:
         except asyncio.TimeoutError:
             pass
 
+    @property
+    def strict_arg(self):
+        return (True,) if self.strict else ()
+
+    async def wait(self, seconds):
+        """A turn's own pause. A per-fan child of the all-fans runner never sleeps: the account's
+        serial loop moves on to the next fan instead."""
+        if not self.strict:
+            await self.idle(seconds)
+
     def note(self, reason):
         """Emit a hold/clear event only when the reason changes."""
         if reason != self.last_held:
             self.last_held = reason
-            runner.emit({"event": "held" if reason else "resumed", **({"reason": reason} if reason else {})})
+            runner.emit({"event": "held" if reason else "resumed", **({"reason": reason} if reason else {}),
+                         **({"fan_id": self.args.fan} if self.strict else {})})
 
     # ── session ───────────────────────────────────────────────────────────
     async def ensure_session(self):
@@ -209,8 +250,10 @@ class Service:
 
     def start_intake(self):
         from .intake import Intake
+        if self.started_at is None:
+            self.started_at = runner.now()
         factory = self._intake_factory or Intake
-        self.intake = factory(self.scope, self.args.fan, self.path)
+        self.intake = factory(self.scope, None if self.all_fans else self.args.fan, self.path)
         self.intake.start(self.client)
 
     # ── ownership ─────────────────────────────────────────────────────────
@@ -223,7 +266,7 @@ class Service:
             self.ensured = True
         token = "native-" + secrets.token_hex(24)
         pilot = self.ledger.activate_service(pilot_id=self.pilot_id, account_id=self.db, fan_id=self.args.fan,
-                                             owner_token=token, now=runner.now(), ttl_s=self.ttl_s)
+                                             owner_token=token, now=runner.now(), ttl_s=self.ttl_s, cutoff=self.cutoff)
         if not await reserve_ownership(account_id=self.db, fan_id=self.args.fan, owner_token=token,
                                        now=runner.now(), ttl_s=self.ttl_s):
             self.ledger.release_service(pilot_id=self.pilot_id, owner_token=token, now=runner.now())
@@ -273,24 +316,42 @@ class Service:
             clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
 
     # ── main loop ─────────────────────────────────────────────────────────
-    def _twin_controls(self):
+    def _owned(self, fan):
+        from onlyfans_runtime.fastt_manual import fastt_owned
+        return fastt_owned(self.db, fan)
+
+    def _twin_controls(self, fans=None):
         """Twin's dashboard side, run every tick (also while the fan is paused or taken over):
-        repair stop/display drift fail-closed, then send at most one queued human message through
-        this runner's single-attempt boundary. No-op without Twin's PostgreSQL control tables."""
+        repair stop/display drift fail-closed, then send queued human messages through
+        this runner's single-attempt boundary. No-op without Twin's PostgreSQL control tables.
+
+        Single-fan mode: that one fan. All-fans mode: ``fans`` (every owned fan with activity) get
+        the account's new-conversation policy and the reconcile; a queued human message for ANY
+        owned fan of the account is sent (never a non-owned one)."""
         import os
         url, tenant = os.environ.get("DATABASE_URL", ""), os.environ.get("ONLYFANS_WORKER_TENANT", "")
         if not url.startswith("postgresql") or not tenant:
             return None
-        from onlyfans_runtime.fastt_manual import FasttManualTransport, NotSent, dispatch_next_manual, fastt_owned
-        from onlyfans_runtime.store import Store
+        from onlyfans_runtime.fastt_manual import FasttManualTransport, NotSent, dispatch_next_manual
+        from onlyfans_runtime.store import Refused as TwinRefused, Store
         from onlyfans_runtime.text_delivery import TextAuthority
         from sqlalchemy import text as sql
-        if not fastt_owned(self.db, self.args.fan):
+        if not self.all_fans and not self._owned(self.args.fan):
             return None
         if getattr(self, "_twin_store", None) is None:
             self._twin_store = Store(url)
         store = self._twin_store
-        store.reconcile_runtime_stop(tenant, self.db, self.args.fan)
+        for fan in ([self.args.fan] if not self.all_fans else (fans or [])):
+            if not self._owned(fan):
+                continue
+            try:
+                if self.all_fans:
+                    store.admit_new_conversation(tenant, self.db, fan)
+                store.reconcile_runtime_stop(tenant, self.db, fan)
+            except TwinRefused as exc:
+                if not self.all_fans:
+                    raise
+                runner.emit({"event": "twin-controls-skipped", "fan_id": fan, "reason": str(exc)[:80]})
         with store.engine.connect() as c:
             rev = c.execute(sql("SELECT revision FROM of_delivery_policy WHERE account_id=:a"), {"a": self.db}).scalar()
         if rev is None or self.client is None:
@@ -298,22 +359,137 @@ class Service:
         from twin_bridge.platform import escape_plain_text
 
         def post_once(grant):
-            if grant.fan_id != self.args.fan:
+            if (not self._owned(grant.fan_id)) if self.all_fans else grant.fan_id != self.args.fan:
                 raise NotSent()
             return self.client.send_text_once_body(grant.fan_id, escape_plain_text(grant.body))
 
-        outcome = dispatch_next_manual(TextAuthority(store), tenant, self.db,
-                                       FasttManualTransport(self.db, post_once, policy_revision=int(rev)))
-        if outcome is not None:
-            runner.emit({"event": "human-send", "outcome": outcome})
+        outcome = None
+        for _ in range(HUMAN_SENDS_PER_TICK if self.all_fans else 1):
+            done = dispatch_next_manual(TextAuthority(store), tenant, self.db,
+                                        FasttManualTransport(self.db, post_once, policy_revision=int(rev)))
+            if done is None:
+                break
+            outcome = done
+            runner.emit({"event": "human-send", "outcome": done})
         return outcome
+
+    # ── all-fans orchestration ────────────────────────────────────────────
+    def pending_fans(self):
+        """(fan, newest message id) for owned fans whose newest message is an unanswered inbound
+        that arrived since this run started, oldest first (a fan just answered drops out, so the
+        order is a fair round robin). Newest ``CANDIDATES_MAX`` only: older silent chats cannot
+        starve a fresh one."""
+        from .ledger import _dt
+        with runner.readonly(self.path) as con:
+            rows = con.execute(
+                "SELECT m.fan_id,m.message_id,m.created_at FROM messages m WHERE m.account_id=? AND m.direction='in' "
+                "AND NOT EXISTS (SELECT 1 FROM messages n WHERE n.account_id=m.account_id AND n.fan_id=m.fan_id "
+                "AND NOT (n.direction='out' AND n.is_unsent) "
+                "AND (n.created_at>m.created_at OR (n.created_at=m.created_at AND n.message_id>m.message_id))) "
+                "ORDER BY m.created_at DESC,m.message_id DESC LIMIT ?", (self.db, CANDIDATES_MAX)).fetchall()
+        since = _dt(self.started_at)
+        found = sorted(((_dt(r[2]), r[1], r[0]) for r in rows if _dt(r[2]) > since))
+        return [(fan, mid) for _, mid, fan in found if self._owned(fan)]
+
+    def child(self, fan):
+        child = self.children.get(fan)
+        if child is None:
+            args = argparse.Namespace(**{**vars(self.args), "fan": fan, "all_fans": False, "service_id": None})
+            child = Service(args, stop=self.stop, ttl_s=self.ttl_s, renew_s=self.renew_s, poll_s=self.poll_s,
+                            hold_s=self.hold_s, quiet_s=self.quiet_s, connection_check_s=self.connection_check_s)
+            child.strict, child.cutoff = True, self.started_at
+            child.path, child.ledger, child.context = self.path, self.ledger, self.context
+            self.children[fan] = child
+        child.client, child.conn, child.sentinels = self.client, self.conn, self.sentinels
+        return child
+
+    async def release_child(self, fan):
+        child = self.children.pop(fan, None)
+        if child is not None:
+            await child.release_pilot()
+
+    async def release_pilot(self):
+        """Give the lease back; the durable rows keep their evidence (clean-shutdown semantics)."""
+        from twin_bridge.coordination import clear_owner
+        pilot, self.pilot = self.pilot, None
+        task, self._renew_task = self._renew_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if pilot is not None:
+            try:
+                if self.lease is not None and not self.lease.lost:
+                    self.ledger.release_service(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
+            except Refused:
+                pass
+            clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
+
+    def already_claimed(self, fan, message_id):
+        with runner.readonly(self.path) as con:
+            if not store.has_table(con, "native_pilot_inputs"):
+                return False  # nothing has ever been claimed on this store
+        return self.ledger.input_claimed(pilot_id=f"svc-{self.scope.provider_id}-{fan}", message_id=message_id)
+
+    def _hold_fan(self, fan, reason):
+        wait = self.poll_s if reason.startswith("fan-") else self.hold_s
+        self.fan_holds[fan] = (runner.now() + timedelta(seconds=wait), reason)
+
+    async def tick_all(self):
+        pending = await asyncio.to_thread(self.pending_fans)
+        try:
+            await asyncio.to_thread(self._twin_controls, [fan for fan, _ in pending])
+        except Exception as exc:
+            runner.emit({"event": "twin-controls-error", "reason": (str(exc) or type(exc).__name__)[:120]})
+        # Give back the lease of any fan quiet for a while (bounds renewal tasks and ownership).
+        for fan, child in list(self.children.items()):
+            if child.pilot is not None and fan not in dict(pending) and \
+                    (runner.now() - child.last_active).total_seconds() > FAN_IDLE_RELEASE_S:
+                await self.release_child(fan)
+        for fan, mid in pending:
+            if self.stop.is_set():
+                return
+            hold = self.fan_holds.get(fan)
+            if hold and runner.now() < hold[0]:
+                continue
+            if self.already_claimed(fan, mid):
+                continue  # already worked (a reply, or a no-reply/abandoned turn): never regenerated
+            child = self.child(fan)
+            child.last_active = runner.now()
+            before = child.turns_started
+            try:
+                await child.serve_fan()
+            except Refused as exc:
+                child.note(exc.reason)
+                if exc.reason.startswith(("allowance-", "model-budget")):
+                    raise  # account-wide: stop selecting fans until it clears
+                self._hold_fan(fan, exc.reason)
+                continue
+            except Exception as exc:
+                child.note("service-error:" + type(exc).__name__)
+                self._hold_fan(fan, "service-error")
+                continue
+            if child.turns_started > before:
+                return  # one turn at a time; re-read controls and the queue before the next fan
+        self.note(None)
+        await self.idle(self.poll_s)
 
     async def tick(self):
         await self.ensure_session()
+        if self.all_fans:
+            return await self.tick_all()
         try:
             await asyncio.to_thread(self._twin_controls)
         except Exception as exc:
             runner.emit({"event": "twin-controls-error", "reason": (str(exc) or type(exc).__name__)[:120]})
+        await self.serve_fan()
+
+    async def serve_fan(self):
+        """Everything one fan's turn needs, after the account-level session and Twin controls."""
+        if self.strict:
+            # All-fans: a fan that is not enabled/paused/stopped never even gets a pilot or lease.
+            held = await asyncio.to_thread(fan_hold_reason, self.path, self.db, self.args.fan, True)
+            if held:
+                raise Refused(held)
         if self.pilot is None:
             await self.acquire()
         if self.lease.lost:
@@ -323,7 +499,7 @@ class Service:
         if state["state"] != "active":
             await self.drop_pilot()
             raise Refused(state["reason"] or "pilot-stopped")
-        held = await asyncio.to_thread(fan_hold_reason, self.path, self.db, self.args.fan)
+        held = await asyncio.to_thread(fan_hold_reason, self.path, self.db, self.args.fan, *self.strict_arg)
         if held:
             raise Refused(held)
         policy = self.ledger.allowance_status(self.db)
@@ -341,19 +517,20 @@ class Service:
         snap = ledger.snapshot(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
         if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id) \
                 or (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < self.quiet_s:
-            return await self.idle(self.poll_s)
+            return await self.wait(self.poll_s)
         wait = self.cooldown_left()
         if wait > 0:
             # FASTT's own short post-send cooldown (fans.automation_paused_until) would make
             # ai_chatter skip the fan; wait it out instead of claiming and abandoning the input.
-            return await self.idle(min(wait + 0.5, self.poll_s * 10))
+            return await self.wait(min(wait + 0.5, self.poll_s * 10))
         try:
             sources = runner.read_sources(self.path, self.db, args.fan, getattr(snap, "member_ids", (snap.message_id,)))
             key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now())
         except Refused as exc:
             if exc.reason in ("input-already-claimed", "source-changed"):
-                return await self.idle(self.poll_s)
+                return await self.wait(self.poll_s)
             raise
+        self.turns_started += 1
         gateway = ServiceGateway(self, pilot, content=self.content, scope=self.scope)
         gateway.sources, gateway.input_key, gateway.bubble = sources, key, 0
         model = NativePilotModel(
@@ -366,7 +543,8 @@ class Service:
         stats = error = None
         try:
             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
-                              content=self.content, context=self.context) as native:
+                              content=self.content, context=self.context,
+                              **({"own_offers_only": True} if self.strict else {})) as native:
                 stats = await native.run(run_id=run_id)
             if gateway.stopped_reason or model.stopped_reason:
                 raise Refused(gateway.stopped_reason or model.stopped_reason)
@@ -478,8 +656,10 @@ class Service:
             raise Refused(state["reason"] or reason)
         # Abandon this input only: it is never regenerated (no automatic retry).
         ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
-        runner.emit({"event": "turn-abandoned", "reason": reason})
-        await self.idle(self.hold_s)
+        runner.emit({"event": "turn-abandoned", "reason": reason, **({"fan_id": self.args.fan} if self.strict else {})})
+        await self.wait(self.hold_s)
+        if self.strict and reason.startswith("model-budget"):
+            raise Refused(reason)  # the daily model budget is the ACCOUNT's: the runner backs off for everyone
 
     async def run(self):
         from twin_bridge.coordination import store_target
@@ -488,6 +668,8 @@ class Service:
             raise Refused("pilot-store-required")
         runner.require_store_schema(self.path)
         self.ledger = Ledger(self.path, allowance=True)
+        if self.all_fans and getattr(self.args, "content_manifest", None):
+            raise Refused("content-manifest-not-supported-with-all-fans")
         if getattr(self.args, "content_manifest", None):
             from .content import ContentPlan
             self.content = ContentPlan(self.args.content_manifest, self.db, self.args.fan)
@@ -502,7 +684,8 @@ class Service:
                     await self.tick()
                 except Refused as exc:
                     self.note(exc.reason)
-                    await self.idle(self.poll_s if exc.reason.startswith("fan-") else self.hold_s)
+                    await self.idle(self.poll_s if exc.reason.startswith("fan-") else
+                                    BUDGET_HOLD_S if exc.reason.startswith("model-budget") else self.hold_s)
                 except Exception as exc:
                     self.note("service-error:" + type(exc).__name__)
                     await self.idle(self.hold_s)
@@ -514,6 +697,8 @@ class Service:
         from twin_bridge.coordination import clear_owner
         pilot = self.pilot
         try:
+            for fan in list(self.children):
+                await self.release_child(fan)
             task, self._renew_task = self._renew_task, None
             if task is not None:
                 task.cancel()
@@ -553,7 +738,7 @@ async def preflight(args):
     if not path:
         raise Refused("pilot-store-required")
     runner.require_store_schema(path)
-    profile = runner.check_local(path, scope.db_id, args.fan)
+    profile = runner.check_local(path, scope.db_id, args.fan or 0)
     client = None
     try:
         conn = await connection.load_verified_connection(scope)
@@ -593,7 +778,10 @@ async def serve(args, **kwargs):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--account", required=True, help="Twin account id (of-<owner>) or the bare owner id")
-    parser.add_argument("--fan", type=int, required=True)
+    scope_group = parser.add_mutually_exclusive_group(required=True)
+    scope_group.add_argument("--fan", type=int)
+    scope_group.add_argument("--all-fans", action="store_true",
+                             help="answer every fan of the account whose Twin state is automated (never enables anyone)")
     parser.add_argument("--handle", required=True)
     parser.add_argument("--service-id", help="stable pilot id, svc-<letters, digits, - _> (default svc-<owner>-<fan>)")
     parser.add_argument("--enable-send", action="store_true", help="without it: read-only preflight, then exit")
@@ -603,7 +791,9 @@ def main(argv=None):
                         help="Set the fan's runtime stop once the paid card is confirmed (approved test scope)")
     args = parser.parse_args(argv)
     from .ledger import SERVICE_ID
-    if not AccountScope.valid(args.account) or args.fan <= 0 or (args.service_id and not SERVICE_ID.fullmatch(args.service_id)):
+    if args.all_fans and args.content_manifest:
+        parser.error("--content-manifest is not supported with --all-fans")
+    if not AccountScope.valid(args.account) or (args.fan is not None and args.fan <= 0) or (args.service_id and not SERVICE_ID.fullmatch(args.service_id)):
         parser.error("invalid service scope")
     os.environ.setdefault("W7_WEBHOOK_DISPATCH_DISABLED", "1")
     logging.disable(logging.CRITICAL)

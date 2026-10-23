@@ -13,9 +13,12 @@ dependencies run one way: llm_client → llm_providers ← tenant_keys.
 
 from __future__ import annotations
 
+import contextvars
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping
 
 from dotenv import dotenv_values, load_dotenv
 
@@ -23,7 +26,14 @@ _HERE = Path(__file__).resolve().parent
 _ENV_FILE = _HERE / ".env"
 # Mirror db.engine: load service/.env if it hasn't been loaded yet. override=False
 # means a real value already in the process env (e.g. a host-exported key) wins.
-if "ONLYFANS_PROCESS_ROLE" not in os.environ:
+#
+# OFFLINE/TEST ISOLATION (P2-I7): a test process sets TWIN_FASTT_CONFIG_ISOLATED=1
+# BEFORE importing this module to stop the import-time dotenv read entirely, so an
+# offline check can never pick up a real key from service/.env. The variable is
+# unset in every deployment, so production behaviour is byte-for-byte unchanged;
+# the seams below honour the same flag at call time.
+_CONFIG_ISOLATED = os.environ.get("TWIN_FASTT_CONFIG_ISOLATED") == "1"
+if "ONLYFANS_PROCESS_ROLE" not in os.environ and not _CONFIG_ISOLATED:
     load_dotenv(_ENV_FILE, override=False)
 
 
@@ -48,6 +58,12 @@ PROVIDERS: dict[str, LLMProvider] = {
     "zai": LLMProvider("zai", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY"),
     # OpenRouter, the same route the Oct 20 native pilot and the Telegram V2
     # worker use. Native accounts still need their own saved credential.
+    # OpenRouter (P2-I7). The Telegram/Twin Fastt context serves its model calls
+    # through the deployment's existing OpenRouter account. The key env is the
+    # SAME house env the rest of the deployment uses, but the Telegram context
+    # resolves it through the injected policy below — never through the local
+    # `.env`/secrets-store fallbacks in `_api_key` — so a missing Telegram
+    # credential fails closed instead of silently billing the host key.
     "openrouter": LLMProvider("openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
 }
 
@@ -65,16 +81,20 @@ def _api_key(env_name: str) -> str:
 
     A value pasted into the Setup → Keys UI (secrets.json) wins over both, so a
     self-hoster can add a key without touching env/.env or restarting."""
-    try:
-        from secrets_store import stored as _stored
-        s = _stored(env_name)
-        if s:
-            return s
-    except Exception:  # never let the key store crash a provider call
-        pass
+    if not _CONFIG_ISOLATED:
+        try:
+            from secrets_store import stored as _stored
+            s = _stored(env_name)
+            if s:
+                return s
+        except Exception:  # never let the key store crash a provider call
+            pass
     val = (os.environ.get(env_name) or "").strip()
     if val:
         return val
+    if _CONFIG_ISOLATED:
+        # Isolated processes read the process env ONLY. No dotenv file fallback.
+        return ""
     try:
         return (dotenv_values(_ENV_FILE).get(env_name) or "").strip()
     except Exception:  # pragma: no cover — never let key lookup crash the caller
@@ -128,3 +148,113 @@ def house_key(provider: str) -> str:
     if prov is None:
         return ""
     return _api_key(prov.api_key_env)
+
+
+# ── Injected Telegram (Twin/Fastt) model policy ──────────────────────────────
+# P2-I7. The Telegram worker is NOT the OnlyFans deployment: it must select its
+# model from an explicit per-creator mapping and bill one named credential, and
+# a missing/malformed mapping must STOP before any model HTTP request rather
+# than fall back to a house default or another tenant's key.
+#
+# The policy is a CONTEXTVAR, not a module global, so it is per async context:
+# an OnlyFans path running in the same process keeps its legacy behaviour, a
+# test can install a synthetic policy and reset it without leaking, and two
+# workers cannot observe each other's settings. `None` (the default) means "no
+# Telegram policy" and every existing resolver behaves exactly as before.
+
+
+@dataclass(frozen=True)
+class TelegramLLMPolicy:
+    """One creator worker's injected model policy.
+
+    `purposes` maps an enabled P2 purpose to an INTERNAL `llm_models.MODELS` id.
+    `trusted_account_id` is the ONE creator/billing account this Telegram context
+    may bill; it is carried from the worker's trusted binding and is NEVER
+    inferred from fan input or from whatever `account_id` a caller happens to
+    pass, so a call for another account is a configuration error rather than a
+    cross-billing surprise.
+    `credential_env` names the env var holding the ONE credential this Telegram
+    context may bill — a reference, never a value, so it can be logged and
+    snapshotted without exposing a secret. `provider_allowlist` is the set of
+    provider names this context may call; an unlisted provider is refused even
+    if a model id happens to resolve to it.
+    """
+
+    purposes: Mapping[str, str]
+    trusted_account_id: str
+    credential_env: str
+    provider_allowlist: frozenset[str]
+    config_version: str = "cfg_0000"
+
+    def __post_init__(self) -> None:
+        """Detach the installed policy from every caller-owned mutable object.
+
+        A frozen dataclass does not freeze a dict held by one of its fields. The
+        worker therefore snapshots valid containers here; configuration changes
+        require installing a new versioned policy rather than mutating the object
+        that an in-flight turn is already using. Malformed values remain intact
+        so ``config_problem`` can return the normal typed configuration error.
+        """
+        if isinstance(self.purposes, Mapping):
+            object.__setattr__(self, "purposes", MappingProxyType(dict(self.purposes)))
+        if isinstance(self.provider_allowlist, (set, frozenset)):
+            object.__setattr__(self, "provider_allowlist", frozenset(self.provider_allowlist))
+
+    def config_problem(self) -> str:
+        """Return "" when the policy is well formed, else a refusal reason.
+
+        The policy's OWNER rejects a malformed policy once, here, so both the
+        resolver consumer and the client boundary refuse the same way instead of
+        each re-deriving validity (and drifting apart).
+        """
+        if not isinstance(self.purposes, Mapping) or not self.purposes:
+            return "telegram policy has no enabled purposes"
+        for name, model in self.purposes.items():
+            if not isinstance(name, str) or not name.strip():
+                return "telegram policy has a blank purpose name"
+            if not isinstance(model, str) or not model.strip():
+                return f"telegram purpose {name!r} maps to a blank model"
+        if not isinstance(self.trusted_account_id, str) or not self.trusted_account_id.strip():
+            return "telegram policy has no trusted billing account"
+        if not isinstance(self.credential_env, str) or not self.credential_env.strip():
+            return "telegram policy has no credential reference"
+        if not isinstance(self.config_version, str) or not self.config_version.strip():
+            return "telegram policy has no config version"
+        if not isinstance(self.provider_allowlist, (set, frozenset)) or not self.provider_allowlist:
+            return "telegram policy has no allowed providers"
+        for name in self.provider_allowlist:
+            if not isinstance(name, str) or not name.strip():
+                return "telegram policy allows a blank provider name"
+        return ""
+
+
+_telegram_policy: contextvars.ContextVar[TelegramLLMPolicy | None] = contextvars.ContextVar(
+    "fastt_telegram_llm_policy", default=None
+)
+
+
+def set_telegram_policy(policy: TelegramLLMPolicy | None) -> contextvars.Token:
+    """Install the Telegram policy for the current context. Returns a token for
+    `reset_telegram_policy`."""
+    return _telegram_policy.set(policy)
+
+
+def reset_telegram_policy(token: contextvars.Token) -> None:
+    """Undo a `set_telegram_policy`, restoring the previous value."""
+    _telegram_policy.reset(token)
+
+
+def active_telegram_policy() -> TelegramLLMPolicy | None:
+    """The policy in force for this context, or None outside the Telegram path."""
+    return _telegram_policy.get()
+
+
+def telegram_credential(policy: TelegramLLMPolicy) -> str:
+    """The credential named by the policy, read from the process env ONLY.
+
+    Deliberately bypasses `_api_key`: the Telegram context must never reach into
+    `secrets_store`, a local `.env` file, or the house key, because those are the
+    paths that silently bill the wrong party. "" when unset — the caller decides
+    the fail-closed error.
+    """
+    return (os.environ.get(policy.credential_env) or "").strip()

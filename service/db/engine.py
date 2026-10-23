@@ -35,13 +35,21 @@ HERE = Path(__file__).resolve().parent
 ONLYFANS_PROCESS_ROLE = os.environ.get("ONLYFANS_PROCESS_ROLE")
 if ONLYFANS_PROCESS_ROLE not in {None, "api", "worker"}:
     raise RuntimeError("Invalid ONLYFANS_PROCESS_ROLE")
-if ONLYFANS_PROCESS_ROLE is None:
+#
+# OFFLINE/TEST ISOLATION (P2-I7): TWIN_FASTT_CONFIG_ISOLATED=1 (set by an offline
+# check before import) skips the dotenv read so a test process cannot pick up a
+# real DATABASE_URL or credential from service/.env. Unset in every deployment.
+_CONFIG_ISOLATED = os.environ.get("TWIN_FASTT_CONFIG_ISOLATED") == "1"
+if ONLYFANS_PROCESS_ROLE is None and not _CONFIG_ISOLATED:
     load_dotenv(HERE.parent / ".env", override=False)
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    f"sqlite+aiosqlite:///{HERE.parent / 'chatterly.db'}",
-)
+_EXPLICIT_DATABASE_URL = os.environ.get("DATABASE_URL")
+if _CONFIG_ISOLATED and not _EXPLICIT_DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is required when TWIN_FASTT_CONFIG_ISOLATED=1; "
+        "refusing to fall back to service/chatterly.db"
+    )
+DATABASE_URL = _EXPLICIT_DATABASE_URL or f"sqlite+aiosqlite:///{HERE.parent / 'chatterly.db'}"
 
 if ONLYFANS_PROCESS_ROLE:
     from sqlalchemy.engine import make_url

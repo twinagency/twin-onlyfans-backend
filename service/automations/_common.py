@@ -2095,7 +2095,20 @@ async def resolve_model(account_id: str, purpose: str, override: str | None = No
     `purpose` is a MODEL_PURPOSES key when an operator can pin it; any other
     string simply finds no override and falls through, which is what the lanes
     with no dropdown (content_resolver, pins, tip_reward) rely on.
+
+    🚨 THE ONE EXCEPTION (P2-I7): inside the injected Telegram context a
+    `llm_providers.TelegramLLMPolicy` is active. There the purpose MUST have an
+    explicit, valid entry in the policy's map; a missing or invalid entry RAISES
+    `llm_client.LLMConfigError` instead of falling back to the house model. The
+    total-never-raise contract above is correct for a lane that is already
+    running, and wrong for a migration whose whole point is that an unmapped
+    Telegram purpose must stop before a model call rather than quietly inherit a
+    default nobody chose. Outside the policy nothing changes.
     """
+    if llm_client.active_telegram_policy() is not None:
+        # ONE policy decision, owned by llm_client and shared with the public
+        # call boundary, so model selection and call admission cannot disagree.
+        return llm_client.telegram_model_for(purpose)
     if override and override in llm_client.MODELS:
         return override
     try:

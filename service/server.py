@@ -5292,6 +5292,38 @@ async def send_message(
 
     await _reject_if_resale(account_id, int(chat_id), body)
 
+    # ── Twin bridge takeover, BEFORE the transport ──────────────────
+    # A human composing a reply owns the conversation. Record the takeover so the
+    # bridge's unsent work is invalidated, and REFUSE rather than clear the
+    # reservation if a bridge provider attempt is in flight or its outcome is
+    # unknown - clearing it would race a live dispatch. A chat the bridge does
+    # not own is unaffected (`clear`).
+    try:
+        from twin_bridge.coordination import TAKEOVER_BLOCKED, human_takeover
+    except Exception:  # pragma: no cover - bridge package absent
+        TAKEOVER_BLOCKED, human_takeover = None, None
+    if human_takeover is not None:
+        try:
+            decision = await human_takeover(
+                account_id=account_id, fan_id=int(chat_id), now=datetime.utcnow(),
+            )
+        except Exception:
+            # A bridge-control fault must not silently permit a racing send.
+            log.exception("twin bridge takeover check failed (chat_id=%s)", chat_id)
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "bridge-takeover-unavailable"},
+            )
+        if decision == TAKEOVER_BLOCKED:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "bridge-delivery-unknown",
+                    "message": "The Twin bridge has an unresolved send for this "
+                               "fan. Resolve it before replying manually.",
+                },
+            )
+
     # Bridge sync _proxy from this async handler — copied from the
     # /users/list pattern at server.py around line 2388.
     result = await asyncio.to_thread(

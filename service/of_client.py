@@ -427,14 +427,21 @@ class OFClient:
         return self._http_call("GET", url)
 
     def _http_call(self, method: str, url: str, *,
-                   json_body: dict | None = None) -> requests.Response:
+                   json_body: dict | None = None,
+                   proxy_tries: int | None = None) -> requests.Response:
         """All outbound OF calls funnel here so failures (proxy 403, TLS, DNS,
         timeout) get a single structured log line with the context we need to
         debug: which account, which proxy, which OF endpoint.
 
         Also the single place we passively observe OF's current build hash:
         every response carries `x-of-rev` in the headers, which feeds the
-        global live-rev cache for drift detection (see live_rev.py)."""
+        global live-rev cache for drift detection (see live_rev.py).
+
+        `proxy_tries` overrides the default three-attempt ProxyError retry for
+        ONE call. The Twin bridge's message POST passes 1: a single bridge send
+        must not be able to hide several message POSTs behind a wrapper, and
+        every other caller keeps the default byte-for-byte (None).
+        """
         require_legacy_provider_role()
         headers = self._signed_headers(url)
         if json_body is not None:
@@ -449,7 +456,8 @@ class OFClient:
                     return self.http.get(url, headers=headers, timeout=self.timeout_s)
                 return self.http.request(method, url, json=json_body,
                                          headers=headers, timeout=self.timeout_s)
-            r = self._proxy_retry(_do, what=f"{method} {_short_path(url)}")
+            tries = 3 if proxy_tries is None else max(1, int(proxy_tries))
+            r = self._proxy_retry(_do, tries=tries, what=f"{method} {_short_path(url)}")
             # Opportunistic rev capture. OF echoes their current build in
             # `x-of-rev` on most /api2/v2/* responses; note() is a no-op
             # if the header's missing or unchanged so this is cheap on
@@ -532,11 +540,13 @@ class OFClient:
 
     def request(self, method: str, path_or_url: str, *,
                 json_body: dict | None = None,
-                params: dict | None = None) -> requests.Response:
+                params: dict | None = None,
+                proxy_tries: int | None = None) -> requests.Response:
         """Generic signed request. `method` in {GET, POST, PUT, PATCH, DELETE}.
         OF's sign algorithm is body-independent, so the same headers work for all methods."""
         url = self._build_url(path_or_url, params)
-        return self._http_call(method.upper(), url, json_body=json_body)
+        return self._http_call(method.upper(), url, json_body=json_body,
+                               proxy_tries=proxy_tries)
 
     def request_json(self, method: str, path_or_url: str, **kw) -> Any:
         """request() + raise OFAPIError on non-2xx + .json() the success body.
@@ -678,7 +688,7 @@ class OFClient:
                 return
             cursor = msgs[-1]["id"]
             if delay_s:
-                                _t.sleep(delay_s)
+                time.sleep(delay_s)
 
     def get_all_messages(self, chat_id: str | int, *, page_size: int = 10,
                          delay_s: float = 0.3, max_pages: int | None = None,
@@ -1485,6 +1495,25 @@ class OFClient:
                              native_rf=retry_plan.native_rf)
             return self.post_json(path, json_body=retry)
 
+    def _bridge_boundary(self, chat_id, *, purpose: str, dispatch_token=None):
+        """The Twin bridge's shared transport boundary, or a no-op.
+
+        Imported lazily and guarded — a deployment without the bridge package
+        keeps sending exactly as before. Every local DM writer (the direct
+        chat send, the scheduled send, and the mass/broadcast sends) passes
+        through this one gate; the bridge's own dispatch additionally needs its
+        attempt-bound `dispatch_token`.
+        """
+        try:
+            from twin_bridge.coordination import guarded_send as _bridge_guard
+        except Exception:  # pragma: no cover - optional component
+            from contextlib import nullcontext
+            return nullcontext()
+        return _bridge_guard(
+            getattr(self, "account_id", ""), chat_id,
+            purpose=purpose, dispatch_token=dispatch_token,
+        )
+
     # ── Messages: write ─────────────────────────────────────────
 
     def send_message(self, chat_id: str | int, text: str, *,
@@ -1495,7 +1524,8 @@ class OFClient:
                      reply_to_message_id: int | None = None,
                      tagged_users: list[int] | None = None,
                      giphy_id: str | None = None,
-                     auto_tag: bool = True) -> dict:
+                     auto_tag: bool = True,
+                     purpose: str = "other") -> dict:
         """POST /api2/v2/chats/{chat_id}/messages — send a message to one fan
         (or another creator, when both subscribe to each other).
 
@@ -1540,8 +1570,60 @@ class OFClient:
             body.get("userTags") or [], body.get("rfTag") or [],
             body.get("giphyId"),
         )
-        return self._post_dropping_auto_cotag(
-            f"{API_BASE}/chats/{chat_id}/messages", body, retry_plan)
+        # The shared transport boundary: the Twin bridge's durable reservation is
+        # enforced HERE, where every DM writer actually POSTs, so a writer that
+        # already passed its own eligibility check can still be stopped.
+        # Imported lazily and guarded - a deployment without the bridge package
+        # must keep sending exactly as before.
+        try:
+            from twin_bridge.coordination import guarded_send as _bridge_guard
+        except Exception:  # pragma: no cover - optional component
+            _bridge_guard = None
+        if _bridge_guard is None:
+            return self._post_dropping_auto_cotag(
+                f"{API_BASE}/chats/{chat_id}/messages", body, retry_plan)
+        with _bridge_guard(getattr(self, "account_id", ""), chat_id, purpose=purpose):
+            return self._post_dropping_auto_cotag(
+                f"{API_BASE}/chats/{chat_id}/messages", body, retry_plan)
+
+    # ── Twin bridge: one free-text DM, exactly one POST ──────────
+
+    def send_text_once(self, chat_id: str | int, text: str) -> dict:
+        """Send ONE plain free-text DM with exactly ONE HTTP POST.
+
+        Deliberately narrower than `send_message`: no price, no lock, no media,
+        no previews, no tags, no GIF, no quote, no auto-tagging, and no retry of
+        any kind (neither the proxy retry nor the auto-co-tag re-POST). This is
+        what makes "one bridge attempt = one provider message" a property of the
+        transport rather than a promise about the caller.
+        """
+        return self.send_text_once_body(chat_id, _wrap_text_as_p(text))
+
+    def send_text_once_body(self, chat_id: str | int, body_text: str) -> dict:
+        """One POST of an ALREADY-FORMED text body (the bridge escapes it first).
+
+        Kept separate from `send_text_once` so the bridge can supply its own
+        unconditional plain-text escaping (literal `<p>…</p>`, ampersands, emoji
+        and intended whitespace must reach the fan verbatim) while every existing
+        caller keeps the legacy composer wrapping.
+        """
+        body = {
+            "text": body_text,
+            "lockedText": False,
+            "mediaFiles": [],
+            "price": 0,
+            "previews": [],
+            # OF web always sends these as empty arrays; omitting them is what
+            # made creator-to-creator sends 400.
+            "rfTag": [],
+            "rfGuest": [],
+            "rfPartner": [],
+            "isForward": False,
+        }
+        log_of.info("send_text_once chat=%s (bridge: single POST, no retry)", chat_id)
+        return self.post_json(
+            f"{API_BASE}/chats/{chat_id}/messages", json_body=body, proxy_tries=1,
+        )
 
     # ── Chat message-level writes — VERIFIED LIVE ──────────────
     # All four paths are under /messages/{id}/..., NOT /chats/{cid}/messages/{mid}/...
@@ -2176,8 +2258,9 @@ class OFClient:
             "userIds": [int(chat_id)],
         }
         retry_plan = self._apply_cotags(body, media_files, tagged_users, auto_tag)
-        return self._post_dropping_auto_cotag(
-            f"{API_BASE}/messages/queue", body, retry_plan)
+        with self._bridge_boundary(chat_id, purpose="scheduled"):
+            return self._post_dropping_auto_cotag(
+                f"{API_BASE}/messages/queue", body, retry_plan)
 
     def schedule_mass_message(self, *, text: str, scheduled_date: str,
                               user_ids: list[int] | None = None,
@@ -2232,8 +2315,11 @@ class OFClient:
         retry_plan = self._apply_cotags(body, media_files, tagged_users, auto_tag)
         if giphy_id:
             body["giphyId"] = str(giphy_id)
-        return self._post_dropping_auto_cotag(
-            f"{API_BASE}/messages/queue", body, retry_plan)
+        # A scheduled MASS message is a broadcast: its recipient coverage cannot
+        # be shown to exclude a bridge-reserved account, so it is refused there.
+        with self._bridge_boundary(0, purpose="broadcast"):
+            return self._post_dropping_auto_cotag(
+                f"{API_BASE}/messages/queue", body, retry_plan)
 
     def cancel_scheduled(self, queue_id: int) -> Any:
         """DELETE /api2/v2/messages/queue/{queue_id} — cancel a scheduled send."""
@@ -2305,8 +2391,10 @@ class OFClient:
             # of `mediaFiles`. OF web includes GIFs on broadcasts; mirror the
             # field so the relay forwards rather than dropping silently.
             body["giphyId"] = str(giphy_id)
-        return self._post_dropping_auto_cotag(
-            f"{API_BASE}/messages/queue", body, retry_plan)
+        # A mass message is a broadcast: refused for a bridge-reserved account.
+        with self._bridge_boundary(0, purpose="broadcast"):
+            return self._post_dropping_auto_cotag(
+                f"{API_BASE}/messages/queue", body, retry_plan)
 
     # ── Posts: write ───────────────────────────────────────────
 
@@ -3483,3 +3571,4 @@ class OFClient:
         Beware: this MOVES MONEY. Code path exists; deliberately not live-tested."""
         return self.post_json(f"{API_BASE}/tips",
                               json_body={"userId": user_id, "amount": amount, "message": message})
+

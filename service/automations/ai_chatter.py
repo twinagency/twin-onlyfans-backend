@@ -168,6 +168,7 @@ from .tip_reward_config import image_describe_flags
 # unit-tested without a DB, a FakeOF and a patched LLM — and so nothing in it can
 # reach back into this one.
 from . import _history_window
+from telegram_runtime.capabilities import active_telegram_capabilities
 # Deliberate sibling reuse — keeps the texting voice byte-compatible with
 # welcome_chatter_for_info instead of forking 500 lines of tuned style machinery.
 from .welcome_chatter_for_info import (
@@ -184,6 +185,79 @@ from .welcome_chatter_for_info import (
 )
 
 log = logging.getLogger("of-relay.automation.ai_chatter")
+
+
+# Telegram channel seam.  These wrappers are the only channel-aware additions
+# to the native engine: without an active capability snapshot they call the
+# original owners exactly as before.  With one installed, ai_chatter still owns
+# prompts, candidate gates, bubble shaping and attribution; the capability owns
+# only the channel/config/model/timing operations named by the P2 contract.
+async def _runtime_model(account_id: str, purpose: str, requested=None):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.resolve_model(account_id, purpose, requested)
+    return await resolve_model(account_id, purpose, requested)
+
+
+async def _runtime_chat(**kwargs):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.chat(**kwargs)
+    return await llm_client.chat(**kwargs)
+
+
+def _runtime_client(account_id: str):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return cap.make_client(account_id)
+    return ax._make_client(account_id)
+
+
+async def _runtime_enqueue(account_id: str, kind: str, **kwargs):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.enqueue_job(account_id, kind, **kwargs)
+    return await ax.enqueue_job(account_id, kind, **kwargs)
+
+
+async def _runtime_bool(account_id: str, name: str, native_loader):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.bool_setting(account_id, name, native_loader)
+    return await native_loader(account_id)
+
+
+async def _native_typo_enabled(account_id: str) -> bool:
+    return bool((await load_typo_flags(account_id))[_PURPOSE])
+
+
+async def _native_nonnative_enabled(account_id: str) -> bool:
+    return bool((await load_nonnative_flags(account_id))[_PURPOSE])
+
+
+async def _native_spacing_enabled(account_id: str) -> bool:
+    return bool((await load_spacing_flags(account_id))[_PURPOSE])
+
+
+async def _runtime_day(account_id: str, *args, **kwargs):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.load_day(account_id, *args, **kwargs)
+    return await _daylog.load_day(account_id, *args, **kwargs)
+
+
+async def _runtime_teaser(account_id: str, kind: str, native_loader):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.teaser_config(account_id, kind)
+    return await native_loader(account_id)
+
+
+async def _runtime_hold(account_id: str, fan_id: int, seconds: float, **kwargs):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.hold(account_id, fan_id, seconds, **kwargs)
+    return await hold_with_typing(account_id, fan_id, seconds, **kwargs)
 
 _PURPOSE = "ai_chatter"          # model_by_purpose key + fan lease + enqueue kind
 # automation_kind on a reply that CARRIES a priced offer. Same engine, same run —
@@ -1138,7 +1212,11 @@ async def _load_config(account_id: str) -> dict:
     error → defaults (disabled)."""
     async with get_session() as s:
         cfg = await s.get(AccountAiConfig, str(account_id))
-    return config_from_row(cfg)
+    merged = config_from_row(cfg)
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.load_config(str(account_id), merged)
+    return merged
 
 
 def config_from_row(cfg: AccountAiConfig | None) -> dict:
@@ -3584,7 +3662,7 @@ async def _send_free_bubble(client, account_id: str, fan_id: int, line: str,
     those paths from diverging on attribution/typing/emit_live details."""
     line = apply_word_restriction(line)[:_REPLY_MAX_CHARS]
     if hold:
-        await hold_with_typing(account_id, fan_id,
+        await _runtime_hold(account_id, fan_id,
                                typing_delay_seconds(line, typing_wpm),
                                typing_indicator=typing_indicator)
     try:
@@ -4080,6 +4158,12 @@ async def _resolve_open_offers(account_id: str, client, cfg: dict,
     HOT (post-purchase re-offer conversion decays 66.7% <5min → 45.0% >24h, so the
     hot window is the whole game), and an UNPAID one gets exactly one unsend-first
     discount resend before the ladder taps out."""
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.resolve_open_offers(
+            str(account_id), client, cfg,
+            dry_run=dry_run, only_fan_ids=only_fan_ids,
+        )
     stats = {"unlocked_tip": 0, "unlocked_ppv": 0, "offers_expired": 0,
              "offers_unsent": 0, "deliveries_failed": 0, "would_unlock": 0,
              "discount_resends": 0}
@@ -4207,7 +4291,7 @@ async def _resolve_open_offers(account_id: str, client, cfg: dict,
                 # so this branch runs exactly once for it (idempotent by construction).
                 pb_rng = random.Random(f"postbuy:{account_id}:{fan_id}:{offer.id}")
                 try:
-                    await ax.enqueue_job(
+                    await _runtime_enqueue(
                         account_id, _PURPOSE, payload={"post_buy": int(offer.id)},
                         run_at=paid_at + timedelta(seconds=pb_rng.uniform(90, 240)))
                 except Exception:
@@ -4217,7 +4301,7 @@ async def _resolve_open_offers(account_id: str, client, cfg: dict,
                 # bubble (+ the free gift, if enabled and >=2 paid this session), then
                 # TAPPED. Self-cancels in the handler if he speaks/buys before it fires.
                 try:
-                    await ax.enqueue_job(
+                    await _runtime_enqueue(
                         account_id, _PURPOSE, payload={"aftercare": int(offer.id)},
                         run_at=paid_at + timedelta(minutes=upsell.AFTERCARE_SILENCE_M))
                 except Exception:
@@ -4278,7 +4362,7 @@ async def _maybe_bootstrap_profile(account_id: str, fan_id: int) -> bool:
             )).first()
             if pending is not None:
                 return False
-        await ax.enqueue_job(account_id, "gen_info",
+        await _runtime_enqueue(account_id, "gen_info",
                              payload={"force_ids": [int(fan_id)]})
         return True
     except Exception:
@@ -4313,7 +4397,6 @@ class _Money(NamedTuple):
     indistinguishable on sight, and the previous shape needed a hand-written
     warning not to unpack it short. `.paid` and `.tip` need no warning.
     """
-
     ask: datetime | None = None    # newest unpaid priced outbound, still live
     paid: datetime | None = None   # newest priced outbound he UNLOCKED
     tip: datetime | None = None    # newest INBOUND tip
@@ -4493,14 +4576,14 @@ async def _run_nudge(account_id: str, payload: dict, cfg: dict) -> dict:
         return {"status": "skipped", "reason": "nudge_disabled",
                 "nudged": 0, "nudge_skipped": len(fan_ids)}
     typing_wpm = await load_typing_wpm(account_id)
-    typing_indicator = await load_typing_indicator(account_id)
+    typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
     async with get_session() as s:
         fan_rows = (await s.execute(
             select(Fan).where(Fan.account_id == str(account_id),
                               Fan.fan_id.in_(list(fan_ids)))
         )).scalars().all()
     fans = {int(f.fan_id): f for f in fan_rows}
-    client = await asyncio.to_thread(ax._make_client, account_id)
+    client = await asyncio.to_thread(_runtime_client, account_id)
     _nudge_v = await load_voice_blocks(account_id)
 
     nudged = skipped = 0
@@ -4529,7 +4612,7 @@ async def _run_nudge(account_id: str, payload: dict, cfg: dict) -> dict:
             name = _greetable(f, _nudge_v)
             line = apply_word_restriction(
                 random.choice(_nudge_v.nudge_lines).replace("{name}", name))[:_REPLY_MAX_CHARS]
-            await hold_with_typing(account_id, fan_id,
+            await _runtime_hold(account_id, fan_id,
                                    typing_delay_seconds(line, typing_wpm),
                                    typing_indicator=typing_indicator)
             result = await asyncio.to_thread(
@@ -4622,8 +4705,8 @@ async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:
         return {"status": "skipped", "reason": "locked", "post_buy": True}
 
     typing_wpm = await load_typing_wpm(account_id)
-    typing_indicator = await load_typing_indicator(account_id)
-    client = await asyncio.to_thread(ax._make_client, account_id)
+    typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
+    client = await asyncio.to_thread(_runtime_client, account_id)
     bridged = rung_fired = 0
     try:
         name = _greetable(f, await load_voice_blocks(account_id))
@@ -4734,7 +4817,7 @@ async def _fire_post_buy_rung(client, account_id: str, cfg: dict, fan_id: int,
         kwargs["previews"] = previews
     # §3.6 — the priced attach never lands instantly; hold the 45-115s pacing floor.
     if bool(cfg.get("rhythm_enabled")):
-        await hold_with_typing(account_id, fan_id, rhythm.ppv_drop_delay(
+        await _runtime_hold(account_id, fan_id, rhythm.ppv_drop_delay(
             random.Random(f"pbdrop:{account_id}:{fan_id}:{item.id}"),
             stalled=bool(cfg.get("filming_stall_enabled"))),
             typing_indicator=typing_indicator)
@@ -4817,8 +4900,8 @@ async def _run_aftercare(account_id: str, payload: dict, cfg: dict) -> dict:
         return {"status": "skipped", "reason": "locked", "aftercare": True}
 
     typing_wpm = await load_typing_wpm(account_id)
-    typing_indicator = await load_typing_indicator(account_id)
-    client = await asyncio.to_thread(ax._make_client, account_id)
+    typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
+    client = await asyncio.to_thread(_runtime_client, account_id)
     sent = gifted = 0
     try:
         _ac_v = await load_voice_blocks(account_id)
@@ -4841,7 +4924,7 @@ async def _run_aftercare(account_id: str, payload: dict, cfg: dict) -> dict:
                     break
         if gift_media:
             line = apply_word_restriction(line)[:_REPLY_MAX_CHARS]
-            await hold_with_typing(account_id, fan_id,
+            await _runtime_hold(account_id, fan_id,
                                    typing_delay_seconds(line, typing_wpm),
                                    typing_indicator=typing_indicator)
             try:
@@ -5812,7 +5895,7 @@ async def _trigger_make_right_apology(account_id: str, fan_id: int,
                        Message.direction == "in")
                 .order_by(Message.created_at.desc(), Message.message_id.desc())
                 .limit(1))).scalar_one_or_none()
-        await ax.enqueue_job(
+        await _runtime_enqueue(
             account_id, "make_right",
             payload={"hard_decline": {"fan_id": int(fan_id),
                                       "message_id": int(mid) if mid else None,
@@ -6926,7 +7009,7 @@ async def _scored_or_re_asked(raw: str, msgs: list[dict], *, model: str,
         return raw, False, False
     log.info("ai_chatter rating had no score account=%s fan=%s — re-asking",
              account_id, fan_id)
-    res = await llm_client.chat(
+    res = await _runtime_chat(
         model=model,
         messages=msgs + [
             {"role": "assistant", "content": raw},
@@ -7353,7 +7436,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         # one of those must still get his delivery — the unlock watcher runs
         # even when disabled; only conversation + new offers stop.
         if await _open_offers(account_id):
-            client = await asyncio.to_thread(ax._make_client, account_id)
+            client = await asyncio.to_thread(_runtime_client, account_id)
             offer_stats = await _resolve_open_offers(
                 account_id, client, cfg, dry_run=dry_run,
                 only_fan_ids=only_fan_ids or None)
@@ -7366,23 +7449,25 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     resume_h = max(0, int(cfg.get("resume_after_manual_hours") or 0))
     max_replies = int(payload.get("max_replies") or cfg.get("max_fans_per_tick") or 8)
 
-    model = await resolve_model(account_id, _PURPOSE, payload.get("model"))
+    model = await _runtime_model(account_id, _PURPOSE, payload.get("model"))
     typing_wpm = await load_typing_wpm(account_id)
-    typing_indicator = await load_typing_indicator(account_id)
+    typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
     # Human typing pacing (pacing.py) — the gaps BETWEEN the bubbles of one reply,
     # and what the "...is typing" bar does during them. Ships OFF: with `enabled`
     # False every delay below is byte-identically what it was, no rng is drawn, and
     # hold_with_typing takes its old single-phase path.
     pace_cfg = pacing.PaceConfig.from_cfg(cfg)
     style_on = (await load_style_flags(account_id))[_PURPOSE]
-    typo_on = (await load_typo_flags(account_id))[_PURPOSE]
+    typo_on = await _runtime_bool(account_id, "deliberate_typos", _native_typo_enabled)
     # PHASE 2 pre-send consistency check — OFF unless explicitly enabled.
     consistency_on = (await load_consistency_flags(account_id))[_PURPOSE]
-    nonnative_on = (await load_nonnative_flags(account_id))[_PURPOSE]
+    nonnative_on = await _runtime_bool(
+        account_id, "deliberate_nonnative_style", _native_nonnative_enabled)
     # Space-before-"?" — its own tri-state key, read independently but only
     # ever APPLIED inside the non-native block below, so it can narrow that
     # register and never widen it.
-    spacing_on = (await load_spacing_flags(account_id))[_PURPOSE]
+    spacing_on = await _runtime_bool(
+        account_id, "deliberate_nonnative_spacing", _native_spacing_enabled)
     # Account-wide emoji strip. ai_chatter ignored this setting entirely until the
     # send chokepoint was extracted and made the omission visible — 7 of 12 live
     # accounts had it ON, so the operator asked for no emojis and the engine that
@@ -7394,7 +7479,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     bio_gate_on = bool(cfg.get("persona_facts_on_ask_only", True))
     prompt_sells = bool(cfg.get("prompt_sell_catalog", False))
     banned_words, banned_words_mode = await load_banned_words(account_id)  # compliance word filter (default: none)
-    stickers_on = await load_cat_stickers_flag(account_id)    # cat reaction gifs (default ON)
+    stickers_on = await _runtime_bool(account_id, "cat_stickers", load_cat_stickers_flag)
     sticker_skip_w, sticker_solo_w, sticker_gap_min = \
         await load_cat_sticker_tuning(account_id)             # per-account rate knobs
     account_lang = await _language.load_account_language(account_id)  # output language + guard gate
@@ -7524,8 +7609,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     # flag so an operator can turn the whole feature off without a deploy; the empty
     # `Day` when off / no tz / cap hit, and it renders "" everywhere (byte-identical
     # prompt). `cfg_row` is already in hand here, so the flag costs no extra query.
-    day = await _daylog.load_day(account_id, cfg_row, model=model,
-                                 purpose=_PURPOSE, clock_tz=clock_tz)
+    day = await _runtime_day(account_id, cfg_row, model=model,
+                             purpose=_PURPOSE, clock_tz=clock_tz)
     sleep_win = (await sleep_window(account_id, tz_off, cfg.get("sleep_window"),
                                     str(cfg.get("rhythm_sleep_source") or "default"))
                  if rhythm_on else rhythm.DEFAULT_SLEEP)
@@ -7562,7 +7647,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         stats=audience_stats, extra_allowed_ids=force_ids))
     by_fan = {fid: c for fid, c in by_fan.items() if fid in _kept}
 
-    client = await asyncio.to_thread(ax._make_client, account_id)
+    client = await asyncio.to_thread(_runtime_client, account_id)
 
     # ── M3 offer layer: resolve unlocks FIRST (a fan doesn't have to speak to
     # buy), then load the catalog + the open-offer map the prompts read.
@@ -7600,10 +7685,10 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     # gate: the images ARE the lead-up, so they warm even an account with no catalog. The
     # spend brakes below still apply (a broke/declined/companion fan never reaches it).
     from automations import teaser_select as _teaser
-    teaser_cfg = await _teaser.hot_teaser_config(account_id)
+    teaser_cfg = await _runtime_teaser(account_id, "hot", _teaser.hot_teaser_config)
     # Conversational teaser ladder — NOT gated on heat; fires during ordinary chat
     # every N of his messages, climbing free → $10 → $50. None ⇒ off.
-    convo_teaser_cfg = await _teaser.convo_teaser_config(account_id)
+    convo_teaser_cfg = await _runtime_teaser(account_id, "conversation", _teaser.convo_teaser_config)
     # Can she actually read a picture he sends? (vision describe at ingest — see
     # webhook_dispatch.on_inbound_image). Gates the "send me one and I'll rate it"
     # bot-accusation dare: promising a rating she can't deliver is worse than not
@@ -8282,7 +8367,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     # Release the lease BEFORE the wait — an inline hold would expire
                     # its 900s TTL and burn one of the executor's 4 GLOBAL run slots.
                     await ax.release_fan_lease(account_id, fan_id)
-                    await ax.enqueue_job(
+                    await _runtime_enqueue(
                         account_id, _PURPOSE,
                         payload={"only_fan_ids": [int(fan_id)], "rhythm_resume": True,
                                  "rhythm_cover": away.cover_line},
@@ -8307,7 +8392,11 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 log.debug("ai_chatter fact-extract failed account=%s fan=%s",
                           account_id, fan_id, exc_info=True)
             try:
-                await _maybe_push_nickname(client, account_id, fan_id, f)
+                cap = active_telegram_capabilities()
+                if cap is not None:
+                    await cap.push_nickname(client, account_id, fan_id, f)
+                else:
+                    await _maybe_push_nickname(client, account_id, fan_id, f)
             except Exception:
                 log.debug("ai_chatter nick push failed account=%s fan=%s",
                           account_id, fan_id, exc_info=True)
@@ -9151,7 +9240,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                               sell_signal=signal_on,
                                               v=v)
             try:
-                res = await llm_client.chat(
+                res = await _runtime_chat(
                     model=model,
                     messages=msgs,
                     purpose=_PURPOSE,
@@ -9915,7 +10004,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                   # month unspent.
                                   "draft_life_tip_big": big}
                         drafts_stored += 1
-                    await ax.enqueue_job(
+                    await _runtime_enqueue(
                         account_id, _PURPOSE,
                         payload={"only_fan_ids": [int(fan_id)], "rhythm_resume": True,
                                  # The cover line is decided WITH the gap it explains;
@@ -10095,7 +10184,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         run_inline_s += float(drop) - float(pace.total_s)
                         pace = pacing.silent_hold(float(drop), typing_s, pace_cfg)
                     ppv_drops += 1
-                await hold_with_typing(account_id, fan_id, pace.total_s,
+                await _runtime_hold(account_id, fan_id, pace.total_s,
                                        typing_indicator=typing_indicator,
                                        quiet_s=pace.quiet_s,
                                        think_at_s=pace.think_at_s,
@@ -10197,7 +10286,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     # A gif is PICKED, not typed, so there is no typing time in this
                     # hold at all — see pacing.silent_hold.
                     s_pace = pacing.silent_hold(s_hold, 0.0, pace_cfg)
-                    await hold_with_typing(account_id, fan_id, s_pace.total_s,
+                    await _runtime_hold(account_id, fan_id, s_pace.total_s,
                                            typing_indicator=typing_indicator,
                                            quiet_s=s_pace.quiet_s)
                     try:
@@ -10432,7 +10521,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     # in _run_nudge if he buys or replies first. Off by default.
                     if nudge_on and nudge_min > 0:
                         try:
-                            await ax.enqueue_job(
+                            await _runtime_enqueue(
                                 account_id, "ai_chatter",
                                 payload={"nudge_fan_ids": [int(fan_id)]},
                                 run_at=now + timedelta(minutes=nudge_min))

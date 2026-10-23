@@ -219,6 +219,15 @@ class SqlOnlyFansReadRepo:
         except (SQLAlchemyError, ValueError, TypeError, RecursionError) as exc:
             raise _storage_failure(exc) from exc
 
+    async def ledger(self, *, tenant_id, account_id):
+        from onlyfans_runtime.launch_ledger.dashboard import read_ledger
+        try:
+            async with get_session() as s:
+                await lock_read_scope(s, account_id)
+                return await s.run_sync(lambda sync: read_ledger(sync, tenant_id, account_id))
+        except (SQLAlchemyError, ValueError, TypeError, RecursionError) as exc:
+            raise _storage_failure(exc) from exc
+
     async def operations(self, *, tenant_id: str | None, account_id: str) -> dict | None:
         """Account-scoped counters only; a refusal never becomes healthy/zero."""
         from db.onlyfans_models import OfIngress, OfWork

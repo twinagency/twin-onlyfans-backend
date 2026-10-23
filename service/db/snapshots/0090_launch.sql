@@ -271,3 +271,23 @@ END;
 $$;
 CREATE TRIGGER of_engagement_action_guard BEFORE UPDATE OR DELETE ON of_engagement_action
   FOR EACH ROW EXECUTE FUNCTION of_engagement_action_guard();
+
+-- Ledger retry: dashboard commands that only make a held scan due; the command row is append-only evidence.
+CREATE TABLE of_ledger_retry_command (
+	account_id VARCHAR NOT NULL, 
+	command_key VARCHAR(64) NOT NULL, 
+	binding_id VARCHAR NOT NULL, 
+	request_hash VARCHAR(64) NOT NULL, 
+	actor VARCHAR(128) NOT NULL, 
+	expected_connection_revision INTEGER NOT NULL, 
+	expected_scan_fingerprint VARCHAR(64) NOT NULL, 
+	result VARCHAR(16) NOT NULL, 
+	created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, 
+	CONSTRAINT pk_of_ledger_retry_command PRIMARY KEY (account_id, command_key), 
+	CONSTRAINT ck_of_ledger_retry_command_result CHECK (result IN ('queued')), 
+	CONSTRAINT ck_of_ledger_retry_command_revision CHECK (expected_connection_revision >= 0), 
+	CONSTRAINT fk_of_ledger_retry_command_account_id_of_runtime FOREIGN KEY(account_id) REFERENCES of_runtime (account_id) ON DELETE RESTRICT, 
+	CONSTRAINT fk_of_ledger_retry_command_binding_id_of_creator_bindings FOREIGN KEY(binding_id) REFERENCES of_creator_bindings (id) ON DELETE RESTRICT
+);
+CREATE FUNCTION of_ledger_retry_immutable() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'ledger retry evidence is append-only'; END; $$;
+CREATE TRIGGER of_ledger_retry_immutable BEFORE UPDATE OR DELETE ON of_ledger_retry_command FOR EACH ROW EXECUTE FUNCTION of_ledger_retry_immutable();

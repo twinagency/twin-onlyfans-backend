@@ -817,7 +817,11 @@ class TextAuthority:
             return grant
         try:
             proof = transport.send(grant, authority=self, tenant_id=tenant_id)
-        except Exception:
+        except Exception as exc:
+            # Type, message and frame locations only; never request bodies or credentials.
+            import sys, traceback
+            frames = ",".join(f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}" for f in traceback.extract_tb(exc.__traceback__)[-6:])
+            print(f"onlyfans_dispatch_failed intent={intent_id} type={type(exc).__name__} msg={str(exc)[:200]!r} at={frames}", file=sys.stderr, flush=True)
             return self.mark_unknown(tenant_id, account_id, intent_id, grant.token)
         if type(proof) is NotAccepted:
             return self.record_not_accepted(tenant_id, account_id, intent_id, grant.token, proof)

@@ -155,7 +155,7 @@ class OfTextIntent(Base):
         UniqueConstraint("account_id", "command_key", name="uq_of_text_intent_command"),
         UniqueConstraint("account_id", "attempt_id", name="uq_of_text_intent_attempt"),
         UniqueConstraint("account_id", "provider_message_id", name="uq_of_text_intent_provider_message"),
-        CheckConstraint("origin IN ('automated','manual','campaign','engagement')", name="origin"),
+        CheckConstraint("origin IN ('automated','manual','campaign','engagement','fastt')", name="origin"),
         CheckConstraint("status IN ('queued','dispatching','accepted','not_accepted','unknown','cancelled','refused')", name="status"),
         CheckConstraint("provider_message_id IS NULL OR provider_message_id > 0", name="provider_message_id"),
         CheckConstraint("(catalog_item_id IS NULL AND media_json = '[]' AND preview_json = '[]' AND price_cents = 0 AND catalog_snapshot_json IS NULL AND offer_id IS NULL) OR (catalog_item_id IS NOT NULL AND media_json <> '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents >= 300 AND price_cents <= 20000)",

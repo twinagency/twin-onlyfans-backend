@@ -357,7 +357,9 @@ class CampaignService:
             for campaign, recipient in candidates:
                 state = s.get(OfConversationState, (account_id, recipient.fan_id))
                 fan = s.get(Fan, (account_id, recipient.fan_id))
-                if state is None or fan is None or fan.is_muted or state.mode != "automated" or state.takeover_state != "none":
+                from .fastt_owner import owned_by_fastt
+                if (state is None or fan is None or fan.is_muted or state.mode != "automated" or state.takeover_state != "none"
+                        or owned_by_fastt(s, account_id, recipient.fan_id)):
                     recipient.status, recipient.reason, recipient.updated_at = "skipped", "contact_or_owner_unavailable", now
                     continue
                 if not _offer_current(s, campaign):

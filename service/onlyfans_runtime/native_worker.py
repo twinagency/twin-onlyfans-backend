@@ -173,7 +173,8 @@ class NativeWorker:
         with Session(self.store.engine) as s,s.begin():
             self.store._runtime(s,self.tenant_id,account.account_id)
             identity=s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id==account.account_id,
-                OfTextIntent.status=="queued").order_by(OfTextIntent.created_at,OfTextIntent.intent_id).limit(1))
+                OfTextIntent.status=="queued",
+                OfTextIntent.origin!="fastt").order_by(OfTextIntent.created_at,OfTextIntent.intent_id).limit(1))
         if identity is None:return
         result=self.authority.dispatch(self.tenant_id,account.account_id,identity,account.transport)
         if result in {"accepted","not_accepted","unknown"}:setattr(report,result,getattr(report,result)+1)

@@ -250,6 +250,16 @@ class TextAuthority:
             return "contact_blocked"
         if state.takeover_state == "requested":
             return "takeover_pending"
+        from .fastt_owner import owned_by_fastt
+        owned = owned_by_fastt(s, runtime.account_id, fan.fan_id)
+        if origin == "fastt":
+            # The dedicated runner sends only to a fan it durably owns, and only while AI is in control.
+            if not owned:
+                return "not_runtime_owner"
+            if state.mode != "automated" or state.takeover_state != "none":
+                return "owner_changed"
+        elif owned and origin in {"automated", "campaign", "engagement"}:
+            return "runtime_owned"
         if origin in {"automated", "campaign", "engagement"} and (state.mode != "automated" or state.takeover_state != "none"):
             return "owner_changed"
         if origin == "manual" and (state.mode != "human_controlled" or state.takeover_state not in {"none", "effective"}):
@@ -269,15 +279,22 @@ class TextAuthority:
 
     def prepare(self, tenant_id, account_id, fan_id, *, command_key, expected_revision,
                 body, origin, actor, work: Claim | None = None, ttl_seconds=300, native_plan_id=None,
-                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None):
+                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None,
+                expected_input_revision=None):
         _id(fan_id)
         if (not isinstance(command_key, str) or not 1 <= len(command_key) <= 64
                 or type(expected_revision) is not int or expected_revision < 0
                 or not isinstance(body, str) or not body.strip() or len(body.encode()) > 20000
-                or origin not in {"automated", "manual", "campaign", "engagement"}
+                or origin not in {"automated", "manual", "campaign", "engagement", "fastt"}
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 600):
             raise Refused("invalid text intent")
+        if expected_input_revision is not None and (origin != "fastt" or type(expected_input_revision) is not int
+                                                    or expected_input_revision < 0):
+            raise Refused("invalid input revision")
+        if origin == "fastt" and (expected_input_revision is None or work is not None or native_plan_id is not None
+                                  or campaign_id is not None or engagement_action_id is not None):
+            raise Refused("invalid runner intent")
         if (origin == "campaign" and (campaign_id is None or work is not None or native_plan_id is not None)
                 or origin != "campaign" and campaign_id is not None):
             raise Refused("invalid campaign intent")
@@ -292,7 +309,7 @@ class TextAuthority:
             _id(catalog_item_id)
             if origin == "automated" and native_plan_id is None:
                 raise Refused("automated media requires its native plan")
-        if quoted_price_cents is not None and (catalog_item_id is None or native_plan_id is None):
+        if quoted_price_cents is not None and (catalog_item_id is None or (native_plan_id is None and origin != "fastt")):
             raise Refused("only a recorded native quote may change the sticker price")
         request = dict(account_id=account_id, fan_id=fan_id, command_key=command_key,
                        expected_revision=expected_revision, body=body, origin=origin,
@@ -301,6 +318,8 @@ class TextAuthority:
             request["campaign_id"] = campaign_id
         if engagement_action_id is not None:
             request["engagement_action_id"] = engagement_action_id
+        if expected_input_revision is not None:
+            request["expected_input_revision"] = expected_input_revision
         if native_plan_id is not None:
             if type(native_plan_id) is not str or len(native_plan_id) != 36 or origin != "automated" or work is None:
                 raise Refused("invalid native plan reference")
@@ -329,6 +348,10 @@ class TextAuthority:
                 raise Refused("takeover belongs to another team member")
             if state.revision != expected_revision:
                 raise Refused("control revision conflict")
+            if expected_input_revision is not None and state.input_revision != expected_input_revision:
+                # The runner captured its revisions at turn start; anything the fan, a human or a
+                # history import did since (including during pacing waits) invalidates the turn.
+                raise Refused("input revision conflict")
             if policy.queued_count >= MAX_QUEUED:
                 raise Refused("delivery queue full")
             if policy.active_intent_id:
@@ -349,6 +372,8 @@ class TextAuthority:
                     raise Refused("media delivery disabled")
                 terms = catalog_terms(s, account_id, catalog_item_id, price_cents=quoted_price_cents)
                 assert_unowned(s, account_id, fan_id, terms)
+                # origin 'fastt' keeps FASTT's own selling decision: only the approved catalogue
+                # terms, the fixed price and ownership evidence are enforced here.
                 if origin == "automated":
                     from .native_sales import eligible, choice
                     if not eligible(s, account_id, fan_id, now)[0]:
@@ -487,6 +512,22 @@ class TextAuthority:
             state.unresolved_attempt_id, state.updated_at = attempt, now
             return self._grant(intent)
 
+    def cancel_queued(self, tenant_id, account_id, intent_id, reason):
+        """Withdraw an intent that was never granted a dispatch (still 'queued'). No-op otherwise."""
+        if not isinstance(reason, str) or not 1 <= len(reason) <= 100:
+            raise Refused("invalid cancellation reason")
+        with Session(self.engine) as s, s.begin():
+            self.store._runtime(s, tenant_id, account_id)
+            now = self._db_now(s)
+            intent = self._intent(s, account_id, intent_id)
+            if intent.status != "queued":
+                return intent.status
+            intent.status, intent.reason, intent.updated_at = "cancelled", reason, now
+            policy = s.get(OfDeliveryPolicy, account_id)
+            if policy is not None and policy.queued_count > 0:
+                policy.queued_count -= 1
+            return intent.status
+
     @staticmethod
     def _grant(row):
         return Dispatch(row.account_id, row.fan_id, row.intent_id, row.attempt_id, row.dispatch_token,
@@ -502,7 +543,7 @@ class TextAuthority:
                   (grant.token, 36), (grant.body, 20000), (grant.payload_hash, 64))
         if (any(type(value) is not str or not 1 <= len(value.encode()) <= limit for value, limit in fields)
                 or len(grant.payload_hash) != 64 or any(c not in "0123456789abcdef" for c in grant.payload_hash)
-                or type(grant.origin) is not str or grant.origin not in {"automated", "manual", "campaign", "engagement"}
+                or type(grant.origin) is not str or grant.origin not in {"automated", "manual", "campaign", "engagement", "fastt"}
                 or type(grant.deadline) is not datetime or grant.deadline.tzinfo is not None
                 or type(grant.policy_revision) is not int or grant.policy_revision < 0
                 or type(grant.wire_version) is not int or grant.wire_version not in {0, 1}):
@@ -770,16 +811,23 @@ class TextAuthority:
                               price_cents=row.price_cents, is_paid=False if row.price_cents else None,
                               automation_kind="onlyfans_campaign" if row.origin == "campaign" else
                                 "onlyfans_engagement" if row.origin == "engagement" else
-                                ("onlyfans_media" if row.catalog_item_id is not None else "onlyfans_text") if row.origin == "automated" else None))
+                                ("onlyfans_media" if row.catalog_item_id is not None else "onlyfans_text") if row.origin == "automated" else
+                                # FASTT's own attribution kinds, so its turn gates, cadence counters and
+                                # last-look recognise this row as an automation send, not a human reply.
+                                ("ai_upseller" if row.catalog_item_id is not None else "ai_chatter") if row.origin == "fastt" else None))
                 state.input_revision += 1
                 s.flush()
+            elif row.origin == "fastt" and existing.automation_kind is None:
+                # The inbox poll can ingest our own bubble before this projection. Backfill the
+                # attribution it could not know so FASTT never reads it as a human reply.
+                existing.automation_kind = "ai_upseller" if row.catalog_item_id is not None else "ai_chatter"
             from .media_delivery import project
             project(s, row, proof.message_id, stamp)
             if receipt is None:
                 receipt = OfMessageDelivery(account_id=account_id, fan_id=row.fan_id, message_id=proof.message_id)
                 s.add(receipt)
             receipt.outcome, receipt.attempt_id = "sent", row.attempt_id
-            receipt.origin = "ai" if row.origin in {"automated", "engagement"} else "human"
+            receipt.origin = "ai" if row.origin in {"automated", "engagement", "fastt"} else "human"
             receipt.evidence_ref, receipt.recorded_at = row.evidence_ref, stamp
             receipt.detail = "The transport accepted this exact message. This is not a purchase or read receipt."
             chat = s.get(Chat, (account_id, row.fan_id))

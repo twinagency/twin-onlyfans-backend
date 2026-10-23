@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Chat, Fan, Message, OfConversationState, OfCreatorBinding, OfMessageDelivery
 from db.onlyfans_models import OfControlAudit, OfIngress, OfRecovery, OfRuntime, OfWork, OfScan
+from db.onlyfans_fastt_models import OfRuntimeOwner
 from onlyfans_read.contract import UNRESOLVED_OUTCOMES, ID_PATTERN
 
 MAX_PENDING = 1000
@@ -459,7 +460,11 @@ class Store:
                 or len(set(account_ids)) != len(account_ids)):
             raise Refused("invalid worker account scope")
         now = utcnow()
-        due = or_(OfWork.status == "waiting", (OfWork.status == "claimed") & (OfWork.lease_until <= now))
+        # A fan owned by the FASTT runner is never planned by the native reactive path
+        # (single active sender). Ownership is a durable row, not an in-process flag.
+        runner_owned = select(OfRuntimeOwner.fan_id).where(OfRuntimeOwner.account_id == OfWork.account_id,
+            OfRuntimeOwner.fan_id == OfWork.fan_id, OfRuntimeOwner.released_at.is_(None)).exists()
+        due = or_(OfWork.status == "waiting", (OfWork.status == "claimed") & (OfWork.lease_until <= now)) & ~runner_owned
         with Session(self.engine) as s, s.begin():
             query = select(OfRuntime).join(OfCreatorBinding, OfCreatorBinding.id == OfRuntime.binding_id).where(
                 OfRuntime.enabled.is_(True), OfCreatorBinding.tenant_id == tenant_id,

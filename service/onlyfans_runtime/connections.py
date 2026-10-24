@@ -121,7 +121,7 @@ def get_capture_context(store,tenant,creator,account=None):
     return {'accountId':account,'ownerId':owner,'proxyUrl':proxy,'fingerprint':capture_network_fingerprint(proxy)}
 
 
-def get_connection(store,tenant,account,*,include_sync=False):
+def get_connection(store,tenant,account,*,include_sync=False,include_runner=False,runner_status_path=None):
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account)
         row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
@@ -140,6 +140,12 @@ def get_connection(store,tenant,account,*,include_sync=False):
             'policyRevision':policy.revision if policy else 0,'usedUnits':policy.used_units if policy else 0,
             'limitUnits':policy.limit_units if policy else 0,'mediaEnabled':bool(policy and policy.media_enabled),
             'automateNewConversations':bool(row and row.automate_new_conversations)}
+        if include_runner:
+            # Connected is not live. Report the supervisor's runner state separately; the file is only read,
+            # a missing file is 'unknown', and aiLive needs sending enabled AND a running runner.
+            from .runner_state import runner_state
+            result['runner']=runner_state(account,path=runner_status_path)
+            result['aiLive']=bool(result['outgoingEnabled'] and result['runner']['state']=='running')
         if include_sync:
             scan=s.get(OfScan,account)
             recovery=dict(s.execute(select(OfRecovery.status,func.count()).where(OfRecovery.account_id==account).group_by(OfRecovery.status)).all())

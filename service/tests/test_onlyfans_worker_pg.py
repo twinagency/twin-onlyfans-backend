@@ -214,6 +214,9 @@ def compete_worker(url,ready,gate,done,output):
             # step() has committed its accepted receipt before reporting it.
             if report["accepted"]==1:done.set()
         runtime.run(done,max_cycles=200,poll_seconds=.05,observe=observe)
+        # Both competitors retain the original five-cycle replay check after
+        # acceptance; the completion signal must not hide a late duplicate.
+        runtime.run(threading.Event(),max_cycles=5,poll_seconds=.05,observe=reports.append)
         output.put((len(model.calls),len(wire.calls),reports))
     finally:store.close()
 

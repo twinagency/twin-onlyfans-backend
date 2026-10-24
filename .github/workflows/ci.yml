@@ -1,55 +1,50 @@
-name: CI
-
-# The mirror is meant to be cloned and deployed by strangers, so the things a
-# stranger would try first are exactly what runs here: install the pinned deps,
-# run the suite, typecheck, and build the dashboard for production.
+name: FASTT bounded capacity diagnostic
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-
+permissions:
+  contents: read
 jobs:
-  relay:
-    name: relay (python)
+  load:
     runs-on: ubuntu-latest
+    timeout-minutes: 9
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_test_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      ONLYFANS_TEST_PG_URL: postgresql://postgres:disposable_test_only@127.0.0.1:5432/postgres
+      PYTHON_DOTENV_DISABLED: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: 6ec2a9811894aa0afa36b0624a9791964d57b5bb
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"   # matches the Dockerfile
-      - name: Install ffmpeg
-        # The Dockerfile installs it, and the relay needs it: media_prep
-        # .can_shrink() returns False without it, so an oversized video is
-        # skipped rather than compressed — which changes what the batch-cap
-        # tests observe. A runner without ffmpeg is not this project's runtime.
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      - name: Install pinned deps
-        # Test-only dependencies remain separate from the production image.
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-onlyfans-test.txt
+      - name: Install existing pinned test dependencies
+        run: pip install -r requirements-onlyfans-test.txt
+      - name: Harness regression
+        run: timeout 90s python service/tests/test_native_pilot_load_pg.py
+      - name: Two-account load scenarios
         run: |
-          python -m venv venv
-          ./venv/bin/pip install --upgrade pip
-          ./venv/bin/pip install -r requirements-onlyfans-test.txt
-      - name: service/tests
-        run: ./venv/bin/python scripts/run-service-tests.py
-
-  app:
-    name: dashboard (next)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: app
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+          mkdir -p load-results
+          timeout 330s python service/native_pilot/tools/load_test.py --scenario burst,sweep_2.5,sweep_3.5,rate_limit,control --accounts 2 --fans 250 --sim-minutes 45 --scale 60 --throttle 20 --seed 7 --out load-results/report.json > load-results/stdout.json 2> load-results/progress.log
+      - name: Publish diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: app/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test:run
-      - run: pnpm typecheck
-      - run: pnpm build
+          name: fastt-capacity-6ec2a98
+          path: load-results/

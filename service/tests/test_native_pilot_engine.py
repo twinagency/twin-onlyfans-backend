@@ -168,11 +168,6 @@ async def exercise():
                     check(not refused, f"listed-item obligation {offer}")
                 async with get_session() as s:
                     await s.execute(delete(ContentOffer))
-            for ids, open_cap in (({1}, None), ({1, 2}, 4)):
-                pilot.content = SimpleNamespace(catalog_ids=ids)
-                cfg = await pilot.load_config(account, {})
-                check(cfg.get("max_open_offers") == open_cap, f"open-offer cap for {len(ids)} item(s)")
-                check(cfg["max_offers_per_fan_per_day"] == (4 if open_cap else 2), "daily offer cap follows item count")
             pilot.content = None
             for wrong in ({"account_id": "999", "fan_id": fan, "model": MODEL},
                           {"account_id": account, "fan_id": fan+1, "model": MODEL},

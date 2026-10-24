@@ -233,7 +233,9 @@ class VaultPlan:
         if not self.path:
             return frozenset()
         from twin_bridge.store import readonly
-        clause = " OR ".join("tags LIKE ?" for _ in self.LANE_TAGS)
+        # Plus every approved (enabled) catalogue item: an unpaid card already sent for one is
+        # settled by OnlyFans too and must not freeze the chat when the account moves to vault mode.
+        clause = " OR ".join("tags LIKE ?" for _ in self.LANE_TAGS) + " OR enabled"
         with readonly(self.path) as con:
             rows = con.execute(f"SELECT id FROM catalog_items WHERE account_id=? AND ({clause})",
                                (self.account, *(f'%"{t}"%' for t in self.LANE_TAGS))).fetchall()

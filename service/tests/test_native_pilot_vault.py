@@ -96,8 +96,9 @@ def boundary(tmp):
                          ('content-receipt-media', {'lockedText': True}),
                          ('content-receipt-previews', {'previews': [2001]})]:
         refuses(code, lambda: plan.evidence({**valid, **change}, checked))
-    # FASTT's own lane rows (this account only) are what an open PPV may be; nothing else is exempt
-    check(plan.catalog_ids == frozenset({1, 2}), ('lane ids', plan.catalog_ids))
+    # FASTT's own lane rows plus approved (enabled) catalogue items, this account only, may have an
+    # open PPV; a disabled non-lane row (3) and another account's row (4) are not exempt
+    check(plan.catalog_ids == frozenset({1, 2, 5}), ('lane ids', plan.catalog_ids))
     check(VaultPlan(ACCOUNT, FAN).catalog_ids == frozenset(), 'no store, no exemption')
     refuses('content-plan-scope', lambda: VaultPlan('abc', FAN))
     # catalogue mode is unchanged: a manifest plan still refuses a non-manifest card and a vault-style price

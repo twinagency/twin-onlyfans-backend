@@ -60,7 +60,8 @@ async def candidates(api, account: str, limit: int, *, fresh_only: bool = False)
     if fresh_only:
         stmt = stmt.where(VaultItem.describe_status.is_(None))
     else:
-        stmt = stmt.where(VaultItem.describe_status.isnot("described"))
+        # IS DISTINCT FROM: portable (a bare IS NOT 'text' is SQLite-only and fails on PostgreSQL).
+        stmt = stmt.where(VaultItem.describe_status.is_distinct_from("described"))
     stmt = stmt.order_by(VaultItem.created_at.desc(), VaultItem.media_id.desc()).limit(limit)
     async with get_session() as s:
         return [r[0] for r in (await s.execute(stmt)).all()]

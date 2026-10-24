@@ -131,6 +131,10 @@ class NativeEngine:
             # the vault-wide resolver and all other media writers stay off.
             result.update(prompt_sell_catalog=True, ppv_caption_1to1=False,
                           min_fan_msgs_between_offers=0, max_offers_per_fan_per_day=2)
+            if len(self.content.catalog_ids) > 1:
+                # Several approved cards: two unpaid offers must not silence the rest
+                # (ai_chatter stops at max_open_offers and the daily cap).
+                result.update(max_open_offers=4, max_offers_per_fan_per_day=4)
         if self.context:
             # Approved creator facts ride the system prompt on every turn, not
             # only when the fan asks about her (FASTT's token-saving default).

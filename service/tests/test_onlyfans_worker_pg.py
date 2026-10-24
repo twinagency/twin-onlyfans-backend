@@ -201,31 +201,47 @@ def test_cached_worker_refuses_role_switch_and_health_contains_only_counts(datab
     store.close()
 
 
-def compete_worker(url,gate,output):
+def compete_worker(url,ready,gate,done,output):
     os.environ.update(ONLYFANS_PROCESS_ROLE="worker",DATABASE_URL=url)
     store=Store(url);model=SyntheticNativeModel(delay_seconds=.2,reported_cost_millicents=7);wire=SyntheticTextTransport(ACCOUNT)
     try:
-        runtime=worker(store,model=model,transport=wire);gate.wait(10)
+        runtime=worker(store,model=model,transport=wire)
+        ready.put(True)
+        assert gate.wait(30),"parent did not release both ready workers"
         reports=[]
-        runtime.run(threading.Event(),max_cycles=5,poll_seconds=.05,observe=reports.append)
+        def observe(report):
+            reports.append(report)
+            # step() has committed its accepted receipt before reporting it.
+            if report["accepted"]==1:done.set()
+        runtime.run(done,max_cycles=200,poll_seconds=.05,observe=observe)
         output.put((len(model.calls),len(wire.calls),reports))
     finally:store.close()
 
 
 def test_two_full_worker_processes_have_one_native_invocation_and_one_send(database,monkeypatch):
-    store,_=start(database,monkeypatch);context=multiprocessing.get_context("spawn");gate=context.Event();output=context.Queue()
-    children=[context.Process(target=compete_worker,args=(database[0],gate,output)) for _ in range(2)]
+    store,_=start(database,monkeypatch);context=multiprocessing.get_context("spawn")
+    ready=context.Queue();gate=context.Event();done=context.Event();output=context.Queue()
+    children=[context.Process(target=compete_worker,args=(database[0],ready,gate,done,output)) for _ in range(2)]
     try:
         for child in children:child.start()
+        for _ in children:assert ready.get(timeout=20) is True
         gate.set()
+        try:
+            accepted_completion=done.wait(10)
+        finally:
+            # Preserve whether acceptance actually occurred before parent cleanup.
+            done.set()
+        # Drain reports before joining so a full diagnostic queue cannot block a
+        # child's feeder thread on the timeout path.
+        values=[output.get(timeout=20) for _ in children]
         for child in children:child.join(20);assert child.exitcode==0
-        values=[output.get(timeout=2) for _ in children]
         # Synthetic counters and durable state only: no bodies, prompts, tokens,
-        # credentials or receipt payloads. Keep the original timing and counts.
+        # credentials or receipt payloads. Preserve the exact-once counts.
         with Session(database[1]) as s:
             runtime=s.get(OfRuntime,ACCOUNT)
             policy=s.get(OfDeliveryPolicy,ACCOUNT)
             diagnostic={
+                "acceptedCompletion":accepted_completion,
                 "children":[{"modelCalls":row[0],"sendCalls":row[1],"cycles":row[2]} for row in values],
                 "work":[dict(row) for row in s.execute(select(OfWork.status,OfWork.generation,
                     OfWork.control_revision,OfWork.target_message_id)).mappings()],
@@ -239,12 +255,16 @@ def test_two_full_worker_processes_have_one_native_invocation_and_one_send(datab
             }
             detail=json.dumps(diagnostic,sort_keys=True)
             print("synthetic_worker_race_diagnostic="+detail,flush=True)
+            assert accepted_completion,"no committed acceptance within 10 seconds: "+detail
             assert sum(row[0] for row in values)==sum(row[1] for row in values)==1,detail
             assert s.scalar(select(func.count()).select_from(GrokCall))==1,detail
             assert s.scalar(select(func.count()).select_from(Message).where(Message.direction=="out"))==1,detail
     finally:
+        done.set();gate.set()
         for child in children:
-            if child.is_alive():child.kill();child.join(3)
+            if child.pid is not None:
+                child.join(20)
+                if child.is_alive():child.kill();child.join(3)
         store.close()
 
 

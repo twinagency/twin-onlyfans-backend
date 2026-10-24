@@ -32,6 +32,7 @@ PRICE_FLOOR_CENTS, PRICE_CEIL_CENTS = 300, 10000   # hard bounds a manifest rang
 MAX_ITEMS = 50
 MAX_MEDIA = 10
 MEDIA_TYPES = ("photo", "video")
+ITEM_KINDS = MEDIA_TYPES + ("image", "image_set")   # catalogue kinds create_catalog_single writes
 ITEM_KEYS = {"catalog_id", "kind", "price_cents", "media", "preview_ids"}
 
 
@@ -41,7 +42,7 @@ def _id(value):
 
 def _item(x, lo, hi):
     if (not isinstance(x, dict) or set(x) != ITEM_KEYS
-            or not _id(x["catalog_id"]) or x["kind"] not in MEDIA_TYPES
+            or not _id(x["catalog_id"]) or x["kind"] not in ITEM_KINDS
             or type(x["price_cents"]) is not int):
         raise Refused("content-plan-item")
     if not lo <= x["price_cents"] <= hi:

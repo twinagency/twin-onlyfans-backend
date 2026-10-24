@@ -225,7 +225,6 @@ def test_mixed_bundle_keeps_order_and_photo_preview(ready):
 
 
 @pytest.mark.parametrize("ids,previews,locked,price,reason", [
-    ([13, 11], [13], False, 1999, "Only included photos"),
     ([11, 12], [11], True, 1999, "cannot become a draft"),
     ([11, 12], [11], False, 100, "cannot become a draft"),
     ([11, 16], [], False, 1999, "not available"),

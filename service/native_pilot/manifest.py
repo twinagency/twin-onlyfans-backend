@@ -25,7 +25,7 @@ from pathlib import Path
 
 from twin_bridge.store import readonly
 
-from .content import MAX_ITEMS, MAX_MEDIA, MEDIA_TYPES, PRICE_CEIL_CENTS, PRICE_CENTS, PRICE_FLOOR_CENTS, ContentPlan
+from .content import ITEM_KINDS, MAX_ITEMS, MAX_MEDIA, MEDIA_TYPES, PRICE_CEIL_CENTS, PRICE_CENTS, PRICE_FLOOR_CENTS, ContentPlan
 from .ledger import Refused
 from .scope import AccountScope
 
@@ -53,7 +53,7 @@ def build(db, account, fan):
             reason = None
             if bool(r["is_free_teaser"]) or r["pricing_mode"] != "fixed":
                 reason = "not-fixed-paid"
-            elif r["kind"] not in MEDIA_TYPES or media is None or previews is None:
+            elif r["kind"] not in ITEM_KINDS or media is None or previews is None:
                 reason = "invalid-row"
             elif not 1 <= len(media) <= MAX_MEDIA or not set(previews) <= set(media):
                 reason = "invalid-media"

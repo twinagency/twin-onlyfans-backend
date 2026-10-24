@@ -341,7 +341,7 @@ def create_catalog_single(s, runtime, connection, *, media, previews, label, des
 
     The caller owns the runtime lock, command evidence and acknowledgement.
     Bundles may hold several paid photos and/or videos sold for one total;
-    free previews must be included photos and at least one asset stays paid.
+    free previews (photo or video, as OnlyFans allows) are included assets and at least one stays paid.
     """
     account = runtime.account_id
     if (pricing_mode not in {"dynamic", "fixed"} or type(price_cents) is not int
@@ -355,8 +355,6 @@ def create_catalog_single(s, runtime, connection, *, media, previews, label, des
         job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
         if row is None or not _ready(row, observation, job, connection, runtime.binding_id)[0]:
             raise Refused("vault media unavailable")
-        if mid in previews and row.kind != "photo":
-            raise InvalidVault("Only included photos may be free preview assets.")
         assets.append(row)
     paid = [row for row in assets if row.media_id not in previews]
     videos = [row for row in paid if row.kind == "video"]

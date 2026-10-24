@@ -64,8 +64,6 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None):
         VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id).with_for_update(read=True)).all()
     if len(rows) != len(ids) or any(r.removed_at is not None or r.kind not in {"image", "photo", "video"} for r in rows):
         raise Refused("catalogue media unavailable")
-    if any(r.kind == "video" and r.media_id in previews for r in rows):
-        raise Refused("a priced video cannot be a free preview")
     snapshot = {"item": {key: getattr(item, key) for key in (
         "id", "account_id", "script_id", "enabled", "kind", "label", "description_for_ai",
         "price_cents", "is_free_teaser", "updated_at")},

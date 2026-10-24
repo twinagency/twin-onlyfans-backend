@@ -45,7 +45,7 @@ def emit(obj: dict[str, Any]) -> None:
     print(json.dumps(obj, ensure_ascii=False, default=str), flush=True)
 
 
-async def candidates(api, account: str, limit: int, *, fresh_only: bool = False) -> list[int]:
+async def candidates(api, account: str, limit: int, *, fresh_only: bool = False, shard: tuple[int, int] = (0, 1)) -> list[int]:
     """Un-described, not-removed photo/video media ids, newest first.
 
     Same WHERE / ORDER BY as the non-force branch of ``_run_describe_all``."""
@@ -62,6 +62,8 @@ async def candidates(api, account: str, limit: int, *, fresh_only: bool = False)
     else:
         # IS DISTINCT FROM: portable (a bare IS NOT 'text' is SQLite-only and fails on PostgreSQL).
         stmt = stmt.where(VaultItem.describe_status.is_distinct_from("described"))
+    if shard[1] > 1:  # parallel workers split the vault by media id, never the same item twice
+        stmt = stmt.where(VaultItem.media_id % shard[1] == shard[0])
     stmt = stmt.order_by(VaultItem.created_at.desc(), VaultItem.media_id.desc()).limit(limit)
     async with get_session() as s:
         return [r[0] for r in (await s.execute(stmt)).all()]
@@ -142,7 +144,7 @@ async def run(args, api=None) -> dict[str, Any]:
         raise SystemExit("--account must be the Twin form of-<owner>")
     if api is None:
         import vault_ai_api as api
-    ids = await candidates(api, scope.db_id, args.limit, fresh_only=args.fresh_only)
+    ids = await candidates(api, scope.db_id, args.limit, fresh_only=args.fresh_only, shard=getattr(args, "shard", (0, 1)))
     if args.dry_run:
         for mid in ids:
             emit({"media_id": mid, "would_caption": True})
@@ -166,6 +168,7 @@ def parse(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--account", required=True, help="Twin account id, of-<owner>")
     p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--shard", default="0/1", help="i/n: this worker takes media ids with id %% n == i")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--dry-run", action="store_true", help="list candidates; no model or provider call")
     p.add_argument("--fresh-only", action="store_true",
@@ -173,6 +176,12 @@ def parse(argv=None) -> argparse.Namespace:
     p.add_argument("--with-flags", action="store_true",
                    help="also run FASTT's exposure-flags pass after each caption, as describe-all does")
     a = p.parse_args(argv)
+    try:
+        i, n = (int(v) for v in a.shard.split("/"))
+        assert 1 <= n <= 32 and 0 <= i < n
+    except (ValueError, AssertionError):
+        p.error("--shard must be i/n with 0 <= i < n <= 32")
+    a.shard = (i, n)
     if not 1 <= a.limit <= 5000:
         p.error("--limit must be 1..5000")
     return a

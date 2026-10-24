@@ -139,3 +139,15 @@ preflight). It runs until SIGTERM/SIGINT and is never started by itself.
   out, the conversation still gets a text reply (one plain regeneration if the reply was only price talk) and the runner
   emits `offer-declined` with `reason` = `max-open-offers` | `daily-offer-cap` | `offer-pacing` | `item-already-pending` |
   `media-already-pending` | `item-already-purchased`. No offer row is closed or created by this.
+- Follow-ups (`--followups`, default off; the supervisor passes it when the account's `ai_chatter_config_json` has
+  `fastt_followups: true`): FASTT's own re-engage nudge. After an unbought paid card ai_chatter schedules one
+  `nudge_fan_ids` job (`nudge_after_minutes`, default 15); `engine.enqueue_job` keeps exactly that job in the
+  runner-owned `fastt_runtime.native_pilot_followups` table (never `scheduled_jobs`, so the legacy worker and
+  `check_local` never see it; every other job kind stays suppressed). When the fan has nothing waiting, the service runs
+  the due job through FASTT's own `ai_chatter.run(payload={"nudge_fan_ids": [fan]})` (`_run_nudge`) on the same
+  boundary as a turn: history proof against the anchor (our own last message), hold checks, the account allowance (one
+  unit), single attempt, unknown-send hold. The job is dropped, never retried, when the fan replied, the offer is
+  resolved, the fan is paused / taken over / restricted / not owned, the send is unresolved, or the job is over 6 hours
+  late. FASTT gates the nudge on `cadence_enabled`, so the flag turns the cadence controller on with every burst/daily
+  cap at 0 (no cap in FASTT's own `_cadence_gate`): it never skips a fan. The nudge is only scheduled on the model's
+  `>>OFFER` path (catalogue / manifest mode); the vault ask lane (`--vault-mode`) has no nudge in stock FASTT.

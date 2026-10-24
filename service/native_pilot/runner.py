@@ -73,7 +73,7 @@ def check_local(path, account, fan, approved_item=None):
                 "account_id": account, "fan_id": fan}
 
 
-def require_store_schema(path):
+def require_store_schema(path, followups=False):
     """PostgreSQL: create the separate ``fastt_runtime`` schema's tables if absent, then verify them.
 
     The application schema (revision 0091) is untouched; only the nine pilot/bridge tables
@@ -86,7 +86,8 @@ def require_store_schema(path):
     store.ensure_runtime_schema(path)
     with readonly(path) as con:
         for table in ("twin_bridge_conversations", "twin_bridge_send_attempts", "twin_bridge_turns",
-                      "twin_bridge_writes", "native_pilots", "native_pilot_inputs", "native_pilot_receipts"):
+                      "twin_bridge_writes", "native_pilots", "native_pilot_inputs", "native_pilot_receipts",
+                      *(("native_pilot_followups",) if followups else ())):
             if not store.has_table(con, table):
                 raise Refused("pilot-schema-missing")
 
@@ -154,6 +155,42 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan):
         raise Refused("source-missing")
 
 
+def check_followup_history(history, anchors, confirmed_ids, *, account, fan):
+    """The follow-up twin of check_provider_history: the only message at or after the anchor (our own last
+    outbound) may be that anchor and what this input already sent. A fan reply, a human/external send or
+    anything unreadable refuses."""
+    from twin_bridge.contract import parse_canonical_timestamp
+    from twin_bridge.delivery import external_outbound_ids
+
+    if not anchors:
+        raise Refused("source-missing")
+    since = min(datetime.fromisoformat(r["created_at"]) for r in anchors.values())
+    since = since.replace(microsecond=since.microsecond // 1000 * 1000)
+    if external_outbound_ids(history, set(confirmed_ids) | set(anchors), creator_id=account, fan_id=fan, since=since):
+        raise Refused("external-outbound")
+    seen = set()
+    for item in history:
+        mid = item.get("id")
+        if isinstance(mid, bool) or not isinstance(mid, (str, int)) or not str(mid).isascii() or not str(mid).isdigit():
+            raise Refused("history-id-invalid")
+        mid = int(mid)
+        stamp = parse_canonical_timestamp(item.get("createdAt"), "createdAt")
+        for field in ("withUser", "user"):
+            if field in item:
+                bound = item[field]
+                if not isinstance(bound, dict) or isinstance(bound.get("id"), bool) or str(bound.get("id")) != str(fan):
+                    raise Refused("history-recipient-mismatch")
+        if stamp < since or mid in confirmed_ids:
+            continue
+        if mid not in anchors:
+            raise Refused("new-message-during-generation")
+        if item.get("isUnsent"):
+            raise Refused("source-invalidated")
+        seen.add(mid)
+    if seen != set(anchors):
+        raise Refused("source-missing")
+
+
 class Gateway:
     def __init__(self, ledger, pilot, client, loop, content=None, scope=None):
         self.ledger, self.pilot, self.client, self.loop = ledger, pilot, client, loop
@@ -164,6 +201,7 @@ class Gateway:
         from twin_bridge.platform import OnlyFansTextAdapter
         self.reader = OnlyFansTextAdapter(self.scope.provider_id, client=client)
         self.input_key = None
+        self.followup = False   # True: the "sources" are our own anchor message (a follow-up), not fan input
         self.sources = {}
         self.bubble = 0
         self.stopped_reason = None
@@ -216,7 +254,8 @@ class Gateway:
             history = await self.reader.preflight_history(self.pilot.fan_id, since=since, source_ids=set(self.sources))
             receipts = self.ledger.receipts(pilot_id=self.pilot.pilot_id, input_key=self.input_key)
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
-            check_provider_history(history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
+            (check_followup_history if self.followup else check_provider_history)(
+                history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
                             approved_item=self.content.catalog_ids if self.content else None)
             if self.hold_check is not None:

@@ -57,6 +57,7 @@ FAN_IDLE_RELEASE_S = 900.0
 CANDIDATES_MAX = 200      # fans served per tick, and the size of one scan page / the controls window
 SCAN_PAGES_MAX = 10       # a tick reads at most this many pages of CANDIDATES_MAX rows: bounded work
 BUDGET_HOLD_S = 300.0
+FOLLOWUPS_PER_TICK = 5
 HUMAN_SENDS_PER_TICK = 5
 HOLD_S = 15.0
 QUIET_S = 7.0
@@ -193,6 +194,7 @@ class Service:
         self.client = self.conn = self.sentinels = self.intake = None
         self.pilot = self.lease = None
         self.content = self.context = None
+        self.followups = None      # followups.FollowupQueue when --followups, else None (every job suppressed)
         self.prior_catalog = None
         self.catalog_owner = self
         self.next_conn_check = 0.0
@@ -478,6 +480,7 @@ class Service:
             child.strict, child.cutoff = True, self.started_at
             child.path, child.ledger, child.context = self.path, self.ledger, self.context
             child.content, child.catalog_owner = self.content, self
+            child.followups = self.followups
             self.children[fan] = child
         child.client, child.conn, child.sentinels = self.client, self.conn, self.sentinels
         return child
@@ -549,6 +552,8 @@ class Service:
                 continue
             if child.turns_started > before:
                 return  # one turn at a time; re-read controls and the queue before the next fan
+        if await self.run_followups():
+            return  # a follow-up turn started: re-read controls and the queue first
         self.note(None)
         await self.idle(self.poll_s)
 
@@ -560,10 +565,15 @@ class Service:
             await asyncio.to_thread(self._twin_controls)
         except Exception as exc:
             runner.emit({"event": "twin-controls-error", "reason": (str(exc) or type(exc).__name__)[:120]})
+        if await self.run_followups():
+            return
         await self.serve_fan()
 
-    async def serve_fan(self):
-        """Everything one fan's turn needs, after the account-level session and Twin controls."""
+    async def serve_fan(self, job=None):
+        """Everything one fan's turn needs, after the account-level session and Twin controls.
+
+        ``job``: a due follow-up (the stock nudge) for this fan instead of fresh fan input. Same
+        hold / lease / allowance gates; only the turn itself differs."""
         if self.strict:
             # All-fans: a fan that is not enabled/paused/stopped never even gets a pilot or lease.
             held = await asyncio.to_thread(fan_hold_reason, self.path, self.db, self.args.fan, True)
@@ -586,12 +596,11 @@ class Service:
             raise Refused("allowance-disabled" if policy is not None and not policy["enabled"]
                           else "allowance-exhausted" if policy else "allowance-missing")
         self.note(None)
+        if job is not None:
+            return await self.followup_turn(job)
         await self.turn()
 
     async def turn(self):
-        from .budget import DailyBudget
-        from .engine import NativeEngine
-        from .model import ENDPOINT, NativePilotModel
         pilot, ledger, args = self.pilot, self.ledger, self.args
         snap = ledger.snapshot(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
         if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id) \
@@ -609,22 +618,34 @@ class Service:
             if exc.reason in ("input-already-claimed", "source-changed"):
                 return await self.wait(self.poll_s)
             raise
+        await self.execute(key, sources, source_id=snap.message_id)
+
+    async def execute(self, key, sources, *, source_id, job=None):
+        """Run FASTT's engine for one claimed input (fan message, or the nudge job ``job``) through the
+        single-attempt boundary. Returns the failure reason, or None."""
+        from .budget import DailyBudget
+        from .engine import NativeEngine
+        from .model import ENDPOINT, NativePilotModel
+        from .followups import nudge_payload
+        pilot, ledger, args = self.pilot, self.ledger, self.args
         self.turns_started += 1
         gateway = ServiceGateway(self, pilot, content=self.content, scope=self.scope)
         gateway.sources, gateway.input_key, gateway.bubble = sources, key, 0
+        gateway.followup = job is not None
         model = NativePilotModel(
             api_key=self.conn.model_api_key, account_id=self.db, fan_id=args.fan, deadline=time.monotonic() + TURN_MAX_S,
             should_stop=gateway.stopped, on_event=runner.emit,
             reserve_call=lambda: ledger.count_model_call(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now()),
             budget=DailyBudget(self.scope, self.conn.model_id, endpoint=ENDPOINT))
-        runner.emit({"event": "generating", "source_message_id": str(snap.message_id), "engine": "fastt-native"})
+        runner.emit({"event": "generating", "source_message_id": str(source_id), "engine": "fastt-native"})
         run_id = runner.begin_native_run(self.path, self.db)
         stats = error = None
         try:
             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
                               content=self.content, context=self.context,
-                              **({"own_offers_only": True} if self.strict else {})) as native:
-                stats = await native.run(run_id=run_id)
+                              **({"own_offers_only": True} if self.strict else {}),
+                              **({"followups": self.followups} if self.followups is not None else {})) as native:
+                stats = await native.run(run_id=run_id, **({"payload": nudge_payload(args.fan)} if job is not None else {}))
             if gateway.stopped_reason or model.stopped_reason:
                 raise Refused(gateway.stopped_reason or model.stopped_reason)
             if not isinstance(stats, dict) or stats.get("errors") or stats.get("cap_hit"):
@@ -636,9 +657,9 @@ class Service:
         receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
         if error:
             if self.stop.is_set() and not receipts:
-                return  # clean stop: the unsent claim is dropped on release and answered after restart
+                return error  # clean stop: the unsent claim is dropped on release and answered after restart
             await self.after_failure(error, key)
-            return
+            return error
         try:
             runner.verify_attribution(self.path, self.db, args.fan, receipts, content=self.content,
                                       automation_employee_id=self.sentinels.automation)
@@ -654,6 +675,86 @@ class Service:
         if not receipts:
             runner.emit({"event": "native-no-reply", "skip_counts": {k: v for k, v in (stats or {}).items()
                                                                      if k.startswith("skipped_") and isinstance(v, int) and v}})
+        return None
+
+    # ── follow-ups (--followups): FASTT's own delayed nudge, run when due ──────
+    def offer_open(self) -> bool:
+        """True while the fan still has an open (unbought) offer: FASTT's nudge only exists for that."""
+        with runner.readonly(self.path) as con:
+            if not store.has_table(con, "content_offers"):
+                return False
+            return con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status='open' LIMIT 1",
+                               (self.db, self.args.fan)).fetchone() is not None
+
+    def settle_job(self, job, state, reason):
+        if self.ledger.followup_finish(job_id=job["job_id"], state=state, reason=reason, now=runner.now()):
+            runner.emit({"event": "followup-" + state, "kind": job["kind"], "fan_id": job["fan_id"],
+                         **({"reason": reason} if reason else {})})
+
+    async def followup_turn(self, job):
+        """One attempt, never replayed: the job is settled (done / dropped / failed) whatever happens."""
+        pilot, ledger, args = self.pilot, self.ledger, self.args
+        if not await asyncio.to_thread(self.offer_open):
+            return self.settle_job(job, "dropped", "offer-resolved")        # bought, expired or withdrawn
+        wait = self.cooldown_left()
+        if wait > 0:
+            return await self.wait(min(wait + 0.5, self.poll_s * 10))        # FASTT's short post-send cooldown
+        from .ledger import FOLLOWUP_DROPS
+        try:
+            key, anchor = await asyncio.to_thread(ledger.claim_followup, pilot_id=pilot.pilot_id,
+                                                  owner_token=pilot.owner_token, job_id=job["job_id"], now=runner.now())
+            sources = runner.read_sources(self.path, self.db, args.fan, [anchor["message_id"]])
+        except Refused as exc:
+            if exc.reason in FOLLOWUP_DROPS or exc.reason in ("source-missing", "source-ids-invalid"):
+                return self.settle_job(job, "dropped", exc.reason)
+            raise
+        outcome = ("failed", "followup-error")
+        try:
+            error = await self.execute(key, sources, source_id=anchor["message_id"], job=job)
+            sent = any(r["state"] == "sent" for r in ledger.receipts(pilot_id=pilot.pilot_id, input_key=key))
+            outcome = ("failed", error) if error else ("done", None) if sent else ("dropped", "native-skipped")
+        finally:
+            self.settle_job(job, *outcome)
+
+    async def run_followups(self):
+        """Serve at most one due follow-up. True when a turn was started (the caller then re-reads everything).
+
+        Runs only when no fan message is waiting. A fan held, paused, taken over, restricted or not owned,
+        an unresolved send or a changed chat DROPS the job; account-wide limits (allowance, model budget)
+        leave it queued until it expires."""
+        if self.followups is None:
+            return False
+        due = await asyncio.to_thread(self.ledger.followups_due, account_id=self.db, now=runner.now(),
+                                      fan_id=None if self.all_fans else self.args.fan, limit=FOLLOWUPS_PER_TICK)
+        for job in due:
+            if self.stop.is_set():
+                return False
+            fan = job["fan_id"]
+            hold = self.fan_holds.get(fan)
+            if hold and runner.now() < hold[0]:
+                continue
+            if self.all_fans and not self._owned(fan):
+                self.settle_job(job, "dropped", "fan-not-owned")
+                continue
+            target = self.child(fan) if self.all_fans else self
+            target.last_active = runner.now()
+            before = target.turns_started
+            try:
+                await target.serve_fan(job)
+            except Refused as exc:
+                target.note(exc.reason)
+                if exc.reason.startswith(("allowance-", "model-budget")):
+                    raise
+                self.settle_job(job, "dropped", exc.reason)
+                continue
+            except Exception as exc:
+                target.note("service-error:" + type(exc).__name__)
+                self._hold_fan(fan, "service-error")
+                self.settle_job(job, "dropped", "service-error")
+                continue
+            if target.turns_started > before:
+                return True
+        return False
 
     def cooldown_left(self) -> float:
         """Seconds left on FASTT's per-fan cooldown (fans.automation_paused_until), 0 when none."""
@@ -747,6 +848,10 @@ class Service:
             raise Refused("pilot-store-required")
         runner.require_store_schema(self.path)
         self.ledger = Ledger(self.path, allowance=True)
+        if getattr(self.args, "followups", False):
+            from .followups import FollowupQueue
+            runner.require_store_schema(self.path, followups=True)
+            self.followups = FollowupQueue(self.ledger, self.db, lambda: runner.now())
         if getattr(self.args, "vault_mode", False):
             if getattr(self.args, "content_manifest", None):
                 raise Refused("vault-mode-and-manifest")
@@ -868,6 +973,9 @@ def build_parser():
     parser.add_argument("--content-manifest")
     parser.add_argument("--vault-mode", action="store_true",
                         help="FASTT's stock vault selling (default off); mutually exclusive with --content-manifest")
+    parser.add_argument("--followups", action="store_true",
+                        help="default off: run FASTT's own delayed re-engage nudge (queued by ai_chatter after an unbought "
+                             "paid offer) when due, through the same send boundary; every other background job stays suppressed")
     parser.add_argument("--stop-after-card", action="store_true",
                         help="TEST/PILOT ONLY, default off: set the fan's runtime stop once the paid card is confirmed. "
                              "Production (compose fastt-runner, supervisor children, --all-fans) keeps chatting after a card.")

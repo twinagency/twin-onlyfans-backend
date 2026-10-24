@@ -121,7 +121,20 @@ _SCHEMA = (
         bubble_no INTEGER NOT NULL, state TEXT NOT NULL, provider_message_id TEXT,
         response_json TEXT, evidence_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         UNIQUE(input_key,bubble_no))""",
+    """CREATE TABLE IF NOT EXISTS native_pilot_followups (
+        job_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, fan_id INTEGER NOT NULL, kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL, run_at TEXT NOT NULL, last_in_id INTEGER, last_in_at TEXT,
+        state TEXT NOT NULL, reason TEXT, input_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
 )
+
+# Runner-owned follow-ups (see service.py --followups). The legacy scheduled_jobs table is never used.
+FOLLOWUP_KINDS = ("nudge",)
+FOLLOWUP_MARK = "followup:"            # source_hash prefix of an input that answers a follow-up, not a fan message
+FOLLOWUP_MAX_AHEAD = timedelta(hours=24)
+FOLLOWUP_TTL = timedelta(hours=6)      # a job this long past its time is stale (downtime): dropped, never sent late
+# Job-specific reasons: the job is dropped. Anything else (lease, allowance, unsettled send) is not the job's fault.
+FOLLOWUP_DROPS = ("followup-not-queued", "followup-not-due", "followup-expired", "followup-chat-moved",
+                  "followup-fan-replied", "input-already-claimed")
 
 
 # Persistent-service pilots (see activate_service) are never capped by their own
@@ -353,7 +366,10 @@ class Ledger:
                 raise Refused("input-not-generating")
             expected = SourceSnapshot(i["message_id"], i["source_hash"], i["created_at"], i["ingested_at"],
                                       tuple(json.loads(i["member_ids_json"])), i["earliest_created_at"])
-            if self._source(con, p, now_s, exclude_input_key=input_key) != expected:
+            if i["source_hash"].startswith(FOLLOWUP_MARK):
+                if not self._followup_unchanged(con, p, i):
+                    raise Refused("source-changed")
+            elif self._source(con, p, now_s, exclude_input_key=input_key) != expected:
                 raise Refused("source-changed")
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND bubble_no=?", (input_key, bubble_no)).fetchone():
                 raise Refused("attempt-already-exists")
@@ -467,7 +483,10 @@ class Ledger:
                 raise Refused("input-not-generating")
             expected = SourceSnapshot(i["message_id"], i["source_hash"], i["created_at"], i["ingested_at"],
                                       tuple(json.loads(i["member_ids_json"])), i["earliest_created_at"])
-            if self._source(con, p, now_s, exclude_input_key=r["input_key"]) != expected:
+            if i["source_hash"].startswith(FOLLOWUP_MARK):
+                if not self._followup_unchanged(con, p, i):
+                    raise Refused("source-changed")
+            elif self._source(con, p, now_s, exclude_input_key=r["input_key"]) != expected:
                 raise Refused("source-changed")
 
     def record_sent(self, *, pilot_id: str, owner_token: str, attempt_id: int,
@@ -554,6 +573,106 @@ class Ledger:
                 raise Refused("pilot-owner-mismatch")
             con.execute("UPDATE native_pilot_inputs SET state='complete',updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
                         (_dt(now), pilot_id, input_key))
+
+    # ── runner-owned follow-ups (the stock nudge) ────────────────────────────
+    # A follow-up has no fan message to answer: its "source" is the newest message of the chat, which
+    # must still be OUR OWN last outbound (the anchor), with no fan message newer than the one the job
+    # was queued behind. Claiming it uses the same native_pilot_inputs row, so one anchor is claimed at
+    # most once per pilot (never replayed) and begin_attempt re-proves the anchor at the wire.
+
+    @staticmethod
+    def _newest(con, account: str, fan: int, pilot_id: str | None = None, input_key: str | None = None):
+        return con.execute(
+            "SELECT m.message_id,m.direction,m.body,m.created_at,m.ingested_at,m.automation_kind FROM messages m "
+            "WHERE m.account_id=? AND m.fan_id=? AND NOT (m.direction='out' AND m.is_unsent) "
+            "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts r WHERE r.pilot_id=? AND r.input_key=? "
+            "AND r.state='sent' AND r.provider_message_id=CAST(m.message_id AS TEXT)) "
+            "ORDER BY m.created_at DESC,m.message_id DESC LIMIT 1", (account, fan, pilot_id, input_key)).fetchone()
+
+    @classmethod
+    def _followup_unchanged(cls, con, p, i) -> bool:
+        row = cls._newest(con, p["account_id"], p["fan_id"], p["pilot_id"], i["input_key"])
+        return row is not None and row["message_id"] == i["message_id"] and row["direction"] == "out"
+
+    def followup_add(self, *, account_id: str, fan_id: int, kind: str, payload: dict, run_at: datetime | str,
+                     now: datetime | str) -> str | None:
+        """Queue one follow-up; a still-queued one for the same account/fan/kind is superseded. Returns its id."""
+        if kind not in FOLLOWUP_KINDS:
+            raise Refused("followup-kind")
+        if not isinstance(fan_id, int) or isinstance(fan_id, bool) or fan_id <= 0:
+            raise Refused("invalid-identity")
+        now_s, run_s = _dt(now), _dt(run_at)
+        if run_s > _dt(datetime.fromisoformat(now_s) + FOLLOWUP_MAX_AHEAD):
+            raise Refused("followup-run-at")
+        with self._tx(initialize=True) as con:
+            # One live nudge per fan: a newer offer's nudge replaces an older queued one (its anchor is stale).
+            con.execute("UPDATE native_pilot_followups SET state='dropped',reason='superseded',updated_at=? "
+                        "WHERE account_id=? AND fan_id=? AND kind=? AND state='queued'", (now_s, account_id, fan_id, kind))
+            last_in = con.execute("SELECT message_id,created_at FROM messages WHERE account_id=? AND fan_id=? "
+                                  "AND direction='in' ORDER BY created_at DESC,message_id DESC LIMIT 1",
+                                  (account_id, fan_id)).fetchone()
+            job_id = _hash([account_id, fan_id, kind, run_s, now_s])[:32]
+            con.execute("INSERT INTO native_pilot_followups(job_id,account_id,fan_id,kind,payload_json,run_at,last_in_id,"
+                        "last_in_at,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'queued',?,?)",
+                        (job_id, account_id, fan_id, kind, _json(payload), run_s,
+                         last_in["message_id"] if last_in else None, _dt(last_in["created_at"]) if last_in else None,
+                         now_s, now_s))
+            return job_id
+
+    def followups_due(self, *, account_id: str, now: datetime | str, fan_id: int | None = None, limit: int = 20) -> list[dict]:
+        with store.readonly(self.path) as con:
+            if not store.has_table(con, "native_pilot_followups"):
+                return []
+            query, args = ("SELECT * FROM native_pilot_followups WHERE account_id=? AND state='queued' AND run_at<=?",
+                           [account_id, _dt(now)])
+            if fan_id is not None:
+                query, args = query + " AND fan_id=?", args + [fan_id]
+            return [dict(r) for r in con.execute(query + " ORDER BY run_at,job_id LIMIT ?", (*args, limit))]
+
+    def followup_finish(self, *, job_id: str, state: str, reason: str | None, now: datetime | str) -> bool:
+        """Settle a job exactly once: done / dropped / failed. A settled job is never queued again.
+        True when this call settled it (a second call is a no-op)."""
+        if state not in ("done", "dropped", "failed"):
+            raise Refused("followup-state")
+        with self._tx(initialize=True) as con:
+            return con.execute("UPDATE native_pilot_followups SET state=?,reason=?,updated_at=? WHERE job_id=? "
+                               "AND state IN ('queued','claimed')", (state, reason, _dt(now), job_id)).rowcount > 0
+
+    def claim_followup(self, *, pilot_id: str, owner_token: str, job_id: str, now: datetime | str) -> tuple[str, dict]:
+        """Claim one due job before generating. Returns ``(input_key, anchor_message_row)``.
+
+        Refuses (job-specific reasons in FOLLOWUP_DROPS) unless the newest message of the chat is still our
+        own AI outbound, newer than the pilot cutoff, and the fan has not spoken since the job was queued."""
+        now_s = _dt(now)
+        with self._tx(initialize=True) as con:
+            p = self._active(con, pilot_id, owner_token, now_s)
+            job = con.execute("SELECT * FROM native_pilot_followups WHERE job_id=?", (job_id,)).fetchone()
+            if job is None or job["state"] != "queued" or (job["account_id"], job["fan_id"]) != (p["account_id"], p["fan_id"]):
+                raise Refused("followup-not-queued")
+            if job["run_at"] > now_s:
+                raise Refused("followup-not-due")
+            if now_s > _dt(datetime.fromisoformat(job["run_at"]) + FOLLOWUP_TTL):
+                raise Refused("followup-expired")
+            anchor = self._newest(con, p["account_id"], p["fan_id"])
+            if (anchor is None or anchor["direction"] != "out" or not anchor["automation_kind"]
+                    or not isinstance(anchor["message_id"], int) or _dt(anchor["created_at"]) <= p["cutoff"]):
+                raise Refused("followup-chat-moved")
+            last_in = con.execute("SELECT message_id FROM messages WHERE account_id=? AND fan_id=? AND direction='in' "
+                                  "ORDER BY created_at DESC,message_id DESC LIMIT 1", (p["account_id"], p["fan_id"])).fetchone()
+            if (last_in["message_id"] if last_in else None) != job["last_in_id"]:
+                raise Refused("followup-fan-replied")
+            if con.execute("SELECT 1 FROM native_pilot_inputs WHERE pilot_id=? AND (message_id=? OR state='generating')",
+                           (pilot_id, anchor["message_id"])).fetchone():
+                raise Refused("input-already-claimed")
+            key = _hash([pilot_id, FOLLOWUP_MARK, job_id])
+            created, ingested = _dt(anchor["created_at"]), _dt(anchor["ingested_at"] or anchor["created_at"])
+            con.execute("INSERT INTO native_pilot_inputs(input_key,pilot_id,message_id,source_hash,created_at,ingested_at,"
+                        "member_ids_json,earliest_created_at,state,claimed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'generating',?,?)",
+                        (key, pilot_id, anchor["message_id"], FOLLOWUP_MARK + _hash([job_id, anchor["message_id"], created]),
+                         created, ingested, _json([anchor["message_id"]]), created, now_s, now_s))
+            con.execute("UPDATE native_pilot_followups SET state='claimed',input_key=?,updated_at=? WHERE job_id=?",
+                        (key, now_s, job_id))
+            return key, dict(anchor)
 
     # ── persistent service pilots ────────────────────────────────────────────
     # Same rows, same fences and the same admission/unknown rules as a bounded

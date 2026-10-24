@@ -315,6 +315,45 @@ async def suite(root):
             f.sql("UPDATE messages SET automation_kind='ai_upseller',price_cents=300 WHERE message_id=?",(reply["id"],))
             runner.verify_attribution(f.path,fixtures.ACCT,fixtures.FAN,f.ledger.receipts(pilot_id=p.pilot_id),content=plan)
 
+    # Several approved items: a send of the second listed item goes out, a stale open PPV of
+    # any listed item is not an obligation, an unlisted item's open PPV still is, and a card
+    # carrying no listed item's media set never reaches the wire.
+    MEDIA2 = [{"id": 7201, "type": "photo"}]
+    TYPES.update({7201: "photo"})
+    for case in ("multi-second", "multi-open-listed", "multi-open-unlisted", "multi-unlisted-card"):
+        f, p, g, c, h = make(case)
+        f.sql("CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,preview_media_ids TEXT,price_cents INTEGER,is_free_teaser INTEGER,enabled INTEGER,pricing_mode TEXT)")
+        f.sql("INSERT INTO catalog_items VALUES(1,?,'video','[7101, 7102]','[7101]',300,0,1,'fixed')", (fixtures.ACCT,))
+        f.sql("INSERT INTO catalog_items VALUES(3,?,'photo','[7201]','[]',300,0,1,'fixed')", (fixtures.ACCT,))
+        manifest=root/(case+".json")
+        manifest.write_text(json.dumps({"account_id":fixtures.ACCT,"fan_id":fixtures.FAN,"items":[
+          {"catalog_id":1,"kind":"video","price_cents":300,"media":MEDIA,"preview_ids":[7101]},
+          {"catalog_id":3,"kind":"photo","price_cents":300,"media":MEDIA2,"preview_ids":[]}]}))
+        plan=ContentPlan(manifest,fixtures.ACCT,fixtures.FAN);g.content=plan
+        c.vault_media_by_id=lambda mid:{"id":mid,"type":TYPES[mid],"canView":True}
+        h.change_result=lambda result:result.update(price=h.posts[-1]["price"],media=[dict(m) for m in MEDIA2],mediaCount=1,previews=[])
+        if case=="multi-open-listed":
+            for item in (1, 3):
+                f.sql("INSERT INTO content_offers VALUES(?,?,'open','ppv',?)", (fixtures.ACCT,fixtures.FAN,item))
+        if case=="multi-open-unlisted":
+            f.sql("INSERT INTO content_offers VALUES(?,?,'open','ppv',9)", (fixtures.ACCT,fixtures.FAN))
+        if case=="multi-unlisted-card":
+            refuses_any = False
+            try:
+                g.send(fixtures.FAN,"caption",{"price":3.0,"locked_text":False,"media_files":[7101,7201],"previews":[]})
+            except Refused:
+                refuses_any = True
+            check(refuses_any and h.posts==[], case)
+            continue
+        terms=plan.terms({"price":3.0,"locked_text":False,"media_files":[7201],"previews":[]})
+        check(terms["catalog_id"]==3, case)
+        if case=="multi-open-unlisted":
+            await async_refuses("chat-offer-open",lambda:g._send("neutral caption",terms))
+            check(h.posts==[], case)
+        else:
+            await g._send("neutral caption",terms)
+            check(len(h.posts)==1 and h.posts[0]["mediaFiles"]==[7201] and h.posts[0]["price"]==3.0, case)
+
     # A card whose media cannot be viewed, or whose catalogue row drifted or is
     # disabled, never reaches the wire.
     for case, mutate, reason in (("asset-gone", lambda c, f: setattr(c, "vault_media_by_id", lambda mid: {"id": mid, "type": TYPES[mid], "canView": False}), "content-asset-unavailable"),

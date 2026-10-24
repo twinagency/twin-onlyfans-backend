@@ -147,6 +147,30 @@ async def exercise():
                 check((len(calls), len(sent)) == before, "obligation refused before model/provider")
                 async with get_session() as s:
                     await s.execute(delete(ContentOffer))
+            # Approved catalogue items: this fan's open PPV of ANY listed item is not an
+            # obligation; an unlisted item, another fan's offer, or a tip-unlock still is.
+            async with get_session() as s:
+                s.add(CatalogItem(id=2, account_id=account, label="Second item"))
+                s.add(CatalogItem(id=3, account_id=account, label="Unlisted item"))
+            pilot.content = SimpleNamespace(catalog_ids={1, 2})
+            for offer, refused in ((dict(fan_id=fan, item_id=1, mode="ppv"), False),
+                                   (dict(fan_id=fan, item_id=2, mode="ppv"), False),
+                                   (dict(fan_id=fan, item_id=3, mode="ppv"), True),
+                                   (dict(fan_id=fan + 1, item_id=2, mode="ppv"), True),
+                                   (dict(fan_id=fan, item_id=2, mode="tip_unlock"), True)):
+                async with get_session() as s:
+                    s.add(ContentOffer(id=1, account_id=account, status="open", **offer))
+                try:
+                    await pilot._no_obligations()
+                except PilotBoundaryError as e:
+                    check(refused and str(e) == "open-offer-obligation", f"listed-item obligation {offer}")
+                else:
+                    check(not refused, f"listed-item obligation {offer}")
+                async with get_session() as s:
+                    await s.execute(delete(ContentOffer))
+            async with get_session() as s:
+                await s.execute(delete(CatalogItem).where(CatalogItem.id.in_((2, 3))))
+            pilot.content = None
             for wrong in ({"account_id": "999", "fan_id": fan, "model": MODEL},
                           {"account_id": account, "fan_id": fan+1, "model": MODEL},
                           {"account_id": account, "fan_id": fan, "model": "other"}):

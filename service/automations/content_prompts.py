@@ -60,12 +60,13 @@ from db.models import (
 )
 
 from ._common import (
-    build_facts_note, facts_from_fan, load_voice_blocks, resolve_model,
+    build_facts_note, facts_from_fan, load_voice_blocks, resolve_model as _legacy_resolve_model,
 )
 # The canonical strip. `_funnel_routing` is a pure leaf (re + datetime), and it
 # is where `reply_mass_funnel` and `_funnel_signals` already get this.
 from . import _hook_upsell
 from ._funnel_routing import strip_html
+from ._runtime_llm import runtime_chat, runtime_resolve_model
 from .content_contract import MEDIA_KINDS, Contract, _STOPWORDS
 # The ONE place a pack's media is counted and named — the SOLD block below tells
 # him what he bought in the same words the caption above it will use. A second
@@ -73,6 +74,11 @@ from .content_contract import MEDIA_KINDS, Contract, _STOPWORDS
 from .pack_claim import _media_phrase
 
 log = logging.getLogger("of-relay.automation.content_prompts")
+
+
+async def resolve_model(account_id, purpose, override=None):
+    """Legacy resolution, or the active runtime capability's pinned model."""
+    return await runtime_resolve_model(_legacy_resolve_model, account_id, purpose, override)
 
 # ── Thread reading (shared with tip_context's proven shape) ─────────
 
@@ -313,7 +319,7 @@ async def read_contract(account_id: str, fan_id: int, *, n_msgs: int = 20,
             "this is the 200 most common words, not the whole vocabulary."
         )
     try:
-        res = await llm_client.chat(
+        res = await runtime_chat(
             model=model or await resolve_model(account_id, "content_resolver"),
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": "CHAT (oldest first):\n" + "\n".join(lines)}],
@@ -613,7 +619,7 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
         user += _ASK_ONLY
 
     try:
-        res = await llm_client.chat(
+        res = await runtime_chat(
             model=model,
             messages=[{"role": "system",
                        "content": _HOOK_SYSTEM["him" if str(voice or "").strip().lower()
@@ -690,7 +696,7 @@ async def _match(account_id: str, fan_id: int, contract: Contract,
     )
     user = "CATALOG (id: description):\n" + "\n".join(
         f"{mid}: {text}" for mid, text in pool)
-    res = await llm_client.chat(
+    res = await runtime_chat(
         model=model,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
@@ -746,7 +752,7 @@ async def _nearest(account_id: str, fan_id: int, contract: Contract,
     )
     user = "CATALOG (id: description):\n" + "\n".join(
         f"{mid}: {text}" for mid, text in pool)
-    res = await llm_client.chat(
+    res = await runtime_chat(
         model=model,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
@@ -924,7 +930,7 @@ async def _answer_line(account_id: str, fan_id: int, his_words: str,
     )
     user = ("CONVERSATION:\n" + "\n".join(lines)) if thread \
         else f"HIS MESSAGE:\n{his_words}"
-    res = await llm_client.chat(
+    res = await runtime_chat(
         model=model,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
@@ -965,7 +971,7 @@ async def _action_phrase(account_id: str, fan_id: int,
         'Reply as JSON: {"phrase": "me riding him on the couch"}.'
     )
     user = "MEDIA DESCRIPTIONS:\n" + "\n".join(text for _, text in described)
-    res = await llm_client.chat(
+    res = await runtime_chat(
         model=model,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
@@ -1004,7 +1010,7 @@ async def _verify(account_id: str, fan_id: int, contract: Contract,
     )
     user = "ITEMS (id: description):\n" + "\n".join(
         f"{mid}: {text}" for mid, text in picks)
-    res = await llm_client.chat(
+    res = await runtime_chat(
         model=model,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],

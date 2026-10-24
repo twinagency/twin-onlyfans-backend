@@ -103,6 +103,13 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(prohibited, repr(self.events))
             self.assertNotIn(prohibited, repr(result.raw))
 
+    async def test_resolver_purposes_get_bounded_larger_output_cap(self):
+        adapter = self.make(lambda _: httpx.Response(200, json=envelope('{"verdicts":{}}')))
+        for purpose, cap in (("content_resolver_verify", 1200), ("content_resolver_contract", 1200),
+                             ("content_resolver_action", 400), ("content_resolver_hook", 400), ("ai_chatter", 400)):
+            await self.call(adapter, purpose=purpose, response_format={"type": "json_object"})
+            self.assertEqual(json.loads(self.requests[-1].content)["max_tokens"], cap, purpose)
+
     async def test_json_format_preserved_and_parsed(self):
         adapter = self.make(lambda _: httpx.Response(200, json=envelope('{"answer":"neutral"}')))
         result = await self.call(adapter, response_format={"type": "json_object"})

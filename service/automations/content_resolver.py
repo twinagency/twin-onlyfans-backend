@@ -69,7 +69,8 @@ from db.engine import get_session
 from db.models import Fan, VaultFolder, VaultFolderItem, VaultItem
 from jsonsafe import load_json
 
-from ._common import load_voice_blocks, resolve_model
+from ._common import load_voice_blocks, resolve_model as _legacy_resolve_model
+from ._runtime_llm import runtime_resolve_model
 # Re-exported, not merely used: `content_resolver.Contract` and
 # `content_resolver.NO_MATCH` are what ~80 call sites across pack_sender,
 # make_right, tip_reward and the suites already say. The split is an internal
@@ -85,6 +86,11 @@ from .content_prompts import (  # noqa: F401
 )
 
 log = logging.getLogger("of-relay.automation.content_resolver")
+
+
+async def resolve_model(account_id, purpose, override=None):
+    """Legacy resolution, or the active runtime capability's pinned model."""
+    return await runtime_resolve_model(_legacy_resolve_model, account_id, purpose, override)
 
 # Prompt-size guardrails, inherited from tip_context (which they served well).
 _CANDIDATES_MAX = 150

@@ -24,6 +24,15 @@ from .scope import AccountScope
 
 MODEL = "deepseek/deepseek-v4.1-flash"
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+# FASTT's vault resolver JSON calls (contract read, shelf match/nearest, verify verdicts for up to
+# 24 items) can need more than the default 400-token cap; a truncated reply fails closed
+# ("model-output-incomplete"). Only these exact purposes get the larger bounded cap; every other
+# purpose, including ai_chatter replies, stays at ``max_tokens``.
+RESOLVER_MAX_TOKENS = 1200
+RESOLVER_PURPOSES = frozenset({
+    "content_resolver_contract", "content_resolver_match", "content_resolver_nearest",
+    "content_resolver_verify"})
+
 MAX_RESPONSE_BYTES = 128 * 1024
 MAX_REQUEST_BYTES = 512 * 1024
 
@@ -152,9 +161,10 @@ class NativePilotModel:
             self._fail("model-format-unsupported")
         if not isinstance(messages, list) or not messages or any(not isinstance(item, dict) for item in messages):
             self._fail("model-messages-invalid")
+        max_tokens = max(self.max_tokens, RESOLVER_MAX_TOKENS) if purpose in RESOLVER_PURPOSES else self.max_tokens
         body: dict[str, Any] = {
             "model": MODEL, "messages": messages, "temperature": temperature,
-            "stream": False, "max_tokens": self.max_tokens,
+            "stream": False, "max_tokens": max_tokens,
             "provider": {"order": ["deepinfra/fp8", "together"], "allow_fallbacks": False},
             "reasoning": {"enabled": False}, "usage": {"include": True},
         }
@@ -180,7 +190,7 @@ class NativePilotModel:
             # Daily-budget hold BEFORE any HTTP. A refusal means no request is made.
             try:
                 reservation = await self._budget.reserve(
-                    fan_id=self.fan_id, request_bytes=len(encoded), max_output_tokens=self.max_tokens)
+                    fan_id=self.fan_id, request_bytes=len(encoded), max_output_tokens=max_tokens)
             except Exception as exc:
                 self._fail("model-budget-exhausted" if type(exc).__name__ == "LLMCapExceeded"
                            else "model-budget-refused")

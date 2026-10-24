@@ -13,6 +13,11 @@ made long-lived, with every safety rule kept:
 * durable admission before each single-attempt POST; an unknown outcome stops
   sending for the fan and is NEVER resent - an operator resolves it and resumes
   the conversation, only then may the service re-acquire;
+* a send that CERTAINLY did not reach OnlyFans (a provider HTTP 429 or other 4xx refusal, or a hold/stop seen
+  between admission and the wire) is recorded ``not_sent``, gives its allowance unit back and stops nothing; a
+  429 or last-instant hold answers the same input again after a back-off (at most 2 times), and an input lost
+  to a model timeout/error is requeued once. Never once any send attempt for that input stands (sent,
+  dispatching, unknown), and a timeout, 408, 5xx or unreadable reply stays an unknown outcome as above;
 * no deadline: the lease is renewed every few seconds; a lapsed/lost lease
   stops sending and the process re-acquires only through ``activate_service``;
 * a restart adopts its own pilot once the old lease has lapsed, refuses while
@@ -47,7 +52,7 @@ from datetime import datetime, timedelta, timezone
 from twin_bridge import store
 
 from . import runner
-from .ledger import Ledger, Refused
+from .ledger import MAX_REQUEUES_MODEL, MAX_REQUEUES_PROVIDER, Ledger, Refused
 from .scope import AccountScope
 
 LEASE_TTL_S = 120.0
@@ -65,6 +70,9 @@ DESCRIBE_WAIT_S = 45.0       # a caption-less fan photo waits this long for its 
 CONNECTION_CHECK_S = 300.0
 TURN_MAX_S = 600.0
 PACE_MAX_S = 180.0
+MODEL_RETRY_REASONS = ("model-timeout", "model-http-failed", "model-response-failed")
+RATE_LIMIT_BACKOFF_S = 60.0   # a provider 429: wait this long (times the retry number) unless Retry-After says otherwise
+RATE_LIMIT_BACKOFF_MAX_S = 300.0
 
 # skip_list reasons a human (or OnlyFans) wrote to say "stop automating this fan".
 COOLDOWN_WAIT_MAX_S = 120.0
@@ -155,6 +163,11 @@ class ServiceGateway(runner.Gateway):
         while True:
             if self.stopped():
                 raise Refused(self.stopped_reason)
+            if self.hold_check is not None:
+                # The throttle can last minutes: an operator pause landing meanwhile must not cost a turn.
+                held = await asyncio.to_thread(self.hold_check)
+                if held:
+                    raise Refused(held)
             policy = self.ledger.allowance_status(self.pilot.account_id)
             if policy is None:
                 raise Refused("allowance-missing")
@@ -201,6 +214,7 @@ class Service:
         self.next_conn_check = 0.0
         self.started_at = None
         self.turns_started = 0
+        self.backoff_s = 0.0       # set by after_failure when an input was requeued; the all-fans runner turns it into a hold
         self.last_active = runner.now()
         self.last_held = None
         self.ensured = False
@@ -459,7 +473,7 @@ class Service:
                     params += list(STOP_REASONS)
                 if store.has_table(con, "native_pilot_inputs"):  # claimed = worked: a reply, or a no-reply/abandoned turn
                     sql += (" AND NOT EXISTS (SELECT 1 FROM native_pilot_inputs i WHERE i.pilot_id=? || CAST(m.fan_id AS TEXT) "
-                            "AND i.message_id=m.message_id)")
+                            "AND i.message_id=m.message_id AND i.state NOT LIKE 'requeued:%')")
                     params.append(f"svc-{self.scope.provider_id}-")
                 cursor = ()
                 for _ in range(SCAN_PAGES_MAX):
@@ -558,6 +572,10 @@ class Service:
                 child.note("service-error:" + type(exc).__name__)
                 self._hold_fan(fan, "service-error")
                 continue
+            if child.backoff_s:
+                # A requeued input (provider 429 / model failure): leave this fan alone while it backs off.
+                self.fan_holds[fan] = (runner.now() + timedelta(seconds=child.backoff_s), "retry-backoff")
+                child.backoff_s = 0.0
             if child.turns_started > before:
                 return  # one turn at a time; re-read controls and the queue before the next fan
         if await self.run_followups():
@@ -638,7 +656,10 @@ class Service:
         pilot, ledger, args = self.pilot, self.ledger, self.args
         self.turns_started += 1
         gateway = ServiceGateway(self, pilot, content=self.content, scope=self.scope)
-        gateway.sources, gateway.input_key, gateway.bubble = sources, key, 0
+        # A requeued input already owns bubble numbers (its refused attempts): continue after them.
+        prior = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
+        gateway.sources, gateway.input_key, gateway.bubble = sources, key, max((r["bubble_no"] for r in prior), default=0)
+        self.backoff_s = 0.0
         gateway.followup = job is not None
         model = NativePilotModel(
             api_key=self.conn.model_api_key, account_id=self.db, fan_id=args.fan, deadline=time.monotonic() + TURN_MAX_S,
@@ -670,7 +691,16 @@ class Service:
         if error:
             if self.stop.is_set() and not receipts:
                 return error  # clean stop: the unsent claim is dropped on release and answered after restart
-            await self.after_failure(error, key)
+            # Answer the input again later only when no send attempt stands for it (the ledger re-checks):
+            # a model timeout/error, or a POST that certainly did not reach OnlyFans (a provider 429, or a
+            # last-instant hold). A definite non-429 refusal and every follow-up job are not retried.
+            retry = None
+            if job is None:
+                if gateway.not_sent is not None:
+                    retry = ("provider", gateway.not_sent.retry_after) if gateway.not_sent.retry else None
+                elif error in MODEL_RETRY_REASONS:
+                    retry = ("model", None)
+            await self.after_failure(error, key, retry=retry)
             return error
         try:
             runner.verify_attribution(self.path, self.db, args.fan, receipts, content=self.content,
@@ -684,7 +714,7 @@ class Service:
         ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
         if getattr(args, "stop_after_card", False) and await self.card_delivered(receipts):
             await self.stop_after_card()
-        if not receipts:
+        if not any(r["state"] == "sent" for r in receipts):
             runner.emit({"event": "native-no-reply", "skip_counts": {k: v for k, v in (stats or {}).items()
                                                                      if k.startswith("skipped_") and isinstance(v, int) and v}})
         return None
@@ -836,9 +866,26 @@ class Service:
             via = "runtime-stop-only:" + (str(exc)[:60] or type(exc).__name__)
         runner.emit({"event": "stopped-after-card", "account_id": self.db, "fan_id": self.args.fan, "via": via})
 
-    async def after_failure(self, reason, key):
-        """A failed turn: stop for the fan if the ledger says so, else abandon only this input."""
+    async def after_failure(self, reason, key, retry=None):
+        """A failed turn: stop for the fan if the ledger says so, else abandon only this input.
+
+        ``retry`` = ``("model"|"provider", retry_after_s)``: the input had no send attempt stand for it, so (bounded:
+        once after a model failure, twice after a certain provider refusal) it is requeued and answered again after
+        a back-off instead of being abandoned; the regenerated reply goes through every gate and the single-attempt
+        boundary again."""
         pilot, ledger = self.pilot, self.ledger
+        if retry is not None and ledger.status(pilot.pilot_id)["state"] == "active":
+            kind, after = retry
+            count = ledger.requeue_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now(),
+                                         max_requeues=MAX_REQUEUES_MODEL if kind == "model" else MAX_REQUEUES_PROVIDER)
+            if count:
+                backoff = (min(max(after, 5.0), RATE_LIMIT_BACKOFF_MAX_S) if after else RATE_LIMIT_BACKOFF_S * count) \
+                    if kind == "provider" else self.hold_s
+                runner.emit({"event": "turn-requeued", "reason": reason, "retry": count, "backoff_s": backoff,
+                             **({"fan_id": self.args.fan} if self.strict else {})})
+                self.backoff_s = backoff
+                await self.wait(backoff)
+                return
         await runner.report_to_twin(ledger, pilot, reason)
         state = ledger.status(pilot.pilot_id)
         if state["state"] != "active":

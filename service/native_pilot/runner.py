@@ -218,6 +218,37 @@ def check_followup_history(history, anchors, confirmed_ids, *, account, fan):
         raise Refused("source-missing")
 
 
+class NotSent(Exception):
+    """An admitted send attempt that CERTAINLY did not reach OnlyFans (see ``Ledger.record_not_sent``).
+
+    Raised only from the physical-POST step: either before anything touched the wire (a last-instant hold,
+    stop or source check), or after the provider answered the POST with a definite refusal (HTTP 429, or any
+    other 4xx but 408: the provider read the request and created nothing, the same rule as
+    ``twin_bridge.platform``). A timeout, connection loss, 5xx or an unreadable reply is NOT this: those stay
+    ``delivery_unknown``. ``retry`` says whether the same input may be answered again later."""
+
+    def __init__(self, reason, *, retry=False, retry_after=None):
+        super().__init__(reason)
+        self.reason, self.retry, self.retry_after = reason, retry, retry_after
+
+
+def _refusal(exc):
+    """The ``NotSent`` a provider HTTP error stands for, or None when the outcome is not definite."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if type(status) is not int:
+        return None
+    if status == 429:
+        after = None
+        try:
+            after = float(getattr(exc.response, "headers", {}).get("retry-after"))
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return NotSent("provider-rate-limited", retry=True, retry_after=after)
+    if 400 <= status < 500 and status != 408:
+        return NotSent("provider-refused")
+    return None
+
+
 class Gateway:
     def __init__(self, ledger, pilot, client, loop, content=None, scope=None):
         self.ledger, self.pilot, self.client, self.loop = ledger, pilot, client, loop
@@ -236,6 +267,7 @@ class Gateway:
         # here (never from the frozen Pilot) and a held fan can refuse a bubble.
         self.deadline = pilot.deadline
         self.hold_check = None
+        self.not_sent = None   # the NotSent that ended a send (a retryable one lets the caller answer the input again)
 
     async def pace(self):
         """Wait point before history/admission; the bounded pilot has no pacing."""
@@ -256,7 +288,7 @@ class Gateway:
         state = self.ledger.status(self.pilot.pilot_id)
         if state["state"] != "active":
             self.stopped_reason = state["reason"] or "pilot-stopped"
-        elif sum(state["attempts"].values()) >= self.pilot.end_limit - self.pilot.baseline_used:
+        elif Ledger.counted(state["attempts"]) >= self.pilot.end_limit - self.pilot.baseline_used:
             self.stopped_reason = "send-limit-reached"
         elif now() >= datetime.fromisoformat(self.deadline):
             self.stopped_reason = "time-limit-reached"
@@ -312,6 +344,8 @@ class Gateway:
                     con.execute("UPDATE native_pilot_receipts SET evidence_json=? WHERE attempt_id=? AND state='dispatching'",
                                 (json.dumps({"content_intent": terms}, sort_keys=True), attempt.id))
 
+            wire = [False]
+
             def physical_post():
                 # Re-read stop/owner after the thread handoff, immediately at the wire.
                 with readonly(self.ledger.path) as con:
@@ -334,11 +368,21 @@ class Gateway:
                                 "mediaFiles": list(terms["media_ids"]), "price": terms["price_cents"] / 100,
                                 "previews": list(terms["preview_ids"]), "rfTag": [], "rfGuest": [], "rfPartner": [],
                                 "isForward": False}
+                        wire[0] = True   # from the next call on, the POST may have reached OnlyFans
                         return self.client.post_json(f"{API_BASE}/chats/{self.pilot.fan_id}/messages", json_body=body, proxy_tries=1,
                                                     allow_redirects=False)
+                    wire[0] = True
                     return self.client.send_text_once_body(self.pilot.fan_id, escape_plain_text(text))
             try:
                 raw = await asyncio.to_thread(physical_post)
+            except Exception as exc:
+                # Certain outcomes only (see NotSent); anything else propagates as the unknown it is.
+                if not wire[0]:
+                    raise NotSent(exc.reason if isinstance(exc, Refused) else "send-check-failed", retry=True) from None
+                refused = _refusal(exc)
+                if refused is not None:
+                    raise refused from None
+                raise
             finally:
                 revoke_dispatch(self.pilot.account_id, self.pilot.fan_id, token)
             validated = validate_created_message(raw, chat_id=self.pilot.fan_id, creator_id=self.scope.provider_id)
@@ -359,11 +403,20 @@ class Gateway:
                   "limit": self.limit_label()})
             return raw
         except Exception as exc:
-            self.stopped_reason = exc.reason if isinstance(exc, Refused) else "send-check-failed"
+            self.stopped_reason = exc.reason if isinstance(exc, (Refused, NotSent)) else "send-check-failed"
             if attempt is not None and not settled:
-                self.ledger.record_unknown(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
-                                           attempt_id=attempt.id, now=now())
-                self.stopped_reason = "delivery-unknown"
+                certain = False
+                if isinstance(exc, NotSent):
+                    try:
+                        self.ledger.record_not_sent(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                                                    attempt_id=attempt.id, now=now())
+                        certain, self.not_sent = True, exc
+                    except Exception:
+                        pass   # could not settle it as certain: keep the old, safe reading below
+                if not certain:
+                    self.ledger.record_unknown(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                                               attempt_id=attempt.id, now=now())
+                    self.stopped_reason = "delivery-unknown"
             raise Refused(self.stopped_reason) from None
 
 
@@ -412,6 +465,8 @@ def verify_attribution(path, account, fan, receipts, content=None, automation_em
     carry exactly the Automation sentinel (never NULL, never a human's id)."""
     with readonly(path) as con:
         for receipt in receipts:
+            if receipt["state"] == "not_sent":
+                continue  # certainly never sent: there is no message to attribute
             if receipt["state"] != "sent":
                 raise Refused("delivery-unresolved")
             row = con.execute("SELECT direction,automation_kind,price_cents,media_count"
@@ -524,7 +579,7 @@ async def run(args):
                     reason = state["reason"] or "operator-stop"
                     break
                 attempts = state["attempts"]
-                if sum(attempts.values()) >= args.send_limit:
+                if Ledger.counted(attempts) >= args.send_limit:
                     reason = "send-limit-reached"
                     break
                 snap = ledger.snapshot(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=now())

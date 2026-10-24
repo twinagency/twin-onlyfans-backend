@@ -68,6 +68,8 @@ async def report_outcomes(*, account_id, fan_id, receipts, run_error=None, now=N
         attention = bool(run_error)
         for r in sorted(receipts, key=lambda x: int(x["attempt_id"])):
             ref = attempt_ref(r["attempt_id"])
+            if r["state"] == "not_sent":
+                continue  # certainly never sent (see Ledger.record_not_sent): nothing to attribute, nothing unknown
             if r["state"] != "sent":
                 # delivery_unknown, or dispatching when the run ended: never "sent".
                 out["unknown"] += 1

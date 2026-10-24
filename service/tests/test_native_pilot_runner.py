@@ -54,10 +54,11 @@ async def async_refuses(reason, fn):
 
 
 class FakeResponse:
-    def __init__(self, data):
-        self.status_code = 200
-        self.ok = True
-        self.headers = {}
+    def __init__(self, data, status=200, headers=None):
+        self.status_code = status
+        self.ok = status < 400
+        self.headers = headers or {}
+        self.url = "https://onlyfans.invalid/api2/v2/x"
         self.text = json.dumps(data)
         self.data = data
 
@@ -71,6 +72,7 @@ class FakeHTTP:
         self.account, self.fan, self.at = account, fan, at
         self.posts, self.gets, self.post_kwargs = [], [], []
         self.fail = None
+        self.refuse = None      # (status, headers): the provider answers the POST with that HTTP error
         self.change_result = None
         self.closed = False
 
@@ -85,6 +87,8 @@ class FakeHTTP:
         self.post_kwargs.append(kwargs)
         if self.fail:
             raise self.fail
+        if self.refuse:
+            return FakeResponse({"error": "refused"}, status=self.refuse[0], headers=self.refuse[1])
         result = {"id": 1000 + len(self.posts), "text": json["text"], "isFromMe": True,
                   "fromUser": {"id": int(self.account)}, "withUser": {"id": self.fan},
                   "createdAt": self.at, "price": 0, "media": []}
@@ -209,6 +213,62 @@ async def suite(root):
     await async_refuses("delivery-unknown", lambda: g._send("must not retry"))
     check(len(h.posts) == 1)
 
+    # A definite provider refusal (HTTP 429, any other 4xx but 408) created nothing: the attempt is CERTAINLY
+    # not sent. It spends no budget, stops nothing, and the same input may be answered again; timeouts,
+    # 408 and 5xx stay ambiguous (delivery unknown, stop, never resent).
+    f, p, g, c, h = make("rate-limited")
+    h.refuse = (429, {"retry-after": "7"})
+    await async_refuses("provider-rate-limited", lambda: g._send("neutral reply"))
+    check(len(h.posts) == 1 and g.not_sent.retry is True and g.not_sent.retry_after == 7.0)
+    check(f.ledger.status(p.pilot_id)["attempts"] == {"not_sent": 1} and f.ledger.status(p.pilot_id)["state"] == "active")
+    check(f.sql("SELECT state,reserved,send_budget_used,send_budget_limit FROM twin_bridge_conversations")[0][:3] == ("active", 1, 3))
+    check(f.sql("SELECT state,reason FROM twin_bridge_send_attempts WHERE turn_id<>'previous-twin-turn'")[0] == ("refused", "native-pilot-not-sent"))
+    check(f.sql("SELECT count(*) FROM twin_bridge_writes")[0][0] == 0, "no writer marker is left behind")
+    check(runner.check_local(f.path, fixtures.ACCT, fixtures.FAN)["account_id"] == fixtures.ACCT, "a refused attempt does not block the fan")
+    check(len(f.ledger.receipts(pilot_id=p.pilot_id, input_key=g.input_key)) == 1)
+    # The latched gateway refuses more; a fresh gateway on the same input answers it, after the refused bubble.
+    await async_refuses("provider-rate-limited", lambda: g._send("latched"))
+    check(len(h.posts) == 1)
+    h.refuse = None
+    g2 = runner.Gateway(f.ledger, p, c, asyncio.get_running_loop())
+    g2.input_key, g2.sources, g2.bubble = g.input_key, g.sources, 1
+    reply = await g2._send("neutral reply")
+    check(len(h.posts) == 2 and f.ledger.status(p.pilot_id)["attempts"] == {"not_sent": 1, "sent": 1})
+    f.source(reply["id"], direction="out", body=reply["text"], created_at=current.isoformat(sep=" "))
+    f.sql("UPDATE messages SET automation_kind='ai_chatter' WHERE message_id=?", (reply["id"],))
+    runner.verify_attribution(f.path, fixtures.ACCT, fixtures.FAN, f.ledger.receipts(pilot_id=p.pilot_id, input_key=g.input_key))
+    check(f.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0] == 4, "only the sent bubble is spent")
+
+    for status in (400, 403, 404, 422):
+        f, p, g, c, h = make("refused-%d" % status)
+        h.refuse = (status, {})
+        await async_refuses("provider-refused", lambda: g._send("neutral reply"))
+        check(len(h.posts) == 1 and g.not_sent.retry is False, status)
+        check(f.ledger.status(p.pilot_id)["attempts"] == {"not_sent": 1} and f.ledger.status(p.pilot_id)["state"] == "active", status)
+    for status in (408, 500, 502, 503, 504):
+        f, p, g, c, h = make("ambiguous-%d" % status)
+        h.refuse = (status, {})
+        await async_refuses("delivery-unknown", lambda: g._send("neutral reply"))
+        check(len(h.posts) == 1 and g.not_sent is None, status)
+        check(f.ledger.status(p.pilot_id)["attempts"] == {"delivery_unknown": 1} and f.ledger.status(p.pilot_id)["state"] == "stopped", status)
+        check(f.sql("SELECT state FROM twin_bridge_conversations")[0][0] == "attention", status)
+
+    # A card POST (price, media) refused with 429 is just as certain.
+    # (covered with the content fixtures below: see "content-rate-limited")
+
+    # The ledger will never turn an attempt that may have been sent into "not sent".
+    f, p, g, c, h = make("not-sent-guard")
+    await g._send("neutral reply")
+    attempt_id = f.ledger.receipts(pilot_id=p.pilot_id)[0]["attempt_id"]
+    refuses("attempt-not-dispatching", lambda: f.ledger.record_not_sent(**f.call, attempt_id=attempt_id))
+    check(f.ledger.status(p.pilot_id)["attempts"] == {"sent": 1})
+    f, p, g, c, h = make("not-sent-guard-unknown")
+    h.fail = ProxyError("synthetic transport failure")
+    await async_refuses("delivery-unknown", lambda: g._send("neutral reply"))
+    attempt_id = f.ledger.receipts(pilot_id=p.pilot_id)[0]["attempt_id"]
+    refuses("attempt-not-dispatching", lambda: f.ledger.record_not_sent(**f.call, attempt_id=attempt_id))
+    check(f.ledger.status(p.pilot_id)["attempts"] == {"delivery_unknown": 1})
+
     f, p, g, c, h = make("bad-receipt")
     h.change_result = lambda r: r.update(text="different provider content")
     await async_refuses("delivery-unknown", lambda: g._send("neutral reply"))
@@ -235,9 +295,17 @@ async def suite(root):
                 f.ledger.stop(**f.call, reason="operator-stop")
             return admitted
         with patch.object(f.ledger, "begin_attempt", racing_begin):
-            await async_refuses("delivery-unknown", lambda: g._send("neutral reply"))
+            # Nothing reached the wire: the attempt is CERTAINLY not sent (never "delivery unknown").
+            await async_refuses("source-changed" if case == "source-race" else "authority-lost-before-post",
+                                lambda: g._send("neutral reply"))
         check(h.posts == [], "last-instant validation must precede physical POST")
-        check(f.ledger.status(p.pilot_id)["state"] == "stopped")
+        check(f.ledger.status(p.pilot_id)["state"] == ("active" if case == "source-race" else "stopped"))
+        check(f.ledger.status(p.pilot_id)["attempts"] == {"not_sent": 1}, case)
+        check(f.sql("SELECT state,reason FROM twin_bridge_send_attempts WHERE turn_id<>'previous-twin-turn'")[0] == ("refused", "native-pilot-not-sent"))
+        check(g.not_sent is not None and g.not_sent.retry is True)
+        # the budget unit is given back while the owner still holds the conversation (a stop already closed it)
+        check(f.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0] == (3 if case == "source-race" else 4), case)
+        check(f.sql("SELECT state FROM twin_bridge_conversations")[0][0] == ("active" if case == "source-race" else "paused"), case)
 
     # A prior pilot/input's receipt is not permission to ignore a newer
     # unrelated outbound in the CURRENT input's provider history.
@@ -277,7 +345,7 @@ async def suite(root):
     from native_pilot.content import ContentPlan
     MEDIA = [{"id": 7101, "type": "photo"}, {"id": 7102, "type": "video"}]
     TYPES = {m["id"]: m["type"] for m in MEDIA}
-    for case in ("content-paid", "content-unknown", "content-bad-receipt", "content-bad-previews"):
+    for case in ("content-paid", "content-unknown", "content-bad-receipt", "content-bad-previews", "content-rate-limited"):
         f, p, g, c, h = make(case)
         f.sql("CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,preview_media_ids TEXT,price_cents INTEGER,is_free_teaser INTEGER,enabled INTEGER,pricing_mode TEXT)")
         f.sql("INSERT INTO catalog_items VALUES(1,?,'video','[7101, 7102]','[7101]',300,0,1,'fixed')", (fixtures.ACCT,))
@@ -295,6 +363,12 @@ async def suite(root):
         terms=plan.terms({"price":3.0,"locked_text":False,"media_files":[7101,7102],"previews":[7101]})
         if case=="content-unknown":
             h.fail=ProxyError("synthetic uncertainty")
+        if case=="content-rate-limited":
+            h.refuse=(429,{})
+            await async_refuses("provider-rate-limited",lambda:g._send("neutral caption",terms))
+            check(len(h.posts)==1 and g.not_sent.retry is True)
+            check(f.ledger.status(p.pilot_id)["attempts"]=={"not_sent":1} and f.ledger.status(p.pilot_id)["state"]=="active")
+            continue
         if case in ("content-unknown","content-bad-receipt","content-bad-previews"):
             await async_refuses("delivery-unknown",lambda:g._send("neutral caption",terms))
             await async_refuses("delivery-unknown",lambda:g._send("no retry",terms))

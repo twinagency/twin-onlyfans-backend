@@ -142,6 +142,13 @@ FOLLOWUP_DROPS = ("followup-not-queued", "followup-not-due", "followup-expired",
 # conversation budget only has to stay above anything the allowance can grant
 # (``limit_units`` is at most 10000), so it can never be the first thing to bind.
 SERVICE_BUDGET_CEILING = 10000
+
+# An input whose turn failed with NO provider send attempt standing (a model timeout/error, or a POST the
+# provider certainly refused) may be answered again, a bounded number of times. The count lives in the
+# input's state while it waits (``requeued:<n>``), so no schema change is needed.
+REQUEUED = "requeued:"
+MAX_REQUEUES_MODEL = 1
+MAX_REQUEUES_PROVIDER = 2
 SERVICE_ID = re.compile(r"svc-[A-Za-z0-9_-]{1,92}")
 
 
@@ -158,6 +165,8 @@ class Ledger:
         # long a caption-less photo may wait for its description before it is skipped as before.
         # 0 = descriptions are not used here at all (the bounded pilot, every older fixture).
         self.describe_wait_s = 0
+        # input_key -> how many times it has been requeued so far (set when a requeued input is re-claimed).
+        self._requeues: dict[str, int] = {}
 
     def _check_target(self) -> None:
         # Never silently create an empty database at a misspelled production path.
@@ -346,9 +355,20 @@ class Ledger:
             p = self._active(con, pilot_id, owner_token, now_s)
             if self._source(con, p, now_s) != snapshot:
                 raise Refused("source-changed")
-            if con.execute("SELECT 1 FROM native_pilot_inputs WHERE pilot_id=? AND (message_id=? OR state='generating')",
-                           (pilot_id, snapshot.message_id)).fetchone():
+            if con.execute("SELECT 1 FROM native_pilot_inputs WHERE pilot_id=? AND state='generating'", (pilot_id,)).fetchone():
                 raise Refused("input-already-claimed")
+            prior = con.execute("SELECT input_key,state FROM native_pilot_inputs WHERE pilot_id=? AND message_id=?",
+                                (pilot_id, snapshot.message_id)).fetchone()
+            if prior is not None:
+                if not str(prior["state"]).startswith(REQUEUED) or prior["input_key"] != _hash([pilot_id, snapshot.message_id]):
+                    raise Refused("input-already-claimed")
+                # A requeued input (nothing was sent for it) is claimed again on the freshly proven snapshot.
+                con.execute("UPDATE native_pilot_inputs SET source_hash=?,created_at=?,ingested_at=?,member_ids_json=?,"
+                            "earliest_created_at=?,state='generating',claimed_at=?,updated_at=? WHERE input_key=?",
+                            (snapshot.source_hash, snapshot.created_at, snapshot.ingested_at, _json(snapshot.member_ids),
+                             snapshot.earliest_created_at, now_s, now_s, prior["input_key"]))
+                self._requeues[prior["input_key"]] = int(str(prior["state"])[len(REQUEUED):] or 1)
+                return prior["input_key"]
             key = _hash([pilot_id, snapshot.message_id])
             con.execute("INSERT INTO native_pilot_inputs(input_key,pilot_id,message_id,source_hash,created_at,ingested_at,"
                         "member_ids_json,earliest_created_at,state,claimed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'generating',?,?)",
@@ -416,7 +436,8 @@ class Ledger:
         Never resets, lowers or raises ``used_units`` except by this single
         increment, and the increment is conditional on the row still reading as
         checked, so it cannot pass ``limit_units`` even against Twin's own worker.
-        The unit is never refunded: an unknown outcome keeps it spent.
+        The unit is never refunded for an unknown outcome (it stays spent). Only
+        ``record_not_sent`` gives one back, for an attempt that certainly never reached the wire.
         """
         row = cls._policy_row(con, account)
         if row is None:
@@ -584,6 +605,64 @@ class Ledger:
             con.execute("UPDATE twin_bridge_send_attempts SET state='delivery_unknown',reason='native-pilot-unknown',updated_at=? WHERE id=?",
                         (now_s, attempt_id))
             self._stop(con, pilot_id, owner_token, "delivery-unknown", now_s, unknown=True)
+
+    def record_not_sent(self, *, pilot_id: str, owner_token: str, attempt_id: int, now: datetime | str) -> bool:
+        """Settle an admitted attempt that CERTAINLY never reached the wire (refused before the POST, or the
+        provider answered with a definite refusal such as HTTP 429: nothing was created).
+
+        The receipt becomes ``not_sent`` and the attempt ``refused``: neither blocks the fan, nothing stops,
+        nothing needs an operator. The conversation's budget unit is given back while this owner still holds
+        it, and the account's delivery allowance unit too (persistent service only); the throttle
+        (``next_dispatch_at``) is left in place so the account still spaces its sends. An attempt that is
+        already ``sent`` or ``delivery_unknown`` is NEVER converted: refused. Identical replay is a no-op
+        (returns False)."""
+        now_s = _dt(now)
+        with self._tx() as con:
+            self._outcome_owner(con, pilot_id, owner_token, attempt_id)
+            r = con.execute("SELECT state FROM native_pilot_receipts WHERE attempt_id=?", (attempt_id,)).fetchone()
+            if r["state"] == "not_sent":
+                return False
+            if r["state"] != "dispatching":
+                raise Refused("attempt-not-dispatching")
+            p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            con.execute("UPDATE native_pilot_receipts SET state='not_sent',updated_at=? WHERE attempt_id=? AND state='dispatching'",
+                        (now_s, attempt_id))
+            con.execute("UPDATE twin_bridge_send_attempts SET state='refused',reason='native-pilot-not-sent',updated_at=? "
+                        "WHERE id=? AND state='dispatching'", (now_s, attempt_id))
+            con.execute("UPDATE twin_bridge_conversations SET send_budget_used=send_budget_used-1,updated_at=? "
+                        "WHERE account_id=? AND fan_id=? AND owner_token=? AND revision=? AND send_budget_used>?",
+                        (now_s, p["account_id"], p["fan_id"], owner_token, p["revision"], p["baseline_used"]))
+            if self.allowance:
+                con.execute("UPDATE of_delivery_policy SET used_units=used_units-1 WHERE account_id=? AND used_units>0",
+                            (p["account_id"],))
+            return True
+
+    def requeue_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str,
+                      max_requeues: int) -> int:
+        """Let a failed input be answered again later (bounded). Returns how many times it has now been
+        requeued (1, 2, ...), or 0 when it was not requeued.
+
+        Only a message input still ``generating`` with NO receipt in any state but ``not_sent`` qualifies: once any
+        send attempt stands for it (sent, dispatching, delivery_unknown) it is never regenerated. A follow-up
+        job input is never requeued (the job is settled once). After ``max_requeues`` it is not requeued again."""
+        now_s = _dt(now)
+        with self._tx() as con:
+            p = con.execute("SELECT owner_token FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            if p is None or p["owner_token"] != owner_token:
+                raise Refused("pilot-owner-mismatch")
+            i = con.execute("SELECT state,source_hash FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
+                            (pilot_id, input_key)).fetchone()
+            if i is None or i["state"] != "generating" or i["source_hash"].startswith(FOLLOWUP_MARK):
+                return 0
+            if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND state<>'not_sent' LIMIT 1",
+                           (input_key,)).fetchone():
+                return 0
+            used = self._requeues.get(input_key, 0)
+            if used >= max_requeues:
+                return 0
+            con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
+                        (f"{REQUEUED}{used + 1}", now_s, pilot_id, input_key))
+            return used + 1
 
     def finish_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str) -> None:
         with self._tx() as con:
@@ -830,7 +909,7 @@ class Ledger:
 
         Only the current owner may release. A claim with NO receipt is deleted so
         the unanswered message is generated again after restart (nothing was
-        sent for it); a claim with any receipt is stopped, never regenerated.
+        sent for it; a ``not_sent`` receipt is not a send); a claim with any other receipt is stopped, never regenerated.
         Unsettled sends are left exactly as they are and still block adoption.
         """
         now_s = _dt(now)
@@ -839,7 +918,7 @@ class Ledger:
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
             con.execute("DELETE FROM native_pilot_inputs WHERE pilot_id=? AND state='generating' AND NOT EXISTS "
-                        "(SELECT 1 FROM native_pilot_receipts r WHERE r.input_key=native_pilot_inputs.input_key)", (pilot_id,))
+                        "(SELECT 1 FROM native_pilot_receipts r WHERE r.input_key=native_pilot_inputs.input_key AND r.state<>'not_sent')", (pilot_id,))
             con.execute("UPDATE native_pilot_inputs SET state='stopped',updated_at=? WHERE pilot_id=? AND state='generating'",
                         (now_s, pilot_id))
             if p["state"] == "active":
@@ -859,7 +938,7 @@ class Ledger:
 
     def input_claimed(self, *, pilot_id: str, message_id: int) -> bool:
         with store.readonly(self.path) as con:
-            return con.execute("SELECT 1 FROM native_pilot_inputs WHERE pilot_id=? AND message_id=?",
+            return con.execute("SELECT 1 FROM native_pilot_inputs WHERE pilot_id=? AND message_id=? AND state NOT LIKE 'requeued:%'",
                                (pilot_id, message_id)).fetchone() is not None
 
     def status(self, pilot_id: str) -> dict:
@@ -873,6 +952,11 @@ class Ledger:
             result["attempts"] = {r["state"]: r["n"] for r in con.execute(
                 "SELECT state,COUNT(*) AS n FROM native_pilot_receipts WHERE pilot_id=? GROUP BY state", (pilot_id,))}
             return result
+
+    @staticmethod
+    def counted(attempts: dict) -> int:
+        """Admissions that still count against a pilot's send limit (a ``not_sent`` one was given back)."""
+        return sum(n for state, n in attempts.items() if state != "not_sent")
 
     def receipts(self, *, pilot_id: str, input_key: str | None = None) -> list[dict]:
         """Metadata only; confirmed IDs may be used for live-history reconciliation."""

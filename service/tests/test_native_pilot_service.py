@@ -251,6 +251,77 @@ def ledger_level(backend, root):
     snap = led3.snapshot(**call4, now=t6)
     check(led3.claim_input(**call4, snapshot=snap, now=t6) == key3)
 
+    # 5. An attempt that CERTAINLY never reached the wire: refunded (budget unit AND allowance unit), never blocking,
+    #    never convertible once it may have been sent; the throttle stays in place.
+    backend.policy(f, limit=100, used=10, throttle=20)
+    t7 = t6 + timedelta(seconds=30)
+    led3.renew(**call4, now=t7, ttl_s=3600)
+    budget0 = f.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0]
+    a = led3.begin_attempt(**call4, input_key=key3, bubble_no=1, revision=p4.revision, now=t7)
+    check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 11)
+    check(f.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0] == budget0 + 1)
+    check(led3.record_not_sent(**call4, attempt_id=a.id, now=t7) is True)
+    used, nxt = f.sql("SELECT used_units,next_dispatch_at FROM of_delivery_policy")[0]
+    check(used == 10 and ts(nxt) == t7 + timedelta(seconds=20), "the allowance unit is refunded, the throttle stays")
+    check(f.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0] == budget0)
+    check(f.sql("SELECT state,reason FROM twin_bridge_send_attempts WHERE id=?", (a.id,))[0] == ("refused", "native-pilot-not-sent"))
+    st = led3.status(PID)["attempts"]
+    check(st["not_sent"] == 1 and Ledger.counted(st) == sum(st.values()) - 1, "a refused attempt does not count against the limit")
+    sent0 = st.get("sent", 0)
+    check(led3.record_not_sent(**call4, attempt_id=a.id, now=t7) is False, "identical replay is a no-op")
+    check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 10, "a replay never refunds twice")
+    check(led3.status(PID)["state"] == "active" and f.sql("SELECT state FROM twin_bridge_conversations")[0][0] == "active")
+    refuses(L, "attempt-owner-mismatch", lambda: led3.record_not_sent(pilot_id=PID, owner_token="forged-owner-0000000001",
+                                                                       attempt_id=a.id, now=t7))
+    a2 = led3.begin_attempt(**call4, input_key=key3, bubble_no=2, revision=p4.revision, now=t7 + timedelta(seconds=20))
+    led3.record_sent(**call4, attempt_id=a2.id, provider_message_id="1301", validated_response={"id": 1301, "text": "r"},
+                     evidence={"verified": True}, now=t7)
+    refuses(L, "attempt-not-dispatching", lambda: led3.record_not_sent(**call4, attempt_id=a2.id, now=t7))
+    refuses(L, "attempt-already-exists", lambda: led3.begin_attempt(**call4, input_key=key3, bubble_no=1, revision=p4.revision,
+                                                                    now=t7 + timedelta(seconds=40)))
+    check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 11 and (led3.status(PID)["attempts"]["not_sent"], led3.status(PID)["attempts"]["sent"]) == (1, sent0 + 1))
+    check(led3.requeue_input(**call4, input_key=key3, now=t7, max_requeues=2) == 0, "an input with a sent bubble is never requeued")
+
+    # A delivery_unknown attempt is never converted either, and blocks until an operator resolves it.
+    t8 = t7 + timedelta(seconds=200)
+    led3.finish_input(**call4, input_key=key3, now=t8)
+    f.source(401, created_at=(t8 - timedelta(seconds=5)).isoformat(sep=" "), ingested_at=(t8 - timedelta(seconds=4)).isoformat(sep=" "))
+    key4 = led3.claim_input(**call4, snapshot=led3.snapshot(**call4, now=t8), now=t8)
+    check(key4 != key3 and f.sql("SELECT state FROM native_pilot_inputs WHERE input_key=?", (key4,))[0][0] == "generating")
+    a3 = led3.begin_attempt(**call4, input_key=key4, bubble_no=1, revision=p4.revision, now=t8)
+    check(led3.requeue_input(**call4, input_key=key4, now=t8, max_requeues=2) == 0, "a dispatching attempt is never requeued over")
+    led3.record_not_sent(**call4, attempt_id=a3.id, now=t8)
+
+    # 6. Requeue: bounded, durable, only without a standing send attempt, and the same input is claimed again.
+    check(f.sql("SELECT state FROM native_pilot_inputs WHERE input_key=?", (key4,))[0][0] == "generating")
+    check(led3.requeue_input(**call4, input_key=key4, now=t8, max_requeues=1) == 1)
+    check(f.sql("SELECT state FROM native_pilot_inputs WHERE input_key=?", (key4,))[0][0] == "requeued:1")
+    check(not led3.input_claimed(pilot_id=PID, message_id=401), "a requeued input is not 'worked'")
+    refuses(L, "input-not-generating", lambda: led3.begin_attempt(**call4, input_key=key4, bubble_no=2, revision=p4.revision,
+                                                                  now=t8 + timedelta(seconds=30)))
+    t9 = t8 + timedelta(seconds=60)
+    check(led3.claim_input(**call4, snapshot=led3.snapshot(**call4, now=t9), now=t9) == key4, "the same input, claimed again")
+    check(f.sql("SELECT state FROM native_pilot_inputs WHERE input_key=?", (key4,))[0][0] == "generating")
+    check(f.sql("SELECT count(*) FROM native_pilot_inputs WHERE message_id=401")[0][0] == 1)
+    check(led3.input_claimed(pilot_id=PID, message_id=401))
+    refuses(L, "input-already-claimed", lambda: led3.claim_input(**call4, snapshot=led3.snapshot(**call4, now=t9), now=t9))
+    check(led3.requeue_input(**call4, input_key=key4, now=t9, max_requeues=1) == 0, "bounded: once is once")
+    check(f.sql("SELECT state FROM native_pilot_inputs WHERE input_key=?", (key4,))[0][0] == "generating")
+    check(led3.requeue_input(**call4, input_key=key4, now=t9, max_requeues=2) == 2)
+    # The count survives a restart (it lives in the state): a fresh ledger reads it back at the next claim.
+    led4 = Ledger(f.path, allowance=True)
+    check(led4.claim_input(**call4, snapshot=led4.snapshot(**call4, now=t9), now=t9) == key4)
+    check(led4.requeue_input(**call4, input_key=key4, now=t9, max_requeues=2) == 0, "the bound holds across a new process")
+    # A follow-up input is never requeued (its job is settled once).
+    f.sql("UPDATE native_pilot_inputs SET source_hash='followup:x' WHERE input_key=?", (key4,))
+    check(led4.requeue_input(**call4, input_key=key4, now=t9, max_requeues=9) == 0)
+    f.sql("UPDATE native_pilot_inputs SET source_hash=? WHERE input_key=?", (snap.source_hash, key4))
+    refuses(L, "pilot-owner-mismatch", lambda: led4.requeue_input(pilot_id=PID, owner_token="forged-owner-0000000001",
+                                                                  input_key=key4, now=t9, max_requeues=2))
+    # A clean release drops a claim whose only receipt is a not_sent one (nothing was sent: answered after restart).
+    led4.release_service(**call4, now=t9)
+    check(not f.sql("SELECT 1 FROM native_pilot_inputs WHERE input_key=?", (key4,)), "not_sent receipts do not pin a claim")
+
 
 # ── assembled loop ────────────────────────────────────────────────────────────
 
@@ -310,6 +381,8 @@ async def loop_level(backend, root):
         def __init__(self, f):
             super().__init__([], A, F, clock().isoformat() + "Z")
             self.f, self.sent, self.posted_at = f, [], []
+            self.codes = []          # scripted answers for the next POSTs: an HTTP error status, or None = succeed
+            self.refuse_headers = {}
 
         def get(self, url, **kwargs):
             rows = self.f.sql("SELECT message_id,body,created_at FROM messages WHERE direction='in' AND fan_id=?", (F,))
@@ -321,6 +394,11 @@ async def loop_level(backend, root):
         def request(self, method, url, json=None, **kwargs):
             self.at = clock().isoformat() + "Z"
             self.posted_at.append(clock())
+            if self.codes:
+                code = self.codes.pop(0)
+                if code:
+                    self.posts.append(dict(json))
+                    return R.FakeResponse({"error": "refused"}, status=code, headers=self.refuse_headers)
             response = super().request(method, url, json=json, **kwargs)
             self.sent.append(response.data)
             return response
@@ -343,8 +421,11 @@ async def loop_level(backend, root):
         texts = ["neutral reply"]
         card = False
 
+        fail_models = 0        # the next N turns end in a model timeout before anything is sent
+        die_after_first = False  # the model times out after the first bubble went out
+
         def __init__(self, account, fan, *, chat, send, emit, content, context):
-            self.send, self.fan = send, fan
+            self.send, self.fan, self.chat = send, fan, chat
 
         def __enter__(self):
             return self
@@ -354,7 +435,14 @@ async def loop_level(backend, root):
 
         async def run(self, run_id):
             f = holder["f"]
-            for text in FakeEngine.texts:
+            if FakeEngine.fail_models > 0:
+                FakeEngine.fail_models -= 1
+                self.chat.__self__.stopped_reason = "model-timeout"
+                return {"errors": 1}
+            for i, text in enumerate(FakeEngine.texts):
+                if FakeEngine.die_after_first and i == 1:
+                    self.chat.__self__.stopped_reason = "model-timeout"
+                    return {"errors": 1}
                 raw = await asyncio.to_thread(self.send, self.fan, text, {})
                 f.source(raw["id"], direction="out", body=raw["text"], created_at=clock().isoformat(sep=" "))
                 f.sql("UPDATE messages SET automation_kind='ai_chatter',sent_by_employee_id=5 WHERE message_id=?", (raw["id"],))
@@ -404,6 +492,10 @@ async def loop_level(backend, root):
 
     def kinds(name):
         return [e for e in events if e.get("event") == name]
+
+    async def settle_loop(n=60):
+        for _ in range(n):
+            await asyncio.sleep(0.003)
 
     with patch.object(runner, "emit", events.append), patch.object(runner, "now", clock), \
             patch.object(runner, "report_to_twin", no_report), patch.object(service, "ensure_fan_conversation", no_ensure), \
@@ -499,9 +591,10 @@ async def loop_level(backend, root):
         backend.set_skip(f, None)
         await stop(task, patcher)
 
-        # ── a stop seen at admission leaves no attempt; one seen at the wire is fail-closed and never POSTs ──
+        # ── a stop seen while pacing or at admission leaves no attempt; one seen at the wire never POSTs and is
+        #    CERTAINLY not sent (receipt not_sent, allowance unit refunded, input requeued) ──
         original = service.fan_hold_reason
-        for trip, label in ((1, "admission"), (2, "wire")):
+        for trip, label in ((1, "pace"), (2, "admission"), (3, "wire")):
             f, http, client = make("loop-" + label, limit=100, used=4, throttle=1)
             calls = {"n": 0, "armed": False}
 
@@ -521,15 +614,174 @@ async def loop_level(backend, root):
                 task, patcher = start(client)
                 await until(lambda: kinds("ready"), "ready", events)
                 fan_says(f)
-                await until(lambda: kinds("turn-abandoned") or kinds("stopped"), label + " stop outcome", events)
+                await until(lambda: kinds("turn-abandoned") or kinds("stopped") or kinds("turn-requeued"), label + " stop outcome", events)
                 check(http.posts == [], label + ": nothing reached the wire")
-                check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == (4 if trip == 1 else 5))
-                if trip == 1:
+                check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4, label + ": no allowance unit stays spent")
+                check(f.sql("SELECT state FROM native_pilots")[0][0] == "active", label + ": a stop at the wire is not an unknown send")
+                check(not f.sql("SELECT 1 FROM native_pilot_receipts WHERE state='delivery_unknown'"))
+                if trip < 3:
                     check(kinds("turn-abandoned")[0]["reason"] == "fan-restricted")
-                    check(f.sql("SELECT state FROM native_pilots")[0][0] == "active", "an admission-time stop is not an unknown send")
+                    check(not f.sql("SELECT 1 FROM native_pilot_receipts"), label + ": no attempt was admitted")
                 else:
-                    check(f.sql("SELECT state FROM native_pilot_receipts")[0][0] == "delivery_unknown")
+                    check(f.sql("SELECT state FROM native_pilot_receipts")[0][0] == "not_sent")
+                    check(f.sql("SELECT state FROM twin_bridge_conversations")[0][0] == "active")
+                    check(kinds("turn-requeued")[0]["reason"] == "fan-held-before-post" and kinds("turn-requeued")[0]["retry"] == 1)
+                    check(not kinds("stopped"))
                 await stop(task, patcher)
+
+        # ── a pause landing while the turn waits out the account throttle is seen THERE, not a throttle later ──
+        from native_pilot.ledger import _dt
+        due = clock() + timedelta(days=10)
+        f, http, client = make("loop-pace-hold", limit=100, used=4, throttle=20, nxt=_dt(due))
+        calls = {"n": 0, "armed": False}
+
+        def stops_while_waiting(path, account, fan):
+            if not calls["armed"]:
+                return original(path, account, fan)
+            calls["n"] += 1
+            if calls["n"] >= 3:
+                calls.setdefault("seen_at", clock())
+                return "fan-paused"
+            return None
+
+        real_run = FakeEngine.run
+
+        async def armed_run(self, run_id):
+            calls["armed"] = True
+            return await real_run(self, run_id)
+        events.clear()
+        with patch.object(service, "fan_hold_reason", stops_while_waiting), patch.object(FakeEngine, "run", armed_run):
+            task, patcher = start(client)
+            await until(lambda: kinds("ready"), "ready", events)
+            fan_says(f)
+            await until(lambda: kinds("turn-abandoned"), "abandoned while pacing", events)
+            check(kinds("turn-abandoned")[0]["reason"] == "fan-paused")
+            # Without the check in pace() this turn waits out the (here: days long) throttle and ends
+            # "allowance-wait-timeout"; with it the pause is seen on the 3rd one second step.
+            check(calls["n"] == 3, "the hold is re-read on every pacing step")
+            check(http.posts == [] and not f.sql("SELECT 1 FROM native_pilot_receipts"))
+            check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4)
+            await stop(task, patcher)
+
+        # ── a clean provider 429 is "not sent": nothing stops, the unit comes back, the SAME input is answered later ──
+        f, http, client = make("loop-429", limit=100, used=4, throttle=1)
+        http.codes, http.refuse_headers = [429], {}
+        events.clear()
+        task, patcher = start(client)
+        await until(lambda: kinds("ready"), "ready", events)
+        mid = fan_says(f)
+        await until(lambda: kinds("turn-requeued"), "429 requeued", events)
+        check(len(http.posts) == 1 and kinds("turn-requeued")[0]["reason"] == "provider-rate-limited")
+        check(kinds("turn-requeued")[0]["retry"] == 1 and kinds("turn-requeued")[0]["backoff_s"] == 60.0)
+        check(f.sql("SELECT state FROM native_pilots")[0][0] == "active" and f.sql("SELECT state FROM twin_bridge_conversations")[0][0] == "active")
+        check(not kinds("stopped") and not kinds("turn-abandoned") and not f.sql("SELECT 1 FROM native_pilot_receipts WHERE state='delivery_unknown'"))
+        await replied(f, http, 2, "answered again after the 429", outs=1)
+        check(http.posted_at[1] - http.posted_at[0] >= timedelta(seconds=60), "the retry waits out the back-off")
+        check(sorted(r[0] for r in f.sql("SELECT state FROM native_pilot_receipts")) == ["not_sent", "sent"])
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5, "only the accepted send keeps its unit")
+        check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete" and f.sql("SELECT count(*) FROM native_pilot_inputs")[0][0] == 1)
+        check(f.sql("SELECT count(*) FROM messages WHERE direction='out'")[0][0] == 1, "exactly one message reached the fan")
+        check(reports.count(None) >= 1 and "provider-rate-limited" not in reports, "a requeued blip does not flag the fan for a human")
+        await stop(task, patcher)
+
+        # Retry-After is honoured (clamped); the bound is 2 requeues, then the input is abandoned, the fan NOT stopped.
+        f, http, client = make("loop-429-bound", limit=100, used=4, throttle=1)
+        http.codes, http.refuse_headers = [429, 429, 429], {"retry-after": "7"}
+        events.clear()
+        task, patcher = start(client)
+        await until(lambda: kinds("ready"), "ready", events)
+        fan_says(f)
+        await until(lambda: kinds("turn-abandoned"), "429 bound reached", events)
+        check(len(http.posts) == 3 and [e["retry"] for e in kinds("turn-requeued")] == [1, 2])
+        check([e["backoff_s"] for e in kinds("turn-requeued")] == [7.0, 7.0])
+        check(kinds("turn-abandoned")[0]["reason"] == "provider-rate-limited")
+        check(f.sql("SELECT state FROM native_pilots")[0][0] == "active" and not kinds("stopped"))
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4 and f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete")
+        check(sorted(r[0] for r in f.sql("SELECT state FROM native_pilot_receipts")) == ["not_sent"] * 3)
+        await settle_loop()
+        check(len(http.posts) == 3, "an abandoned input is not retried again")
+        fan_says(f, "a newer message")
+        await replied(f, http, 4, "the next message is answered normally", outs=1)
+        await stop(task, patcher)
+
+        # Another definite refusal (403) is certain too but is not retried; ambiguous statuses stay unknown.
+        for code in (403, 408, 500, 503):
+            f, http, client = make("loop-http-%d" % code, limit=100, used=4, throttle=1)
+            http.codes = [code]
+            events.clear()
+            task, patcher = start(client)
+            await until(lambda: kinds("ready"), "ready", events)
+            fan_says(f)
+            if code == 403:
+                await until(lambda: kinds("turn-abandoned"), "403 abandoned", events)
+                check(kinds("turn-abandoned")[0]["reason"] == "provider-refused" and not kinds("turn-requeued"))
+                check(f.sql("SELECT state FROM native_pilots")[0][0] == "active" and f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4)
+                check(f.sql("SELECT state FROM native_pilot_receipts")[0][0] == "not_sent" and len(http.posts) == 1)
+            else:
+                await until(lambda: kinds("stopped"), "%d unknown stop" % code, events)
+                check(kinds("stopped")[0]["reason"] == "delivery-unknown" and not kinds("turn-requeued"))
+                check(f.sql("SELECT state FROM native_pilots")[0][0] == "stopped" and f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5)
+                check(f.sql("SELECT state FROM native_pilot_receipts")[0][0] == "delivery_unknown" and len(http.posts) == 1)
+                check(f.sql("SELECT state FROM twin_bridge_conversations")[0][0] == "attention")
+            await stop(task, patcher)
+
+        # A 429 on a LATER bubble (an earlier one already went out): the rest is dropped, never regenerated.
+        f, http, client = make("loop-429-late", limit=100, used=4, throttle=1)
+        http.codes = [None, 429]
+        FakeEngine.texts = ["first bubble", "second bubble"]
+        events.clear()
+        task, patcher = start(client)
+        await until(lambda: kinds("ready"), "ready", events)
+        fan_says(f)
+        await until(lambda: kinds("turn-abandoned"), "late 429 abandoned", events)
+        check(len(http.posts) == 2 and not kinds("turn-requeued") and kinds("turn-abandoned")[0]["reason"] == "provider-rate-limited")
+        check(sorted(r[0] for r in f.sql("SELECT state FROM native_pilot_receipts")) == ["not_sent", "sent"])
+        check(f.sql("SELECT state FROM native_pilots")[0][0] == "active" and f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5)
+        await settle_loop()
+        check(len(http.posts) == 2, "a partly answered input is never regenerated")
+        FakeEngine.texts = ["neutral reply"]
+        await stop(task, patcher)
+
+        # ── a model timeout/error abandons an input only after ONE requeue; never once a send attempt stands ──
+        f, http, client = make("loop-model-retry", limit=100, used=4, throttle=1)
+        FakeEngine.fail_models = 1
+        events.clear()
+        task, patcher = start(client)
+        await until(lambda: kinds("ready"), "ready", events)
+        fan_says(f)
+        await replied(f, http, 1, "answered after one model failure")
+        check([e["reason"] for e in kinds("turn-requeued")] == ["model-timeout"] and not kinds("turn-abandoned"))
+        check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete" and f.sql("SELECT count(*) FROM native_pilot_inputs")[0][0] == 1)
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5)
+        await stop(task, patcher)
+
+        f, http, client = make("loop-model-bound", limit=100, used=4, throttle=1)
+        FakeEngine.fail_models = 2
+        events.clear()
+        task, patcher = start(client)
+        await until(lambda: kinds("ready"), "ready", events)
+        fan_says(f)
+        await until(lambda: kinds("turn-abandoned"), "model failure twice: abandoned", events)
+        check(len(kinds("turn-requeued")) == 1 and kinds("turn-abandoned")[0]["reason"] == "model-timeout")
+        await settle_loop()
+        check(http.posts == [] and FakeEngine.fail_models == 0, "exactly one retry, no more")
+        check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete")
+        fan_says(f, "next message")
+        await replied(f, http, 1, "the fan is answered on his next message")
+        await stop(task, patcher)
+
+        f, http, client = make("loop-model-after-send", limit=100, used=4, throttle=1)
+        FakeEngine.texts, FakeEngine.die_after_first = ["first bubble", "second bubble"], True
+        events.clear()
+        task, patcher = start(client)
+        await until(lambda: kinds("ready"), "ready", events)
+        fan_says(f)
+        await until(lambda: kinds("turn-abandoned"), "model failed after a send: abandoned", events)
+        check(not kinds("turn-requeued") and len(http.posts) == 1, "never regenerated once a send attempt stands")
+        await settle_loop()
+        check(len(http.posts) == 1)
+        FakeEngine.texts, FakeEngine.die_after_first = ["neutral reply"], False
+        await stop(task, patcher)
 
         # ── unknown outcome: hold, never resend, across a restart, until an operator resolves ──
         f, http, client = make("loop-unknown", limit=100, used=4, throttle=1)
@@ -817,6 +1069,7 @@ async def multi_level(backend, root):
 
         def __init__(self, f):
             self.f, self.sent, self.posts, self.fail_for, self.closed = f, [], [], {}, False
+            self.codes_for = {}     # fan -> scripted answers for its next POSTs (HTTP error status, or None = succeed)
 
         @staticmethod
         def fan_of(url):
@@ -837,6 +1090,10 @@ async def multi_level(backend, root):
                 self.posts.append((fan, json["text"]))
                 raise self.fail_for[fan]
             self.posts.append((fan, json["text"]))
+            if self.codes_for.get(fan):
+                code = self.codes_for[fan].pop(0)
+                if code:
+                    return R.FakeResponse({"error": "refused"}, status=code)
             result = {"id": 7000 + len(self.posts), "text": json["text"], "isFromMe": True, "fromUser": {"id": int(A)},
                       "withUser": {"id": fan}, "createdAt": clock().isoformat() + "Z", "price": 0, "media": []}
             self.sent.append(result)
@@ -860,8 +1117,10 @@ async def multi_level(backend, root):
     holder = {}
 
     class FakeEngine:
+        fail_for = {}      # fan -> number of coming turns that end in a model timeout before anything is sent
+
         def __init__(self, account, fan, *, chat, send, emit, content, context, own_offers_only=False):
-            self.send, self.fan, self.content = send, fan, content
+            self.send, self.fan, self.content, self.chat = send, fan, content, chat
             check(own_offers_only is True, "all-fans turns scope open offers to their own fan")
 
         def __enter__(self):
@@ -876,6 +1135,10 @@ async def multi_level(backend, root):
 
         async def run(self, run_id):
             f = holder["f"]
+            if FakeEngine.fail_for.get(self.fan):
+                FakeEngine.fail_for[self.fan] -= 1
+                self.chat.__self__.stopped_reason = "model-timeout"
+                return {"errors": 1}
             if FakeEngine.gate is not None:
                 FakeEngine.waiting.append(self.fan)
                 await FakeEngine.gate.wait()
@@ -1142,8 +1405,8 @@ async def multi_level(backend, root):
         await stop(task, patcher)
 
         # A Pause that lands AFTER admission but before the wire is caught by the wire re-check: no POST at all.
-        # The ledger then records the attempt as uncertain (fail closed): it cannot prove "not sent" for an
-        # attempt that was opened, so the fan waits for an operator and nothing is ever retried.
+        # Nothing was handed to the transport, so the attempt is CERTAINLY not sent: the unit is refunded, the fan
+        # is not stranded as delivery-unknown, and once the Pause is lifted the SAME message is answered (once).
         f, http, client = make("multi-wire", limit=100, used=4, throttle=1)
         events.clear()
         task, patcher = await start(client)
@@ -1157,12 +1420,42 @@ async def multi_level(backend, root):
             return attempt
         with patch.object(_Ledger, "begin_attempt", begin_then_pause):
             says(f, FA, "a, paused at the wire")
-            await until(lambda: any(e.get("event") == "stopped" for e in events), "wire re-check refusal", events)
+            await until(lambda: kinds("turn-requeued"), "wire re-check refusal", events)
         await settle()
         check(not posted(http, FA), "no POST after the Pause ack even when it lands at the wire")
-        check(f.sql("SELECT state FROM native_pilots WHERE pilot_id=?", (f"svc-{A}-{FA}",))[0][0] == "stopped")
+        check(not kinds("stopped"), "not a stranded delivery-unknown")
+        check(f.sql("SELECT state FROM native_pilots WHERE pilot_id=?", (f"svc-{A}-{FA}",))[0][0] == "active")
+        check(f.sql("SELECT state FROM native_pilot_receipts")[0][0] == "not_sent")
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4, "the unit was refunded")
         says(f, FB, "b unaffected")
         await until(lambda: len(posted(http, FB)) == 1, "B still answered", events)
+        backend.fan_skip(f, FA, None)                            # the Pause is lifted
+        await until(lambda: len(posted(http, FA)) == 1, "the held message is answered after the Pause", events)
+        await settle()
+        check(len(posted(http, FA)) == 1 and f.sql("SELECT count(*) FROM messages WHERE direction='out' AND fan_id=?", (FA,))[0][0] == 1)
+        await stop(task, patcher)
+
+        # A provider 429 on A: A backs off, B is still answered meanwhile, then A's SAME message is answered.
+        f, http, client = make("multi-429", limit=100, used=4, throttle=1)
+        events.clear()
+        http.codes_for[FA] = [429]
+        task, patcher = await start(client)
+        says(f, FA, "a, rate limited")
+        says(f, FB, "b meanwhile")
+        await until(lambda: len(posted(http, FA)) == 2 and len(posted(http, FB)) == 1, "A retried after B", events)
+        await settle()
+        check([p[0] for p in http.posts][:2] == [FA, FB], "B was answered while A backed off")
+        check(kinds("turn-requeued") and kinds("turn-requeued")[0]["fan_id"] == FA and not kinds("stopped"))
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 6, "the refused attempt's unit was refunded")
+        check(sorted(r[0] for r in f.sql("SELECT state FROM native_pilot_receipts WHERE pilot_id=?", (f"svc-{A}-{FA}",))) == ["not_sent", "sent"])
+        check(f.sql("SELECT count(*) FROM messages WHERE direction='out' AND fan_id=?", (FA,))[0][0] == 1)
+        # a model failure: requeued once for that fan, the other fan is unaffected
+        FakeEngine.fail_for = {FA: 1}
+        says(f, FA, "a again")
+        await until(lambda: len(kinds("turn-requeued")) == 2, "model failure requeued", events)
+        await until(lambda: len(posted(http, FA)) == 3, "A answered after the model retry", events)
+        check([e["reason"] for e in kinds("turn-requeued")] == ["provider-rate-limited", "model-timeout"])
+        FakeEngine.fail_for = {}
         await stop(task, patcher)
         # The wildcard account plan reaches both children; reviewed catalogue state is
         # enabled as one account operation and restored once, preserving mixed prior states.

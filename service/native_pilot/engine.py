@@ -38,6 +38,25 @@ class PilotBoundaryError(RuntimeError):
     """Fixed public reason only: never embed message text or transport details."""
 
 
+class _ResolverRefused(Exception):
+    """Raised by the resolver's client. Deliberately not a PilotBoundaryError: FASTT catches it
+    (delivery reaction not sent, expiry unsend skipped) and the run is not marked violated."""
+
+
+class _ResolverClient:
+    """What FASTT's unlock watcher gets: no platform reads or writes at all. Paid state comes from the
+    ledger/transactions tables; the delivery reaction, unsend and live re-read all fail closed."""
+
+    def send_message(self, *args, **kwargs):
+        raise _ResolverRefused("resolver-send-refused")
+
+    def unsend_message(self, *args, **kwargs):
+        raise _ResolverRefused("resolver-unsend-refused")
+
+    def get_messages(self, *args, **kwargs):
+        raise _ResolverRefused("resolver-read-refused")
+
+
 class _TextClient:
     """No wildcard delegation to a live client; its only write is plain text."""
 
@@ -326,12 +345,24 @@ class NativeEngine:
         return None
 
     async def resolve_open_offers(self, account_id, client, cfg, **kwargs):
+        """FASTT's own unlock watcher / stall-TTL expiry, for THIS fan only.
+
+        The stock body runs unchanged (``ai_chatter._resolve_open_offers_stock``); only its
+        mouths are narrowed: a client that cannot send, unsend or read the platform, and
+        two stock switches forced off for this call (``unsend_expired_offer``,
+        ``qualification_gate_enabled``: its discount resend and ladder jobs). Writes left:
+        ``content_offers`` status (expired / delivered / cancelled), ``messages.is_paid`` /
+        ``purchased_at`` on a ledger-proven buy, bought-media stamps and a short fan lease."""
         self._account(account_id)
         await self._no_obligations()
-        return {name: 0 for name in (
-            "unlocked_tip", "unlocked_ppv", "offers_expired",
-            "offers_unsent", "deliveries_failed", "would_unlock",
-            "discount_resends")}
+        safe = dict(cfg)
+        safe.update(unsend_expired_offer=False, qualification_gate_enabled=False)
+        stats = await self.native._resolve_open_offers_stock(
+            self.account_id, _ResolverClient(), safe,
+            dry_run=bool(kwargs.get("dry_run")), only_fan_ids={self.fan_id})
+        if any(stats.values()):
+            self._emit({"event": "offers-resolved", **{k: v for k, v in stats.items() if v}})
+        return stats
 
     async def bool_setting(self, account_id, name, native_loader):
         self._account(account_id)

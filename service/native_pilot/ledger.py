@@ -141,6 +141,10 @@ class Ledger:
         # one unit of the account's EXISTING of_delivery_policy, in the same
         # transaction as the durable attempt. The bounded pilot never sets it.
         self.allowance = allowance
+        # Persistent service only, when fan photos are described (FASTT's inbound_describe): how
+        # long a caption-less photo may wait for its description before it is skipped as before.
+        # 0 = descriptions are not used here at all (the bounded pilot, every older fixture).
+        self.describe_wait_s = 0
 
     def _check_target(self) -> None:
         # Never silently create an empty database at a misspelled production path.
@@ -245,7 +249,12 @@ class Ledger:
         return p
 
     @staticmethod
-    def _source(con, p, now: str,
+    def _described(con, p, message_id: int) -> bool:
+        row = con.execute("SELECT image_desc FROM messages WHERE account_id=? AND fan_id=? AND message_id=?",
+                          (p["account_id"], p["fan_id"], message_id)).fetchone()
+        return bool(row and isinstance(row[0], str) and row[0].strip())
+
+    def _source(self, con, p, now: str,
                 exclude_input_key: str | None = None) -> SourceSnapshot | None:
         # Only proven outputs from the CURRENT input are excluded. A newer external
         # outbound, system event, unsent or invalid row, etc. holds the pilot.
@@ -285,7 +294,17 @@ class Ledger:
                 # chat for a human (who may take over). Its caption is answerable text; without
                 # one the row is not an input, so the AI answers his text around it.
                 if not text:
-                    continue
+                    plain_media = (row["is_tip"] == 0 and row["price_cents"] == 0
+                                   and (row["media_count"] != 0 or bool(media)))
+                    if not (self.describe_wait_s and plain_media):
+                        continue
+                    if not self._described(con, p, row["message_id"]):
+                        # A description may still be on its way: hold the chat rather than answer
+                        # around his photo; once the window passes it is skipped as before.
+                        if now < _dt(datetime.fromisoformat(ingested) + timedelta(seconds=self.describe_wait_s)):
+                            return None
+                        continue
+                    # A described photo is answerable input (its description is what the AI reads).
             elif not text:
                 return None
             members.append(dict(row))

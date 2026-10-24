@@ -60,6 +60,7 @@ BUDGET_HOLD_S = 300.0
 HUMAN_SENDS_PER_TICK = 5
 HOLD_S = 15.0
 QUIET_S = 7.0
+DESCRIBE_WAIT_S = 45.0       # a caption-less fan photo waits this long for its description
 CONNECTION_CHECK_S = 300.0
 TURN_MAX_S = 600.0
 PACE_MAX_S = 180.0
@@ -244,13 +245,13 @@ class Service:
             old, self.client, self.sentinels = self.client, client, sentinels
             if self.intake is not None:
                 await self.intake.stop()
-            self.start_intake()
+            self.start_intake(conn)
             if old is not None:
                 old.http.close()
         self.conn = conn
         self.next_conn_check = time.monotonic() + self.connection_check_s
 
-    def start_intake(self):
+    def start_intake(self, conn=None):
         from .intake import Intake
         if self.started_at is None:
             # All-fans: the activation instant is persisted once and reused across restarts (a process
@@ -259,7 +260,14 @@ class Service:
                 pilot_id=f"svc-{self.scope.provider_id}-allfans-watermark", account_id=self.db, now=runner.now())
                 if self.all_fans else runner.now())
         factory = self._intake_factory or Intake
-        self.intake = factory(self.scope, None if self.all_fans else self.args.fan, self.path)
+        # FASTT's own inbound_describe for fan photos (photo_vision.py); the ledger waits for it, briefly.
+        kwargs = {}
+        if self._intake_factory is None:
+            from .photo_vision import make_describer
+            kwargs["describe"] = make_describer(self.scope, self.client, api_key=(conn or self.conn).model_api_key,
+                                              emit=runner.emit)
+            self.ledger.describe_wait_s = DESCRIBE_WAIT_S
+        self.intake = factory(self.scope, None if self.all_fans else self.args.fan, self.path, **kwargs)
         self.intake.start(self.client)
 
     # ── ownership ─────────────────────────────────────────────────────────

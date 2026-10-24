@@ -65,7 +65,15 @@ class NativePilotModel:
     ``on_event`` receives metadata only. Callback failure stops the adapter.
     Every failure latches ``stopped_reason``; callers must not replace the
     adapter to retry an uncertain operation within the same pilot.
+
+    The class attributes below are the whole route: a subclass (see ``photo_vision.py``) changes the
+    model, provider order and request size, never the checks, budget or accounting.
     """
+
+    ACCEPTS = MODEL              # the model name callers pass
+    API_MODEL = MODEL            # what is sent, and what the response must name
+    PROVIDER_ORDER = ["deepinfra/fp8", "together"]
+    REQUEST_LIMIT = MAX_REQUEST_BYTES
 
     def __init__(
         self, *, api_key: str, account_id: str, fan_id: int, deadline: float,
@@ -147,7 +155,7 @@ class NativePilotModel:
         self._check()
         if account_id != self.account_id or type(account_id) is not str or type(fan_id) is not int or fan_id != self.fan_id:
             self._fail("model-scope-denied")
-        if model != MODEL:
+        if model != self.ACCEPTS:
             self._fail("model-route-denied")
         if reasoning_effort:
             self._fail("model-reasoning-denied")
@@ -163,9 +171,9 @@ class NativePilotModel:
             self._fail("model-messages-invalid")
         max_tokens = max(self.max_tokens, RESOLVER_MAX_TOKENS) if purpose in RESOLVER_PURPOSES else self.max_tokens
         body: dict[str, Any] = {
-            "model": MODEL, "messages": messages, "temperature": temperature,
+            "model": self.API_MODEL, "messages": messages, "temperature": temperature,
             "stream": False, "max_tokens": max_tokens,
-            "provider": {"order": ["deepinfra/fp8", "together"], "allow_fallbacks": False},
+            "provider": {"order": list(self.PROVIDER_ORDER), "allow_fallbacks": False},
             "reasoning": {"enabled": False}, "usage": {"include": True},
         }
         if response_format is not None:
@@ -174,7 +182,7 @@ class NativePilotModel:
             encoded = json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
         except (ValueError, TypeError, UnicodeError, RecursionError):
             self._fail("model-request-invalid")
-        if len(encoded) > MAX_REQUEST_BYTES:
+        if len(encoded) > self.REQUEST_LIMIT:
             self._fail("model-request-too-large")
         if self.calls >= self.max_calls:
             self._fail("model-call-budget")
@@ -195,7 +203,7 @@ class NativePilotModel:
                 self._fail("model-budget-exhausted" if type(exc).__name__ == "LLMCapExceeded"
                            else "model-budget-refused")
         self._event({"event": "model-start", "call": call_number,
-                     "provider": "openrouter", "model": MODEL})
+                     "provider": "openrouter", "model": self.API_MODEL})
         started = time.monotonic()
         try:
             self._check()
@@ -220,7 +228,7 @@ class NativePilotModel:
                                 raise NativePilotModelError("model-response-too-large")
                             raw_bytes.extend(chunk)
             self._check()
-            result, metadata = self._parse(raw_bytes, response_format)
+            result, metadata = self._parse(raw_bytes, response_format, self.API_MODEL)
         except asyncio.CancelledError:
             await self._hold(reservation)
             self.stopped_reason = self.stopped_reason or "model-cancelled"
@@ -256,17 +264,18 @@ class NativePilotModel:
         latency_ms = max(0, round((time.monotonic() - started) * 1000))
         result.latency_ms = latency_ms
         self._event({"event": "model-complete", "call": call_number,
-                     "provider": "openrouter", "model": MODEL,
+                     "provider": "openrouter", "model": self.API_MODEL,
                      "latency_ms": latency_ms, **metadata})
         return result
 
     @staticmethod
-    def _parse(raw_bytes: bytes | bytearray, response_format: dict | None) -> tuple[Any, dict[str, Any]]:
+    def _parse(raw_bytes: bytes | bytearray, response_format: dict | None,
+               expected: str = MODEL) -> tuple[Any, dict[str, Any]]:
         # Import lazily: importing this adapter alone does not load dotenv/DB.
         from llm_client import LLMResult
 
         data = _strict_json(raw_bytes)
-        if not isinstance(data, dict) or "error" in data or data.get("model") != MODEL:
+        if not isinstance(data, dict) or "error" in data or data.get("model") != expected:
             raise NativePilotModelError("model-envelope-invalid")
         choices = data.get("choices")
         if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
@@ -312,7 +321,7 @@ class NativePilotModel:
         # The native result's raw field is deliberately only safe usage metadata.
         # No raw response or reasoning is needed by this bounded text pilot.
         result = LLMResult(
-            call_id=None, model=MODEL, provider="openrouter", content=content,
+            call_id=None, model=expected, provider="openrouter", content=content,
             parsed=parsed, reasoning_content=None,
             tokens_in=tokens["prompt_tokens"], tokens_out=tokens["completion_tokens"],
             cache_hit_tokens=cache_hit, cost_cents=cost_mc, latency_ms=0,

@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-onlyfans-test.txt
       - run: pip install -r requirements-onlyfans-test.txt
@@ -45,7 +45,6 @@ jobs:
           python service/tests/test_native_pilot_ledger.py
           python service/tests/test_native_pilot_runner.py
           python service/tests/test_native_pilot_postsale.py
-          python service/tests/test_native_pilot_postsale_engine.py
       - name: PostgreSQL sender and account management
         run: |
           python service/tests/test_native_pilot_service_pg.py
@@ -54,9 +53,28 @@ jobs:
         run: |
           mkdir -p test-results
           python service/native_pilot/tools/load_test.py --scenario rate_limit --accounts 2 --fans 250 --sim-minutes 45 --scale 60 --throttle 20 --seed 7 --out test-results/rate-limit.json > test-results/load-stdout.json 2> test-results/load-progress.log
+      - name: Existing post-sale engine scenarios
+        if: always()
+        run: python service/tests/test_native_pilot_postsale_engine.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: fastt-launch-readiness
           path: test-results/
           if-no-files-found: ignore
+  postsale-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 874b3c9b03b16b45290ae4b40e943f42783bc803
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-onlyfans-test.txt
+      - run: pip install -r requirements-onlyfans-test.txt
+      - name: Reproduce post-sale scenario on the unchanged deployed source
+        run: python service/tests/test_native_pilot_postsale_engine.py

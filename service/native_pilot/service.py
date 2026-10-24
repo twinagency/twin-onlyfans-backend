@@ -15,7 +15,7 @@ made long-lived, with every safety rule kept:
   the conversation, only then may the service re-acquire;
 * a send that CERTAINLY did not reach OnlyFans (a provider HTTP 429 or other 4xx refusal, or a hold/stop seen
   between admission and the wire) is recorded ``not_sent``, gives its allowance unit back and stops nothing; a
-  429 or last-instant hold answers the same input again after a back-off (at most 2 times), and an input lost
+  429 keeps the unsent input pending through a durable account cooldown; a last-instant hold has bounded retries. An input lost
   to a model timeout/error is requeued once. Never once any send attempt for that input stands (sent,
   dispatching, unknown), and a timeout, 408, 5xx or unreadable reply stays an unknown outcome as above;
 * no deadline: the lease is renewed every few seconds; a lapsed/lost lease

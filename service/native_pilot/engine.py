@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from .scope import AccountScope
 
 MODEL = "deepseek/deepseek-v4.1-flash"
+RESOLVER_PURPOSE_PREFIX = "content_resolver"
 
 # Independent switches are explicit: disabling the sales catalogue alone does
 # not turn off Fastt's teaser, pack, sticker or scheduled follow-up paths.
@@ -224,7 +225,8 @@ class NativeEngine:
 
     async def resolve_model(self, account_id, purpose, requested=None):
         self._account(account_id)
-        if purpose != "ai_chatter" or requested not in (None, "", self.model):
+        allowed = ("ai_chatter",) + (("content_resolver",) if getattr(self.content, "vault_mode", False) else ())
+        if purpose not in allowed or requested not in (None, "", self.model):
             self._refuse("forbidden-model-scope")
         return self.model
 
@@ -234,6 +236,11 @@ class NativeEngine:
                 or kwargs["fan_id"] != self.fan_id
                 or kwargs.get("model") != self.model):
             self._refuse("forbidden-model-scope")
+        purpose = str(kwargs.get("purpose") or "")
+        if purpose.startswith(RESOLVER_PURPOSE_PREFIX) or purpose == "gather_close_answer":
+            # FASTT's vault ask lane (content_resolver / voice line) only, and only in vault mode.
+            if not getattr(self.content, "vault_mode", False):
+                self._refuse("forbidden-model-scope")
         result = await self._chat(**kwargs)
         if self.content is None or kwargs.get("response_format"):
             return result

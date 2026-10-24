@@ -624,6 +624,30 @@ class Ledger:
                         (end, owner_token, lease_s, True, revision, now_s, account_id, fan_id))
             return self._pilot(con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone())
 
+    def service_watermark(self, *, pilot_id: str, account_id: str, now: datetime | str) -> str:
+        """The account's all-fans activation instant: written ONCE (first start), then reused.
+
+        Stored as a marker row in the existing ``native_pilots`` table (state ``watermark``,
+        fan 0): never ``active``, never a lease, no new table or migration. Every restart
+        returns the first value, so an input that arrived after activation but before a
+        restart is still answerable, while anything older (the pre-activation backlog) never is.
+        Delete the row to re-baseline deliberately.
+        """
+        if not isinstance(pilot_id, str) or not SERVICE_ID.fullmatch(pilot_id):
+            raise Refused("invalid-pilot-id")
+        now_s = _dt(now)
+        with self._tx(initialize=True) as con:
+            row = con.execute("SELECT account_id,state,cutoff FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            if row is not None:
+                if row["account_id"] != account_id or row["state"] != "watermark":
+                    raise Refused("activation-conflict")
+                return row["cutoff"]
+            con.execute("INSERT INTO native_pilots(pilot_id,account_id,fan_id,owner_token,cutoff,deadline,"
+                        "grant_limit,baseline_used,end_limit,revision,state,created_at,updated_at) "
+                        "VALUES(?,?,0,'watermark',?,?,0,0,0,0,'watermark',?,?)",
+                        (pilot_id, account_id, now_s, now_s, now_s, now_s))
+            return now_s
+
     def renew(self, *, pilot_id: str, owner_token: str, now: datetime | str, ttl_s: float) -> str:
         """Move the pilot deadline and the conversation lease forward; returns the new deadline.
 

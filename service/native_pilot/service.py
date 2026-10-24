@@ -53,7 +53,7 @@ from twin_bridge import store
 
 from . import postsale, runner
 from .followups import DISCOUNT_KIND, NUDGE_KIND
-from .ledger import MAX_REQUEUES_MODEL, MAX_REQUEUES_PROVIDER, Ledger, Refused
+from .ledger import MAX_REQUEUES_MODEL, Ledger, Refused
 from .scope import AccountScope
 
 LEASE_TTL_S = 120.0
@@ -588,6 +588,14 @@ class Service:
 
     async def tick(self):
         await self.ensure_session()
+        policy = self.ledger.allowance_status(self.db)
+        if policy and policy["next_dispatch_at"]:
+            wait = (datetime.fromisoformat(policy["next_dispatch_at"]) - runner.now()).total_seconds()
+            if wait > 0:
+                # The shared send gate includes a provider cooldown, durably retained after restart.
+                # Do not spend model calls or probe another fan through the same limited connection.
+                await self.idle(min(wait, self.poll_s))
+                return
         if self.all_fans:
             return await self.tick_all()
         try:
@@ -967,18 +975,19 @@ class Service:
     async def after_failure(self, reason, key, retry=None):
         """A failed turn: stop for the fan if the ledger says so, else abandon only this input.
 
-        ``retry`` = ``("model"|"provider", retry_after_s)``: the input had no send attempt stand for it, so (bounded:
-        once after a model failure, twice after a certain provider refusal) it is requeued and answered again after
-        a back-off instead of being abandoned; the regenerated reply goes through every gate and the single-attempt
-        boundary again."""
+        Model failures retain their one-retry bound. A definite provider 429 keeps an unsent message pending
+        with a persistent account cooldown. Unknown, dispatching and partly sent inputs are never replayed."""
         pilot, ledger = self.pilot, self.ledger
         if retry is not None and ledger.status(pilot.pilot_id)["state"] == "active":
             kind, after = retry
+            provider_defer = kind == "provider" and reason == "provider-rate-limited"
+            prior = ledger._requeues.get(key, 0)
+            backoff = (max(5.0, after) if after is not None else min(RATE_LIMIT_BACKOFF_S * (prior + 1), RATE_LIMIT_BACKOFF_MAX_S)) \
+                if provider_defer else self.hold_s
             count = ledger.requeue_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now(),
-                                         max_requeues=MAX_REQUEUES_MODEL if kind == "model" else MAX_REQUEUES_PROVIDER)
+                                         max_requeues=None if provider_defer else MAX_REQUEUES_MODEL,
+                                         not_before=runner.now() + timedelta(seconds=backoff) if provider_defer else None)
             if count:
-                backoff = (min(max(after, 5.0), RATE_LIMIT_BACKOFF_MAX_S) if after else RATE_LIMIT_BACKOFF_S * count) \
-                    if kind == "provider" else self.hold_s
                 runner.emit({"event": "turn-requeued", "reason": reason, "retry": count, "backoff_s": backoff,
                              **({"fan_id": self.args.fan} if self.strict else {})})
                 self.backoff_s = backoff

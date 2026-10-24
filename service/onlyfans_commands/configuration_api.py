@@ -58,7 +58,7 @@ async def get(request:Request,account_id:str):
     if isinstance(context,JSONResponse):return context
     store,tenant=context
     try:
-        data=await asyncio.to_thread(get_configuration,store,tenant,account_id)
+        data=await asyncio.to_thread(get_configuration,store,tenant,account_id,include_activation=request.query_params.get("activation")=="1")
     except Refused:return refuse("not_available",404,"That creator configuration is not available.")
     except Exception:return refuse("configuration_unavailable",503,"Creator configuration could not be read.")
     return response({"ok":True,"accountId":account_id,"configuration":data})

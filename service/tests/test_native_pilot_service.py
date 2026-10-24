@@ -312,6 +312,17 @@ def ledger_level(backend, root):
     led4 = Ledger(f.path, allowance=True)
     check(led4.claim_input(**call4, snapshot=led4.snapshot(**call4, now=t9), now=t9) == key4)
     check(led4.requeue_input(**call4, input_key=key4, now=t9, max_requeues=2) == 0, "the bound holds across a new process")
+    # A provider cooldown is durable across Ledger instances and never consumes allowance.
+    used_before = f.sql("SELECT used_units FROM of_delivery_policy")[0][0]
+    due = t9 + timedelta(seconds=900)
+    check(led4.requeue_input(**call4, input_key=key4, now=t9, max_requeues=None, not_before=due) == 3)
+    restarted = Ledger(f.path, allowance=True)
+    check(ts(restarted.allowance_status(A)["next_dispatch_at"]) == due)
+    check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == used_before)
+    check(f.sql("SELECT state FROM native_pilot_inputs WHERE input_key=?", (key4,))[0][0] == "requeued:3")
+    check(restarted.claim_input(**call4, snapshot=restarted.snapshot(**call4, now=t9), now=t9) == key4)
+    refuses(L, "allowance-throttled", lambda: restarted.begin_attempt(**call4, input_key=key4, bubble_no=2,
+            revision=p4.revision, now=t9 + timedelta(seconds=10)))
     # A follow-up input is never requeued (its job is settled once).
     f.sql("UPDATE native_pilot_inputs SET source_hash='followup:x' WHERE input_key=?", (key4,))
     check(led4.requeue_input(**call4, input_key=key4, now=t9, max_requeues=9) == 0)
@@ -684,24 +695,26 @@ async def loop_level(backend, root):
         check(reports.count(None) >= 1 and "provider-rate-limited" not in reports, "a requeued blip does not flag the fan for a human")
         await stop(task, patcher)
 
-        # Retry-After is honoured (clamped); the bound is 2 requeues, then the input is abandoned, the fan NOT stopped.
+        # A long provider refusal stays pending beyond the old two-retry and ten-attempt limits.
         f, http, client = make("loop-429-bound", limit=100, used=4, throttle=1)
-        http.codes, http.refuse_headers = [429, 429, 429], {"retry-after": "7"}
+        http.codes, http.refuse_headers = [429] * 12, {"retry-after": "7"}
         events.clear()
         task, patcher = start(client)
         await until(lambda: kinds("ready"), "ready", events)
         fan_says(f)
-        await until(lambda: kinds("turn-abandoned"), "429 bound reached", events)
-        check(len(http.posts) == 3 and [e["retry"] for e in kinds("turn-requeued")] == [1, 2])
-        check([e["backoff_s"] for e in kinds("turn-requeued")] == [7.0, 7.0])
-        check(kinds("turn-abandoned")[0]["reason"] == "provider-rate-limited")
-        check(f.sql("SELECT state FROM native_pilots")[0][0] == "active" and not kinds("stopped"))
-        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4 and f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete")
-        check(sorted(r[0] for r in f.sql("SELECT state FROM native_pilot_receipts")) == ["not_sent"] * 3)
+        await replied(f, http, 13, "the original input recovers after twelve definite refusals", outs=1)
+        check([e["retry"] for e in kinds("turn-requeued")] == list(range(1, 13)))
+        check([e["backoff_s"] for e in kinds("turn-requeued")] == [7.0] * 12)
+        check(not kinds("turn-abandoned") and not kinds("stopped"))
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5)
+        check(f.sql("SELECT count(*) FROM native_pilot_inputs")[0][0] == 1)
+        check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete")
+        check(sorted(r[0] for r in f.sql("SELECT state FROM native_pilot_receipts")) == ["not_sent"] * 12 + ["sent"])
+        check(all((b-a).total_seconds() >= 7 for a,b in zip(http.posted_at,http.posted_at[1:])))
         await settle_loop()
-        check(len(http.posts) == 3, "an abandoned input is not retried again")
+        check(len(http.posts) == 13, "a recovered input is never replayed")
         fan_says(f, "a newer message")
-        await replied(f, http, 4, "the next message is answered normally", outs=1)
+        await replied(f, http, 14, "the next message is answered normally", outs=2)
         await stop(task, patcher)
 
         # Another definite refusal (403) is certain too but is not retried; ambiguous statuses stay unknown.
@@ -1435,7 +1448,7 @@ async def multi_level(backend, root):
         check(len(posted(http, FA)) == 1 and f.sql("SELECT count(*) FROM messages WHERE direction='out' AND fan_id=?", (FA,))[0][0] == 1)
         await stop(task, patcher)
 
-        # A provider 429 on A: A backs off, B is still answered meanwhile, then A's SAME message is answered.
+        # A provider 429 cools down the account connection; both fans resume without dropping A.
         f, http, client = make("multi-429", limit=100, used=4, throttle=1)
         events.clear()
         http.codes_for[FA] = [429]
@@ -1444,7 +1457,7 @@ async def multi_level(backend, root):
         says(f, FB, "b meanwhile")
         await until(lambda: len(posted(http, FA)) == 2 and len(posted(http, FB)) == 1, "A retried after B", events)
         await settle()
-        check([p[0] for p in http.posts][:2] == [FA, FB], "B was answered while A backed off")
+        check(sorted(p[0] for p in http.posts) == sorted([FA, FA, FB]), "both fans recover after the shared cooldown")
         check(kinds("turn-requeued") and kinds("turn-requeued")[0]["fan_id"] == FA and not kinds("stopped"))
         check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 6, "the refused attempt's unit was refunded")
         check(sorted(r[0] for r in f.sql("SELECT state FROM native_pilot_receipts WHERE pilot_id=?", (f"svc-{A}-{FA}",))) == ["not_sent", "sent"])

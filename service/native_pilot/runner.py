@@ -11,6 +11,8 @@ import asyncio
 import json
 import re
 import logging
+import math
+from email.utils import parsedate_to_datetime
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -240,7 +242,14 @@ def _refusal(exc):
     if status == 429:
         after = None
         try:
-            after = float(getattr(exc.response, "headers", {}).get("retry-after"))
+            raw = getattr(exc.response, "headers", {}).get("retry-after")
+            try:
+                after = float(raw)
+            except (TypeError, ValueError):
+                target = parsedate_to_datetime(raw)
+                after = (target.astimezone(timezone.utc).replace(tzinfo=None) - now()).total_seconds()
+            if not math.isfinite(after) or not 0 <= after <= 2**31:
+                after = None
         except (TypeError, ValueError, AttributeError):
             pass
         return NotSent("provider-rate-limited", retry=True, retry_after=after)

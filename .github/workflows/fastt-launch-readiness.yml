@@ -1,0 +1,62 @@
+name: FASTT launch readiness
+on:
+  push:
+    branches: ['codex/fastt-launch-readiness-*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_test_only
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      ONLYFANS_TEST_PG_URL: postgresql://postgres:disposable_test_only@127.0.0.1:5432/postgres
+      PYTHON_DOTENV_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-onlyfans-test.txt
+      - run: pip install -r requirements-onlyfans-test.txt
+      - name: Scope validation and supervisor isolation
+        run: |
+          python service/tests/test_fastt_activation.py
+          python service/tests/test_native_pilot_supervisor.py
+          python service/tests/test_fastt_scope_db.py
+          python service/tests/test_fastt_scope_wide.py
+      - name: SQLite sender and post-sale regressions
+        run: |
+          python service/tests/test_native_pilot_service.py
+          python service/tests/test_native_pilot_ledger.py
+          python service/tests/test_native_pilot_runner.py
+          python service/tests/test_native_pilot_postsale.py
+          python service/tests/test_native_pilot_postsale_engine.py
+      - name: PostgreSQL sender and account management
+        run: |
+          python service/tests/test_native_pilot_service_pg.py
+          python -m pytest -q service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_fastt_new_conversations_pg.py
+      - name: Repeat bounded rate-limit load scenario
+        run: |
+          mkdir -p test-results
+          python service/native_pilot/tools/load_test.py --scenario rate_limit --accounts 2 --fans 250 --sim-minutes 45 --scale 60 --throttle 20 --seed 7 --out test-results/rate-limit.json > test-results/load-stdout.json 2> test-results/load-progress.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fastt-launch-readiness
+          path: test-results/
+          if-no-files-found: ignore

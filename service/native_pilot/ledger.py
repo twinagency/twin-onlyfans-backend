@@ -394,13 +394,20 @@ class Ledger:
     def begin_attempt(self, *, pilot_id: str, owner_token: str, input_key: str,
                       bubble_no: int, revision: int, now: datetime | str) -> Attempt:
         """Atomic final source + authority check, budget charge, durable intent."""
-        if not isinstance(bubble_no, int) or isinstance(bubble_no, bool) or not 1 <= bubble_no <= 10:
+        if not isinstance(bubble_no, int) or isinstance(bubble_no, bool) or not 1 <= bubble_no < 2**31:
             raise Refused("invalid-bubble")
         if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
             raise Refused("invalid-revision")
         now_s = _dt(now)
         with self._tx() as con:
             p = self._active(con, pilot_id, owner_token, now_s)
+            if bubble_no > 10:
+                # Preserve the ten-bubble limit, excluding definitively refused attempts.
+                # Each retry still gets a distinct immutable attempt/receipt sequence number.
+                refused = con.execute("SELECT count(*) FROM native_pilot_receipts WHERE pilot_id=? AND input_key=? "
+                                      "AND state='not_sent'", (pilot_id, input_key)).fetchone()[0] if self.allowance else 0
+                if bubble_no - refused > 10:
+                    raise Refused("invalid-bubble")
             if revision != p["revision"]:
                 raise Refused("revision-changed")
             i = con.execute("SELECT * FROM native_pilot_inputs WHERE input_key=? AND pilot_id=?", (input_key, pilot_id)).fetchone()
@@ -641,16 +648,20 @@ class Ledger:
             return True
 
     def requeue_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str,
-                      max_requeues: int) -> int:
-        """Let a failed input be answered again later (bounded). Returns how many times it has now been
+                      max_requeues: int | None, not_before: datetime | str | None = None) -> int:
+        """Let a definitely unsent input be answered again later. Returns how many times it has now been
         requeued (1, 2, ...), or 0 when it was not requeued.
 
         Only a message input still ``generating`` with NO receipt in any state but ``not_sent`` qualifies: once any
         send attempt stands for it (sent, dispatching, delivery_unknown) it is never regenerated. A follow-up
-        job input is never requeued (the job is settled once). After ``max_requeues`` it is not requeued again."""
+        job input is never requeued. A numeric bound remains for model failures; None permits persistent-service
+        provider deferral. The account send gate durably retains not_before without changing its allowance."""
         now_s = _dt(now)
+        if max_requeues is None and not self.allowance:
+            raise Refused("persistent-requeue-required")
+        due = _dt(not_before) if not_before is not None else None
         with self._tx() as con:
-            p = con.execute("SELECT owner_token FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            p = con.execute("SELECT owner_token,account_id FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
             i = con.execute("SELECT state,source_hash FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
@@ -661,8 +672,18 @@ class Ledger:
                            (input_key,)).fetchone():
                 return 0
             used = self._requeues.get(input_key, 0)
-            if used >= max_requeues:
+            if max_requeues is not None and used >= max_requeues:
                 return 0
+            if due is not None and self.allowance:
+                # A definite provider refusal applies to this account's connection.
+                # Persist its cooldown in the existing send gate, including across restarts.
+                account = p["account_id"]
+                policy = self._policy_row(con, account)
+                if policy is None:
+                    raise Refused("allowance-missing")
+                current = policy["next_dispatch_at"]
+                if current is None or _dt(current) < due:
+                    con.execute("UPDATE of_delivery_policy SET next_dispatch_at=? WHERE account_id=?", (due, account))
             con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
                         (f"{REQUEUED}{used + 1}", now_s, pilot_id, input_key))
             return used + 1

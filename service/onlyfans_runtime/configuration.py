@@ -12,6 +12,7 @@ from db.onlyfans_models import OfConfigurationChange
 from llm_models import MODELS
 from .native_context import canonical,approved_persona
 from .store import Refused,utcnow
+from .activation import activation_view
 
 def fact_fields():
     from automations._persona_contract import PERSONA_FACT_FIELDS
@@ -62,7 +63,7 @@ def object_value(raw):
     return value
 
 
-def editable(row,runtime,session):
+def editable(row,runtime,session,*,include_activation=False):
     """Only approved fields and catalogue IDs; no arbitrary config or credentials."""
     from automations._voice import fact_labels
     from model_selection import explicit_model
@@ -98,21 +99,26 @@ def editable(row,runtime,session):
         "reasoningOptions":{key:list(model.effort_choices) for key,model in MODELS.items()},
         "salesConfigurationValid":sales_valid,
         "onRequestSalesEnabled":sales_valid and all(sales.get(key) is True for key in SALES_FLAGS),
-        **{name:sales_valid and sales.get(key) is True for name,key in FASTT_SWITCHES.items()}}
+        **{name:sales_valid and sales.get(key) is True for name,key in FASTT_SWITCHES.items()},
+        **({"activation": activation_view(session,row.account_id,sales,binding_id=runtime.binding_id,model_id=resolved)} if include_activation else {})}
 
 
-def get_configuration(store,tenant_id,account_id):
+def get_configuration(store,tenant_id,account_id,*,include_activation=False):
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant_id,account_id)
         row=s.scalar(select(AccountAiConfig).where(AccountAiConfig.account_id==account_id).with_for_update(read=True))
         if row is None:raise Refused("configuration unavailable")
-        return editable(row,runtime,s)
+        return editable(row,runtime,s,include_activation=include_activation)
 
 
 def validate_patch(patch):
-    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort",*FASTT_SWITCHES}:
+    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort","fasttScope",*FASTT_SWITCHES}:
         raise InvalidConfiguration("Only creator persona, facts, model, budget, reasoning and on-request sales settings may be edited here.")
     result={}
+    if "fasttScope" in patch:
+        from .fastt_scope import normalize
+        try: result["fasttScope"] = normalize(patch["fasttScope"])
+        except ValueError as exc: raise InvalidConfiguration(str(exc)) from exc
     if "dailyCostCapCents" in patch:
         value=patch["dailyCostCapCents"]
         if type(value) is not int or not 0<=value<=1000000:
@@ -189,6 +195,17 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
         if runtime.configuration_revision!=expected_revision or fingerprint(row)!=expected_fingerprint:
             raise Refused("configuration revision conflict")
         before={};after={};changed=False
+        if "fasttScope" in patch:
+            from .activation import validate_selection
+            try: selection = validate_selection(account_id, patch["fasttScope"])
+            except ValueError as exc: raise InvalidConfiguration(str(exc)) from exc
+            try: raw = object_value(row.ai_chatter_config_json)
+            except (ValueError, TypeError, RecursionError) as exc: raise InvalidConfiguration("Saved automation settings need review.") from exc
+            before["fasttScope"] = raw.get("fastt_scope")
+            after["fasttScope"] = selection
+            changed = raw.get("fastt_scope") != selection
+            raw["fastt_scope"] = selection
+            row.ai_chatter_config_json = canonical(raw)
         if "onRequestSalesEnabled" in patch:
             sales, valid = sales_settings(row)
             if not valid:

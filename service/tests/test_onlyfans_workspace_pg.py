@@ -1,5 +1,6 @@
 """Canonical native workspace reads, disposable PostgreSQL and neutral fixtures."""
 import asyncio
+from datetime import timedelta
 from contextlib import asynccontextmanager
 import json
 import os
@@ -94,6 +95,23 @@ def test_sales_preserves_original_currency_status_and_records_no_offer_as_paymen
     store.close();other.close()
 
 
+def test_sales_lists_newest_first_even_when_backfill_inserted_newest_rows_first(database):
+    store=seed(*database);other=seed(*database,account="acc-b",tenant="tenant-b")
+    base=utcnow()
+    with Session(database[1]) as s,s.begin():
+        # The ledger backfill walks the provider newest-first, so row ids ascend as sales get older.
+        for days in range(5):
+            s.add(Transaction(account_id="acc-a",fan_id=101,kind="tip",amount_cents=100+days,currency="USD",status="cleared",
+                occurred_at=base-timedelta(days=days),provider_transaction_id=f"synthetic-{days}"))
+        s.add(Transaction(account_id="acc-b",kind="tip",amount_cents=999,currency="USD",status="cleared",occurred_at=base+timedelta(days=1)))
+    pages=[read(database,"sales",limit=2)]
+    while pages[-1]["nextCursor"]:pages.append(read(database,"sales",limit=2,cursor=pages[-1]["nextCursor"]))
+    rows=[x for page in pages for x in page["transactions"]]
+    assert [x["grossCents"] for x in rows]==[100,101,102,103,104]
+    assert len({x["transactionId"] for x in rows})==5
+    store.close();other.close()
+
+
 def test_sales_page_and_totals_share_one_snapshot_during_a_concurrent_refund(database):
     store=seed(*database)
     with Session(database[1]) as s,s.begin():
@@ -103,7 +121,7 @@ def test_sales_page_and_totals_share_one_snapshot_during_a_concurrent_refund(dat
     async def run():
         engine=create_async_engine(make_url(database[0]).set(drivername="postgresql+asyncpg"))
         def after_page(connection,cursor,statement,parameters,context,many):
-            if not changed and "FROM transactions" in statement and "ORDER BY transactions.id DESC" in statement:
+            if not changed and "FROM transactions" in statement and "ORDER BY transactions.occurred_at DESC, transactions.id DESC" in statement:
                 with database[1].begin() as c:c.execute(text("UPDATE transactions SET status='refunded' WHERE account_id='acc-a'"))
                 changed.append(True)
         event.listen(engine.sync_engine,"after_cursor_execute",after_page)

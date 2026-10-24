@@ -849,7 +849,7 @@ async def serve(args, **kwargs):
             loop.remove_signal_handler(sig)
 
 
-def main(argv=None):
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--account", required=True, help="Twin account id (of-<owner>) or the bare owner id")
     scope_group = parser.add_mutually_exclusive_group(required=True)
@@ -862,7 +862,13 @@ def main(argv=None):
     parser.add_argument("--twin-context", action="store_true")
     parser.add_argument("--content-manifest")
     parser.add_argument("--stop-after-card", action="store_true",
-                        help="Set the fan's runtime stop once the paid card is confirmed (approved test scope)")
+                        help="TEST/PILOT ONLY, default off: set the fan's runtime stop once the paid card is confirmed. "
+                             "Production (compose fastt-runner, supervisor children, --all-fans) keeps chatting after a card.")
+    return parser
+
+
+def main(argv=None):
+    parser = build_parser()
     args = parser.parse_args(argv)
     from .ledger import SERVICE_ID
     if not AccountScope.valid(args.account) or (args.fan is not None and args.fan <= 0) or (args.service_id and not SERVICE_ID.fullmatch(args.service_id)):

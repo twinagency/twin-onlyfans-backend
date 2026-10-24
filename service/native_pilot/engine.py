@@ -7,6 +7,9 @@ The runner owns fresh-input admission, transport, durable send cap and recovery.
 """
 from __future__ import annotations
 
+import copy
+from types import SimpleNamespace
+
 from .scope import AccountScope
 
 MODEL = "deepseek/deepseek-v4.1-flash"
@@ -25,6 +28,8 @@ TEXT_ONLY = {
     "post_buy_rung_enabled": False,                   # suppressed here (rhythm would "brb" and never return)
     "rhythm_return_single_bubble_s": 0,
     "profile_openers_enabled": False,  # first-contact openers: new conversations stay operator-controlled
+    "cadence_enabled": False,          # the runner claims each input once; a cadence skip ("rest next
+                                       # tick" in stock FASTT) would leave that message unanswered for good
 }
 
 
@@ -65,6 +70,24 @@ class _TextClient:
 # Separate keys, so an older generic ai_chatter value never changes FASTT selling.
 OFFER_LIMITS = {"fastt_max_open_offers": ("max_open_offers", 2, 2, 10),
                 "fastt_max_offers_per_day": ("max_offers_per_fan_per_day", 2, 0, 50)}
+
+
+# What the model is told when its offer was declined (cap, repeat): chat on, never price.
+NO_OFFER_NOTE = ("No offer, price or unlock is possible this turn. Reply naturally to what he just said; "
+                 "do not mention prices, unlocking, a video, a pic or anything to buy.")
+
+
+REPEAT_REASONS = ("item-already-pending", "media-already-pending")
+
+
+def _with_content(result, content):
+    """The model result with its text replaced (the marker stripped), whatever its concrete type."""
+    try:
+        clone = copy.copy(result)
+        clone.content = content
+        return clone
+    except Exception:
+        return SimpleNamespace(content=content, parsed=getattr(result, "parsed", None))
 
 
 def offer_limits(native):
@@ -108,6 +131,7 @@ class NativeEngine:
         self._token = None
         self._running = False
         self._violation = None
+        self._offer_cfg = {"max_open_offers": 2, "max_offers_per_fan_per_day": 2}
 
     def _refuse(self, reason):
         self._violation = reason
@@ -147,6 +171,7 @@ class NativeEngine:
             # Explicit pilot configuration of the existing catalogue path;
             # the vault-wide resolver and all other media writers stay off.
             result.update(prompt_sell_catalog=True, ppv_caption_1to1=False, **offer_limits(native))
+            self._offer_cfg = {k: result[k] for k in ("max_open_offers", "max_offers_per_fan_per_day")}
         if self.context:
             # Approved creator facts ride the system prompt on every turn, not
             # only when the fan asks about her (FASTT's token-saving default).
@@ -202,7 +227,77 @@ class NativeEngine:
                 or kwargs["fan_id"] != self.fan_id
                 or kwargs.get("model") != self.model):
             self._refuse("forbidden-model-scope")
-        return await self._chat(**kwargs)
+        result = await self._chat(**kwargs)
+        if self.content is None or kwargs.get("response_format"):
+            return result
+        return await self._keep_chatting(kwargs, result)
+
+    async def _keep_chatting(self, kwargs, result):
+        """A declined offer never silences the conversation.
+
+        FASTT validates the model's ``>>OFFER`` id against what this fan may still be offered and
+        otherwise binned the price talk: a reply made of that alone was dropped, so the fan got
+        nothing (cap reached) or, for a piece already pending, a second identical card. Here the
+        reason is decided with FASTT's own helpers; the declined offer is recorded as an
+        ``offer-declined`` runner event and the model is asked once for the plain chat reply. No
+        selling rule is changed: a turn FASTT would sell on passes through untouched."""
+        raw = (getattr(result, "content", None) or "")
+        clean, offer_id = self.native._parse_offer_marker(raw.strip())
+        if offer_id is None:
+            return result
+        try:
+            reason = await self._offer_blocker(int(offer_id))
+        except Exception:
+            return result      # fail open to FASTT's own gates, never a new stop
+        if reason is None:
+            return result
+        retried = False
+        # FASTT already refuses the id on a cap or an owned item, and bins the price bubble. Two
+        # things still need the wrapper: a card for a piece that is already pending (FASTT would
+        # send it again) and a reply that is nothing but price talk (FASTT would drop it).
+        survivors = [line for line in clean.splitlines() if line.strip() and not self.native._unbacked_talk(line)]
+        if not survivors or reason in REPEAT_REASONS:
+            if survivors:
+                result = _with_content(result, clean)
+            else:
+                retry = dict(kwargs)
+                retry["messages"] = list(kwargs["messages"]) + [{"role": "system", "content": NO_OFFER_NOTE}]
+                result, retried = await self._chat(**retry), True
+                again, _ = self.native._parse_offer_marker((getattr(result, "content", None) or "").strip())
+                result = _with_content(result, again)
+        self._emit({"event": "offer-declined", "reason": reason, "item_id": int(offer_id),
+                    "account_id": self.account_id, "fan_id": self.fan_id, "regenerated": retried})
+        return result
+
+    async def _offer_blocker(self, offer_id):
+        """Why this fan may not get a card for ``offer_id`` right now, or None. FASTT's own readers."""
+        native, account, fan = self.native, self.account_id, self.fan_id
+        items = await native._load_catalog(account)
+        by_id = {int(i.id): i for i in items}
+        target = by_id.get(offer_id)
+        if target is None:
+            return None          # not on the shelf: FASTT rejects the id itself
+        open_offers = await native._open_offers(account, fan)
+        if any(int(o.item_id) == offer_id for o in open_offers):
+            return "item-already-pending"
+        hero = await native._hero_media_map(account, items)
+        mine = set(hero[offer_id])
+        for offer in open_offers:
+            if int(offer.item_id) in hero and mine & set(hero[int(offer.item_id)]):
+                return "media-already-pending"
+        if not await native._offerable_for_fan(account, fan, [target]):
+            return "item-already-purchased"
+        open_count = len(open_offers)
+        if open_count and await native._unlocked_since_open_offers(account, fan, open_offers):
+            open_count -= 1
+        cfg = self._offer_cfg
+        if open_count >= max(2, cfg["max_open_offers"]):
+            return "max-open-offers"
+        if not await native._offer_caps_ok(account, fan, {**cfg, "min_fan_msgs_between_offers": 0}):
+            return "daily-offer-cap"
+        if open_count and not await native._offer_caps_ok(account, fan, {**cfg, "min_fan_msgs_between_offers": 1}):
+            return "offer-pacing"
+        return None
 
     def make_client(self, account_id):
         self._account(account_id)

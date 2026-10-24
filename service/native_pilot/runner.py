@@ -489,7 +489,9 @@ async def run(args):
                     with readonly(path) as con:
                         rows = con.execute("SELECT evidence_json FROM native_pilot_receipts WHERE pilot_id=? AND state='sent'", (pilot.pilot_id,)).fetchall()
                         sent_media = [json.loads(r[0]).get("content") for r in rows]
-                    if any(x and x["price_cents"] == 300 for x in sent_media):
+                    # Bounded TEST pilot only (never the persistent service): it ends once ANY reviewed
+                    # paid card of its manifest is confirmed, whatever that item's price (content.paid).
+                    if any(x and x["price_cents"] > 0 for x in sent_media):
                         reason = "paid-card-sent-test-complete"
                         break
                 if not receipts:

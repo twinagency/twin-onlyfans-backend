@@ -23,6 +23,8 @@ class InvalidConfiguration(ValueError):
 
 
 SALES_FLAGS = ("pack_send_enabled", "pack_on_ask_enabled", "qualification_gate_enabled")
+# FASTT runner switches, same JSON blob; default OFF, only a literal boolean true is on.
+FASTT_SWITCHES = {"fasttDiscountResend": "fastt_discount_resend", "fasttPostBuyUpsell": "fastt_post_buy_upsell"}
 
 
 def sales_settings(row):
@@ -95,7 +97,8 @@ def editable(row,runtime,session):
         "dailyCostCapCents":row.daily_cost_cap_cents, "reasoningEffort":row.reasoning_effort,
         "reasoningOptions":{key:list(model.effort_choices) for key,model in MODELS.items()},
         "salesConfigurationValid":sales_valid,
-        "onRequestSalesEnabled":sales_valid and all(sales.get(key) is True for key in SALES_FLAGS)}
+        "onRequestSalesEnabled":sales_valid and all(sales.get(key) is True for key in SALES_FLAGS),
+        **{name:sales_valid and sales.get(key) is True for name,key in FASTT_SWITCHES.items()}}
 
 
 def get_configuration(store,tenant_id,account_id):
@@ -107,7 +110,7 @@ def get_configuration(store,tenant_id,account_id):
 
 
 def validate_patch(patch):
-    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort"}:
+    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort",*FASTT_SWITCHES}:
         raise InvalidConfiguration("Only creator persona, facts, model, budget, reasoning and on-request sales settings may be edited here.")
     result={}
     if "dailyCostCapCents" in patch:
@@ -124,6 +127,11 @@ def validate_patch(patch):
         if type(patch["onRequestSalesEnabled"]) is not bool:
             raise InvalidConfiguration("The on-request sales setting must be an explicit boolean.")
         result["onRequestSalesEnabled"]=patch["onRequestSalesEnabled"]
+    for name in FASTT_SWITCHES:
+        if name in patch:
+            if type(patch[name]) is not bool:
+                raise InvalidConfiguration("FASTT switches must be an explicit boolean.")
+            result[name]=patch[name]
     if "inheritCreatorFacts" in patch:
         keys=patch["inheritCreatorFacts"]
         if (type(keys) is not list or not keys
@@ -195,6 +203,20 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
             after["salesSettings"]={key:{"present":key in sales,"value":sales.get(key)} for key in SALES_FLAGS}
             changed=changed or previous_sales!=canonical(sales)
             if previous_sales!=canonical(sales):
+                row.ai_chatter_config_json=canonical(sales)
+        if any(name in patch for name in FASTT_SWITCHES):
+            sales, valid = sales_settings(row)
+            if not valid:
+                raise InvalidConfiguration("Saved sales configuration needs review before it can be edited.")
+            before.setdefault("fasttSwitches",{});after.setdefault("fasttSwitches",{})
+            previous_switches=canonical(sales)
+            for name,key in FASTT_SWITCHES.items():
+                if name in patch:
+                    before["fasttSwitches"][key]={"present":key in sales,"value":sales.get(key)}
+                    sales[key]=patch[name]
+                    after["fasttSwitches"][key]={"present":True,"value":patch[name]}
+            if previous_switches!=canonical(sales):
+                changed=True
                 row.ai_chatter_config_json=canonical(sales)
         if "persona" in patch:
             changed=changed or row.persona!=patch["persona"]

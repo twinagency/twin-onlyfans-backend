@@ -424,7 +424,7 @@ async def loop_level(backend, root):
         fail_models = 0        # the next N turns end in a model timeout before anything is sent
         die_after_first = False  # the model times out after the first bubble went out
 
-        def __init__(self, account, fan, *, chat, send, emit, content, context):
+        def __init__(self, account, fan, *, chat, send, emit, content, context, **_extra):
             self.send, self.fan, self.chat = send, fan, chat
 
         def __enter__(self):
@@ -1119,7 +1119,7 @@ async def multi_level(backend, root):
     class FakeEngine:
         fail_for = {}      # fan -> number of coming turns that end in a model timeout before anything is sent
 
-        def __init__(self, account, fan, *, chat, send, emit, content, context, own_offers_only=False):
+        def __init__(self, account, fan, *, chat, send, emit, content, context, own_offers_only=False, **_extra):
             self.send, self.fan, self.content, self.chat = send, fan, content, chat
             check(own_offers_only is True, "all-fans turns scope open offers to their own fan")
 
@@ -1578,7 +1578,8 @@ def followup_ledger_level(backend, root):
 
     f.source(100, created_at=at(1), ingested_at=at(2))                 # the fan's message
     out(101, 5)                                                         # our card (the anchor)
-    refuses(L, "followup-kind", lambda: led.followup_add(account_id=A, fan_id=F, kind="post_buy", payload={}, run_at=T0, now=T0))
+    refuses(L, "followup-kind", lambda: led.followup_add(account_id=A, fan_id=F, kind="aftercare", payload={}, run_at=T0, now=T0))
+    refuses(L, "followup-offer", lambda: led.followup_add(account_id=A, fan_id=F, kind="post_buy", payload={}, run_at=T0, now=T0))
     refuses(L, "followup-run-at", lambda: job(sec_run=3 * 86400))
     j1 = job()
     row = f.sql("SELECT kind,state,last_in_id,run_at FROM native_pilot_followups")[0]
@@ -1733,7 +1734,7 @@ async def followup_loop_level(backend, root):
         exactly as ai_chatter does (the REAL NativeEngine.enqueue_job decides what is kept); a job turn is the nudge."""
         _account = staticmethod(lambda account_id: None)
 
-        def __init__(self, account, fan, *, chat, send, emit, content, context, own_offers_only=False, followups=None):
+        def __init__(self, account, fan, *, chat, send, emit, content, context, own_offers_only=False, followups=None, **_extra):
             self.send, self.fan, self.fan_id, self.account_id = send, fan, fan, account
             self.followups, self._emit = followups, emit
             holder["engines"].append(self)

@@ -3904,8 +3904,20 @@ def _is_price_error(exc: Exception) -> bool:
     return hit
 
 
+@dataclasses.dataclass
+class _VaultCard:
+    """A vault card as it was SENT (the native runner's own receipt evidence): the media, the free previews and the
+    price the fan actually saw. The vault lane's catalog row carries none of these, so the discounted resend reads
+    them from here. ``why`` is filled with the fixed reason a resend did not happen."""
+    media: list
+    previews: list
+    price_cents: int
+    why: str | None = None
+
+
 async def _maybe_discount_resend(client, account_id: str, cfg: dict,
-                                 offer: ContentOffer, now: datetime) -> bool:
+                                 offer: ContentOffer, now: datetime, *,
+                                 vault: "_VaultCard | None" = None) -> bool:
     """The ONE answer to an unpaid rung: unsend it, re-send it cheaper, ONCE, then
     tap out. Measured on the corpus, after an unpaid rung:
         repeat the same price → 6.8% paid   (the single WORST action measured)
@@ -3916,17 +3928,27 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     to wait for the discount. A 404 = already unsent = success; ANY other unsend
     failure aborts the resend entirely (silence beats a double-live price)."""
     fan_id = int(offer.fan_id)
-    if not offer.offered_at or offer.offered_at > now - timedelta(minutes=upsell.RESEND_AFTER_M):
+
+    def _skip(why: str) -> bool:
+        # Vault (native runner) path only: report WHY nothing was resent; the stock path keeps its silent False.
+        if vault is not None:
+            vault.why = why
         return False
+
+    if not offer.offered_at or offer.offered_at > now - timedelta(minutes=upsell.RESEND_AFTER_M):
+        return _skip("too-early")
     # Only a PPV-carrying offer has a locked message to unsend-and-reprice; a
     # LEGACY tip-only row (mode "tip", pre-2026-08-19 — nothing creates one now)
     # has nothing to pull, and re-asking a fan who ignored a tip ask is begging.
     if offer.mode not in ("ppv", "both") or not offer.offer_message_id:
-        return False
+        return _skip("not-a-card")
     ladders = await _load_ladders(account_id, [fan_id])
     lad = ladders.get(fan_id)
     if lad is None:
-        return False
+        if vault is None:
+            return False
+        # The gate-off native runner writes no ladder row until a fan's first buy or cut: a blank, never-saved one.
+        lad = LadderState(account_id=str(account_id), fan_id=fan_id, status=upsell.STATUS_OPEN)
     # ⚠️ THE BRAKE THE REPLY LOOP HONOURS AND THIS PATH USED TO IGNORE.
     # A SOFT decline ("im broke rn") sets offers_paused_until = +24h and KEEPS TALKING.
     # But this watcher only checked `status`, so 90 minutes after a man told us he had no
@@ -3934,17 +3956,17 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     # thing upsell.py's own docstring says we must never do. Caught by the simulator's
     # broke_guy persona; it is the one violation it found on the first clean run.
     if lad.status in (upsell.STATUS_STOPPED, upsell.STATUS_TAPPED):
-        return False
+        return _skip("selling-stopped")
     if lad.offers_paused_until and lad.offers_paused_until > datetime.utcnow():
-        return False
+        return _skip("selling-paused")
     # A COMPANION/cooldown fan (§6) is not sold to at all — belt-and-suspenders with
     # the offers_paused_until guard above (spend_regret sets BOTH).
     if lad.status == upsell.STATUS_COMPANION:
-        return False
+        return _skip("companion-only")
     if lad.companion_until and lad.companion_until > datetime.utcnow():
-        return False
+        return _skip("companion-only")
     if lad.cooldown_until and lad.cooldown_until > datetime.utcnow():
-        return False
+        return _skip("selling-paused")
     # ── §5 EARNED DISCOUNT. The cut is now CONTINGENT ON A VOICED OBJECTION. The v1
     # behaviour — a bare 90-min timer, no objection check — was exactly the 95.8%-
     # unprompted anti-pattern (unprompted cuts convert 20.7% vs 42.9% for cuts
@@ -3967,7 +3989,7 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     if upsell.classify_decline(last_text):
         log.info("ai_chatter discount resend BLOCKED — he declined account=%s fan=%s",
                  account_id, fan_id)
-        return False
+        return _skip("fan-declined")
     cuts30, asks30 = await _cuts_asks_last_30d(account_id, fan_id, now)
     ok_disc, why_disc = upsell.may_discount(upsell.DiscountCtx(
         last_inbound_text=last_text or "",
@@ -3979,7 +4001,7 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     if not ok_disc:
         log.debug("ai_chatter discount refused account=%s fan=%s why=%s",
                   account_id, fan_id, why_disc)
-        return False                       # strip the cut; a pivot happens on his next turn
+        return _skip(why_disc)             # strip the cut; a pivot happens on his next turn
     # NOT gated on status == OPEN. The discount resend is a WIN-BACK ("hey stranger...
     # where u been? i took it down and put it back cheaper for you") — it is aimed
     # precisely at the fan who went quiet, and his ladder goes IDLE after SESSION_IDLE_M
@@ -3989,36 +4011,45 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     # 1) is the "second chance after a refusal" consent question the operator owns.
     if int(lad.unpaid_rungs or 0) >= int(cfg.get("stop_after_unpaid_rungs")
                                           or upsell.STOP_AFTER_UNPAID_RUNGS):
-        return False                       # already discounted once. No begging.
+        return _skip("already-discounted")  # already discounted once. No begging.
     item = await _get_item(int(offer.item_id))
     if item is None:
-        return False
-    media = _item_media(item)
-    # He may have bought this exact media somewhere else entirely (a mass blast has
-    # no content_offers row at all) — media-keyed, never catalog-keyed. HERO media
-    # only: owning the free tease frames doesn't make the discounted payoff his.
-    hero = (await _hero_media_map(account_id, [item]))[int(item.id)]
+        return _skip("item-missing")
+    if vault is None:
+        media = _item_media(item)
+        # He may have bought this exact media somewhere else entirely (a mass blast has
+        # no content_offers row at all) — media-keyed, never catalog-keyed. HERO media
+        # only: owning the free tease frames doesn't make the discounted payoff his.
+        hero = (await _hero_media_map(account_id, [item]))[int(item.id)]
+    else:
+        # The vault lane's catalog row names no media; the sent card does. Hero = what is locked, not the free previews.
+        media = [int(m) for m in vault.media]
+        free = {int(m) for m in vault.previews}
+        hero = [m for m in media if m not in free] or media
     if (await _owned_or_seen_media(account_id, fan_id)) & set(hero):
         await _resolve_offer(int(offer.id), status="cancelled", resolved_by="owned")
         await _close_ladder(account_id, fan_id, upsell.STATUS_TAPPED)
-        return False
-    seen_cents = int(offer.price_cents or 0)
+        return _skip("already-owned")
+    seen_cents = int((vault.price_cents if vault is not None else 0) or offer.price_cents or 0)
     if seen_cents <= upsell.OF_PRICE_FLOOR_CENTS:
-        return False                       # nothing left to discount into
+        return _skip("price-at-minimum")   # nothing left to discount into
 
     if not await ax.acquire_fan_lease(account_id, fan_id, _PURPOSE):
-        return False                       # someone else owns the fan this cycle
+        return _skip("fan-locked")         # someone else owns the fan this cycle
     try:
-        try:
-            await asyncio.to_thread(client.unsend_message,
-                                    int(offer.offer_message_id), fan_id)
-        except Exception as e:
-            if not _is_404(e):
-                log.warning("ai_chatter discount resend ABORTED — unsend failed "
-                            "account=%s fan=%s msg=%s (original may still be live)",
-                            account_id, fan_id, offer.offer_message_id, exc_info=True)
-                return False
-        await _resolve_offer(int(offer.id), status="cancelled", resolved_by="discounted")
+        if vault is None:
+            try:
+                await asyncio.to_thread(client.unsend_message,
+                                        int(offer.offer_message_id), fan_id)
+            except Exception as e:
+                if not _is_404(e):
+                    log.warning("ai_chatter discount resend ABORTED — unsend failed "
+                                "account=%s fan=%s msg=%s (original may still be live)",
+                                account_id, fan_id, offer.offer_message_id, exc_info=True)
+                    return False
+            await _resolve_offer(int(offer.id), status="cancelled", resolved_by="discounted")
+        # Vault path: the removal is DEFERRED to the wire, inside the replacement's own attempt (below). Nothing is
+        # unsent and nothing is cancelled until the provider has confirmed the original is gone.
 
         rng = random.Random(f"discount:{account_id}:{fan_id}:{offer.id}")
         # Compute off the price he SAW, but never above OF's $200 wire max — a static
@@ -4029,9 +4060,11 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         px = max(upsell.OF_PRICE_FLOOR_CENTS,
                  min(upsell.discount_price(seen_cents, rng, str(account_id)),
                      upsell.OF_PRICE_MAX_CENTS))
+        if vault is not None and px >= seen_cents:
+            return _skip("price-at-minimum")   # a "discount" is strictly lower than what he saw, or it is not sent
         line = _pack_line("discount_resend", cfg, fan_id, price_cents=px)
         if not line:
-            return False
+            return _skip("no-line")
         # BOTH prices go in. He has already seen this piece once at `seen_cents` and
         # said nothing, so the caption's job is not to introduce it — it is to give
         # him a reason to look again. `was_cents` is what lets the line know that,
@@ -4048,13 +4081,24 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         # quoting different numbers is exactly the tell this whole feature exists to
         # remove.
         kwargs: dict = {"price": px / 100, "locked_text": False, "media_files": media}
-        previews = _item_previews(item)
+        previews = _item_previews(item) if vault is None else [int(m) for m in vault.previews]
         if previews:
             kwargs["previews"] = previews
+        orig_msg = int(offer.offer_message_id)
         try:
+            if vault is not None:
+                # Names the ONE card to remove first; the DELETE runs at the wire, then the replacement is posted, all in
+                # one ledger attempt (an uncertain outcome is the ledger's delivery-unknown, never replayed).
+                await asyncio.to_thread(client.unsend_message, orig_msg, fan_id)
             result = await asyncio.to_thread(
                 lambda: client.send_message(fan_id, line, **kwargs))
         except Exception as e:
+            if vault is not None:
+                # Confirmed removal is the only thing that retires the original, whether or not the replacement landed.
+                if client.removed(orig_msg):
+                    await _resolve_offer(int(offer.id), status="cancelled", resolved_by="discounted")
+                    return _skip("replacement-not-sent")
+                return _skip("removal-not-confirmed")
             if _is_price_error(e):
                 # A price-validation 400 is not an undeliverable fan — never quarantine
                 # him for it. Drop the discount; the original was already unsent.
@@ -4066,8 +4110,12 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
                         account_id, fan_id, exc_info=True)
             return False
         msg_id = result.get("id") if isinstance(result, dict) else None
+        if vault is not None and client.removed(orig_msg):
+            # Original gone, replacement on the wire: the offer row links to the message that replaced it.
+            await _resolve_offer(int(offer.id), status="cancelled", resolved_by="discounted",
+                                 delivery_message_id=int(msg_id) if msg_id else None)
         if not msg_id:
-            return False
+            return _skip("replacement-not-sent")
         await write_outbound_attribution(
             account_id=account_id, fan_id=fan_id, message_id=int(msg_id),
             sent_by_employee_id=None, automation_kind=_KIND_UPSELL,  # a priced ask
@@ -4093,6 +4141,8 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
                            last_ask_at=now, session_idle_at=now)
         log.info("ai_chatter discount resend account=%s fan=%s %s→%s msg=%s",
                  account_id, fan_id, seen_cents, px, msg_id)
+        if vault is not None:
+            vault.why = None
         return True
     finally:
         await ax.release_fan_lease(account_id, fan_id)
@@ -4739,6 +4789,58 @@ async def _newer_delivered_offer(account_id: str, fan_id: int,
     return row is not None
 
 
+async def _run_discount(account_id: str, payload: dict, cfg: dict) -> dict:
+    """The native runner's discounted resend: FASTT's own ``_maybe_discount_resend`` on one unpaid VAULT card.
+
+    The runner keeps ``qualification_gate_enabled`` off (that switch is the whole ladder), so the stock watcher
+    never reaches the resend; the runner's post-sale scan queues this job instead. Everything the stock function
+    decides is still decided by it: this wrapper only supplies what the gate-off account lacks — the sent card's
+    media/previews/price (the runner's receipt evidence) and the fan's voiced objection (stamped on the ladder
+    the way the reply loop would have). Idempotent per offer: a resolved offer is skipped."""
+    offer_id = payload.get("discount_offer")
+
+    def _skipped(why: str) -> dict:
+        return {"status": "skipped", "reason": why, "discount": True, "discount_skip": why}
+
+    if not cfg.get("enabled") or type(offer_id) is not int:
+        return _skipped("discount_disabled")
+    offer = await _load_offer(offer_id)
+    if offer is None or str(offer.account_id) != str(account_id):
+        return _skipped("no_offer")
+    if offer.status != "open" or not offer.offer_message_id:
+        return _skipped("offer_resolved")
+    fan_id = int(offer.fan_id)
+    now = datetime.utcnow()
+    cap = active_telegram_capabilities()
+    sent_card = getattr(cap, "sent_card", None)
+    card = await asyncio.to_thread(sent_card, int(offer.offer_message_id)) if callable(sent_card) else None
+    if not card or not card.get("media"):
+        return _skipped("card-evidence-missing")
+    vault = _VaultCard(media=list(card["media"]), previews=list(card.get("previews") or []),
+                       price_cents=int(card.get("price_cents") or 0))
+    async with get_session() as s:
+        rows = (await s.execute(
+            select(Message.created_at, Message.body).where(
+                Message.account_id == str(account_id), Message.fan_id == fan_id,
+                Message.direction == "in", Message.created_at > offer.offered_at)
+            .order_by(Message.created_at, Message.message_id))).all()
+    from . import _price_ask
+    objection_at, blocker = _price_ask.objection_state([(r[0], r[1] or "") for r in rows])
+    if blocker:
+        return _skipped(blocker)
+    if objection_at is not None:
+        # What the reply loop stamps when it hears a voiced objection (gate on); here it is read off the thread.
+        lad = (await _load_ladders(account_id, [fan_id])).get(fan_id)
+        if lad is None or lad.objection_at is None or lad.objection_at < objection_at:
+            await _save_ladder(account_id, fan_id, objection_at=objection_at)
+    client = await asyncio.to_thread(_runtime_client, account_id)
+    sent = await _maybe_discount_resend(client, account_id, cfg, offer, now, vault=vault)
+    out = {"status": "ok", "discount": True, "discount_resends": 1 if sent else 0}
+    if not sent:
+        out["discount_skip"] = vault.why or "not-eligible"
+    return out
+
+
 async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:
     """§4.4b — fired ~90-240s after a PAID unlock. ALWAYS sends the free post_buy_bridge
     bubble (keeps the scene alive on a conversation, not silence). THEN — only if
@@ -4824,6 +4926,9 @@ async def _fire_post_buy_rung(client, account_id: str, cfg: dict, fan_id: int,
     fan_spoke_last=True — the PURCHASE substitutes for fan_spoke_last AND NOTHING ELSE.
     Prices off the band via smart pricing when on, else the catalog. Sends ONE priced
     attach after the §3.6 45s+ pacing floor. Returns 1 if a rung went out, else 0."""
+    if cfg.get("fastt_vault_post_buy"):
+        # Nicky-style vault selling: there is no catalogue to pick from, so the follow-up card comes from the vault.
+        return await _fire_post_buy_vault_rung(client, account_id, cfg, fan_id, f, lad, now)
     catalog_items = await _load_catalog(account_id)
     if not catalog_items or not await _offer_caps_ok(
             account_id, fan_id, {**cfg, "min_fan_msgs_between_offers": 0}):
@@ -4923,6 +5028,61 @@ async def _fire_post_buy_rung(client, account_id: str, cfg: dict, fan_id: int,
                        rung_index=rung_index + 1, last_ask_at=now, session_idle_at=now)
     log.info("ai_chatter post_buy rung account=%s fan=%s item=%s msg=%s",
              account_id, fan_id, item.id, msg_id)
+    return 1
+
+
+async def _fire_post_buy_vault_rung(client, account_id: str, cfg: dict, fan_id: int,
+                                    f: Fan | None, lad: LadderState | None, now: datetime) -> int:
+    """`_fire_post_buy_rung` for a vault seller: the same rules, the vault's selector.
+
+    Same offer caps and the same ``upsell.qualify`` (the PURCHASE stands in for ``fan_spoke_last``, nothing else).
+    The card is the vault lane's own: ``content_prompts.read_hook`` reads the thread and what he already bought
+    for a reason to sell one more set (None = nothing suitable: no offer is manufactured), the hook lane plans it
+    from UNOWNED vault media and ``lane.deliver`` puts it on the wire with the read's bridge as her one voice line.
+    At most one card per call; the runner's offer-keyed job makes that one card per purchase. Returns 1 if it sold."""
+    if not await _offer_caps_ok(account_id, fan_id, {**cfg, "min_fan_msgs_between_offers": 0}):
+        return 0
+    ok, _why = upsell.qualify(upsell.GateCtx(
+        fan_id=fan_id, last_inbound_text="unlocked", last_inbound_at=now,
+        fan_spoke_last=True,           # §4.4b purchase_is_turn — the ONLY substitution
+        status=(lad.status if lad is not None else upsell.STATUS_HOT),
+        offers_paused_until=(lad.offers_paused_until if lad is not None else None),
+        last_ask_at=(lad.last_ask_at if lad is not None else None)), now)
+    if not ok:
+        return 0
+    # The hook lane's shape: per-fan caps zeroed (already checked above), account ceilings and brakes kept.
+    lane = sell_lane.SellLane(
+        account_id, _PURPOSE,
+        {**cfg, "max_offers_per_fan_per_day": 0, "min_fan_msgs_between_offers": 0})
+    voice = (await load_voice_blocks(account_id)).voice
+    cfg_row = await load_cfg_row(account_id)
+    hook: list = []
+
+    async def _read():
+        from . import content_prompts
+        h = await content_prompts.read_hook(
+            account_id, fan_id, voice=voice,
+            saved_effort=(cfg_row.reasoning_effort if cfg_row is not None else None),
+            effort_pick=str(cfg.get("hook_upsell_effort") or "auto"))
+        if h is not None:
+            hook.append(h)
+        return h.contract if h is not None else None
+
+    by = await _gather(account_id, {fan_id})
+    c = by.get(fan_id)
+    turn = sell_lane.Turn(text="unlocked", at=now, our_last_at=(c.last_out_at if c is not None else None),
+                          fan_spoke_last=True, wide_ask="post_buy")
+    plan = await lane.plan(fan_id, turn, fan=f, blocked=False,
+                           counters=sell_lane.AskCounters(asks_today=0, account_hour=0, account_day=0),
+                           contract=_read)
+    if not plan:
+        return 0
+    res = await lane.deliver(client, plan, voice_line=(hook[0].bridge if hook else None))
+    if not res.sold:
+        return 0
+    await _save_ladder(account_id, fan_id, status=upsell.STATUS_OPEN, last_ask_at=now, session_idle_at=now)
+    log.info("ai_chatter post_buy vault rung account=%s fan=%s px=%s msg=%s via=vault",
+             account_id, fan_id, res.price_cents, res.message_id)
     return 1
 
 
@@ -7520,6 +7680,10 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         return await _run_nudge(account_id, payload, cfg)
     # §4.4b / §7 — the post-buy bridge/rung and the aftercare/gift ride the same
     # ai_chatter job kind (NO new job kinds, per §3.8). Their own gating lives inside.
+    # The native runner's discounted resend rides the same job kind (its own payload key, queued by the runner's
+    # post-sale scan, never by this module): FASTT's `_maybe_discount_resend` on ONE still-unpaid vault card.
+    if payload.get("discount_offer") is not None:
+        return await _run_discount(account_id, payload, cfg)
     if payload.get("post_buy") is not None:
         return await _run_post_buy(account_id, payload, cfg)
     if payload.get("aftercare") is not None:

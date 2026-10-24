@@ -51,7 +51,8 @@ from datetime import datetime, timedelta, timezone
 
 from twin_bridge import store
 
-from . import runner
+from . import postsale, runner
+from .followups import DISCOUNT_KIND, NUDGE_KIND
 from .ledger import MAX_REQUEUES_MODEL, MAX_REQUEUES_PROVIDER, Ledger, Refused
 from .scope import AccountScope
 
@@ -214,6 +215,7 @@ class Service:
         self.next_conn_check = 0.0
         self.started_at = None
         self.turns_started = 0
+        self._outcomes = set()     # (kind, offer, reason) already reported by scan_postsale
         self.backoff_s = 0.0       # set by after_failure when an input was requeued; the all-fans runner turns it into a hold
         self.last_active = runner.now()
         self.last_held = None
@@ -578,6 +580,7 @@ class Service:
                 child.backoff_s = 0.0
             if child.turns_started > before:
                 return  # one turn at a time; re-read controls and the queue before the next fan
+        await self.run_postsale_scan()
         if await self.run_followups():
             return  # a follow-up turn started: re-read controls and the queue first
         self.note(None)
@@ -591,6 +594,7 @@ class Service:
             await asyncio.to_thread(self._twin_controls)
         except Exception as exc:
             runner.emit({"event": "twin-controls-error", "reason": (str(exc) or type(exc).__name__)[:120]})
+        await self.run_postsale_scan()
         if await self.run_followups():
             return
         await self.serve_fan()
@@ -652,7 +656,7 @@ class Service:
         from .budget import DailyBudget
         from .engine import NativeEngine
         from .model import ENDPOINT, NativePilotModel
-        from .followups import nudge_payload
+        from .followups import job_payload, offer_of, DISCOUNT_KIND
         pilot, ledger, args = self.pilot, self.ledger, self.args
         self.turns_started += 1
         gateway = ServiceGateway(self, pilot, content=self.content, scope=self.scope)
@@ -661,6 +665,10 @@ class Service:
         gateway.sources, gateway.input_key, gateway.bubble = sources, key, max((r["bubble_no"] for r in prior), default=0)
         self.backoff_s = 0.0
         gateway.followup = job is not None
+        if job is not None and job["kind"] == DISCOUNT_KIND:
+            # The one card this job may remove (re-read here, not trusted from the queue row).
+            row = await asyncio.to_thread(self.offer_row, offer_of(job["kind"], job_payload(job)))
+            gateway.expected_unsend = int(row["offer_message_id"]) if row and row["offer_message_id"] else None
         model = NativePilotModel(
             api_key=self.conn.model_api_key, account_id=self.db, fan_id=args.fan, deadline=time.monotonic() + TURN_MAX_S,
             should_stop=gateway.stopped, on_event=runner.emit,
@@ -673,8 +681,10 @@ class Service:
             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
                               content=self.content, context=self.context,
                               **({"own_offers_only": True} if self.strict else {}),
+                              arm_unsend=gateway.arm_unsend, unsent=lambda: gateway.unsent_ids,
+                              card_of=lambda mid: ledger.card_evidence(account_id=self.db, fan_id=args.fan, provider_message_id=str(mid)),
                               **({"followups": self.followups} if self.followups is not None else {})) as native:
-                stats = await native.run(run_id=run_id, **({"payload": nudge_payload(args.fan)} if job is not None else {}))
+                stats = await native.run(run_id=run_id, **({"payload": job_payload(job)} if job is not None else {}))
             if gateway.stopped_reason or model.stopped_reason:
                 raise Refused(gateway.stopped_reason or model.stopped_reason)
             if not isinstance(stats, dict) or stats.get("errors") or stats.get("cap_hit"):
@@ -728,6 +738,88 @@ class Service:
             return con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status='open' LIMIT 1",
                                (self.db, self.args.fan)).fetchone() is not None
 
+    def offer_row(self, offer_id):
+        """The offer row of THIS account (fan, status, how it resolved, its provider message id), or None."""
+        if type(offer_id) is not int:
+            return None
+        with runner.readonly(self.path) as con:
+            row = con.execute("SELECT id,fan_id,status,resolved_by,offer_message_id,price_cents FROM content_offers "
+                              "WHERE id=? AND account_id=?", (offer_id, self.db)).fetchone()
+        return dict(zip(("id", "fan_id", "status", "resolved_by", "offer_message_id", "price_cents"), row)) if row else None
+
+    def postsale_block(self, job):
+        """Why a discount / post-buy job must not run now (a fixed reason), or None."""
+        from .followups import job_payload, offer_of
+        kind = job["kind"]
+        if not postsale.settings(self.path, self.db)["discount" if kind == DISCOUNT_KIND else "post_buy"]:
+            return "feature-disabled"
+        offer = self.offer_row(offer_of(kind, job_payload(job)))
+        if offer is None or int(offer["fan_id"]) != int(job["fan_id"]):
+            return "offer-mismatch"
+        if kind == DISCOUNT_KIND:
+            return None if offer["status"] == "open" else "already-purchased" if offer["status"] == "delivered" else "offer-resolved"
+        return None if offer["status"] == "delivered" and offer["resolved_by"] == "ppv_ledger" else "not-purchased"
+
+    def _postsale_in_scope(self, fan):
+        """The fans the scan may queue for: this runner's own, owned by FASTT and not held (the same fences a turn passes)."""
+        if self.all_fans:
+            return self._owned(fan) and not fan_hold_reason(self.path, self.db, fan, True)
+        return fan == self.args.fan
+
+    def scan_postsale(self):
+        """Queue the offer-keyed follow-ups FASTT's discounted resend and post-purchase upsell run from (see postsale.py).
+
+        Both switches default off. Reads only, plus the queue write; the stock functions decide when the job runs."""
+        if self.followups is None:
+            return
+        st = postsale.settings(self.path, self.db)
+        if not (st["discount"] or st["post_buy"]):
+            return
+        from automations import _price_ask, upsell
+        now = runner.now()
+        with runner.readonly(self.path) as con:
+            buys = postsale.purchases(con, self.db, now) if st["post_buy"] else []
+            cards = postsale.unpaid_cards(con, self.db, now, upsell.RESEND_AFTER_M) if st["discount"] else []
+            ready = []
+            for offer_id, fan, offered_at, price in cards:
+                if not self._postsale_in_scope(fan):
+                    continue
+                if price <= upsell.OF_PRICE_FLOOR_CENTS:
+                    self.outcome("discount", offer_id, "price-at-minimum", fan)
+                    continue
+                said = postsale.inbound_since(con, self.db, fan, offered_at)
+                objected, blocked = _price_ask.objection_state(said)
+                if blocked:
+                    self.outcome("discount", offer_id, blocked, fan)
+                elif _price_ask.beat_after(said, objected):
+                    ready.append((offer_id, fan))
+        for offer_id, fan in buys:
+            if not self._postsale_in_scope(fan):
+                continue
+            run_at = postsale.post_buy_run_at(self.db, fan, offer_id, now)
+            if self.followups.add(fan, "ai_chatter", {"post_buy": offer_id}, run_at):
+                # The purchase settles this card: its nudge and any discount are obsolete.
+                self.ledger.followups_retire(account_id=self.db, fan_id=fan, kinds=(NUDGE_KIND, DISCOUNT_KIND),
+                                             reason="purchased", now=now)
+                runner.emit({"event": "post-buy-queued", "fan_id": fan, "offer_id": offer_id})
+        for offer_id, fan in ready:
+            if self.followups.add(fan, "ai_chatter", {"discount_offer": offer_id}, now):
+                runner.emit({"event": "discount-queued", "fan_id": fan, "offer_id": offer_id})
+
+    async def run_postsale_scan(self):
+        """The scan is best effort: a failure here never costs a fan turn."""
+        try:
+            await asyncio.to_thread(self.scan_postsale)
+        except Exception as exc:
+            runner.emit({"event": "postsale-scan-error", "reason": type(exc).__name__})
+
+    def outcome(self, kind, offer_id, reason, fan):
+        """One concise operational outcome per (kind, offer, reason): ids and a fixed reason, never text or media."""
+        key = (kind, offer_id, reason)
+        if key not in self._outcomes:
+            self._outcomes.add(key)
+            runner.emit({"event": kind + "-skipped", "reason": reason, "offer_id": offer_id, "fan_id": fan})
+
     def settle_job(self, job, state, reason):
         if self.ledger.followup_finish(job_id=job["job_id"], state=state, reason=reason, now=runner.now()):
             runner.emit({"event": "followup-" + state, "kind": job["kind"], "fan_id": job["fan_id"],
@@ -736,7 +828,13 @@ class Service:
     async def followup_turn(self, job):
         """One attempt, never replayed: the job is settled (done / dropped / failed) whatever happens."""
         pilot, ledger, args = self.pilot, self.ledger, self.args
-        if not await asyncio.to_thread(self.offer_open):
+        if job["kind"] != NUDGE_KIND:
+            # Discount / post-buy: the saved switch and the offer's own state, re-read at run time (a switch turned off
+            # since the job was queued stops it here, before anything is generated or sent).
+            why = await asyncio.to_thread(self.postsale_block, job)
+            if why:
+                return self.settle_job(job, "dropped", why)
+        elif not await asyncio.to_thread(self.offer_open):
             return self.settle_job(job, "dropped", "offer-resolved")        # bought, expired or withdrawn
         wait = self.cooldown_left()
         if wait > 0:

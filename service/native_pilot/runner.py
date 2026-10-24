@@ -268,6 +268,37 @@ class Gateway:
         self.deadline = pilot.deadline
         self.hold_check = None
         self.not_sent = None   # the NotSent that ended a send (a retryable one lets the caller answer the input again)
+        # Discounted resend (service.py arms these for exactly one job): the one unpaid card of this fan the job may
+        # remove, and the ids whose removal the provider confirmed. The DELETE happens at the wire, inside the SAME
+        # single attempt as the replacement card, so an uncertain outcome is the ledger's ordinary delivery-unknown.
+        self.expected_unsend = None
+        self.unsend_id = None
+        self.unsent_ids = set()
+
+    def arm_unsend(self, message_id):
+        """Name the card the next send must remove first. Only the one id the job was built for is accepted."""
+        if type(message_id) is not int or message_id != self.expected_unsend or self.unsend_id is not None:
+            self.stopped_reason = "unsend-scope-refused"
+            raise Refused(self.stopped_reason)
+        self.unsend_id = message_id
+
+    def _remove_card(self, message_id):
+        """DELETE the armed card at the wire; return only once the provider confirmed it is gone.
+
+        A 404 is FASTT's own "already removed" and counts as removed. Any other failure raises: a definite 4xx
+        refusal becomes NotSent in ``_send`` (nothing changed, nothing is sent), anything unproven is delivery-unknown."""
+        from of_client import API_BASE
+        try:
+            res = self.client.delete_json(f"{API_BASE}/messages/{message_id}", json_body={"withUserId": int(self.pilot.fan_id)},
+                                          proxy_tries=1, allow_redirects=False)
+        except Exception as exc:
+            if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+                self.unsent_ids.add(message_id)
+                return
+            raise
+        if not (isinstance(res, dict) and res.get("success") is True):
+            raise RuntimeError("unsend-unconfirmed")
+        self.unsent_ids.add(message_id)
 
     async def pace(self):
         """Wait point before history/admission; the bounded pilot has no pacing."""
@@ -301,9 +332,12 @@ class Gateway:
 
         attempt = None
         settled = False
+        unsend_id, self.unsend_id = self.unsend_id, None      # armed for THIS send only, never carried to another
         try:
             if self.stopped() or not self.input_key:
                 raise Refused(self.stopped_reason or "pilot-stopped")
+            if unsend_id is not None and not terms:
+                raise Refused("unsend-needs-card")
             if len(text.encode("utf-16-le")) // 2 > 4000:
                 raise Refused("output-too-long")
             await self.pace()
@@ -362,6 +396,9 @@ class Gateway:
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
                     owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
+                    if unsend_id is not None:
+                        wire[0] = True    # the DELETE may have reached OnlyFans from here on
+                        self._remove_card(unsend_id)
                     if terms:
                         from of_client import API_BASE
                         body = {"text": escape_plain_text(text), "lockedText": False,

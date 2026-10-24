@@ -128,10 +128,13 @@ _SCHEMA = (
 )
 
 # Runner-owned follow-ups (see service.py --followups). The legacy scheduled_jobs table is never used.
-FOLLOWUP_KINDS = ("nudge",)
+FOLLOWUP_KINDS = ("nudge", "discount", "post_buy")
+# Kinds keyed to ONE offer id (payload carries it): a restart or a duplicate purchase event can queue each at most once.
+OFFER_KEYED_KINDS = ("discount", "post_buy")
 FOLLOWUP_MARK = "followup:"            # source_hash prefix of an input that answers a follow-up, not a fan message
 FOLLOWUP_MAX_AHEAD = timedelta(hours=24)
 FOLLOWUP_TTL = timedelta(hours=6)      # a job this long past its time is stale (downtime): dropped, never sent late
+OFFER_PAYLOAD_KEY = {"discount": "discount_offer", "post_buy": "post_buy"}   # the payload key carrying that offer id
 # Job-specific reasons: the job is dropped. Anything else (lease, allowance, unsettled send) is not the job's fault.
 FOLLOWUP_DROPS = ("followup-not-queued", "followup-not-due", "followup-expired", "followup-chat-moved",
                   "followup-fan-replied", "input-already-claimed")
@@ -703,19 +706,66 @@ class Ledger:
         if run_s > _dt(datetime.fromisoformat(now_s) + FOLLOWUP_MAX_AHEAD):
             raise Refused("followup-run-at")
         with self._tx(initialize=True) as con:
-            # One live nudge per fan: a newer offer's nudge replaces an older queued one (its anchor is stale).
-            con.execute("UPDATE native_pilot_followups SET state='dropped',reason='superseded',updated_at=? "
-                        "WHERE account_id=? AND fan_id=? AND kind=? AND state='queued'", (now_s, account_id, fan_id, kind))
             last_in = con.execute("SELECT message_id,created_at FROM messages WHERE account_id=? AND fan_id=? "
                                   "AND direction='in' ORDER BY created_at DESC,message_id DESC LIMIT 1",
                                   (account_id, fan_id)).fetchone()
-            job_id = _hash([account_id, fan_id, kind, run_s, now_s])[:32]
+            if kind in OFFER_KEYED_KINDS:
+                # Queue time re-proof: the offer exists and is THIS account's and THIS fan's.
+                offer_id = payload.get(OFFER_PAYLOAD_KEY[kind]) if isinstance(payload, dict) else None
+                if type(offer_id) is not int or offer_id <= 0 or con.execute(
+                        "SELECT 1 FROM content_offers WHERE id=? AND account_id=? AND fan_id=?",
+                        (offer_id, account_id, fan_id)).fetchone() is None:
+                    raise Refused("followup-offer")
+                prior = con.execute("SELECT state,last_in_id FROM native_pilot_followups WHERE account_id=? AND fan_id=? "
+                                    "AND kind=? AND payload_json=?", (account_id, fan_id, kind, _json(payload))).fetchall()
+                newest_in = last_in["message_id"] if last_in else None
+                for row in prior:
+                    # post_buy: one opportunity per purchase, ever. discount: a job the eligibility rules dropped may be
+                    # queued again, but only once the fan has said something new since.
+                    if kind == "post_buy" or row["state"] != "dropped" or row["last_in_id"] == newest_in:
+                        return None
+            else:
+                # One live nudge per fan: a newer offer's nudge replaces an older queued one (its anchor is stale).
+                con.execute("UPDATE native_pilot_followups SET state='dropped',reason='superseded',updated_at=? "
+                            "WHERE account_id=? AND fan_id=? AND kind=? AND state='queued'", (now_s, account_id, fan_id, kind))
+            job_id = _hash([account_id, fan_id, kind, run_s, now_s, payload])[:32]   # the payload too: two offers queued in one instant
             con.execute("INSERT INTO native_pilot_followups(job_id,account_id,fan_id,kind,payload_json,run_at,last_in_id,"
                         "last_in_at,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'queued',?,?)",
                         (job_id, account_id, fan_id, kind, _json(payload), run_s,
                          last_in["message_id"] if last_in else None, _dt(last_in["created_at"]) if last_in else None,
                          now_s, now_s))
             return job_id
+
+    def card_evidence(self, *, account_id: str, fan_id: int, provider_message_id: str) -> dict | None:
+        """The vault card this runner sent as ``provider_message_id`` to this fan, from its own sent-receipt evidence:
+        ``{"media": [ids], "previews": [ids], "price_cents": n}``, else None (never sent here, or sent without content)."""
+        with store.readonly(self.path) as con:
+            if not store.has_table(con, "native_pilot_receipts"):
+                return None
+            row = con.execute("SELECT r.evidence_json FROM native_pilot_receipts r JOIN native_pilots p ON p.pilot_id=r.pilot_id "
+                              "WHERE p.account_id=? AND p.fan_id=? AND r.provider_message_id=? AND r.state='sent' "
+                              "ORDER BY r.attempt_id DESC LIMIT 1", (account_id, fan_id, str(provider_message_id))).fetchone()
+        try:
+            content = json.loads(row[0] or "{}").get("content") if row else None
+        except ValueError:
+            return None
+        if not isinstance(content, dict):
+            return None
+        media, previews, price = content.get("media_ids"), content.get("preview_ids"), content.get("price_cents")
+        if (not isinstance(media, list) or not media or any(type(m) is not int for m in media)
+                or not isinstance(previews, list) or any(type(m) is not int for m in previews)
+                or type(price) is not int or price <= 0):
+            return None
+        return {"media": list(media), "previews": list(previews), "price_cents": price}
+
+    def followups_retire(self, *, account_id: str, fan_id: int, kinds: tuple, reason: str, now: datetime | str) -> int:
+        """Drop this fan's still-queued jobs of ``kinds`` (a purchase makes the unpaid-offer nudge and discount obsolete)."""
+        if not kinds or any(k not in FOLLOWUP_KINDS for k in kinds):
+            raise Refused("followup-kind")
+        with self._tx(initialize=True) as con:
+            return con.execute("UPDATE native_pilot_followups SET state='dropped',reason=?,updated_at=? WHERE account_id=? AND fan_id=? "
+                               "AND state='queued' AND kind IN (%s)" % ",".join("?" * len(kinds)),
+                               (reason, _dt(now), account_id, fan_id, *kinds)).rowcount
 
     def followups_due(self, *, account_id: str, now: datetime | str, fan_id: int | None = None, limit: int = 20) -> list[dict]:
         with store.readonly(self.path) as con:

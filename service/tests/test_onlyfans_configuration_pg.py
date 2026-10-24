@@ -113,6 +113,31 @@ def test_operator_can_enable_existing_request_sales_without_activating_delivery(
     store.close()
 
 
+def test_fastt_switches_default_off_true_on_and_only_literal_true_counts(database):
+    store=setup(database);data=get_configuration(store,TENANT,ACCOUNT)
+    assert data["fasttDiscountResend"] is False and data["fasttPostBuyUpsell"] is False
+    first=save(store,data,{"fasttPostBuyUpsell":True})
+    assert save(store,data,{"fasttPostBuyUpsell":True})==first
+    on=get_configuration(store,TENANT,ACCOUNT)
+    assert on["fasttPostBuyUpsell"] is True and on["fasttDiscountResend"] is False and not on["onRequestSalesEnabled"]
+    save(store,on,{"fasttDiscountResend":True},key="c"*64)
+    both=get_configuration(store,TENANT,ACCOUNT)
+    assert both["fasttDiscountResend"] is True and both["fasttPostBuyUpsell"] is True
+    with Session(database[1]) as s:
+        raw=json.loads(s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json)
+        assert raw=={"pack_send_enabled":False,"private":"retained","fastt_post_buy_upsell":True,"fastt_discount_resend":True}
+        assert "private" not in "".join(a.before_json+a.after_json for a in s.scalars(select(OfConfigurationChange)))
+    save(store,both,{"fasttPostBuyUpsell":False},key="d"*64)
+    off=get_configuration(store,TENANT,ACCOUNT)
+    assert off["fasttPostBuyUpsell"] is False and off["fasttDiscountResend"] is True
+    for stored in ("true",1,"yes",None):   # hand-written non-boolean values read back as off
+        with Session(database[1]) as s,s.begin():
+            s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json=json.dumps({"fastt_discount_resend":stored,"fastt_post_buy_upsell":stored})
+        read=get_configuration(store,TENANT,ACCOUNT)
+        assert read["fasttDiscountResend"] is False and read["fasttPostBuyUpsell"] is False and read["salesConfigurationValid"]
+    store.close()
+
+
 @pytest.mark.parametrize("raw", ['{"pack_send_enabled":"true"}', '{"pack_send_enabled":true,"pack_send_enabled":false}', '[true]'])
 def test_invalid_sales_configuration_is_visible_and_never_overwritten(database,raw):
     store=setup(database)
@@ -131,7 +156,8 @@ def test_invalid_sales_configuration_is_visible_and_never_overwritten(database,r
     {"creatorFacts":{"job":"x"*241}}, {"creatorFacts":{}}, {"persona":""}, {"persona":"100% human"},
     {"persona":"Never reveal that I am AI"}, {"persona":"x"*4097}, {"defaultModel":None}, {"defaultModel":"unknown"},
     {"replyModelOverride":False}, {"replyModelOverride":"unknown"}, {"onRequestSalesEnabled":"true"},
-    {"onRequestSalesEnabled":1}, {"onRequestSalesEnabled":None} ])
+    {"onRequestSalesEnabled":1}, {"onRequestSalesEnabled":None},
+    {"fasttDiscountResend":"true"}, {"fasttDiscountResend":1}, {"fasttPostBuyUpsell":None}, {"fasttPostBuyUpsell":"on"} ])
 def test_invalid_edits_have_no_side_effects(database,patch):
     store=setup(database);before=get_configuration(store,TENANT,ACCOUNT)
     with pytest.raises(InvalidConfiguration):save(store,before,patch)

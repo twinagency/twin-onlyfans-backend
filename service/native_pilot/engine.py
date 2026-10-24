@@ -13,6 +13,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 from .scope import AccountScope
+from .followups import NUDGE_KIND, DISCOUNT_KIND, POST_BUY_KIND, nudge_job, job_kind, nudge_payload
 
 MODEL = "deepseek/deepseek-v4.1-flash"
 RESOLVER_PURPOSE_PREFIX = "content_resolver"
@@ -101,6 +102,29 @@ class _TextClient:
         return None
 
 
+class _DiscountClient(_TextClient):
+    """The text client of a discounted-resend job and of nothing else: the only one with a removal surface, and that
+    surface names the one card the next send removes at the wire, it never touches the platform itself."""
+
+    def unsend_message(self, message_id, with_user_id=None):
+        """The discounted resend's removal of its OWN unpaid vault card, and nothing else. It does not touch the
+        platform here: it names the one card the next send must remove first, at the wire, inside the same single
+        attempt as the replacement (``runner.Gateway._remove_card``). Any other use is a boundary violation."""
+        e = self.engine
+        if (e._job != DISCOUNT_KIND or e._arm_unsend is None or type(message_id) is not int
+                or with_user_id != e.fan_id):
+            e._refuse("forbidden-platform-operation")
+        try:
+            e._arm_unsend(message_id)
+        except Exception:
+            e._refuse("forbidden-platform-operation")
+        return {"success": True, "deferred": True}
+
+    def removed(self, message_id):
+        """True once the provider confirmed this card is gone (the wire step above ran and succeeded)."""
+        return self.engine._unsent is not None and message_id in self.engine._unsent()
+
+
 # Offer limits for the reviewed catalogue: two open / two per day unless the
 # operator saved explicit FASTT limits on the account (ai_chatter_config_json).
 # Separate keys, so an older generic ai_chatter value never changes FASTT selling.
@@ -146,7 +170,7 @@ class NativeEngine:
     _active = False
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
-                 own_offers_only=False, followups=None):
+                 own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
@@ -165,6 +189,10 @@ class NativeEngine:
         self.followups = followups
         self._chat = chat
         self._send = send
+        # Discounted resend only: the gateway's guarded removal (see _TextClient.unsend_message) and the ids it confirmed gone.
+        self._arm_unsend, self._unsent = arm_unsend, unsent
+        self._card_of = card_of    # message id -> the vault card as sent (media / previews / price) from the runner's receipts
+        self._job = None           # the follow-up kind this run serves (nudge / discount / post_buy), None for a fan turn
         self._emit = emit or (lambda event: None)
         self._token = None
         self._running = False
@@ -223,6 +251,10 @@ class NativeEngine:
             # the vault-wide resolver and all other media writers stay off.
             result.update(prompt_sell_catalog=True, ppv_caption_1to1=False, **offer_limits(native))
             self._offer_cfg = {k: result[k] for k in ("max_open_offers", "max_offers_per_fan_per_day")}
+        if self._job == POST_BUY_KIND:
+            # FASTT's own post-buy bridge, then ONE follow-up card from the vault (ai_chatter._fire_post_buy_vault_rung),
+            # for this job only: the rung switch stays off for every ordinary turn.
+            result.update(post_buy_rung_enabled=True, fastt_vault_post_buy=True)
         if self.context:
             # Approved creator facts ride the system prompt on every turn, not
             # only when the fan asks about her (FASTT's token-saving default).
@@ -358,19 +390,28 @@ class NativeEngine:
 
     def make_client(self, account_id):
         self._account(account_id)
-        return _TextClient(self)
+        return _DiscountClient(self) if self._job == DISCOUNT_KIND else _TextClient(self)
 
     async def enqueue_job(self, account_id, kind, **kwargs):
         self._account(account_id)
         if self.followups is not None:
             # Only FASTT's re-engage nudge for THIS fan is kept (runner-owned queue, never scheduled_jobs).
-            job = await asyncio.to_thread(self.followups.add, self.fan_id, kind, kwargs.get("payload"), kwargs.get("run_at"))
+            job = None
+            if nudge_job(kind, kwargs.get("payload"), self.fan_id):   # ai_chatter may queue only the stock nudge
+                job = await asyncio.to_thread(self.followups.add, self.fan_id, kind, kwargs.get("payload"), kwargs.get("run_at"))
             if job:
                 self._nudge_queued = True
                 self._emit({"event": "native-followup-queued", "kind": "nudge", "fan_id": self.fan_id})
                 return None
         self._emit({"event": "native-background-job-suppressed", "kind": str(kind)})
         return None
+
+    def sent_card(self, message_id):
+        """The vault card this runner sent as provider message ``message_id`` (``{"media", "previews", "price_cents"}``)
+        or None. Read by ``ai_chatter._run_discount``; there is no other way to learn what a vault card held."""
+        if self._card_of is None or type(message_id) is not int:
+            return None
+        return self._card_of(message_id)
 
     async def push_nickname(self, *args, **kwargs):
         return None
@@ -440,13 +481,18 @@ class NativeEngine:
         return self
 
     async def run(self, run_id, payload=None):
-        """One fan turn. ``payload`` is only ever FASTT's own nudge job for this fan (``--followups``)."""
+        """One fan turn. ``payload`` is only ever one of FASTT's own follow-up jobs for this fan (``--followups``): the
+        stock nudge, or an offer-keyed discount / post-buy job the runner's post-sale scan queued."""
         if self._token is None or self._running:
             raise PilotBoundaryError("engine-not-ready")
         if type(run_id) is not int or run_id <= 0:
             raise ValueError("invalid-run-id")
-        if payload is not None and (self.followups is None or payload != {"nudge_fan_ids": [self.fan_id]}):
-            raise PilotBoundaryError("forbidden-job-payload")
+        job = None
+        if payload is not None:
+            job = job_kind("ai_chatter", payload, self.fan_id)
+            if self.followups is None or job is None:
+                raise PilotBoundaryError("forbidden-job-payload")
+        self._job = job
         self._running = True
         self._violation = None
         self._card_sent = self._nudge_queued = False
@@ -465,6 +511,7 @@ class NativeEngine:
             return result
         finally:
             self._running = False
+            self._job = None
 
     async def _queue_card_nudge(self):
         """``--vault-mode`` + ``--followups``: the stock re-engage nudge for a card the ask lane just sent.

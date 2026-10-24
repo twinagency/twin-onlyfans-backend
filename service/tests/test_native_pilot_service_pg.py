@@ -137,13 +137,24 @@ async def real_schema():
     check(await intake.handle(frame(9100)) == "persisted")
     check(await intake.handle(frame(9100)) == "duplicate")
     check(await intake.handle(frame(9101, sender=int(L.ACCT))) == "other-sender")
-    check(await intake.handle(frame(9102, mediaCount=1, media=[{"id": 1}])) == "unsupported")
     stored = base.rows("SELECT message_id,direction,body FROM messages WHERE account_id=? ORDER BY message_id", (A,))
     check(stored == [(9100, "in", "hello there")] or (len(stored) == 1 and stored[0][:2] == (9100, "in")), stored)
     check(base.rows("SELECT count(*) FROM fans WHERE account_id=?", (A,))[0][0] == 1)
     # Intake's row is what the ledger snapshots (same shared history, no second copy).
     check(Ledger(base.SYNC_URL).snapshot(pilot_id="svc-real", owner_token="synthetic-owner-real-0001",
                                                   now=now + timedelta(seconds=10)) is not None)
+
+    # D2: a fan photo is stored (the ledger then holds the burst) and flags a human; nothing is sent.
+    check(base.rows("SELECT requires_attention FROM of_conversation_state WHERE account_id=? AND fan_id=?", (A, F)) in ([], [(False,)]),
+          "no attention before an unsupported frame")
+    check(await intake.handle(frame(9102, mediaCount=1, media=[{"id": 1}])) == "unsupported")
+    check(await intake.handle(frame(9102, mediaCount=1, media=[{"id": 1}])) == "duplicate")
+    check(base.rows("SELECT direction,media_count FROM messages WHERE account_id=? AND message_id=9102", (A,)) == [("in", 1)])
+    check(base.rows("SELECT requires_attention FROM of_conversation_state WHERE account_id=? AND fan_id=?", (A, F)) == [(True,)],
+          "the fan is flagged for a human")
+    check(Ledger(base.SYNC_URL).snapshot(pilot_id="svc-real", owner_token="synthetic-owner-real-0001",
+                                         now=now + timedelta(seconds=10)) is None, "the ledger holds a burst with media")
+    check(not base.rows("SELECT 1 FROM messages WHERE account_id=? AND direction='out'", (A,)), "nothing was sent")
     await engine.dispose()
 
 

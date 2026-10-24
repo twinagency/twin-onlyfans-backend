@@ -37,7 +37,7 @@ async def exercise(tag):
     from db.engine import engine, get_session
     from db.models import (Base, Account, Fan, Message, Employee, OfMessageDelivery, OfConversationState)
     from native_pilot.engine import NativeEngine
-    from native_pilot.reporting import report_outcomes, attempt_ref
+    from native_pilot.reporting import report_outcomes, report_attention, attempt_ref
     from onlyfans_read import projections
     from onlyfans_read.repo import SqlOnlyFansReadRepo
 
@@ -139,6 +139,29 @@ async def exercise(tag):
     state = await repo.conversation_state(account_id=account, fan_id=fan_ok)
     check(state.requires_attention and state.unresolved_attempt_id is None, "error raises attention only")
     check(await counts(fan_ok) == (1, 1, 1), "still one message and one receipt")
+
+    # --- D2: unsupported fan input (photo/tip/paid message) flags a human, nothing else -------------
+    fan_media, fan_known, fan_ghost = (int(account) * 10 + n for n in (4, 5, 6))
+    async with get_session() as s:
+        for fan in (fan_media, fan_known):
+            s.add(Fan(account_id=account, fan_id=fan))
+        s.add(OfConversationState(account_id=account, fan_id=fan_known, mode="automated", revision=3,
+                                  input_revision=0, takeover_state="none", requires_attention=False))
+    check(await report_attention(account_id=account, fan_id=fan_ghost, reason="unsupported-input:media") is False
+          and await counts(fan_ghost) == (0, 0, 0), "no fan row: nothing is invented")
+    check(await report_attention(account_id=account, fan_id=fan_media, reason="unsupported-input:media") is True, "attention raised")
+    state = await repo.conversation_state(account_id=account, fan_id=fan_media)
+    check(state.requires_attention and state.unresolved_attempt_id is None, "visible attention, no fake send incident")
+    async with get_session() as s:
+        row = await s.get(OfConversationState, (account, fan_media))
+        check(row.mode == "paused" and row.revision == 0, "a missing control row starts paused, as everywhere else")
+    check(await report_attention(account_id=account, fan_id=fan_known, reason="unsupported-input:tip") is True, "tip flagged")
+    async with get_session() as s:
+        row = await s.get(OfConversationState, (account, fan_known))
+        check(row.requires_attention and row.mode == "automated" and row.revision == 3,
+              "an existing control row only gains attention; mode and revision are Twin's")
+    check(await report_attention(account_id=account, fan_id=fan_known, reason="unsupported-input:tip") is True
+          and await counts(fan_known) == (0, 0, 1), "repeat is idempotent; still no message or receipt written")
 
     if PG:
         async with engine.begin() as conn:

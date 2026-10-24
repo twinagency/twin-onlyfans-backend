@@ -11,9 +11,14 @@ second history exists. Everything else is dropped here:
 
 * frames for another fan (all-fans mode: none are dropped for that) and above all our own
   account's echoes, which the transcoder would otherwise misfile as inbound;
-* media / tip / priced / locked / gif input (``unsupported-input``): the ledger
-  holds on those, exactly as in the recovered ``tools/intake.py``;
 * messages already stored.
+
+Media / tip / priced / locked / gif input (``unsupported-input``) is NOT dropped. It is stored
+through the same transcoder (its tip row is the existing ledger path, which
+``transaction_ingest`` later dedupes against, so nothing is written twice here), which makes the
+ledger hold the burst (it never answers a burst containing media/tip/price), and the fan is flagged
+``requires_attention`` for a human. The bot never reads or replies to that content. The reason
+(``unsupported-input:media|tip|paid|gif``) is in the runner event; the stored row is the evidence.
 
 The runner's ledger, not this module, decides what is fresh enough to answer.
 """
@@ -45,16 +50,34 @@ async def _default_transcode(account_id, message):
     await _transcode_chat_message(account_id, message)
 
 
+async def _default_attention(account_id, fan_id, reason):
+    from .reporting import report_attention
+    return await report_attention(account_id=account_id, fan_id=fan_id, reason=reason)
+
+
+def unsupported_reason(message: dict) -> str | None:
+    """Why the runner cannot read this frame, money first; None for plain text."""
+    if message.get("isTip"):
+        return "unsupported-input:tip"
+    if message.get("price") or message.get("lockedText"):
+        return "unsupported-input:paid"
+    if message.get("giphyId"):
+        return "unsupported-input:gif"
+    if message.get("media") or message.get("mediaCount"):
+        return "unsupported-input:media"
+    return None
+
+
 def unsupported(message: dict) -> bool:
-    return bool(message.get("media") or message.get("mediaCount") or message.get("giphyId") or message.get("isTip")
-                or message.get("price") or message.get("lockedText"))
+    return unsupported_reason(message) is not None
 
 
 class Intake:
     def __init__(self, scope: AccountScope, fan: int | None, path, *, socket_factory=_default_socket,
-                 transcode=_default_transcode, emit=_emit, backoff_s: float = BACKOFF_MIN_S):
+                 transcode=_default_transcode, attention=_default_attention, emit=_emit,
+                 backoff_s: float = BACKOFF_MIN_S):
         self.scope, self.fan, self.path = scope, fan, path
-        self._factory, self._transcode, self._emit = socket_factory, transcode, emit
+        self._factory, self._transcode, self._attention, self._emit = socket_factory, transcode, attention, emit
         self._backoff0 = backoff_s
         self._task = None
         self._ws = None
@@ -64,6 +87,14 @@ class Intake:
         with store.readonly(self.path) as con:
             return con.execute("SELECT 1 FROM messages WHERE account_id=? AND fan_id=? AND message_id=?",
                                (self.scope.db_id, self.fan if fan is None else fan, message_id)).fetchone() is not None
+
+    async def _flag(self, fan: int, mid: int, reason: str) -> bool:
+        """Raise the human-attention flag; a failure is reported, never swallowed silently."""
+        try:
+            return bool(await self._attention(self.scope.db_id, fan, reason))
+        except Exception:
+            self._emit({"event": "intake-attention-failed", "message_id": mid, "reason": reason})
+            return False
 
     async def handle(self, event) -> str:
         """Process one frame; returns a fixed label (also what the tests assert)."""
@@ -96,9 +127,7 @@ class Intake:
             datetime.fromisoformat(str(message["createdAt"]).replace("Z", "+00:00"))
         except (KeyError, ValueError):
             return "invalid"
-        if unsupported(message):
-            self._emit({"event": "unsupported-input", "message_id": mid})
-            return "unsupported"
+        reason = unsupported_reason(message)
         try:
             if await asyncio.to_thread(self._exists, mid, fan):
                 return "duplicate"
@@ -106,7 +135,14 @@ class Intake:
             stored = await asyncio.to_thread(self._exists, mid, fan)
         except Exception:
             self._emit({"event": "intake-persist-failed", "message_id": mid})
+            if reason:
+                await self._flag(fan, mid, reason)
             return "failed"
+        if reason:
+            flagged = await self._flag(fan, mid, reason)
+            self._emit({"event": "unsupported-input", "message_id": mid, "fan_id": fan, "reason": reason,
+                        "persisted": stored, "attention": flagged})
+            return "unsupported"
         self._emit({"event": "inbound-persisted", "message_id": mid, "verified": stored})
         return "persisted" if stored else "failed"
 

@@ -248,7 +248,7 @@ class Ledger:
     def _source(con, p, now: str,
                 exclude_input_key: str | None = None) -> SourceSnapshot | None:
         # Only proven outputs from the CURRENT input are excluded. A newer external
-        # outbound, system event, unsupported fan input, etc. holds the pilot.
+        # outbound, system event, unsent or invalid row, etc. holds the pilot.
         rows = con.execute("SELECT m.message_id,m.direction,m.body,m.media_ids,m.media_count,m.price_cents,"
                           "m.is_tip,m.is_unsent,m.created_at,m.ingested_at,m.raw_json FROM messages m "
                           "WHERE m.account_id=? AND m.fan_id=? AND NOT (m.direction='out' AND m.is_unsent) "
@@ -271,14 +271,22 @@ class Ledger:
                 break
             if not (p["cutoff"] < ingested <= now) or created > now:
                 return None
-            if row["is_unsent"] != 0 or row["is_tip"] != 0 or row["price_cents"] != 0 \
-                    or row["media_count"] != 0 or not isinstance(row["body"], str) or not row["body"].strip() \
-                    or not isinstance(row["message_id"], int) or row["message_id"] <= 0:
+            if row["is_unsent"] != 0 or not isinstance(row["message_id"], int) or row["message_id"] <= 0:
                 return None
             try:
-                if json.loads(row["media_ids"]) != []:
-                    return None
+                media = json.loads(row["media_ids"])
             except (TypeError, ValueError):
+                return None
+            if not isinstance(media, list):
+                return None
+            text = isinstance(row["body"], str) and bool(row["body"].strip())
+            if row["is_tip"] != 0 or row["price_cents"] != 0 or row["media_count"] != 0 or media:
+                # A fan photo/video/gif/tip/paid message does not stop the AI: intake flagged the
+                # chat for a human (who may take over). Its caption is answerable text; without
+                # one the row is not an input, so the AI answers his text around it.
+                if not text:
+                    continue
+            elif not text:
                 return None
             members.append(dict(row))
             if len(members) > 100:

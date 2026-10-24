@@ -156,8 +156,8 @@ def run(root: Path):
         check(g.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0] == 3)
 
     # Canonical input invalidation and newest-message race are rejected before any spend.
-    invalids = ({"direction": "out"}, {"is_tip": 1}, {"is_unsent": 1}, {"price_cents": 1},
-                {"media_count": 1}, {"media_ids": '[9]'}, {"media_ids": 'bad'}, {"body": '  '},
+    invalids = ({"direction": "out"}, {"is_unsent": 1}, {"media_ids": 'bad'}, {"body": '  '},
+                {"is_tip": 1, "body": ''}, {"media_count": 1, "body": ''}, {"media_ids": '[9]', "body": ' '},
                 {"created_at": NOW.isoformat(sep=" ")}, {"ingested_at": NOW.isoformat(sep=" ")},
                 {"created_at": "bad"}, {"created_at": "2099-01-01"}, {"fan_id": FAN + 1}, {"account_id": "999"})
     for n, invalid in enumerate(invalids):
@@ -165,6 +165,22 @@ def run(root: Path):
         g.activate(); g.source(**invalid)
         check(g.ledger.snapshot(**g.call) is None)
         check(g.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0] == 3)
+    # A fan photo/tip/paid message never stops the AI (intake flags a human): its caption is
+    # answerable text, and a caption-less one is skipped so his text around it is answered.
+    for n, extra in enumerate(({"is_tip": 1}, {"price_cents": 1}, {"media_count": 1}, {"media_ids": '[9]'})):
+        g = Fixture(root, "captioned" + str(n))
+        g.activate(); g.source(**extra)
+        snap = g.ledger.snapshot(**g.call)
+        check(snap is not None and snap.member_ids == (100,), f"captioned unsupported input answered {extra}")
+    g = Fixture(root, "photo-after-text")
+    g.activate(); g.source(mid=100)
+    g.source(mid=101, body='', media_count=1, media_ids='[9]',
+             created_at=(NOW + timedelta(seconds=1, milliseconds=500)).isoformat(sep=" "))
+    snap = g.ledger.snapshot(**g.call)
+    check(snap is not None and snap.member_ids == (100,), "caption-less photo after text: the text is answered")
+    g = Fixture(root, "photo-only")
+    g.activate(); g.source(mid=100, body='', media_count=1, media_ids='[9]')
+    check(g.ledger.snapshot(**g.call) is None, "a caption-less photo alone is no input")
     for n, mutation in enumerate(("UPDATE messages SET is_unsent=1", "UPDATE messages SET body='edited'", "UPDATE messages SET raw_json='{}'")):
         g = Fixture(root, "mutation" + str(n)); g.activate(); g.source(); k = g.claim()
         g.sql(mutation)

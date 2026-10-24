@@ -144,7 +144,7 @@ async def real_schema():
     check(Ledger(base.SYNC_URL).snapshot(pilot_id="svc-real", owner_token="synthetic-owner-real-0001",
                                                   now=now + timedelta(seconds=10)) is not None)
 
-    # D2: a fan photo is stored (the ledger then holds the burst) and flags a human; nothing is sent.
+    # D2: a fan photo is stored and flags a human; the AI is not stopped (its caption is answerable); nothing is sent here.
     check(base.rows("SELECT requires_attention FROM of_conversation_state WHERE account_id=? AND fan_id=?", (A, F)) in ([], [(False,)]),
           "no attention before an unsupported frame")
     check(await intake.handle(frame(9102, mediaCount=1, media=[{"id": 1}])) == "unsupported")
@@ -152,8 +152,9 @@ async def real_schema():
     check(base.rows("SELECT direction,media_count FROM messages WHERE account_id=? AND message_id=9102", (A,)) == [("in", 1)])
     check(base.rows("SELECT requires_attention FROM of_conversation_state WHERE account_id=? AND fan_id=?", (A, F)) == [(True,)],
           "the fan is flagged for a human")
-    check(Ledger(base.SYNC_URL).snapshot(pilot_id="svc-real", owner_token="synthetic-owner-real-0001",
-                                         now=now + timedelta(seconds=10)) is None, "the ledger holds a burst with media")
+    snap = Ledger(base.SYNC_URL).snapshot(pilot_id="svc-real", owner_token="synthetic-owner-real-0001",
+                                          now=now + timedelta(seconds=10))
+    check(snap is not None and snap.message_id == 9102, "the AI keeps going: the photo's caption is answerable")
     check(not base.rows("SELECT 1 FROM messages WHERE account_id=? AND direction='out'", (A,)), "nothing was sent")
     await engine.dispose()
 

@@ -95,6 +95,9 @@ _INT_KNOBS = {
     "proven_spend_floor_add_cents": (0, 20_000),
     # How many asks may sit unanswered at once (runtime floors this at 2).
     "max_open_offers": (1, 10),
+    # FASTT runner offer limits (native_pilot.engine.offer_limits); unset = 2 / 2.
+    "fastt_max_open_offers": (2, 10),
+    "fastt_max_offers_per_day": (0, 50),
     # Daily quota (item 21c) — the ceiling above the burst cap. 0 anywhere means
     # "no ceiling from this knob", never "cap at zero".
     "daily_quota_replies": (0, _DAILY_QUOTA_MAX),

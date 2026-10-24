@@ -170,6 +170,16 @@ async def exercise():
                     await s.execute(delete(ContentOffer))
             async with get_session() as s:
                 await s.execute(delete(CatalogItem).where(CatalogItem.id.in_((2, 3))))
+            # Offer limits: two/two by default, whatever the item count or a generic
+            # ai_chatter value says; only explicit, in-range FASTT keys change them.
+            for native_cfg, want in (({}, (2, 2)),
+                                     ({"max_open_offers": 5, "max_offers_per_fan_per_day": 9}, (2, 2)),
+                                     ({"fastt_max_open_offers": 4, "fastt_max_offers_per_day": 4}, (4, 4)),
+                                     ({"fastt_max_open_offers": 1, "fastt_max_offers_per_day": 99}, (2, 2)),
+                                     ({"fastt_max_open_offers": True, "fastt_max_offers_per_day": "4"}, (2, 2))):
+                cfg = await pilot.load_config(account, native_cfg)
+                check((cfg["max_open_offers"], cfg["max_offers_per_fan_per_day"]) == want,
+                      f"offer limits {native_cfg}")
             pilot.content = None
             for wrong in ({"account_id": "999", "fan_id": fan, "model": MODEL},
                           {"account_id": account, "fan_id": fan+1, "model": MODEL},

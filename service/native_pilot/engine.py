@@ -62,6 +62,21 @@ class _TextClient:
         return None
 
 
+# Offer limits for the reviewed catalogue: two open / two per day unless the
+# operator saved explicit FASTT limits on the account (ai_chatter_config_json).
+# Separate keys, so an older generic ai_chatter value never changes FASTT selling.
+OFFER_LIMITS = {"fastt_max_open_offers": ("max_open_offers", 2, 2, 10),
+                "fastt_max_offers_per_day": ("max_offers_per_fan_per_day", 2, 0, 50)}
+
+
+def offer_limits(native):
+    out = {}
+    for key, (target, default, lo, hi) in OFFER_LIMITS.items():
+        value = native.get(key, default)
+        out[target] = value if type(value) is int and lo <= value <= hi else default
+    return out
+
+
 class NativeEngine:
     """Scoped Telegram capabilities around the real native engine.
 
@@ -134,7 +149,7 @@ class NativeEngine:
             # Explicit pilot configuration of the existing catalogue path;
             # the vault-wide resolver and all other media writers stay off.
             result.update(prompt_sell_catalog=True, ppv_caption_1to1=False,
-                          min_fan_msgs_between_offers=0, max_offers_per_fan_per_day=2)
+                          min_fan_msgs_between_offers=0, **offer_limits(native))
         if self.context:
             # Approved creator facts ride the system prompt on every turn, not
             # only when the fan asks about her (FASTT's token-saving default).

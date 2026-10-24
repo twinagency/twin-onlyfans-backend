@@ -595,12 +595,16 @@ async def intake_level(backend, root):
     A, F = L.ACCT, L.FAN
     f = backend.fixture(root, "intake")
     scope = AccountScope.parse(A)
-    stored, out = [], []
+    stored, out, flagged = [], [], []
 
     async def transcode(account, message):
         check(account == scope.db_id)
         f.source(message["id"], body=message["text"], created_at=str(message["createdAt"]).replace("T", " ").replace("Z", ""))
         stored.append(message["id"])
+
+    async def attention(account, fan, reason):
+        flagged.append((account, fan, reason))
+        return True
 
     def msg(mid, sender=F, **extra):
         return {"api2_chat_message": {"id": mid, "text": "<p>hi</p>", "createdAt": "2026-10-24T01:02:03.123000+00:00",
@@ -623,6 +627,7 @@ async def intake_level(backend, root):
     sockets = [Socket([], fail=True),
                Socket([{"connected": True}, msg(7001), msg(7001), msg(7002, sender=int(A)), msg(7003, sender=F + 1),
                        msg(7004, media=[{"id": 1}], mediaCount=1), msg(7005, isTip=True), msg(7006, price=3),
+                       msg(7009, giphyId="g1"), msg(7010, lockedText=True), msg(7004, media=[{"id": 1}], mediaCount=1),
                        {"unrelated": 1}, "not-a-dict", {"api2_chat_message": {"id": "x", "fromUser": {"id": F}}},
                        msg(7007)]), Socket([])]
     made = []
@@ -631,24 +636,63 @@ async def intake_level(backend, root):
         made.append(client)
         return sockets[min(len(made) - 1, len(sockets) - 1)]
 
-    intake = Intake(scope, F, f.path, socket_factory=factory, transcode=transcode, emit=out.append, backoff_s=0.001)
+    intake = Intake(scope, F, f.path, socket_factory=factory, transcode=transcode, attention=attention,
+                    emit=out.append, backoff_s=0.001)
     intake.start("client-object")
     for _ in range(300):
-        if len(stored) >= 2:
+        if 7007 in stored:
             break
         await asyncio.sleep(0.01)
     await intake.stop()
-    check(stored == [7001, 7007], stored)
+    # D2: unsupported fan input is no longer dropped. It is stored (so the ledger holds the burst and a tip
+    # reaches the existing tip ledger path) AND the fan is flagged for a human. Text is unchanged.
+    check(stored == [7001, 7004, 7005, 7006, 7009, 7010, 7007], stored)
+    check(flagged == [(scope.db_id, F, "unsupported-input:media"), (scope.db_id, F, "unsupported-input:tip"),
+                      (scope.db_id, F, "unsupported-input:paid"), (scope.db_id, F, "unsupported-input:gif"),
+                      (scope.db_id, F, "unsupported-input:paid")], flagged)
     check(len(made) >= 2 and all(c == "client-object" for c in made), "reconnects with backoff on the same client")
     check(sockets[1].stopped, "the socket is stopped with the intake")
     unsupported = sorted(e["message_id"] for e in out if e["event"] == "unsupported-input")
-    check(unsupported == [7004, 7005, 7006])
+    check(unsupported == [7004, 7005, 7006, 7009, 7010], "a repeated frame is a duplicate, not a second unsupported event")
+    check(all(e["persisted"] and e["attention"] for e in out if e["event"] == "unsupported-input"))
+    check({e["reason"] for e in out if e["event"] == "unsupported-input"} ==
+          {"unsupported-input:media", "unsupported-input:tip", "unsupported-input:paid", "unsupported-input:gif"})
     check([e["message_id"] for e in out if e["event"] == "inbound-persisted"] == [7001, 7007])
     check(any(e["event"] == "intake-error" for e in out) and any(e["event"] == "intake-connected" for e in out))
     # The account's own echo and another fan are never filed as this fan's inbound.
     check(not f.sql("SELECT 1 FROM messages WHERE message_id IN (7002,7003)"))
-    h = Intake(scope, F, f.path, transcode=transcode, emit=out.append)
+    h = Intake(scope, F, f.path, transcode=transcode, attention=attention, emit=out.append)
     check(await h.handle(msg(7008, createdAt="not-a-date")) == "invalid")
+    check(len(flagged) == 5, "plain text and invalid frames never flag attention")
+    check(await h.handle(msg(7004, media=[{"id": 1}], mediaCount=1)) == "duplicate" and len(flagged) == 5,
+          "an already stored unsupported frame is not re-flagged (a human may have cleared it)")
+
+    # A failing attention write never loses the stored row and never turns into a reply.
+    async def attention_broken(account, fan, reason):
+        raise RuntimeError("synthetic")
+    out.clear()
+    h = Intake(scope, F, f.path, transcode=transcode, attention=attention_broken, emit=out.append)
+    check(await h.handle(msg(7011, media=[{"id": 2}], mediaCount=1)) == "unsupported")
+    check(7011 in stored)
+    ev = [e for e in out if e["event"] == "unsupported-input"]
+    check(len(ev) == 1 and ev[0]["persisted"] is True and ev[0]["attention"] is False)
+    check(any(e["event"] == "intake-attention-failed" and e["message_id"] == 7011 for e in out))
+
+    # A failing store still tries the attention flag, and says so.
+    async def transcode_broken(account, message):
+        raise RuntimeError("synthetic")
+    out.clear()
+    before = len(flagged)
+    h = Intake(scope, F, f.path, transcode=transcode_broken, attention=attention, emit=out.append)
+    check(await h.handle(msg(7012, isTip=True)) == "failed")
+    check(len(flagged) == before + 1 and flagged[-1][2] == "unsupported-input:tip")
+    check(any(e["event"] == "intake-persist-failed" and e["message_id"] == 7012 for e in out))
+
+    # (A stored media/tip/paid inbound row already holds the ledger snapshot: test_native_pilot_ledger invalids.)
+    from native_pilot.intake import unsupported_reason
+    check(unsupported_reason(msg(1)["api2_chat_message"]) is None)
+    check(unsupported_reason(msg(1, isTip=True, media=[{"id": 1}])["api2_chat_message"]) == "unsupported-input:tip",
+          "money outranks media in the reason")
 
 
 async def multi_intake_level(backend, root):
@@ -669,14 +713,20 @@ async def multi_intake_level(backend, root):
     def msg(mid, sender, **extra):
         return {"api2_chat_message": {"id": mid, "text": "<p>hi</p>", "createdAt": "2026-10-24T01:02:03.123000+00:00",
                                       "fromUser": {"id": sender}, **extra}}
-    intake = Intake(scope, None, f.path, transcode=transcode, emit=out.append)
+    flagged = []
+
+    async def attention(account, fan, reason):
+        flagged.append((fan, reason))
+        return True
+    intake = Intake(scope, None, f.path, transcode=transcode, attention=attention, emit=out.append)
     check(await intake.handle(msg(8101, L.FAN + 5)) == "persisted")
     check(await intake.handle(msg(8102, L.FAN + 6)) == "persisted")
     check(await intake.handle(msg(8102, L.FAN + 6)) == "duplicate")
     check(await intake.handle(msg(8103, int(L.ACCT))) == "other-sender", "our own echo is never filed as a fan's inbound")
     check(await intake.handle(msg(8104, L.FAN + 7, mediaCount=1, media=[{"id": 1}])) == "unsupported")
     check(await intake.handle(msg(8105, "not-an-id")) == "other-sender")
-    check(stored == [(L.FAN + 5, 8101), (L.FAN + 6, 8102)], stored)
+    check(stored == [(L.FAN + 5, 8101), (L.FAN + 6, 8102), (L.FAN + 7, 8104)], stored)
+    check(flagged == [(L.FAN + 7, "unsupported-input:media")], "attention is per sender fan in all-fans mode")
 
 
 # ── all-fans mode ─────────────────────────────────────────────────────────────

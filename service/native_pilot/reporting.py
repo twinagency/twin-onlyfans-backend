@@ -16,6 +16,11 @@ ONE WRITER PER ROW, decided here:
   (the schema forbids a receipt without a message), and never reports it as sent;
   the dashboard shows it as an unresolved ``unknown`` incident. An error only raises
   ``requires_attention``. Mode, takeover and revisions are left to the control path.
+* ``report_attention``: an unsupported fan input (photo, video, gif, tip, paid or locked
+  message) the FASTT runner cannot read. Same single write as above: ``requires_attention``
+  on ``of_conversation_state`` (a missing control row starts paused, as everywhere). No
+  message, receipt or incident is invented and no money is written: a tip/purchase is
+  reconciled by the existing ledger paths (``event_transcoder`` tip row, ``transaction_ingest``).
 """
 from __future__ import annotations
 
@@ -90,3 +95,11 @@ async def report_outcomes(*, account_id, fan_id, receipts, run_error=None, now=N
             await s.flush()
             await _attention(s, account_id, fan_id, attempt=unknown_attempt, now=now)
     return out
+
+
+async def report_attention(*, account_id, fan_id, reason, now=None) -> bool:
+    """Flag the fan for a human. ``reason`` (``unsupported-input:<kind>``) rides in the runner
+    event; the stored inbound row is the durable evidence. False when the fan row is unknown."""
+    from db.engine import get_session
+    async with get_session() as s:
+        return await _attention(s, str(account_id), int(fan_id), now=now or _now())

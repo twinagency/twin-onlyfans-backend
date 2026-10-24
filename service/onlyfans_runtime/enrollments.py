@@ -2,7 +2,7 @@
 from __future__ import annotations
 import base64,hashlib,json,re,uuid
 from datetime import datetime,timedelta,timezone
-from sqlalchemy import select,func,text,or_
+from sqlalchemy import select,func,text,or_,update
 from sqlalchemy.orm import Session
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from db.models import Account,OfCreatorBinding
@@ -12,6 +12,10 @@ from .connections import (_validate_identity,_request,_seal,_aad,_open,encryptio
 from .provider_connector import session_from_capture,NativeProviderConnector,NativeProtocolError,NativeAuthenticationError
 from .browser_capture import validate_browser_payload,normalize_browser_payload
 from .store import Refused,utcnow
+
+# A provider that stays unreachable must end in a visible failure, not an hours-long 'pending'.
+# Each check is at least CONNECTION_RETRY_INTERVAL apart, so this is a few minutes.
+MAX_CHECKS=8
 
 def _scope(tenant,creator):
     if (type(tenant)is not str or tenant=='deployment' or not re.fullmatch(r'[A-Za-z0-9._:-]{1,64}',tenant)
@@ -52,6 +56,12 @@ def submit_enrollment(store,tenant,*,creator_id,creator_name,handle,payload,comm
         pending=s.scalar(select(func.count()).select_from(OfConnectionEnrollment).where(OfConnectionEnrollment.tenant_id==tenant,
             OfConnectionEnrollment.status.in_(['pending','checking']),OfConnectionEnrollment.expires_at>utcnow()))
         if pending>=256:raise Refused('connection enrollment limit')
+        # A newer capture for the same creator and owner replaces older ones that have not started
+        # checking, so repeated submissions neither queue duplicate provider checks nor leave
+        # several 'pending' rows spinning. A claimed ('checking') row is left to finish.
+        s.execute(update(OfConnectionEnrollment).where(OfConnectionEnrollment.tenant_id==tenant,OfConnectionEnrollment.creator_id==creator_id,
+            OfConnectionEnrollment.owner_id==payload['ownerId'],OfConnectionEnrollment.status=='pending')
+            .values(status='expired',sealed_config=None,last_error=None,lease_until=None,updated_at=utcnow()))
         identity=str(uuid.uuid4())
         row=OfConnectionEnrollment(id=identity,tenant_id=tenant,creator_id=creator_id,creator_name=creator_name,handle=handle,
             owner_id=payload['ownerId'],actor=actor,command_key=command_key,request_hash=fingerprint,status='pending',
@@ -151,7 +161,7 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
                 if row.status=='checking' and row.generation==generation:
                     now=utcnow()
                     if (isinstance(error,NativeProtocolError) and not isinstance(error,NativeAuthenticationError)
-                            and row.expires_at>now):
+                            and row.expires_at>now and row.generation<MAX_CHECKS):
                         # Keep the frozen encrypted capture for a later GET.
                         # The cooldown excludes this row so other creators proceed.
                         row.status='pending';row.last_error='provider_connection_check_retry'

@@ -643,7 +643,7 @@ async def loop_level(backend, root):
         # ── a pause landing while the turn waits out the account throttle is seen THERE, not a throttle later ──
         from native_pilot.ledger import _dt
         due = clock() + timedelta(days=10)
-        f, http, client = make("loop-pace-hold", limit=100, used=4, throttle=20, nxt=_dt(due))
+        f, http, client = make("loop-pace-hold", limit=100, used=4, throttle=20)
         calls = {"n": 0, "armed": False}
 
         def stops_while_waiting(path, account, fan):
@@ -658,6 +658,9 @@ async def loop_level(backend, root):
         real_run = FakeEngine.run
 
         async def armed_run(self, run_id):
+            # A different sender extends the gate while generation is in flight.
+            # Initial account cooldowns are now waited out before generation begins.
+            f.sql("UPDATE of_delivery_policy SET next_dispatch_at=?", (_dt(due),))
             calls["armed"] = True
             return await real_run(self, run_id)
         events.clear()

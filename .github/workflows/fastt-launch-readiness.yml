@@ -49,7 +49,7 @@ jobs:
       - name: PostgreSQL sender and account management
         run: |
           python service/tests/test_native_pilot_service_pg.py
-          python -m pytest -q service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_fastt_new_conversations_pg.py
+          python -m pytest -q service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_fastt_new_conversations_pg.py service/tests/test_fastt_activation_pg.py
       - name: Repeat bounded rate-limit load scenario
         run: |
           mkdir -p test-results

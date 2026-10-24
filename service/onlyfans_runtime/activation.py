@@ -30,7 +30,7 @@ def validate_selection(account, value):
 def activation_view(session, account, config, *, binding_id, model_id):
     from sqlalchemy import select, func
     from db.models import OfConversationState
-    from db.onlyfans_models import OfDeliveryPolicy
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
     from db.onlyfans_connection_models import OfProviderConnection
     from .connections import personality_credential_status, _open
     from .fastt_scope import normalize

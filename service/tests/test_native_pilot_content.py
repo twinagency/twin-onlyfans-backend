@@ -70,11 +70,15 @@ def plan_checks(tmp, db_path):
     # the manifest itself may name exactly one $3 item
     free = {'catalog_id': 2, 'kind': 'photo', 'price_cents': 0, 'media': [{'id': 1003, 'type': 'photo'}], 'preview_ids': []}
     paid = manifest_spec()['items'][0]
+    second = {'catalog_id': 3, 'kind': 'photo', 'price_cents': 300, 'media': [{'id': 1004, 'type': 'photo'}], 'preview_ids': []}
     bad_manifest = {
-        'content-plan-shape': [{**manifest_spec(), 'items': []}, {**manifest_spec(), 'items': [paid, free]}, {**manifest_spec(), 'items': paid}],
+        'content-plan-shape': [{**manifest_spec(), 'items': []}, {**manifest_spec(), 'items': [paid, dict(paid)]}, {**manifest_spec(), 'items': paid},
+                               {**manifest_spec(), 'items': [paid, {**second, 'media': paid['media']}]},   # same media set twice
+                               {**manifest_spec(), 'items': [paid] + [{**second, 'catalog_id': 100 + i, 'media': [{'id': 2000 + i, 'type': 'photo'}], 'preview_ids': []} for i in range(50)]}],
         'content-plan-scope': [{**manifest_spec(), 'fan_id': FAN + 1}, {**manifest_spec(), 'account_id': 'of-900009'},
                                {**manifest_spec(), 'account_id': 'abc'}],
-        'content-plan-terms': [manifest_spec(price_cents=0), manifest_spec(price_cents=500), manifest_spec(price_cents=301)],
+        'content-plan-terms': [{**manifest_spec(), 'items': [paid, free]}, {**manifest_spec(), 'items': [paid, {**second, 'price_cents': 500}]},
+                               manifest_spec(price_cents=0), manifest_spec(price_cents=500), manifest_spec(price_cents=301)],
         'content-plan-item': [manifest_spec(catalog_id=True), manifest_spec(kind='audio'), manifest_spec(extra=1),
                               manifest_spec(price_cents='300')],
         'content-plan-media': [manifest_spec(media=[]), manifest_spec(media=[{'id': 0, 'type': 'photo'}]),
@@ -86,6 +90,21 @@ def plan_checks(tmp, db_path):
     for code, spec in bad_manifest.items():
         for i, one in enumerate(spec if isinstance(spec, list) else [spec]):
             refuses(code, lambda: plan_for(tmp, one, f'bad-{code}-{i}.json'))
+    # several reviewed items: each send must match exactly one listed item
+    multi = plan_for(tmp, {**manifest_spec(), 'items': [paid, second]}, 'multi.json')
+    assert multi.catalog_ids == {1, 3} and multi.item['catalog_id'] == 1
+    assert multi.item_for(3)['media_ids'] == [1004] and multi.item_for(9) is None
+    assert multi.terms(dict(REAL_SHAPE))['catalog_id'] == 1
+    t2 = multi.terms({'price': 3.0, 'locked_text': False, 'media_files': [1004], 'previews': []})
+    assert t2['catalog_id'] == 3 and t2['media_ids'] == [1004] and t2['preview_ids'] == []
+    for code, variant in [('content-send-media', {**REAL_SHAPE, 'media_files': [1003]}),
+                          ('content-send-media', {**REAL_SHAPE, 'media_files': [1001, 1004]}),
+                          ('content-send-previews', {'price': 3.0, 'locked_text': False, 'media_files': [1004], 'previews': [1004]}),
+                          ('content-send-price', {'price': 4, 'locked_text': False, 'media_files': [1004], 'previews': []})]:
+        refuses(code, lambda: multi.terms(variant))
+    # the one-item manifest still sells only its item
+    refuses('content-send-media', lambda: plan.terms({'price': 3.0, 'locked_text': False, 'media_files': [1004], 'previews': []}))
+    assert plan.catalog_ids == {1}
     # provider receipt: only the exact card is evidence
     valid = {'id': 500, 'price': 3.0, 'media': [{'id': 1002, 'type': 'video'}, {'id': 1001, 'type': 'photo'}],
              'previews': [1001], 'mediaCount': 2}
@@ -127,6 +146,29 @@ def plan_checks(tmp, db_path):
                       ('content-catalog-drift', "UPDATE catalog_items SET is_free_teaser=1"),
                       ('content-catalog-drift', "UPDATE catalog_items SET kind='photo'")]:
         refuses(code, lambda: catalog(sql))
+    # check_catalog over every listed item
+    def two_item_catalog(mutate=None):
+        with sqlite3.connect(db_path) as con:
+            con.execute('DELETE FROM catalog_items')
+            for i, kind, media, prev in [(1, 'video', '[1001, 1002]', '[1001]'), (3, 'photo', '[1004]', '[]')]:
+                con.execute("INSERT INTO catalog_items(id,account_id,label,kind,media_ids,preview_media_ids,price_cents,"
+                            "is_free_teaser,enabled,pricing_mode,tags,tip_unlock_cents) VALUES(?,?,'x',?,?,?,300,0,1,'fixed','[]',0)",
+                            (i, ACCOUNT, kind, media, prev))
+            if mutate:
+                con.execute(mutate)
+        con = sqlite3.connect(db_path); con.row_factory = sqlite3.Row
+        try:
+            multi.check_catalog(con, ACCOUNT)
+        finally:
+            con.close()
+    two_item_catalog()
+    two_item_catalog("UPDATE catalog_items SET enabled=0 WHERE id=3")    # a listed item may be disabled
+    for code, sql in [('content-catalog-scope', "DELETE FROM catalog_items WHERE id=3"),
+                      ('content-catalog-drift', "UPDATE catalog_items SET price_cents=500 WHERE id=3"),
+                      ('content-catalog-drift', "UPDATE catalog_items SET media_ids='[1005]' WHERE id=3"),
+                      ('content-catalog-scope', "INSERT INTO catalog_items(id,account_id,label,kind,media_ids,preview_media_ids,price_cents,is_free_teaser,enabled,pricing_mode,tags,tip_unlock_cents) "
+                                                "VALUES(7,'of-900001','other','photo','[1003]','[]',300,0,1,'fixed','[]',0)")]:
+        refuses(code, lambda: two_item_catalog(sql))
     return plan
 
 

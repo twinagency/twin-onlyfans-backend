@@ -217,7 +217,7 @@ class Service:
     async def acquire(self):
         from twin_bridge.coordination import reserve_ownership
         profile = runner.check_local(self.path, self.db, self.args.fan,
-                                         approved_item=self.content.item["catalog_id"] if self.content else None)
+                                         approved_item=self.content.catalog_ids if self.content else None)
         if not self.ensured:
             await ensure_fan_conversation(self.scope, self.args.fan)
             self.ensured = True
@@ -231,10 +231,17 @@ class Service:
         self.pilot, self.lease = pilot, Lease(pilot.deadline)
         if self.content and self.prior_catalog is None:
             with store.transaction(self.path) as con:
-                self.prior_catalog = con.execute("SELECT enabled FROM catalog_items WHERE account_id=? AND id=?",
-                                                 (self.db, self.content.item["catalog_id"])).fetchone()[0]
-                con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
-                            (True, self.db, self.content.item["catalog_id"]))
+                prior = {}
+                for item_id in sorted(self.content.catalog_ids):
+                    row = con.execute("SELECT enabled FROM catalog_items WHERE account_id=? AND id=?",
+                                      (self.db, item_id)).fetchone()
+                    if row is None:
+                        raise Refused("content-catalog-scope")
+                    prior[item_id] = row[0]
+                for item_id in prior:
+                    con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
+                                (True, self.db, item_id))
+                self.prior_catalog = prior
         self._renew_task = asyncio.get_running_loop().create_task(self._renew_loop(pilot))
         runner.emit({"event": "ready", "pilot_id": pilot.pilot_id, "account_id": self.db, "fan_id": self.args.fan,
                      "engine": "fastt-native", "persistent": True, "lease_utc": pilot.deadline,
@@ -527,8 +534,9 @@ class Service:
                 clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
             if self.content and self.prior_catalog is not None:
                 with store.transaction(self.path) as con:
-                    con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
-                                (self.prior_catalog, self.db, self.content.item["catalog_id"]))
+                    for item_id, enabled in self.prior_catalog.items():
+                        con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
+                                    (enabled, self.db, item_id))
             runner.emit({"event": "finished", "persistent": True})
         finally:
             try:

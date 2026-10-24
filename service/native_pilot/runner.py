@@ -56,7 +56,10 @@ def check_local(path, account, fan, approved_item=None):
                         raise Refused("account-automation-enabled")
         # Suppressing the offer resolver is permitted only with no obligation.
         # An open PPV of the one approved item is settled by OnlyFans itself (the fan unlocks it).
-        approved = (" AND NOT (mode='ppv' AND status='open' AND item_id=?)", (approved_item,)) if approved_item else ("", ())
+        # approved_item: one catalogue id, or an iterable of listed ids.
+        ids = sorted({approved_item} if isinstance(approved_item, int) else set(approved_item or ()))
+        approved = (" AND NOT (mode='ppv' AND status='open' AND item_id IN (%s))" % ",".join("?" * len(ids)),
+                    tuple(ids)) if ids else ("", ())
         if con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status IN ('open','paid','delivering')"
                        + approved[0] + " LIMIT 1", (account, fan, *approved[1])).fetchone():
             raise Refused("chat-offer-open")
@@ -215,7 +218,7 @@ class Gateway:
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
             check_provider_history(history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
-                            approved_item=self.content.item["catalog_id"] if self.content else None)
+                            approved_item=self.content.catalog_ids if self.content else None)
             if self.hold_check is not None:
                 held = await asyncio.to_thread(self.hold_check)
                 if held:
@@ -423,9 +426,15 @@ async def run(args):
             # The reviewed card must be sellable for this run. Remember the live
             # flag so it is restored, not forced, when the pilot ends.
             with store.transaction(path) as con:
-                prior_catalog = con.execute("SELECT enabled FROM catalog_items WHERE account_id=? AND id=?",
-                                            (db, content.item["catalog_id"])).fetchone()[0]
-                con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?", (True, db, content.item["catalog_id"]))
+                prior_catalog = {}
+                for item_id in sorted(content.catalog_ids):
+                    row = con.execute("SELECT enabled FROM catalog_items WHERE account_id=? AND id=?",
+                                      (db, item_id)).fetchone()
+                    if row is None:
+                        raise Refused("content-catalog-scope")
+                    prior_catalog[item_id] = row[0]
+                for item_id in prior_catalog:
+                    con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?", (True, db, item_id))
         reason = "time-limit-reached"
         context = None
         if getattr(args, "twin_context", False):
@@ -511,8 +520,9 @@ async def run(args):
                 emit({"event": "finished", **ledger.status(pilot.pilot_id)})
                 if content and prior_catalog is not None:
                     with store.transaction(path) as con:
-                        con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
-                                    (prior_catalog, db, content.item["catalog_id"]))
+                        for item_id, enabled in prior_catalog.items():
+                            con.execute("UPDATE catalog_items SET enabled=? WHERE account_id=? AND id=?",
+                                        (enabled, db, item_id))
         finally:
             try:
                 if client is not None:

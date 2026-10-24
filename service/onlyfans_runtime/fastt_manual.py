@@ -1,8 +1,11 @@
 """A human's dashboard message for a fan the FASTT runtime owns.
 
-Ownership is a deployment scope, ``ONLYFANS_FASTT_SCOPE="<account>:<fan>[,...]"``
-or an account-wide entry ``<account>:*`` (every fan of that account). Ownership
-only decides WHO sends; whether the AI replies stays Twin's per-fan state.
+Ownership is a deployment allowlist, ``ONLYFANS_FASTT_SCOPE="<account>:<fan>[,...]"``,
+an account-wide entry ``<account>:*``, or ``db:<account>`` (the operator selects the
+fans per account in the settings), cut by the per-account selection; see
+``fastt_scope``. Removing a fan from the selection stops FASTT serving it but never
+hands it back to the legacy worker automatically. Ownership only decides WHO sends;
+whether the AI replies stays Twin's per-fan state.
 (account in Twin form ``of-176774528`` or FASTT form ``176774528``). It is read
 only; nothing here enables a fan.
 
@@ -29,15 +32,14 @@ attempt that is never replayed.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import os
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import fastt_scope
+from .fastt_scope import SCOPE_ENV
 from .runtime_stop import to_fastt_account_id
 from .store import Refused
-
-SCOPE_ENV = "ONLYFANS_FASTT_SCOPE"
 
 
 class NotSent(Exception):
@@ -45,30 +47,29 @@ class NotSent(Exception):
 
 
 def _scope():
-    """(fan pairs, whole accounts) named by the deployment scope."""
-    pairs, accounts = set(), set()
-    for item in (os.environ.get(SCOPE_ENV) or "").split(","):
-        account, _, fan = item.strip().partition(":")
-        if not account:
-            continue
-        try:
-            fastt_account = to_fastt_account_id(account)
-        except Exception:
-            continue
-        if fan == "*":
-            accounts.add(fastt_account)
-        elif fan.isdecimal():
-            pairs.add((fastt_account, int(fan)))
-    return pairs, accounts
+    """(fan pairs, whole accounts) the legacy worker must treat as FASTT's (the OWNERSHIP view).
+
+    Env allowlist plus the per-account database selection, see ``fastt_scope``. With no database value this
+    is exactly the old env-only answer. It only grows within a process; removing a fan never returns it.
+    """
+    return fastt_scope.owned_scope()
 
 
 def fastt_account_owned(account_id) -> bool:
-    """True when the whole account is owned (``<account>:*``)."""
+    """True when the whole account is owned (``<account>:*``, or database mode ``all``)."""
     return to_fastt_account_id(account_id) in _scope()[1]
 
 
 def fastt_owned(account_id, fan_id) -> bool:
+    """The legacy worker must not send for this fan (never shrinks within a process)."""
     pairs, accounts = _scope()
+    account = to_fastt_account_id(account_id)
+    return account in accounts or (account, fan_id) in pairs
+
+
+def fastt_serves(account_id, fan_id) -> bool:
+    """The FASTT runner may act for this fan now: the current selection, which can shrink."""
+    pairs, accounts = fastt_scope.serve_scope()
     account = to_fastt_account_id(account_id)
     return account in accounts or (account, fan_id) in pairs
 
@@ -114,7 +115,7 @@ def next_queued_manual(store, tenant_id, account_id):
         rows = s.execute(select(OfTextIntent.intent_id, OfTextIntent.fan_id).where(
             OfTextIntent.account_id == account_id, OfTextIntent.status == "queued",
             OfTextIntent.origin == "manual").order_by(OfTextIntent.created_at, OfTextIntent.intent_id).limit(50)).all()
-    return next((identity for identity, fan in rows if fastt_owned(account_id, fan)), None)
+    return next((identity for identity, fan in rows if fastt_serves(account_id, fan)), None)
 
 
 def dispatch_next_manual(authority, tenant_id, account_id, transport):

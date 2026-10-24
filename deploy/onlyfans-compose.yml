@@ -81,7 +81,7 @@ services:
         condition: service_healthy
   # Runner supervisor: ONE container that starts/stops/restarts one `native_pilot.service` child
   # process per active account (database-driven; no Docker socket, no web-app control). Opt in with
-  # `--profile fastt-supervisor`. It reads ONLYFANS_FASTT_SCOPE (who may send), FASTT_HANDLES
+  # `--profile fastt-supervisor`. It reads ONLYFANS_FASTT_SCOPE (the allowlist of who may send: `<account>:<fan>`, `<account>:*` or `db:<account>`; the per-account fan selection is an operator setting, fastt_scope), FASTT_HANDLES
   # (optional `of-<owner>:<handle>,...` overrides; the binding's stored handle is the default) and
   # writes its manifests and a health file under /var/lib/fastt (named volume below).
   # NEVER run this together with `fastt-runner` for the same account: two senders for one account.

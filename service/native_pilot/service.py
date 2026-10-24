@@ -359,8 +359,8 @@ class Service:
 
     # ── main loop ─────────────────────────────────────────────────────────
     def _owned(self, fan):
-        from onlyfans_runtime.fastt_manual import fastt_owned
-        return fastt_owned(self.db, fan)
+        from onlyfans_runtime.fastt_manual import fastt_serves
+        return fastt_serves(self.db, fan)
 
     def _twin_controls(self, fans=None):
         """Twin's dashboard side, run every tick (also while the fan is paused or taken over):

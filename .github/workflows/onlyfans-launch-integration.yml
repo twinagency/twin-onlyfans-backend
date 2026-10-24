@@ -193,7 +193,11 @@ jobs:
           if-no-files-found: error
   acceptance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     services:
       postgres:
         image: postgres:16-alpine
@@ -277,17 +281,56 @@ jobs:
         env:
           DASHBOARD_SHA: ${{ steps.pair.outputs.dashboard_sha }}
           ACCEPTANCE_SUITE: ${{ inputs.suite || 'combined' }}
+          ACCEPTANCE_SHARD: ${{ matrix.shard }}
         run: >-
           python scripts/onlyfans-release-acceptance.py
           --suite "$ACCEPTANCE_SUITE"
           --dashboard-dir "$GITHUB_WORKSPACE/paired-dashboard"
           --dashboard-sha "$DASHBOARD_SHA"
           --backend-sha "$GITHUB_SHA"
+          --shard-index "$ACCEPTANCE_SHARD"
+          --shard-count 6
           --evidence-dir "$GITHUB_WORKSPACE/release-evidence"
       - name: Save exact commands, node identities and release evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}
+          name: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}-shard-${{ matrix.shard }}
           path: release-evidence/
+          if-no-files-found: error
+  aggregate:
+    needs: acceptance
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: backend
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download every shard from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}-shard-*
+          path: release-shards
+      - name: Prove complete manifest coverage and zero-exemption outcomes
+        working-directory: backend
+        env:
+          ACCEPTANCE_SUITE: ${{ inputs.suite || 'combined' }}
+        run: >-
+          python scripts/onlyfans-release-acceptance.py
+          --aggregate
+          --suite "$ACCEPTANCE_SUITE"
+          --shard-count 6
+          --backend-sha "$GITHUB_SHA"
+          --dashboard-sha "$(cat docs/onlyfans/ACCEPTANCE-DASHBOARD-SHA)"
+          --evidence-dir "$GITHUB_WORKSPACE/release-shards"
+      - name: Save aggregate acceptance proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}-aggregate
+          path: release-shards/aggregate-summary.json
           if-no-files-found: error

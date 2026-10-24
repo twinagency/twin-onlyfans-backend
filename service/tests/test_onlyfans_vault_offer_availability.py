@@ -5,7 +5,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 from onlyfans_runtime.store import utcnow
-from onlyfans_runtime.vault_management import _ready, digest
+from onlyfans_runtime.vault_management import _provenance, _ready, digest
 from onlyfans_runtime.vault_video import protected_source
 
 
@@ -41,13 +41,33 @@ class NativeVaultOfferAvailability(unittest.TestCase):
         args[0].raw_json = json.dumps(raw); args[1].raw_hash = digest(args[0].raw_json)
         self.assertEqual(_ready(*args), (False, "readiness_unknown"))
 
-    def test_owner_connection_revision_and_raw_identity_holds_remain(self):
-        for field, value in [("status", "expired"), ("revision", 3), ("owner_id", 102),
+    def test_credential_revision_advance_preserves_verified_vault_identity(self):
+        args = self.fixture()
+        args[3].revision = 3  # saving a model key or activating does not change the asset
+        self.assertEqual(_ready(*args), (True, None))
+        # Revision tolerance is explicit at the offer-readiness boundary;
+        # other provenance callers retain their strict default.
+        self.assertFalse(_provenance(*args))
+        self.assertTrue(_provenance(*args, current_revision=False))
+
+    def test_owner_connection_and_raw_identity_holds_remain(self):
+        for field, value in [("status", "expired"), ("owner_id", 102),
                              ("binding_id", "foreign"), ("expires_at", utcnow() - timedelta(seconds=1))]:
             with self.subTest(field=field):
                 args = self.fixture(); setattr(args[3], field, value)
                 self.assertEqual(_ready(*args), (False, "unverified_owner"))
+        for field, value in [("owner_id", 102), ("binding_id", "foreign")]:
+            with self.subTest(job_field=field):
+                args = self.fixture(); setattr(args[2], field, value)
+                self.assertEqual(_ready(*args), (False, "unverified_owner"))
+        for missing in (1, 2, 3):
+            with self.subTest(missing=missing):
+                args = list(self.fixture()); args[missing] = None
+                self.assertEqual(_ready(*args), (False, "unverified_owner"))
         args = self.fixture(); args[1].raw_hash = "0" * 64
+        self.assertEqual(_ready(*args), (False, "unverified_owner"))
+        args = self.fixture(); raw = json.loads(args[0].raw_json); raw["canView"] = False
+        args[0].raw_json = json.dumps(raw)  # unchanged observation must not verify changed raw data
         self.assertEqual(_ready(*args), (False, "unverified_owner"))
         self.assertEqual(_ready(*self.fixture(id=14)), (False, "unverified_owner"))
         self.assertEqual(_ready(*self.fixture(type="photo")), (False, "unverified_owner"))

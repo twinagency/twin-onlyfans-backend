@@ -31,6 +31,20 @@ def isolated_environment():
     return {name:os.environ[name] for name in names if name in os.environ}
 
 
+def copy_public_assets(dashboard):
+    """Populate legacy harness assets; a shared public symlink already has them."""
+    for asset in ["brand/platforms", "moxy", "lynq", "icon.png", "brand/catalogue/approved-blue-badge.png"]:
+        source = dashboard / "public" / asset
+        target = dashboard / "preview/onlyfans-integration/public" / asset
+        if source.resolve() == target.resolve():
+            continue
+        if source.is_dir():
+            shutil.copytree(source, target, dirs_exist_ok=True)
+        elif source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dashboard", type=Path, required=True)
@@ -83,13 +97,9 @@ def main():
             api = stack.enter_context(process([sys.executable,"-m","uvicorn","onlyfans_app:app","--app-dir","service","--host","127.0.0.1","--port",str(api_port)], cwd=backend,env=env,log=Path(logs)/"api.log"))
             wait_http(env["ONLYFANS_API_BASE_URL"]+"/healthz", api)
             node = os.environ.get("CODEX_PRIMARY_RUNTIME_NODE", "node")
-            # The harness app has no public/ of its own (it is gitignored). Copy
-            # the exact static assets the shared shell requests so the Overview
-            # does not log 404s, as check-onlyfans-render-browser.mjs already does.
-            for asset in ["brand/platforms", "moxy", "lynq", "icon.png", "brand/catalogue/approved-blue-badge.png"]:
-                source, target = dashboard/"public"/asset, dashboard/"preview/onlyfans-integration/public"/asset
-                if source.is_dir():shutil.copytree(source,target,dirs_exist_ok=True)
-                elif source.is_file():target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
+            # Newer harnesses share public/ through a symlink; older ones still
+            # need the shell assets copied into their separate directory.
+            copy_public_assets(dashboard)
             web = stack.enter_context(process([node,str(dashboard/"node_modules/next/dist/bin/next"),"dev","--hostname","127.0.0.1","--port",str(args.port)],cwd=dashboard/"preview/onlyfans-integration",env=env,log=Path(logs)/"next.log"))
             wait_http(f"http://127.0.0.1:{args.port}/api/onlyfans/accounts", web)
             if args.smoke:

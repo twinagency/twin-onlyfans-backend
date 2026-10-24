@@ -117,7 +117,9 @@ def test_heuristic_legacy_link_is_not_promoted_to_exact_attribution(database):
 def test_unlinked_purchase_evidence_holds_campaign_revenue_instead_of_guessing(database, monkeypatch):
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "worker")
     store, service, campaign = sent(database)
-    assert record(store, ACCOUNT, parsed(transaction())) == "applied"
+    # The unlinked purchase belongs to the current binding; pre-binding
+    # history is retained without blocking this binding's commerce.
+    assert record(store, ACCOUNT, parsed(transaction(createdAt=utcnow().isoformat() + "Z"))) == "applied"
     fresh(database[1])
     result = details(service, campaign)
     assert result["revenueStatus"] == "ledger_held" and result["purchases"] is None

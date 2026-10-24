@@ -21,11 +21,13 @@ the visible hold reason):
 * a ``verified`` ``of_provider_connection`` for the same binding, without a failing check, unexpired and
   owned by the account's OnlyFans id (``connection-*``; the sealed credential is NOT opened here, the child
   does that);
-* the account is named by the deployment ownership scope ``ONLYFANS_FASTT_SCOPE`` (read through
-  ``onlyfans_runtime.fastt_manual._scope``, which stays the single source of who may send):
-  ``<account>:*`` runs ``--all-fans``, exactly one ``<account>:<fan>`` pair runs ``--fan <fan>``, several
-  pairs for one account are held (``scope-multi-fan-unsupported``). An account that is active in the
-  database but outside the scope is never started (the legacy worker keeps it);
+* the account is named by the effective FASTT scope (``onlyfans_runtime.fastt_scope.desired_scope``: the
+  deployment allowlist ``ONLYFANS_FASTT_SCOPE`` cut by the operator's per-account ``fastt_scope`` setting,
+  re-read every loop, so a scope change restarts the child without a container restart): a whole account
+  (``<account>:*`` or setting mode ``all``) runs ``--all-fans``, exactly one fan runs ``--fan <fan>``, several
+  fans (setting mode ``selected``, or several env pairs) run ``--all-fans`` and the runner serves only the
+  selected ones through its ownership filter. An account that is active in the database but outside the
+  scope is never started (the legacy worker keeps it);
 * a handle: the operator env map ``FASTT_HANDLES=of-<owner>:<name>,...`` if it names the account, else the
   binding's stored handle, else ``handle-missing`` (``handle-invalid`` if it is not a plain handle);
 * a manifest built (``native_pilot.manifest.build`` then ``verify``) with no blocker
@@ -167,9 +169,9 @@ def inactive_reason(row, scope: AccountScope, now):
 
 
 def read_scope():
-    """(fan pairs, whole accounts), bare owner ids: exactly what the senders themselves use."""
-    from onlyfans_runtime.fastt_manual import _scope
-    return _scope()
+    """(fan pairs, whole accounts), bare owner ids: what the runner may serve now (settled, see fastt_scope)."""
+    from onlyfans_runtime.fastt_scope import desired_scope
+    return desired_scope()
 
 
 def parse_handles(raw):
@@ -324,8 +326,10 @@ class Supervisor:
             fan = "*"
         elif len(fans) == 1:
             fan = fans[0]
+        elif fans:
+            fan = "*"           # several selected fans: one all-fans runner, filtered by its ownership check
         else:
-            return Hold("scope-multi-fan-unsupported")
+            return Hold("not-in-scope")
         handle = self.handles.get(scope.provider_id) or (row.get("handle") or "").strip().lstrip("@")
         if not handle:
             return Hold("handle-missing")

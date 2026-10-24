@@ -268,9 +268,24 @@ with tempfile.TemporaryDirectory() as tmp:
           and '--all-fans' not in r.children[0].argv, 'single pair -> --fan')
     check(json.loads((Path(tmp) / 'manifests' / f'{A}.json').read_text())['fan_id'] == 7, 'manifest is fan-scoped')
     check(r.state(B) is None, 'account outside the scope is not started or listed')
+    # several selected fans: ONE all-fans runner (it serves only the selected ones through its ownership filter)
+    first = r.live(A)[0]
     r.scope = ({('900001', 7), ('900001', 8)}, set())
     r.tick(31)
-    check(r.state(A) == ('held', 'scope-multi-fan-unsupported') and not r.live(A), 'several pairs held, child stopped')
+    check(first.signals == ['TERM'] and len(r.live(A)) == 1 and '--all-fans' in r.live(A)[0].argv
+          and '--fan' not in r.live(A)[0].argv and r.state(A) == ('running', None), 'several fans -> --all-fans, restarted once')
+    check(json.loads((Path(tmp) / 'manifests' / f'{A}.json').read_text())['fan_id'] == '*', 'manifest is account-wide')
+    n = len(r.children)
+    r.scope = ({('900001', 8), ('900001', 9)}, set())     # membership change, same args and manifest: no restart
+    r.tick(31)
+    check(len(r.children) == n and len(r.live(A)) == 1, 'a changed selection that keeps --all-fans is not a restart')
+    r.scope = ({('900001', 8)}, set())                    # one fan again -> --fan 8, restarted once
+    r.tick(31)
+    check(len(r.children) == n + 1 and r.live(A)[0].argv[r.live(A)[0].argv.index('--fan') + 1] == '8', 'single again -> --fan')
+    r.tick(31)
+    check(len(r.children) == n + 1, 'a scope that did not change restarts nothing')
+    r.scope = ({('900001', 7), ('900001', 8)}, set())
+    r.tick(31)
     r.scope = ({('900001', 7), ('900001', 8)}, {'900001'})
     r.tick(31)
     check(len(r.live(A)) == 1 and '--all-fans' in r.live(A)[0].argv, 'account-wide entry wins')
@@ -278,6 +293,37 @@ with tempfile.TemporaryDirectory() as tmp:
     # the real scope reader (env) gives the same answer
     with patch.dict(os.environ, {'ONLYFANS_FASTT_SCOPE': 'of-900001:*,900002:5'}):
         check(S.read_scope() == ({('900002', 5)}, {'900001'}), 'real _scope reader')
+
+    # database scope through the real reader: per-mode args, and a change restarts the child once
+    from onlyfans_runtime import fastt_scope as FS
+    rows, clk = {}, [5000.0]
+    def reader(ids):
+        return {i: (None if rows.get(i) is None else json.dumps({'fastt_scope': rows[i]})) for i in ids}
+    os.makedirs(Path(tmp) / 'r2')
+    r2 = Rig(Path(tmp) / 'r2', None)
+    r2.sup.scope_reader = S.read_scope
+    with patch.dict(os.environ, {'ONLYFANS_FASTT_SCOPE': 'db:of-900001'}), patch.object(FS, '_reader', reader), \
+            patch.object(FS, '_clock', lambda: clk[0]):
+        FS.reset_cache()
+        def at(seconds, value, name):
+            rows['of-900001'] = value
+            clk[0] += seconds
+            r2.tick(seconds)
+        at(0, {'mode': 'single', 'fans': [7]}, 'single')
+        check(not r2.children and r2.state(A) is None, 'a database scope is not started before the settle wait')
+        at(FS.SETTLE_S + 1, {'mode': 'single', 'fans': [7]}, 'single')
+        check(len(r2.children) == 1 and r2.children[0].argv[r2.children[0].argv.index('--fan') + 1] == '7', 'single -> --fan 7')
+        at(31, {'mode': 'single', 'fans': [7]}, 'same')
+        check(len(r2.children) == 1, 'unchanged scope: no restart')
+        at(31, {'mode': 'selected', 'fans': [7, 8]}, 'selected')        # 8 appears: settles first, 7 keeps serving
+        check(len(r2.children) == 1, 'a new fan waits for the settle before the child changes')
+        at(FS.SETTLE_S + 1, {'mode': 'selected', 'fans': [7, 8]}, 'selected')
+        check(len(r2.children) == 2 and r2.children[0].signals == ['TERM'] and '--all-fans' in r2.children[1].argv, 'selected -> --all-fans, one restart')
+        at(31, {'mode': 'all', 'fans': []}, 'all')
+        at(FS.SETTLE_S + 1, {'mode': 'all', 'fans': []}, 'all')
+        check(len(r2.children) == 2, 'all keeps --all-fans: same args, no restart')
+        at(31, None, 'cleared')
+        check(r2.state(A) is None or r2.state(A)[0] in ('stopping', 'held') and not r2.live(A), 'scope cleared: child stopped')
 
 with tempfile.TemporaryDirectory() as tmp:
     # --- handle: env map, stored binding handle, missing, invalid ---

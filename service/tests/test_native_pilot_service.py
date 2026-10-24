@@ -758,6 +758,34 @@ async def loop_level(backend, root):
         FakeEngine.texts = ["neutral reply"]
         await stop(task, patcher)
 
+        # Provider deferrals and the one model retry have independent budgets.
+        for failures in (1, 2):
+            f, http, client = make("loop-mixed-retry-" + str(failures), limit=100, used=4, throttle=1)
+            http.codes, http.refuse_headers = [429], {"Retry-After": "7"}
+            calls = {"n": 0}
+            real_run = FakeEngine.run
+            async def mixed_run(self, run_id, failures=failures):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    FakeEngine.fail_models = failures
+                return await real_run(self, run_id)
+            events.clear()
+            with patch.object(FakeEngine, "run", mixed_run):
+                task, patcher = start(client)
+                await until(lambda: kinds("ready"), "ready", events)
+                fan_says(f)
+                if failures == 1:
+                    await replied(f, http, 2, "provider refusal then model timeout recovers", outs=1)
+                    check(not kinds("turn-abandoned"))
+                    check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5)
+                else:
+                    await until(lambda: kinds("turn-abandoned"), "second model failure remains bounded", events)
+                    check(kinds("turn-abandoned")[0]["reason"] == "model-timeout")
+                    check(len(http.posts) == 1 and f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4)
+                check([e["reason"] for e in kinds("turn-requeued")] == ["provider-rate-limited", "model-timeout"])
+                check(FakeEngine.fail_models == 0)
+                await stop(task, patcher)
+
         # ── a model timeout/error abandons an input only after ONE requeue; never once a send attempt stands ──
         f, http, client = make("loop-model-retry", limit=100, used=4, throttle=1)
         FakeEngine.fail_models = 1

@@ -53,7 +53,7 @@ from twin_bridge import store
 
 from . import postsale, runner
 from .followups import DISCOUNT_KIND, NUDGE_KIND
-from .ledger import MAX_REQUEUES_MODEL, Ledger, Refused
+from .ledger import MAX_REQUEUES_MODEL, MAX_REQUEUES_PROVIDER, Ledger, Refused
 from .scope import AccountScope
 
 LEASE_TTL_S = 120.0
@@ -984,8 +984,11 @@ class Service:
             prior = ledger._requeues.get(key, 0)
             backoff = (max(5.0, after) if after is not None else min(RATE_LIMIT_BACKOFF_S * (prior + 1), RATE_LIMIT_BACKOFF_MAX_S)) \
                 if provider_defer else self.hold_s
+            # Provider refusals must not consume the separate one-model-retry budget.
+            provider_attempts = sum(r["state"] == "not_sent" for r in ledger.receipts(pilot_id=pilot.pilot_id, input_key=key))
+            retry_limit = None if provider_defer else MAX_REQUEUES_PROVIDER if kind == "provider" else MAX_REQUEUES_MODEL + provider_attempts
             count = ledger.requeue_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now(),
-                                         max_requeues=None if provider_defer else MAX_REQUEUES_MODEL,
+                                         max_requeues=retry_limit,
                                          not_before=runner.now() + timedelta(seconds=backoff) if provider_defer else None)
             if count:
                 runner.emit({"event": "turn-requeued", "reason": reason, "retry": count, "backoff_s": backoff,

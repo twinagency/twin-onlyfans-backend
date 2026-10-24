@@ -13,7 +13,8 @@ from test_onlyfans_connections_pg import verified, TENANT
 from test_onlyfans_provider_adapters import OWNER
 from test_onlyfans_media_pg import manual, intent
 from test_onlyfans_text_delivery_pg import ACCOUNT, FAN
-from db.models import Fan, Message, Transaction, VaultSend
+from db.models import Fan, Message, Transaction, VaultSend, OfCreatorBinding
+from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
 from onlyfans_runtime.commerce import held
@@ -92,7 +93,9 @@ def test_duplicate_pending_cleared_refund_and_stale_page_change_money_once(datab
 
 def test_unlinked_paid_media_holds_sales_and_changed_amount_is_a_conflict(database, monkeypatch):
     store, account, _ = verified(database, monkeypatch)
-    observation = parsed(transaction())
+    # This is a purchase during the current binding, rather than the default
+    # history fixture (one minute before this newly provisioned binding).
+    observation = parsed(transaction(createdAt=utcnow().isoformat() + "Z"))
     assert record(store, account, observation) == "applied"
     with Session(database[1]) as s:
         assert held(s, account)
@@ -102,6 +105,32 @@ def test_unlinked_paid_media_holds_sales_and_changed_amount_is_a_conflict(databa
     with Session(database[1]) as s:
         assert s.scalar(select(Transaction.amount_cents)) == 1000
         assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1000
+        assert held(s, account)
+    store.close()
+
+
+@pytest.mark.parametrize("offset_us,expected_hold", [(-1, False), (0, True), (1, True)])
+def test_unlinked_purchase_hold_starts_at_current_binding_boundary(database, monkeypatch, offset_us, expected_hold):
+    store, account, _ = verified(database, monkeypatch)
+    with Session(database[1]) as s:
+        runtime = s.get(OfRuntime, account)
+        binding_created = s.get(OfCreatorBinding, runtime.binding_id).created_at
+    occurred = binding_created + timedelta(microseconds=offset_us)
+    observation = parsed(transaction(createdAt=occurred.isoformat() + "Z"))
+    assert record(store, account, observation) == "applied"
+    with Session(database[1]) as s:
+        assert held(s, account) is expected_hold
+        assert s.scalar(select(Transaction.message_id)) is None
+        assert s.scalar(select(Transaction.occurred_at)) == occurred
+        # Historical exemption affects the hold, never the retained purchase
+        # evidence or the fan's canonical spending total.
+        assert s.scalar(select(func.count()).select_from(OfLedgerEvidence)) == 1
+        assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1000
+    if not expected_hold:
+        # Conflicting financial evidence still holds even an old purchase.
+        assert record(store, account, {**observation, "amount_cents": 1100}) == "conflict"
+        with Session(database[1]) as s:
+            assert held(s, account)
     store.close()
 
 

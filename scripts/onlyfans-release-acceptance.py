@@ -78,18 +78,136 @@ def junit_counts(path: Path) -> dict:
             "failed": failed, "errored": errored, "skipped": skipped}
 
 
+def expanded_manifest(suite: str) -> tuple[list[str], list[str]]:
+    manifest = json.loads(MANIFEST.read_text())[suite]
+    separate = manifest["separateScripts"]
+    if len(separate) != len(set(separate)):
+        raise ValueError("Required isolated scripts are duplicated")
+    files = set()
+    for pattern in manifest["patterns"]:
+        matches = list(ROOT.glob(pattern))
+        if not matches:
+            raise ValueError(f"Required acceptance pattern matched no tests: {pattern}")
+        files.update(str(path.relative_to(ROOT)) for path in matches)
+    files.difference_update(separate)
+    if any(not (ROOT / name).is_file() for name in separate):
+        raise ValueError("A required isolated script is missing")
+    return sorted(files), separate
+
+
+def shard_manifest(suite: str, index: int, count: int) -> tuple[list[str], list[str]]:
+    if not 1 <= count <= 32 or not 0 <= index < count:
+        raise ValueError("Acceptance shard index/count is invalid")
+    files, separate = expanded_manifest(suite)
+    assigned = files[index::count]
+    if not assigned:
+        raise ValueError("Acceptance shard has no assigned test files")
+    return assigned, separate if index == 0 else []
+
+
+def checked_events(path: Path) -> dict:
+    events = json.loads(path.read_text())
+    selected = events.get("selected", [])
+    if (not selected or len(selected) != len(set(selected)) or events.get("collected") != len(selected) or events.get("exitStatus") != 0
+            or events.get("deselected") or events.get("collectionErrors")):
+        raise ValueError("Shard collection/execution is empty, duplicated, failed or deselected")
+    return events
+
+
+def aggregate_shards(directory: Path, suite: str, count: int, backend_sha: str, dashboard_sha: str) -> dict:
+    """Recompute completeness and outcomes from every shard's evidence, never its green label alone."""
+    if not 1 <= count <= 32:
+        raise ValueError("Acceptance shard count is invalid")
+    if (not re.fullmatch(r"[0-9a-f]{40}", backend_sha or "")
+            or not re.fullmatch(r"[0-9a-f]{40}", dashboard_sha or "")):
+        raise ValueError("Record both exact full candidate SHAs")
+    if dashboard_sha != (ROOT / "docs/onlyfans/ACCEPTANCE-DASHBOARD-SHA").read_text().strip():
+        raise ValueError("The dashboard SHA differs from the committed acceptance pin")
+    expected_backend = source_proof(ROOT, backend_sha)
+    files, separate = expanded_manifest(suite)
+    summaries = list(directory.rglob("summary.json"))
+    if len(summaries) != count:
+        raise ValueError("Required shard evidence is missing or duplicated")
+    seen_indexes, seen_files, seen_nodes, seen_scripts = set(), [], set(), []
+    dashboard_proof = None
+    total = {key: 0 for key in ("reported", "passed", "failed", "errored", "skipped", "collected", "deselected")}
+    for summary in summaries:
+        report = json.loads(summary.read_text())
+        shard = report.get("shard", {})
+        index = shard.get("index")
+        if (type(index) is not int or not 0 <= index < count or index in seen_indexes
+                or shard.get("count") != count or report.get("suite") != suite or report.get("accepted") is not True):
+            raise ValueError("Shard identity, suite or acceptance is invalid")
+        seen_indexes.add(index)
+        assigned, scripts = shard_manifest(suite, index, count)
+        expanded = json.loads((summary.parent / "expanded-manifest.json").read_text())
+        if (expanded != {"pytestFiles": assigned, "separateScripts": scripts}
+                or shard.get("pytestFiles") != assigned or shard.get("separateScripts") != scripts):
+            raise ValueError("Shard manifest differs from its complete deterministic assignment")
+        seen_files.extend(assigned)
+        if report.get("backend") != expected_backend or report.get("dashboard", {}).get("sha") != dashboard_sha:
+            raise ValueError("Shard candidate source proof differs from the final pair")
+        if dashboard_proof is None:
+            dashboard_proof = report["dashboard"]
+        elif report["dashboard"] != dashboard_proof:
+            raise ValueError("Shard dashboard source proofs differ")
+        collection = checked_events(summary.parent / "collection.json")
+        execution = checked_events(summary.parent / "execution.json")
+        nodes = collection["selected"]
+        if (execution["selected"] != nodes or any(node.split("::", 1)[0] not in assigned for node in nodes)
+                or seen_nodes.intersection(nodes)):
+            raise ValueError("Shard node identities changed, overlap or escape their assigned files")
+        seen_nodes.update(nodes)
+        counts = junit_counts(summary.parent / "acceptance.xml")
+        counts.update(collected=len(nodes), deselected=len(execution["deselected"]))
+        if (counts != report.get("pytest") or counts["reported"] != len(nodes)
+                or any(counts[key] for key in ("failed", "errored", "skipped", "deselected"))):
+            raise ValueError("Shard JUnit outcomes are incomplete, failed, errored or skipped")
+        for key in total:
+            total[key] += counts[key]
+        results = report.get("separateScripts", [])
+        if [item.get("path") for item in results] != scripts:
+            raise ValueError("Required isolated scripts are missing or duplicated")
+        for index_in_shard, result in enumerate(results):
+            output = (summary.parent / f"script-{index_in_shard}.log").read_text()
+            if (result.get("passed") is not True or result.get("exitStatus") != 0
+                    or "all cases passed" not in output or re.search(r"\bSKIPPED\b|\b[1-9][0-9]* FAILED\b", output)):
+                raise ValueError("An isolated script did not complete acceptance")
+        seen_scripts.extend(scripts)
+    if (seen_indexes != set(range(count)) or len(seen_files) != len(set(seen_files))
+            or sorted(seen_files) != files or seen_scripts != separate):
+        raise ValueError("Shard union does not cover the full acceptance manifest exactly once")
+    return {"schemaVersion": "of-release-acceptance.v1", "suite": suite, "accepted": True,
+            "shardCount": count, "backend": expected_backend, "dashboard": dashboard_proof,
+            "pytest": total, "pytestFiles": files, "nodeIDs": sorted(seen_nodes), "separateScripts": separate}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", choices=("combined", "commerce"), default="combined")
-    parser.add_argument("--dashboard-dir", type=Path, required=True)
+    parser.add_argument("--dashboard-dir", type=Path)
     parser.add_argument("--dashboard-sha", required=True)
     parser.add_argument("--backend-sha", default=os.environ.get("GITHUB_SHA"))
     parser.add_argument("--evidence-dir", type=Path, required=True)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument("--aggregate", action="store_true")
     args = parser.parse_args()
     evidence = args.evidence_dir
-    if not evidence.is_absolute() or not args.dashboard_dir.is_absolute():
+    if not evidence.is_absolute() or (not args.aggregate and (args.dashboard_dir is None or not args.dashboard_dir.is_absolute())):
         parser.error("Dashboard and evidence directories must be absolute")
     evidence.mkdir(parents=True, exist_ok=True)
+    if args.aggregate:
+        try:
+            report = aggregate_shards(evidence, args.suite, args.shard_count, args.backend_sha, args.dashboard_sha)
+            print("Accepted complete shard union:", json.dumps(report["pytest"], sort_keys=True))
+            code = 0
+        except Exception as error:
+            report = {"accepted": False, "blocker": str(error)}
+            print("Release acceptance incomplete:", error, file=sys.stderr)
+            code = 1
+        (evidence / "aggregate-summary.json").write_text(json.dumps(report, indent=2) + "\n")
+        return code
     report = {"schemaVersion": "of-release-acceptance.v1", "suite": args.suite,
               "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "commands": [], "accepted": False}
     try:
@@ -125,19 +243,9 @@ def main() -> int:
         versions["postgresClientDirectory"] = str(pg_bin)
         report["environment"] = versions
         (evidence / "python-versions.txt").write_text(subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True))
-        manifest = json.loads(MANIFEST.read_text())[args.suite]
-        separate = manifest["separateScripts"]
-        files = set()
-        for pattern in manifest["patterns"]:
-            matches = list(ROOT.glob(pattern))
-            if not matches:
-                raise ValueError(f"Required acceptance pattern matched no tests: {pattern}")
-            files.update(str(path.relative_to(ROOT)) for path in matches)
-        files.difference_update(separate)
-        for name in separate:
-            if not (ROOT / name).is_file():
-                raise ValueError("A required isolated script is missing")
-        files = sorted(files)
+        files, separate = shard_manifest(args.suite, args.shard_index, args.shard_count)
+        report["shard"] = {"index": args.shard_index, "count": args.shard_count,
+                           "pytestFiles": files, "separateScripts": separate}
         (evidence / "expanded-manifest.json").write_text(json.dumps({"pytestFiles": files, "separateScripts": separate}, indent=2) + "\n")
         env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(ROOT / "scripts"), str(ROOT / "service"), str(ROOT))),
                "ONLYFANS_TEST_DASHBOARD": str(dashboard), "ONLYFANS_TEST_EVIDENCE": str(evidence),

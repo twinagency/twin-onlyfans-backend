@@ -633,6 +633,10 @@ class Service:
             error = exc.reason if isinstance(exc, Refused) else (gateway.stopped_reason or model.stopped_reason or "native-turn-failed")
         finally:
             runner.finish_native_run(self.path, run_id, stats, error)
+            if isinstance(stats, dict):
+                # FASTT's own per-turn counters (sell lane, offers, packs, skips): operator visibility only.
+                runner.emit({"event": "turn-stats", "stats": {k: v for k, v in stats.items()
+                    if v and isinstance(v, (int, float, str, bool, dict)) and k not in ("model", "mode")}})
         receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
         if error:
             if self.stop.is_set() and not receipts:

@@ -204,8 +204,47 @@ def test_cached_worker_refuses_role_switch_and_health_contains_only_counts(datab
 def compete_worker(url,ready,gate,done,output):
     os.environ.update(ONLYFANS_PROCESS_ROLE="worker",DATABASE_URL=url)
     store=Store(url);model=SyntheticNativeModel(delay_seconds=.2,reported_cost_millicents=7);wire=SyntheticTextTransport(ACCOUNT)
+    from sqlalchemy import event as sa_event
+    counters={"campaignEligible":0,"campaignIneligible":0,"claimGranted":0,"claimNone":0,
+        "skipLockedEmpty":0,"skipLockedPositive":0,"skipLockedUnknown":0}
+    def trace_claim_select(connection,cursor,statement,parameters,execution_context,executemany):
+        # Observe the existing claim SELECT's DB-API rowcount. Never fetch from
+        # its cursor or print SQL/parameters, so claim semantics stay untouched.
+        normalized=" ".join(statement.upper().split())
+        if "FOR UPDATE OF OF_RUNTIME SKIP LOCKED" in normalized:
+            key="skipLockedEmpty" if cursor.rowcount==0 else "skipLockedPositive" if cursor.rowcount>0 else "skipLockedUnknown"
+            counters[key]+=1
+    sa_event.listen(store.engine,"after_cursor_execute",trace_claim_select)
     try:
         runtime=worker(store,model=model,transport=wire)
+        can_dispatch=runtime._can_dispatch_campaign
+        def traced_can_dispatch(account):
+            result=can_dispatch(account)
+            counters["campaignEligible" if result else "campaignIneligible"]+=1
+            return result
+        runtime._can_dispatch_campaign=traced_can_dispatch
+        claim=store.claim
+        def traced_claim(*args,**kwargs):
+            result=claim(*args,**kwargs)
+            counters["claimNone" if result is None else "claimGranted"]+=1
+            return result
+        store.claim=traced_claim
+        # Nonlocking fixture eligibility evidence before the start barrier; no
+        # extra query is inserted into the competing claim loop itself.
+        with Session(store.engine) as s:
+            initial=dict(s.execute(select(OfWork.status,OfWork.due_at,
+                (OfWork.due_at<=func.clock_timestamp()).label("due"),
+                OfRuntime.enabled.label("runtime_enabled"),OfRuntime.recovery_needed,OfRuntime.pending_events,
+                OfRuntime.last_sync_at,OfDeliveryPolicy.enabled.label("policy_enabled"),
+                OfDeliveryPolicy.transport_kind,OfDeliveryPolicy.used_units,OfDeliveryPolicy.limit_units,
+                OfDeliveryPolicy.queued_count,OfDeliveryPolicy.next_dispatch_at,
+                OfConversationState.mode,OfConversationState.takeover_state)
+                .select_from(OfWork).join(OfRuntime,OfRuntime.account_id==OfWork.account_id)
+                .join(OfDeliveryPolicy,OfDeliveryPolicy.account_id==OfWork.account_id)
+                .join(OfConversationState,(OfConversationState.account_id==OfWork.account_id)&
+                    (OfConversationState.fan_id==OfWork.fan_id))
+                .where(OfWork.account_id==ACCOUNT,OfWork.fan_id==101)).mappings().one())
+            initial={key:value.isoformat() if hasattr(value,"isoformat") else value for key,value in initial.items()}
         ready.put(True)
         assert gate.wait(30),"parent did not release both ready workers"
         reports=[]
@@ -217,8 +256,10 @@ def compete_worker(url,ready,gate,done,output):
         # Both competitors retain the original five-cycle replay check after
         # acceptance; the completion signal must not hide a late duplicate.
         runtime.run(threading.Event(),max_cycles=5,poll_seconds=.05,observe=reports.append)
-        output.put((len(model.calls),len(wire.calls),reports))
-    finally:store.close()
+        output.put((len(model.calls),len(wire.calls),reports,{"counters":counters,"initial":initial}))
+    finally:
+        sa_event.remove(store.engine,"after_cursor_execute",trace_claim_select)
+        store.close()
 
 
 def test_two_full_worker_processes_have_one_native_invocation_and_one_send(database,monkeypatch):
@@ -245,7 +286,7 @@ def test_two_full_worker_processes_have_one_native_invocation_and_one_send(datab
             policy=s.get(OfDeliveryPolicy,ACCOUNT)
             diagnostic={
                 "acceptedCompletion":accepted_completion,
-                "children":[{"modelCalls":row[0],"sendCalls":row[1],"cycles":row[2]} for row in values],
+                "children":[{"modelCalls":row[0],"sendCalls":row[1],"cycles":row[2],"trace":row[3]} for row in values],
                 "work":[dict(row) for row in s.execute(select(OfWork.status,OfWork.generation,
                     OfWork.control_revision,OfWork.target_message_id)).mappings()],
                 "plans":[dict(row) for row in s.execute(select(OfNativePlan.status,OfNativePlan.reason,

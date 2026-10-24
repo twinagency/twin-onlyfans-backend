@@ -293,7 +293,7 @@ class Service:
 
     def enable_catalog(self):
         """Enable every reviewed item once per account process, retaining its exact prior state."""
-        if self.content is None or self.prior_catalog is not None:
+        if self.content is None or self.prior_catalog is not None or not self.content.enables_catalog:
             return
         prior = {}
         with store.transaction(self.path) as con:
@@ -747,7 +747,12 @@ class Service:
             raise Refused("pilot-store-required")
         runner.require_store_schema(self.path)
         self.ledger = Ledger(self.path, allowance=True)
-        if getattr(self.args, "content_manifest", None):
+        if getattr(self.args, "vault_mode", False):
+            if getattr(self.args, "content_manifest", None):
+                raise Refused("vault-mode-and-manifest")
+            from .content import VaultPlan
+            self.content = VaultPlan(self.db, "*" if self.all_fans else self.args.fan, self.path)
+        elif getattr(self.args, "content_manifest", None):
             from .content import ContentPlan
             self.content = ContentPlan(self.args.content_manifest, self.db, None if self.all_fans else self.args.fan)
             with runner.readonly(self.path) as con:
@@ -861,6 +866,8 @@ def build_parser():
     parser.add_argument("--enable-send", action="store_true", help="without it: read-only preflight, then exit")
     parser.add_argument("--twin-context", action="store_true")
     parser.add_argument("--content-manifest")
+    parser.add_argument("--vault-mode", action="store_true",
+                        help="FASTT's stock vault selling (default off); mutually exclusive with --content-manifest")
     parser.add_argument("--stop-after-card", action="store_true",
                         help="TEST/PILOT ONLY, default off: set the fan's runtime stop once the paid card is confirmed. "
                              "Production (compose fastt-runner, supervisor children, --all-fans) keeps chatting after a card.")

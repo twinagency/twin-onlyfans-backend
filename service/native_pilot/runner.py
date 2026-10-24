@@ -227,9 +227,7 @@ class Gateway:
                 with readonly(self.ledger.path) as con:
                     self.content.check_catalog(con, self.pilot.account_id)
                     if terms:
-                        row = con.execute("SELECT enabled FROM catalog_items WHERE id=? AND account_id=?", (terms["catalog_id"], self.pilot.account_id)).fetchone()
-                        if not row or not row["enabled"]:
-                            raise Refused("content-item-disabled")
+                        terms = self.content.check_send(con, self.pilot.account_id, terms)
                 if terms:
                     for media_id in terms["media_ids"]:
                         asset = await asyncio.to_thread(self.client.vault_media_by_id, media_id)
@@ -357,7 +355,9 @@ def verify_attribution(path, account, fan, receipts, content=None, automation_em
             stored = con.execute("SELECT response_json FROM native_pilot_receipts WHERE attempt_id=?", (receipt["attempt_id"],)).fetchone() if content else None
             raw = json.loads(stored[0]) if stored else {}
             cents = int(round(float(raw.get("price") or 0) * 100)) if content else 0
-            kinds = ("ai_chatter", "ai_upseller") if content else ("ai_chatter",)
+            # Vault mode: FASTT's own pack lane stamps its cards "pack_send" (pack_pricing.PACK_ATTR_KIND).
+            kinds = (("ai_chatter", "ai_upseller") + (("pack_send",) if getattr(content, "vault_mode", False) else ())
+                     if content else ("ai_chatter",))
             if not row or row["direction"] != "out" or row["automation_kind"] not in kinds or row["price_cents"] != cents or (not content and row["media_count"] != 0):
                 raise Refused("native-attribution-missing")
             if automation_employee_id is not NO_EMPLOYEE_CHECK and row["sent_by_employee_id"] != automation_employee_id:
@@ -383,8 +383,15 @@ async def run(args):
     require_store_schema(path)
     profile = check_local(path, db, args.fan)
     from .content import ContentPlan
-    content = ContentPlan(args.content_manifest, db, args.fan) if getattr(args, "content_manifest", None) else None
-    if content:
+    vault_mode = bool(getattr(args, "vault_mode", False))
+    if vault_mode and getattr(args, "content_manifest", None):
+        raise Refused("vault-mode-and-manifest")
+    if vault_mode:
+        from .content import VaultPlan
+        content = VaultPlan(db, args.fan, path)
+    else:
+        content = ContentPlan(args.content_manifest, db, args.fan) if getattr(args, "content_manifest", None) else None
+    if content and not vault_mode:
         with readonly(path) as con:
             content.check_catalog(con, db)
     client = None
@@ -422,7 +429,7 @@ async def run(args):
             deadline=time.monotonic() + args.max_seconds, should_stop=gateway.stopped, on_event=emit,
             reserve_call=lambda: ledger.reserve_model_call(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=now()),
             budget=DailyBudget(scope, connection.model_id, endpoint=ENDPOINT))
-        if content:
+        if content and content.enables_catalog:
             # The reviewed card must be sellable for this run. Remember the live
             # flag so it is restored, not forced, when the pilot ends.
             with store.transaction(path) as con:
@@ -545,6 +552,9 @@ def main():
     parser.add_argument("--twin-context", action="store_true",
                         help="Feed Twin's approved persona, creator facts and fan memory through the single prompt hook")
     parser.add_argument("--content-manifest", help="Explicit private single-card ($3) pilot manifest; text only when omitted")
+    parser.add_argument("--vault-mode", action="store_true",
+                        help="FASTT's stock vault selling (default off): cards of live vault_items media within FASTT's price "
+                             "bounds; mutually exclusive with --content-manifest")
     args = parser.parse_args()
     if not AccountScope.valid(args.account) or args.fan <= 0 or not 1 <= args.send_limit <= 30 or not 60 <= args.max_seconds <= 1800:
         parser.error("invalid pilot scope or bounds")

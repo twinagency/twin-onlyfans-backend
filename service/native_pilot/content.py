@@ -76,6 +76,9 @@ class ContentPlan:
     US$3. The range is bounded to 300..10000 and each item price must fall in it.
     """
 
+    vault_mode = False
+    enables_catalog = True
+
     def __init__(self, path, account, fan):
         self.raw = json.loads(Path(path).read_text(encoding="utf-8"))
         r = self.raw
@@ -159,6 +162,14 @@ class ContentPlan:
                     or r["pricing_mode"] != "fixed" or (require_enabled and not r["enabled"])):
                 raise Refused("content-catalog-drift")
 
+    def check_send(self, con, account, terms):
+        """Per-send store check at the wire; the catalogue row must still be enabled."""
+        row = con.execute("SELECT enabled FROM catalog_items WHERE id=? AND account_id=?",
+                          (terms["catalog_id"], account)).fetchone()
+        if not row or not row["enabled"]:
+            raise Refused("content-item-disabled")
+        return terms
+
     def evidence(self, raw, expected):
         if Decimal(str(raw.get("price", 0))) * 100 != expected["price_cents"]:
             raise Refused("content-receipt-price")
@@ -180,3 +191,89 @@ class ContentPlan:
         return {"catalog_id": expected["catalog_id"], "media_ids": list(expected["media_ids"]),
                 "preview_ids": list(expected["preview_ids"]), "kind": expected["kind"],
                 "price_cents": expected["price_cents"], "previews_confirmed": previews_confirmed}
+
+
+class VaultPlan:
+    """FASTT's stock vault mode (``--vault-mode``; default off, catalogue mode untouched).
+
+    FASTT's own ask lane (``sell_lane`` -> ``pack_sender``) picks media from the account's
+    ``vault_items`` mirror, prices it with its own ladder and sends one card through
+    ``client.send_message(fan, caption, price=, locked_text=False, media_files=, previews=)``.
+    No manifest names the item, so this boundary re-checks what FASTT sent instead: every media
+    id is a live (``removed_at IS NULL``) ``vault_items`` row of THIS account, of a kind the
+    provider receipt can be compared with, previews are a subset of the media, the price is a
+    whole number of cents inside FASTT's own floor and ceiling (``automations._price_limits``,
+    the constants ``upsell`` uses), the text is not locked, and the provider receipt must
+    match exactly what was sent. One attempt, send cap, unknown-send hold and human controls
+    are the runner's and are unchanged.
+    """
+
+    vault_mode = True
+    enables_catalog = False      # FASTT's own lane rows (enabled=0) are never enabled or listed here
+    # FASTT's lane rows: the ask lane's and the hook lane's (pack_sender.ASK_ITEM_TAG / HOOK_CATEGORY).
+    LANE_TAGS = ("rung:vault-ask", "hook_upsell")
+
+    def __init__(self, account, fan, path=None):
+        if not AccountScope.valid(account) or (fan is not None and fan != "*" and not _id(fan)):
+            raise Refused("content-plan-scope")
+        self.account = AccountScope.parse(account).db_id
+        self.fan = fan
+        self.path = path
+
+    @staticmethod
+    def bounds():
+        from automations._price_limits import OF_PRICE_FLOOR_CENTS, OF_PRICE_MAX_CENTS
+        return OF_PRICE_FLOOR_CENTS, OF_PRICE_MAX_CENTS
+
+    @property
+    def catalog_ids(self):
+        """Open PPVs of FASTT's own lane rows are settled by OnlyFans (the fan unlocks), like an
+        approved manifest item in catalogue mode; any other open offer still blocks."""
+        if not self.path:
+            return frozenset()
+        from twin_bridge.store import readonly
+        clause = " OR ".join("tags LIKE ?" for _ in self.LANE_TAGS)
+        with readonly(self.path) as con:
+            rows = con.execute(f"SELECT id FROM catalog_items WHERE account_id=? AND ({clause})",
+                               (self.account, *(f'%"{t}"%' for t in self.LANE_TAGS))).fetchall()
+        return frozenset(int(r[0]) for r in rows)
+
+    def terms(self, kwargs):
+        if not kwargs:
+            return None
+        if not isinstance(kwargs, dict) or set(kwargs) - {"media_files", "price", "locked_text", "previews"}:
+            raise Refused("content-send-fields")
+        media = kwargs.get("media_files")
+        if (not isinstance(media, list) or not media or any(not _id(m) for m in media)
+                or len(set(media)) != len(media)):
+            raise Refused("content-send-media")
+        price = kwargs.get("price")
+        if isinstance(price, bool) or not isinstance(price, (int, float)):
+            raise Refused("content-send-price")
+        cents = Decimal(str(price)) * 100
+        lo, hi = self.bounds()
+        if cents != cents.to_integral_value() or not lo <= cents <= hi:
+            raise Refused("content-send-price")
+        if kwargs.get("locked_text", False) is not False:
+            raise Refused("content-send-lock")
+        previews = kwargs.get("previews", [])
+        if (not isinstance(previews, list) or any(not _id(p) for p in previews)
+                or len(set(previews)) != len(previews) or not set(previews) <= set(media)):
+            raise Refused("content-send-previews")
+        return {"catalog_id": None, "kind": None, "price_cents": int(cents), "media_ids": list(media),
+                "media_types": {}, "preview_ids": list(previews)}
+
+    def check_catalog(self, con, account, require_enabled=False):
+        """Nothing is listed, so nothing can drift; the per-send vault check is ``check_send``."""
+
+    def check_send(self, con, account, terms):
+        ids = terms["media_ids"]
+        rows = con.execute("SELECT media_id,kind FROM vault_items WHERE account_id=? AND removed_at IS NULL AND media_id IN (%s)"
+                           % ",".join("?" * len(ids)), (account, *ids)).fetchall()
+        kinds = {int(r[0]): r[1] for r in rows}
+        if set(kinds) != set(ids) or any(k not in MEDIA_TYPES for k in kinds.values()):
+            raise Refused("content-send-media")
+        return {**terms, "media_types": {str(i): kinds[i] for i in ids}}
+
+    def evidence(self, raw, expected):
+        return ContentPlan.evidence(self, raw, expected)

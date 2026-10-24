@@ -126,6 +126,17 @@ def read_account(db, account):
     return None if row is None else dict(row)
 
 
+def vault_mode_enabled(db, account):
+    """True only when the account's ai_chatter_config_json carries ``fastt_vault_mode: true`` (default off)."""
+    try:
+        with store.readonly(db) as con:
+            row = con.execute("SELECT ai_chatter_config_json FROM account_ai_config WHERE account_id=?", (account,)).fetchone()
+        value = json.loads(row[0]) if row and row[0] else {}
+    except Exception:
+        return False
+    return isinstance(value, dict) and value.get("fastt_vault_mode") is True
+
+
 def _naive_utc(value):
     if isinstance(value, str):
         value = datetime.fromisoformat(value)
@@ -331,12 +342,17 @@ class Supervisor:
             return Hold("handle-missing")
         if not HANDLE.fullmatch(handle):
             return Hold("handle-invalid")
-        manifest, reason = _manifest_target(self.db, account, fan)
-        if reason:
-            return Hold(reason)
-        path = self.manifest_dir / f"{account}.json"
-        args = ("--account", account, *(("--all-fans",) if fan == "*" else ("--fan", str(fan))),
-                "--handle", handle, "--twin-context", "--content-manifest", str(path), "--enable-send")
+        scope_args = ("--account", account, *(("--all-fans",) if fan == "*" else ("--fan", str(fan))),
+                      "--handle", handle, "--twin-context")
+        if vault_mode_enabled(self.db, account):
+            # FASTT's stock vault selling: no manifest is built or listed (see content.VaultPlan).
+            manifest, args = b"", (*scope_args, "--vault-mode", "--enable-send")
+        else:
+            manifest, reason = _manifest_target(self.db, account, fan)
+            if reason:
+                return Hold(reason)
+            path = self.manifest_dir / f"{account}.json"
+            args = (*scope_args, "--content-manifest", str(path), "--enable-send")
         digest = hashlib.sha256(json.dumps(list(args)).encode() + b"\0" + manifest).hexdigest()
         return Spec(account, fan, args, manifest, digest)
 
@@ -358,7 +374,8 @@ class Supervisor:
 
     def _start(self, slot, spec, now):
         try:
-            atomic_write(self.manifest_dir / f"{spec.account}.json", spec.manifest)
+            if spec.manifest:
+                atomic_write(self.manifest_dir / f"{spec.account}.json", spec.manifest)
         except OSError:
             self._held(slot, "manifest:write-failed")
             return

@@ -341,6 +341,7 @@ async def loop_level(backend, root):
 
     class FakeEngine:
         texts = ["neutral reply"]
+        card = False
 
         def __init__(self, account, fan, *, chat, send, emit, content, context):
             self.send, self.fan = send, fan
@@ -357,6 +358,8 @@ async def loop_level(backend, root):
                 raw = await asyncio.to_thread(self.send, self.fan, text, {})
                 f.source(raw["id"], direction="out", body=raw["text"], created_at=clock().isoformat(sep=" "))
                 f.sql("UPDATE messages SET automation_kind='ai_chatter',sent_by_employee_id=5 WHERE message_id=?", (raw["id"],))
+                if FakeEngine.card:   # the confirmed bubble is the priced card
+                    f.sql("UPDATE messages SET automation_kind='ai_upseller',price_cents=300 WHERE message_id=?", (raw["id"],))
             return {}
 
     def make(name, **policy):
@@ -581,6 +584,50 @@ async def loop_level(backend, root):
             await asyncio.sleep(0.003)
         check(http.posts == [] and not task.done())
         await stop(task, patcher)
+
+        # ── D6: a paid card never ends the conversation unless --stop-after-card is passed ──
+        # The production paths (compose fastt-runner, supervisor children) never pass the flag.
+        base_argv = ["--account", A, "--fan", str(F), "--handle", "synthetic-creator", "--enable-send"]
+        check(service.build_parser().parse_args(base_argv).stop_after_card is False, "stop-after-card is off by default")
+        check(service.build_parser().parse_args(["--account", A, "--all-fans", "--handle", "h", "--enable-send"]).stop_after_card is False,
+              "all-fans: off by default")
+        check(service.build_parser().parse_args(base_argv + ["--stop-after-card"]).stop_after_card is True,
+              "stop-after-card is an explicit flag")
+        FakeEngine.card = True
+        # Attribution of a priced card needs the catalogue plan; this section tests only the stop wiring.
+        attribution_off = patch.object(runner, "verify_attribution", lambda *a, **k: None)
+        attribution_off.start()
+        for label, flag in (("default", None), ("flag-off", False)):
+            f, http, client = make("loop-card-" + label, limit=100, used=4, throttle=1)
+            events.clear()
+            with patch.object(args, "stop_after_card", flag, create=True):
+                task, patcher = start(client)
+                await until(lambda: kinds("ready"), "ready", events)
+                fan_says(f)
+                await replied(f, http, 1, label + ": the card goes out")
+                check(f.sql("SELECT count(*) FROM messages WHERE price_cents=300")[0][0] == 1)
+                fan_says(f, "i want another")
+                await replied(f, http, 2, label + ": the chat goes on after the card")
+                check(not kinds("stopped-after-card") and not task.done(), label + ": no stop after a card")
+                check(service.fan_hold_reason(f.path, A, F) is None, label + ": no runtime stop was written")
+                await stop(task, patcher)
+        if backend.pg:   # the stop writes the real skip_list / Twin control rows: full schema only
+            f, http, client = make("loop-card-flag", limit=100, used=4, throttle=1)
+            events.clear()
+            with patch.object(args, "stop_after_card", True, create=True):
+                task, patcher = start(client)
+                await until(lambda: kinds("ready"), "ready", events)
+                fan_says(f)
+                await replied(f, http, 1, "flag: the card goes out")
+                await until(lambda: kinds("stopped-after-card"), "stopped after the card", events)
+                check(service.fan_hold_reason(f.path, A, F) is not None, "flag: the runtime stop is written")
+                fan_says(f, "i want another")
+                for _ in range(30):
+                    await asyncio.sleep(0.003)
+                check(len(http.posts) == 1, "flag: nothing is sent after the card")
+                await stop(task, patcher)
+        FakeEngine.card = False
+        attribution_off.stop()
 
     from db.engine import engine
     await engine.dispose()

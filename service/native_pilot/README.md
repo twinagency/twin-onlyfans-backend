@@ -131,3 +131,11 @@ preflight). It runs until SIGTERM/SIGINT and is never started by itself.
   fan's plain text with `event_transcoder._transcode_chat_message` (idempotent upsert, keyed `of-<owner>`).
 - Start: `FASTT_ACCOUNT=of-<owner> FASTT_FAN=<id> FASTT_HANDLE=<name> docker compose -f deploy/onlyfans-compose.yml
   --profile fastt up -d fastt-runner`.
+- After a card: the service keeps chatting. `--stop-after-card` (default off, test/pilot scope only; neither the compose
+  `fastt-runner` nor the supervisor passes it) pauses the fan once the paid card is confirmed. The bounded `runner.py`
+  pilot is the other place a confirmed card ends the run (`paid-card-sent-test-complete`).
+- Offers: at most `fastt_max_open_offers` unpaid cards (default 2) and `fastt_max_offers_per_day` (default 2). When the
+  model asks for a card that is not allowed (cap, a piece or media already pending, an item already bought) no card goes
+  out, the conversation still gets a text reply (one plain regeneration if the reply was only price talk) and the runner
+  emits `offer-declined` with `reason` = `max-open-offers` | `daily-offer-cap` | `offer-pacing` | `item-already-pending` |
+  `media-already-pending` | `item-already-purchased`. No offer row is closed or created by this.

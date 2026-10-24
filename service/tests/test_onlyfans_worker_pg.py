@@ -4,6 +4,7 @@ import json
 import multiprocessing
 import os
 import threading
+import time
 
 import pytest
 from sqlalchemy import create_engine,func,select,text
@@ -201,22 +202,33 @@ def test_cached_worker_refuses_role_switch_and_health_contains_only_counts(datab
     store.close()
 
 
-def compete_worker(url,gate,output):
+def compete_worker(url,gate,done,output):
     os.environ.update(ONLYFANS_PROCESS_ROLE="worker",DATABASE_URL=url)
     store=Store(url);model=SyntheticNativeModel(delay_seconds=.2,reported_cost_millicents=7);wire=SyntheticTextTransport(ACCOUNT)
+    stop=threading.Event()
+    # Claim uses SKIP LOCKED on the runtime row every step also locks, so a peer can
+    # starve it for many cycles: run until the parent sees the send, not a fixed count.
+    threading.Thread(target=lambda:(done.wait(60),stop.set()),daemon=True).start()
     try:
         runtime=worker(store,model=model,transport=wire);gate.wait(10)
-        runtime.run(threading.Event(),max_cycles=5,poll_seconds=.05)
+        runtime.run(stop,poll_seconds=.05)
         output.put((len(model.calls),len(wire.calls)))
     finally:store.close()
 
 
 def test_two_full_worker_processes_have_one_native_invocation_and_one_send(database,monkeypatch):
-    store,_=start(database,monkeypatch);context=multiprocessing.get_context("spawn");gate=context.Event();output=context.Queue()
-    children=[context.Process(target=compete_worker,args=(database[0],gate,output)) for _ in range(2)]
+    store,_=start(database,monkeypatch);context=multiprocessing.get_context("spawn");gate=context.Event();done=context.Event();output=context.Queue()
+    children=[context.Process(target=compete_worker,args=(database[0],gate,done,output)) for _ in range(2)]
     try:
         for child in children:child.start()
         gate.set()
+        deadline=time.monotonic()+45
+        while time.monotonic()<deadline:
+            with Session(database[1]) as s:
+                if s.scalar(select(func.count()).select_from(OfTextIntent).where(OfTextIntent.status=="accepted")):break
+            time.sleep(.1)
+        time.sleep(1)  # let a duplicate claim or send show itself before stopping
+        done.set()
         for child in children:child.join(20);assert child.exitcode==0
         values=[output.get(timeout=2) for _ in children]
         assert sum(row[0] for row in values)==sum(row[1] for row in values)==1

@@ -226,6 +226,19 @@ async def exercise():
     await set_automation_restrict(ACCOUNT, fan, False)
     check(await skip_reason(fan) is None, "manual stop replaces then releases cleanly")
 
+    # -- pause acknowledged while the model call is HUNG: it lands first, the late reply is never sent ------
+    fan = await new_fan()
+    release, started = asyncio.Event(), asyncio.Event()
+    async def hung():
+        started.set()
+        await release.wait()
+    hung_turn = asyncio.ensure_future(play(fan, on_chat=hung))
+    await asyncio.wait_for(started.wait(), 10)
+    await add_skip(fan, "manual_restrict")                 # the acknowledged Pause
+    release.set()
+    sent, stats = await asyncio.wait_for(hung_turn, 10)
+    check(sent == [] and stats["replies_sent"] == 0, "pause acked during a hung model call: nothing sent after it")
+
     await engine.dispose()
 
 

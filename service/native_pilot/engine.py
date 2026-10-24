@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from datetime import timedelta
 from types import SimpleNamespace
 
 from .scope import AccountScope
@@ -84,11 +85,14 @@ class _TextClient:
         if self.engine.content:
             self.engine.content.terms(kwargs)
         try:
-            return self.engine._send(fan_id, text, kwargs)
+            result = self.engine._send(fan_id, text, kwargs)
         except Exception:
             # The native loop intentionally catches send exceptions. Preserve a
             # stop signal outside that loop, without logging raw transport text.
             self.engine._refuse("native-send-interrupted")
+        if kwargs:
+            self.engine._card_sent = True      # a priced card (media + price) reached the wire
+        return result
 
     def mark_chat_read(self, fan_id):
         if type(fan_id) is not int or fan_id != self.engine.fan_id:
@@ -166,6 +170,8 @@ class NativeEngine:
         self._running = False
         self._violation = None
         self._offer_cfg = {"max_open_offers": 2, "max_offers_per_fan_per_day": 2}
+        # --followups in vault mode: FASTT's own nudge delay and what this turn did (see _queue_card_nudge).
+        self._nudge_min, self._card_sent, self._nudge_queued = 0, False, False
 
     def _refuse(self, reason):
         self._violation = reason
@@ -203,6 +209,8 @@ class NativeEngine:
         result.update(TEXT_ONLY)
         if self.followups is not None:
             result.update(copy.deepcopy(FOLLOWUPS))
+            minutes = result.get("nudge_after_minutes")
+            self._nudge_min = minutes if type(minutes) is int and minutes > 0 else 0
         if getattr(self.content, "vault_mode", False):
             # FASTT's stock vault-wide ask lane (sell_lane -> pack_sender -> content_resolver), nothing else:
             # the model never writes an offer (stock prompt_sell_catalog False) and the ask lane
@@ -358,6 +366,7 @@ class NativeEngine:
             # Only FASTT's re-engage nudge for THIS fan is kept (runner-owned queue, never scheduled_jobs).
             job = await asyncio.to_thread(self.followups.add, self.fan_id, kind, kwargs.get("payload"), kwargs.get("run_at"))
             if job:
+                self._nudge_queued = True
                 self._emit({"event": "native-followup-queued", "kind": "nudge", "fan_id": self.fan_id})
                 return None
         self._emit({"event": "native-background-job-suppressed", "kind": str(kind)})
@@ -440,6 +449,7 @@ class NativeEngine:
             raise PilotBoundaryError("forbidden-job-payload")
         self._running = True
         self._violation = None
+        self._card_sent = self._nudge_queued = False
         try:
             await self._no_obligations()
             result = await self.native.run(self.account_id, payload if payload is not None else {
@@ -450,9 +460,28 @@ class NativeEngine:
             # still reach the runner so it cannot turn into an automatic retry.
             if self._violation:
                 raise PilotBoundaryError(self._violation)
+            if payload is None:
+                await self._queue_card_nudge()
             return result
         finally:
             self._running = False
+
+    async def _queue_card_nudge(self):
+        """``--vault-mode`` + ``--followups``: the stock re-engage nudge for a card the ask lane just sent.
+
+        FASTT only schedules its nudge on the model's ``>>OFFER`` path (ai_chatter, after ``_record_offer``);
+        a vault card goes ``sell_lane -> pack_sender`` and never reaches that line. So after a turn that put
+        a priced card on the wire, the same job is enqueued (same payload, same ``nudge_after_minutes``, same
+        ``enqueue_job`` gate); FASTT's own ``_run_nudge`` then handles it, and the service drops it if the offer
+        is settled or the fan spoke first. Best effort, like the stock schedule; never twice for one turn."""
+        if (self.followups is None or not getattr(self.content, "vault_mode", False) or not self._card_sent
+                or self._nudge_queued or self._nudge_min <= 0):
+            return
+        try:
+            await self.enqueue_job(self.account_id, "ai_chatter", payload={"nudge_fan_ids": [self.fan_id]},
+                                   run_at=self.followups.clock() + timedelta(minutes=self._nudge_min))
+        except Exception:
+            self._emit({"event": "native-followup-queue-failed", "fan_id": self.fan_id})
 
     def __exit__(self, exc_type, exc, tb):
         if self._token is not None:

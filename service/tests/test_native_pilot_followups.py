@@ -204,6 +204,109 @@ async def exercise(tmp):
           'control: with FASTT default caps the same fan WOULD be skipped (the test can fail)')
     stats, out, ev, mid = await turn('lol ok', followups=queue)
     check(stats['replies_sent'] == 1 and stats.get('skipped_cadence', 0) == 0, 'burst caps never skip a fan with --followups')
+
+    # 7. --vault-mode: a card from FASTT's ask lane (sell_lane -> pack_sender) never reaches ai_chatter's own nudge
+    #    schedule, so the engine queues the identical job after the turn; FASTT's own _run_nudge then handles it.
+    from native_pilot.content import VaultPlan
+    from native_pilot import engine as engine_mod
+    await reset()
+    async with get_session() as s:
+        s.add(CatalogItem(id=2, account_id=ACCOUNT, label='vault - asked for', kind='image_set', enabled=False,
+                          description_for_ai='content from her vault', price_cents=1250, tags='["rung:vault-ask"]'))
+    vault = VaultPlan(ACCOUNT, FAN, str(db_path))
+    vsent = []
+
+    def vsend(fid, text, kw):
+        vault.terms(kw)
+        vsent.append((text, kw))
+        return {'id': 60000 + len(vsent), 'text': text, 'createdAt': datetime.utcnow().isoformat(), 'fromUser': {'id': 900001}}
+
+    async def vchat(**kw):
+        return SimpleNamespace(content='{}', parsed={}) if kw.get('response_format') else SimpleNamespace(content='x', parsed=None)
+
+    async def lane_card(native):
+        """What the ask lane does: one priced card out through the engine's client, its message row and its OPEN offer."""
+        await native.native._load_config(ACCOUNT)
+        res = native.make_client(ACCOUNT).send_message(FAN, 'this one is for you', media_files=[2001, 2002], price=12.5, locked_text=False)
+        async with get_session() as s:
+            s.add(Message(account_id=ACCOUNT, fan_id=FAN, message_id=res['id'], direction='out', body=res['text'],
+                          automation_kind='pack_send', sent_by_employee_id=1, price_cents=1250, created_at=datetime.utcnow()))
+            s.add(ContentOffer(account_id=ACCOUNT, fan_id=FAN, item_id=2, mode='ppv', price_cents=1250,
+                               offer_message_id=res['id'], status='open'))
+        return {'status': 'ok', 'offers_made': 1}
+
+    async def vault_turn(followups, stub=lane_card):
+        mid = await fan_says('show me something')
+        before = len(events)
+        with NativeEngine(ACCOUNT, FAN, chat=vchat, send=vsend, emit=events.append, content=vault, followups=followups) as native:
+            async def run(account_id, payload, run_id=None):
+                return await stub(native)
+            with patch.object(native.native, 'run', run):
+                await native.run(mid)
+        return [e for e in events[before:] if e['event'] == 'native-followup-queued'], mid
+
+    def queued_rows():
+        return rows('SELECT fan_id,kind,payload_json,run_at,last_in_id,state FROM native_pilot_followups')
+
+    queued, mid = await vault_turn(None)
+    check(not queued and not queued_rows() and await jobs() == 0, 'vault, flag off: nothing is queued')
+    queued, mid = await vault_turn(queue)
+    job = queued_rows()
+    check(len(queued) == 1 and len(job) == 1 and job[0][:3] == (FAN, 'nudge', '{"nudge_fan_ids":[%d]}' % FAN)
+          and job[0][4] == mid and job[0][5] == 'queued', ('vault card queues the stock nudge', job))
+    delay = datetime.fromisoformat(job[0][3]) - datetime.utcnow()
+    check(timedelta(minutes=14) < delay <= timedelta(minutes=15, seconds=5) and await jobs() == 0,
+          'same nudge_after_minutes, never scheduled_jobs')
+    # a vault turn that sent no card (plain reply) queues nothing; a turn that already queued its own is not doubled
+    async def plain(native):
+        await native.native._load_config(ACCOUNT)
+        native.make_client(ACCOUNT).send_message(FAN, 'haha tell me more')
+        return {'status': 'ok'}
+    await reset()
+    queued, mid = await vault_turn(queue, plain)
+    check(not queued and not queued_rows(), 'vault plain reply: no nudge')
+
+    async def card_then_stock(native):
+        out = await lane_card(native)
+        await native.enqueue_job(ACCOUNT, 'ai_chatter', payload={'nudge_fan_ids': [FAN]}, run_at=datetime.utcnow() + timedelta(minutes=15))
+        return out
+    await reset()
+    queued, mid = await vault_turn(queue, card_then_stock)
+    check(len(queued) == 1 and len(queued_rows()) == 1, 'a nudge queued by the turn itself is not queued twice')
+    # the queued job is FASTT's own handler's: open lane offer + nobody replied -> one plain line
+    await reset()
+    await vault_turn(queue)
+    await age()
+    n0 = len(vsent)
+    with NativeEngine(ACCOUNT, FAN, chat=vchat, send=vsend, emit=events.append, content=vault, followups=queue) as native:
+        stats = await native.run(20, payload={'nudge_fan_ids': [FAN]})
+    check(stats.get('nudged') == 1 and len(vsent) == n0 + 1 and not vsent[-1][1] and vsent[-1][0].strip(), ('vault nudge sent', stats))
+    # the nudge run itself queues nothing new
+    check(len(queued_rows()) == 1, 'a nudge run does not requeue')
+    # dropped: the fan replied first (FASTT's handler) ...
+    await reset()
+    await vault_turn(queue)
+    await fan_says('wait what')
+    n1 = len(vsent)
+    with NativeEngine(ACCOUNT, FAN, chat=vchat, send=vsend, emit=events.append, content=vault, followups=queue) as native:
+        stats = await native.run(21, payload={'nudge_fan_ids': [FAN]})
+    check(stats.get('nudged') == 0 and stats.get('nudge_skipped') == 1 and len(vsent) == n1, 'vault replied: nothing sent')
+    # ... or the card was bought (offer no longer open)
+    await reset()
+    await vault_turn(queue)
+    await age()
+    async with get_session() as s:
+        for o in (await s.execute(select(ContentOffer))).scalars():
+            o.status = 'delivered'
+    n1 = len(vsent)
+    with NativeEngine(ACCOUNT, FAN, chat=vchat, send=vsend, emit=events.append, content=vault, followups=queue) as native:
+        stats = await native.run(22, payload={'nudge_fan_ids': [FAN]})
+    check(stats.get('nudged') == 0 and len(vsent) == n1, 'vault bought: nothing sent')
+    # a nudge delay of 0 (operator switched it off) queues nothing
+    await reset()
+    with patch.object(engine_mod, 'FOLLOWUPS', {**FOLLOWUPS, 'nudge_after_minutes': 0}):
+        queued, mid = await vault_turn(queue)
+    check(not queued and not queued_rows(), 'nudge_after_minutes 0: no nudge')
     await engine.dispose()
 
 

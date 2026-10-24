@@ -1297,6 +1297,7 @@ async def followup_loop_level(backend, root):
     dotenv.dotenv_values = lambda *a, **k: {"OPENROUTER_API_KEY": "synthetic-unused-key"}
     L = backend.L
     import copy
+    from types import SimpleNamespace
     from urllib.parse import urlsplit
     import test_native_pilot_runner as R
     from curl_cffi.requests.exceptions import ProxyError
@@ -1401,8 +1402,15 @@ async def followup_loop_level(backend, root):
             f.sql("UPDATE messages SET automation_kind='ai_chatter',sent_by_employee_id=5 WHERE message_id=?", (raw["id"],))
             if payload is None and holder["offer"]:
                 f.sql("INSERT INTO content_offers VALUES(?,?,'open','ppv',71)", (A, self.fan))
-                await self.enqueue_job(A, "ai_chatter", payload={"nudge_fan_ids": [self.fan]},
-                                       run_at=clock() + timedelta(minutes=holder["delay_min"]))
+                if holder.get("vault"):
+                    # --vault-mode: the card came from the ask lane, which schedules no nudge of its own; the REAL
+                    # engine hook queues it after the turn (state a priced card + FASTT's delay put on the engine).
+                    self._card_sent, self._nudge_queued, self._nudge_min = True, False, holder["delay_min"]
+                    self.content = SimpleNamespace(vault_mode=True)
+                    await RealEngine._queue_card_nudge(self)
+                else:
+                    await self.enqueue_job(A, "ai_chatter", payload={"nudge_fan_ids": [self.fan]},
+                                           run_at=clock() + timedelta(minutes=holder["delay_min"]))
                 await self.enqueue_job(A, "ai_chatter", payload={"post_buy": 1}, run_at=clock())
             return {"status": "ok"}
 
@@ -1535,6 +1543,41 @@ async def followup_loop_level(backend, root):
             await until(lambda: len(posted(http, FA)) == 3, tag + ": normal reply after the nudge", events)
             await until(lambda: jobs(f, FA)[-1] == ("queued", None), tag + ": next nudge queued behind the new card", events)
             await stop(task, patcher)
+
+            # ── --vault-mode cards: the engine hook queues the nudge; due -> sent; replied / bought -> dropped ──
+            holder["vault"] = True
+            f, http, client = make("fu-vault-" + tag)
+            events.clear()
+            task, patcher = await start(client, make_args(all_fans, True))
+            says(f, FA)
+            await until(lambda: len(posted(http, FA)) == 1 and jobs(f, FA) and kinds("native-followup-queued"), tag + " vault: card reply", events)
+            check(jobs(f, FA) == [("queued", None)] and len(kinds("native-followup-queued")) == 1, tag + " vault: the card queued the nudge")
+            clock.add(16 * 60)
+            await until(lambda: len(posted(http, FA)) == 2, tag + " vault: nudge sent when due", events, timeout=60)
+            await until(lambda: jobs(f, FA) == [("done", None)], tag + " vault: job settled", events)
+            check(posted(http, FA)[1][1] == "<p>%s</p>" % NUDGE and holder["payloads"] == [{"nudge_fan_ids": [FA]}], tag + " vault: stock payload")
+            check(used(f) == 6 and not f.sql("SELECT 1 FROM scheduled_jobs"), tag + " vault: one allowance unit, no scheduled_jobs")
+            await stop(task, patcher)
+            f, http, client = make("fu-vault-drop-" + tag)
+            holder["delay_min"] = 180
+            events.clear()
+            task, patcher = await start(client, make_args(all_fans, True))
+            fans = [FA, FB] if all_fans else [FA]
+            for fan in fans:
+                says(f, fan)
+                await until(lambda fan=fan: len(posted(http, fan)) == 1 and jobs(f, fan), tag + " vault: reply", events)
+            holder["offer"] = False
+            if all_fans:
+                f.sql("UPDATE content_offers SET status='delivered' WHERE fan_id=?", (FB,))   # bought
+            says(f, FA, "wait one more thing")                                                 # replied first
+            f.sql("UPDATE native_pilot_followups SET run_at=? WHERE state='queued'",
+                  ((clock() - timedelta(minutes=1)).isoformat(sep=" ", timespec="microseconds"),))
+            await until(lambda: all(jobs(f, fan)[-1][0] == "dropped" for fan in fans), tag + " vault: stale jobs dropped", events, timeout=30)
+            check(jobs(f, FA)[-1][1] in ("followup-fan-replied", "followup-chat-moved")
+                  and (not all_fans or jobs(f, FB)[-1][1] == "offer-resolved"), tag + " vault: dropped reasons")
+            check(all(NUDGE not in text for _, text in http.posts) and holder["payloads"] == [], tag + " vault: no nudge on the wire")
+            await stop(task, patcher)
+            holder["vault"], holder["delay_min"] = False, 15
 
             # ── dropped: the fan replied first / bought / paused / chat held / unreadable chat ──
             f, http, client = make("fu-drop-" + tag)

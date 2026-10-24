@@ -150,4 +150,8 @@ preflight). It runs until SIGTERM/SIGINT and is never started by itself.
   resolved, the fan is paused / taken over / restricted / not owned, the send is unresolved, or the job is over 6 hours
   late. FASTT gates the nudge on `cadence_enabled`, so the flag turns the cadence controller on with every burst/daily
   cap at 0 (no cap in FASTT's own `_cadence_gate`): it never skips a fan. The nudge is only scheduled on the model's
-  `>>OFFER` path (catalogue / manifest mode); the vault ask lane (`--vault-mode`) has no nudge in stock FASTT.
+  `>>OFFER` path (catalogue / manifest mode); the vault ask lane (`--vault-mode`, `sell_lane` -> `pack_sender`) has no
+  nudge in stock FASTT, so with both flags the engine queues the identical job (same payload, same
+  `nudge_after_minutes`) after a turn that put a priced card on the wire (`NativeEngine._queue_card_nudge`); FASTT's own
+  `_run_nudge` handles it (any `status='open'` offer, including the `rung:vault-ask` row), the service drops it when the
+  offer is settled or the fan spoke first.

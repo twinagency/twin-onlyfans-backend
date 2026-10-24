@@ -13,20 +13,18 @@ MODEL = "deepseek/deepseek-v4.1-flash"
 
 # Independent switches are explicit: disabling the sales catalogue alone does
 # not turn off Fastt's teaser, pack, sticker or scheduled follow-up paths.
+# Stock FASTT (ai_chatter._DEFAULTS) everywhere except what this boundary cannot carry
+# yet. Each override below has a concrete reason; anything not listed runs as stock.
 TEXT_ONLY = {
-    "enabled": True, "mode": "always", "max_fans_per_tick": 1,
-    "payers_only": False,
-    "pack_send_enabled": False, "pack_on_ask_enabled": False,
-    "prompt_sell_catalog": False, "qualification_gate_enabled": False,
-    "smart_pricing_enabled": False, "cadence_enabled": False,
-    "nudge_enabled": False, "rhythm_enabled": False,
-    "rhythm_return_single_bubble_s": 0, "pacing_enabled": False,
-    "life_tip_ask_enabled": False, "life_tip_big_enabled": False,
-    "post_buy_rung_enabled": False, "hook_upsell_enabled": False,
-    "hook_upsell_early_ask": False, "gift_enabled": False,
-    "filming_stall_enabled": False, "profile_openers_enabled": False,
-    "force_ask": False, "pivot_on_escalation": False,
-    "engage_old_fans": False,
+    "enabled": True, "mode": "always",
+    "max_fans_per_tick": 1,            # one runner turn serves exactly one fan
+    "payers_only": False,              # stock True would ignore every non-payer
+    "pack_send_enabled": False, "pack_on_ask_enabled": False,  # packs/gifts send media outside the
+    "gift_enabled": False,                                     # approved catalogue: refused at the send boundary
+    "nudge_enabled": False, "rhythm_enabled": False,  # need FASTT's background job runner; jobs are
+    "post_buy_rung_enabled": False,                   # suppressed here (rhythm would "brb" and never return)
+    "rhythm_return_single_bubble_s": 0,
+    "profile_openers_enabled": False,  # first-contact openers: new conversations stay operator-controlled
 }
 
 
@@ -148,8 +146,7 @@ class NativeEngine:
         if self.content:
             # Explicit pilot configuration of the existing catalogue path;
             # the vault-wide resolver and all other media writers stay off.
-            result.update(prompt_sell_catalog=True, ppv_caption_1to1=False,
-                          min_fan_msgs_between_offers=0, **offer_limits(native))
+            result.update(prompt_sell_catalog=True, ppv_caption_1to1=False, **offer_limits(native))
         if self.context:
             # Approved creator facts ride the system prompt on every turn, not
             # only when the fan asks about her (FASTT's token-saving default).

@@ -71,6 +71,10 @@ async def exercise():
         with NativeEngine(account, fan, chat=chat, send=send, emit=events.append) as pilot:
             cfg = await native._load_config(account)
             check(all(cfg[k] == v for k, v in TEXT_ONLY.items()), "text-only config")
+            from automations.ai_chatter import _DEFAULTS
+            check(all(cfg[k] == _DEFAULTS[k] for k in ("cadence_enabled", "pivot_on_escalation", "engage_old_fans",
+                                                     "qualification_gate_enabled", "min_fan_msgs_between_offers")),
+                  "everything not overridden runs as stock FASTT")
             check(not cfg["payers_only"], "nonpayer admitted normally")
             check(not await native._runtime_bool(account, "typing_indicator", native.load_typing_indicator),
                   "typing socket disabled")

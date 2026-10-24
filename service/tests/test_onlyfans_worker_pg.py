@@ -206,8 +206,9 @@ def compete_worker(url,gate,output):
     store=Store(url);model=SyntheticNativeModel(delay_seconds=.2,reported_cost_millicents=7);wire=SyntheticTextTransport(ACCOUNT)
     try:
         runtime=worker(store,model=model,transport=wire);gate.wait(10)
-        runtime.run(threading.Event(),max_cycles=5,poll_seconds=.05)
-        output.put((len(model.calls),len(wire.calls)))
+        reports=[]
+        runtime.run(threading.Event(),max_cycles=5,poll_seconds=.05,observe=reports.append)
+        output.put((len(model.calls),len(wire.calls),reports))
     finally:store.close()
 
 
@@ -219,10 +220,28 @@ def test_two_full_worker_processes_have_one_native_invocation_and_one_send(datab
         gate.set()
         for child in children:child.join(20);assert child.exitcode==0
         values=[output.get(timeout=2) for _ in children]
-        assert sum(row[0] for row in values)==sum(row[1] for row in values)==1
+        # Synthetic counters and durable state only: no bodies, prompts, tokens,
+        # credentials or receipt payloads. Keep the original timing and counts.
         with Session(database[1]) as s:
-            assert s.scalar(select(func.count()).select_from(GrokCall))==1
-            assert s.scalar(select(func.count()).select_from(Message).where(Message.direction=="out"))==1
+            runtime=s.get(OfRuntime,ACCOUNT)
+            policy=s.get(OfDeliveryPolicy,ACCOUNT)
+            diagnostic={
+                "children":[{"modelCalls":row[0],"sendCalls":row[1],"cycles":row[2]} for row in values],
+                "work":[dict(row) for row in s.execute(select(OfWork.status,OfWork.generation,
+                    OfWork.control_revision,OfWork.target_message_id)).mappings()],
+                "plans":[dict(row) for row in s.execute(select(OfNativePlan.status,OfNativePlan.reason,
+                    OfNativePlan.model_call_id)).mappings()],
+                "intents":[dict(row) for row in s.execute(select(OfTextIntent.status,OfTextIntent.reason)).mappings()],
+                "runtime":{"enabled":runtime.enabled,"recoveryNeeded":runtime.recovery_needed,
+                    "pendingEvents":runtime.pending_events},
+                "policy":{"enabled":policy.enabled,"usedUnits":policy.used_units,
+                    "queuedCount":policy.queued_count,"activeIntent":bool(policy.active_intent_id)},
+            }
+            detail=json.dumps(diagnostic,sort_keys=True)
+            print("synthetic_worker_race_diagnostic="+detail,flush=True)
+            assert sum(row[0] for row in values)==sum(row[1] for row in values)==1,detail
+            assert s.scalar(select(func.count()).select_from(GrokCall))==1,detail
+            assert s.scalar(select(func.count()).select_from(Message).where(Message.direction=="out"))==1,detail
     finally:
         for child in children:
             if child.is_alive():child.kill();child.join(3)

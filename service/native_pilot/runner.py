@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import logging
 import secrets
 import time
@@ -19,6 +20,15 @@ from twin_bridge import store
 
 from .ledger import Ledger, Refused
 from .scope import AccountScope
+
+
+_DASH = re.compile(r"\s*[\u2014\u2013]\s*")
+
+
+def no_dashes(text):
+    """Owner rule: no em/en dashes in fan-visible text (chat or card caption)."""
+    out = _DASH.sub(", ", text).strip(", ")
+    return out or text
 
 
 def now():
@@ -200,7 +210,7 @@ class Gateway:
             self.stopped_reason = "send-scope-refused"
             raise Refused(self.stopped_reason)
         terms = self.content.terms(kwargs) if self.content else None
-        return asyncio.run_coroutine_threadsafe(self._send(text, terms), self.loop).result()
+        return asyncio.run_coroutine_threadsafe(self._send(no_dashes(text), terms), self.loop).result()
 
     def stopped(self):
         if self.stopped_reason:

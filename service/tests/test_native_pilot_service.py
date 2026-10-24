@@ -834,7 +834,7 @@ async def multi_level(backend, root):
         return [e for e in events if e.get("event") == name]
 
     def pilots(f):
-        return sorted(r[0] for r in f.sql("SELECT pilot_id FROM native_pilots"))
+        return sorted(r[0] for r in f.sql("SELECT pilot_id FROM native_pilots WHERE state<>'watermark'"))
 
     async def settle(n=60):
         for _ in range(n):
@@ -1027,6 +1027,75 @@ async def multi_level(backend, root):
             await stop(task, patcher)
         check([(row[0], bool(row[1])) for row in f.sql("SELECT id,enabled FROM catalog_items ORDER BY id")]
               == [(71, False), (72, True)], "all reviewed catalogue states restored exactly")
+
+        # ── D1a: the activation watermark is persisted, so a restart never drops an input that
+        #    arrived after activation; pre-activation backlog and answered inputs are never replayed ──
+        f, http, client = make("multi-restart", limit=100, used=4, throttle=1)
+        says(f, FA, "arrived before activation")
+        clock.add(5)
+        events.clear()
+        task, patcher = await start(client)
+        first = f.sql("SELECT cutoff FROM native_pilots")
+        check(len(first) == 1, "the activation instant is persisted once, as one marker row")
+        await stop(task, patcher)
+        says(f, FB, "arrived after activation, while the process was down")
+        clock.add(5)
+        task, patcher = await start(client)
+        await until(lambda: len(posted(http, FB)) == 1, "input between activation and restart is answered", events,
+                    timeout=6)
+        await settle()
+        check(not posted(http, FA), "pre-activation backlog is never replayed")
+        check(f.sql("SELECT cutoff FROM native_pilots WHERE fan_id=0")[0][0] == first[0][0],
+              "a restart reuses the persisted activation instant")
+        await stop(task, patcher)
+        task, patcher = await start(client)
+        await settle()
+        check(len(posted(http, FB)) == 1 and not posted(http, FA), "a third start replays nothing that was answered")
+        await stop(task, patcher)
+
+        # ── D1b: ineligible newer rows never starve an older eligible input (window patched small) ──
+        f, http, client = make("multi-fair", limit=100, used=4, throttle=1)
+        extra = [L.FAN + 100 + n for n in range(10)]
+        for n, fan in enumerate(extra):
+            backend.add_fan(f, fan)
+            if n >= 5:
+                OWNED.add(fan)
+                backend.fan_state(f, fan, "paused")       # owned but operator-paused
+        events.clear()
+        with patch.object(service, "CANDIDATES_MAX", 4):
+            task, patcher = await start(client)
+            says(f, FB, "oldest eligible")
+            for fan in extra:                              # five non-owned, five paused: all newer than FB
+                says(f, fan, "newer but must not be answered")
+            says(f, FA, "newest eligible")
+            await until(lambda: len(posted(http, FB)) == 1 and len(posted(http, FA)) == 1,
+                        "eligible inputs behind more than CANDIDATES_MAX ineligible rows are served", events, timeout=6)
+            check([p[0] for p in http.posts[:2]] == [FB, FA], "oldest pending first")
+            check(all(not posted(http, fan) for fan in extra), "ineligible fans are never answered")
+            await stop(task, patcher)
+        OWNED.difference_update(extra)
+
+        # ── D1c: fans held by an unknown send never freeze the others (window patched small) ──
+        f, http, client = make("multi-held", limit=100, used=4, throttle=1)
+        held_fans = [L.FAN + 200 + n for n in range(3)]
+        for fan in held_fans:
+            backend.add_fan(f, fan)
+            backend.fan_state(f, fan, "automated")
+            OWNED.add(fan)
+            http.fail_for[fan] = ProxyError("synthetic transport failure")
+        events.clear()
+        with patch.object(service, "CANDIDATES_MAX", 2):
+            task, patcher = await start(client)
+            for fan in held_fans:
+                says(f, fan, "first")
+                await until(lambda fan=fan: len(posted(http, fan)) == 1, "unknown send", events, timeout=6)
+            for fan in held_fans:
+                says(f, fan, "second, held behind the unknown send")
+            says(f, FB, "fresh fan behind three held fans")
+            await until(lambda: len(posted(http, FB)) == 1, "a held fan never freezes the others", events, timeout=6)
+            check(all(len(posted(http, fan)) == 1 for fan in held_fans), "held fans are never resent")
+            await stop(task, patcher)
+        OWNED.difference_update(held_fans)
     from db.engine import engine
     await engine.dispose()
 

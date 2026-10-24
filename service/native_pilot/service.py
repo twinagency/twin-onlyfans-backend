@@ -54,7 +54,8 @@ LEASE_TTL_S = 120.0
 RENEW_S = 30.0
 POLL_S = 2.0
 FAN_IDLE_RELEASE_S = 900.0
-CANDIDATES_MAX = 200
+CANDIDATES_MAX = 200      # fans served per tick, and the size of one scan page / the controls window
+SCAN_PAGES_MAX = 10       # a tick reads at most this many pages of CANDIDATES_MAX rows: bounded work
 BUDGET_HOLD_S = 300.0
 HUMAN_SENDS_PER_TICK = 5
 HOLD_S = 15.0
@@ -252,7 +253,11 @@ class Service:
     def start_intake(self):
         from .intake import Intake
         if self.started_at is None:
-            self.started_at = runner.now()
+            # All-fans: the activation instant is persisted once and reused across restarts (a process
+            # start is not an activation); single-fan keeps its own per-pilot cutoff.
+            self.started_at = (self.ledger.service_watermark(
+                pilot_id=f"svc-{self.scope.provider_id}-allfans-watermark", account_id=self.db, now=runner.now())
+                if self.all_fans else runner.now())
         factory = self._intake_factory or Intake
         self.intake = factory(self.scope, None if self.all_fans else self.args.fan, self.path)
         self.intake.start(self.client)
@@ -404,21 +409,65 @@ class Service:
 
     # ── all-fans orchestration ────────────────────────────────────────────
     def pending_fans(self):
-        """(fan, newest message id) for owned fans whose newest message is an unanswered inbound
-        that arrived since this run started, oldest first (a fan just answered drops out, so the
-        order is a fair round robin). Newest ``CANDIDATES_MAX`` only: older silent chats cannot
-        starve a fresh one."""
+        """``(serve, controlled)`` for one tick of the all-fans runner.
+
+        ``serve``: ``(fan, newest message id)`` oldest first, for owned fans whose newest message is an
+        unanswered inbound that arrived after the persisted activation watermark. The ineligible are removed
+        BEFORE the bound is applied, so they cannot occupy it: operator-paused / restricted / taken-over /
+        never-enabled fans and fans whose newest message is already claimed are filtered in SQL, non-owned
+        fans and fans in a live hold in Python while paging oldest first. At most ``CANDIDATES_MAX`` fans
+        and ``SCAN_PAGES_MAX`` pages per tick.
+
+        ``controlled``: every owned fan with an unanswered inbound among the newest ``CANDIDATES_MAX``
+        (paused or not: Twin's controls still run for them), plus ``serve``.
+        """
         from .ledger import _dt
+        since, now, owned = _dt(self.started_at), runner.now(), {}
+
+        def is_owned(fan):
+            if fan not in owned:
+                owned[fan] = bool(self._owned(fan))
+            return owned[fan]
+
+        base = ("SELECT m.fan_id,m.message_id,m.created_at FROM messages m WHERE m.account_id=? AND m.direction='in' "
+                "AND m.created_at>? AND NOT EXISTS (SELECT 1 FROM messages n WHERE n.account_id=m.account_id "
+                "AND n.fan_id=m.fan_id AND NOT (n.direction='out' AND n.is_unsent) "
+                "AND (n.created_at>m.created_at OR (n.created_at=m.created_at AND n.message_id>m.message_id)))")
+        serve, controlled = [], []
         with runner.readonly(self.path) as con:
-            rows = con.execute(
-                "SELECT m.fan_id,m.message_id,m.created_at FROM messages m WHERE m.account_id=? AND m.direction='in' "
-                "AND NOT EXISTS (SELECT 1 FROM messages n WHERE n.account_id=m.account_id AND n.fan_id=m.fan_id "
-                "AND NOT (n.direction='out' AND n.is_unsent) "
-                "AND (n.created_at>m.created_at OR (n.created_at=m.created_at AND n.message_id>m.message_id))) "
-                "ORDER BY m.created_at DESC,m.message_id DESC LIMIT ?", (self.db, CANDIDATES_MAX)).fetchall()
-        since = _dt(self.started_at)
-        found = sorted(((_dt(r[2]), r[1], r[0]) for r in rows if _dt(r[2]) > since))
-        return [(fan, mid) for _, mid, fan in found if self._owned(fan)]
+            for fan, _, created in con.execute(base + " ORDER BY m.created_at DESC,m.message_id DESC LIMIT ?",
+                                               (self.db, since, CANDIDATES_MAX)).fetchall():
+                if _dt(created) > since and is_owned(fan) and fan not in controlled:
+                    controlled.append(fan)
+            if store.has_table(con, "of_conversation_state"):  # strict: no projection table = nobody enabled
+                sql, params = base, [self.db, since]
+                sql += (" AND EXISTS (SELECT 1 FROM of_conversation_state s WHERE s.account_id=m.account_id "
+                        "AND s.fan_id=m.fan_id AND s.mode='automated' AND (s.takeover_state IS NULL OR s.takeover_state='none'))")
+                if store.has_table(con, "skip_list"):
+                    sql += (" AND NOT EXISTS (SELECT 1 FROM skip_list k WHERE k.account_id=m.account_id "
+                            "AND k.fan_id=m.fan_id AND k.reason IN (" + ",".join("?" for _ in STOP_REASONS) + "))")
+                    params += list(STOP_REASONS)
+                if store.has_table(con, "native_pilot_inputs"):  # claimed = worked: a reply, or a no-reply/abandoned turn
+                    sql += (" AND NOT EXISTS (SELECT 1 FROM native_pilot_inputs i WHERE i.pilot_id=? || CAST(m.fan_id AS TEXT) "
+                            "AND i.message_id=m.message_id)")
+                    params.append(f"svc-{self.scope.provider_id}-")
+                cursor = ()
+                for _ in range(SCAN_PAGES_MAX):
+                    rows = con.execute(
+                        sql + (" AND (m.created_at,m.message_id)>(?,?)" if cursor else "")
+                        + " ORDER BY m.created_at,m.message_id LIMIT ?",
+                        tuple(params) + cursor + (CANDIDATES_MAX,)).fetchall()
+                    for fan, mid, created in rows:
+                        hold = self.fan_holds.get(fan)
+                        if _dt(created) > since and is_owned(fan) and not (hold and now < hold[0]):
+                            serve.append((fan, mid))
+                            if len(serve) >= CANDIDATES_MAX:
+                                break
+                    if len(serve) >= CANDIDATES_MAX or len(rows) < CANDIDATES_MAX:
+                        break
+                    cursor = (rows[-1][2], rows[-1][1])
+        controlled += [fan for fan, _ in serve if fan not in controlled]
+        return serve, controlled
 
     def child(self, fan):
         child = self.children.get(fan)
@@ -465,14 +514,14 @@ class Service:
         self.fan_holds[fan] = (runner.now() + timedelta(seconds=wait), reason)
 
     async def tick_all(self):
-        pending = await asyncio.to_thread(self.pending_fans)
+        pending, controlled = await asyncio.to_thread(self.pending_fans)
         try:
-            await asyncio.to_thread(self._twin_controls, [fan for fan, _ in pending])
+            await asyncio.to_thread(self._twin_controls, controlled)
         except Exception as exc:
             runner.emit({"event": "twin-controls-error", "reason": (str(exc) or type(exc).__name__)[:120]})
         # Give back the lease of any fan quiet for a while (bounds renewal tasks and ownership).
         for fan, child in list(self.children.items()):
-            if child.pilot is not None and fan not in dict(pending) and \
+            if child.pilot is not None and fan not in controlled and \
                     (runner.now() - child.last_active).total_seconds() > FAN_IDLE_RELEASE_S:
                 await self.release_child(fan)
         for fan, mid in pending:

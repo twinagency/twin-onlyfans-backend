@@ -132,6 +132,12 @@ class PgFixture(ledger_test.Fixture):
                    "VALUES(?,?,?,'{}',CURRENT_TIMESTAMP,0)")
             # The real column is NOT NULL: a job with no kind is the empty kind (still not 'gen_info').
             args = (args[0], args[1], "" if args[2] is None else args[2])
+        elif sql.startswith("INSERT INTO content_offers VALUES("):
+            # Runner fixture shape: (account, fan, status, mode, item_id); the real table has more NOT NULL columns.
+            sql = ("INSERT INTO content_offers(account_id,fan_id,status,mode,item_id,price_cents,tip_unlock_cents,"
+                   "tips_accum_cents,offered_at,updated_at) "
+                   + sql[len("INSERT INTO content_offers "):].rstrip(")")
+                   + ",300,0,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)")
         elif sql.startswith("INSERT INTO catalog_items VALUES("):
             # Runner fixture shape: (id, account, kind, media_ids, preview_media_ids, price, is_free_teaser, enabled, pricing_mode).
             m = re.fullmatch(r"INSERT INTO catalog_items VALUES\((\d+),\?,'(\w+)','(\[[\d, ]+\])','(\[[\d, ]*\])',(\d+),([01]),([01]),'(\w+)'\)", sql)

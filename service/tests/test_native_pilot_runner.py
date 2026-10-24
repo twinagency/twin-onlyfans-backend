@@ -336,6 +336,8 @@ async def suite(root):
             for item in (1, 3):
                 f.sql("INSERT INTO content_offers VALUES(?,?,'open','ppv',?)", (fixtures.ACCT,fixtures.FAN,item))
         if case=="multi-open-unlisted":
+            # A real (disabled, so not sellable) unlisted catalogue row: the offer's item must exist.
+            f.sql("INSERT INTO catalog_items VALUES(9,?,'photo','[7301]','[]',300,0,0,'fixed')", (fixtures.ACCT,))
             f.sql("INSERT INTO content_offers VALUES(?,?,'open','ppv',9)", (fixtures.ACCT,fixtures.FAN))
         if case=="multi-unlisted-card":
             refuses_any = False

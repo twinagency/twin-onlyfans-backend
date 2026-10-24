@@ -20,6 +20,10 @@ ledger hold the burst (it never answers a burst containing media/tip/price), and
 ``requires_attention`` for a human. The bot never reads or replies to that content. The reason
 (``unsupported-input:media|tip|paid|gif``) is in the runner event; the stored row is the evidence.
 
+A plain fan photo/video (no tip, price or gif) is additionally described by FASTT's own
+``inbound_describe`` (see ``photo_vision.py``) in a background task, so the AI reads it as ``[he sent: ...]``; the
+``requires_attention`` flag is raised regardless, and a failed description changes nothing else.
+
 The runner's ledger, not this module, decides what is fresh enough to answer.
 """
 from __future__ import annotations
@@ -75,10 +79,12 @@ def unsupported(message: dict) -> bool:
 class Intake:
     def __init__(self, scope: AccountScope, fan: int | None, path, *, socket_factory=_default_socket,
                  transcode=_default_transcode, attention=_default_attention, emit=_emit,
-                 backoff_s: float = BACKOFF_MIN_S):
+                 backoff_s: float = BACKOFF_MIN_S, describe=None):
         self.scope, self.fan, self.path = scope, fan, path
         self._factory, self._transcode, self._attention, self._emit = socket_factory, transcode, attention, emit
         self._backoff0 = backoff_s
+        self._describe = describe          # async (fan_id, message_id) -> str | None, or None = off
+        self._describing = set()
         self._task = None
         self._ws = None
         self._stopping = False
@@ -142,9 +148,29 @@ class Intake:
             flagged = await self._flag(fan, mid, reason)
             self._emit({"event": "unsupported-input", "message_id": mid, "fan_id": fan, "reason": reason,
                         "persisted": stored, "attention": flagged})
+            if stored and reason == "unsupported-input:media" and self._describe is not None:
+                task = asyncio.get_running_loop().create_task(self._describe_media(fan, mid))
+                self._describing.add(task)
+                task.add_done_callback(self._describing.discard)
             return "unsupported"
         self._emit({"event": "inbound-persisted", "message_id": mid, "verified": stored})
         return "persisted" if stored else "failed"
+
+    async def _describe_media(self, fan: int, mid: int) -> None:
+        try:
+            desc = await self._describe(fan, mid)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._emit({"event": "media-describe-failed", "message_id": mid, "fan_id": fan})
+            return
+        self._emit({"event": "media-described", "message_id": mid, "fan_id": fan,
+                    "described": bool(desc), "chars": len(desc) if desc else 0})
+
+    async def drain(self) -> None:
+        """Wait for in-flight descriptions (tests, orderly stop)."""
+        if self._describing:
+            await asyncio.gather(*list(self._describing), return_exceptions=True)
 
     async def _run(self, client) -> None:
         backoff = self._backoff0
@@ -176,6 +202,8 @@ class Intake:
 
     async def stop(self) -> None:
         self._stopping = True
+        for pending in list(self._describing):
+            pending.cancel()
         if self._ws is not None:
             try:
                 self._ws.stop()

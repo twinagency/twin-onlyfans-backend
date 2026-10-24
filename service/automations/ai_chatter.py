@@ -4228,6 +4228,15 @@ async def _resolve_open_offers(account_id: str, client, cfg: dict,
             str(account_id), client, cfg,
             dry_run=dry_run, only_fan_ids=only_fan_ids,
         )
+    return await _resolve_open_offers_stock(account_id, client, cfg,
+                                            dry_run=dry_run, only_fan_ids=only_fan_ids)
+
+
+async def _resolve_open_offers_stock(account_id: str, client, cfg: dict,
+                                     *, dry_run: bool,
+                                     only_fan_ids: set[int] | None = None) -> dict:
+    """The stock watcher body, unchanged. Split out only so a capability (the native
+    pilot) can run FASTT's own resolver with its own guarded client."""
     stats = {"unlocked_tip": 0, "unlocked_ppv": 0, "offers_expired": 0,
              "offers_unsent": 0, "deliveries_failed": 0, "would_unlock": 0,
              "discount_resends": 0}

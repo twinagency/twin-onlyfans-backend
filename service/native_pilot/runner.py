@@ -100,7 +100,19 @@ def read_sources(path, account, fan, ids):
                            (account, fan, *ids)).fetchall()
     if {r["message_id"] for r in rows} != set(ids):
         raise Refused("source-missing")
-    return {r["message_id"]: dict(r) for r in rows}
+    sources = {r["message_id"]: dict(r) for r in rows}
+    # A photo FASTT described (messages.image_desc) is a readable source whose provider frame carries
+    # media; read separately so a store without the column (fixtures) simply has none.
+    try:
+        with readonly(path) as con:
+            described = {r["message_id"] for r in con.execute(
+                f"SELECT message_id FROM messages WHERE account_id=? AND fan_id=? AND message_id IN ({marks}) "
+                "AND image_desc IS NOT NULL AND image_desc<>''", (account, fan, *ids)).fetchall()}
+    except Exception:
+        described = set()
+    for mid in described:
+        sources[mid]["described"] = True
+    return sources
 
 
 def check_provider_history(history, sources, confirmed_ids, *, account, fan):
@@ -141,13 +153,18 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan):
             raise Refused("source-time-changed")
         if item.get("isUnsent"):
             raise Refused("source-invalidated")
+        # A described photo (FASTT's inbound_describe) may carry plain media; nothing else may.
+        photo_ok = bool(sources[mid].get("described"))
         if (item.get("isTip") or item.get("lockedText") or item.get("isLocked") or item.get("isReaction") or
-                item.get("media") or item.get("mediaFiles") or item.get("previews") or
-                item.get("mediaCount") or item.get("gif") or item.get("giphyId")):
+                (not photo_ok and (item.get("media") or item.get("mediaCount"))) or
+                item.get("mediaFiles") or item.get("previews") or item.get("gif") or item.get("giphyId")):
             raise Refused("source-not-plain-text")
         if isinstance(item.get("price"), bool) or item.get("price") not in (None, 0, 0.0, "0", "0.00"):
             raise Refused("source-not-free-text")
-        if not isinstance(item.get("text"), str) or html_to_text(item["text"]) != html_to_text(sources[mid]["body"]):
+        text = item.get("text")
+        if text is None and photo_ok:
+            text = ""
+        if not isinstance(text, str) or html_to_text(text) != html_to_text(sources[mid]["body"] or ""):
             raise Refused("source-text-changed")
         seen.add(mid)
     if seen != set(sources):

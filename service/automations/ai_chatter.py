@@ -4110,8 +4110,10 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
                         account_id, fan_id, exc_info=True)
             return False
         msg_id = result.get("id") if isinstance(result, dict) else None
-        if vault is not None and client.removed(orig_msg):
+        if vault is not None and client.removed(orig_msg) and getattr(
+                await _load_offer(int(offer.id)), "status", None) == "open":
             # Original gone, replacement on the wire: the offer row links to the message that replaced it.
+            # (Only while it is still open: a purchase the ledger settled meanwhile is never overwritten.)
             await _resolve_offer(int(offer.id), status="cancelled", resolved_by="discounted",
                                  delivery_message_id=int(msg_id) if msg_id else None)
         if not msg_id:
@@ -4856,6 +4858,9 @@ async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:
     offer = await _load_offer(int(offer_id))
     if offer is None:
         return {"status": "skipped", "reason": "no_offer", "post_buy": True}
+    if cfg.get("fastt_vault_post_buy") and not (offer.status == "delivered" and offer.resolved_by == "ppv_ledger"):
+        # The runner's job: only a purchase the payment ledger settled (never an open card or a claim).
+        return {"status": "skipped", "reason": "not_purchased", "post_buy": True}
     fan_id = int(offer.fan_id)
     now = datetime.utcnow()
     # He replied since he paid → the normal reply loop owns him; a scripted bridge over
@@ -5045,6 +5050,7 @@ async def _fire_post_buy_vault_rung(client, account_id: str, cfg: dict, fan_id: 
     ok, _why = upsell.qualify(upsell.GateCtx(
         fan_id=fan_id, last_inbound_text="unlocked", last_inbound_at=now,
         fan_spoke_last=True,           # §4.4b purchase_is_turn — the ONLY substitution
+        inbound_qualifies=True,        # the unlock IS the substantive event; "unlocked" would trip the low-information bar
         status=(lad.status if lad is not None else upsell.STATUS_HOT),
         offers_paused_until=(lad.offers_paused_until if lad is not None else None),
         last_ask_at=(lad.last_ask_at if lad is not None else None)), now)

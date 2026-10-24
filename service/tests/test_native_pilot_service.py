@@ -870,8 +870,17 @@ async def multi_level(backend, root):
         def __exit__(self, *exc):
             return False
 
+        gate = None        # an asyncio.Event: the model is "hung" until the test sets it
+        waiting = []       # fans whose model call is currently hung
+        after_gate = None  # called once the hung model returns, before the engine tries to send
+
         async def run(self, run_id):
             f = holder["f"]
+            if FakeEngine.gate is not None:
+                FakeEngine.waiting.append(self.fan)
+                await FakeEngine.gate.wait()
+                if FakeEngine.after_gate is not None:
+                    FakeEngine.after_gate(self.fan)
             if self.content is not None:
                 check(self.content.catalog_ids == {71, 72}, "every child receives the reviewed account plan")
                 rows = f.sql("SELECT id,enabled FROM catalog_items ORDER BY id")
@@ -1102,6 +1111,59 @@ async def multi_level(backend, root):
             check(("reconcile", FB) in calls)
             check(not any(c[1] in (FC, FD, FF) for c in calls), "no controls for fans without activity or not owned")
             await stop(task, patcher)
+        # ── iso45 6.E: a Pause acknowledged while the model is HUNG is final: nothing is sent after the ack,
+        #    the other fan keeps being answered, and Hand back -> Resume answers the next message ──
+        f, http, client = make("multi-hung", limit=100, used=4, throttle=1)
+        events.clear()
+        FakeEngine.gate, FakeEngine.waiting = asyncio.Event(), []
+        task, patcher = await start(client)
+        says(f, FA, "a, while the model hangs")
+        await until(lambda: FA in FakeEngine.waiting, "model call for A is hung", events)
+        backend.fan_state(f, FA, "paused")                  # Twin's acknowledged Pause (display + stop together)
+        backend.fan_skip(f, FA, "manual_restrict")
+        FakeEngine.gate.set()
+        await settle(120)
+        check(not posted(http, FA), "nothing is sent to A after the Pause ack, whatever the model returned")
+        check(f.sql("SELECT count(*) FROM twin_bridge_send_attempts WHERE turn_id LIKE 'native-pilot-%'")[0][0] == 0,
+              "a pre-wire refusal opens no send attempt (nothing uncertain)")
+        check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4, "and spends no allowance unit")
+        check(not any(e.get("event") == "stopped" for e in events), "the fan is not stranded as delivery-unknown")
+        says(f, FB, "b while a is paused")
+        await until(lambda: len(posted(http, FB)) == 1, "B is answered while A is paused", events)
+        check(not posted(http, FA))
+        # Hand back / Resume (what Twin writes), then a NEW message from A is answered; the old one never is.
+        FakeEngine.gate = None
+        backend.fan_skip(f, FA, None)
+        backend.fan_state(f, FA, "automated")
+        says(f, FA, "a again after resume")
+        await until(lambda: len(posted(http, FA)) == 1, "A answered after Resume", events)
+        await settle()
+        check(len(posted(http, FA)) == 1, "the message that met the Pause is never regenerated or resent")
+        await stop(task, patcher)
+
+        # A Pause that lands AFTER admission but before the wire is caught by the wire re-check: no POST at all.
+        # The ledger then records the attempt as uncertain (fail closed): it cannot prove "not sent" for an
+        # attempt that was opened, so the fan waits for an operator and nothing is ever retried.
+        f, http, client = make("multi-wire", limit=100, used=4, throttle=1)
+        events.clear()
+        task, patcher = await start(client)
+        from native_pilot.ledger import Ledger as _Ledger
+        real_begin = _Ledger.begin_attempt
+
+        def begin_then_pause(self, **kw):
+            attempt = real_begin(self, **kw)
+            if kw["pilot_id"] == f"svc-{A}-{FA}":
+                backend.fan_skip(f, FA, "manual_restrict")      # Pause ack lands between admission and the wire
+            return attempt
+        with patch.object(_Ledger, "begin_attempt", begin_then_pause):
+            says(f, FA, "a, paused at the wire")
+            await until(lambda: any(e.get("event") == "stopped" for e in events), "wire re-check refusal", events)
+        await settle()
+        check(not posted(http, FA), "no POST after the Pause ack even when it lands at the wire")
+        check(f.sql("SELECT state FROM native_pilots WHERE pilot_id=?", (f"svc-{A}-{FA}",))[0][0] == "stopped")
+        says(f, FB, "b unaffected")
+        await until(lambda: len(posted(http, FB)) == 1, "B still answered", events)
+        await stop(task, patcher)
         # The wildcard account plan reaches both children; reviewed catalogue state is
         # enabled as one account operation and restored once, preserving mixed prior states.
         f, http, client = make("multi-content", limit=100, used=4, throttle=1)

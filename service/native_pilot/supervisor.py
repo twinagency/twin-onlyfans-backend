@@ -130,13 +130,23 @@ def read_account(db, account):
 
 def vault_mode_enabled(db, account):
     """True only when the account's ai_chatter_config_json carries ``fastt_vault_mode: true`` (default off)."""
+    return _config_flag(db, account, "fastt_vault_mode")
+
+
+def followups_enabled(db, account):
+    """True only when ai_chatter_config_json carries ``fastt_followups: true`` (default off): the runner
+    then also runs FASTT's own delayed re-engage nudge (service ``--followups``)."""
+    return _config_flag(db, account, "fastt_followups")
+
+
+def _config_flag(db, account, key):
     try:
         with store.readonly(db) as con:
             row = con.execute("SELECT ai_chatter_config_json FROM account_ai_config WHERE account_id=?", (account,)).fetchone()
         value = json.loads(row[0]) if row and row[0] else {}
     except Exception:
         return False
-    return isinstance(value, dict) and value.get("fastt_vault_mode") is True
+    return isinstance(value, dict) and value.get(key) is True
 
 
 def _naive_utc(value):
@@ -347,7 +357,8 @@ class Supervisor:
         if not HANDLE.fullmatch(handle):
             return Hold("handle-invalid")
         scope_args = ("--account", account, *(("--all-fans",) if fan == "*" else ("--fan", str(fan))),
-                      "--handle", handle, "--twin-context")
+                      "--handle", handle, "--twin-context",
+                      *(("--followups",) if followups_enabled(self.db, account) else ()))
         if vault_mode_enabled(self.db, account):
             # FASTT's stock vault selling: no manifest is built or listed (see content.VaultPlan).
             manifest, args = b"", (*scope_args, "--vault-mode", "--enable-send")

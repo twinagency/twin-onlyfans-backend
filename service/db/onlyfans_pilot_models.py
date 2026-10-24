@@ -1,6 +1,6 @@
 """Native FASTT pilot storage: Twin bridge control tables, writer markers, admission ledger.
 
-These nine tables are what ``native_pilot.ledger`` and ``twin_bridge.coordination`` read
+These nine tables (plus the runner-owned ``native_pilot_followups`` queue) are what ``native_pilot.ledger`` and ``twin_bridge.coordination`` read
 and write. They are deliberately NOT part of the application's shared metadata
 (``db.models.Base``), its alembic chain or ``db.schema.check_schema``: the live
 application schema stays at revision 0091 so the currently deployed api/worker images
@@ -358,6 +358,30 @@ class NativePilotInput(Base):
     earliest_created_at = Column(String, nullable=False)
     state = Column(String, nullable=False)
     claimed_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
+
+class NativePilotFollowup(Base):
+    """Runner-owned durable queue of FASTT's own delayed follow-ups (the re-engage nudge).
+
+    Deliberately NOT ``scheduled_jobs``: the legacy worker/executor never sees these rows, so it can
+    never run one. Only ``native_pilot.service`` (``--followups``) reads and settles them; every
+    send still goes through the ledger's admission, so the account's delivery allowance caps it.
+    """
+    __tablename__ = "native_pilot_followups"
+    __table_args__ = (Index("ix_native_pilot_followups_due", "account_id", "state", "run_at"),)
+    job_id = Column(String, primary_key=True)
+    account_id = Column(String, nullable=False)
+    fan_id = Column(BigInteger, nullable=False)
+    kind = Column(String, nullable=False)
+    payload_json = Column(Text, nullable=False)
+    run_at = Column(String, nullable=False)
+    last_in_id = Column(BigInteger)
+    last_in_at = Column(String)
+    state = Column(String, nullable=False)
+    reason = Column(String)
+    input_key = Column(String)
+    created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
 

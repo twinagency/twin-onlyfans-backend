@@ -1197,6 +1197,431 @@ async def multi_level(backend, root):
     await engine.dispose()
 
 
+# ── follow-ups (--followups): FASTT's own nudge, ledger and supervised loop ──────────────
+
+def followup_ledger_level(backend, root):
+    from native_pilot.ledger import Ledger, Refused, FOLLOWUP_MARK
+    L = backend.L
+    f = backend.fixture(root, "fu-ledger")
+    backend.prepare(f)
+    backend.policy(f, limit=50, used=4, throttle=1)
+    led = Ledger(f.path, allowance=True)
+    A, F, TOK, PID, T0 = L.ACCT, L.FAN, "synthetic-owner-fu-0001", "svc-synthetic-fu", L.NOW
+    p = led.activate_service(pilot_id=PID, account_id=A, fan_id=F, owner_token=TOK, now=T0, ttl_s=3000)
+    call = dict(pilot_id=PID, owner_token=TOK)
+
+    def at(sec):
+        return (T0 + timedelta(seconds=sec)).isoformat(sep=" ")
+
+    def out(mid, sec, kind="ai_chatter"):
+        f.source(mid, direction="out", body="the card", created_at=at(sec), ingested_at=at(sec))
+        f.sql("UPDATE messages SET automation_kind=? WHERE message_id=?", (kind, mid))
+
+    def job(sec_run=900, now_sec=10):
+        return led.followup_add(account_id=A, fan_id=F, kind="nudge", payload={"nudge_fan_ids": [F]},
+                                run_at=T0 + timedelta(seconds=sec_run), now=T0 + timedelta(seconds=now_sec))
+
+    f.source(100, created_at=at(1), ingested_at=at(2))                 # the fan's message
+    out(101, 5)                                                         # our card (the anchor)
+    refuses(L, "followup-kind", lambda: led.followup_add(account_id=A, fan_id=F, kind="post_buy", payload={}, run_at=T0, now=T0))
+    refuses(L, "followup-run-at", lambda: job(sec_run=3 * 86400))
+    j1 = job()
+    row = f.sql("SELECT kind,state,last_in_id,run_at FROM native_pilot_followups")[0]
+    check(row[0] == "nudge" and row[1] == "queued" and row[2] == 100)
+    check(led.followups_due(account_id=A, now=T0 + timedelta(seconds=100)) == [], "not due yet")
+    refuses(L, "followup-not-due", lambda: led.claim_followup(**call, job_id=j1, now=T0 + timedelta(seconds=100)))
+    j2 = job(sec_run=950, now_sec=20)
+    check(j2 != j1 and f.sql("SELECT state,reason FROM native_pilot_followups WHERE job_id=?", (j1,))[0] == ("dropped", "superseded"),
+          "a newer nudge supersedes the queued one")
+    check([d["job_id"] for d in led.followups_due(account_id=A, now=T0 + timedelta(seconds=1000))] == [j2])
+    check(led.followups_due(account_id=A, now=T0 + timedelta(seconds=1000), fan_id=F + 1) == [])
+    refuses(L, "followup-not-queued", lambda: led.claim_followup(**call, job_id=j1, now=T0 + timedelta(seconds=1000)))
+    # A claim is exactly one input row for the anchor; begin_attempt proves the anchor again and spends the allowance.
+    key, anchor = led.claim_followup(**call, job_id=j2, now=T0 + timedelta(seconds=1000))
+    check(anchor["message_id"] == 101)
+    check(f.sql("SELECT state FROM native_pilot_followups WHERE job_id=?", (j2,))[0][0] == "claimed")
+    check(f.sql("SELECT source_hash,message_id,state FROM native_pilot_inputs WHERE input_key=?", (key,))[0][0].startswith(FOLLOWUP_MARK))
+    refuses(L, "followup-not-queued", lambda: led.claim_followup(**call, job_id=j2, now=T0 + timedelta(seconds=1000)))
+    a = led.begin_attempt(**call, input_key=key, bubble_no=1, revision=p.revision, now=T0 + timedelta(seconds=1001))
+    check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5, "the nudge spends one allowance unit like any send")
+    led.record_sent(**call, attempt_id=a.id, provider_message_id="102", validated_response={"id": 102, "text": "nudge"},
+                    evidence={"verified": True}, now=T0 + timedelta(seconds=1001))
+    check(led.followup_finish(job_id=j2, state="done", reason=None, now=T0 + timedelta(seconds=1002)) is True)
+    check(led.followup_finish(job_id=j2, state="failed", reason="x", now=T0 + timedelta(seconds=1003)) is False
+          and f.sql("SELECT state FROM native_pilot_followups WHERE job_id=?", (j2,))[0][0] == "done", "a settled job stays settled")
+    led.finish_input(**call, input_key=key, now=T0 + timedelta(seconds=1002))
+    # One anchor is claimed at most once, whatever job points at it.
+    f.source(102, direction="out", body="nudge", created_at=at(1001), ingested_at=at(1001))
+    f.sql("UPDATE messages SET automation_kind='ai_chatter' WHERE message_id=102")
+    j3 = job(sec_run=1000, now_sec=1010)
+    key3, anchor3 = led.claim_followup(**call, job_id=j3, now=T0 + timedelta(seconds=2000))
+    check(anchor3["message_id"] == 102, "a follow-up of a follow-up anchors on the newest message")
+    led.followup_finish(job_id=j3, state="dropped", reason="test", now=T0 + timedelta(seconds=2001))
+    led.finish_input(**call, input_key=key3, now=T0 + timedelta(seconds=2001))
+    j4 = job(sec_run=1000, now_sec=2002)
+    refuses(L, "input-already-claimed", lambda: led.claim_followup(**call, job_id=j4, now=T0 + timedelta(seconds=2100)))
+    led.followup_finish(job_id=j4, state="dropped", reason="test", now=T0 + timedelta(seconds=2101))
+    # The chat moved: each of these drops the job (job-specific reasons), and nothing is ever claimed.
+    n_inputs = f.sql("SELECT count(*) FROM native_pilot_inputs")[0][0]
+    j5 = job(sec_run=1000, now_sec=2150)                                     # queued behind our card (101/102)
+    f.source(110, created_at=at(2200), ingested_at=at(2200))                 # the fan replied
+    refuses(L, "followup-chat-moved", lambda: led.claim_followup(**call, job_id=j5, now=T0 + timedelta(seconds=2300)))
+    out(111, 2250)                                                           # we answered: the anchor is ours again,
+    refuses(L, "followup-fan-replied", lambda: led.claim_followup(**call, job_id=j5, now=T0 + timedelta(seconds=2300)))
+    #                                                                         ...but the fan spoke after the job was queued
+    j6 = job(sec_run=2300, now_sec=2260)                                     # queued behind that reply: valid again
+    out(112, 2290, kind=None)                                                # a human typed in the meantime
+    refuses(L, "followup-chat-moved", lambda: led.claim_followup(**call, job_id=j6, now=T0 + timedelta(seconds=2400)))
+    f.sql("UPDATE messages SET automation_kind='ai_chatter' WHERE message_id=112")
+    f.sql("UPDATE messages SET is_unsent=1 WHERE message_id=112")            # ...and unsent it: our card is the newest again
+    j7 = job(sec_run=2300, now_sec=2261)
+    far = (T0 + timedelta(days=2)).isoformat(sep=" ")
+    f.sql("UPDATE native_pilots SET deadline=?", (far,))
+    f.sql("UPDATE twin_bridge_conversations SET owner_expires_at=?", (far,))
+    refuses(L, "followup-expired", lambda: led.claim_followup(**call, job_id=j7, now=T0 + timedelta(hours=7)))
+    check(f.sql("SELECT count(*) FROM native_pilot_inputs")[0][0] == n_inputs, "no refused claim leaves an input row")
+    # begin_attempt re-proves the anchor at the wire: a fan message arriving after the claim refuses the send.
+    f.sql("UPDATE native_pilot_followups SET state='dropped' WHERE state='queued'")
+    j8 = job(sec_run=2300, now_sec=2262)
+    key8, anchor8 = led.claim_followup(**call, job_id=j8, now=T0 + timedelta(seconds=2400))
+    used = f.sql("SELECT used_units FROM of_delivery_policy")[0][0]
+    f.source(120, created_at=at(2401), ingested_at=at(2401))
+    refuses(L, "source-changed", lambda: led.begin_attempt(**call, input_key=key8, bubble_no=1, revision=p.revision,
+                                                           now=T0 + timedelta(seconds=2402)))
+    check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == used, "a refused follow-up admission spends nothing")
+
+
+async def followup_loop_level(backend, root):
+    import dotenv
+    dotenv.load_dotenv = lambda *a, **k: False
+    dotenv.dotenv_values = lambda *a, **k: {"OPENROUTER_API_KEY": "synthetic-unused-key"}
+    L = backend.L
+    import copy
+    from urllib.parse import urlsplit
+    import test_native_pilot_runner as R
+    from curl_cffi.requests.exceptions import ProxyError
+    from native_pilot import attribution, connection as conn_mod, engine as engine_mod, runner, service
+    from native_pilot.attribution import Sentinels
+    from native_pilot.scope import AccountScope
+    from of_client import OFClient
+
+    logging.disable(logging.CRITICAL)
+    A = L.ACCT
+    FA, FB, FC, FD, FE = (L.FAN + n for n in range(5))
+    OWNED = {FA, FB, FC, FD, FE}
+    events = []
+    clock = Clock(datetime.now(timezone.utc).replace(tzinfo=None, microsecond=123000))
+    RealEngine = engine_mod.NativeEngine
+    NUDGE = "hey are you still there"
+
+    async def no_report(ledger, pilot, run_error=None):
+        pass
+
+    async def no_ensure(scope, fan):
+        pass
+
+    RENEW = 1799.0
+
+    async def fast_idle(self, seconds):
+        if seconds != RENEW:      # the lease renewals do not advance virtual time (keeps the scenarios arrangeable)
+            clock.add(seconds)
+        try:
+            await asyncio.wait_for(self.stop.wait(), 0.002)
+        except asyncio.TimeoutError:
+            pass
+
+    class LiveHTTP:
+        def __init__(self, f):
+            self.f, self.sent, self.posts, self.fail_for, self.closed = f, [], [], {}, False
+
+        @staticmethod
+        def fan_of(url):
+            return int(urlsplit(url).path.split("/")[-2])
+
+        def get(self, url, **kwargs):
+            fan = self.fan_of(url)
+            rows = self.f.sql("SELECT message_id,body,created_at FROM messages WHERE direction='in' AND fan_id=?", (fan,))
+            inbound = [{"id": mid, "text": body, "createdAt": str(created).replace(" ", "T") + "Z", "isFromMe": False,
+                        "fromUser": {"id": fan}, "withUser": {"id": fan}} for mid, body, created in rows]
+            history = sorted([m for m in self.sent if m["withUser"]["id"] == fan] + inbound,
+                             key=lambda m: (m["createdAt"], m["id"]), reverse=True)
+            return R.FakeResponse({"list": copy.deepcopy(history), "hasMore": False})
+
+        def request(self, method, url, json=None, **kwargs):
+            fan = self.fan_of(url)
+            self.posts.append((fan, json["text"]))
+            if fan in self.fail_for:
+                raise self.fail_for[fan]
+            result = {"id": 7000 + len(self.posts), "text": json["text"], "isFromMe": True, "fromUser": {"id": int(A)},
+                      "withUser": {"id": fan}, "createdAt": clock().isoformat() + "Z", "price": 0, "media": []}
+            self.sent.append(result)
+            return R.FakeResponse(result)
+
+        def close(self):
+            self.closed = True
+
+    class FakeIntake:
+        def __init__(self, scope, fan, path):
+            pass
+
+        def start(self, client):
+            FakeIntake.up = True
+
+        async def stop(self):
+            pass
+
+    holder = {"offer": True, "engines": []}
+
+    class FakeEngine:
+        """ai_chatter stand-in: a normal turn replies with a card (open offer) and schedules FASTT's nudge job
+        exactly as ai_chatter does (the REAL NativeEngine.enqueue_job decides what is kept); a job turn is the nudge."""
+        _account = staticmethod(lambda account_id: None)
+
+        def __init__(self, account, fan, *, chat, send, emit, content, context, own_offers_only=False, followups=None):
+            self.send, self.fan, self.fan_id, self.account_id = send, fan, fan, account
+            self.followups, self._emit = followups, emit
+            holder["engines"].append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        enqueue_job = RealEngine.enqueue_job
+
+        async def run(self, run_id, payload=None):
+            f = holder["f"]
+            if payload is not None:
+                holder.setdefault("payloads", []).append(payload)
+            clock.add(10)      # typing time: a reply never shares a millisecond with the message it answers
+            raw = await asyncio.to_thread(self.send, self.fan, NUDGE if payload is not None else "neutral reply", {})
+            f.source(raw["id"], fan_id=self.fan, direction="out", body=raw["text"],
+                     created_at=raw["createdAt"].removesuffix("Z").replace("T", " "))
+            f.sql("UPDATE messages SET automation_kind='ai_chatter',sent_by_employee_id=5 WHERE message_id=?", (raw["id"],))
+            if payload is None and holder["offer"]:
+                f.sql("INSERT INTO content_offers VALUES(?,?,'open','ppv',71)", (A, self.fan))
+                await self.enqueue_job(A, "ai_chatter", payload={"nudge_fan_ids": [self.fan]},
+                                       run_at=clock() + timedelta(minutes=holder["delay_min"]))
+                await self.enqueue_job(A, "ai_chatter", payload={"post_buy": 1}, run_at=clock())
+            return {"status": "ok"}
+
+    def make(name, **policy):
+        f = backend.fixture(root, name)
+        backend.prepare(f)
+        backend.policy(f, **{"limit": 100, "used": 4, "throttle": 1, **policy})
+        f.sql("CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,"
+              "preview_media_ids TEXT,price_cents INTEGER,is_free_teaser INTEGER,enabled INTEGER,pricing_mode TEXT)")
+        f.sql("INSERT INTO catalog_items VALUES(71,?,'video','[501]','[]',300,0,1,'fixed')", (A,))
+        for fan in (FB, FC, FD, FE):
+            backend.add_fan(f, fan)
+        for fan in OWNED:
+            backend.fan_state(f, fan, "automated")
+        holder["f"], holder["payloads"], holder["engines"] = f, [], []
+        holder["offer"], holder["delay_min"] = True, 15
+        http = LiveHTTP(f)
+        client = OFClient.__new__(OFClient)
+        client.account_id, client.user_id, client.platform = A, A, "onlyfans"
+        client.http, client.timeout_s, client.proxy_url, client.proxy_label = http, 1, None, None
+        client._signed_headers = lambda url: {}
+        client.me = lambda: {"id": int(A), "username": "synthetic-creator"}
+        return f, http, client
+
+    fake_conn = conn_mod.PilotConnection(
+        scope=AccountScope.parse(A), tenant_id="synthetic-tenant", revision=3, owner_id=int(A),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30), capture={}, x_hash="x", proxy_url=None,
+        model_id="openrouter/deepseek-v4.1-flash", model_api_key="synthetic-key", daily_cost_cap_cents=100)
+
+    async def fake_load(scope):
+        return fake_conn
+
+    async def fake_sentinels():
+        return Sentinels(automation=5, human=6)
+
+    manifest = root / "fu-plan.json"
+
+    def write_manifest(fan):
+        manifest.write_text(json.dumps({"account_id": A, "fan_id": fan, "price_range_cents": [300, 500], "items": [
+            {"catalog_id": 71, "kind": "video", "price_cents": 300, "media": [{"id": 501, "type": "video"}], "preview_ids": []}]}))
+
+    def make_args(all_fans, followups):
+        return argparse.Namespace(account=A, fan=None if all_fans else FA, all_fans=all_fans, handle="synthetic-creator",
+                                  enable_send=True, twin_context=False, content_manifest=str(manifest), service_id=None,
+                                  followups=followups)
+    ids = iter(range(5000, 9000))
+
+    def says(f, fan, text="neutral fan text"):
+        clock.add(1)
+        mid = next(ids)
+        f.source(mid, fan_id=fan, body=text, created_at=clock().isoformat(sep=" "), ingested_at=clock().isoformat(sep=" "))
+        return mid
+
+    def posted(http, fan):
+        return [p for p in http.posts if p[0] == fan]
+
+    def kinds(name):
+        return [e for e in events if e.get("event") == name]
+
+    def jobs(f, fan=None):
+        return f.sql("SELECT state,reason FROM native_pilot_followups" + (" WHERE fan_id=%d" % fan if fan else "") + " ORDER BY created_at")
+
+    async def settle(n=80):
+        for _ in range(n):
+            await asyncio.sleep(0.003)
+
+    with patch.object(runner, "emit", events.append), patch.object(runner, "now", clock), \
+            patch.object(runner, "report_to_twin", no_report), patch.object(service, "ensure_fan_conversation", no_ensure), \
+            patch.object(service.Service, "idle", fast_idle), patch.object(engine_mod, "NativeEngine", FakeEngine), \
+            patch.object(service.Service, "_owned", lambda self, fan: fan in OWNED), \
+            patch.object(conn_mod, "load_verified_connection", fake_load), patch.object(attribution, "require_sentinels", fake_sentinels):
+
+        async def start(client, args):
+            patcher = patch.object(conn_mod, "build_client", return_value=client)
+            patcher.start()
+            # Virtual time runs fast while idle (every renew loop advances the shared clock): long leases keep it stable.
+            options = dict(ttl_s=3600, renew_s=RENEW, poll_s=2, hold_s=15, quiet_s=0, intake_factory=FakeIntake)
+            FakeIntake.up = False
+            task = asyncio.get_running_loop().create_task(service.serve(args, **options))
+            await until(lambda: FakeIntake.up and (args.all_fans or kinds("ready")), "intake up", events)
+            return task, patcher
+
+        async def stop(task, patcher):
+            os.kill(os.getpid(), signal.SIGTERM)
+            await asyncio.wait_for(task, 20)
+            patcher.stop()
+
+        def used(f):
+            return f.sql("SELECT used_units FROM of_delivery_policy")[0][0]
+
+        for all_fans in ((False,) if os.environ.get('FU_SINGLE') else (True, False)):
+            tag = "all-fans" if all_fans else "single-fan"
+            write_manifest("*" if all_fans else FA)
+
+            # ── flag off: the card turn runs, the nudge job is suppressed, nothing is queued or sent later ──
+            f, http, client = make("fu-off-" + tag)
+            events.clear()
+            task, patcher = await start(client, make_args(all_fans, False))
+            says(f, FA)
+            await until(lambda: len(posted(http, FA)) == 1, tag + " off: card reply", events)
+            clock.add(20 * 60)
+            await settle()
+            check(len(posted(http, FA)) == 1 and not kinds("native-followup-queued"), tag + " off: no nudge, nothing queued")
+            check(f.sql("SELECT count(*) FROM native_pilot_followups")[0][0] == 0, tag + " off: no follow-up rows")
+            check(all(e.followups is None for e in holder["engines"]), tag + " off: the engine gets no queue")
+            await stop(task, patcher)
+
+            # ── flag on: queued after the reply, run when due through the boundary, counted against the cap ──
+            f, http, client = make("fu-on-" + tag)
+            events.clear()
+            task, patcher = await start(client, make_args(all_fans, True))
+            says(f, FA)
+            await until(lambda: len(posted(http, FA)) == 1, tag + ": card reply", events)
+            await until(lambda: len(kinds("native-background-job-suppressed")) == 1 and jobs(f, FA), tag + ": job queued", events)
+            check(jobs(f, FA) == [("queued", None)] and len(kinds("native-followup-queued")) == 1, tag + ": exactly the nudge job is queued")
+            check(len(kinds("native-background-job-suppressed")) == 1, tag + ": the post-buy job is suppressed")
+            check(used(f) == 5 and not f.sql("SELECT 1 FROM scheduled_jobs"), tag + ": nothing in scheduled_jobs")
+            clock.add(16 * 60)           # past nudge_after_minutes (no wait for idle ticks: PostgreSQL ticks are slow)
+            await until(lambda: len(posted(http, FA)) == 2, tag + ": nudge sent when due", events, timeout=60)
+            await until(lambda: jobs(f, FA) == [("done", None)], tag + ": job settled", events)
+            check(posted(http, FA)[1][1] == "<p>%s</p>" % NUDGE and holder["payloads"] == [{"nudge_fan_ids": [FA]}], tag + ": FASTT's nudge payload")
+            check(used(f) == 6, tag + ": the nudge spent one allowance unit")
+            check(f.sql("SELECT count(*) FROM native_pilot_receipts WHERE state='sent'")[0][0] == 2)
+            check(kinds("followup-done") and not kinds("followup-dropped"), tag + ": done event")
+            await settle()
+            check(len(posted(http, FA)) == 2 and f.sql("SELECT count(*) FROM native_pilot_followups")[0][0] == 1,
+                  tag + ": one attempt, never replayed")
+            # He answers the nudge: the normal path takes over (and queues the next nudge behind that card).
+            says(f, FA, "oh hey")
+            await until(lambda: len(posted(http, FA)) == 3, tag + ": normal reply after the nudge", events)
+            await until(lambda: jobs(f, FA)[-1] == ("queued", None), tag + ": next nudge queued behind the new card", events)
+            await stop(task, patcher)
+
+            # ── dropped: the fan replied first / bought / paused / chat held / unreadable chat ──
+            f, http, client = make("fu-drop-" + tag)
+            holder["delay_min"] = 180        # virtual time passes fast while idle: leave room to arrange each case
+            events.clear()
+            task, patcher = await start(client, make_args(all_fans, True))
+            fans = [FA] if not all_fans else [FA, FB, FC, FD]
+            for fan in fans:
+                says(f, fan)
+                await until(lambda fan=fan: len(posted(http, fan)) == 1 and jobs(f, fan), tag + ": reply", events)
+            check(all(jobs(f, fan) == [("queued", None)] for fan in fans))
+            holder["offer"] = False
+            if all_fans:
+                backend.fan_state(f, FC, "human_controlled")                       # taken over / paused
+                backend.fan_skip(f, FD, "manual_restrict")                         # chat held
+                f.sql("UPDATE content_offers SET status='delivered' WHERE fan_id=?", (FB,))   # bought
+                backend.fan_state(f, FE, "automated")
+            says(f, FA, "wait one more thing")                                     # replied first (answered, no new job)
+            f.sql("UPDATE native_pilot_followups SET run_at=? WHERE state='queued'",
+                  ((clock() - timedelta(minutes=1)).isoformat(sep=" ", timespec="microseconds"),))     # every job is due now
+            await until(lambda: all(jobs(f, fan)[-1][0] == "dropped" for fan in fans), tag + ": every stale job dropped", events, timeout=30)
+            await settle()
+            reasons = {fan: jobs(f, fan)[-1][1] for fan in fans}
+            check(reasons[FA] in ("followup-fan-replied", "followup-chat-moved"), reasons)
+            if all_fans:
+                check(reasons[FB] == "offer-resolved" and reasons[FC] == "fan-human-controlled"
+                      and reasons[FD] == "fan-restricted", reasons)
+            check(all(NUDGE not in text for _, text in http.posts), tag + ": no nudge reached the wire")
+            check(len(posted(http, FA)) == 2 and holder["payloads"] == [], tag + ": the dropped jobs never reached the engine")
+            await stop(task, patcher)
+
+            # ── the send cap holds a due nudge; it goes out once the allowance allows, still one unit ──
+            f, http, client = make("fu-cap-" + tag, limit=5, used=4)
+            events.clear()
+            task, patcher = await start(client, make_args(all_fans, True))
+            says(f, FA)
+            await until(lambda: len(posted(http, FA)) == 1 and used(f) == 5 and jobs(f, FA), tag + ": reply spent the last unit", events)
+            clock.add(16 * 60)
+            await until(lambda: any(str(e.get("reason", "")).startswith("allowance-") for e in kinds("held")), tag + ": cap holds", events, timeout=30)
+            await settle()
+            check(len(posted(http, FA)) == 1 and used(f) == 5 and jobs(f, FA) == [("queued", None)], tag + ": nudge waits behind the cap")
+            backend.policy(f, limit=10, used=5, throttle=1)
+            await until(lambda: len(posted(http, FA)) == 2, tag + ": nudge sent after the cap is raised", events, timeout=30)
+            check(used(f) == 6, tag + ": counted against the cap")
+            await stop(task, patcher)
+
+            # ── an unknown outcome on the nudge holds the fan and is never resent; a stale job is never sent late ──
+            f, http, client = make("fu-unknown-" + tag)
+            events.clear()
+            task, patcher = await start(client, make_args(all_fans, True))
+            says(f, FA)
+            await until(lambda: len(posted(http, FA)) == 1, tag + ": reply", events)
+            await until(lambda: jobs(f, FA) == [("queued", None)], tag + ": job queued", events)
+            http.fail_for[FA] = ProxyError("synthetic transport failure")
+            clock.add(16 * 60)
+            await until(lambda: len(posted(http, FA)) == 2, tag + ": the one nudge attempt", events, timeout=30)
+            await until(lambda: jobs(f, FA)[-1][0] in ("failed", "dropped") and f.sql("SELECT state FROM native_pilot_receipts WHERE state='delivery_unknown'"),
+                        tag + ": unknown outcome recorded", events)
+            http.fail_for.clear()
+            await settle(150)
+            check(len(posted(http, FA)) == 2, tag + ": never resent")
+            check(f.sql("SELECT state FROM native_pilots WHERE pilot_id LIKE 'svc-%' AND fan_id>0")[0][0] == "stopped", tag + ": fan held")
+            await stop(task, patcher)
+            f, http, client = make("fu-expired-" + tag)
+            events.clear()
+            holder["delay_min"] = 180
+            task, patcher = await start(client, make_args(all_fans, True))
+            says(f, FA)
+            await until(lambda: len(posted(http, FA)) == 1, tag + ": reply", events)
+            await until(lambda: jobs(f, FA) == [("queued", None)], tag + ": job queued", events)
+            # The job's time is further in the past than any live process would leave it (downtime).
+            f.sql("UPDATE native_pilot_followups SET run_at=?", ((clock() - timedelta(hours=7)).isoformat(sep=" ", timespec="microseconds"),))
+            await until(lambda: jobs(f, FA)[-1][0] == "dropped", tag + ": stale job dropped", events, timeout=30)
+            check(jobs(f, FA)[-1][1] == "followup-expired" and len(posted(http, FA)) == 1, tag + ": never sent late")
+            await stop(task, patcher)
+
+    # The legacy worker/executor and the dashboard never touch the runner-owned queue.
+    import re
+    for path in Path(__file__).resolve().parents[1].rglob("*.py"):
+        rel = path.relative_to(Path(__file__).resolve().parents[1]).parts
+        if rel[0] in ("tests", "native_pilot", "db", "twin_bridge") or path.name.startswith("test_"):
+            continue
+        check("native_pilot_followups" not in path.read_text(errors="ignore"), "queue is not referenced by " + str(path))
+    from db.engine import engine
+    await engine.dispose()
+
+
 def main():
     import test_native_pilot_ledger as L
     backend = SqliteBackend(L)
@@ -1212,6 +1637,8 @@ def main():
         asyncio.run(intake_level(backend, root))
         asyncio.run(multi_level(backend, root))
         asyncio.run(multi_intake_level(backend, root))
+        followup_ledger_level(backend, root)
+        asyncio.run(followup_loop_level(backend, root))
     print(f"native pilot service: all cases passed ({CHECKS} checks)")
 
 

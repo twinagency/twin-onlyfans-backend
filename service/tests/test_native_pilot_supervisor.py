@@ -133,6 +133,27 @@ with tempfile.TemporaryDirectory() as tmp:
     check(status['accounts'][A]['state'] == 'running' and 'pid' not in json.dumps(status), 'status file, no pid')
     check('SEALED-SECRET' not in json.dumps(status) + json.dumps(r.events), 'no credential anywhere')
 
+    # --- fastt_followups: boolean true (and only that) passes --followups; default and other accounts stay as before ---
+    with tempfile.TemporaryDirectory() as tmp2:
+        r2 = Rig(tmp2, ALL)
+        r2.sql("CREATE TABLE account_ai_config (account_id TEXT, ai_chatter_config_json TEXT)")
+        r2.sql("INSERT INTO account_ai_config VALUES (?,?)", A, json.dumps({'fastt_followups': True}))
+        r2.sql("INSERT INTO account_ai_config VALUES (?,?)", B, json.dumps({'fastt_followups': 'true'}))
+        r2.tick()
+        a2 = next(c for c in r2.children if c.account == A)
+        b2 = next(c for c in r2.children if c.account == B)
+        mp = str(Path(tmp2) / 'manifests' / f'{A}.json')
+        check(a2.argv == ['--account', A, '--all-fans', '--handle', 'creator1', '--twin-context', '--followups',
+                          '--content-manifest', mp, '--enable-send'], a2.argv)
+        check('--followups' not in b2.argv, 'only boolean true enables the follow-ups')
+        check(S.followups_enabled(r2.db, A) is True and S.followups_enabled(r2.db, B) is False
+              and S.followups_enabled(r2.db, '999999') is False)
+        # Switching it off in the config restarts that child without the flag.
+        r2.sql("UPDATE account_ai_config SET ai_chatter_config_json=? WHERE account_id=?", json.dumps({}), A)
+        for _ in range(6):
+            r2.tick(31)
+        check(any('--followups' not in c.argv for c in r2.children if c.account == A and c.code is None), 'toggled off: restarted without the flag')
+
     # --- unchanged config keeps the same child ---
     for _ in range(5):
         r.tick(31)

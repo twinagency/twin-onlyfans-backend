@@ -7,6 +7,7 @@ The runner owns fresh-input admission, transport, durable send cap and recovery.
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 from types import SimpleNamespace
 
@@ -31,6 +32,17 @@ TEXT_ONLY = {
     "profile_openers_enabled": False,  # first-contact openers: new conversations stay operator-controlled
     "cadence_enabled": False,          # the runner claims each input once; a cadence skip ("rest next
                                        # tick" in stock FASTT) would leave that message unanswered for good
+}
+
+# ``--followups``: FASTT's stock re-engage nudge. ai_chatter gates it as ``cadence_on and nudge_enabled``
+# (both when scheduling it and in _run_nudge), so the cadence controller has to be ON. It is made inert
+# rather than reimplemented: every burst/daily cap is 0 ("no cap" in FASTT's _cadence_gate), so it never
+# skips a fan (the "rest next tick" skip that TEXT_ONLY avoids); no spend floor, no daily quota.
+FOLLOWUPS = {
+    "nudge_enabled": True, "cadence_enabled": True,
+    "msg_limits_by_signal": {"baseline": 0, "buying_signal": 0, "no_signal": 0, "pic_sent": 0},
+    "msg_limits_by_spend": [],
+    "daily_quota_enabled": False, "daily_quota_enforce": False,
 }
 
 
@@ -130,7 +142,7 @@ class NativeEngine:
     _active = False
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
-                 own_offers_only=False):
+                 own_offers_only=False, followups=None):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
@@ -145,6 +157,8 @@ class NativeEngine:
         self.context = context
         # All-fans runner: another fan's open offer is that fan's business, not this turn's obligation.
         self.own_offers_only = bool(own_offers_only)
+        # Runner-owned queue (followups.FollowupQueue) or None. None = every background job is suppressed.
+        self.followups = followups
         self._chat = chat
         self._send = send
         self._emit = emit or (lambda event: None)
@@ -187,6 +201,8 @@ class NativeEngine:
         self._account(account_id)
         result = dict(native)
         result.update(TEXT_ONLY)
+        if self.followups is not None:
+            result.update(copy.deepcopy(FOLLOWUPS))
         if getattr(self.content, "vault_mode", False):
             # FASTT's stock vault-wide ask lane (sell_lane -> pack_sender -> content_resolver), nothing else:
             # the model never writes an offer (stock prompt_sell_catalog False) and the ask lane
@@ -338,6 +354,12 @@ class NativeEngine:
 
     async def enqueue_job(self, account_id, kind, **kwargs):
         self._account(account_id)
+        if self.followups is not None:
+            # Only FASTT's re-engage nudge for THIS fan is kept (runner-owned queue, never scheduled_jobs).
+            job = await asyncio.to_thread(self.followups.add, self.fan_id, kind, kwargs.get("payload"), kwargs.get("run_at"))
+            if job:
+                self._emit({"event": "native-followup-queued", "kind": "nudge", "fan_id": self.fan_id})
+                return None
         self._emit({"event": "native-background-job-suppressed", "kind": str(kind)})
         return None
 
@@ -408,16 +430,19 @@ class NativeEngine:
             raise
         return self
 
-    async def run(self, run_id):
+    async def run(self, run_id, payload=None):
+        """One fan turn. ``payload`` is only ever FASTT's own nudge job for this fan (``--followups``)."""
         if self._token is None or self._running:
             raise PilotBoundaryError("engine-not-ready")
         if type(run_id) is not int or run_id <= 0:
             raise ValueError("invalid-run-id")
+        if payload is not None and (self.followups is None or payload != {"nudge_fan_ids": [self.fan_id]}):
+            raise PilotBoundaryError("forbidden-job-payload")
         self._running = True
         self._violation = None
         try:
             await self._no_obligations()
-            result = await self.native.run(self.account_id, {
+            result = await self.native.run(self.account_id, payload if payload is not None else {
                 "only_fan_ids": [self.fan_id], "max_replies": 1,
                 "mode": "always", "model": self.model,
             }, run_id=run_id)

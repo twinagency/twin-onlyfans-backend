@@ -51,3 +51,23 @@ def test_scope_save_is_audited_idempotent_and_preserves_sales_and_human_controls
         with pytest.raises(InvalidConfiguration): save(store,current,{"fasttScope":forbidden},key="f"*64)
     assert get_configuration(store,TENANT,ACCOUNT)["fingerprint"] == current["fingerprint"]
     store.close()
+
+
+def test_connection_policy_projection_is_opt_in_read_only(database, monkeypatch):
+    from test_onlyfans_connections_pg import verified, change, LIMITS, TENANT as CONNECTION_TENANT
+    from onlyfans_runtime.connections import get_connection
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    store, account, _ = verified(database, monkeypatch)
+    legacy = get_connection(store, CONNECTION_TENANT, account)
+    assert "throttleSeconds" not in legacy
+    change(store, account, "activate", legacy["revision"], "e"*64, LIMITS)
+    with Session(database[1]) as session:
+        before = session.get(OfDeliveryPolicy, account)
+        saved = (before.used_units, before.revision, before.throttle_seconds)
+    view = get_connection(store, CONNECTION_TENANT, account, include_policy=True)
+    assert view["throttleSeconds"] == LIMITS["throttleSeconds"]
+    assert "throttleSeconds" not in get_connection(store, CONNECTION_TENANT, account)
+    with Session(database[1]) as session:
+        after = session.get(OfDeliveryPolicy, account)
+        assert (after.used_units, after.revision, after.throttle_seconds) == saved
+    store.close()

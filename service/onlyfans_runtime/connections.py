@@ -121,7 +121,7 @@ def get_capture_context(store,tenant,creator,account=None):
     return {'accountId':account,'ownerId':owner,'proxyUrl':proxy,'fingerprint':capture_network_fingerprint(proxy)}
 
 
-def get_connection(store,tenant,account,*,include_sync=False,include_runner=False,runner_status_path=None):
+def get_connection(store,tenant,account,*,include_sync=False,include_runner=False,include_policy=False,runner_status_path=None):
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account)
         row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
@@ -140,6 +140,8 @@ def get_connection(store,tenant,account,*,include_sync=False,include_runner=Fals
             'policyRevision':policy.revision if policy else 0,'usedUnits':policy.used_units if policy else 0,
             'limitUnits':policy.limit_units if policy else 0,'mediaEnabled':bool(policy and policy.media_enabled),
             'automateNewConversations':bool(row and row.automate_new_conversations)}
+        if include_policy:
+            result['throttleSeconds']=policy.throttle_seconds if policy else None
         if include_runner:
             # Connected is not live. Report the supervisor's runner state separately; the file is only read,
             # a missing file is 'unknown', and aiLive needs sending enabled AND a running runner.

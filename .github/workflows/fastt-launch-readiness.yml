@@ -53,6 +53,16 @@ jobs:
         run: |
           mkdir -p test-results
           python service/native_pilot/tools/load_test.py --scenario rate_limit --accounts 2 --fans 250 --sim-minutes 45 --scale 60 --throttle 20 --seed 7 --out test-results/rate-limit.json > test-results/load-stdout.json 2> test-results/load-progress.log
+          python - <<'PY'
+          import json
+          r = json.load(open("test-results/rate-limit.json"))["results"][0]
+          assert not r["service_crashed"] and not r["helper_errors"], r
+          assert all(a["replies_sent"] > 0 and a["throttle_respected"] for a in r["accounts"].values()), r
+          assert r["totals"]["provider_429s"] > 0, "Scenario did not exercise rate limits"
+          assert r["event_reasons"].get("turn-requeued:provider-rate-limited", 0) > 0, r
+          assert not r["event_reasons"].get("turn-abandoned:provider-rate-limited", 0), r
+          assert not r["event_reasons"].get("turn-abandoned:native-turn-failed", 0), r
+          PY
       - name: Existing post-sale engine scenarios
         if: always()
         run: python service/tests/test_native_pilot_postsale_engine.py

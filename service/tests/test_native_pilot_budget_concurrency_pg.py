@@ -14,7 +14,8 @@ from native_pilot.scope import AccountScope
 
 @pytest.mark.parametrize("limited", [False, True])
 @pytest.mark.parametrize("pool_size", [4, 8])
-def test_concurrent_first_reservations_do_not_race_or_overspend(database, monkeypatch, limited, pool_size):
+@pytest.mark.parametrize("admitted", [False, True])
+def test_concurrent_first_reservations_do_not_race_or_overspend(database, monkeypatch, limited, pool_size, admitted):
     import importlib
     db_engine = importlib.import_module("db.engine")
     url, engine = database
@@ -30,6 +31,8 @@ def test_concurrent_first_reservations_do_not_race_or_overspend(database, monkey
 
     async def exercise():
         from sqlalchemy.engine import make_url
+        if admitted:
+            budget._admission_lock = asyncio.Lock()
         async_engine = create_async_engine(make_url(url).set(drivername="postgresql+asyncpg"),
                                            pool_size=pool_size, max_overflow=0, pool_timeout=3,
                                            pool_pre_ping=True,

@@ -208,6 +208,7 @@ class Service:
         self.children, self.fan_holds, self.owned_check = {}, {}, None
         self.fan_tasks = FanTasks(configured_fan_concurrency())
         self.dispatch_lock = asyncio.Lock()
+        self.budget_lock = asyncio.Lock()
         self.args = args
         self.scope = AccountScope.parse(args.account)
         self.db = self.scope.db_id
@@ -519,6 +520,7 @@ class Service:
             child.content, child.catalog_owner = self.content, self
             child.followups = self.followups
             child.dispatch_lock = self.dispatch_lock
+            child.budget_lock = self.budget_lock
             self.children[fan] = child
         child.client, child.conn, child.sentinels = self.client, self.conn, self.sentinels
         return child
@@ -738,7 +740,8 @@ class Service:
             api_key=self.conn.model_api_key, account_id=self.db, fan_id=args.fan, deadline=time.monotonic() + TURN_MAX_S,
             should_stop=gateway.stopped, on_event=runner.emit,
             reserve_call=lambda: ledger.count_model_call(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now()),
-            budget=DailyBudget(self.scope, self.conn.model_id, endpoint=ENDPOINT))
+            budget=DailyBudget(self.scope, self.conn.model_id, endpoint=ENDPOINT,
+                               **({"admission_lock": self.budget_lock} if self.fan_tasks.limit > 1 else {})))
         runner.emit({"event": "generating", "source_message_id": str(source_id), "engine": "fastt-native"})
         run_id = runner.begin_native_run(self.path, self.db)
         stats = error = None

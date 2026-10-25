@@ -50,3 +50,14 @@ def test_service_overlaps_fans_without_reentering_same_fan(monkeypatch):
         slow.set();await service.fan_tasks.drain()
         assert started.count(1)==1 and len(service.fan_tasks)==0
     asyncio.run(run())
+
+def test_children_share_budget_admission_only_within_their_creator(monkeypatch):
+    monkeypatch.setenv("FASTT_MAX_CONCURRENT_FANS", "2")
+    async def run():
+        first = Service(argparse.Namespace(account="of-123", fan=None, all_fans=True))
+        other = Service(argparse.Namespace(account="of-124", fan=None, all_fans=True))
+        a, b = first.child(1), first.child(2)
+        assert a.budget_lock is b.budget_lock is first.budget_lock
+        assert other.child(1).budget_lock is other.budget_lock
+        assert first.budget_lock is not other.budget_lock
+    asyncio.run(run())

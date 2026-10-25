@@ -1,0 +1,41 @@
+name: Synthetic messaging wait diagnostics
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_test_only
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      ONLYFANS_TEST_PG_URL: postgresql://postgres:disposable_test_only@127.0.0.1:5432/postgres
+      PYTHON_DOTENV_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-onlyfans-test.txt
+      - run: pip install -r requirements-onlyfans-test.txt
+      - name: Diagnostic workload only; this is not capacity acceptance
+        run: |
+          mkdir -p test-results
+          python service/native_pilot/tools/load_test.py --scenario target_100k --accounts 10 --fans 500 --throttle 0.25 --concurrent-fans 32 --sim-minutes 1.5 --scale 1 --profile --out test-results/capacity.json > test-results/stdout.json 2> test-results/progress.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-wait-diagnostics
+          path: test-results/

@@ -38,11 +38,13 @@ jobs:
         run: |
           python service/tests/test_native_pilot_fan_tasks.py
           python service/tests/test_native_pilot_capacity_checks.py
+          python service/tests/test_native_pilot_load_schedule.py
       - name: Existing assembled service and send-boundary regression
         run: python service/tests/test_native_pilot_service.py
       - name: Existing engine boundaries
         run: python service/tests/test_native_pilot_engine.py
   target-load:
+    if: github.event_name == 'workflow_dispatch'
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 15

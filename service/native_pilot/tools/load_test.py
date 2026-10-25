@@ -32,6 +32,7 @@ import argparse
 import asyncio
 import copy
 import json
+import math
 import os
 import random
 import resource
@@ -52,6 +53,7 @@ from urllib.parse import urlsplit
 SERVICE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SERVICE))
 from native_pilot.tools.capacity_checks import evaluate_capacity
+from native_pilot.tools.diagnostics import capture_waits
 
 MODEL_TIMEOUT_S = 45.0   # native_pilot.model's per-call limit (no retry)
 FAN_BASE = 1_000_000
@@ -498,7 +500,7 @@ def make_schedule(w: World):
                     index += 1
                 else:
                     t += w.rng.expovariate(cfg.rate_per_min / 60.0)
-                if t >= cfg.sim_minutes * 60:
+                if t >= cfg.sim_minutes * 60 or math.isclose(t, cfg.sim_minutes * 60, abs_tol=1e-9):
                     break
                 f = w.rng.choice(w.fans)
                 for k in range(1 if cfg.single_messages else w.rng.choice([1, 1, 2])):
@@ -746,6 +748,7 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
 
     stats = {"rss_kb_max": rss_kb(), "threads_max": threading.active_count(), "conn_samples": [], "conn_active_samples": []}
     stop = asyncio.Event()
+    stats["wait_samples"] = []
 
     cpu0, rss0, pg0 = cpu_s(), rss_kb(), pg_cpu_s(pg_container)
     _, xact0 = db.census()
@@ -758,6 +761,12 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
             break
     w.base = w.sim_t()   # the scenario's timeline starts here; the clock itself never jumps (watermarks are in it)
     helpers = [asyncio.create_task(sampler(w, db, stats, stop)), asyncio.create_task(lag_probe(w, stop))]
+    if os.environ.get("LOAD_TEST_PROFILE") == "1":
+        async def profile_waits():
+            while not stop.is_set():
+                await asyncio.sleep(10)
+                stats["wait_samples"].append({"scenario_seconds": round(w.rel(), 2), **capture_waits()})
+        helpers.append(asyncio.create_task(profile_waits()))
     if cfg.prefill:
         await w.sleep_sim(1.0)
         for t, acct, fan in schedule:
@@ -813,6 +822,7 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
         "scheduled_messages_per_hour": round(len(schedule) * 3600 / (cfg.sim_minutes * 60 - 30), 3)
             if cfg.sim_minutes * 60 > 30 else 0,
     }
+    result["wait_samples"] = stats["wait_samples"]
     result["service_crashed"] = crashed
     result["helper_errors"] = helper_errors
     result["service_pool"] = {"sync_store_pool": "pool_size=2,max_overflow=4 per URL (twin_bridge.store)",
@@ -997,9 +1007,12 @@ def main(argv=None):
     p.add_argument("--sim-minutes", type=float, default=60.0)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--out")
+    p.add_argument("--profile", action="store_true", help="capture task/thread wait locations without message text or credentials")
     p.add_argument("--require-target-sla", action="store_true", help="fail unless unscaled target traffic and every reply meet the 30-second test SLA")
     args = p.parse_args(argv)
     os.environ["FASTT_MAX_CONCURRENT_FANS"] = str(args.concurrent_fans)
+    if args.profile:
+        os.environ["LOAD_TEST_PROFILE"] = "1"
     result = run_all(args)
     if args.require_target_sla:
         for row in result["results"]:

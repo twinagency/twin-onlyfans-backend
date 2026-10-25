@@ -14,7 +14,8 @@ from native_pilot.scope import AccountScope
 
 @pytest.mark.parametrize("limited", [False, True])
 def test_concurrent_first_reservations_do_not_race_or_overspend(database, monkeypatch, limited):
-    from db import engine as db_engine
+    import importlib
+    db_engine = importlib.import_module("db.engine")
     url, engine = database
     account = "of-900000001"
     budget = DailyBudget(AccountScope.parse(account), "openrouter/deepseek-v4.1-flash",

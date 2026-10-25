@@ -40,6 +40,9 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False):
     now=(await session.scalar(select(func.transaction_timestamp()))).replace(tzinfo=None)
     if finish>now+timedelta(minutes=5):raise BadRequest("invalid_earnings_window","The reporting window is in the future.")
     query=select(OfCreatorBinding).where(OfCreatorBinding.channel=="onlyfans",OfCreatorBinding.revoked_at.is_(None))
+    from .agency_scope import current_scope
+    scope = current_scope.get()
+    if scope is not None:query=query.where(OfCreatorBinding.creator_id.in_(scope.creator_ids))
     if tenant_id is not None:query=query.where(OfCreatorBinding.tenant_id==tenant_id)
     bindings=list(await session.scalars(query.order_by(OfCreatorBinding.account_id).limit(1001).with_for_update(read=True)))
     ids=[r.account_id for r in bindings]

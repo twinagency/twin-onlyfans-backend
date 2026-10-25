@@ -1,0 +1,66 @@
+# Managed IPRoyal ISP assignment
+
+This is a separate private broker. It reads purchased IPRoyal ISP Dedicated
+stock and assigns one fixed IPv4 address to each scoped creator + OnlyFans
+handle. Free and paid handles receive separate assignments. There is one
+inventory authority for an IPRoyal account; do not start independent inventories
+for the same purchased stock.
+
+The broker imports only confirmed, non-test ISP Dedicated orders. It never
+orders, pays for, renews, rotates, or changes credentials at IPRoyal. Inventory
+exhaustion is a visible refusal; it never shares an assigned IP, switches a
+country, chooses datacenter/rotating stock, or falls back to direct traffic.
+
+Existing encrypted OnlyFans connections are inspected inside the broker to
+reserve their IPs before any new assignment. Existing accounts are not modified.
+If an existing proxy cannot be identified/decrypted, inventory admission fails
+closed. DNS-based legacy proxies require an explicit inventory review. Provider
+credential changes quarantine an assignment instead of replacing its network.
+
+## Configuration
+
+The service listens on port 8791 on an internal Docker network, with host access
+bound to loopback only. It requires these private runtime variables:
+
+- `IPROYAL_API_TOKEN`: IPRoyal Settings > API access token.
+- `ONLYFANS_MANAGED_PROXY_TOKEN`: a separate generated server-to-server token.
+- `ONLYFANS_MANAGED_PROXY_TENANT`: the current OnlyFans connection tenant.
+- `ONLYFANS_MANAGED_PROXY_DATABASE_URL`: the existing PostgreSQL database.
+- `ONLYFANS_CONNECTION_KEY`: the existing connection encryption key.
+
+Run `python -m managed_proxy.api --init-schema` explicitly once, then run
+`python -m managed_proxy.api`. Initialization creates the isolated
+`onlyfans_proxy` schema only. It does not change the runtime Alembic revision,
+public account controls, session records, delivery counters, or FASTT processes.
+No schema is created or repaired at normal service startup.
+
+The dashboard uses `ONLYFANS_MANAGED_PROXY_BASE_URL` and the private
+`ONLYFANS_MANAGED_PROXY_TOKEN`. It never receives the IPRoyal API token.
+Assignment URLs travel only from broker to dashboard server to hosted sign-in.
+Browser requests contain the handle/country selection, never managed proxy
+credentials. Captured network fingerprints and signed-in handle checks apply
+before normal enrollment. Existing reconnect uses the saved network unchanged.
+
+## Operating stock
+
+Buy a pool of dedicated ISP IPs in the required countries in the platform's
+IPRoyal account. Keep renewal enabled for live assignments; do not refresh IPs
+at renewal. The platform assigns an unused IP during Add OnlyFans account.
+Agency users need no IPRoyal account and no proxy credential copying.
+
+An assigned IP is retained across retries and is never automatically released or
+recycled. An administrator must investigate expired, replaced or unused
+assignments before any future manual release mechanism is added. Saving a
+connection starts normal imports but does not activate AI or outgoing messages.
+
+## Verification
+
+`managed_proxy_tests/test_managed_proxy.py` tests provider filtering, credential
+redaction, exact product selection and encrypted identity binding.
+`managed_proxy_tests/test_managed_proxy_pg.py` uses real disposable PostgreSQL
+databases for concurrent claims, same-owner retries, free/paid and tenant
+separation, existing account reservation, expired inventory and quarantine.
+
+Provider API authentication and stock were verified with read-only requests on
+25 October 2026. Live assignment requires an unused purchased IP. Synthetic
+assignment tests are not evidence of a fresh OnlyFans login or message delivery.

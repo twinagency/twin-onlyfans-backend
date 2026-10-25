@@ -8,7 +8,7 @@ import re
 import threading
 import time
 
-from .provider import IPRoyal, ProxyError
+from .provider import IPRoyal, ProxyError, COUNTRY_NAMES
 from .store import Store
 
 
@@ -67,7 +67,9 @@ def main():
             if not self.ready():
                 return self.reply(503,{"ok":False,"code":status["error"] or "inventory_stale"})
             try:
-                return self.reply(200,{"ok":True,"provider":"iproyal","type":"isp_dedicated","countries":store.stock()})
+                counts={row["code"]:row["available"] for row in store.stock()}
+                countries=[{"code":code,"name":name,"available":counts.get(code,0)} for code,name in sorted(COUNTRY_NAMES.items(),key=lambda item:item[1])]
+                return self.reply(200,{"ok":True,"provider":"iproyal","type":"isp_dedicated","countries":countries})
             except Exception:
                 return self.reply(503,{"ok":False,"code":"inventory_unavailable"})
 

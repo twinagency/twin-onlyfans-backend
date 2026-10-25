@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Iterator
 
 from twin_bridge import store
+from .overlap import overlapped_replies
 
 
 class Refused(RuntimeError):
@@ -281,21 +282,28 @@ class Ledger:
 
     def _source(self, con, p, now: str,
                 exclude_input_key: str | None = None) -> SourceSnapshot | None:
-        # Only proven outputs from the CURRENT input are excluded. A newer external
-        # outbound, system event, unsent or invalid row, etc. holds the pilot.
+        # Exclude this input's proven outputs, and completed replies whose recorded
+        # input predates a newly arrived message. External/unknown sends still hold.
+        latest_in = con.execute(
+            "SELECT message_id FROM messages WHERE account_id=? AND fan_id=? AND direction='in' "
+            "ORDER BY created_at DESC,message_id DESC LIMIT 1", (p["account_id"], p["fan_id"])).fetchone()
+        overlap = overlapped_replies(con, p["account_id"], p["fan_id"], latest_in[0]) if latest_in else []
+        ignored = {int(r[0]) for r in overlap}
+        covered = {int(mid) for r in overlap for mid in json.loads(r[1])}
+        overlap_sql = ("AND m.message_id NOT IN (" + ",".join("?" for _ in ignored) + ") ") if ignored else ""
         rows = con.execute("SELECT m.message_id,m.direction,m.body,m.media_ids,m.media_count,m.price_cents,"
                           "m.is_tip,m.is_unsent,m.created_at,m.ingested_at,m.raw_json FROM messages m "
                           "WHERE m.account_id=? AND m.fan_id=? AND NOT (m.direction='out' AND m.is_unsent) "
                           "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts r "
                           "WHERE r.pilot_id=? AND r.input_key=? AND r.state='sent' "
                           "AND r.provider_message_id=CAST(m.message_id AS TEXT)) "
-                          "ORDER BY m.created_at DESC,m.message_id DESC LIMIT 101",
-                          (p["account_id"], p["fan_id"], p["pilot_id"], exclude_input_key)).fetchall()
+                          + overlap_sql + "ORDER BY m.created_at DESC,m.message_id DESC LIMIT 101",
+                          (p["account_id"], p["fan_id"], p["pilot_id"], exclude_input_key, *sorted(ignored))).fetchall()
         if not rows or rows[0]["direction"] != "in":
             return None
         members = []
         for row in rows:
-            if row["direction"] != "in":
+            if row["direction"] != "in" or row["message_id"] in covered:
                 break
             try:
                 created, ingested = _dt(row["created_at"]), _dt(row["ingested_at"])
@@ -347,6 +355,17 @@ class Ledger:
         now_s = _dt(now)
         with self._tx() as con:
             return self._source(con, self._active(con, pilot_id, owner_token, now_s), now_s)
+
+    def unanswered_reply_ids(self, *, pilot_id: str, owner_token: str, input_key: str, now) -> tuple[int, ...]:
+        """Receipt-proven exclusions for the claimed input's native history/last-look gates."""
+        with self._tx() as con:
+            p = self._active(con, pilot_id, owner_token, _dt(now))
+            i = con.execute("SELECT message_id FROM native_pilot_inputs WHERE pilot_id=? AND input_key=? "
+                            "AND state='generating'", (pilot_id, input_key)).fetchone()
+            if i is None:
+                raise Refused("input-not-generating")
+            return tuple(sorted({int(r[0]) for r in overlapped_replies(
+                con, p["account_id"], p["fan_id"], i[0])}))
 
     def claim_input(self, *, pilot_id: str, owner_token: str, snapshot: SourceSnapshot,
                     now: datetime | str) -> str:

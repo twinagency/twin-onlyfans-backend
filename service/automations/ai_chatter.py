@@ -254,6 +254,13 @@ async def _runtime_teaser(account_id: str, kind: str, native_loader):
     return await native_loader(account_id)
 
 
+def _runtime_unanswered_replies(account_id: str):
+    """A worker may prove that exact receipts answered an older input, not this one."""
+    cap = active_telegram_capabilities()
+    hook = getattr(cap, "unanswered_replies", None) if cap is not None else None
+    return hook(account_id) if hook is not None else frozenset()
+
+
 async def _runtime_prompt_context(account_id: str, fan_id: int, last_inbound: str):
     """The ONE prompt hook for Twin's approved persona/creator facts and fan memory.
 
@@ -2152,6 +2159,7 @@ async def _gather(account_id: str,
     Consecutive rows of HERS within `_BUBBLE_WINDOW` are the same reply; anything
     else (his message, a human's, a gap) closes her turn."""
     out: dict[int, _Cand] = {}
+    unanswered_replies = _runtime_unanswered_replies(account_id)
     gap = timedelta(minutes=session_gap_min) if session_gap_min > 0 else None
     # WHEN each of her replies landed, per fan — the single measurement all three
     # counters are derived from after the scan. The loop's only job is to decide
@@ -2306,13 +2314,14 @@ async def _gather(account_id: str,
         # …and is it a REACTION rather than an answer? `image_reply` / `tip_reward`
         # go out within seconds of HIS action, carry an automation_kind (so they are
         # never `broadcast`) and say nothing — see TURN_NEUTRAL_KINDS.
+        older_input_reply = (fan_id, message_id) in unanswered_replies and not named_chatter
         turn_neutral = direction == "out" and automation_kind in TURN_NEUTRAL_KINDS
         # THE one predicate for "this row took the turn". Every consumer that asks
         # the question reads THIS, never the two flags separately: a row visible to
         # `last_dir` but invisible to `in_run`, or vice versa, is a half-state — the
         # thread then means two different things to two pieces of the same gate, and
         # which one wins depends on evaluation order. One name, one answer.
-        answers_him = not broadcast and not turn_neutral
+        answers_him = not broadcast and not turn_neutral and not older_input_reply
         # Neither a broadcast NOR a reaction takes the turn. Both stay in `messages`
         # — she must know what she just sent him — but neither may move
         # `last_dir`/`last_body`. A ppv_send / funnel blast landing on top of his
@@ -2337,7 +2346,7 @@ async def _gather(account_id: str,
         # and one that silently agreed would hide the drift instead of pricing it
         # at zero. A mass row is excluded here exactly as `mass_run_id.is_(None)`
         # excludes it there.
-        if direction == "out" and mass_run_id is None and (
+        if direction == "out" and not older_input_reply and mass_run_id is None and (
                 automation_kind is not None or named_chatter):
             c.answered_after_in.append((automation_kind, named_chatter))
         if direction == "in":
@@ -3754,6 +3763,8 @@ async def _thread_moved_on(account_id: str, fan_id: int,
     """
     if inbound_at is None:
         return ""
+    unanswered_ids = [mid for fid, mid in _runtime_unanswered_replies(account_id)
+                      if fid == int(fan_id)]
     async with get_session() as s:
         newer_in = (await s.execute(
             select(Message.message_id).where(
@@ -3808,6 +3819,8 @@ async def _thread_moved_on(account_id: str, fan_id: int,
                 # Bubbles of THIS reply that already went out are not "somebody
                 # else answered" (the per-bubble look at the wire passes them).
                 Message.message_id.not_in(list(exclude_ids)) if exclude_ids else true(),
+                or_(Message.message_id.not_in(unanswered_ids), _named_chatter_clause(automation_emp_id))
+                    if unanswered_ids else true(),
                 or_(automation_answered,
                     _named_chatter_clause(automation_emp_id)),
             ).limit(1)

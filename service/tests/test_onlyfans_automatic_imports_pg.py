@@ -129,3 +129,17 @@ def test_worker_task_identity_is_rejected_by_api_and_agency_scopes(monkeypatch):
     token=current_scope.set(AgencyScope(('creator-a',),'agency-user:synthetic',True))
     try:assert not actor_allowed(actor)
     finally:current_scope.reset(token)
+
+
+def test_automatic_import_scheduler_runs_read_jobs_without_uploads(monkeypatch):
+    import onlyfans_worker as entry
+    import onlyfans_runtime.content_sync as sync
+    import onlyfans_runtime.offer_post_source as posts
+    import onlyfans_runtime.content_sync_media as uploads
+    calls=[]
+    monkeypatch.setattr(sync,'process_due',lambda *a,**kw:(calls.append('sync') or 1))
+    monkeypatch.setattr(posts,'process_posts',lambda *a,**kw:(calls.append('posts') or 1))
+    def forbidden(*a,**kw):pytest.fail('automatic reading entered the upload worker')
+    monkeypatch.setattr(uploads,'process_uploads',forbidden)
+    assert entry._process_import_sync(object(),TENANT,limit=1,stop=threading.Event())==2
+    assert calls==['sync','posts']

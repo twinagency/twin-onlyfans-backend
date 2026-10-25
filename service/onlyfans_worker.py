@@ -48,6 +48,16 @@ def _process_offer_jobs(store, tenant, *, limit, stop):
             + process_refresh_jobs(store, tenant, limit=limit, stop=stop))
 
 
+def _process_import_sync(store, tenant, *, limit, stop):
+    """Automatic account reading never starts uploads or publishing."""
+    from onlyfans_runtime.content_sync import process_due
+    from onlyfans_runtime.offer_post_source import process_posts
+    processed = process_due(store, tenant, limit=limit, stop=stop)
+    if stop.is_set():
+        return processed
+    return processed + process_posts(store, tenant, limit=limit, stop=stop)
+
+
 def _process_content_sync(store, tenant, *, limit, stop):
     # Scheduling is DB-only and enqueues the bounded refresh/vault jobs above;
     # uploads run through the media owner. Neither sends a message or publishes.
@@ -251,7 +261,8 @@ def main(argv=None):
                         vault_jobs=_process_vault_jobs, enrollment_jobs=_process_connection_enrollments,
                         ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None,
                         offer_jobs=_process_offer_jobs if os.environ.get("ONLYFANS_OFFER_IMPORT_ENABLED") == "1" else None,
-                        content_sync_jobs=_process_content_sync if os.environ.get("ONLYFANS_CONTENT_SYNC_ENABLED") == "1" else None,
+                        content_sync_jobs=(_process_content_sync if os.environ.get("ONLYFANS_CONTENT_SYNC_ENABLED") == "1"
+                            else _process_import_sync if os.environ.get("ONLYFANS_AUTOMATIC_IMPORTS_ENABLED") == "1" else None),
                         worker_options=worker_options)
     finally:
         stop.set()

@@ -251,7 +251,7 @@ def message_model(
         "evidenceRef": evidence_ref,
         "attachments": {
             "count": max(int(message.media_count or 0), len(message.media)),
-            "media": [{"mediaId": str(mid), "kind": kind} for mid, kind in message.media],
+            "media": [{"mediaId": str(mid), "kind": kind, **({"source": "message"} if mid in message.message_media_ids else {})} for mid, kind in message.media],
             "price": {"currency": MONEY_CURRENCY, "minorUnits": int(message.price_cents or 0)},
             "purchaseStatus": ("not_applicable" if not message.price_cents else
                 "purchased" if message.is_paid is True or message.purchased_at is not None else

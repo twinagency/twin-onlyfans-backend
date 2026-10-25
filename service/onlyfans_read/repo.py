@@ -118,6 +118,7 @@ class MessageRow:
     automation_kind: str | None
     sent_by_employee_id: int | None
     media: tuple[tuple[int, str], ...] = ()
+    message_media_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -596,10 +597,11 @@ class SqlOnlyFansReadRepo:
                     Message.message_id, Message.direction, Message.body, created_at_text(),
                     Message.media_count, Message.price_cents, Message.is_paid, Message.purchased_at,
                     Message.is_unsent, Message.temp_id, Message.automation_kind,
-                    Message.sent_by_employee_id, Message.media_ids,
+                    Message.sent_by_employee_id, Message.media_ids, Message.raw_json,
                 ).where(Message.account_id == account_id, Message.fan_id == fan_id)
                     .order_by(Message.message_id.desc()).limit(limit))).all()
                 refs = {int(row[0]): _message_media_ids(row[12]) for row in rows}
+                raw_media = {int(row[0]): _message_media_kinds(row[13], refs[int(row[0])]) for row in rows}
                 missing = [int(row[0]) for row in rows if not refs[int(row[0])]
                            and (int(row[4] or 0) > 0 or int(row[5] or 0) > 0)]
                 if missing:
@@ -625,9 +627,10 @@ class SqlOnlyFansReadRepo:
             price_cents=int(row[5] or 0), is_paid=row[6], purchased_at=row[7],
             is_unsent=bool(row[8]), temp_id=row[9], automation_kind=row[10],
             sent_by_employee_id=row[11],
-            media=tuple((mid, "photo" if kinds.get(mid) in {"image", "photo"}
+            media=tuple((mid, raw_media[int(row[0])].get(mid) or ("photo" if kinds.get(mid) in {"image", "photo"}
                          else kinds.get(mid) if kinds.get(mid) in {"video", "audio"}
-                         else "unknown") for mid in refs[int(row[0])]),
+                         else "unknown")) for mid in refs[int(row[0])]),
+            message_media_ids=tuple(raw_media[int(row[0])]),
         ) for row in rows]
         out.reverse()
         return out
@@ -786,3 +789,16 @@ def _message_media_ids(raw: str | None) -> list[int]:
             or len(set(values)) != len(values)):
         return []
     return values
+
+
+def _message_media_kinds(raw, ids):
+    try:
+        frame = json.loads(raw or '{}')
+        media = frame.get('media', [])
+        if type(media) is not list or len(media) > 100:
+            return {}
+        return {m['id']: 'photo' if m.get('type') in {'photo','image','gif'} else m['type']
+                for m in media if type(m) is dict and type(m.get('id')) is int and m['id'] in ids
+                and m.get('type') in {'photo','image','gif','video','audio'}}
+    except (ValueError, TypeError, AttributeError):
+        return {}

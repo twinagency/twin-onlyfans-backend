@@ -58,16 +58,3 @@ class OfConnectionEnrollment(Base):
     last_error=Column(String(64))
     created_at=Column(DateTime,nullable=False)
     updated_at=Column(DateTime,nullable=False)
-
-class OfProxyAssignment(Base):
-    __tablename__="of_proxy_assignment"
-    __table_args__=(
-        UniqueConstraint("pool_id",name="uq_of_proxy_assignment_pool"),
-        UniqueConstraint("proxy_fingerprint",name="uq_of_proxy_assignment_network"),
-        {"info":{"onlyfans_since":"0092_proxy_assignments"}})
-    tenant_id=Column(String,primary_key=True)
-    creator_id=Column(String,primary_key=True)
-    pool_id=Column(String(64),nullable=False)
-    proxy_fingerprint=Column(String(64),nullable=False)
-    sealed_proxy=Column(Text,nullable=False)
-    created_at=Column(DateTime,nullable=False)

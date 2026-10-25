@@ -1,4 +1,4 @@
-name: Agency proxy and concurrency checks
+name: Message capacity and concurrency checks
 on:
   push:
     branches: ['codex/agency-scale-20261025']
@@ -32,8 +32,8 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-onlyfans-test.txt
       - run: pip install -r requirements-onlyfans-test.txt
-      - name: Pool allocation, schema and manual activation regressions
-        run: python -m pytest -q service/tests/test_onlyfans_proxy_pool_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_onlyfans_creator_enrollments_pg.py service/tests/test_fastt_activation_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_native_pilot_concurrency.py
+      - name: Delivery limits, schema and manual activation regressions
+        run: python -m pytest -q service/tests/test_onlyfans_delivery_scale_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_onlyfans_creator_enrollments_pg.py service/tests/test_fastt_activation_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_native_pilot_concurrency.py
       - name: Concurrent fan scheduling
         run: python service/tests/test_native_pilot_fan_tasks.py
       - name: Existing assembled service and send-boundary regression

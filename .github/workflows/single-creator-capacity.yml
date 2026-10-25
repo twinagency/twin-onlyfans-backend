@@ -32,7 +32,7 @@ jobs:
         run: |
           git diff --exit-code 06ee3026b80cdf9f0858d744937d0e1cf1a4ae9e -- service/automations service/native_pilot/twin_context.py service/native_pilot/content.py service/db service/onlyfans_runtime/connections.py
       - name: Concurrency isolation and real PostgreSQL budgets
-        run: python -m pytest -q -x service/tests/test_native_pilot_concurrency.py service/tests/test_native_pilot_budget_concurrency_pg.py service/tests/test_native_pilot_metadata_reads_pg.py
+        run: python -m pytest -q -x service/tests/test_native_pilot_concurrency.py service/tests/test_native_pilot_budget_concurrency_pg.py service/tests/test_native_pilot_metadata_reads_pg.py service/tests/test_native_pilot_capacity_acceptance.py
       - name: Delivery cancellation and worker boundaries
         run: |
           python service/tests/test_native_pilot_fan_tasks.py
@@ -48,6 +48,8 @@ jobs:
           python service/tests/test_native_pilot_content.py
       - name: Existing ownership restart and PostgreSQL compatibility
         run: |
+          git worktree add --detach /tmp/of-release-compat 8a427a3
+          export ONLYFANS_RELEASE_SERVICE_DIR=/tmp/of-release-compat/service
           python service/tests/test_native_pilot_storage_pg.py
           python service/tests/test_native_pilot_service_pg.py
       - name: Native engine smoke including reviewed media

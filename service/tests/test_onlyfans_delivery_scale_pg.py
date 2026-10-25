@@ -37,7 +37,10 @@ def test_upgrade_retains_existing_delivery_controls_and_usage(database):
         command.upgrade(_config(c), LAUNCH_CONTROLS)
         check_schema(c, expected=LAUNCH_CONTROLS)
         c.exec_driver_sql("INSERT INTO accounts(id,is_active_default) VALUES ('of-900000001',false)")
-        c.exec_driver_sql("INSERT INTO fans(account_id,fan_id) VALUES ('of-900000001',1000001)")
+        from db.models import Fan
+        with Session(bind=c) as session:
+            session.add(Fan(account_id="of-900000001", fan_id=1000001))
+            session.flush()
         c.exec_driver_sql("INSERT INTO of_creator_bindings(id,tenant_id,creator_id,creator_name,account_id,handle,channel) "
                          "VALUES ('synthetic-binding','synthetic-tenant','synthetic-creator','Synthetic','of-900000001','synthetic','onlyfans')")
         c.exec_driver_sql("INSERT INTO of_runtime(account_id,binding_id,enabled,activated_at) "

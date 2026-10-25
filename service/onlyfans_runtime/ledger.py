@@ -148,7 +148,7 @@ def _status(previous, incoming):
     return "applied" if previous in PAID and incoming in STATUSES else "conflict"
 
 
-def apply_observation(s, account, observation, *, now):
+def apply_observation(s, account, observation, *, now, backfill=False):
     """Caller holds the runtime lock; all canonical effects are one transaction."""
     encoded = canonical(observation)
     fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
@@ -219,7 +219,7 @@ def apply_observation(s, account, observation, *, now):
             from .commerce import settle_media_purchase
             settle_media_purchase(s, account_id=account, fan_id=fan_id, message=message,
                 offer=offer, paid=paid, was_paid=was_paid, stamp=occurred, now=now)
-        if moved and fan_id is not None:
+        if moved and fan_id is not None and not (backfill and occurred < now - timedelta(minutes=5)):
             s.flush()
             from .launch_engagement.events import cancel_for_fan
             cancel_for_fan(s, account, fan_id, "purchase", now=now)
@@ -345,7 +345,7 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                     scan.status, scan.last_error, scan.next_poll_at = ("running" if deferred else "held"), error, deferred or now + timedelta(minutes=5)
                     continue
                 for row in rows:
-                    apply_observation(s, account, row, now=now)
+                    apply_observation(s, account, row, now=now, backfill=history)
                 scan.page_offset, scan.last_page_hash = offset + len(rows), page_hash
                 scan.next_poll_at = now + timedelta(seconds=1 if more else 300)
                 if not more:

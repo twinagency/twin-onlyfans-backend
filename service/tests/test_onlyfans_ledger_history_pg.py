@@ -122,3 +122,20 @@ def test_additive_upgrade_from_91_retains_financial_evidence(database):
         assert session.scalar(select(Transaction.provider_transaction_id))=="retained"
         assert session.scalar(select(func.count()).select_from(OfLedgerHistory))==0
     store.close()
+
+def test_old_import_does_not_cancel_current_engagement(database,monkeypatch):
+    store=setup(database)
+    from onlyfans_runtime.ledger import apply_observation
+    import onlyfans_runtime.launch_engagement.events as events
+    calls=[]
+    monkeypatch.setattr(events,"cancel_for_fan",lambda *a,**kw:calls.append(True))
+    now=utcnow()
+    row=transaction(createdAt=(now-timedelta(days=900)).isoformat()+"Z")
+    observation=parse_page(payload([row]),owner_id=OWNER,start=datetime(1970,1,1),end=now)[0][0]
+    with Session(database[1]) as session,session.begin():
+        store._runtime(session,"tenant-a","acc-a")
+        assert apply_observation(session,"acc-a",observation,now=now,backfill=True)=="applied"
+    assert calls==[]
+    with Session(database[1]) as session:
+        assert session.scalar(select(func.count()).select_from(Transaction))==1
+    store.close()

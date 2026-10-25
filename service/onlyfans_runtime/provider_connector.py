@@ -369,13 +369,15 @@ class NativeProviderConnector(NativeLoopbackConnector):
         return self._signed_request("GET", API_PATH + f"/posts/{post_id}", b"{}",
             max_response_bytes=self._vault_max_bytes, accepted_statuses=(200, 404), with_status=True)
 
-    def still_bytes(self, url):
+    def still_bytes(self, url, *, timeout_seconds=2):
         """One credential-free CDN image GET, through this account's fixed proxy.
 
         URLs come only from a validated vault page, never from an HTTP caller.
         No cookies/signing headers, redirects, decompression or retries. The
         permanent still store owns format detection and its existing byte cap.
         """
+        if type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds) or not .05 <= timeout_seconds <= 10:
+            raise NativeProtocolError("invalid native image timeout")
         self._ready()
         self._handle.current()
         from vault_still_store import MAX_STILL_BYTES, image_type
@@ -394,7 +396,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 response = client.request("GET", url,
                     headers={"Accept": "image/jpeg,image/png,image/webp,image/gif", "Accept-Encoding": "identity",
                              "User-Agent": self._handle.user_agent, "Referer": ORIGIN + "/"},
-                    proxy=self._handle.proxy_url, timeout=min(self._timeout, 2),
+                    proxy=self._handle.proxy_url, timeout=min(self._timeout, timeout_seconds),
                     allow_redirects=False, verify=True, accept_encoding="identity",
                     content_callback=bounded, discard_cookies=True)
                 data = b"".join(chunks)
@@ -409,16 +411,14 @@ class NativeProviderConnector(NativeLoopbackConnector):
         except Exception:
             raise NativeProtocolError("native image read is unavailable") from None
 
-    def transaction_page(self, *, offset, limit=20, start, end, history=False):
+    def transaction_page(self, *, offset, limit=20, start, end):
         """Reuse the legacy ledger endpoint with frozen UTC bounds and no retries."""
         self._ready()
-        if (type(offset) is not int or not 0 <= offset <= (1000000000 if history is True else 10000)
+        if (type(offset) is not int or not 0 <= offset <= 10000
                 or type(limit) is not int or not 1 <= limit <= 20
                 or type(start) is not datetime or type(end) is not datetime
                 or start.tzinfo is not None or end.tzinfo is not None
-                or type(history) is not bool
-                or start < datetime(1970, 1, 1)
-                or not timedelta(0) <= end - start <= timedelta(days=60000 if history else 90)):
+                or not timedelta(0) <= end - start <= timedelta(days=90)):
             raise Refused("invalid bounded native ledger page")
         self.verify_identity()
         path = API_PATH + "/payouts/transactions?" + urlencode({"limit": limit, "offset": offset,

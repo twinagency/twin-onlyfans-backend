@@ -13,7 +13,8 @@ from native_pilot.scope import AccountScope
 
 
 @pytest.mark.parametrize("limited", [False, True])
-def test_concurrent_first_reservations_do_not_race_or_overspend(database, monkeypatch, limited):
+@pytest.mark.parametrize("pool_size", [4, 8])
+def test_concurrent_first_reservations_do_not_race_or_overspend(database, monkeypatch, limited, pool_size):
     import importlib
     db_engine = importlib.import_module("db.engine")
     url, engine = database
@@ -30,7 +31,11 @@ def test_concurrent_first_reservations_do_not_race_or_overspend(database, monkey
     async def exercise():
         from sqlalchemy.engine import make_url
         async_engine = create_async_engine(make_url(url).set(drivername="postgresql+asyncpg"),
-                                           pool_size=8, max_overflow=0)
+                                           pool_size=pool_size, max_overflow=0, pool_timeout=3,
+                                           pool_pre_ping=True,
+                                           connect_args={"command_timeout": 15, "server_settings": {
+                                               "statement_timeout": "10000", "lock_timeout": "3000",
+                                               "timezone": "UTC"}})
         monkeypatch.setattr(db_engine, "async_session_factory",
                             async_sessionmaker(async_engine, expire_on_commit=False))
         try:

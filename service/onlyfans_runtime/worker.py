@@ -5,6 +5,7 @@ Production transport/session integration remains a separately gated adapter.
 """
 from dataclasses import dataclass, field
 from typing import Protocol
+import os
 from .store import Event, PAGE_LIMIT, Refused, Store
 
 
@@ -12,6 +13,7 @@ from .store import Event, PAGE_LIMIT, Refused, Store
 class ChatPage:
     fan_ids: list[int]
     next_cursor: str | None
+    heads: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,9 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
         raise Refused("reader scope mismatch")
     scope = {"connection_revision": connection_revision} if connection_revision is not None else {}
     applied = store.drain(tenant_id, account_id, **scope)
+    if os.environ.get("ONLYFANS_RECENT_INBOX_ENABLED") == "1":
+        from .recent_inbox import poll_recent
+        applied += poll_recent(store, tenant_id, account_id, reader, connection_revision=connection_revision)
     discovered = recovered = 0
     scan = store.claim_scan(tenant_id, account_id, **scope)
     if scan:

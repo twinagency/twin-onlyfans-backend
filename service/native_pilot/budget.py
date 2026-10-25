@@ -54,12 +54,14 @@ def _utcnow() -> datetime:
 
 
 class DailyBudget:
-    def __init__(self, scope: AccountScope, model_id: str, *, endpoint: str, clock=_utcnow) -> None:
+    def __init__(self, scope: AccountScope, model_id: str, *, endpoint: str, clock=_utcnow,
+                 admission_lock=None) -> None:
         from llm_models import MODELS
         spec = MODELS.get(model_id)
         if spec is None:
             raise BudgetRefused("budget-model-unknown")
         self.scope, self.model_id, self.endpoint, self._clock = scope, model_id, endpoint, clock
+        self._admission_lock = admission_lock
         self.provider = spec.provider
         rates = [Decimal(str(spec.input_per_1k_cents)), Decimal(str(spec.output_per_1k_cents))]
         if any(not rate.is_finite() or rate <= 0 for rate in rates):
@@ -78,6 +80,17 @@ class DailyBudget:
         return self._units(request_bytes, max_output_tokens)
 
     async def reserve(self, *, fan_id: int, request_bytes: int, max_output_tokens: int) -> Reservation:
+        # Row locks still provide cross-process correctness. Queue this account's
+        # short reservation transactions before pool checkout; model HTTP runs
+        # after reserve returns and never holds this admission lock.
+        if self._admission_lock is not None:
+            async with self._admission_lock:
+                return await self._reserve(fan_id=fan_id, request_bytes=request_bytes,
+                                           max_output_tokens=max_output_tokens)
+        return await self._reserve(fan_id=fan_id, request_bytes=request_bytes,
+                                   max_output_tokens=max_output_tokens)
+
+    async def _reserve(self, *, fan_id: int, request_bytes: int, max_output_tokens: int) -> Reservation:
         from sqlalchemy import select
         from db.engine import get_session
         from db.models import AccountAiConfig, GrokCall, GrokDailyCost
@@ -91,8 +104,10 @@ class DailyBudget:
         now = self._clock()
         day = now.strftime("%Y-%m-%d")
         async with get_session() as s:
+            # Serialize reservation creation even before the daily row exists.
+            # Shared config locks let two first calls race to insert that row.
             cfg = await s.scalar(select(AccountAiConfig).where(
-                AccountAiConfig.account_id == self.scope.db_id).with_for_update(read=True))
+                AccountAiConfig.account_id == self.scope.db_id).with_for_update())
             cap = cfg.daily_cost_cap_cents if cfg is not None else None
             if type(cap) is not int or not 0 <= cap <= 1_000_000:
                 raise BudgetRefused("budget-cap-unset")
@@ -131,6 +146,14 @@ class DailyBudget:
         return None
 
     async def settle(self, reservation: Reservation, *, cost_usd, tokens_in, tokens_out) -> int | None:
+        if self._admission_lock is not None:
+            async with self._admission_lock:
+                return await self._settle(reservation, cost_usd=cost_usd,
+                                          tokens_in=tokens_in, tokens_out=tokens_out)
+        return await self._settle(reservation, cost_usd=cost_usd,
+                                  tokens_in=tokens_in, tokens_out=tokens_out)
+
+    async def _settle(self, reservation: Reservation, *, cost_usd, tokens_in, tokens_out) -> int | None:
         from sqlalchemy import select
         from db.engine import get_session
         from db.models import GrokCall, GrokDailyCost
@@ -157,6 +180,12 @@ class DailyBudget:
 
     async def hold(self, reservation: Reservation) -> None:
         """Outcome unproven: keep the reservation, mark the audit row unknown."""
+        if self._admission_lock is not None:
+            async with self._admission_lock:
+                return await self._hold(reservation)
+        return await self._hold(reservation)
+
+    async def _hold(self, reservation: Reservation) -> None:
         from sqlalchemy import select
         from db.engine import get_session
         from db.models import GrokCall

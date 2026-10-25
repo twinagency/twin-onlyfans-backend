@@ -266,12 +266,18 @@ class Gateway:
         # OnlyFans (history, receipts, client identity) uses the provider-side id.
         self.scope = scope or AccountScope.parse(pilot.account_id)
         from twin_bridge.platform import OnlyFansTextAdapter
-        self.reader = OnlyFansTextAdapter(self.scope.provider_id, client=client)
+        from .send_io import run_blocking
+        from .fan_tasks import configured_fan_concurrency
+        self.run_blocking = run_blocking if configured_fan_concurrency() > 1 else asyncio.to_thread
+        self.reader = OnlyFansTextAdapter(self.scope.provider_id, client=client, blocking_call=self.run_blocking)
         self.input_key = None
         self.followup = False   # True: the "sources" are our own anchor message (a follow-up), not fan input
         self.sources = {}
         self.bubble = 0
         self.stopped_reason = None
+        self.parallel_admission = False
+        self.cancelled = False
+        self.wire_check = None
         # The persistent service renews its lease, so the deadline is read from
         # here (never from the frozen Pilot) and a held fan can refuse a bubble.
         self.deadline = pilot.deadline
@@ -334,6 +340,67 @@ class Gateway:
             self.stopped_reason = "time-limit-reached"
         return bool(self.stopped_reason)
 
+    async def local_call(self, function, /, *args, **kwargs):
+        from .fan_tasks import configured_fan_concurrency
+        if configured_fan_concurrency() > 1:
+            from .local_io import run_blocking
+            return await run_blocking(function, *args, **kwargs)
+        return function(*args, **kwargs)
+
+    async def _prepare_attempt(self, terms):
+        started, retries = time.monotonic(), 0
+        while True:
+            if self.cancelled:
+                raise Refused("send-cancelled")
+            await self.pace()
+            if await self.local_call(self.stopped):
+                raise Refused(self.stopped_reason)
+            since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
+            history = await self.reader.preflight_history(self.pilot.fan_id, since=since, source_ids=set(self.sources))
+            if self.cancelled:
+                raise Refused("send-cancelled")
+            if self.parallel_admission and await self.local_call(self.stopped):
+                raise Refused(self.stopped_reason)
+            receipts = await self.local_call(self.ledger.receipts, pilot_id=self.pilot.pilot_id, input_key=self.input_key)
+            known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
+            (check_followup_history if self.followup else check_provider_history)(
+                history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
+            await self.local_call(check_local, self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
+                            approved_item=self.content.catalog_ids if self.content else None)
+            if self.hold_check is not None:
+                held = await self.run_blocking(self.hold_check)
+                if held:
+                    raise Refused(held)
+            if self.content:
+                def check_terms():
+                    with readonly(self.ledger.path) as con:
+                        self.content.check_catalog(con, self.pilot.account_id)
+                        return self.content.check_send(con, self.pilot.account_id, terms) if terms else terms
+                terms = await self.local_call(check_terms)
+                if terms:
+                    for media_id in terms["media_ids"]:
+                        asset = await self.run_blocking(self.client.vault_media_by_id, media_id)
+                        if (str(asset.get("id")) != str(media_id) or asset.get("type") != terms["media_types"][str(media_id)]
+                                or asset.get("canView") is not True):
+                            raise Refused("content-asset-unavailable")
+            self.bubble += 1
+            if self.cancelled:
+                raise Refused("send-cancelled")
+            try:
+                attempt = await self.local_call(self.ledger.begin_attempt, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                    input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+                return attempt, terms
+            except Refused as exc:
+                if not self.parallel_admission or exc.reason != "allowance-throttled":
+                    raise
+                # begin_attempt rolled back: no durable attempt or physical POST
+                # exists. Keep the same bubble number and refresh every check.
+                self.bubble -= 1
+                retries += 1
+                if retries >= 32 or time.monotonic() - started >= 180:
+                    raise Refused("allowance-wait-timeout")
+                await asyncio.sleep(0)
+
     async def _send(self, text, terms=None):
         from twin_bridge.coordination import authorize_dispatch, revoke_dispatch, guarded_send
         from twin_bridge.platform import escape_plain_text, validate_created_message
@@ -343,54 +410,30 @@ class Gateway:
         settled = False
         unsend_id, self.unsend_id = self.unsend_id, None      # armed for THIS send only, never carried to another
         try:
-            if self.stopped() or not self.input_key:
+            if await self.local_call(self.stopped) or not self.input_key:
                 raise Refused(self.stopped_reason or "pilot-stopped")
             if unsend_id is not None and not terms:
                 raise Refused("unsend-needs-card")
             if len(text.encode("utf-16-le")) // 2 > 4000:
                 raise Refused("output-too-long")
-            await self.pace()
-            if self.stopped():
-                raise Refused(self.stopped_reason)
-            since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
-            history = await self.reader.preflight_history(self.pilot.fan_id, since=since, source_ids=set(self.sources))
-            receipts = self.ledger.receipts(pilot_id=self.pilot.pilot_id, input_key=self.input_key)
-            known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
-            (check_followup_history if self.followup else check_provider_history)(
-                history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
-            check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
-                            approved_item=self.content.catalog_ids if self.content else None)
-            if self.hold_check is not None:
-                held = await asyncio.to_thread(self.hold_check)
-                if held:
-                    raise Refused(held)
-            if self.content:
-                with readonly(self.ledger.path) as con:
-                    self.content.check_catalog(con, self.pilot.account_id)
-                    if terms:
-                        terms = self.content.check_send(con, self.pilot.account_id, terms)
-                if terms:
-                    for media_id in terms["media_ids"]:
-                        asset = await asyncio.to_thread(self.client.vault_media_by_id, media_id)
-                        if (str(asset.get("id")) != str(media_id) or asset.get("type") != terms["media_types"][str(media_id)]
-                                or asset.get("canView") is not True):
-                            raise Refused("content-asset-unavailable")
-            self.bubble += 1
-            attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
-                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+            attempt, terms = await self._prepare_attempt(terms)
             token = authorize_dispatch(self.pilot.account_id, self.pilot.fan_id, turn_id=attempt.turn_id,
                 attempt_no=attempt.attempt_no, owner_token=self.pilot.owner_token, revision=self.pilot.revision)
             if terms:
                 # Retain the frozen media/price intent even if the POST outcome
                 # is unknown. No new table and no automatic delivery recovery.
-                with store.transaction(self.ledger.path) as con:
-                    con.execute("UPDATE native_pilot_receipts SET evidence_json=? WHERE attempt_id=? AND state='dispatching'",
-                                (json.dumps({"content_intent": terms}, sort_keys=True), attempt.id))
+                def save_intent():
+                    with store.transaction(self.ledger.path) as con:
+                        con.execute("UPDATE native_pilot_receipts SET evidence_json=? WHERE attempt_id=? AND state='dispatching'",
+                                    (json.dumps({"content_intent": terms}, sort_keys=True), attempt.id))
+                await self.local_call(save_intent)
 
             wire = [False]
 
             def physical_post():
                 # Re-read stop/owner after the thread handoff, immediately at the wire.
+                if self.cancelled:
+                    raise Refused("send-cancelled")
                 with readonly(self.ledger.path) as con:
                     row = con.execute("SELECT state,owner_token,revision,owner_expires_at,reserved FROM twin_bridge_conversations WHERE account_id=? AND fan_id=?",
                                       (self.pilot.account_id, self.pilot.fan_id)).fetchone()
@@ -404,6 +447,10 @@ class Gateway:
                     raise Refused("fan-held-before-post")
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
                     owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
+                if self.wire_check is not None:
+                    held = self.wire_check()
+                    if held:
+                        raise Refused(held)
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
                     if unsend_id is not None:
                         wire[0] = True    # the DELETE may have reached OnlyFans from here on
@@ -420,7 +467,7 @@ class Gateway:
                     wire[0] = True
                     return self.client.send_text_once_body(self.pilot.fan_id, escape_plain_text(text))
             try:
-                raw = await asyncio.to_thread(physical_post)
+                raw = await self.run_blocking(physical_post)
             except Exception as exc:
                 # Certain outcomes only (see NotSent); anything else propagates as the unknown it is.
                 if not wire[0]:
@@ -440,12 +487,12 @@ class Gateway:
                     any(raw.get(k) for k in ("media", "mediaFiles", "mediaCount", "previews", "lockedText", "isTip", "isUnsent")) or
                     isinstance(raw.get("price"), bool) or raw.get("price") not in (None, 0, 0.0, "0", "0.00")):
                 raise Refused("provider-response-contradicts-text-send")
-            self.ledger.record_sent(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+            await self.local_call(self.ledger.record_sent, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                 attempt_id=attempt.id, provider_message_id=validated.provider_message_id,
                 validated_response=raw, evidence={**validated.evidence, **({"content": content_evidence} if terms else {})}, now=now())
             settled = True
             emit({"event": "sent", "engine": "fastt-native", "provider_message_id": validated.provider_message_id,
-                  "pilot_sent": len([r for r in self.ledger.receipts(pilot_id=self.pilot.pilot_id) if r["state"] == "sent"]),
+                  "pilot_sent": len([r for r in await self.local_call(self.ledger.receipts, pilot_id=self.pilot.pilot_id) if r["state"] == "sent"]),
                   "limit": self.limit_label()})
             return raw
         except Exception as exc:
@@ -454,13 +501,13 @@ class Gateway:
                 certain = False
                 if isinstance(exc, NotSent):
                     try:
-                        self.ledger.record_not_sent(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                        await self.local_call(self.ledger.record_not_sent, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                                                     attempt_id=attempt.id, now=now())
                         certain, self.not_sent = True, exc
                     except Exception:
                         pass   # could not settle it as certain: keep the old, safe reading below
                 if not certain:
-                    self.ledger.record_unknown(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                    await self.local_call(self.ledger.record_unknown, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                                                attempt_id=attempt.id, now=now())
                     self.stopped_reason = "delivery-unknown"
             raise Refused(self.stopped_reason) from None

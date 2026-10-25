@@ -83,6 +83,7 @@ class NativePilotModel:
         max_calls: int = 80, max_tokens: int = 400,
         transport: httpx.AsyncBaseTransport | None = None,
         budget: Any = None,
+        blocking_call: Any = None,
     ) -> None:
         if (not isinstance(api_key, str) or not api_key
                 or any(ord(ch) < 33 or ord(ch) > 126 for ch in api_key)):
@@ -110,6 +111,9 @@ class NativePilotModel:
         self.max_tokens = max_tokens
         self._transport = transport
         self._budget = budget
+        if blocking_call is not None and not callable(blocking_call):
+            raise NativePilotModelError("model-callback-invalid")
+        self._blocking_call = blocking_call
         self.calls = 0
         self.stopped_reason: str | None = None
 
@@ -130,6 +134,12 @@ class NativePilotModel:
             self._fail("model-pilot-stopped")
         if time.monotonic() >= self.deadline:
             self._fail("model-deadline")
+
+    async def _check_async(self) -> None:
+        if self._blocking_call is None:
+            self._check()
+        else:
+            await self._blocking_call(self._check)
 
     async def _hold(self, reservation: Any) -> None:
         """Unproven outcome: the budget reservation is kept, never released."""
@@ -152,7 +162,7 @@ class NativePilotModel:
         response_format: dict | None = None, temperature: float = 0.7,
         reasoning_effort: str = "",
     ) -> Any:
-        self._check()
+        await self._check_async()
         if account_id != self.account_id or type(account_id) is not str or type(fan_id) is not int or fan_id != self.fan_id:
             self._fail("model-scope-denied")
         if model != self.ACCEPTS:
@@ -190,7 +200,10 @@ class NativePilotModel:
         call_number = self.calls
         try:
             if self._reserve_call is not None:
-                self._reserve_call()
+                if self._blocking_call is None:
+                    self._reserve_call()
+                else:
+                    await self._blocking_call(self._reserve_call)
         except Exception:
             self._fail("model-call-reservation-refused")
         reservation = None
@@ -206,7 +219,7 @@ class NativePilotModel:
                      "provider": "openrouter", "model": self.API_MODEL})
         started = time.monotonic()
         try:
-            self._check()
+            await self._check_async()
             async with asyncio.timeout(min(45.0, self.deadline - time.monotonic())):
                 async with httpx.AsyncClient(
                     transport=self._transport, timeout=min(45.0, self.deadline - time.monotonic()),
@@ -227,7 +240,7 @@ class NativePilotModel:
                             if len(raw_bytes) + len(chunk) > MAX_RESPONSE_BYTES:
                                 raise NativePilotModelError("model-response-too-large")
                             raw_bytes.extend(chunk)
-            self._check()
+            await self._check_async()
             result, metadata = self._parse(raw_bytes, response_format, self.API_MODEL)
         except asyncio.CancelledError:
             await self._hold(reservation)

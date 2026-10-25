@@ -144,7 +144,7 @@ FOLLOWUP_DROPS = ("followup-not-queued", "followup-not-due", "followup-expired",
 # conversation budget: the account's delivery allowance is the cap. The
 # conversation budget only has to stay above anything the allowance can grant
 # (``limit_units`` is at most 10000), so it can never be the first thing to bind.
-SERVICE_BUDGET_CEILING = 10000
+SERVICE_BUDGET_CEILING = 1000000
 
 # An input whose turn failed with NO provider send attempt standing (a model timeout/error, or a POST the
 # provider certainly refused) may be answered again, a bounded number of times. The count lives in the
@@ -156,7 +156,7 @@ SERVICE_ID = re.compile(r"svc-[A-Za-z0-9_-]{1,92}")
 
 
 class Ledger:
-    def __init__(self, path: str | Path, *, allowance: bool = False):
+    def __init__(self, path: str | Path, *, allowance: bool = False, concurrent_reads: bool = False):
         # A PostgreSQL target is the application URL (never printed or logged).
         self.path = path if store.is_pg(path) else Path(path)
         self.pg = store.is_pg(path)
@@ -164,6 +164,7 @@ class Ledger:
         # one unit of the account's EXISTING of_delivery_policy, in the same
         # transaction as the durable attempt. The bounded pilot never sets it.
         self.allowance = allowance
+        self.concurrent_reads = concurrent_reads
         # Persistent service only, when fan photos are described (FASTT's inbound_describe): how
         # long a caption-less photo may wait for its description before it is skipped as before.
         # 0 = descriptions are not used here at all (the bounded pilot, every older fixture).
@@ -185,6 +186,19 @@ class Ledger:
                 for statement in _SCHEMA:
                     con.execute(statement)
             yield con
+
+    @contextmanager
+    def _metadata_read(self):
+        # Pure metadata reads use one consistent MVCC snapshot in concurrent PG
+        # mode. Admission, ownership changes, counters and receipts still write
+        # through the existing globally serialized transaction boundary.
+        if self.pg and self.concurrent_reads:
+            self._check_target()
+            with store.readonly(self.path) as con:
+                yield con
+        else:
+            with self._tx() as con:
+                yield con
 
     @staticmethod
     def _pilot(row) -> Pilot:
@@ -1014,7 +1028,7 @@ class Ledger:
 
     def status(self, pilot_id: str) -> dict:
         """Return only public metadata/counters, never owner tokens or message text."""
-        with self._tx() as con:
+        with self._metadata_read() as con:
             p = con.execute("SELECT pilot_id,account_id,fan_id,cutoff,deadline,baseline_used,end_limit,revision,state,reason,model_calls "
                             "FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None:
@@ -1031,7 +1045,7 @@ class Ledger:
 
     def receipts(self, *, pilot_id: str, input_key: str | None = None) -> list[dict]:
         """Metadata only; confirmed IDs may be used for live-history reconciliation."""
-        with self._tx() as con:
+        with self._metadata_read() as con:
             query = ("SELECT attempt_id,input_key,bubble_no,state,provider_message_id,created_at,updated_at "
                      "FROM native_pilot_receipts WHERE pilot_id=?")
             args: tuple = (pilot_id,)

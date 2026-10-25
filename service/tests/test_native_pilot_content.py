@@ -177,6 +177,70 @@ async def exercise(tmp):
         offers = (await s.execute(select(ContentOffer))).scalars().all()
         assert [(x.mode, x.status) for x in offers] == [('ppv', 'open')], [(x.mode, x.status) for x in offers]
     print(json.dumps({'native_single_card_real_shape': True, 'provider_calls': len(sent), 'model_calls': len(calls)}))
+    # Two simultaneous real engine turns on one creator must keep their fan,
+    # reviewed media terms and attribution separate through worker callbacks.
+    from native_pilot.content import ContentPlan
+    from telegram_runtime.capabilities import active_telegram_capabilities
+    fan_ids = [FAN + 10, FAN + 11]
+    async with get_session() as session:
+        for index, fid in enumerate(fan_ids):
+            session.add(Fan(account_id=ACCOUNT, fan_id=fid))
+            session.add(Message(account_id=ACCOUNT, fan_id=fid, message_id=300 + index,
+                                direction='in', body='Please send the reviewed video',
+                                created_at=datetime.utcnow() - timedelta(seconds=30)))
+    arrived, both_ready, concurrent_sends = set(), asyncio.Event(), []
+
+    async def conversation(index, fid):
+        spec = manifest_spec()
+        spec['fan_id'] = fid
+        path = Path(tmp) / f'concurrent-{fid}.json'
+        path.write_text(json.dumps(spec))
+        fan_plan = ContentPlan(path, ACCOUNT, fid)
+
+        async def concurrent_chat(**kw):
+            assert kw['account_id'] == ACCOUNT and kw['fan_id'] == fid
+            assert active_telegram_capabilities().fan_id == fid
+            if kw.get('response_format'):
+                return SimpleNamespace(content='{}', parsed={})
+            arrived.add(fid)
+            if len(arrived) == 2:
+                both_ready.set()
+            await asyncio.wait_for(both_ready.wait(), timeout=15)
+            return SimpleNamespace(content='The reviewed video is $3.\\n>>OFFER 1', parsed=None)
+
+        def concurrent_send(target, text, kw):
+            assert target == fid
+            assert active_telegram_capabilities().fan_id == fid
+            terms = fan_plan.terms(kw)
+            concurrent_sends.append((target, kw))
+            raw = {'id': 20000 + index, 'text': text,
+                   'createdAt': datetime.utcnow().isoformat(), 'fromUser': {'id': 900001}}
+            if terms:
+                raw.update(media=[{'id': 1001, 'type': 'photo'}, {'id': 1002, 'type': 'video'}],
+                           mediaCount=2, previews=[1001], price=terms['price_cents'] / 100,
+                           lockedText=False)
+                fan_plan.evidence(raw, terms)
+            return raw
+
+        with NativeEngine(ACCOUNT, fid, chat=concurrent_chat, send=concurrent_send,
+                          content=fan_plan, own_offers_only=True) as native:
+            result = await native.run(10 + index)
+            assert not result.get('errors'), result
+
+    await asyncio.wait_for(asyncio.gather(*(conversation(i, fid) for i, fid in enumerate(fan_ids))),
+                           timeout=45)
+    assert arrived == set(fan_ids), arrived
+    assert sorted(fid for fid, terms in concurrent_sends if terms) == fan_ids, concurrent_sends
+    assert all(terms == REAL_SHAPE for _, terms in concurrent_sends if terms)
+    assert active_telegram_capabilities() is None
+    async with get_session() as session:
+        offers = (await session.execute(select(ContentOffer).where(ContentOffer.fan_id.in_(fan_ids)))).scalars().all()
+        assert sorted((x.fan_id, x.mode, x.status) for x in offers) == [(fid, 'ppv', 'open') for fid in fan_ids]
+        output = (await session.execute(select(Message).where(
+            Message.fan_id.in_(fan_ids), Message.direction == 'out'))).scalars().all()
+        assert sorted((x.account_id, x.fan_id, x.automation_kind) for x in output) == [
+            (ACCOUNT, fid, 'ai_upseller') for fid in fan_ids], [(x.account_id, x.fan_id, x.message_id, x.automation_kind) for x in output]
+    print(json.dumps({'concurrent_reviewed_cards': len(fan_ids), 'fan_attribution_isolated': True}))
     await engine.dispose()
 
 

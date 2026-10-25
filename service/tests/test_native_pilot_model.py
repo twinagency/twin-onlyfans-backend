@@ -71,6 +71,24 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
         settings.update(overrides)
         return await adapter.chat(**settings)
 
+    async def test_database_callbacks_use_independent_workers_when_configured(self):
+        import threading
+        from native_pilot.local_io import run_blocking
+        main_thread = threading.get_ident()
+        callback_threads = []
+        def stop_check():
+            callback_threads.append(threading.get_ident())
+            return False
+        def reserve():
+            callback_threads.append(threading.get_ident())
+            self.reservations.append("reserved")
+        adapter = self.make(should_stop=stop_check, reserve_call=reserve, blocking_call=run_blocking)
+        await self.call(adapter)
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.reservations, ["reserved"])
+        self.assertEqual(len(callback_threads), 4)
+        self.assertTrue(all(value != main_thread for value in callback_threads))
+
     async def test_pinned_wire_native_prompt_and_real_result(self):
         adapter = self.make()
         messages = [{"role": "system", "content": "Native synthetic instructions"},

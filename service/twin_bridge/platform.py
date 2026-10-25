@@ -182,11 +182,12 @@ class OnlyFansTextAdapter:
     """Sends one free-text DM per call through an explicit account client."""
 
     def __init__(self, account_id: str, *, client=None, client_factory=None,
-                 history_limit: int = 10) -> None:
+                 history_limit: int = 10, blocking_call=None) -> None:
         self.account_id = str(account_id)
         self._client = client
         self._client_factory = client_factory
         self._history_limit = int(history_limit)
+        self._run_blocking = blocking_call or asyncio.to_thread
 
     # ── identity ─────────────────────────────────────────────────────
 
@@ -198,7 +199,7 @@ class OnlyFansTextAdapter:
 
     async def client(self):
         if self._client is None:
-            self._client = await asyncio.to_thread(self._factory(), self.account_id)
+            self._client = await self._run_blocking(self._factory(), self.account_id)
         bound = getattr(self._client, "account_id", None)
         if bound is not None and str(bound) != self.account_id:
             raise PlatformError("client-account-mismatch")
@@ -216,7 +217,7 @@ class OnlyFansTextAdapter:
         if before_id is not None:
             kwargs["before_id"] = before_id
         try:
-            page = await asyncio.to_thread(
+            page = await self._run_blocking(
                 client.get_messages, chat_id, **kwargs,
             )
         except Exception as exc:  # noqa: BLE001 - classified, never swallowed
@@ -339,7 +340,7 @@ class OnlyFansTextAdapter:
             # The attempt-bound token - not a purpose string - authorizes it.
             with guarded_send(self.account_id, target, purpose="twin_bridge",
                               dispatch_token=dispatch_token):
-                payload = await asyncio.to_thread(client.send_text_once_body, target, body)
+                payload = await self._run_blocking(client.send_text_once_body, target, body)
         except Exception as exc:  # noqa: BLE001 - classified below
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if isinstance(status, int) and status not in (408, 429) and 400 <= status < 500:

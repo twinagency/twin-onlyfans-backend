@@ -31,7 +31,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import contextvars
+import socket
+import tempfile
 import json
+import math
 import os
 import random
 import resource
@@ -41,6 +45,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -50,25 +55,34 @@ from urllib.parse import urlsplit
 
 SERVICE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SERVICE))
+from native_pilot.tools.capacity_checks import evaluate_capacity
+from native_pilot.tools.diagnostics import capture_waits
 
 MODEL_TIMEOUT_S = 45.0   # native_pilot.model's per-call limit (no retry)
 FAN_BASE = 1_000_000
 
 
-# ── configuration ─────────────────────────────────────────────────────────────
+# â”€â”€ configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @dataclass
 class Cfg:
     name: str
     accounts: int = 2
+    account_offset: int = 0
+    send_concurrency: int = 1
+    native_engine: bool = False
+    media_every: int = 0
+    burst_size: int = 0
     fans: int = 250
     sim_minutes: float = 60.0
     scale: float = 30.0
-    throttle_s: int = 20
+    throttle_s: float = 20
     seed: int = 7
     # arrivals
     burst: bool = False              # every fan sends 1-3 messages inside burst_window_s at t=0
     burst_window_s: float = 60.0
+    single_messages: bool = False
+    deterministic_arrivals: bool = False
     rate_per_min: float = 0.0        # steady Poisson arrivals per account (a burst of 1-2 bubbles each)
     # model
     model_lo_s: float = 0.4
@@ -77,6 +91,7 @@ class Cfg:
     p_model_error: float = 0.0       # immediate provider error
     # provider
     provider_latency_s: float = 0.6
+    history_latency_s: float = 0.0
     p_429: float = 0.0
     storm: tuple | None = None       # (start_sim_s, end_sim_s): every POST is a 429
     # control events (scenario d)
@@ -91,12 +106,26 @@ class Cfg:
 
 def scenarios(args) -> dict:
     base = dict(accounts=args.accounts, fans=args.fans, scale=args.scale, throttle_s=args.throttle,
-                seed=args.seed, sim_minutes=args.sim_minutes)
+                seed=args.seed, sim_minutes=args.sim_minutes, account_offset=getattr(args, "account_offset", 0),
+                send_concurrency=getattr(args, "concurrent_sends", 1))
     out = {}
 
     def add(name, **kw):
         out[name] = Cfg(name=name, **{**base, **kw})
 
+    add("baseline_fleet", accounts=10, fans=args.fans, throttle_s=args.throttle,
+        rate_per_min=100000 / 60 / 10, single_messages=True, deterministic_arrivals=True,
+        model_lo_s=6.0, model_hi_s=6.0,
+        provider_latency_s=getattr(args, "provider_latency_seconds", 0.2),
+        history_latency_s=getattr(args, "history_latency_seconds", 0.0))
+    add("baseline_account", accounts=1, rate_per_min=args.rate_per_account_hour / 60, single_messages=True,
+        deterministic_arrivals=True, model_lo_s=6.0, model_hi_s=6.0,
+        provider_latency_s=getattr(args, "provider_latency_seconds", 0.2),
+        history_latency_s=getattr(args, "history_latency_seconds", 0.0))
+    add("single_creator", accounts=1, rate_per_min=args.rate_per_account_hour / 60,
+        single_messages=True, deterministic_arrivals=True, model_lo_s=6.0, model_hi_s=6.0,
+        native_engine=args.native_engine, media_every=args.media_every, burst_size=args.burst_size,
+        provider_latency_s=args.provider_latency_seconds, history_latency_s=args.history_latency_seconds)
     add("tiny", accounts=2, fans=8, sim_minutes=3, scale=30, throttle_s=2, burst=True, burst_window_s=5,
         rate_per_min=20.0, control_at_s=15, resume_after_s=40, pause_n=2, takeover_n=1)
     add("ceiling_1acct", accounts=1, fans=args.fans, sim_minutes=10, scale=20, throttle_s=1, burst=True,
@@ -117,7 +146,7 @@ def scenarios(args) -> dict:
     return out
 
 
-# ── the simulated world ───────────────────────────────────────────────────────
+# â”€â”€ the simulated world â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def quantiles(values, qs=(0.5, 0.95, 0.99)):
     if not values:
@@ -148,6 +177,16 @@ class Timers:
         timed.__wrapped__ = fn
         return timed
 
+    def async_wrap(self, label, fn):
+        async def timed(*args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return await fn(*args, **kwargs)
+            finally:
+                with self.lock:
+                    self.rows.setdefault(label, []).append((time.perf_counter() - started) * 1000)
+        return timed
+
     def report(self):
         out = {}
         for label, v in sorted(self.rows.items()):
@@ -163,7 +202,7 @@ class World:
         self.t0 = time.monotonic()
         self.base = 0.0          # simulated second at which the scenario's own timeline starts (after start-up)
         self.sim0 = datetime.now(timezone.utc).replace(tzinfo=None)
-        self.accts = [f"of-{900000001 + i}" for i in range(cfg.accounts)]
+        self.accts = [f"of-{900000001 + cfg.account_offset + i}" for i in range(cfg.accounts)]
         self.provider = {a: a[3:] for a in self.accts}
         self.fans = [FAN_BASE + i for i in range(cfg.fans)]
         self.rng = random.Random(cfg.seed)
@@ -185,7 +224,10 @@ class World:
         self.control = []        # dicts
         self.paused_since = {}   # (acct, fan) -> t_commit
         self.lag = []
+        self.arrival_lag_s = []
         self.timers = Timers()
+        self.validation_errors = []
+        self.model_purposes = {}
 
     # simulated time
     def sim_t(self):
@@ -211,11 +253,16 @@ class World:
             await asyncio.sleep(min(left / self.S, 0.25))
 
     # registry
-    def new_inbound(self, acct, fan, text="neutral fan text"):
+    def new_inbound(self, acct, fan, text="neutral fan text", *, scheduled_t=None):
+        if self.cfg.native_engine:
+            text = ("Please send the reviewed three dollar video." if self.cfg.media_every and
+                    (fan - FAN_BASE) % self.cfg.media_every == 0 else "How is your day going?")
+            text += " Synthetic fan " + str(fan) + "."
         with self.lock:
             self.mid += 1
-            created = self.ms(self.now())
-            rec = {"id": self.mid, "created": created, "t": self.sim_t(), "answered_t": None, "text": text,
+            arrived = self.sim_t() if scheduled_t is None else scheduled_t
+            created = self.ms(self.sim0 + timedelta(seconds=arrived))
+            rec = {"id": self.mid, "created": created, "t": arrived, "answered_t": None, "text": text,
                    "ahead": len(self.pending[acct])}
             self.inbound.setdefault((acct, fan), []).append(rec)
             self.pending[acct].add(fan)
@@ -237,7 +284,7 @@ class World:
             self.event_reasons[key] = self.event_reasons.get(key, 0) + 1
 
 
-# ── fakes ─────────────────────────────────────────────────────────────────────
+# â”€â”€ fakes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class FakeResponse:
     def __init__(self, data, status=200, url="https://onlyfans.invalid/api2/v2/x"):
@@ -264,6 +311,7 @@ class FakeHTTP:
 
     def get(self, url, **kwargs):
         w, fan = self.w, self.fan_of(url)
+        time.sleep(w.cfg.history_latency_s / w.S)
         with w.lock:
             inbound = [{"id": r["id"], "text": r["text"], "createdAt": r["created"].isoformat() + "Z", "isFromMe": False,
                         "fromUser": {"id": fan}, "withUser": {"id": fan}}
@@ -285,8 +333,19 @@ class FakeHTTP:
             w.out_id += 1
             result = {"id": w.out_id, "text": json["text"], "isFromMe": True, "fromUser": {"id": self.provider_id},
                       "withUser": {"id": fan}, "createdAt": w.ms(w.now()).isoformat() + "Z", "price": 0, "media": []}
+            media = json.get("mediaFiles", [])
+            if media:
+                result.update(price=json.get("price", 0), lockedText=json.get("lockedText", False),
+                              media=[{"id": mid, "type": "photo" if mid == 1001 else "video"} for mid in media],
+                              previews=json.get("previews", []), mediaCount=len(media))
+            if cfg.native_engine:
+                if str(fan) not in json["text"]:
+                    w.validation_errors.append("reply-fan-marker-mismatch")
+                if media and (media != [1001, 1002] or json.get("price") != 3
+                              or json.get("previews") != [1001]):
+                    w.validation_errors.append("reviewed-media-terms-mismatch")
             w.sent.setdefault((self.acct, fan), []).append(result)
-            w.posts.append({"acct": self.acct, "fan": fan, "t": t, "ok": True, "status": 200})
+            w.posts.append({"acct": self.acct, "fan": fan, "t": t, "ok": True, "status": 200, "media": bool(media)})
         w.answered(self.acct, fan, t)
         return FakeResponse(result, url=url)
 
@@ -307,7 +366,7 @@ class FakeIntake:
         pass
 
 
-# ── database ──────────────────────────────────────────────────────────────────
+# â”€â”€ database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class Db:
     def __init__(self, admin_url):
@@ -319,6 +378,9 @@ class Db:
             sys.exit("REFUSED: the load harness only runs against a local throwaway PostgreSQL (got host %r)" % u.host)
         self.reuse = os.environ.get("LOAD_TEST_REUSE_DB")   # dev only: a database already bootstrapped by a previous run
         self.name = self.reuse or "of_load_" + uuid.uuid4().hex[:10]
+        self.fleet_token = os.environ.get("LOAD_TEST_FLEET_TOKEN")
+        if self.fleet_token and (not self.reuse or not self.name.startswith("of_load_")):
+            sys.exit("REFUSED: a fleet worker requires its parent-created disposable database")
         self.admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
         self.sync_url = u.set(drivername="postgresql+psycopg2", database=self.name).render_as_string(hide_password=False)
         self.async_url = u.set(drivername="postgresql+asyncpg", database=self.name).render_as_string(hide_password=False)
@@ -341,12 +403,17 @@ class Db:
                                      "(5,'Automation',false),(6,'Twin staff',false),(9,'Other',false)")
             e.dispose()
         from twin_bridge import store
-        store.ensure_runtime_schema(self.sync_url)
+        if not self.fleet_token:
+            store.ensure_runtime_schema(self.sync_url)
         # the harness's own pool, labelled so it is excluded from the connection census
         self.engine = self.create_engine(self.sync_url, pool_size=4, max_overflow=4,
                                          connect_args={"options": "-c timezone=UTC -c search_path=fastt_runtime,public", "application_name": "load-harness"})
         self.mon = self.create_engine(self.sync_url, pool_size=1, max_overflow=0,
                                       connect_args={"application_name": "load-monitor"})
+        if self.fleet_token:
+            rows = self.run("SELECT token FROM public.load_harness_fleet WHERE id=1")
+            if rows != [(self.fleet_token,)]:
+                raise RuntimeError("fleet database ownership marker mismatch")
 
     def drop(self):
         from twin_bridge import store
@@ -404,12 +471,19 @@ class Db:
             self.run("INSERT INTO of_delivery_policy(account_id,revision,enabled,transport_kind,limit_units,used_units,"
                      "queued_count,throttle_seconds,next_dispatch_at,active_intent_id,media_enabled) "
                      "VALUES(:a,1,true,'native',10000,4,0,:t,NULL,NULL,false)", {"a": a, "t": w.cfg.throttle_s})
-            from db.models import AccountAiConfig, Fan
+            from db.models import AccountAiConfig, Fan, CatalogItem
             from sqlalchemy.orm import Session
             with Session(self.engine) as session:
                 session.add(AccountAiConfig(account_id=a, daily_cost_cap_cents=1_000_000))
                 session.add_all([Fan(account_id=a, fan_id=f) for f in w.fans])
+                if w.cfg.native_engine and w.cfg.media_every:
+                    session.add(CatalogItem(id=1, account_id=a, label="Reviewed fixture video", kind="video",
+                        description_for_ai="One reviewed neutral video with a free preview photo.",
+                        media_ids="[1001, 1002]", preview_media_ids="[1001]", duration_sec=60,
+                        price_cents=300, is_free_teaser=False, enabled=True, pricing_mode="fixed"))
                 session.commit()
+            if w.cfg.native_engine and w.cfg.media_every:
+                self.run("UPDATE of_delivery_policy SET media_enabled=true WHERE account_id=:a", {"a": a})
             self.many("INSERT INTO of_conversation_state(account_id,fan_id,mode,takeover_state) "
                       "VALUES(:a,:f,'automated','none')", [{"a": a, "f": f} for f in w.fans])
             self.many("INSERT INTO twin_bridge_conversations(account_id,fan_id,creator_slug,conversation_id,"
@@ -439,7 +513,7 @@ class Db:
         return rows, int(xact or 0)
 
 
-# ── process / host measurements ───────────────────────────────────────────────
+# â”€â”€ process / host measurements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def rss_kb():
     try:
@@ -471,7 +545,7 @@ def pg_cpu_s(container):
     return None
 
 
-# ── the run ───────────────────────────────────────────────────────────────────
+# â”€â”€ the run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def make_schedule(w: World):
     cfg, ev = w.cfg, []
@@ -482,21 +556,38 @@ def make_schedule(w: World):
                 for k in range(w.rng.choice([1, 1, 2, 3])):
                     ev.append((t + 2.5 * k * (0 if cfg.prefill else 1), a, f))
         if cfg.rate_per_min:
-            t = 30.0
+            t, index = 30.0, 0
             while t < cfg.sim_minutes * 60:
-                t += w.rng.expovariate(cfg.rate_per_min / 60.0)
-                f = w.rng.choice(w.fans)
-                for k in range(w.rng.choice([1, 1, 2])):
+                if cfg.burst_size and index >= round((cfg.sim_minutes * 60 - 30) * cfg.rate_per_min / 60):
+                    break
+                if cfg.deterministic_arrivals:
+                    if cfg.burst_size:
+                        t = 30.0 + (index // cfg.burst_size) * cfg.burst_size * 60.0 / cfg.rate_per_min
+                    else:
+                        t = 30.0 + index * 60.0 / cfg.rate_per_min
+                    index += 1
+                else:
+                    t += w.rng.expovariate(cfg.rate_per_min / 60.0)
+                if t >= cfg.sim_minutes * 60 or math.isclose(t, cfg.sim_minutes * 60, abs_tol=1e-9):
+                    break
+                f = w.fans[(index - 1) % len(w.fans)] if cfg.deterministic_arrivals else w.rng.choice(w.fans)
+                for k in range(1 if cfg.single_messages else w.rng.choice([1, 1, 2])):
                     ev.append((t + 2.0 * k, a, f))
     ev.sort()
     return ev
 
 
 async def simulate_fans(w: World, db: Db, schedule):
-    for t, acct, fan in schedule:
-        await w.sleep_until(w.base + t)
-        rec = w.new_inbound(acct, fan)
-        await asyncio.to_thread(db.insert_in, acct, fan, rec)
+    # The arrival writer must not compete for the send workers' default executor.
+    # Late arrivals retain their scheduled timestamps and invalidate the benchmark.
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="load-ingress") as ingress:
+        for t, acct, fan in schedule:
+            due = w.base + t
+            await w.sleep_until(due)
+            rec = w.new_inbound(acct, fan, scheduled_t=due)
+            await loop.run_in_executor(ingress, db.insert_in, acct, fan, rec)
+            w.arrival_lag_s.append(max(0.0, w.sim_t() - due))
 
 
 async def sampler(w: World, db: Db, stats, stop):
@@ -624,6 +715,8 @@ def install_patches(stack: ExitStack, holder: dict):
     from native_pilot import model as model_mod
     MODEL_NAME = model_mod.MODEL
 
+    model_scope = contextvars.ContextVar("synthetic_model_scope", default=None)
+
     async def synthetic_llm(request):
         """OpenRouter stand-in: configurable latency, timeouts (as httpx.ReadTimeout), provider errors."""
         w, cfg = W(), W().cfg
@@ -634,14 +727,42 @@ def install_patches(stack: ExitStack, holder: dict):
             await w.sleep_sim(0.3)
             return httpx.Response(503, json={"error": "synthetic"})
         await w.sleep_sim(w.rng.uniform(cfg.model_lo_s, cfg.model_hi_s))
+        response_text = "synthetic reply"
+        if cfg.native_engine:
+            account, fan, kwargs = model_scope.get()
+            if kwargs.get("response_format"):
+                response_text = "{}"
+            elif cfg.media_every and (fan - FAN_BASE) % cfg.media_every == 0:
+                response_text = "Reviewed video for synthetic fan " + str(fan) + " is $3.\n>>OFFER 1"
+            else:
+                response_text = "Hello synthetic fan " + str(fan) + ". My day is going well."
         return httpx.Response(200, json={
-            "model": model_mod.MODEL, "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "synthetic reply"}}],
+            "model": model_mod.MODEL, "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": response_text}}],
             "usage": {"prompt_tokens": 2500, "completion_tokens": 40}})
 
     class SyntheticModel(model_mod.NativePilotModel):
         def __init__(self, **kw):
             kw["transport"] = httpx.MockTransport(synthetic_llm)
             super().__init__(**kw)
+
+        async def chat(self, **kwargs):
+            w = W()
+            if not w.cfg.native_engine:
+                return await super().chat(**kwargs)
+            if kwargs.get("account_id") != self.account_id or kwargs.get("fan_id") != self.fan_id:
+                w.validation_errors.append("model-fan-scope-mismatch")
+                raise RuntimeError("model-fan-scope-mismatch")
+            token = model_scope.set((self.account_id, self.fan_id, kwargs))
+            w.model_calls[self.account_id] += 1
+            purpose = str(kwargs.get("purpose"))
+            w.model_purposes[purpose] = w.model_purposes.get(purpose, 0) + 1
+            try:
+                return await super().chat(**kwargs)
+            except Exception:
+                w.model_failures[self.account_id] += 1
+                raise
+            finally:
+                model_scope.reset(token)
 
     scope_conn = {}
 
@@ -657,9 +778,14 @@ def install_patches(stack: ExitStack, holder: dict):
         return conn_for(scope)
 
     def build_client(conn):
+        if os.environ.get("LOAD_TEST_FLEET_TOKEN") or holder.get("native_engine"):
+            # The real connection builder binds provider access once per worker.
+            # Keep that same account guard when substituting only the HTTP socket.
+            from onlyfans_runtime.role_guard import allow_native_pilot_provider_access
+            allow_native_pilot_provider_access(conn.scope.provider_id)
         w = W()
         acct = conn.scope.db_id
-        http = w.http[acct]
+        http = FakeHTTP(w, acct)
         client = OFClient.__new__(OFClient)
         client.account_id, client.user_id, client.platform = conn.scope.provider_id, conn.scope.provider_id, "onlyfans"
         client.http, client.timeout_s, client.proxy_url, client.proxy_label = http, 1, None, None
@@ -684,8 +810,45 @@ def install_patches(stack: ExitStack, holder: dict):
     stack.enter_context(patch.object(runner, "report_to_twin", no_report))
     stack.enter_context(patch.object(service, "ensure_fan_conversation", no_ensure))
     stack.enter_context(patch.object(service.Service, "idle", idle))
-    stack.enter_context(patch.object(engine_mod, "NativeEngine", SyntheticEngine))
+    if not holder.get("native_engine"):
+        stack.enter_context(patch.object(engine_mod, "NativeEngine", SyntheticEngine))
     stack.enter_context(patch.object(model_mod, "NativePilotModel", SyntheticModel))
+    from native_pilot import budget as budget_mod
+    class ProfileBudget(budget_mod.DailyBudget):
+        async def _reserve(self, **kwargs):
+            return await W().timers.async_wrap("budget.reserve_database", super()._reserve)(**kwargs)
+
+        async def _settle(self, *args, **kwargs):
+            return await W().timers.async_wrap("budget.settle_database", super()._settle)(*args, **kwargs)
+
+        async def _hold(self, *args, **kwargs):
+            return await W().timers.async_wrap("budget.hold_database", super()._hold)(*args, **kwargs)
+
+        async def reserve(self, **kwargs):
+            try:
+                return await W().timers.async_wrap("budget.reserve_with_queue", super().reserve)(**kwargs)
+            except Exception as exc:
+                cause = getattr(exc, "orig", None)
+                state = getattr(cause, "sqlstate", None) or getattr(cause, "pgcode", None)
+                code = state if isinstance(state, str) and len(state) == 5 and state.isalnum() else ""
+                W().emit({"event": "synthetic-budget-error", "reason": type(exc).__name__ + (":" + code if code else "")})
+                raise
+        async def settle(self, *args, **kwargs):
+            try:
+                return await W().timers.async_wrap("budget.settle_with_queue", super().settle)(*args, **kwargs)
+            except Exception as exc:
+                W().emit({"event": "synthetic-budget-settlement-error",
+                          "reason": type(exc).__module__ + "." + type(exc).__name__})
+                raise
+
+        async def hold(self, *args, **kwargs):
+            try:
+                return await super().hold(*args, **kwargs)
+            except Exception as exc:
+                W().emit({"event": "synthetic-budget-hold-error",
+                          "reason": type(exc).__module__ + "." + type(exc).__name__})
+                raise
+    stack.enter_context(patch.object(budget_mod, "DailyBudget", ProfileBudget))
     stack.enter_context(patch.object(conn_mod, "load_verified_connection", fake_load))
     stack.enter_context(patch.object(conn_mod, "build_client", build_client))
     stack.enter_context(patch.object(attribution, "require_sentinels", fake_sentinels))
@@ -709,22 +872,34 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
     import argparse as ap
     from db.engine import engine as async_engine  # noqa: F401  (imported so dispose in shutdown is the real one)
 
-    db.reset()
+    if db.fleet_token and (cfg.name != "baseline_account" or cfg.accounts != 1):
+        raise RuntimeError("fleet workers may run exactly one creator scenario")
+    if not db.fleet_token:
+        db.reset()
     w = World(cfg)
     w.http = {a: FakeHTTP(w, a) for a in w.accts}
     holder["w"], holder["db"] = w, db
-    db.seed(w)
+    if not db.fleet_token:
+        db.seed(w)
     schedule = make_schedule(w)
 
     services, tasks = [], []
     for a in w.accts:
+        manifest = None
+        if cfg.native_engine and cfg.media_every:
+            manifest = Path(tempfile.gettempdir()) / (db.name + "-manifest.json")
+            manifest.write_text(json.dumps({"account_id": a, "fan_id": "*", "items": [{
+                "catalog_id": 1, "kind": "video", "price_cents": 300,
+                "media": [{"id": 1001, "type": "photo"}, {"id": 1002, "type": "video"}],
+                "preview_ids": [1001]}]}), encoding="utf-8")
         args = ap.Namespace(account=a, fan=None, all_fans=True, handle="synthetic-creator", enable_send=True,
-                            twin_context=False, content_manifest=None, service_id=None)
+                            twin_context=False, content_manifest=str(manifest) if manifest else None, service_id=None)
         svc = service.Service(args, intake_factory=FakeIntake)
         services.append(svc)
 
     stats = {"rss_kb_max": rss_kb(), "threads_max": threading.active_count(), "conn_samples": [], "conn_active_samples": []}
     stop = asyncio.Event()
+    stats["wait_samples"] = []
 
     cpu0, rss0, pg0 = cpu_s(), rss_kb(), pg_cpu_s(pg_container)
     _, xact0 = db.census()
@@ -735,8 +910,28 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
         await asyncio.sleep(0.02)
         if any(t.done() for t in tasks) or time.monotonic() - t_wait > 60:
             break
+    if db.fleet_token:
+        if any(s.started_at is None for s in services) or any(task.done() for task in tasks):
+            raise RuntimeError("creator service did not start before the fleet barrier")
+        barrier = Path(os.environ["LOAD_TEST_FLEET_BARRIER"])
+        ready = barrier / f"ready-{cfg.account_offset}.json"
+        ready.write_text(json.dumps({"pid": os.getpid(), "account": w.accts[0]}))
+        deadline = time.monotonic() + 90
+        while not (barrier / "start.json").exists():
+            if time.monotonic() >= deadline or any(task.done() for task in tasks):
+                raise RuntimeError("fleet startup barrier failed")
+            await asyncio.sleep(0.05)
+        start_epoch = json.loads((barrier / "start.json").read_text())["epoch"]
+        await asyncio.sleep(max(0.0, start_epoch - time.time()))
+    actual_start_epoch = time.time()
     w.base = w.sim_t()   # the scenario's timeline starts here; the clock itself never jumps (watermarks are in it)
     helpers = [asyncio.create_task(sampler(w, db, stats, stop)), asyncio.create_task(lag_probe(w, stop))]
+    if os.environ.get("LOAD_TEST_PROFILE") == "1":
+        async def profile_waits():
+            while not stop.is_set():
+                await asyncio.sleep(10)
+                stats["wait_samples"].append({"scenario_seconds": round(w.rel(), 2), **capture_waits()})
+        helpers.append(asyncio.create_task(profile_waits()))
     if cfg.prefill:
         await w.sleep_sim(1.0)
         for t, acct, fan in schedule:
@@ -748,7 +943,8 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
     if cfg.control_at_s is not None:
         helpers.append(asyncio.create_task(controller(w, db)))
     t_start_real, t_start_sim = time.monotonic(), w.sim_t()
-    end_sim = t_start_sim + cfg.sim_minutes * 60
+    # Stop arrivals at the configured duration, then give the last inputs their full SLA window.
+    end_sim = t_start_sim + cfg.sim_minutes * 60 + (90 if cfg.name in ("baseline_fleet", "baseline_account", "single_creator") else 0)
     while w.sim_t() < end_sim:
         await asyncio.sleep(0.25)
         if cfg.stop_when_drained and all(not w.pending[a] for a in w.accts) and w.sim_t() > t_start_sim + 12:
@@ -782,10 +978,38 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
             result["accounts"][acct]["min_admission_gap_s"] = round(min(gaps), 3) if gaps else None
             result["accounts"][acct]["throttle_respected"] = (min(gaps) >= cfg.throttle_s - 0.05) if gaps else True
             result["accounts"][acct]["min_wire_gap_s_informational"] = result["accounts"][acct].pop("min_gap_between_sends_s")
+    result["offered_load"] = {
+        "scheduled_messages": len(schedule),
+        "generated_messages": sum(len(records) for records in w.inbound.values()),
+        "persisted_messages": len(w.arrival_lag_s) if not cfg.prefill else sum(len(records) for records in w.inbound.values()),
+        "max_ingress_delay_s": round(max(w.arrival_lag_s, default=0.0), 3),
+        "arrival_window_s": max(0.0, cfg.sim_minutes * 60 - 30),
+        "scheduled_messages_per_hour": round(len(schedule) * 3600 / (cfg.sim_minutes * 60 - 30), 3)
+            if cfg.sim_minutes * 60 > 30 else 0,
+    }
+    result["start_epoch"] = actual_start_epoch
+    result["worker_database_role"] = os.environ.get("ONLYFANS_PROCESS_ROLE")
+    result["delivery_concurrency"] = cfg.send_concurrency
+    result["account_ledger_locks"] = False
+    result["native_engine_exercised"] = cfg.native_engine
+    result["validation_errors"] = w.validation_errors
+    result["model_purposes"] = w.model_purposes
+    result["media_posts"] = sum(bool(p.get("media")) for p in w.posts if p["ok"])
+    result["provider_posts_by_fan"] = {str(f): len(w.sent.get((w.accts[0], f), [])) for f in w.fans
+                                     if (w.accts[0], f) in w.inbound}
+    result["async_pool"] = {"size": async_engine.pool.size(), "max_overflow": async_engine.pool._max_overflow}
+    result["wait_samples"] = stats["wait_samples"]
     result["service_crashed"] = crashed
     result["helper_errors"] = helper_errors
+    result["runtime_errors"] = [
+        f"{reason} ({count})" for reason, count in w.event_reasons.items()
+        if reason.startswith(("held:service-error:", "held:shutdown-turn:",
+                              "synthetic-budget-error:", "synthetic-budget-settlement-error:",
+                              "synthetic-budget-hold-error:"))
+    ]
     result["service_pool"] = {"sync_store_pool": "pool_size=2,max_overflow=4 per URL (twin_bridge.store)",
-                              "async_engine_pool": "SQLAlchemy default (5+10)"}
+                              "async_engine_pool": result["async_pool"]}
+    result["capacity_verdict"] = single_creator_verdict(result) if cfg.name == "single_creator" else None
     return result
 
 
@@ -836,6 +1060,10 @@ def summarize(w: World, cfg: Cfg, services, stats, elapsed_real, elapsed_sim, t0
             "throttle_respected": (min(gaps) >= cfg.throttle_s - 0.5) if gaps else True,
             "provider_429s": sum(1 for p in bad_posts if p["acct"] == a),
             "reply_latency_s": {**quantiles(lat), "n": len(lat), "max": round(max(lat), 1) if lat else None},
+            "delivered_over_90s": sum(value > 90 for value in lat),
+            "unanswered_over_90s": sum(value > 90 for value in censored),
+            "delivered_over_30s": sum(value > 30 for value in lat),
+            "unanswered_over_30s": sum(value > 30 for value in censored),
             "unanswered_at_end": len(censored),
             "unanswered_oldest_age_s": round(max(censored), 1) if censored else 0,
             "latency_incl_unanswered_s": quantiles(lat + censored),
@@ -907,14 +1135,20 @@ def summarize(w: World, cfg: Cfg, services, stats, elapsed_real, elapsed_sim, t0
     return out
 
 
-# ── entry ─────────────────────────────────────────────────────────────────────
+# â”€â”€ entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_all(args, names=None):
     admin = args.pg_url or os.environ.get("ONLYFANS_TEST_PG_URL")
     if not admin:
         sys.exit("FAILED: --pg-url / ONLYFANS_TEST_PG_URL (admin URL of a disposable LOCAL PostgreSQL) is required")
     os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
-    os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
+    # Fleet workers use the deployed worker role and its bounded DB pool.
+    # Older standalone scenarios retain their intentionally role-free fixture.
+    if os.environ.get("LOAD_TEST_FLEET_TOKEN") or args.native_engine:
+        os.environ["ONLYFANS_PROCESS_ROLE"] = "worker"
+    else:
+        os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
+    os.environ["TWIN_FASTT_CONFIG_ISOLATED"] = "1"
     os.environ["TWIN_BRIDGE_ENABLED"] = "0"
     os.environ["TWIN_BRIDGE_SEND_ENABLED"] = "0"
     os.environ["W7_WEBHOOK_DISPATCH_DISABLED"] = "1"
@@ -932,8 +1166,14 @@ def run_all(args, names=None):
     results = []
     try:
         db.bootstrap()
-        holder = {}
+        holder = {"native_engine": args.native_engine}
         with ExitStack() as stack:
+            original_connect = socket.socket.connect
+            def local_only(sock, address):
+                if isinstance(address, tuple) and address[0] not in ("127.0.0.1", "::1", "localhost"):
+                    raise RuntimeError("external-network-forbidden-in-capacity-test")
+                return original_connect(sock, address)
+            stack.enter_context(patch.object(socket.socket, "connect", local_only))
             holder["service"], holder["AccountScope"] = install_patches(stack, holder)
 
             async def go():
@@ -951,24 +1191,84 @@ def run_all(args, names=None):
     return {"harness": "native_pilot.tools.load_test", "python": sys.version.split()[0], "results": results}
 
 
+def single_creator_verdict(result):
+    failures = []
+    cfg, offered = result["config"], result["offered_load"]
+    count = offered["scheduled_messages"]
+    if cfg["accounts"] != 1 or cfg["scale"] != 1:
+        failures.append("one unscaled creator required")
+    if count <= 0 or offered["generated_messages"] != count or offered["persisted_messages"] != count:
+        failures.append("missing scheduled arrivals")
+    if offered["max_ingress_delay_s"] > 1:
+        failures.append("arrival persistence lag exceeds one second")
+    for key in ("service_crashed", "helper_errors", "runtime_errors", "validation_errors"):
+        if result.get(key):
+            failures.append(key)
+    for row in result["accounts"].values():
+        if row["reply_latency_s"]["n"] != count or row["unanswered_at_end"]:
+            failures.append("unanswered inputs")
+        if row["delivered_over_90s"] or not row["reply_latency_s"]["n"] or row["reply_latency_s"]["max"] > 90:
+            failures.append("90-second maximum exceeded")
+        if row["model_failures"] or row["provider_429s"] or not row["throttle_respected"]:
+            failures.append("model provider or pacing failure")
+    if cfg["native_engine"]:
+        if not result["native_engine_exercised"] or not result["model_purposes"]:
+            failures.append("native engine evidence missing")
+        if any(n != 1 for n in result["provider_posts_by_fan"].values()):
+            failures.append("fixture expects one reply per distinct fan")
+        expected = sum((int(f) - FAN_BASE) % cfg["media_every"] == 0 for f in result["provider_posts_by_fan"]) if cfg["media_every"] else 0
+        if result["media_posts"] != expected:
+            failures.append("reviewed media count mismatch")
+    return {"passed": not failures, "failures": failures,
+            "scope": "Real native engine, scheduler, PG, budget and delivery path; deterministic simulated AI/provider; catalogue media references. No live-provider rate or vault/vision capacity certification."}
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scenario", default="all")
     p.add_argument("--pg-url", help="admin URL of a disposable LOCAL PostgreSQL (default ONLYFANS_TEST_PG_URL)")
     p.add_argument("--pg-container", help="docker container name of that PostgreSQL, to also report its CPU (optional)")
+    p.add_argument("--rate-per-account-hour", type=int, default=120)
+    p.add_argument("--native-engine", action="store_true")
+    p.add_argument("--media-every", type=int, default=0)
+    p.add_argument("--burst-size", type=int, default=0)
     p.add_argument("--accounts", type=int, default=2)
+    p.add_argument("--account-offset", type=int, default=0, choices=range(200))
     p.add_argument("--fans", type=int, default=250)
     p.add_argument("--scale", type=float, default=30.0, help="simulated seconds per real second")
-    p.add_argument("--throttle", type=int, default=20, help="of_delivery_policy.throttle_seconds (production: 20)")
+    p.add_argument("--throttle", type=float, default=20, help="of_delivery_policy.throttle_seconds (production: 20)")
+    p.add_argument("--concurrent-fans", type=int, default=1, choices=range(1,65))
     p.add_argument("--sim-minutes", type=float, default=60.0)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--out")
+    p.add_argument("--profile", action="store_true", help="capture task/thread wait locations without message text or credentials")
+    p.add_argument("--require-target-sla", action="store_true", help="fail unless unscaled target traffic and every reply meet the 30-second test SLA")
+    p.add_argument("--account-ledger-locks", action="store_true")
+    p.add_argument("--concurrent-sends", type=int, choices=range(1, 17), default=1)
+    p.add_argument("--provider-latency-seconds", type=float, default=0.2)
+    p.add_argument("--history-latency-seconds", type=float, default=0.0)
     args = p.parse_args(argv)
+    if args.native_engine and (args.scale != 1 or args.scenario != "single_creator"):
+        p.error("native engine capacity requires one unscaled single_creator scenario")
+    for value in [args.provider_latency_seconds, args.history_latency_seconds]:
+        if not math.isfinite(value) or not 0 <= value <= 30:
+            p.error("synthetic request latency must be finite and between zero and thirty seconds")
+    os.environ["FASTT_ACCOUNT_LEDGER_LOCKS"] = "1" if args.account_ledger_locks else "0"
+    os.environ["FASTT_MAX_CONCURRENT_SENDS"] = str(args.concurrent_sends)
+    os.environ["FASTT_MAX_CONCURRENT_FANS"] = str(args.concurrent_fans)
+    if args.profile:
+        os.environ["LOAD_TEST_PROFILE"] = "1"
     result = run_all(args)
+    if args.require_target_sla:
+        for row in result["results"]:
+            row["capacity_verdict"] = evaluate_capacity(row)
     text = json.dumps(result, indent=2, default=str)
     if args.out:
         Path(args.out).write_text(text)
     print(text)
+    if (args.require_target_sla or args.scenario == "single_creator") and any(not row["capacity_verdict"]["passed"] for row in result["results"]):
+        print("FAILED: capacity acceptance criteria were not met; see capacity_verdict in the report", file=sys.stderr)
+        return 1
     return 0
 
 

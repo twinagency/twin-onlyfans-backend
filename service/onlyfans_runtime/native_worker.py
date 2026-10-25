@@ -7,6 +7,7 @@ delivery and receipt repair. Injected seams must be explicitly registered types.
 """
 from dataclasses import asdict,dataclass
 import math
+import time
 import os
 import threading
 
@@ -325,7 +326,7 @@ class NativeWorker:
             return report
         finally:self._lock.release()
 
-    def run(self,stop,*,max_cycles=None,poll_seconds=.5,max_backoff_seconds=5,observe=None):
+    def run(self,stop,*,max_cycles=None,poll_seconds=.5,max_backoff_seconds=5,observe=None,max_seconds=None,minimum_cycles=1):
         """Cooperative drain with interruptible, bounded failure backoff.
 
         A hard process kill may interrupt a phase; persisted invocation and wire
@@ -337,11 +338,20 @@ class NativeWorker:
         for value in (poll_seconds,max_backoff_seconds):
             if type(value) not in {int,float} or not math.isfinite(value):raise Refused("invalid worker polling bound")
         if not .05<=poll_seconds<=5 or not poll_seconds<=max_backoff_seconds<=30:raise Refused("invalid worker polling bound")
+        if (max_seconds is not None and (type(max_seconds) not in {int,float}
+                or not math.isfinite(max_seconds) or not .05<=max_seconds<=3600)):
+            raise Refused("invalid worker time limit")
+        if type(minimum_cycles) is not int or minimum_cycles<1 or (max_cycles is not None and minimum_cycles>max_cycles):
+            raise Refused("invalid minimum worker cycles")
+        deadline=time.monotonic()+max_seconds if max_seconds is not None else None
         cycles=failures=0
         while not stop.is_set() and (max_cycles is None or cycles<max_cycles):
             report=self.step(stop);cycles+=1
             failures=min(failures+1,6) if report.errors else 0
             if observe is not None:observe(report.public())
             if max_cycles is not None and cycles>=max_cycles:break
+            # Slow HTTP turns must yield to credential refresh and import jobs.
+            # Finish one pass over the selected cohort before yielding.
+            if deadline is not None and cycles>=minimum_cycles and time.monotonic()>=deadline:break
             stop.wait(min(max_backoff_seconds,poll_seconds*2**failures))
         return cycles

@@ -69,7 +69,9 @@ def test_refresh_restart_and_reconnect_do_not_duplicate_or_reset_imports(databas
     assert ensure_started(store,TENANT,account,connection_revision=1)
     assert not ensure_started(store,TENANT,account,connection_revision=1)
     with Session(store.engine) as s,s.begin():
-        s.scalar(select(OfVaultSyncJob)).page_offset=240
+        job=s.scalar(select(OfVaultSyncJob))
+        job.page_offset=job.items_seen=240
+        job.pages_read=10
     assert save(store,account,payload,1,'d'*64)==2
     load_worker_cohort(store,TENANT,include_read_only=True)
     assert not ensure_started(store,TENANT,account,connection_revision=2)

@@ -42,9 +42,16 @@ def test_concurrent_first_reservations_do_not_race_or_overspend(database, monkey
         monkeypatch.setattr(db_engine, "async_session_factory",
                             async_sessionmaker(async_engine, expire_on_commit=False))
         try:
-            return await asyncio.wait_for(asyncio.gather(*(
+            outcomes = await asyncio.wait_for(asyncio.gather(*(
                 budget.reserve(fan_id=1000000+i, request_bytes=8000, max_output_tokens=4096)
                 for i in range(32)), return_exceptions=True), timeout=20)
+            if admitted:
+                reservations = [value for value in outcomes if isinstance(value, Reservation)]
+                await asyncio.wait_for(asyncio.gather(*(
+                    budget.hold(value) if index % 2 else
+                    budget.settle(value, cost_usd=None, tokens_in=100, tokens_out=10)
+                    for index, value in enumerate(reservations))), timeout=20)
+            return outcomes
         finally:
             await async_engine.dispose()
 
@@ -61,5 +68,14 @@ def test_concurrent_first_reservations_do_not_race_or_overspend(database, monkey
         calls = list(session.scalars(select(GrokCall).where(GrokCall.account_id == account)))
         assert len(rows) == 1
         assert rows[0].call_count == len(accepted) == len(calls)
-        assert rows[0].cost_cents == len(accepted) * reserve <= cap * 100
-        assert all(c.status == "pending" for c in calls)
+        if admitted:
+            settled = (len(accepted) + 1) // 2
+            unknown = len(accepted) // 2
+            assert rows[0].cost_cents == settled * budget._units(100, 10) + unknown * reserve <= cap * 100
+            assert sum(call.status == "done" for call in calls) == settled
+            assert sum(call.status == "unknown" for call in calls) == unknown
+            assert all(call.cost_cents == (budget._units(100, 10) if call.status == "done" else reserve)
+                       for call in calls)
+        else:
+            assert rows[0].cost_cents == len(accepted) * reserve <= cap * 100
+            assert all(c.status == "pending" for c in calls)

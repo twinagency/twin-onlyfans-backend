@@ -124,9 +124,11 @@ async def enroll(request:Request):
     store,tenant=context
     try:
         body=await read_json(request)
-        if set(body)!={'creatorId','creatorName','handle','session','actor','commandKey'}:raise ValueError()
+        required={'creatorId','creatorName','handle','session','actor','commandKey'}
+        if set(body) not in (required,required|{'initialProxyUrl'}):raise ValueError()
     except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid connection enrollment.'},400)
     try:
-        result=await asyncio.to_thread(submit_enrollment,store,tenant,creator_id=body['creatorId'],creator_name=body['creatorName'],handle=body['handle'],payload=body['session'],actor=body['actor'],command_key=body['commandKey'])
+        initial={'initial_proxy_url':body['initialProxyUrl']} if 'initialProxyUrl' in body else {}
+        result=await asyncio.to_thread(submit_enrollment,store,tenant,creator_id=body['creatorId'],creator_name=body['creatorName'],handle=body['handle'],payload=body['session'],actor=body['actor'],command_key=body['commandKey'],**initial)
         return response({'ok':True,'enrollment':result})
     except Exception as exc:return failure(exc)

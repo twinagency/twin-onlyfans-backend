@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 
 const OF='https://onlyfans.com', WIDTH=432, HEIGHT=720;
 const id=v=>typeof v==='string'&&/^[A-Za-z0-9._:-]{1,64}$/.test(v);
-const actor=v=>typeof v==='string'&&/^creator-session:[a-f0-9]{64}$/.test(v);
+const actor=v=>typeof v==='string'&&/^(?:creator-session|op-session):[a-f0-9]{64}$/.test(v);
 const header=v=>typeof v==='string'&&/^[\x20-\x7e]{1,4096}$/.test(v);
 const uuid=v=>typeof v==='string'&&/^[a-f0-9-]{36}$/.test(v);
 export const networkFingerprint=proxy=>createHash('sha256').update('twin-capture-network.v1\0'+(proxy??'')).digest('hex');

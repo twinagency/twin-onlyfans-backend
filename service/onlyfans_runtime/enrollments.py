@@ -27,9 +27,11 @@ def _public(row):
     return {'id':row.id,'status':state,'accountId':row.account_id if state=='accepted' else None,
         'error':row.last_error if state=='failed' else None,'expiresAt':row.expires_at.isoformat()+'Z'}
 
-def submit_enrollment(store,tenant,*,creator_id,creator_name,handle,payload,command_key,actor):
+_NO_INITIAL_PROXY=object()
+
+def submit_enrollment(store,tenant,*,creator_id,creator_name,handle,payload,command_key,actor,initial_proxy_url=_NO_INITIAL_PROXY):
     _scope(tenant,creator_id);_validate_identity(command_key,actor,0)
-    if (not actor.startswith('creator-session:') or type(creator_name)is not str or not creator_name.strip()
+    if (not re.fullmatch(r'(?:creator-session|op-session):[a-f0-9]{64}',actor) or type(creator_name)is not str or not creator_name.strip()
         or len(creator_name.encode())>160 or '\x00' in creator_name or type(handle)is not str
         or not handle.strip() or len(handle.encode())>160 or '\x00' in handle
         or type(payload)is not dict):raise Refused('invalid connection enrollment')
@@ -42,6 +44,20 @@ def submit_enrollment(store,tenant,*,creator_id,creator_name,handle,payload,comm
             session_from_capture(account_id='of-'+str(payload['ownerId']),owner_id=payload['ownerId'],policy_revision=1,
                 capture=payload['capture'],x_hash=payload['xHash'],proxy_url=None,expires_at=expires)
     except Exception:raise Refused('invalid connection enrollment') from None
+    # Only an authenticated operator can choose the first connection's network.
+    # Keep it sealed with the captured proof; creator refreshes cannot set it.
+    if initial_proxy_url is not _NO_INITIAL_PROXY:
+        if not actor.startswith('op-session:'):raise Refused('invalid connection enrollment')
+        if initial_proxy_url is not None:
+            from urllib.parse import urlsplit
+            try:
+                u=urlsplit(initial_proxy_url)
+                if (type(initial_proxy_url)is not str or not re.fullmatch(r'[\x21-\x7e]{1,2048}',initial_proxy_url)
+                        or u.scheme not in {'http','https','socks5'} or not u.hostname or not u.port
+                        or u.path not in {'','/'} or u.query or u.fragment):raise ValueError()
+            except Exception:raise Refused('invalid connection enrollment') from None
+        if payload.get('networkFingerprint')!=capture_network_fingerprint(initial_proxy_url):raise Refused('capture network changed')
+        payload={**payload,'initialProxyUrl':initial_proxy_url}
     fingerprint=_request('enroll',{'creatorId':creator_id,'creatorName':creator_name,'handle':handle,'session':payload},0)
     with Session(store.engine) as s,s.begin():
         lock=int.from_bytes(hashlib.sha256(('enroll:'+tenant).encode()).digest()[:8],'big',signed=True)
@@ -114,6 +130,10 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
                 if existing is not None and (binding is None or binding.tenant_id!=tenant or binding.creator_id!=creator_id):raise Refused('scope unavailable')
                 connection=s.get(OfProviderConnection,account)
                 proxy=_open(connection,tenant)['proxyUrl'] if connection is not None else None
+            initial_proxy=payload.pop('initialProxyUrl',_NO_INITIAL_PROXY)
+            if initial_proxy is not _NO_INITIAL_PROXY:
+                if connection is not None and proxy!=initial_proxy:raise Refused('capture network changed')
+                proxy=initial_proxy
             network_fingerprint=payload.pop('networkFingerprint',None)
             if network_fingerprint is not None and network_fingerprint!=capture_network_fingerprint(proxy):raise Refused('capture network changed')
             if 'browser' in payload:
@@ -124,7 +144,8 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
                 with Session(store.engine) as s,s.begin():
                     row=s.get(OfConnectionEnrollment,identity,with_for_update=True)
                     if row.status!='checking' or row.generation!=generation or row.lease_until<=utcnow() or row.expires_at<=utcnow():continue
-                    frozen={**payload,'networkFingerprint':network_fingerprint} if network_fingerprint is not None else payload
+                    frozen={**payload,'networkFingerprint':network_fingerprint} if network_fingerprint is not None else dict(payload)
+                    if initial_proxy is not _NO_INITIAL_PROXY:frozen={**frozen,'initialProxyUrl':initial_proxy}
                     row.sealed_config=_seal(frozen,tenant,'enrollment:'+identity,creator_id,1)
             session=session_from_capture(account_id=account,owner_id=owner_id,policy_revision=1,capture=payload['capture'],
                 x_hash=payload['xHash'],proxy_url=proxy,expires_at=datetime.fromisoformat(payload['expiresAt'].replace('Z','+00:00')))
@@ -150,7 +171,9 @@ def process_enrollments(store,tenant,*,limit=1,stop=None,connector_type=NativePr
             with Session(store.engine) as s,s.begin():
                 row=s.get(OfConnectionEnrollment,identity,with_for_update=True)
                 if row.status!='checking' or row.generation!=generation or row.lease_until<=utcnow() or row.expires_at<=utcnow():continue
-                save_connection(store,tenant,account,payload=payload,expected_revision=expected,command_key=save_key,actor=actor,session_only=True,expected_network_fingerprint=network_fingerprint)
+                first_network=initial_proxy is not _NO_INITIAL_PROXY and expected==0
+                save_payload={**payload,'proxyUrl':proxy,'model':None} if first_network else payload
+                save_connection(store,tenant,account,payload=save_payload,expected_revision=expected,command_key=save_key,actor=actor,session_only=not first_network,expected_network_fingerprint=network_fingerprint)
                 row.status='accepted';row.account_id=account;row.last_error=None;row.sealed_config=None;row.updated_at=utcnow()
             completed+=1
         except Exception as error:

@@ -57,6 +57,12 @@ try{
   const second=await service.start(scope,{startKey:randomUUID(),network});assert.notEqual(second.id,started.id);
   await service.cancel(scope,second.id);assert.equal(service.status(scope,second.id).phase,'cancelled');
   const third=await service.start(scope,{startKey:randomUUID(),network});clock+=16*60_000;await service.collect();assert.throws(()=>service.status(scope,third.id),e=>e.status===404);
+  const admin={creatorId:scope.creatorId,actor:'op-session:'+'c'.repeat(64)};
+  const adminJob=await service.start(admin,{startKey:randomUUID(),network});
+  await until(()=>service.status(admin,adminJob.id).phase==='waiting');
+  assert.throws(()=>service.status(scope,adminJob.id),e=>e.status===404,'Creator sessions cannot inspect an admin login');
+  assert.throws(()=>service.status({...admin,actor:'op-session:'+'d'.repeat(64)},adminJob.id),e=>e.status===404,'Other admin sessions cannot inspect the login');
+  await service.cancel(admin,adminJob.id);
   for(const [url,method,expected]of [['https://onlyfans.com/api2/v2/chats/123/messages','POST',false],['https://onlyfans.com/api2/v2/payments','POST',false],['https://onlyfans.com/api2/v2/users/login','POST',true],['http://127.0.0.1/private','GET',false],['https://recaptcha.net/recaptcha/enterprise.js','GET',true],['https://www.recaptcha.net/recaptcha/api2/anchor','GET',true],['https://brunhild.challenges.cloudflare.com/cdn-cgi/challenge-platform/test','GET',true],['https://onlyfans.com/api2/v2/webauthn/login/options','POST',true],['https://recaptcha.net.attacker.example/recaptcha/enterprise.js','GET',false],['https://foreign.example/','GET',false],['https://abs-0.twimg.com/login/tfw-base.css','GET',true],['https://pbs.twimg.com/app_img/icon','GET',true],['https://abs-0.twimg.com/login/base.js','POST',false],['https://abs-0.twimg.com/elsewhere/test.js','GET',false],['https://api.x.com/1.1/statuses/update.json','POST',false]]){
     assert.equal(allowedRequest({url:()=>url,method:()=>method,isNavigationRequest:()=>false}),expected);
   }

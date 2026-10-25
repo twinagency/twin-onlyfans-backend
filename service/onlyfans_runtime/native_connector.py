@@ -122,7 +122,13 @@ class NativeLoopbackConnector:
                 raise ValueError()
         except (ValueError, TypeError, KeyError) as exc:
             raise NativeProtocolError("invalid native conversation identity") from exc
-        return ChatPage(fans, str(offset + len(rows)) if more else None)
+        heads = {}
+        for fan, row in zip(fans, rows):
+            last = row.get("lastMessage")
+            mid = last.get("id") if type(last) is dict else None
+            if type(mid) is int and 0 < mid < 2**63:
+                heads[fan] = mid
+        return ChatPage(fans, str(offset + len(rows)) if more else None, heads)
 
     def messages(self, *, fan_id, before_id, limit):
         self._ready(); self._limit(limit); _id(fan_id)

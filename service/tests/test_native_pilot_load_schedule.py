@@ -20,6 +20,23 @@ class TargetScheduleTests(unittest.TestCase):
         for account in world.accts:
             self.assertEqual(sum(a == account for _, a, _ in events), 750)
 
+    def test_creator_offsets_partition_the_fleet(self):
+        from native_pilot.tools.load_test import Cfg, World, make_schedule
+        accounts, total = set(), 0
+        for offset in range(10):
+            cfg = Cfg(name="target_10k", accounts=1, account_offset=offset, fans=500,
+                      sim_minutes=5, scale=1, rate_per_min=10000 / 60,
+                      single_messages=True, deterministic_arrivals=True)
+            world = World(cfg)
+            events = make_schedule(world)
+            self.assertEqual(len(events), 750)
+            self.assertEqual({a for _, a, _ in events}, set(world.accts))
+            self.assertFalse(accounts.intersection(world.accts))
+            accounts.update(world.accts)
+            total += len(events)
+        self.assertEqual(total, 7500)
+        self.assertEqual(len(accounts), 10)
+
 
 if __name__ == "__main__":
     unittest.main()

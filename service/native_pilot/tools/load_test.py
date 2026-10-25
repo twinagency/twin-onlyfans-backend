@@ -59,12 +59,13 @@ MODEL_TIMEOUT_S = 45.0   # native_pilot.model's per-call limit (no retry)
 FAN_BASE = 1_000_000
 
 
-# ── configuration ─────────────────────────────────────────────────────────────
+# â”€â”€ configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @dataclass
 class Cfg:
     name: str
     accounts: int = 2
+    account_offset: int = 0
     fans: int = 250
     sim_minutes: float = 60.0
     scale: float = 30.0
@@ -97,7 +98,7 @@ class Cfg:
 
 def scenarios(args) -> dict:
     base = dict(accounts=args.accounts, fans=args.fans, scale=args.scale, throttle_s=args.throttle,
-                seed=args.seed, sim_minutes=args.sim_minutes)
+                seed=args.seed, sim_minutes=args.sim_minutes, account_offset=getattr(args, "account_offset", 0))
     out = {}
 
     def add(name, **kw):
@@ -106,6 +107,8 @@ def scenarios(args) -> dict:
     add("target_100k", accounts=10, fans=args.fans, throttle_s=args.throttle,
         rate_per_min=100000 / 60 / 10, single_messages=True, deterministic_arrivals=True,
         model_lo_s=6.0, model_hi_s=6.0, provider_latency_s=0.2)
+    add("target_10k", accounts=1, rate_per_min=10000 / 60, single_messages=True,
+        deterministic_arrivals=True, model_lo_s=6.0, model_hi_s=6.0, provider_latency_s=0.2)
     add("tiny", accounts=2, fans=8, sim_minutes=3, scale=30, throttle_s=2, burst=True, burst_window_s=5,
         rate_per_min=20.0, control_at_s=15, resume_after_s=40, pause_n=2, takeover_n=1)
     add("ceiling_1acct", accounts=1, fans=args.fans, sim_minutes=10, scale=20, throttle_s=1, burst=True,
@@ -126,7 +129,7 @@ def scenarios(args) -> dict:
     return out
 
 
-# ── the simulated world ───────────────────────────────────────────────────────
+# â”€â”€ the simulated world â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def quantiles(values, qs=(0.5, 0.95, 0.99)):
     if not values:
@@ -172,7 +175,7 @@ class World:
         self.t0 = time.monotonic()
         self.base = 0.0          # simulated second at which the scenario's own timeline starts (after start-up)
         self.sim0 = datetime.now(timezone.utc).replace(tzinfo=None)
-        self.accts = [f"of-{900000001 + i}" for i in range(cfg.accounts)]
+        self.accts = [f"of-{900000001 + cfg.account_offset + i}" for i in range(cfg.accounts)]
         self.provider = {a: a[3:] for a in self.accts}
         self.fans = [FAN_BASE + i for i in range(cfg.fans)]
         self.rng = random.Random(cfg.seed)
@@ -248,7 +251,7 @@ class World:
             self.event_reasons[key] = self.event_reasons.get(key, 0) + 1
 
 
-# ── fakes ─────────────────────────────────────────────────────────────────────
+# â”€â”€ fakes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class FakeResponse:
     def __init__(self, data, status=200, url="https://onlyfans.invalid/api2/v2/x"):
@@ -318,7 +321,7 @@ class FakeIntake:
         pass
 
 
-# ── database ──────────────────────────────────────────────────────────────────
+# â”€â”€ database â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class Db:
     def __init__(self, admin_url):
@@ -330,6 +333,9 @@ class Db:
             sys.exit("REFUSED: the load harness only runs against a local throwaway PostgreSQL (got host %r)" % u.host)
         self.reuse = os.environ.get("LOAD_TEST_REUSE_DB")   # dev only: a database already bootstrapped by a previous run
         self.name = self.reuse or "of_load_" + uuid.uuid4().hex[:10]
+        self.fleet_token = os.environ.get("LOAD_TEST_FLEET_TOKEN")
+        if self.fleet_token and (not self.reuse or not self.name.startswith("of_load_")):
+            sys.exit("REFUSED: a fleet worker requires its parent-created disposable database")
         self.admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
         self.sync_url = u.set(drivername="postgresql+psycopg2", database=self.name).render_as_string(hide_password=False)
         self.async_url = u.set(drivername="postgresql+asyncpg", database=self.name).render_as_string(hide_password=False)
@@ -352,12 +358,17 @@ class Db:
                                      "(5,'Automation',false),(6,'Twin staff',false),(9,'Other',false)")
             e.dispose()
         from twin_bridge import store
-        store.ensure_runtime_schema(self.sync_url)
+        if not self.fleet_token:
+            store.ensure_runtime_schema(self.sync_url)
         # the harness's own pool, labelled so it is excluded from the connection census
         self.engine = self.create_engine(self.sync_url, pool_size=4, max_overflow=4,
                                          connect_args={"options": "-c timezone=UTC -c search_path=fastt_runtime,public", "application_name": "load-harness"})
         self.mon = self.create_engine(self.sync_url, pool_size=1, max_overflow=0,
                                       connect_args={"application_name": "load-monitor"})
+        if self.fleet_token:
+            rows = self.run("SELECT token FROM public.load_harness_fleet WHERE id=1")
+            if rows != [(self.fleet_token,)]:
+                raise RuntimeError("fleet database ownership marker mismatch")
 
     def drop(self):
         from twin_bridge import store
@@ -450,7 +461,7 @@ class Db:
         return rows, int(xact or 0)
 
 
-# ── process / host measurements ───────────────────────────────────────────────
+# â”€â”€ process / host measurements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def rss_kb():
     try:
@@ -482,7 +493,7 @@ def pg_cpu_s(container):
     return None
 
 
-# ── the run ───────────────────────────────────────────────────────────────────
+# â”€â”€ the run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def make_schedule(w: World):
     cfg, ev = w.cfg, []
@@ -744,11 +755,15 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
     import argparse as ap
     from db.engine import engine as async_engine  # noqa: F401  (imported so dispose in shutdown is the real one)
 
-    db.reset()
+    if db.fleet_token and (cfg.name != "target_10k" or cfg.accounts != 1):
+        raise RuntimeError("fleet workers may run exactly one creator scenario")
+    if not db.fleet_token:
+        db.reset()
     w = World(cfg)
     w.http = {a: FakeHTTP(w, a) for a in w.accts}
     holder["w"], holder["db"] = w, db
-    db.seed(w)
+    if not db.fleet_token:
+        db.seed(w)
     schedule = make_schedule(w)
 
     services, tasks = [], []
@@ -771,6 +786,20 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
         await asyncio.sleep(0.02)
         if any(t.done() for t in tasks) or time.monotonic() - t_wait > 60:
             break
+    if db.fleet_token:
+        if any(s.started_at is None for s in services) or any(task.done() for task in tasks):
+            raise RuntimeError("creator service did not start before the fleet barrier")
+        barrier = Path(os.environ["LOAD_TEST_FLEET_BARRIER"])
+        ready = barrier / f"ready-{cfg.account_offset}.json"
+        ready.write_text(json.dumps({"pid": os.getpid(), "account": w.accts[0]}))
+        deadline = time.monotonic() + 90
+        while not (barrier / "start.json").exists():
+            if time.monotonic() >= deadline or any(task.done() for task in tasks):
+                raise RuntimeError("fleet startup barrier failed")
+            await asyncio.sleep(0.05)
+        start_epoch = json.loads((barrier / "start.json").read_text())["epoch"]
+        await asyncio.sleep(max(0.0, start_epoch - time.time()))
+    actual_start_epoch = time.time()
     w.base = w.sim_t()   # the scenario's timeline starts here; the clock itself never jumps (watermarks are in it)
     helpers = [asyncio.create_task(sampler(w, db, stats, stop)), asyncio.create_task(lag_probe(w, stop))]
     if os.environ.get("LOAD_TEST_PROFILE") == "1":
@@ -791,7 +820,7 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
         helpers.append(asyncio.create_task(controller(w, db)))
     t_start_real, t_start_sim = time.monotonic(), w.sim_t()
     # Stop arrivals at the configured duration, then give the last inputs their full SLA window.
-    end_sim = t_start_sim + cfg.sim_minutes * 60 + (30 if cfg.name == "target_100k" else 0)
+    end_sim = t_start_sim + cfg.sim_minutes * 60 + (30 if cfg.name in ("target_100k", "target_10k") else 0)
     while w.sim_t() < end_sim:
         await asyncio.sleep(0.25)
         if cfg.stop_when_drained and all(not w.pending[a] for a in w.accts) and w.sim_t() > t_start_sim + 12:
@@ -834,6 +863,7 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
         "scheduled_messages_per_hour": round(len(schedule) * 3600 / (cfg.sim_minutes * 60 - 30), 3)
             if cfg.sim_minutes * 60 > 30 else 0,
     }
+    result["start_epoch"] = actual_start_epoch
     result["wait_samples"] = stats["wait_samples"]
     result["service_crashed"] = crashed
     result["helper_errors"] = helper_errors
@@ -962,7 +992,7 @@ def summarize(w: World, cfg: Cfg, services, stats, elapsed_real, elapsed_sim, t0
     return out
 
 
-# ── entry ─────────────────────────────────────────────────────────────────────
+# â”€â”€ entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def run_all(args, names=None):
     admin = args.pg_url or os.environ.get("ONLYFANS_TEST_PG_URL")
@@ -1012,6 +1042,7 @@ def main(argv=None):
     p.add_argument("--pg-url", help="admin URL of a disposable LOCAL PostgreSQL (default ONLYFANS_TEST_PG_URL)")
     p.add_argument("--pg-container", help="docker container name of that PostgreSQL, to also report its CPU (optional)")
     p.add_argument("--accounts", type=int, default=2)
+    p.add_argument("--account-offset", type=int, default=0, choices=range(200))
     p.add_argument("--fans", type=int, default=250)
     p.add_argument("--scale", type=float, default=30.0, help="simulated seconds per real second")
     p.add_argument("--throttle", type=float, default=20, help="of_delivery_policy.throttle_seconds (production: 20)")

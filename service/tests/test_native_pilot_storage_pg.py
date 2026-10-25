@@ -168,7 +168,8 @@ class PgFixture(ledger_test.Fixture):
 RELEASE_SERVICE = os.environ.get(
     "ONLYFANS_RELEASE_SERVICE_DIR",
     "/tmp/claude-1000/-home-ronan-twin/1f28717a-be90-4d45-ac41-136eed78da59/scratchpad/rel/service")
-LIVE_REVISION = "0091_launch_controls"
+LIVE_REVISION = "0092_ledger_history"
+PREVIOUS_RELEASE_REVISION = "0091_launch_controls"
 
 
 def original_release_check():
@@ -182,15 +183,19 @@ def original_release_check():
     done = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv.pop(1)); exec(sys.argv.pop(1))",
                            RELEASE_SERVICE, code, SYNC_URL],
                           cwd=RELEASE_SERVICE, env=env, capture_output=True, text=True, timeout=120)
-    check(done.returncode == 0 and f"release-check-ok {LIVE_REVISION}" in done.stdout, done.stdout + done.stderr)
+    # The financial-history migration intentionally advances the app schema.
+    # A 0091 binary must refuse this DB; restarting it would bypass the new
+    # history metadata checks. Pilot tables still remain outside app metadata.
+    check(done.returncode != 0 and "Database revision is not supported by this process" in done.stderr,
+          "The previous application release must refuse the advanced schema")
 
 
 def schema_checks():
     from db.schema import HEAD, _metadata, check_schema
-    check(HEAD == LIVE_REVISION, "application schema head stays at 0091")
+    check(HEAD == LIVE_REVISION, "application schema head includes the financial history migration")
     check(not set(TABLES) & set(_metadata().tables), "app metadata/check_schema must not include the pilot tables")
     with create_engine(SYNC_URL).connect() as conn:
-        check_schema(conn)  # fresh 0091 database, pilot tables not created yet
+        check_schema(conn)  # fresh application database, pilot tables not created yet
         check(set(inspect(conn).get_schema_names()) >= {"public"} and "fastt_runtime" not in inspect(conn).get_schema_names())
     original_release_check()
     # Fail-open: with the fastt_runtime schema absent the OFClient writer-marker path (guarded_send) still

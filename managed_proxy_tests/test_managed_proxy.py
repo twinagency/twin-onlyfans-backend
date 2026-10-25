@@ -34,6 +34,42 @@ class ProviderTest(unittest.TestCase):
         for patch in ({"location":"Unknown"},{"expire_date":"invalid"},{"locations":"United States, Canada"},{"proxy_data":{"ports":{"http|https":0},"proxies":[]}}):
             with self.assertRaises(ProxyError):parse_order(order(**patch))
 
+    def test_single_country_order_accepts_null_or_missing_location(self):
+        data=order(location=None,locations="Portugal",expire_date="2099-11-24 13:18:33")
+        data["proxy_data"]["proxies"]=[
+            {"ip":ip,"username":"fixture-user","password":"fixture-pass"}
+            for ip in ("8.8.4.4","8.8.8.8","1.1.1.1","1.0.0.1","9.9.9.9")]
+        for missing in (False,True):
+            with self.subTest(missing=missing):
+                if missing:data.pop("location",None)
+                values=parse_order(data)
+                self.assertEqual(len(values),5)
+                self.assertEqual({value.country for value in values},{"PT"})
+                self.assertEqual(len({value.address_hash for value in values}),5)
+
+    def test_country_fallback_refuses_ambiguous_missing_or_conflicting_geography(self):
+        for patch in (
+            {"location":None,"locations":None},
+            {"location":None,"locations":"Unknown"},
+            {"location":None,"locations":"Portugal, United States"},
+            {"location":None,"locations":["Portugal"]},
+            {"location":None,"locations":{"country":"Portugal"}},
+            {"location":"Unknown","locations":"Portugal"},
+            {"location":"United States","locations":"Portugal"},
+        ):
+            with self.subTest(patch=patch):
+                with self.assertRaisesRegex(ProxyError,"provider_inventory_needs_review"):
+                    parse_order(order(**patch))
+
+    def test_new_country_order_does_not_hide_existing_stock(self):
+        portugal=order(id=124,location=None,locations="Portugal")
+        portugal["proxy_data"]["proxies"][0]["ip"]="1.1.1.1"
+        def fetch(path):
+            if path=="/products":return {"data":[{"id":9,"name":"ISP Dedicated"}]}
+            return {"data":[portugal,order()],"meta":{"last_page":1}}
+        values=IPRoyal("synthetic",fetch_json=fetch).inventory()
+        self.assertEqual([value.country for value in values],["PT","US"])
+
     def test_private_hosts_and_malformed_credentials_are_refused_without_disclosure(self):
         for ip in ("127.0.0.1","10.1.2.3","169.254.169.254","proxy.example","::1"):
             data=order();data["proxy_data"]["proxies"][0]["ip"]=ip

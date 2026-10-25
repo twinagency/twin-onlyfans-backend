@@ -59,7 +59,13 @@ def parse_order(order, *, now=None):
         expires = expires.replace(tzinfo=timezone.utc) if expires.tzinfo is None else expires.astimezone(timezone.utc)
         if expires <= now:
             return []
-        country = COUNTRIES[order["location"]]
+        # Some single-country orders return location=null and put the country
+        # in locations instead. Accept only an exact known country; lists,
+        # mixed-country strings and conflicting fields still need review.
+        location = order.get("location")
+        if location is None:
+            location = order.get("locations")
+        country = COUNTRIES[location]
         order_id = order["id"]
         port = order["proxy_data"]["ports"]["http|https"]
         proxies = order["proxy_data"]["proxies"]
@@ -68,7 +74,7 @@ def parse_order(order, *, now=None):
         if not isinstance(proxies, list) or len(proxies) > 10000:
             raise ValueError()
         # Mixed-country orders need per-proxy location evidence; never guess.
-        if order.get("locations") not in (None, order["location"]):
+        if order.get("locations") not in (None, location):
             raise ValueError()
         result = []
         for proxy in proxies:

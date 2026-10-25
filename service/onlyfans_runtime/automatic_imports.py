@@ -36,20 +36,6 @@ def ensure_started(store, tenant, account, *, connection_revision):
         connection = s.get(OfProviderConnection, account)
         sync = s.get(OfContentSyncAccount, account)
         if sync is not None:
-            if sync.enabled and sync.binding_id == runtime.binding_id:
-                # A renewed login for the same verified owner can continue a
-                # queued vault import. Invalidate any old in-flight page lease
-                # so its response cannot commit under the new connection.
-                for job in s.scalars(select(OfVaultSyncJob).where(
-                        OfVaultSyncJob.account_id == account,
-                        OfVaultSyncJob.binding_id == runtime.binding_id,
-                        OfVaultSyncJob.owner_id == connection.owner_id,
-                        OfVaultSyncJob.status.in_(("pending", "running")),
-                        OfVaultSyncJob.connection_revision != connection_revision).with_for_update()):
-                    job.connection_revision = connection_revision
-                    job.status = "pending"
-                    job.lease_token = job.lease_until = None
-                    job.updated_at = utcnow()
             return False
         capture = s.scalar(select(OfConnectionChange).where(
             OfConnectionChange.account_id == account,

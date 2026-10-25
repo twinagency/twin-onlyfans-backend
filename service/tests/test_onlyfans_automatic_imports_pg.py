@@ -77,13 +77,9 @@ def test_refresh_restart_and_reconnect_do_not_duplicate_or_reset_imports(databas
     assert not ensure_started(store,TENANT,account,connection_revision=2)
     with Session(store.engine) as s:
         job=s.scalar(select(OfVaultSyncJob))
-        assert job.page_offset==240 and job.connection_revision==2
-    def continued(self,**kw):
-        assert kw['offset']==240
-        return page([media(601)])
-    monkeypatch.setattr(NativeProviderConnector,'vault_page',continued)
-    assert process_vault_jobs(store,TENANT,limit=1,stop=threading.Event())==1
-    with Session(store.engine) as s:assert s.scalar(select(OfVaultSyncJob)).page_offset==241
+        # The bootstrap never rewrites the immutable authentication scope of
+        # an earlier vault job. Existing vault recovery owns re-authentication.
+        assert job.page_offset==240 and job.connection_revision==1
     assert count(store,OfOfferImportJob)==count(store,OfVaultSyncJob)==1
     store.close()
 

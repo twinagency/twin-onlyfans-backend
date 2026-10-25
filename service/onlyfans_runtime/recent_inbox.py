@@ -122,19 +122,29 @@ the native worker. This module has no planner, model or send dependency.
             fans = _read(store, tenant, account, revision,
                 lambda: reader.chats(cursor=None, limit=PAGE_LIMIT),
                 lambda page, claim: _missing(store, tenant, account, revision, page, claim))
-            # Keep previously queued fans ahead of repeated busy conversations;
-            # prepend newly appearing fans so a new arrival is checked promptly.
+            # Give the newest arrival one priority slot, retaining older queued
+            # fans ahead of the rest. Optional missing head hints must not make
+            # repeated top-of-inbox reads starve the tail of the queue.
             waiting = set(state.pending)
-            state.pending = deque([fan for fan in fans if fan not in waiting] + list(state.pending))
+            fresh = [fan for fan in fans if fan not in waiting]
+            state.pending = deque(fresh[:1] + list(state.pending) + fresh[1:])
             state.due = clock() + INTERVAL_SECONDS
         for _ in range(PAGES_PER_TURN):
             if not state.pending:
                 break
             fan = state.pending[0]
-            applied += _read(store, tenant, account, revision,
-                lambda: reader.messages(fan_id=fan, before_id=None, limit=PAGE_LIMIT),
-                lambda page, claim: _commit(store, tenant, account, revision, fan, page, claim,
-                    history_only=connection_revision is not None))
+            try:
+                applied += _read(store, tenant, account, revision,
+                    lambda: reader.messages(fan_id=fan, before_id=None, limit=PAGE_LIMIT),
+                    lambda page, claim: _commit(store, tenant, account, revision, fan, page, claim,
+                        history_only=connection_revision is not None))
+            except ReadDeferred:
+                raise
+            except Exception:
+                # One malformed conversation must not pin every other fan
+                # behind it. Retain it for retry and report the failed turn.
+                state.pending.rotate(-1)
+                raise
             state.pending.popleft()
     except ReadDeferred:
         # Preserve pending work and let the archive/other accounts take a turn.

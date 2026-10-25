@@ -120,3 +120,37 @@ def test_rate_limit_preserves_pending_and_shared_backoff(native,monkeypatch):
         row=s.get(OfProviderReadBudget,account)
         assert row.lease_token is None and row.backoff_until>utcnow()
     assert poll_recent(store,TENANT,account,reader,connection_revision=1)==0
+
+
+def test_enabled_read_step_imports_new_head_and_continues_older_scan(native,monkeypatch):
+    store,account,reader=native
+    monkeypatch.setenv('ONLYFANS_RECENT_INBOX_ENABLED','1')
+    with Session(store.engine) as s,s.begin():
+        scan=s.get(OfScan,account)
+        scan.cursor,scan.status,scan.known_fans_complete='12000','needed',True
+        s.add(OfRecovery(account_id=account,fan_id=901,status='needed',before_id=100,upper_bound=150,high_water=20))
+    cursors=[]
+    def chats(**kw):
+        cursors.append(kw['cursor'])
+        return ChatPage([901], '50', {901:200}) if kw['cursor'] is None else ChatPage([],None)
+    def messages(**kw):
+        return MessagePage([incoming(200 if kw['before_id'] is None else 99)],False)
+    monkeypatch.setattr(reader,'chats',chats)
+    monkeypatch.setattr(reader,'messages',messages)
+    progress=read_step(store,TENANT,account,reader,connection_revision=1)
+    assert cursors==[None,'12000']
+    assert (progress.discovery_pages,progress.recovery_pages)==(1,1)
+    with Session(store.engine) as s:assert s.get(Chat,(account,901)).last_message_id==200
+
+
+def test_failed_conversation_does_not_block_other_recent_fans(native,monkeypatch):
+    store,account,reader=native
+    from onlyfans_runtime.native_protocol import NativeProtocolError
+    monkeypatch.setattr(reader,'chats',lambda **kw:ChatPage([901,902],None))
+    def messages(**kw):
+        if kw['fan_id']==901:raise NativeProtocolError('synthetic malformed page')
+        return MessagePage([incoming(201,902)],False)
+    monkeypatch.setattr(reader,'messages',messages)
+    with pytest.raises(NativeProtocolError):poll_recent(store,TENANT,account,reader,connection_revision=1,clock=lambda:100)
+    with pytest.raises(NativeProtocolError):poll_recent(store,TENANT,account,reader,connection_revision=1,clock=lambda:101)
+    with Session(store.engine) as s:assert s.get(Chat,(account,902)).last_message_id==201

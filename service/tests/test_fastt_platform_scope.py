@@ -69,3 +69,12 @@ def test_platform_token_is_explicit(monkeypatch):
     for value in ("", "db:7", "db:*oops", "of-7:*"):
         assert not fs.platform_scope_enabled(value)
     assert fs.platform_scope_enabled(" db:* ")
+
+
+def test_configuration_read_failure_cannot_broaden_fan_selection(platform, monkeypatch):
+    def fail(ids):
+        raise OSError("offline")
+    monkeypatch.setattr(fs, "_reader", fail)
+    assert manual.fastt_owned("of-7", 456)
+    assert not manual.fastt_serves("of-7", 456)
+    assert fs.desired_scope() == (set(), set())

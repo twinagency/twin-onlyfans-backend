@@ -16,7 +16,7 @@ Two layers, and the env layer is always the upper bound:
   whole account, a pair owns that fan), so a deploy that only has the old variable behaves identically.
 * ``account_ai_config.ai_chatter_config_json["fastt_scope"] = {"mode": "single"|"selected"|"all",
   "fans": [int, ...]}`` is the operator's selection (``single`` = exactly one fan, ``all`` ignores ``fans``).
-  No new column or migration. With a value, the SERVED set is ``selection ∩ allowlist``.
+  No new column or migration. With a value, the SERVED set is ``selection âˆ© allowlist``.
 
 Two predicates come out of that, and they differ on purpose:
 
@@ -29,7 +29,7 @@ runner has stopped serving it. A ``db:`` account whose selection has never been 
 whole (fail closed).
 
 ``serves`` (``fastt_serves`` / ``serve_scope``): "the runner may act for this fan right now", the current
-selection ∩ allowlist (or the pure env value when the account has no database value). The runner and the
+selection âˆ© allowlist (or the pure env value when the account has no database value). The runner and the
 supervisor use it, so removing a fan stops FASTT serving it without handing it to anyone else (its queued
 human messages simply wait).
 
@@ -67,7 +67,7 @@ _reader = None                # callable(db account ids) -> {db account id: raw 
 _discoverer = None            # tests may inject registered OnlyFans account ids
 
 
-# ── strict value validation (also used by the settings route) ────────────────
+# â”€â”€ strict value validation (also used by the settings route) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def normalize(value) -> dict:
     """The canonical ``{"mode", "fans"}`` for a stored/submitted value, or ValueError with the reason."""
@@ -96,7 +96,7 @@ def normalize(value) -> dict:
     return {"mode": mode, "fans": sorted(set(fans))}
 
 
-# ── the env allowlist ────────────────────────────────────────────────────────
+# â”€â”€ the env allowlist â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _account(raw):
     try:
@@ -132,7 +132,7 @@ def parse_allowlist(raw):
     return pairs, anyfan, dbonly
 
 
-# ── the process-local database cache ─────────────────────────────────────────
+# â”€â”€ the process-local database cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class _State:
     def __init__(self):
@@ -329,6 +329,8 @@ def _compute(kind):
                 for fan in env_pairs | db_fans | st.ever_fans.get(account, set()):
                     out_pairs.add((account, fan))
                 continue
+            if platform_scope_enabled() and account not in st.known:
+                continue  # Never treat a failed first configuration read as the default all-fan selection.
             if val is None:                       # no database value: the env alone, exactly as before
                 if account in anyfan:
                     out_accounts.add(account)

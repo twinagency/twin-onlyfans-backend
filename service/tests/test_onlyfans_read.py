@@ -1163,6 +1163,8 @@ from db.models import (  # noqa: E402
     Chat as _Chat,
     Fan as _Fan,
     Message as _Message,
+    VaultItem as _VaultItem,
+    VaultSend as _VaultSend,
 )
 
 # These are rules about a CONSTRAINT, so they are asserted through the real
@@ -1191,6 +1193,8 @@ _ModelsBase.metadata.create_all(
         _Chat.__table__,
         _Fan.__table__,
         _Message.__table__,
+        _VaultItem.__table__,
+        _VaultSend.__table__,
         _OfBinding.__table__,
         _OfState.__table__,
         _OfDelivery.__table__,
@@ -1406,6 +1410,16 @@ async def _durable_receipt_cases():
                                  mode="paused", revision=3,
                                  unresolved_attempt_id="authority-pointer", updated_at=NOW))
 
+    # A historic accepted pack had its files in VaultSend while Message stayed
+    # empty. The read must recover only this account/fan/message's files.
+    _sql(_update(_Message).where(_Message.account_id == "9001", _Message.fan_id == 8101,
+        _Message.message_id == 10103).values(price_cents=500, is_paid=False))
+    _sql(_insert(_VaultItem).values(account_id="9001", media_id=7001, kind="photo", created_at=NOW))
+    _sql(_insert(_VaultSend).values([
+        {"account_id": "9001", "fan_id": 8101, "message_id": 10103, "media_id": 7001, "price_cents": 500},
+        {"account_id": "9001", "fan_id": 8102, "message_id": 10103, "media_id": 7999, "price_cents": 500},
+        {"account_id": "9002", "fan_id": 8101, "message_id": 10103, "media_id": 7998, "price_cents": 500},
+    ]))
     detail = (await S.get_conversation(
         repo, AGENCY_A, account_id="9001", conversation_id="9001:8101", now=NOW
     ))["conversation"]
@@ -1417,6 +1431,21 @@ async def _durable_receipt_cases():
     check("an old unresolved receipt flags its conversation for attention",
           (detail["summary"]["requiresAttention"], detail["summary"]["revision"]), (True, 9))
     actual_messages = {message["messageId"]: message for message in detail["messages"]}
+    check("historic paid attachments are recovered without crossing fan or account scope",
+          actual_messages["10103"]["attachments"],
+          {"count": 1, "media": [{"mediaId": "7001", "kind": "photo"}],
+           "price": {"currency": "USD", "minorUnits": 500}, "purchaseStatus": "not_purchased"})
+    from dataclasses import replace
+    paid = replace(_msg(900205, "out", "paid"), price_cents=500, is_paid=True,
+                   media_count=1, media=((7001, "photo"),))
+    check("accepted send status and purchase status remain separate",
+          P.message_model(conversation_id="9001:8101", message=paid, recorded=None)["attachments"]["purchaseStatus"], "purchased")
+    check("an unknown purchase never becomes a confirmed non-purchase",
+          P.message_model(conversation_id="9001:8101", message=replace(paid, is_paid=None), recorded=None)["attachments"]["purchaseStatus"], "unconfirmed")
+    from onlyfans_read.repo import _message_media_ids
+    for invalid in ("not-json", "[true]", "[0]", "[1,1]", "[1.5]", "{}"):
+        check("malformed media never fabricates attachment identities: " + invalid, _message_media_ids(invalid), [])
+
     check("SQL reads the accepted manual receipt's authorship and evidence",
           (actual_messages["10105"]["origin"], actual_messages["10105"]["delivery"],
            actual_messages["10105"]["evidenceRef"]),

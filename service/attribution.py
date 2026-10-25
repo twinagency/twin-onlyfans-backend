@@ -357,6 +357,7 @@ async def write_outbound_attribution(
     funnel_step: int | None = None,
     automation_kind: str | None = None,
     emit_live: bool = False,
+    media_ids: Iterable[int] | None = None,
 ) -> None:
     """Write the outbound `messages` row.
 
@@ -436,6 +437,12 @@ async def write_outbound_attribution(
     mass_tag = await mass_sender_tag(sent_by_employee_id) if mass_run_id is not None else ""
 
     try:
+        # These identities are the exact files already accepted by the sender.
+        # Keep text-only callers compatible and never turn reporting into a resend.
+        attached = list(media_ids) if media_ids is not None else []
+        if (len(attached) > 100 or len(set(attached)) != len(attached)
+                or any(type(mid) is not int or not 0 < mid < 2**63 for mid in attached)):
+            raise ValueError("invalid outbound media identities")
         async with get_session() as s:
             stmt = sqlite_insert(Message).values(
                 account_id=str(account_id),
@@ -444,8 +451,8 @@ async def write_outbound_attribution(
                 direction="out",
                 sender_name=mass_tag,
                 body=body,
-                media_ids="[]",
-                media_count=0,
+                media_ids=json.dumps(attached),
+                media_count=len(attached),
                 price_cents=int(price_cents),
                 is_paid=False if (price_cents or 0) > 0 else None,
                 is_tip=False,
@@ -460,6 +467,14 @@ async def write_outbound_attribution(
                 index_elements=["account_id", "fan_id", "message_id"],
             )
             res = await s.execute(stmt)
+            if attached and not (res.rowcount or 0):
+                # A history reader may have created the row first. Fill a missing
+                # attachment projection only; preserve known media and purchases.
+                await s.execute(update(Message).where(
+                    Message.account_id == str(account_id), Message.fan_id == int(fan_id),
+                    Message.message_id == int(message_id), Message.media_count == 0,
+                    Message.media_ids == "[]",
+                ).values(media_ids=json.dumps(attached), media_count=len(attached)))
         # Advance the inbox preview — only on a real insert, so a duplicate
         # re-run can't re-bump the chat. Keeps the local `/admin/chats/recent`
         # seed in step with the just-sent text instead of lagging on the fan's

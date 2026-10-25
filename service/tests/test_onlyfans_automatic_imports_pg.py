@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from test_onlyfans_foundation_pg import database
-from test_onlyfans_connections_pg import verified, TENANT, ACTOR, save
+from test_onlyfans_connections_pg import verified, TENANT, ACTOR, save, change
 from test_onlyfans_readonly_inbox_pg import forbid_outgoing
 from test_onlyfans_vault_pg import media, page
 from db.models import VaultItem, Message, GrokCall
@@ -84,6 +84,15 @@ def test_explicit_sync_off_is_respected(database,monkeypatch):
     assert not ensure_started(store,TENANT,account,connection_revision=1)
     assert count(store,OfOfferImportJob)==count(store,OfVaultSyncJob)==0
     with Session(store.engine) as s:assert not s.get(OfContentSyncAccount,account).enabled
+    store.close()
+
+
+def test_verification_revision_can_reuse_its_original_audited_capture(database,monkeypatch):
+    store,account,_=verified(database,monkeypatch)
+    change(store,account,'verify',1,'f'*64)
+    load_worker_cohort(store,TENANT,include_read_only=True)
+    assert ensure_started(store,TENANT,account,connection_revision=2)
+    assert count(store,OfOfferImportJob)==count(store,OfVaultSyncJob)==1
     store.close()
 
 

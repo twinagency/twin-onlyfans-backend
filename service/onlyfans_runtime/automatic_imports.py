@@ -38,9 +38,9 @@ def ensure_started(store, tenant, account, *, connection_revision):
             return False
         capture = s.scalar(select(OfConnectionChange).where(
             OfConnectionChange.account_id == account,
-            OfConnectionChange.revision == connection.revision,
+            OfConnectionChange.revision <= connection.revision,
             OfConnectionChange.action.in_(("save", "session")))
-            .order_by(OfConnectionChange.created_at.desc()).limit(1))
+            .order_by(OfConnectionChange.revision.desc(), OfConnectionChange.created_at.desc()).limit(1))
         if capture is None:
             raise Refused("automatic imports require an audited connection capture")
         key = _digest(["automatic-account-import.v1", tenant, account, runtime.binding_id,

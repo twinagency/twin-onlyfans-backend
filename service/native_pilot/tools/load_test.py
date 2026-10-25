@@ -691,6 +691,11 @@ def install_patches(stack: ExitStack, holder: dict):
         return conn_for(scope)
 
     def build_client(conn):
+        if os.environ.get("LOAD_TEST_FLEET_TOKEN"):
+            # The real connection builder binds provider access once per worker.
+            # Keep that same account guard when substituting only the HTTP socket.
+            from onlyfans_runtime.role_guard import allow_native_pilot_provider_access
+            allow_native_pilot_provider_access(conn.scope.provider_id)
         w = W()
         acct = conn.scope.db_id
         http = w.http[acct]

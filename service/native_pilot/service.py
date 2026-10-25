@@ -481,6 +481,11 @@ class Service:
                     controlled.append(fan)
             if store.has_table(con, "of_conversation_state"):  # strict: no projection table = nobody enabled
                 sql, params = base, [self.db, since]
+                if self.fan_tasks.limit > 1 and store.is_pg(self.path) and self.quiet_s > 0:
+                    # Quiet waits do not need a generation slot. Keep the full
+                    # controlled-fan query above so pause/takeover stays prompt.
+                    sql += " AND m.ingested_at<=?"
+                    params.append(now - timedelta(seconds=self.quiet_s))
                 sql += (" AND EXISTS (SELECT 1 FROM of_conversation_state s WHERE s.account_id=m.account_id "
                         "AND s.fan_id=m.fan_id AND s.mode='automated' AND (s.takeover_state IS NULL OR s.takeover_state='none'))")
                 if store.has_table(con, "skip_list"):

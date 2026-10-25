@@ -35,3 +35,55 @@ def test_metadata_reads_see_committed_state_without_taking_global_write_lock(dat
         assert ledger.status("svc-900000001-1")["state"] == "stopped"
     finally:
         store.dispose_pools()
+
+
+def test_quiet_fans_do_not_take_generation_candidates_but_keep_controls(database, monkeypatch):
+    import argparse
+    from datetime import datetime, timedelta
+    from sqlalchemy.orm import Session
+    from db.models import Account, Fan, Message
+    from native_pilot.service import Service
+    url, engine = database
+    store.ensure_runtime_schema(url)
+    account, now = "of-900000001", datetime.utcnow()
+    with Session(engine) as session, session.begin():
+        session.add(Account(id=account))
+        session.flush()
+        for fid, age in [(1, 0), (2, 20)]:
+            session.add(Fan(account_id=account, fan_id=fid))
+            session.add(Message(account_id=account, fan_id=fid, message_id=100 + fid,
+                                direction="in", body="synthetic fixture",
+                                created_at=now - timedelta(seconds=age),
+                                ingested_at=now - timedelta(seconds=age)))
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO of_conversation_state(account_id,fan_id,mode,takeover_state)
+            VALUES(:account,1,'automated','none'),(:account,2,'automated','none')
+        """), {"account": account})
+    monkeypatch.setenv("FASTT_MAX_CONCURRENT_FANS", "2")
+    service = Service(argparse.Namespace(account=account, fan=None, all_fans=True))
+    service.path = url
+    service.started_at = now - timedelta(minutes=1)
+    service.ledger = Ledger(url, allowance=True, concurrent_reads=True)
+    service._owned = lambda fan: True
+    try:
+        pending, controlled = service.pending_fans()
+        assert pending == [(2, 102)]
+        assert set(controlled) == {1, 2}
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE messages SET ingested_at=:at WHERE account_id=:account AND fan_id=1"),
+                               {"at": now - timedelta(seconds=20), "account": account})
+        pending, _ = service.pending_fans()
+        assert set(pending) == {(1, 101), (2, 102)}
+        # Serial fallback retains selection-before-wait behavior.
+        monkeypatch.setenv("FASTT_MAX_CONCURRENT_FANS", "1")
+        serial = Service(argparse.Namespace(account=account, fan=None, all_fans=True))
+        serial.path, serial.started_at, serial.ledger, serial._owned = (
+            url, service.started_at, service.ledger, service._owned)
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE messages SET ingested_at=:at WHERE account_id=:account AND fan_id=1"),
+                               {"at": now, "account": account})
+        pending, _ = serial.pending_fans()
+        assert set(pending) == {(1, 101), (2, 102)}
+    finally:
+        store.dispose_pools()

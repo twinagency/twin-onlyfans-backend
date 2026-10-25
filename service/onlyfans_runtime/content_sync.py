@@ -610,12 +610,17 @@ def _state(row):
         "status": row.status, "initialJobId": row.initial_job_id}
 
 
-def set_settings(store, tenant, account, *, enabled, expected_revision, command_key, actor):
+def set_settings(store, tenant, account, *, enabled, expected_revision, command_key, actor, expected_connection_revision=None):
     """Versioned on/off. Enabling starts or reuses this account's initial inventory only."""
     _identity(command_key, actor)
     if type(enabled) is not bool or type(expected_revision) is not int or not 0 <= expected_revision < 2**31 - 1:
         raise InvalidSync("Send a boolean enabled flag and the current settings revision.")
-    request_hash = digest({"action": "settings", "enabled": enabled, "expectedRevision": expected_revision})
+    request = {"action": "settings", "enabled": enabled, "expectedRevision": expected_revision}
+    if expected_connection_revision is not None:
+        if type(expected_connection_revision) is not int or expected_connection_revision < 1:
+            raise Refused("invalid initial sync connection revision")
+        request["connectionRevision"] = expected_connection_revision
+    request_hash = digest(request)
     now = utcnow()
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
@@ -632,6 +637,8 @@ def set_settings(store, tenant, account, *, enabled, expected_revision, command_
         before = _state(row)
         if enabled:
             connection = _connection(s, runtime)
+            if expected_connection_revision is not None and connection.revision != expected_connection_revision:
+                raise Refused("initial sync connection changed")
             if row is None:
                 row = Account(account_id=account, binding_id=runtime.binding_id, enabled=True, status="active",
                     revision=1, actor=actor, command_key=command_key, backlog=0, failures=0, created_at=now, updated_at=now)

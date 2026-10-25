@@ -148,14 +148,13 @@ class Store:
             cursor.execute("SELECT * FROM onlyfans_proxy.inventory WHERE owner_key=%s FOR UPDATE",(key,))
             row = cursor.fetchone()
             if row:
-                if row["country"] != country:
-                    raise ProxyError("assignment_country_conflict")
+                # A dashboard country is a preference; retries keep their fixed IP.
                 if row["state"] != "assigned" or row["expires_at"] <= datetime.now(timezone.utc)+timedelta(hours=1) or row["observed_at"] <= datetime.now(timezone.utc)-timedelta(minutes=5):
                     raise ProxyError("assigned_proxy_needs_attention")
                 return self.open(row)
-            cursor.execute("""SELECT * FROM onlyfans_proxy.inventory WHERE state='available' AND country=%s
+            cursor.execute("""SELECT * FROM onlyfans_proxy.inventory WHERE state='available'
                 AND expires_at>CURRENT_TIMESTAMP+INTERVAL '1 hour' AND observed_at>CURRENT_TIMESTAMP-INTERVAL '5 minutes'
-                ORDER BY expires_at DESC,address_hash FOR UPDATE SKIP LOCKED LIMIT 1""",(country,))
+                ORDER BY (country=%s) DESC,expires_at DESC,address_hash FOR UPDATE SKIP LOCKED LIMIT 1""",(country,))
             row = cursor.fetchone()
             if not row:
                 raise ProxyError("proxy_stock_empty")

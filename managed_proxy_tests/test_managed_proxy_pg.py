@@ -99,9 +99,9 @@ def test_provider_credential_change_quarantines_assignment_and_never_recycles_it
     assert "fixture:secret" in first
 
 
-def test_wrong_country_and_expired_or_stale_inventory_are_refused(store):
+def test_country_preference_does_not_replace_existing_assignment_and_stale_inventory_is_refused(store):
     store.sync([candidate()]);assign(store)
-    with pytest.raises(ProxyError,match="assignment_country_conflict"):assign(store,country="GB")
+    assert assign(store,country="GB")==assign(store)
     with store.transaction() as c:c.execute("UPDATE onlyfans_proxy.inventory SET observed_at=CURRENT_TIMESTAMP-INTERVAL '6 minutes'")
     with pytest.raises(ProxyError,match="assigned_proxy_needs_attention"):assign(store)
 
@@ -119,3 +119,28 @@ def test_existing_binding_can_attach_only_to_its_matching_assignment(store):
     assert assign(store)==first
     with store.transaction() as c:
         c.execute("SELECT account_id FROM onlyfans_proxy.inventory");assert c.fetchone()["account_id"]=="of-123"
+
+def test_new_account_uses_other_country_when_preferred_country_has_no_stock(store):
+    proxy=candidate(country="NL")
+    store.sync([proxy])
+    assert assign(store,country="US")==proxy.url
+    assert store.stock()==[]
+
+
+def test_available_preferred_country_is_used_before_other_countries(store):
+    preferred=candidate(country="US")
+    alternative=candidate("1.1.1.1",country="NL",expires_at=datetime.now(timezone.utc)+timedelta(days=20))
+    store.sync([preferred,alternative])
+    assert assign(store)==preferred.url
+    assert assign(store,handle="second_account")==alternative.url
+
+
+def test_cross_country_fallback_does_not_share_proxy_under_concurrent_claims(store):
+    store.sync([candidate(country="NL"),candidate("1.1.1.1",country="PT")])
+    def claim(i):
+        try:return store.assign("tenant-a","creator-"+str(i),"handle_"+str(i),"US",ACTOR)
+        except ProxyError as error:return str(error)
+    with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(claim,range(4)))
+    assigned=[r for r in results if r.startswith("http:")]
+    assert len(assigned)==2 and len(set(assigned))==2
+    assert results.count("proxy_stock_empty")==2

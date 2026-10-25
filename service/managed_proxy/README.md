@@ -8,8 +8,8 @@ for the same purchased stock.
 
 The broker imports only confirmed, non-test ISP Dedicated orders. It never
 orders, pays for, renews, rotates, or changes credentials at IPRoyal. Inventory
-exhaustion is a visible refusal; it never shares an assigned IP, switches a
-country, chooses datacenter/rotating stock, or falls back to direct traffic.
+exhaustion is a visible refusal; it never shares an assigned IP, changes an existing
+assignment, chooses datacenter/rotating stock, or falls back to direct traffic.
 
 Existing encrypted OnlyFans connections are inspected inside the broker to
 reserve their IPs before any new assignment. Existing accounts are not modified.
@@ -47,6 +47,10 @@ Buy a pool of dedicated ISP IPs in the required countries in the platform's
 IPRoyal account. Keep renewal enabled for live assignments; do not refresh IPs
 at renewal. The platform assigns an unused IP during Add OnlyFans account.
 Agency users need no IPRoyal account and no proxy credential copying.
+
+A dashboard country is a preference for new assignments, not a restriction. If
+that country has no eligible unused stock, another purchased country is used.
+Retries retain the same assigned IP even if the dashboard preference changes.
 
 An assigned IP is retained across retries and is never automatically released or
 recycled. An administrator must investigate expired, replaced or unused

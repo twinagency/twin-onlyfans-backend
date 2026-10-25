@@ -55,6 +55,31 @@ class BudgetAdmissionTests(unittest.IsolatedAsyncioTestCase):
         await budget.reserve(fan_id=1, request_bytes=100, max_output_tokens=100)
         self.assertEqual(called, [True])
 
+    async def test_settlement_and_unknown_recording_share_reservation_queue(self):
+        entered, release, calls = asyncio.Event(), asyncio.Event(), []
+        async def reserve(**kw):
+            calls.append("reserve")
+            entered.set()
+            await release.wait()
+        async def settle(*args, **kw):
+            calls.append("settle")
+            return 7
+        async def hold(*args, **kw):
+            calls.append("hold")
+        lock = asyncio.Lock()
+        budgets = [self.budget(lock, reserve) for _ in range(3)]
+        budgets[1]._settle = settle
+        budgets[2]._hold = hold
+        a = asyncio.create_task(budgets[0].reserve(fan_id=1, request_bytes=100, max_output_tokens=100))
+        await entered.wait()
+        b = asyncio.create_task(budgets[1].settle(None, cost_usd=1, tokens_in=1, tokens_out=1))
+        c = asyncio.create_task(budgets[2].hold(None))
+        await asyncio.sleep(0)
+        self.assertEqual(calls, ["reserve"])
+        release.set()
+        self.assertEqual(await asyncio.wait_for(asyncio.gather(a, b, c), 1), [None, 7, None])
+        self.assertEqual(calls, ["reserve", "settle", "hold"])
+
     async def test_default_path_does_not_add_a_lock(self):
         called = []
         async def reserve(**kw):

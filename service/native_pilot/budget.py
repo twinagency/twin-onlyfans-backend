@@ -146,6 +146,14 @@ class DailyBudget:
         return None
 
     async def settle(self, reservation: Reservation, *, cost_usd, tokens_in, tokens_out) -> int | None:
+        if self._admission_lock is not None:
+            async with self._admission_lock:
+                return await self._settle(reservation, cost_usd=cost_usd,
+                                          tokens_in=tokens_in, tokens_out=tokens_out)
+        return await self._settle(reservation, cost_usd=cost_usd,
+                                  tokens_in=tokens_in, tokens_out=tokens_out)
+
+    async def _settle(self, reservation: Reservation, *, cost_usd, tokens_in, tokens_out) -> int | None:
         from sqlalchemy import select
         from db.engine import get_session
         from db.models import GrokCall, GrokDailyCost
@@ -172,6 +180,12 @@ class DailyBudget:
 
     async def hold(self, reservation: Reservation) -> None:
         """Outcome unproven: keep the reservation, mark the audit row unknown."""
+        if self._admission_lock is not None:
+            async with self._admission_lock:
+                return await self._hold(reservation)
+        return await self._hold(reservation)
+
+    async def _hold(self, reservation: Reservation) -> None:
         from sqlalchemy import select
         from db.engine import get_session
         from db.models import GrokCall

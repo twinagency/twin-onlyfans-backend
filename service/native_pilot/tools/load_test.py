@@ -736,6 +736,21 @@ def install_patches(stack: ExitStack, holder: dict):
                 code = state if isinstance(state, str) and len(state) == 5 and state.isalnum() else ""
                 W().emit({"event": "synthetic-budget-error", "reason": type(exc).__name__ + (":" + code if code else "")})
                 raise
+        async def settle(self, *args, **kwargs):
+            try:
+                return await super().settle(*args, **kwargs)
+            except Exception as exc:
+                W().emit({"event": "synthetic-budget-settlement-error",
+                          "reason": type(exc).__module__ + "." + type(exc).__name__})
+                raise
+
+        async def hold(self, *args, **kwargs):
+            try:
+                return await super().hold(*args, **kwargs)
+            except Exception as exc:
+                W().emit({"event": "synthetic-budget-hold-error",
+                          "reason": type(exc).__module__ + "." + type(exc).__name__})
+                raise
     stack.enter_context(patch.object(budget_mod, "DailyBudget", ProfileBudget))
     stack.enter_context(patch.object(conn_mod, "load_verified_connection", fake_load))
     stack.enter_context(patch.object(conn_mod, "build_client", build_client))

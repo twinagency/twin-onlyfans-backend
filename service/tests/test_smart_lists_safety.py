@@ -92,5 +92,3 @@ def test_saved_resolve_route_blocks_before_fan_loader(monkeypatch):
     with pytest.raises(HTTPException) as caught:
         asyncio.run(lists.resolve_smart_list(1))
     assert caught.value.status_code == 409
-
-

@@ -88,4 +88,3 @@ The four requested features are not completed by this patch.
 Next work must establish coverage-aware fan/content facts on the actual integrated release, then provide scoped Smart Lists APIs/UI and campaign audiences. Missing transaction coverage still normalizes to zero in the legacy loader; that limitation is intentionally not reinterpreted without the shared facts contract and its UI compatibility work.
 
 Scripts still require real OnlyFans inbox integration and durable receipt-linked progress. Campaign priority/scale and sequences still require common sender arbitration. Vault performance still requires canonical purchase attribution with bundles counted once.
-

@@ -709,6 +709,18 @@ def install_patches(stack: ExitStack, holder: dict):
     stack.enter_context(patch.object(service.Service, "idle", idle))
     stack.enter_context(patch.object(engine_mod, "NativeEngine", SyntheticEngine))
     stack.enter_context(patch.object(model_mod, "NativePilotModel", SyntheticModel))
+    from native_pilot import budget as budget_mod
+    class ProfileBudget(budget_mod.DailyBudget):
+        async def reserve(self, **kwargs):
+            try:
+                return await super().reserve(**kwargs)
+            except Exception as exc:
+                cause = getattr(exc, "orig", None)
+                state = getattr(cause, "sqlstate", None) or getattr(cause, "pgcode", None)
+                code = state if isinstance(state, str) and len(state) == 5 and state.isalnum() else ""
+                W().emit({"event": "synthetic-budget-error", "reason": type(exc).__name__ + (":" + code if code else "")})
+                raise
+    stack.enter_context(patch.object(budget_mod, "DailyBudget", ProfileBudget))
     stack.enter_context(patch.object(conn_mod, "load_verified_connection", fake_load))
     stack.enter_context(patch.object(conn_mod, "build_client", build_client))
     stack.enter_context(patch.object(attribution, "require_sentinels", fake_sentinels))

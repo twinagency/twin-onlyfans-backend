@@ -46,6 +46,35 @@ class SendWorkerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(*entered, return_exceptions=True)
             await asyncio.gather(*sends, return_exceptions=True)
 
+    async def test_account_send_admission_is_serialized_but_accounts_are_independent(self):
+        from native_pilot.service import ServiceGateway
+        active, peak, sent = {}, {}, []
+        fleet_peak = 0
+        async def wire(gateway, text, terms=None):
+            nonlocal fleet_peak
+            account = gateway.service.account
+            active[account] = active.get(account, 0) + 1
+            peak[account] = max(peak.get(account, 0), active[account])
+            fleet_peak = max(fleet_peak, sum(active.values()))
+            await asyncio.sleep(0.01)
+            sent.append(text)
+            active[account] -= 1
+            return text
+        services = [SimpleNamespace(account=a, fan_tasks=SimpleNamespace(limit=2), dispatch_lock=asyncio.Lock())
+                    for a in ["creator-a", "creator-b"]]
+        gateways = []
+        for service in services:
+            for _ in range(2):
+                gateway = ServiceGateway.__new__(ServiceGateway)
+                gateway.service = service
+                gateways.append(gateway)
+        with patch.object(Gateway, "_send", wire):
+            result = await asyncio.gather(*(g._send(str(i)) for i, g in enumerate(gateways)))
+        self.assertEqual(result, ["0", "1", "2", "3"])
+        self.assertEqual(peak, {"creator-a": 1, "creator-b": 1})
+        self.assertEqual(fleet_peak, 2)
+        self.assertEqual(sorted(sent), ["0", "1", "2", "3"])
+
     async def test_serial_fallback_keeps_original_worker_path(self):
         pilot = SimpleNamespace(account_id="of-100", fan_id=1, deadline="2099-01-01T00:00:00")
         for value, expected in [("1", asyncio.to_thread), ("2", run_blocking)]:

@@ -91,8 +91,10 @@ class DailyBudget:
         now = self._clock()
         day = now.strftime("%Y-%m-%d")
         async with get_session() as s:
+            # Serialize reservation creation even before the daily row exists.
+            # Shared config locks let two first calls race to insert that row.
             cfg = await s.scalar(select(AccountAiConfig).where(
-                AccountAiConfig.account_id == self.scope.db_id).with_for_update(read=True))
+                AccountAiConfig.account_id == self.scope.db_id).with_for_update())
             cap = cfg.daily_cost_cap_cents if cfg is not None else None
             if type(cap) is not int or not 0 <= cap <= 1_000_000:
                 raise BudgetRefused("budget-cap-unset")

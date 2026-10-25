@@ -133,6 +133,14 @@ class ServiceGateway(runner.Gateway):
         self.service = service
         self.hold_check = lambda: fan_hold_reason(service.path, service.db, service.args.fan, *service.strict_arg)
 
+    async def _send(self, text, terms=None):
+        if self.service.fan_tasks.limit == 1:
+            return await super()._send(text, terms)
+        # Generation stays concurrent. Only one gateway at a time waits for and
+        # uses this account's send admission; durable ledger gates still decide.
+        async with self.service.dispatch_lock:
+            return await super()._send(text, terms)
+
     @property
     def deadline(self):  # type: ignore[override]
         return self.service.lease.deadline
@@ -199,6 +207,7 @@ class Service:
         self.cutoff = None         # a child's new-pilot cutoff (the runner's start)
         self.children, self.fan_holds, self.owned_check = {}, {}, None
         self.fan_tasks = FanTasks(configured_fan_concurrency())
+        self.dispatch_lock = asyncio.Lock()
         self.args = args
         self.scope = AccountScope.parse(args.account)
         self.db = self.scope.db_id
@@ -509,6 +518,7 @@ class Service:
             child.path, child.ledger, child.context = self.path, self.ledger, self.context
             child.content, child.catalog_owner = self.content, self
             child.followups = self.followups
+            child.dispatch_lock = self.dispatch_lock
             self.children[fan] = child
         child.client, child.conn, child.sentinels = self.client, self.conn, self.sentinels
         return child

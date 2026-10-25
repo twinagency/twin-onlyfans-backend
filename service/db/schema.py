@@ -37,8 +37,9 @@ ENROLLMENT = "0087_creator_enrollment"
 VAULT_MEDIA = "0088_native_vault_media"
 OFFER_IMPORT = "0089_offer_import"
 LAUNCH = "0090_launch"
-HEAD = "0091_launch_controls"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, HEAD:91}
+LAUNCH_CONTROLS = "0091_launch_controls"
+HEAD = "0092_proxy_assignments"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, HEAD:92}
 HERE = Path(__file__).resolve().parent
 
 
@@ -116,7 +117,11 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             if _since_rank(column) > expected_rank:
                 continue
             other = actual.get(column.name)
-            if other is None or other["type"]._type_affinity != column.type._type_affinity:
+            affinity = column.type._type_affinity
+            if expected_rank < 92 and table.name == "of_delivery_policy" and column.name == "throttle_seconds":
+                from sqlalchemy import Integer
+                affinity = Integer
+            if other is None or other["type"]._type_affinity != affinity:
                 failures.append(f"incompatible column {table.name}.{column.name}")
             elif not column.nullable and other["nullable"]:
                 failures.append(f"nullable required column {table.name}.{column.name}")

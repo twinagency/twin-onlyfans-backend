@@ -7,7 +7,7 @@ commerce evidence audits the existing canonical financial/ownership owners.
 """
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey,
-    ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint,
+    ForeignKeyConstraint, Index, Integer, Float, String, Text, UniqueConstraint,
     false, text,
 )
 
@@ -115,10 +115,10 @@ class OfDeliveryPolicy(Base):
     __tablename__ = "of_delivery_policy"
     __table_args__ = (
         CheckConstraint("transport_kind IN ('synthetic','native')", name="transport_kind"),
-        CheckConstraint("limit_units >= 0 AND limit_units <= 10000", name="limit_units"),
+        CheckConstraint("limit_units >= 0 AND limit_units <= 1000000", name="limit_units"),
         CheckConstraint("used_units >= 0", name="used_units"),
         CheckConstraint("queued_count >= 0 AND queued_count <= 1000", name="queued_count"),
-        CheckConstraint("throttle_seconds >= 1 AND throttle_seconds <= 86400", name="throttle_seconds"),
+        CheckConstraint("throttle_seconds >= 0.1 AND throttle_seconds <= 86400", name="throttle_seconds"),
         {"info": INFO},
     )
     account_id = Column(String, ForeignKey("of_runtime.account_id", ondelete="RESTRICT"), primary_key=True)
@@ -128,7 +128,7 @@ class OfDeliveryPolicy(Base):
     limit_units = Column(Integer, nullable=False, server_default=text("0"))
     used_units = Column(Integer, nullable=False, server_default=text("0"))
     queued_count = Column(Integer, nullable=False, server_default=text("0"))
-    throttle_seconds = Column(Integer, nullable=False, server_default=text("1"))
+    throttle_seconds = Column(Float, nullable=False, server_default=text("1"))
     next_dispatch_at = Column(DateTime)
     active_intent_id = Column(String(36))
     media_enabled = Column(Boolean, nullable=False, server_default=false(),

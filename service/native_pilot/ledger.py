@@ -144,7 +144,7 @@ FOLLOWUP_DROPS = ("followup-not-queued", "followup-not-due", "followup-expired",
 # conversation budget: the account's delivery allowance is the cap. The
 # conversation budget only has to stay above anything the allowance can grant
 # (``limit_units`` is at most 10000), so it can never be the first thing to bind.
-SERVICE_BUDGET_CEILING = 10000
+SERVICE_BUDGET_CEILING = 1000000
 
 # An input whose turn failed with NO provider send attempt standing (a model timeout/error, or a POST the
 # provider certainly refused) may be answered again, a bounded number of times. The count lives in the

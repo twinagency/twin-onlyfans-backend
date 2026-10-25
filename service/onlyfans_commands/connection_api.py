@@ -27,6 +27,8 @@ def response(body,status=200):
 
 def failure(exc):
     if isinstance(exc,Refused):
+        if str(exc) in {'proxy pool exhausted','proxy pool configuration is unavailable','reserved proxy is unavailable'}:
+            return response({'ok':False,'code':'proxy_unavailable','error':'No fixed proxy is available for this creator. Ask your administrator to add proxy capacity.'},503)
         scope=str(exc) in {'scope unavailable','conversation unavailable'}
         return response({'ok':False,'code':'scope_unavailable' if scope else 'connection_conflict','error':'That account is unavailable.' if scope else 'The connection command could not be applied. Refresh and check the selected account.'},404 if scope else 409)
     return response({'ok':False,'code':'outcome_unconfirmed','error':'The outcome is not confirmed. Refresh or retry the same request.'},500)
@@ -75,10 +77,16 @@ async def capture_context(request:Request):
     store,tenant=context
     try:
         body=await read_json(request)
-        if set(body)!={'creatorId','accountId'}:raise ValueError()
+        if set(body) not in ({'creatorId','accountId'},{'creatorId','accountId','assignProxy'}):raise ValueError()
+        if 'assignProxy' in body and (body['assignProxy'] is not True or body['accountId'] is not None):raise ValueError()
     except (ValueError,TypeError,UnicodeError,RecursionError):return response({'ok':False,'code':'invalid_request','error':'Invalid login context.'},400)
     try:
         result=await asyncio.to_thread(get_capture_context,store,tenant,body['creatorId'],body['accountId'])
+        if body.get('assignProxy') is True:
+            from onlyfans_runtime.proxy_pool import reserve_proxy
+            from onlyfans_runtime.connections import capture_network_fingerprint
+            proxy=await asyncio.to_thread(reserve_proxy,store,tenant,body['creatorId'])
+            result={**result,'proxyUrl':proxy,'fingerprint':capture_network_fingerprint(proxy)}
         return response({'ok':True,'context':result})
     except Exception as exc:return failure(exc)
 

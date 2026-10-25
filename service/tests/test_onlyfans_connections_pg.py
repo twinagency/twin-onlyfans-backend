@@ -376,7 +376,7 @@ def test_invalid_payloads_and_limits_never_write_credentials_or_activate(databas
         assert session.scalar(select(func.count()).select_from(OfConnectionChange))==1
         assert session.get(OfRuntime,account).enabled is False
     save(store,account,original)
-    for patch in ({'limitUnits':True},{'limitUnits':0},{'limitUnits':10001},{'throttleSeconds':0},
+    for patch in ({'limitUnits':True},{'limitUnits':0},{'limitUnits':1000001},{'throttleSeconds':0},
         {'throttleSeconds':86401},{'mediaEnabled':1},{'automateNewConversations':1}):
         with pytest.raises(Refused):change(store,account,'activate',1,'c'*64,dict(LIMITS,**patch))
     store.close()

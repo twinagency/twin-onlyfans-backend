@@ -187,8 +187,8 @@ class TextAuthority:
                   limit_units, throttle_seconds, actor, reason, media_enabled=None,
                   transport_kind=None):
         if (type(expected_revision) is not int or expected_revision < 0 or type(enabled) is not bool
-                or type(limit_units) is not int or not 0 <= limit_units <= 10000
-                or type(throttle_seconds) is not int or not 1 <= throttle_seconds <= 86400
+                or type(limit_units) is not int or not 0 <= limit_units <= 1000000
+                or type(throttle_seconds) not in (int,float) or not 0.1 <= throttle_seconds <= 86400
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or not isinstance(reason, str) or not 1 <= len(reason) <= 512
                 or media_enabled is not None and type(media_enabled) is not bool

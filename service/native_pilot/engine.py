@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextvars import ContextVar
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -167,7 +168,7 @@ class NativeEngine:
     or hidden process-global routing table exists.
     """
 
-    _active = False
+    _active = ContextVar("native_engine_active", default=False)
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None):
@@ -464,7 +465,7 @@ class NativeEngine:
         return None
 
     def __enter__(self):
-        if self._token is not None or NativeEngine._active:
+        if self._token is not None or NativeEngine._active.get():
             raise PilotBoundaryError("engine-already-active")
         # Lazy import: merely importing this module never loads repo .env,
         # opens a DB, constructs a platform client or resolves credentials.
@@ -472,11 +473,11 @@ class NativeEngine:
         from telegram_runtime.capabilities import set_telegram_capabilities
 
         self.native = native
-        NativeEngine._active = True
+        self._active_token = NativeEngine._active.set(True)
         try:
             self._token = set_telegram_capabilities(self)
         except BaseException:
-            NativeEngine._active = False
+            NativeEngine._active.reset(self._active_token)
             raise
         return self
 
@@ -535,5 +536,5 @@ class NativeEngine:
             from telegram_runtime.capabilities import reset_telegram_capabilities
             token, self._token = self._token, None
             reset_telegram_capabilities(token)
-            NativeEngine._active = False
+            NativeEngine._active.reset(self._active_token)
         return False

@@ -28,7 +28,7 @@ made long-lived, with every safety rule kept:
 * live inbound arrives through ``intake.Intake`` (FASTT's OFWebSocket).
 
 All-fans mode (``--all-fans``): the same rules, per fan. One process per OnlyFans account,
-one turn at a time. Each tick (1) lets Twin's controls act for every fan with unanswered
+bounded concurrent turns when FASTT_MAX_CONCURRENT_FANS is set (default 1). Each tick (1) lets Twin's controls act for every fan with unanswered
 inbound (reconcile the runtime stop, the account's new-conversation policy, queued human sends),
 (2) picks the OLDEST fan whose newest message is an unanswered inbound and answers it through a
 per-fan child ``Service`` (own ``svc-<owner>-<fan>`` pilot, lease, conversation row, input claim,
@@ -55,6 +55,7 @@ from . import postsale, runner
 from .followups import DISCOUNT_KIND, NUDGE_KIND
 from .ledger import MAX_REQUEUES_MODEL, MAX_REQUEUES_PROVIDER, Ledger, Refused
 from .scope import AccountScope
+from .fan_tasks import FanTasks, configured_fan_concurrency
 
 LEASE_TTL_S = 120.0
 RENEW_S = 30.0
@@ -197,6 +198,7 @@ class Service:
         self.strict = False        # True on a per-fan child of an all-fans runner
         self.cutoff = None         # a child's new-pilot cutoff (the runner's start)
         self.children, self.fan_holds, self.owned_check = {}, {}, None
+        self.fan_tasks = FanTasks(configured_fan_concurrency())
         self.args = args
         self.scope = AccountScope.parse(args.account)
         self.db = self.scope.db_id
@@ -252,6 +254,8 @@ class Service:
         soon = self.conn is not None and self.conn.expires_at.replace(tzinfo=None) <= runner.now() + timedelta(seconds=60)
         if self.client is not None and not soon and time.monotonic() < self.next_conn_check:
             return
+        if len(self.fan_tasks):
+            await self.fan_tasks.drain()  # do not close a transport with an unresolved send
         conn = await connection.load_verified_connection(self.scope)
         if self.client is None or conn.revision != self.conn.revision or conn.expires_at != self.conn.expires_at:
             client = await asyncio.to_thread(connection.build_client, conn)
@@ -540,6 +544,47 @@ class Service:
         wait = self.poll_s if reason.startswith("fan-") else self.hold_s
         self.fan_holds[fan] = (runner.now() + timedelta(seconds=wait), reason)
 
+    async def _serve_concurrent_fan(self, fan):
+        child = self.child(fan)
+        child.last_active = runner.now()
+        try:
+            await child.serve_fan()
+        except Refused as exc:
+            child.note(exc.reason)
+            if exc.reason.startswith(("allowance-", "model-budget")):
+                raise
+            self._hold_fan(fan, exc.reason)
+        except Exception as exc:
+            child.note("service-error:" + type(exc).__name__)
+            self._hold_fan(fan, "service-error")
+        finally:
+            if child.backoff_s:
+                self.fan_holds[fan] = (runner.now() + timedelta(seconds=child.backoff_s), "retry-backoff")
+                child.backoff_s = 0.0
+
+    async def _tick_concurrent_fans(self, pending):
+        self.fan_tasks.reap()
+        for fan, mid in pending:
+            if self.stop.is_set():
+                break
+            hold = self.fan_holds.get(fan)
+            if fan in self.fan_tasks or (hold and runner.now() < hold[0]):
+                continue
+            if self.already_claimed(fan, mid):
+                continue
+            if not self.fan_tasks.start(fan, lambda fan=fan: self._serve_concurrent_fan(fan)):
+                break
+        if len(self.fan_tasks):
+            # Re-read manual takeover and account gates while other fans generate.
+            # No busy spin when all slots are occupied or one fan is slow.
+            await self.idle(min(self.poll_s, 0.25))
+            return
+        await self.run_postsale_scan()
+        if await self.run_followups():
+            return
+        self.note(None)
+        await self.idle(self.poll_s)
+
     async def tick_all(self):
         pending, controlled = await asyncio.to_thread(self.pending_fans)
         try:
@@ -548,9 +593,11 @@ class Service:
             runner.emit({"event": "twin-controls-error", "reason": (str(exc) or type(exc).__name__)[:120]})
         # Give back the lease of any fan quiet for a while (bounds renewal tasks and ownership).
         for fan, child in list(self.children.items()):
-            if child.pilot is not None and fan not in controlled and \
+            if child.pilot is not None and fan not in self.fan_tasks and fan not in controlled and \
                     (runner.now() - child.last_active).total_seconds() > FAN_IDLE_RELEASE_S:
                 await self.release_child(fan)
+        if self.fan_tasks.limit > 1:
+            return await self._tick_concurrent_fans(pending)
         for fan, mid in pending:
             if self.stop.is_set():
                 return
@@ -1053,6 +1100,10 @@ class Service:
         from twin_bridge.coordination import clear_owner
         pilot = self.pilot
         try:
+            try:
+                await self.fan_tasks.drain()
+            except Exception as exc:
+                self.note("shutdown-turn:" + type(exc).__name__)
             for fan in list(self.children):
                 await self.release_child(fan)
             task, self._renew_task = self._renew_task, None

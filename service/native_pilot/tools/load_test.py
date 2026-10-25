@@ -864,6 +864,8 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
             if cfg.sim_minutes * 60 > 30 else 0,
     }
     result["start_epoch"] = actual_start_epoch
+    result["worker_database_role"] = os.environ.get("ONLYFANS_PROCESS_ROLE")
+    result["async_pool"] = {"size": async_engine.pool.size(), "max_overflow": async_engine.pool._max_overflow}
     result["wait_samples"] = stats["wait_samples"]
     result["service_crashed"] = crashed
     result["helper_errors"] = helper_errors
@@ -999,7 +1001,12 @@ def run_all(args, names=None):
     if not admin:
         sys.exit("FAILED: --pg-url / ONLYFANS_TEST_PG_URL (admin URL of a disposable LOCAL PostgreSQL) is required")
     os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
-    os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
+    # Fleet workers use the deployed worker role and its bounded DB pool.
+    # Older standalone scenarios retain their intentionally role-free fixture.
+    if os.environ.get("LOAD_TEST_FLEET_TOKEN"):
+        os.environ["ONLYFANS_PROCESS_ROLE"] = "worker"
+    else:
+        os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
     os.environ["TWIN_BRIDGE_ENABLED"] = "0"
     os.environ["TWIN_BRIDGE_SEND_ENABLED"] = "0"
     os.environ["W7_WEBHOOK_DISPATCH_DISABLED"] = "1"

@@ -20,6 +20,7 @@ def workers():
             "offered_load": {"scheduled_messages": 750, "generated_messages": 750,
                              "persisted_messages": 750, "scheduled_messages_per_hour": 10000,
                              "max_ingress_delay_s": 0.1},
+            "worker_database_role": "worker", "async_pool": {"size": 4, "max_overflow": 0},
             "service_crashed": [], "helper_errors": [], "start_epoch": 1000 + offset * 0.001,
             "totals": {"replies": 750}}))
     return rows
@@ -38,7 +39,7 @@ class FleetEvidenceTests(unittest.TestCase):
         self.assertFalse(combine_workers(rows, [], minutes=5)["capacity_verdict"]["passed"])
 
     def test_crash_late_underfed_scaled_and_clock_skew_fail(self):
-        for kind in ["crash", "late", "underfed", "scaled", "clock"]:
+        for kind in ["crash", "late", "underfed", "scaled", "clock", "pool"]:
             with self.subTest(kind=kind):
                 rows = deepcopy(workers())
                 row = rows[0][1]
@@ -50,6 +51,8 @@ class FleetEvidenceTests(unittest.TestCase):
                     row["offered_load"]["persisted_messages"] = 749
                 elif kind == "scaled":
                     row["config"]["scale"] = 2
+                elif kind == "pool":
+                    row["async_pool"]["max_overflow"] = 10
                 else:
                     row["start_epoch"] += 2
                 self.assertFalse(combine_workers(rows, [], minutes=5)["capacity_verdict"]["passed"])

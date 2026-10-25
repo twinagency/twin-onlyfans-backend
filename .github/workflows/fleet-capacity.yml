@@ -23,6 +23,7 @@ jobs:
           POSTGRES_DB: postgres
         ports: ['5432:5432']
         options: >-
+          --shm-size=512m
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 3s --health-retries 12
     env:
@@ -37,6 +38,12 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-onlyfans-test.txt
       - run: pip install -r requirements-onlyfans-test.txt
+      - name: Explicit disposable database connection budget
+        run: |
+          PGPASSWORD=disposable_test_only psql -h 127.0.0.1 -U postgres -d postgres -c "ALTER SYSTEM SET max_connections=200"
+          docker restart $(docker ps --filter ancestor=postgres:16 --format '{{.ID}}')
+          for attempt in {1..20}; do pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
+          PGPASSWORD=disposable_test_only psql -h 127.0.0.1 -U postgres -d postgres -c "SHOW max_connections"
       - name: Fleet evidence validation
         run: python service/tests/test_native_pilot_fleet_report.py
       - name: Ten isolated creator processes at 100000 inbound per hour

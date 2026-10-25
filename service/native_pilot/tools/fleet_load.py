@@ -25,7 +25,9 @@ def combine_workers(rows, errors, *, minutes):
         config = row.get("config", {})
         if (row.get("scenario") != "target_10k" or config.get("accounts") != 1
                 or config.get("account_offset") != offset or config.get("scale") != 1
-                or config.get("sim_minutes") != minutes or set(row.get("accounts", {})) != {expected}):
+                or config.get("sim_minutes") != minutes or set(row.get("accounts", {})) != {expected}
+                or row.get("worker_database_role") != "worker"
+                or row.get("async_pool") != {"size": 4, "max_overflow": 0}):
             failures.append(f"worker {offset}: invalid account or workload report")
         if expected in accounts:
             failures.append(f"worker {offset}: duplicate account report")
@@ -107,10 +109,11 @@ def main(argv=None):
     evidence = output.parent / (output.stem + "-workers")
     evidence.mkdir(exist_ok=False)
     token = uuid.uuid4().hex
-    peak_rss = 0
+    peak_rss, pg_connection_limit = 0, None
     db.create()
     try:
         db.bootstrap()
+        pg_connection_limit = int(db.run("SHOW max_connections")[0][0])
         db.seed(World(Cfg(name="fleet-seed", accounts=10, fans=args.fans,
                           scale=1, throttle_s=args.throttle)))
         db.run("CREATE TABLE public.load_harness_fleet(id integer PRIMARY KEY,token text NOT NULL)")
@@ -184,6 +187,14 @@ def main(argv=None):
                                                  for _, row in rows), 2),
         "host_cpus": os.cpu_count(),
         "note": "creator workers only; excludes PostgreSQL, API, dashboard and supervisor overhead; no production CPU quota applied",
+    }
+    report["database_connection_budget"] = {
+        "server_max_connections": pg_connection_limit,
+        "worker_async_pool_limit_each": 4,
+        "worker_bridge_pool_limit_each": 6,
+        "creator_pool_theoretical_max": 100,
+        "test_only_ingress_monitor_pools": "at least twenty connections across ten children plus parent setup",
+        "note": "requires additional reserve for API, background jobs, supervisor, administration and deployment overlap",
     }
     report["source_commit"] = os.environ.get("GITHUB_SHA")
     output.write_text(json.dumps(report, indent=2))

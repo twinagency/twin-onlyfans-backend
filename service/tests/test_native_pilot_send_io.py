@@ -1,0 +1,80 @@
+"""Native synchronous send callbacks must not exhaust the workers they await."""
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
+from pathlib import Path
+from types import SimpleNamespace
+import sys
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from native_pilot.runner import Gateway
+from native_pilot.send_io import run_blocking
+from twin_bridge.platform import OnlyFansTextAdapter
+
+
+class SendWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_saturated_callback_pool_can_read_history_and_finish_sends(self):
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=2))
+        client = SimpleNamespace(account_id="100", platform="onlyfans",
+                                 get_messages=lambda *a, **k: {"list": [], "hasMore": False})
+        reader = OnlyFansTextAdapter("100", client=client, blocking_call=run_blocking)
+        gateway = Gateway.__new__(Gateway)
+        gateway.loop = asyncio.get_running_loop()
+        gateway.pilot = SimpleNamespace(fan_id=1)
+        gateway.content = None
+        gate = asyncio.Event()
+        entered = []
+        async def send(text, terms):
+            entered.append(asyncio.current_task())
+            if len(entered) == 2:
+                gate.set()
+            await gate.wait()  # both default workers now wait in the real Gateway.send callback
+            self.assertEqual(await reader.preflight_history(1), [])
+            return await run_blocking(lambda: text)
+        gateway._send = send
+        sends = [asyncio.create_task(asyncio.to_thread(gateway.send, 1, str(i), {})) for i in range(2)]
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*sends), timeout=5)
+            self.assertEqual(results, ["0", "1"])
+        finally:
+            for task in entered:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*entered, return_exceptions=True)
+            await asyncio.gather(*sends, return_exceptions=True)
+
+    async def test_manual_pause_still_refuses_before_send(self):
+        from native_pilot.service import ServiceGateway
+        from native_pilot.ledger import Refused
+        gateway = ServiceGateway.__new__(ServiceGateway)
+        gateway.run_blocking = run_blocking
+        gateway.stopped = lambda: False
+        gateway.hold_check = lambda: "fan-paused"
+        with self.assertRaises(Refused) as caught:
+            await gateway.pace()
+        self.assertEqual(caught.exception.reason, "fan-paused")
+
+    async def test_io_workers_preserve_task_scope(self):
+        account = ContextVar("test_account")
+        async def scoped(value):
+            token = account.set(value)
+            try:
+                return await run_blocking(account.get)
+            finally:
+                account.reset(token)
+        self.assertEqual(await asyncio.gather(scoped("creator-a"), scoped("creator-b")),
+                         ["creator-a", "creator-b"])
+
+    async def test_io_failure_propagates_without_retry(self):
+        attempts = []
+        def fail():
+            attempts.append(1)
+            raise RuntimeError("synthetic send failure")
+        with self.assertRaisesRegex(RuntimeError, "synthetic send failure"):
+            await run_blocking(fail)
+        self.assertEqual(attempts, [1])
+
+
+if __name__ == "__main__":
+    unittest.main()

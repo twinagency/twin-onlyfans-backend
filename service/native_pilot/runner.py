@@ -266,7 +266,9 @@ class Gateway:
         # OnlyFans (history, receipts, client identity) uses the provider-side id.
         self.scope = scope or AccountScope.parse(pilot.account_id)
         from twin_bridge.platform import OnlyFansTextAdapter
-        self.reader = OnlyFansTextAdapter(self.scope.provider_id, client=client)
+        from .send_io import run_blocking
+        self.run_blocking = run_blocking
+        self.reader = OnlyFansTextAdapter(self.scope.provider_id, client=client, blocking_call=run_blocking)
         self.input_key = None
         self.followup = False   # True: the "sources" are our own anchor message (a follow-up), not fan input
         self.sources = {}
@@ -361,7 +363,7 @@ class Gateway:
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
                             approved_item=self.content.catalog_ids if self.content else None)
             if self.hold_check is not None:
-                held = await asyncio.to_thread(self.hold_check)
+                held = await self.run_blocking(self.hold_check)
                 if held:
                     raise Refused(held)
             if self.content:
@@ -371,7 +373,7 @@ class Gateway:
                         terms = self.content.check_send(con, self.pilot.account_id, terms)
                 if terms:
                     for media_id in terms["media_ids"]:
-                        asset = await asyncio.to_thread(self.client.vault_media_by_id, media_id)
+                        asset = await self.run_blocking(self.client.vault_media_by_id, media_id)
                         if (str(asset.get("id")) != str(media_id) or asset.get("type") != terms["media_types"][str(media_id)]
                                 or asset.get("canView") is not True):
                             raise Refused("content-asset-unavailable")
@@ -420,7 +422,7 @@ class Gateway:
                     wire[0] = True
                     return self.client.send_text_once_body(self.pilot.fan_id, escape_plain_text(text))
             try:
-                raw = await asyncio.to_thread(physical_post)
+                raw = await self.run_blocking(physical_post)
             except Exception as exc:
                 # Certain outcomes only (see NotSent); anything else propagates as the unknown it is.
                 if not wire[0]:

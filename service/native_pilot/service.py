@@ -167,7 +167,7 @@ class ServiceGateway(runner.Gateway):
                 raise Refused(self.stopped_reason)
             if self.hold_check is not None:
                 # The throttle can last minutes: an operator pause landing meanwhile must not cost a turn.
-                held = await asyncio.to_thread(self.hold_check)
+                held = await self.run_blocking(self.hold_check)
                 if held:
                     raise Refused(held)
             policy = self.ledger.allowance_status(self.pilot.account_id)

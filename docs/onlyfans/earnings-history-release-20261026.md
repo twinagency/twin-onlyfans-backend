@@ -8,7 +8,7 @@ Financial code: 9332f943354fea4c2592912ee4ddf4c58478cfb1. Source, migration and 
 
 | Service | Deployed immutable image |
 | --- | --- |
-| API | sha256:ff74635288f6da0acac1b93b14e1a423a8409cf5be042134bd6f5318212ebc86 |
+| API | sha256:ce1ba4221a97b5a7faa4e438050aeffbae6086aa984d69877e8a520d27a1bf09 |
 | Worker | sha256:f4788f7b1bb7a2723e4ddc6e30ec05945c7c4213aadc83491ed661478c133965 |
 | FASTT supervisor | sha256:f8bbf5e7703311b6190555a98db2d85b94a6311f0a824d191205892c6c264a3d |
 
@@ -27,3 +27,5 @@ The combined All time headline must use an epoch lower bound. The first Telegram
 Both Twin accounts completed the provider history walk: 520 records per account, 1,040 total. Of these, 1,030 cleared/pending payments remain in recorded revenue; reversed payments are excluded. Verified totals: USD 14,858.26 gross; USD 11,886.34 net after provider fees, including USD 4.80 pending. Moxy has zero authorized OnlyFans bindings and its agency scope exposes no Twin records. Both recent scans were current in the financial API verification.
 
 Validation includes 137 PostgreSQL ledger/provider/worker/earnings checks, the additive 0091-to-0092 retention rehearsal, successful lifetime/agency CI, TypeScript, overview/lifetime contracts and Linux runtime route checks. GitHub subsequently blocked new jobs for its billing/spending-limit issue. Dashboard builds were staged against the existing Linux dependencies and verified before cutover. Temporary PostgreSQL acceptance containers and their network were removed after testing.
+
+Follow-up: the source/category loop now has separate amount variables so optional breakdowns cannot overwrite cleared totals. A multi-kind plus pending regression check passed against the actual API image. Flirt received the earnings view in dashboard PR #297, based on its live 4a192c6f media/onboarding source; verification targets dashboard.flirtaiagency.com directly.

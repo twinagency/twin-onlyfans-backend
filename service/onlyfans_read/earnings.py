@@ -145,11 +145,11 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False,incl
             .group_by(Transaction.account_id,Transaction.kind).limit(20001))).all()
         if len(stats)>20000:raise Unavailable("earnings_value_unavailable","Financial breakdown exceeds the display budget.")
         kinds={};accounts={}
-        for account,kind,n,gross,net,nnet in stats:
+        for account,kind,n,stat_gross,stat_net,nnet in stats:
             for key,target in ((kind,kinds),(account,accounts)):
                 value=target.setdefault(key,{"paymentCount":0,"grossCents":0,"netCents":0})
-                value["paymentCount"]+=int(n);value["grossCents"]+=int(gross)
-                value["netCents"]=None if value["netCents"] is None or nnet!=n else value["netCents"]+int(net or 0)
+                value["paymentCount"]+=int(n);value["grossCents"]+=int(stat_gross)
+                value["netCents"]=None if value["netCents"] is None or nnet!=n else value["netCents"]+int(stat_net or 0)
         result["statistics"]={"byKind":[{"kind":k,**v} for k,v in sorted(kinds.items())],
             "byAccount":[{"accountId":k,**v} for k,v in sorted(accounts.items())]}
         for group in result["statistics"].values():

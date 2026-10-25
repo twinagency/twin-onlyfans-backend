@@ -17,7 +17,7 @@ def complete_result():
                              "persisted_messages": 7500, "scheduled_messages_per_hour": 100000,
                              "max_ingress_delay_s": 0.1},
             "accounts": {f"of-{i}": copy.deepcopy(account) for i in range(10)},
-            "service_crashed": [], "helper_errors": []}
+            "service_crashed": [], "helper_errors": [], "runtime_errors": []}
 
 
 class CapacityAcceptanceTests(unittest.TestCase):
@@ -51,13 +51,13 @@ class CapacityAcceptanceTests(unittest.TestCase):
         result = complete_result()
         result["config"]["scale"] = 2
         self.assertFalse(evaluate_capacity(result)["passed"])
-        for key in ["offered_load", "service_crashed", "helper_errors"]:
+        for key in ["offered_load", "service_crashed", "helper_errors", "runtime_errors"]:
             result = complete_result()
             del result[key]
             self.assertFalse(evaluate_capacity(result)["passed"])
 
     def test_crashes_and_helper_failures_are_not_capacity_success(self):
-        for key in ["service_crashed", "helper_errors"]:
+        for key in ["service_crashed", "helper_errors", "runtime_errors"]:
             result = complete_result()
             result[key] = ["synthetic failure"]
             self.assertFalse(evaluate_capacity(result)["passed"])

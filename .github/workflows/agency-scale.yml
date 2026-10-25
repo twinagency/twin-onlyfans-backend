@@ -42,6 +42,7 @@ jobs:
           python service/tests/test_native_pilot_capacity_checks.py
           python service/tests/test_native_pilot_fleet_report.py
           python service/tests/test_native_pilot_budget_admission.py
+          python service/tests/test_native_pilot_delivery_pool.py
           python service/tests/test_native_pilot_load_schedule.py
           python service/tests/test_native_pilot_send_io.py
       - name: Existing assembled service and send-boundary regression

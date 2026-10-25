@@ -9,7 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from functools import partial
 
-_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="fastt-send-io")
+from .delivery_pool import configured_delivery_concurrency
+
+_POOL = ThreadPoolExecutor(max_workers=max(8, 2 * configured_delivery_concurrency()),
+                           thread_name_prefix="fastt-send-io")
 
 
 async def run_blocking(function, /, *args, **kwargs):

@@ -275,6 +275,9 @@ class Gateway:
         self.sources = {}
         self.bubble = 0
         self.stopped_reason = None
+        self.parallel_admission = False
+        self.cancelled = False
+        self.wire_check = None
         # The persistent service renews its lease, so the deadline is read from
         # here (never from the frozen Pilot) and a held fan can refuse a bubble.
         self.deadline = pilot.deadline
@@ -337,26 +340,20 @@ class Gateway:
             self.stopped_reason = "time-limit-reached"
         return bool(self.stopped_reason)
 
-    async def _send(self, text, terms=None):
-        from twin_bridge.coordination import authorize_dispatch, revoke_dispatch, guarded_send
-        from twin_bridge.platform import escape_plain_text, validate_created_message
-        from twin_bridge.normalize import html_to_text
-
-        attempt = None
-        settled = False
-        unsend_id, self.unsend_id = self.unsend_id, None      # armed for THIS send only, never carried to another
-        try:
-            if self.stopped() or not self.input_key:
-                raise Refused(self.stopped_reason or "pilot-stopped")
-            if unsend_id is not None and not terms:
-                raise Refused("unsend-needs-card")
-            if len(text.encode("utf-16-le")) // 2 > 4000:
-                raise Refused("output-too-long")
+    async def _prepare_attempt(self, terms):
+        started, retries = time.monotonic(), 0
+        while True:
+            if self.cancelled:
+                raise Refused("send-cancelled")
             await self.pace()
             if self.stopped():
                 raise Refused(self.stopped_reason)
             since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
             history = await self.reader.preflight_history(self.pilot.fan_id, since=since, source_ids=set(self.sources))
+            if self.cancelled:
+                raise Refused("send-cancelled")
+            if self.parallel_admission and self.stopped():
+                raise Refused(self.stopped_reason)
             receipts = self.ledger.receipts(pilot_id=self.pilot.pilot_id, input_key=self.input_key)
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
             (check_followup_history if self.followup else check_provider_history)(
@@ -379,8 +376,39 @@ class Gateway:
                                 or asset.get("canView") is not True):
                             raise Refused("content-asset-unavailable")
             self.bubble += 1
-            attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
-                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+            if self.cancelled:
+                raise Refused("send-cancelled")
+            try:
+                attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                    input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+                return attempt, terms
+            except Refused as exc:
+                if not self.parallel_admission or exc.reason != "allowance-throttled":
+                    raise
+                # begin_attempt rolled back: no durable attempt or physical POST
+                # exists. Keep the same bubble number and refresh every check.
+                self.bubble -= 1
+                retries += 1
+                if retries >= 32 or time.monotonic() - started >= 180:
+                    raise Refused("allowance-wait-timeout")
+                await asyncio.sleep(0)
+
+    async def _send(self, text, terms=None):
+        from twin_bridge.coordination import authorize_dispatch, revoke_dispatch, guarded_send
+        from twin_bridge.platform import escape_plain_text, validate_created_message
+        from twin_bridge.normalize import html_to_text
+
+        attempt = None
+        settled = False
+        unsend_id, self.unsend_id = self.unsend_id, None      # armed for THIS send only, never carried to another
+        try:
+            if self.stopped() or not self.input_key:
+                raise Refused(self.stopped_reason or "pilot-stopped")
+            if unsend_id is not None and not terms:
+                raise Refused("unsend-needs-card")
+            if len(text.encode("utf-16-le")) // 2 > 4000:
+                raise Refused("output-too-long")
+            attempt, terms = await self._prepare_attempt(terms)
             token = authorize_dispatch(self.pilot.account_id, self.pilot.fan_id, turn_id=attempt.turn_id,
                 attempt_no=attempt.attempt_no, owner_token=self.pilot.owner_token, revision=self.pilot.revision)
             if terms:
@@ -394,6 +422,8 @@ class Gateway:
 
             def physical_post():
                 # Re-read stop/owner after the thread handoff, immediately at the wire.
+                if self.cancelled:
+                    raise Refused("send-cancelled")
                 with readonly(self.ledger.path) as con:
                     row = con.execute("SELECT state,owner_token,revision,owner_expires_at,reserved FROM twin_bridge_conversations WHERE account_id=? AND fan_id=?",
                                       (self.pilot.account_id, self.pilot.fan_id)).fetchone()
@@ -407,6 +437,10 @@ class Gateway:
                     raise Refused("fan-held-before-post")
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
                     owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
+                if self.wire_check is not None:
+                    held = self.wire_check()
+                    if held:
+                        raise Refused(held)
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
                     if unsend_id is not None:
                         wire[0] = True    # the DELETE may have reached OnlyFans from here on

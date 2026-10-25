@@ -28,6 +28,8 @@ def evaluate_capacity(result):
         failures.append("service errors or missing service completion evidence")
     if "helper_errors" not in result or result["helper_errors"]:
         failures.append("harness errors or missing harness completion evidence")
+    if "runtime_errors" not in result or result["runtime_errors"]:
+        failures.append("runtime errors or missing runtime completion evidence")
     for account, row in accounts.items():
         count = row.get("inbound_messages", 0)
         latency = row.get("reply_latency_s", {})

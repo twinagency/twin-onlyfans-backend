@@ -66,6 +66,7 @@ class Cfg:
     name: str
     accounts: int = 2
     account_offset: int = 0
+    send_concurrency: int = 1
     fans: int = 250
     sim_minutes: float = 60.0
     scale: float = 30.0
@@ -84,6 +85,7 @@ class Cfg:
     p_model_error: float = 0.0       # immediate provider error
     # provider
     provider_latency_s: float = 0.6
+    history_latency_s: float = 0.0
     p_429: float = 0.0
     storm: tuple | None = None       # (start_sim_s, end_sim_s): every POST is a 429
     # control events (scenario d)
@@ -98,7 +100,8 @@ class Cfg:
 
 def scenarios(args) -> dict:
     base = dict(accounts=args.accounts, fans=args.fans, scale=args.scale, throttle_s=args.throttle,
-                seed=args.seed, sim_minutes=args.sim_minutes, account_offset=getattr(args, "account_offset", 0))
+                seed=args.seed, sim_minutes=args.sim_minutes, account_offset=getattr(args, "account_offset", 0),
+                send_concurrency=getattr(args, "concurrent_sends", 1))
     out = {}
 
     def add(name, **kw):
@@ -106,9 +109,13 @@ def scenarios(args) -> dict:
 
     add("target_100k", accounts=10, fans=args.fans, throttle_s=args.throttle,
         rate_per_min=100000 / 60 / 10, single_messages=True, deterministic_arrivals=True,
-        model_lo_s=6.0, model_hi_s=6.0, provider_latency_s=0.2)
+        model_lo_s=6.0, model_hi_s=6.0,
+        provider_latency_s=getattr(args, "provider_latency_seconds", 0.2),
+        history_latency_s=getattr(args, "history_latency_seconds", 0.0))
     add("target_10k", accounts=1, rate_per_min=10000 / 60, single_messages=True,
-        deterministic_arrivals=True, model_lo_s=6.0, model_hi_s=6.0, provider_latency_s=0.2)
+        deterministic_arrivals=True, model_lo_s=6.0, model_hi_s=6.0,
+        provider_latency_s=getattr(args, "provider_latency_seconds", 0.2),
+        history_latency_s=getattr(args, "history_latency_seconds", 0.0))
     add("tiny", accounts=2, fans=8, sim_minutes=3, scale=30, throttle_s=2, burst=True, burst_window_s=5,
         rate_per_min=20.0, control_at_s=15, resume_after_s=40, pause_n=2, takeover_n=1)
     add("ceiling_1acct", accounts=1, fans=args.fans, sim_minutes=10, scale=20, throttle_s=1, burst=True,
@@ -278,6 +285,7 @@ class FakeHTTP:
 
     def get(self, url, **kwargs):
         w, fan = self.w, self.fan_of(url)
+        time.sleep(w.cfg.history_latency_s / w.S)
         with w.lock:
             inbound = [{"id": r["id"], "text": r["text"], "createdAt": r["created"].isoformat() + "Z", "isFromMe": False,
                         "fromUser": {"id": fan}, "withUser": {"id": fan}}
@@ -698,7 +706,7 @@ def install_patches(stack: ExitStack, holder: dict):
             allow_native_pilot_provider_access(conn.scope.provider_id)
         w = W()
         acct = conn.scope.db_id
-        http = w.http[acct]
+        http = FakeHTTP(w, acct)
         client = OFClient.__new__(OFClient)
         client.account_id, client.user_id, client.platform = conn.scope.provider_id, conn.scope.provider_id, "onlyfans"
         client.http, client.timeout_s, client.proxy_url, client.proxy_label = http, 1, None, None
@@ -885,12 +893,20 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
     }
     result["start_epoch"] = actual_start_epoch
     result["worker_database_role"] = os.environ.get("ONLYFANS_PROCESS_ROLE")
+    from native_pilot.delivery_pool import configured_delivery_concurrency
+    result["delivery_concurrency"] = configured_delivery_concurrency()
     result["async_pool"] = {"size": async_engine.pool.size(), "max_overflow": async_engine.pool._max_overflow}
     result["wait_samples"] = stats["wait_samples"]
     result["service_crashed"] = crashed
     result["helper_errors"] = helper_errors
+    result["runtime_errors"] = [
+        f"{reason} ({count})" for reason, count in w.event_reasons.items()
+        if reason.startswith(("held:service-error:", "held:shutdown-turn:",
+                              "synthetic-budget-error:", "synthetic-budget-settlement-error:",
+                              "synthetic-budget-hold-error:"))
+    ]
     result["service_pool"] = {"sync_store_pool": "pool_size=2,max_overflow=4 per URL (twin_bridge.store)",
-                              "async_engine_pool": "SQLAlchemy default (5+10)"}
+                              "async_engine_pool": result["async_pool"]}
     return result
 
 
@@ -1079,7 +1095,14 @@ def main(argv=None):
     p.add_argument("--out")
     p.add_argument("--profile", action="store_true", help="capture task/thread wait locations without message text or credentials")
     p.add_argument("--require-target-sla", action="store_true", help="fail unless unscaled target traffic and every reply meet the 30-second test SLA")
+    p.add_argument("--concurrent-sends", type=int, choices=range(1, 17), default=1)
+    p.add_argument("--provider-latency-seconds", type=float, default=0.2)
+    p.add_argument("--history-latency-seconds", type=float, default=0.0)
     args = p.parse_args(argv)
+    for value in [args.provider_latency_seconds, args.history_latency_seconds]:
+        if not math.isfinite(value) or not 0 <= value <= 30:
+            p.error("synthetic request latency must be finite and between zero and thirty seconds")
+    os.environ["FASTT_MAX_CONCURRENT_SENDS"] = str(args.concurrent_sends)
     os.environ["FASTT_MAX_CONCURRENT_FANS"] = str(args.concurrent_fans)
     if args.profile:
         os.environ["LOAD_TEST_PROFILE"] = "1"

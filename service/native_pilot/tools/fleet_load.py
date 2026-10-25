@@ -16,7 +16,7 @@ sys.path.insert(0, str(SERVICE))
 from native_pilot.tools.capacity_checks import evaluate_capacity
 
 
-def combine_workers(rows, errors, *, minutes):
+def combine_workers(rows, errors, *, minutes, concurrent_sends=1, provider_latency=0.2, history_latency=0.0):
     """Missing, duplicate or differently shaped workers invalidate the fleet result."""
     accounts, starts, offered = {}, [], []
     failures = list(errors)
@@ -26,6 +26,10 @@ def combine_workers(rows, errors, *, minutes):
         if (row.get("scenario") != "target_10k" or config.get("accounts") != 1
                 or config.get("account_offset") != offset or config.get("scale") != 1
                 or config.get("sim_minutes") != minutes or set(row.get("accounts", {})) != {expected}
+                or row.get("delivery_concurrency") != concurrent_sends
+                or config.get("send_concurrency") != concurrent_sends
+                or config.get("provider_latency_s") != provider_latency
+                or config.get("history_latency_s") != history_latency
                 or row.get("worker_database_role") != "worker"
                 or row.get("async_pool") != {"size": 4, "max_overflow": 0}):
             failures.append(f"worker {offset}: invalid account or workload report")
@@ -39,6 +43,7 @@ def combine_workers(rows, errors, *, minutes):
             failures.append(f"worker {offset}: missing start evidence")
         failures.extend(row.get("service_crashed", ["missing service evidence"]))
         failures.extend(row.get("helper_errors", ["missing helper evidence"]))
+        failures.extend(row.get("runtime_errors", ["missing runtime error evidence"]))
     if len(rows) != 10:
         failures.append("ten worker reports are required")
     skew = max(starts) - min(starts) if len(starts) == 10 else None
@@ -55,6 +60,7 @@ def combine_workers(rows, errors, *, minutes):
         },
         "service_crashed": failures,
         "helper_errors": [],
+        "runtime_errors": [],
         "worker_start_skew_s": skew,
         "totals": {"replies": sum(row.get("totals", {}).get("replies", 0) for _, row in rows)},
     }
@@ -85,6 +91,9 @@ def main(argv=None):
     parser.add_argument("--out", required=True)
     parser.add_argument("--require-target-sla", action="store_true")
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--concurrent-sends", type=int, choices=range(1, 17), default=1)
+    parser.add_argument("--provider-latency-seconds", type=float, default=0.2)
+    parser.add_argument("--history-latency-seconds", type=float, default=0.0)
     parser.add_argument("--pg-container", help="disposable PostgreSQL container, for measured database CPU")
     args = parser.parse_args(argv)
     if sys.platform == "win32":
@@ -135,7 +144,11 @@ def main(argv=None):
                            "--scenario", "target_10k", "--accounts", "1", "--account-offset", str(offset),
                            "--fans", str(args.fans), "--sim-minutes", str(args.sim_minutes),
                            "--scale", "1", "--throttle", str(args.throttle),
-                           "--concurrent-fans", str(args.concurrent_fans), "--out", str(child_out)]
+                           "--concurrent-fans", str(args.concurrent_fans),
+                           "--concurrent-sends", str(args.concurrent_sends),
+                           "--provider-latency-seconds", str(args.provider_latency_seconds),
+                           "--history-latency-seconds", str(args.history_latency_seconds),
+                           "--out", str(child_out)]
                 if args.profile:
                     command.append("--profile")
                 process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT,
@@ -188,7 +201,11 @@ def main(argv=None):
         resource_ended = time.monotonic()
         pg_cpu_end = pg_cpu_s(args.pg_container)
         db.drop()  # drops only this parent's freshly named database, after every worker stopped
-    report = combine_workers(rows, errors, minutes=args.sim_minutes)
+    report = combine_workers(rows, errors, minutes=args.sim_minutes, concurrent_sends=args.concurrent_sends,
+                             provider_latency=args.provider_latency_seconds, history_latency=args.history_latency_seconds)
+    report["config"].update(send_concurrency=args.concurrent_sends,
+                            provider_latency_s=args.provider_latency_seconds,
+                            history_latency_s=args.history_latency_seconds)
     report["resources"] = {
         "creator_process_rss_peak_mb": round(peak_rss, 1),
         "creator_process_anonymous_rss_peak_mb": round(peak_anon, 1),
@@ -199,7 +216,7 @@ def main(argv=None):
         "creator_process_cpu_seconds": round(sum(row.get("process", {}).get("cpu_seconds", 0)
                                                  for _, row in rows), 2),
         "host_cpus": os.cpu_count(),
-        "note": "creator workers only; excludes PostgreSQL, API, dashboard and supervisor overhead; no production CPU quota applied",
+        "note": "worker memory/CPU exclude API, dashboard and supervisor; PostgreSQL CPU is separate and includes startup/drain; aggregate RSS may count shared file pages; no production CPU quota applied",
     }
     report["database_connection_budget"] = {
         "server_max_connections": pg_connection_limit,

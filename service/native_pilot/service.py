@@ -132,14 +132,68 @@ class ServiceGateway(runner.Gateway):
         super().__init__(service.ledger, pilot, service.client, asyncio.get_running_loop(), **kwargs)
         self.service = service
         self.hold_check = lambda: fan_hold_reason(service.path, service.db, service.args.fan, *service.strict_arg)
+        self.parallel_admission = getattr(service, "send_concurrency", 1) > 1
+        self._fan_send_lock = asyncio.Lock()
+        self.wire_check = self._parallel_wire_check if self.parallel_admission else None
+
+    def _parallel_wire_check(self):
+        if self.service.stop.is_set():
+            return "service-stopping"
+        policy = self.ledger.allowance_status(self.pilot.account_id)
+        if policy is None or not policy["enabled"]:
+            return "allowance-disabled"
+        if policy["used"] > policy["limit"]:
+            return "allowance-exhausted"
+        if policy["busy"]:
+            return "allowance-busy"
+        # Read the clock AFTER the policy lookup. Other valid native admissions
+        # may move its ordinary next-send time during that lookup.
+        due = policy["next_dispatch_at"]
+        if due and datetime.fromisoformat(due) > (
+                runner.now() + timedelta(seconds=policy["throttle_seconds"])):
+            return "account-cooldown-before-post"
+        return None
 
     async def _send(self, text, terms=None):
-        if self.service.fan_tasks.limit == 1:
-            return await super()._send(text, terms)
-        # Generation stays concurrent. Only one gateway at a time waits for and
-        # uses this account's send admission; durable ledger gates still decide.
-        async with self.service.dispatch_lock:
-            return await super()._send(text, terms)
+        if not getattr(self, "parallel_admission", False):
+            if self.service.fan_tasks.limit == 1:
+                return await super()._send(text, terms)
+            async with self.service.dispatch_lock:
+                return await super()._send(text, terms)
+        # One lane per fan at a time; other fans may use their own bounded,
+        # private Session. Pace and atomic ledger admission remain authoritative.
+        from twin_bridge.platform import OnlyFansTextAdapter
+        async with self._fan_send_lock:
+            if self.stopped():
+                raise Refused(self.stopped_reason or "pilot-stopped")
+            async with self.service.delivery_clients().borrow() as client:
+                original = self.client, self.reader
+                self.client = client
+                self.reader = OnlyFansTextAdapter(self.scope.provider_id, client=client,
+                                                  blocking_call=self.run_blocking)
+                task = asyncio.create_task(super()._send(text, terms))
+                try:
+                    return await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    # Do not return a Session to the pool while its socket may
+                    # still be executing. Before POST the cancellation refuses;
+                    # after POST starts, its receipt/unknown outcome is drained.
+                    self.cancelled = True
+                    while not task.done():
+                        try:
+                            await asyncio.shield(task)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            break
+                    if task.done():
+                        try:
+                            task.result()
+                        except BaseException:
+                            pass
+                    raise
+                finally:
+                    self.client, self.reader = original
 
     @property
     def deadline(self):  # type: ignore[override]
@@ -209,6 +263,10 @@ class Service:
         self.fan_tasks = FanTasks(configured_fan_concurrency())
         self.dispatch_lock = asyncio.Lock()
         self.budget_lock = asyncio.Lock()
+        from .delivery_pool import configured_delivery_concurrency
+        self.send_concurrency = configured_delivery_concurrency()
+        self.delivery_owner = self
+        self._delivery_clients = None
         self.args = args
         self.scope = AccountScope.parse(args.account)
         self.db = self.scope.db_id
@@ -258,6 +316,24 @@ class Service:
             runner.emit({"event": "held" if reason else "resumed", **({"reason": reason} if reason else {}),
                          **({"fan_id": self.args.fan} if self.strict else {})})
 
+    def delivery_clients(self):
+        owner = self.delivery_owner
+        if owner.db != self.db:
+            raise Refused("delivery-account-mismatch")
+        if owner._delivery_clients is None:
+            from .delivery_pool import DeliveryClients
+            from .connection import build_client
+            conn = owner.conn
+            if conn is None:
+                raise Refused("connection-missing")
+            owner._delivery_clients = DeliveryClients(owner.send_concurrency, lambda: build_client(conn))
+        return owner._delivery_clients
+
+    def close_delivery_clients(self):
+        if self._delivery_clients is not None:
+            self._delivery_clients.close()
+            self._delivery_clients = None
+
     # ── session ───────────────────────────────────────────────────────────
     async def ensure_session(self):
         from . import attribution, connection
@@ -274,6 +350,7 @@ class Service:
                 client.http.close()
                 raise Refused("live-account-mismatch")
             sentinels = await attribution.require_sentinels()
+            self.close_delivery_clients()
             old, self.client, self.sentinels = self.client, client, sentinels
             if self.intake is not None:
                 await self.intake.stop()
@@ -526,6 +603,8 @@ class Service:
             child.followups = self.followups
             child.dispatch_lock = self.dispatch_lock
             child.budget_lock = self.budget_lock
+            child.send_concurrency = self.send_concurrency
+            child.delivery_owner = self.delivery_owner
             self.children[fan] = child
         child.client, child.conn, child.sentinels = self.client, self.conn, self.sentinels
         return child
@@ -1076,6 +1155,8 @@ class Service:
             raise Refused(reason)  # the daily model budget is the ACCOUNT's: the runner backs off for everyone
 
     async def run(self):
+        from .delivery_pool import configure_callback_workers
+        configure_callback_workers(asyncio.get_running_loop())
         from twin_bridge.coordination import store_target
         self.path = store_target()
         if not self.path:
@@ -1144,8 +1225,11 @@ class Service:
                     await self.intake.stop()
             finally:
                 try:
-                    if self.client is not None:
-                        self.client.http.close()
+                    try:
+                        self.close_delivery_clients()
+                    finally:
+                        if self.client is not None:
+                            self.client.http.close()
                 finally:
                     await engine.dispose()
 

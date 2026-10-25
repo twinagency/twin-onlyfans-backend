@@ -32,6 +32,8 @@ from .store import Refused, _id, utcnow
 PAGE_SIZE = 24
 MAX_PAGES = 200
 CATALOGUE_BOUND = 2000
+# Folder lists are repeated per media item; response bytes remain independently bounded.
+MAX_FOLDER_STATES = 1000
 
 
 class InvalidVault(ValueError):
@@ -112,7 +114,7 @@ def parse_vault_page(raw, *, owner_id):
                         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
                             raise ValueError()
             folders = row.get("listStates")
-            if folders is not None and (type(folders) is not list or len(folders) > 100 or any(type(f) is not dict for f in folders)):
+            if folders is not None and (type(folders) is not list or len(folders) > MAX_FOLDER_STATES or any(type(f) is not dict for f in folders)):
                 raise ValueError()
         return rows, more
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):

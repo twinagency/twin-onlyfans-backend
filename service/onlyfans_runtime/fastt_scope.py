@@ -329,6 +329,8 @@ def _compute(kind):
                 for fan in env_pairs | db_fans | st.ever_fans.get(account, set()):
                     out_pairs.add((account, fan))
                 continue
+            if platform_scope_enabled() and account not in st.known:
+                continue  # A failed first settings read never grants all-fan serving.
             if val is None:                       # no database value: the env alone, exactly as before
                 if account in anyfan:
                     out_accounts.add(account)

@@ -29,7 +29,11 @@ def test_transient_read_keeps_same_job_cursor_and_resumes_without_duplicates(dat
         row=s.get(OfVaultSyncJob,(account,job['jobId']))
         assert row.status=='running' and row.page_offset==24 and row.items_seen==24 and row.pages_read==1
         assert row.completed_at is None and row.last_error=='vault_read_failed' and row.lease_until>utcnow()
-        row.lease_until=utcnow()-timedelta(seconds=1)
+    # Both the job and the account-wide provider budget must honor backoff.
+    assert process_vault_jobs(store,TENANT)==0
+    after_backoff=utcnow()+timedelta(seconds=6)
+    monkeypatch.setattr('onlyfans_runtime.provider_read_budget.utcnow',lambda:after_backoff)
+    monkeypatch.setattr('onlyfans_runtime.vault_management.utcnow',lambda:after_backoff)
     def finish(self,**kw):
         calls.append(kw['offset'])
         return page([media(25)])

@@ -397,6 +397,12 @@ def _current(runtime, connection, job):
         and connection.status == "verified" and connection.expires_at > utcnow())
 
 
+def _vault_job_expired(requested_at, last_progress_at, now):
+    """Expire a stalled import, while preserving a long import that is advancing."""
+    last_activity = max(requested_at, last_progress_at or requested_at)
+    return now - last_activity > timedelta(hours=1)
+
+
 def process_vault_jobs(store, tenant, *, limit=1, stop=None):
     """At most limit GET pages, including identity checks, outside transactions.
 
@@ -437,8 +443,10 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 _terminal(job, "superseded", "connection_changed")
                 continue
             if utcnow() - job.requested_at > timedelta(hours=1):
-                _terminal(job, "failed", "vault_job_expired")
-                continue
+                last_progress = s.scalar(select(func.max(OfVaultObservation.observed_at)).where(OfVaultObservation.account_id == account, OfVaultObservation.job_id == identity))
+                if _vault_job_expired(job.requested_at, last_progress, utcnow()):
+                    _terminal(job, 'failed', 'vault_job_expired')
+                    continue
             from .connections import _open
             try:
                 clear = _open(connection, tenant)

@@ -152,7 +152,11 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
       // Explicit 2x scaling preserves the existing 864x1440 input/display grid.
       if(!j.cdp)j.cdp=await j.context.newCDPSession(j.page);
       let timer;
-      const shot=await Promise.race([j.cdp.send('Page.captureScreenshot',{format,...(format==='jpeg'?{quality:95}:{}),fromSurface:true,captureBeyondViewport:false,clip:{x:0,y:0,width:WIDTH,height:HEIGHT,scale:2}}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new SignInError('frame_unavailable',409)),3000);})]).finally(()=>clearTimeout(timer));
+      const rendering=(async()=>{
+        const {cssVisualViewport:viewport}=await j.cdp.send('Page.getLayoutMetrics');
+        return j.cdp.send('Page.captureScreenshot',{format,...(format==='jpeg'?{quality:95}:{}),fromSurface:true,captureBeyondViewport:false,clip:{x:viewport.pageX,y:viewport.pageY,width:WIDTH,height:HEIGHT,scale:2}});
+      })();
+      const shot=await Promise.race([rendering,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new SignInError('frame_unavailable',409)),3000);})]).finally(()=>clearTimeout(timer));
       const frame=Buffer.from(shot.data,'base64');
       if(frame.length>2*1024*1024)fail('frame_unavailable',409);return frame;
     });},

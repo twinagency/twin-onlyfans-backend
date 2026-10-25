@@ -1076,7 +1076,8 @@ class Service:
         if not self.path:
             raise Refused("pilot-store-required")
         runner.require_store_schema(self.path)
-        self.ledger = Ledger(self.path, allowance=True)
+        self.ledger = Ledger(self.path, allowance=True,
+                             **({"concurrent_reads": True} if self.fan_tasks.limit > 1 else {}))
         if getattr(self.args, "followups", False):
             from .followups import FollowupQueue
             runner.require_store_schema(self.path, followups=True)

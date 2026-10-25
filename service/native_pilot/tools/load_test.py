@@ -41,6 +41,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -50,6 +51,7 @@ from urllib.parse import urlsplit
 
 SERVICE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SERVICE))
+from native_pilot.tools.capacity_checks import evaluate_capacity
 
 MODEL_TIMEOUT_S = 45.0   # native_pilot.model's per-call limit (no retry)
 FAN_BASE = 1_000_000
@@ -190,6 +192,7 @@ class World:
         self.control = []        # dicts
         self.paused_since = {}   # (acct, fan) -> t_commit
         self.lag = []
+        self.arrival_lag_s = []
         self.timers = Timers()
 
     # simulated time
@@ -216,11 +219,12 @@ class World:
             await asyncio.sleep(min(left / self.S, 0.25))
 
     # registry
-    def new_inbound(self, acct, fan, text="neutral fan text"):
+    def new_inbound(self, acct, fan, text="neutral fan text", *, scheduled_t=None):
         with self.lock:
             self.mid += 1
-            created = self.ms(self.now())
-            rec = {"id": self.mid, "created": created, "t": self.sim_t(), "answered_t": None, "text": text,
+            arrived = self.sim_t() if scheduled_t is None else scheduled_t
+            created = self.ms(self.sim0 + timedelta(seconds=arrived))
+            rec = {"id": self.mid, "created": created, "t": arrived, "answered_t": None, "text": text,
                    "ahead": len(self.pending[acct])}
             self.inbound.setdefault((acct, fan), []).append(rec)
             self.pending[acct].add(fan)
@@ -487,9 +491,15 @@ def make_schedule(w: World):
                 for k in range(w.rng.choice([1, 1, 2, 3])):
                     ev.append((t + 2.5 * k * (0 if cfg.prefill else 1), a, f))
         if cfg.rate_per_min:
-            t = 30.0
+            t, index = 30.0, 0
             while t < cfg.sim_minutes * 60:
-                t += 60.0 / cfg.rate_per_min if cfg.deterministic_arrivals else w.rng.expovariate(cfg.rate_per_min / 60.0)
+                if cfg.deterministic_arrivals:
+                    t = 30.0 + index * 60.0 / cfg.rate_per_min
+                    index += 1
+                else:
+                    t += w.rng.expovariate(cfg.rate_per_min / 60.0)
+                if t >= cfg.sim_minutes * 60:
+                    break
                 f = w.rng.choice(w.fans)
                 for k in range(1 if cfg.single_messages else w.rng.choice([1, 1, 2])):
                     ev.append((t + 2.0 * k, a, f))
@@ -498,10 +508,16 @@ def make_schedule(w: World):
 
 
 async def simulate_fans(w: World, db: Db, schedule):
-    for t, acct, fan in schedule:
-        await w.sleep_until(w.base + t)
-        rec = w.new_inbound(acct, fan)
-        await asyncio.to_thread(db.insert_in, acct, fan, rec)
+    # The arrival writer must not compete for the send workers' default executor.
+    # Late arrivals retain their scheduled timestamps and invalidate the benchmark.
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="load-ingress") as ingress:
+        for t, acct, fan in schedule:
+            due = w.base + t
+            await w.sleep_until(due)
+            rec = w.new_inbound(acct, fan, scheduled_t=due)
+            await loop.run_in_executor(ingress, db.insert_in, acct, fan, rec)
+            w.arrival_lag_s.append(max(0.0, w.sim_t() - due))
 
 
 async def sampler(w: World, db: Db, stats, stop):
@@ -753,7 +769,8 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
     if cfg.control_at_s is not None:
         helpers.append(asyncio.create_task(controller(w, db)))
     t_start_real, t_start_sim = time.monotonic(), w.sim_t()
-    end_sim = t_start_sim + cfg.sim_minutes * 60
+    # Stop arrivals at the configured duration, then give the last inputs their full SLA window.
+    end_sim = t_start_sim + cfg.sim_minutes * 60 + (30 if cfg.name == "target_100k" else 0)
     while w.sim_t() < end_sim:
         await asyncio.sleep(0.25)
         if cfg.stop_when_drained and all(not w.pending[a] for a in w.accts) and w.sim_t() > t_start_sim + 12:
@@ -787,6 +804,15 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
             result["accounts"][acct]["min_admission_gap_s"] = round(min(gaps), 3) if gaps else None
             result["accounts"][acct]["throttle_respected"] = (min(gaps) >= cfg.throttle_s - 0.05) if gaps else True
             result["accounts"][acct]["min_wire_gap_s_informational"] = result["accounts"][acct].pop("min_gap_between_sends_s")
+    result["offered_load"] = {
+        "scheduled_messages": len(schedule),
+        "generated_messages": sum(len(records) for records in w.inbound.values()),
+        "persisted_messages": len(w.arrival_lag_s) if not cfg.prefill else sum(len(records) for records in w.inbound.values()),
+        "max_ingress_delay_s": round(max(w.arrival_lag_s, default=0.0), 3),
+        "arrival_window_s": max(0.0, cfg.sim_minutes * 60 - 30),
+        "scheduled_messages_per_hour": round(len(schedule) * 3600 / (cfg.sim_minutes * 60 - 30), 3)
+            if cfg.sim_minutes * 60 > 30 else 0,
+    }
     result["service_crashed"] = crashed
     result["helper_errors"] = helper_errors
     result["service_pool"] = {"sync_store_pool": "pool_size=2,max_overflow=4 per URL (twin_bridge.store)",
@@ -971,13 +997,20 @@ def main(argv=None):
     p.add_argument("--sim-minutes", type=float, default=60.0)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--out")
+    p.add_argument("--require-target-sla", action="store_true", help="fail unless unscaled target traffic and every reply meet the 30-second test SLA")
     args = p.parse_args(argv)
     os.environ["FASTT_MAX_CONCURRENT_FANS"] = str(args.concurrent_fans)
     result = run_all(args)
+    if args.require_target_sla:
+        for row in result["results"]:
+            row["capacity_verdict"] = evaluate_capacity(row)
     text = json.dumps(result, indent=2, default=str)
     if args.out:
         Path(args.out).write_text(text)
     print(text)
+    if args.require_target_sla and any(not row["capacity_verdict"]["passed"] for row in result["results"]):
+        print("FAILED: capacity acceptance criteria were not met; see capacity_verdict in the report", file=sys.stderr)
+        return 1
     return 0
 
 

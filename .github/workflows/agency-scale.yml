@@ -35,7 +35,9 @@ jobs:
       - name: Delivery limits, schema and manual activation regressions
         run: python -m pytest -q service/tests/test_onlyfans_delivery_scale_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_onlyfans_creator_enrollments_pg.py service/tests/test_fastt_activation_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_native_pilot_concurrency.py
       - name: Concurrent fan scheduling
-        run: python service/tests/test_native_pilot_fan_tasks.py
+        run: |
+          python service/tests/test_native_pilot_fan_tasks.py
+          python service/tests/test_native_pilot_capacity_checks.py
       - name: Existing assembled service and send-boundary regression
         run: python service/tests/test_native_pilot_service.py
       - name: Existing engine boundaries
@@ -74,7 +76,7 @@ jobs:
       - name: Synthetic 100000-per-hour arrivals across ten accounts
         run: |
           mkdir -p test-results
-          python service/native_pilot/tools/load_test.py --scenario target_100k --accounts 10 --fans ${{ matrix.fans-per-account }} --throttle 0.25 --concurrent-fans 32 --sim-minutes 5 --scale 2 --out test-results/capacity.json > test-results/stdout.json 2> test-results/progress.log
+          python service/native_pilot/tools/load_test.py --scenario target_100k --accounts 10 --fans ${{ matrix.fans-per-account }} --throttle 0.25 --concurrent-fans 32 --sim-minutes 5 --scale 1 --require-target-sla --out test-results/capacity.json > test-results/stdout.json 2> test-results/progress.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

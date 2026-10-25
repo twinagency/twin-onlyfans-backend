@@ -64,11 +64,13 @@ class Cfg:
     fans: int = 250
     sim_minutes: float = 60.0
     scale: float = 30.0
-    throttle_s: int = 20
+    throttle_s: float = 20
     seed: int = 7
     # arrivals
     burst: bool = False              # every fan sends 1-3 messages inside burst_window_s at t=0
     burst_window_s: float = 60.0
+    single_messages: bool = False
+    deterministic_arrivals: bool = False
     rate_per_min: float = 0.0        # steady Poisson arrivals per account (a burst of 1-2 bubbles each)
     # model
     model_lo_s: float = 0.4
@@ -97,6 +99,9 @@ def scenarios(args) -> dict:
     def add(name, **kw):
         out[name] = Cfg(name=name, **{**base, **kw})
 
+    add("target_100k", accounts=10, fans=args.fans, throttle_s=args.throttle,
+        rate_per_min=100000 / 60 / 10, single_messages=True, deterministic_arrivals=True,
+        model_lo_s=6.0, model_hi_s=6.0, provider_latency_s=0.2)
     add("tiny", accounts=2, fans=8, sim_minutes=3, scale=30, throttle_s=2, burst=True, burst_window_s=5,
         rate_per_min=20.0, control_at_s=15, resume_after_s=40, pause_n=2, takeover_n=1)
     add("ceiling_1acct", accounts=1, fans=args.fans, sim_minutes=10, scale=20, throttle_s=1, burst=True,
@@ -484,9 +489,9 @@ def make_schedule(w: World):
         if cfg.rate_per_min:
             t = 30.0
             while t < cfg.sim_minutes * 60:
-                t += w.rng.expovariate(cfg.rate_per_min / 60.0)
+                t += 60.0 / cfg.rate_per_min if cfg.deterministic_arrivals else w.rng.expovariate(cfg.rate_per_min / 60.0)
                 f = w.rng.choice(w.fans)
-                for k in range(w.rng.choice([1, 1, 2])):
+                for k in range(1 if cfg.single_messages else w.rng.choice([1, 1, 2])):
                     ev.append((t + 2.0 * k, a, f))
     ev.sort()
     return ev
@@ -836,6 +841,8 @@ def summarize(w: World, cfg: Cfg, services, stats, elapsed_real, elapsed_sim, t0
             "throttle_respected": (min(gaps) >= cfg.throttle_s - 0.5) if gaps else True,
             "provider_429s": sum(1 for p in bad_posts if p["acct"] == a),
             "reply_latency_s": {**quantiles(lat), "n": len(lat), "max": round(max(lat), 1) if lat else None},
+            "delivered_over_30s": sum(value > 30 for value in lat),
+            "unanswered_over_30s": sum(value > 30 for value in censored),
             "unanswered_at_end": len(censored),
             "unanswered_oldest_age_s": round(max(censored), 1) if censored else 0,
             "latency_incl_unanswered_s": quantiles(lat + censored),
@@ -959,11 +966,13 @@ def main(argv=None):
     p.add_argument("--accounts", type=int, default=2)
     p.add_argument("--fans", type=int, default=250)
     p.add_argument("--scale", type=float, default=30.0, help="simulated seconds per real second")
-    p.add_argument("--throttle", type=int, default=20, help="of_delivery_policy.throttle_seconds (production: 20)")
+    p.add_argument("--throttle", type=float, default=20, help="of_delivery_policy.throttle_seconds (production: 20)")
+    p.add_argument("--concurrent-fans", type=int, default=1, choices=range(1,65))
     p.add_argument("--sim-minutes", type=float, default=60.0)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--out")
     args = p.parse_args(argv)
+    os.environ["FASTT_MAX_CONCURRENT_FANS"] = str(args.concurrent_fans)
     result = run_all(args)
     text = json.dumps(result, indent=2, default=str)
     if args.out:

@@ -227,12 +227,12 @@ async def earnings(request:Request):
     try:
         principal=await _authenticate(request)
         from .errors import BadRequest
-        if not {"start","end"}<=set(request.query_params) or set(request.query_params)-{"start","end","includePending"} or request.query_params.get("includePending","false") not in {"true","false"} or any(len(request.query_params.getlist(k))!=1 for k in request.query_params):
+        if not {"start","end"}<=set(request.query_params) or set(request.query_params)-{"start","end","includePending","includeHistory"} or request.query_params.get("includePending","false") not in {"true","false"} or request.query_params.get("includeHistory","false") not in {"true","false"} or any(len(request.query_params.getlist(k))!=1 for k in request.query_params):
             raise BadRequest("invalid_earnings_window","Supply one explicit start and end timestamp.")
         from db.engine import get_session
         from .earnings import read_earnings
         async with get_session() as session:
-            value=await read_earnings(session,tenant_id=principal.tenant_id,start=request.query_params["start"],end=request.query_params["end"],include_pending=request.query_params.get("includePending")=="true")
+            value=await read_earnings(session,tenant_id=principal.tenant_id,start=request.query_params["start"],end=request.query_params["end"],include_pending=request.query_params.get("includePending")=="true",include_history=request.query_params.get("includeHistory")=="true")
     except OnlyFansReadError as exc:return _refusal(exc)
     except Exception:return _refusal(Unavailable("earnings_unavailable","Recorded OnlyFans earnings could not be read."))
     return JSONResponse({"schemaVersion":SCHEMA_VERSION,"earnings":value},headers=_PRIVATE_HEADERS)

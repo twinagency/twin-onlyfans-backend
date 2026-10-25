@@ -29,7 +29,7 @@ def setup(database,*,account="acc-a",tenant="tenant-a",coverage=True):
     return store
 
 
-def read(database,*,tenant="tenant-a",start=None,end=None,include_pending=False):
+def read(database,*,tenant="tenant-a",start=None,end=None,include_pending=False,include_history=False):
     now=utcnow()
     a=start or (now-timedelta(days=30)).isoformat(timespec="milliseconds")+"Z"
     b=end or now.isoformat(timespec="milliseconds")+"Z"
@@ -40,7 +40,7 @@ def read(database,*,tenant="tenant-a",start=None,end=None,include_pending=False)
         sql_event.listen(engine.sync_engine,"before_cursor_execute",no_credentials)
         try:
             async with async_sessionmaker(engine)() as session:
-                async with session.begin():return await read_earnings(session,tenant_id=tenant,start=a,end=b,include_pending=include_pending)
+                async with session.begin():return await read_earnings(session,tenant_id=tenant,start=a,end=b,include_pending=include_pending,include_history=include_history)
         finally:await engine.dispose()
     return asyncio.run(run())
 
@@ -99,7 +99,7 @@ def test_stale_held_or_unverified_records_are_never_a_false_complete_total(datab
 
 def test_bounded_timezone_aware_window_refuses_invalid_ranges():
     for a,b in [("bad","bad"),("2026-10-01","2026-10-02"),("2026-10-02T00:00:00Z","2026-10-01T00:00:00Z"),
-            ("2026-01-01T00:00:00Z","2026-10-01T00:00:00Z")]:
+            ("1969-01-01T00:00:00Z","2026-10-01T00:00:00Z")]:
         with pytest.raises(BadRequest):window(a,b)
 
 

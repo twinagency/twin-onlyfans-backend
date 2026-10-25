@@ -3,12 +3,12 @@
 Amounts are not offers, opens or fan balances. A missing baseline is unknown,
 never zero. Refund/pending states stay separate from cleared gross receipts.
 """
-from datetime import timedelta
+from datetime import datetime,timedelta
 from sqlalchemy import select,func,and_,text
 from db.models import Transaction,OfCreatorBinding
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
-from db.onlyfans_ledger_models import OfLedgerEvidence,OfLedgerScan
+from db.onlyfans_ledger_models import OfLedgerEvidence,OfLedgerScan,OfLedgerHistory
 from onlyfans_runtime.text_delivery import _stamp
 from onlyfans_runtime.store import Refused as InvalidStamp
 from .errors import BadRequest,Unavailable
@@ -23,7 +23,7 @@ def stamp(value):return value.isoformat(timespec="milliseconds")+"Z" if value is
 def window(start,end):
     try:
         a,b=_stamp(start),_stamp(end)
-        if not timedelta(0)<b-a<=timedelta(days=91):raise ValueError()
+        if a<datetime(1970,1,1) or not timedelta(0)<b-a<=timedelta(days=60000):raise ValueError()
         return a,b
     except (ValueError,TypeError,OverflowError,InvalidStamp):raise BadRequest("invalid_earnings_window","Use a supported reporting window with explicit timestamps.") from None
 
@@ -33,7 +33,7 @@ def safe_integer(value):
     return value
 
 
-async def read_earnings(session,*,tenant_id,start,end,include_pending=False):
+async def read_earnings(session,*,tenant_id,start,end,include_pending=False,include_history=False):
     begin,finish=window(start,end)
     await session.connection(execution_options={"isolation_level":"REPEATABLE READ"})
     await session.execute(text("SET LOCAL statement_timeout='3000ms'"))
@@ -51,7 +51,11 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False):
         "accountCount":len(ids),"coveredAccountCount":0,"status":"unavailable","reasons":[],"currency":"USD",
         "clearedGrossCents":None,"clearedNetCents":None,"clearedCount":None,"pendingCount":None,"refundedCount":None,
         "recentLedgerAt":None,"fullLedgerAt":None}
-    if include_pending:result["recorded"]=None
+    if include_pending:
+        result["recorded"]=None
+    if include_history:
+        result["statistics"]=None
+        result["history"]={"accountCount":len(ids),"completedAccountCount":0,"accounts":[]}
     if not ids:result["reasons"]=["no_bound_accounts"];return result
     rows=(await session.execute(select(OfLedgerScan,OfRuntime.binding_id.label("runtime_binding"),
         OfProviderConnection.binding_id.label("connection_binding"),OfProviderConnection.owner_id.label("connection_owner"),
@@ -59,7 +63,22 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False):
         .outerjoin(OfRuntime,OfRuntime.account_id==OfLedgerScan.account_id)
         .outerjoin(OfProviderConnection,OfProviderConnection.account_id==OfLedgerScan.account_id)
         .where(OfLedgerScan.account_id.in_(ids)))).all()
-    scans={row[0].account_id:row for row in rows};reasons=set();recent=[];full=[]
+    histories={row.account_id:row for row in await session.scalars(
+        select(OfLedgerHistory).where(OfLedgerHistory.account_id.in_(ids)))}
+    scans={row[0].account_id:row for row in rows};reasons=set();recent=[];full=[];coverage=[]
+    if include_history:
+        for binding in bindings:
+            h=histories.get(binding.account_id);data=scans.get(binding.account_id)
+            valid=(h is not None and data is not None and
+                (h.binding_id,h.owner_id,h.connection_revision)==(binding.id,data[3],data[4])
+                and data[1]==binding.id and data[2]==binding.id)
+            complete=bool(valid and h.last_complete_at and h.last_full_at and h.status!="held")
+            state="complete" if complete else "held" if valid and h.status=="held" else "syncing" if valid else "unavailable"
+            result["history"]["completedAccountCount"]+=int(complete)
+            result["history"]["accounts"].append({"accountId":binding.account_id,"status":state,
+                "importedPayments":h.page_offset if valid else 0,
+                "lastSuccessfulSyncAt":stamp(h.last_complete_at) if valid else None})
+
     for binding in bindings:
         data=scans.get(binding.account_id)
         if data is None:reasons.add("ledger_unavailable");continue
@@ -67,12 +86,19 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False):
         if (scan.binding_id!=binding.id or runtime_binding!=binding.id or connection_binding!=binding.id
                 or owner!=scan.owner_id or revision!=scan.connection_revision or scan.last_complete_at is None or scan.last_full_at is None):
             reasons.add("ledger_unavailable");continue
-        recent.append(scan.last_complete_at);full.append(scan.last_full_at)
+        h=histories.get(binding.account_id)
+        history_current=(h is not None and (h.binding_id,h.owner_id,h.connection_revision)==
+            (binding.id,owner,revision) and h.last_complete_at is not None and h.last_full_at is not None
+            and h.window_start==datetime(1970,1,1) and h.status!="held"
+            and timedelta(0)<=now-h.last_full_at<=timedelta(hours=26))
+        baseline=h.last_full_at if history_current else scan.last_full_at
+        floor=datetime(1970,1,1) if history_current else baseline-timedelta(days=90)
+        recent.append(scan.last_complete_at);full.append(baseline);coverage.append(floor)
         if scan.status=="held":reasons.add("ledger_held");continue
         if (not timedelta(0)<=now-scan.last_complete_at<=timedelta(minutes=15)
-                or not timedelta(0)<=now-scan.last_full_at<=timedelta(hours=26)):
+                or not timedelta(0)<=now-baseline<=timedelta(hours=26)):
             reasons.add("ledger_stale");continue
-        if begin<scan.last_full_at-timedelta(days=90):reasons.add("outside_coverage");continue
+        if begin<floor:reasons.add("outside_coverage");continue
         result["coveredAccountCount"]+=1
     if len(recent)==len(ids):result["recentLedgerAt"]=stamp(min(recent));result["fullLedgerAt"]=stamp(min(full))
     result["reasons"]=sorted(reasons)
@@ -81,7 +107,8 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False):
     recorded_coverage=(include_pending and len(recent)==len(ids)
         and not reasons-{"ledger_stale","ledger_held"}
         and all(timedelta(0)<=now-value<=timedelta(hours=24) for value in recent)
-        and all(timedelta(0)<=now-value<=timedelta(hours=26) and begin>=value-timedelta(days=90) for value in full))
+        and all(timedelta(0)<=now-value<=timedelta(hours=26) for value in full)
+        and all(begin>=floor for floor in coverage))
     if reasons and not recorded_coverage:return result
     # Existing provider-ID index makes this evidence check bounded per
     # transaction. Multiple observations never multiply one canonical payment.
@@ -109,6 +136,26 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False):
             "paymentCount":safe_integer(cleared+pending_count),
             "lastSuccessfulSyncAt":result["recentLedgerAt"],
         }
+    if include_history and include_pending:
+        eligible=Transaction.status.in_(("cleared","pending"))
+        stats=(await session.execute(select(Transaction.account_id,Transaction.kind,
+            func.count(),func.sum(Transaction.amount_cents),func.sum(Transaction.net_cents),
+            func.count(Transaction.net_cents)).where(Transaction.account_id.in_(ids),
+            Transaction.occurred_at>=begin,Transaction.occurred_at<finish,applied,eligible)
+            .group_by(Transaction.account_id,Transaction.kind).limit(20001))).all()
+        if len(stats)>20000:raise Unavailable("earnings_value_unavailable","Financial breakdown exceeds the display budget.")
+        kinds={};accounts={}
+        for account,kind,n,gross,net,nnet in stats:
+            for key,target in ((kind,kinds),(account,accounts)):
+                value=target.setdefault(key,{"paymentCount":0,"grossCents":0,"netCents":0})
+                value["paymentCount"]+=int(n);value["grossCents"]+=int(gross)
+                value["netCents"]=None if value["netCents"] is None or nnet!=n else value["netCents"]+int(net or 0)
+        result["statistics"]={"byKind":[{"kind":k,**v} for k,v in sorted(kinds.items())],
+            "byAccount":[{"accountId":k,**v} for k,v in sorted(accounts.items())]}
+        for group in result["statistics"].values():
+            for value in group:
+                for field in ("paymentCount","grossCents","netCents"):
+                    if value[field] is not None:safe_integer(value[field])
     if reasons:return result
     result.update(status="current",clearedGrossCents=safe_integer(int(gross)),
         clearedNetCents=safe_integer(int(net or 0)) if net_count==cleared else None,

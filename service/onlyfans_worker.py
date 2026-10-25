@@ -199,6 +199,7 @@ def main(argv=None):
     previous = {}
     store = None
     media_worker = None
+    ledger_worker = None
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
             previous[sig] = signal.signal(sig, lambda *_: stop.set())
@@ -243,13 +244,17 @@ def main(argv=None):
             from onlyfans_runtime.vault_media_worker import MediaWorker
             media_worker = MediaWorker(store, tenant, stop)
             media_worker.start()
+        if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" and not args.once:
+            from onlyfans_runtime.ledger_worker import LedgerWorker
+            ledger_worker = LedgerWorker(store, tenant, stop, observe=_emit)
+            ledger_worker.start()
         # Launch features stay off unless explicitly enabled; engagement additionally needs saved per-account settings.
         worker_options = {name: True for name, flag in (("history_recovery", "ONLYFANS_HISTORY_RECOVERY_ENABLED"),
             ("history_memory", "ONLYFANS_HISTORY_MEMORY_ENABLED"), ("engagement", "ONLYFANS_ENGAGEMENT_ENABLED"))
             if os.environ.get(flag) == "1"}
         return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,facts_reader=facts_reader,
                         vault_jobs=_process_vault_jobs, enrollment_jobs=_process_connection_enrollments,
-                        ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None,
+                        ledger_jobs=_process_ledger_jobs if args.once and os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None,
                         offer_jobs=_process_offer_jobs if os.environ.get("ONLYFANS_OFFER_IMPORT_ENABLED") == "1" else None,
                         content_sync_jobs=_process_content_sync if os.environ.get("ONLYFANS_CONTENT_SYNC_ENABLED") == "1" else None,
                         worker_options=worker_options)
@@ -257,6 +262,8 @@ def main(argv=None):
         stop.set()
         if media_worker is not None:
             media_worker.join()
+        if ledger_worker is not None:
+            ledger_worker.join()
         try:
             if store is not None:
                 store.close()

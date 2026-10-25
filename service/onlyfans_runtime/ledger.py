@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from db.models import ContentOffer, Fan, Message, OfCreatorBinding, Transaction
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
-from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
+from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan, OfLedgerHistory
 from transaction_contract import STATUS_MAP, classify_kind, strip_html
 from .native_context import canonical
 from .native_protocol import MAX_BYTES, NativeProtocolError, cents, load
@@ -238,13 +238,14 @@ def _current(runtime, connection, scan, now):
             (runtime.binding_id, connection.revision, connection.owner_id)))
 
 
-def process_ledger_pages(store, tenant, *, limit=1, stop=None):
+def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
     """At most four leased GET pages, independent of outgoing activation."""
     from onlyfans_read.contract import ID_PATTERN
     if (os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker" or type(tenant) is not str
             or tenant == "deployment" or not ID_PATTERN.fullmatch(tenant)
-            or type(limit) is not int or not 1 <= limit <= 4):
+            or type(limit) is not int or not 1 <= limit <= 4 or type(history) is not bool):
         raise Refused("invalid ledger worker scope or bound")
+    Scan = OfLedgerHistory if history else OfLedgerScan
     processed = 0
     for _ in range(limit):
         if stop is not None and stop.is_set():
@@ -253,35 +254,37 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
         with Session(store.engine) as s:
             candidate = s.scalar(select(OfProviderConnection.account_id).join(OfRuntime,
                 OfRuntime.account_id == OfProviderConnection.account_id).join(OfCreatorBinding,
-                OfCreatorBinding.id == OfRuntime.binding_id).outerjoin(OfLedgerScan,
-                OfLedgerScan.account_id == OfRuntime.account_id).where(
+                OfCreatorBinding.id == OfRuntime.binding_id).outerjoin(Scan,
+                Scan.account_id == OfRuntime.account_id).where(
                 OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.channel == "onlyfans",
                 OfCreatorBinding.revoked_at.is_(None), OfProviderConnection.binding_id == OfRuntime.binding_id,
                 OfProviderConnection.status.in_(("verified", "paused")), OfProviderConnection.verified_at.is_not(None),
                 OfProviderConnection.expires_at > now,
-                or_(OfLedgerScan.account_id.is_(None), and_(OfLedgerScan.next_poll_at <= now,
-                    or_(OfLedgerScan.lease_until.is_(None), OfLedgerScan.lease_until <= now))))
-                .order_by(OfLedgerScan.next_poll_at.asc().nullsfirst(), OfRuntime.account_id).limit(1))
+                or_(Scan.account_id.is_(None), and_(Scan.next_poll_at <= now,
+                    or_(Scan.lease_until.is_(None), Scan.lease_until <= now))))
+                .order_by(Scan.next_poll_at.asc().nullsfirst(), OfRuntime.account_id).limit(1))
         if candidate is None:
             break
         account = candidate
         with Session(store.engine) as s, s.begin():
             runtime = store._runtime(s, tenant, account)
-            connection, scan = s.get(OfProviderConnection, account), s.get(OfLedgerScan, account)
+            connection, scan = s.get(OfProviderConnection, account), s.get(Scan, account)
             now = utcnow()
             if not _current(runtime, connection, None, now):
                 continue
             if scan is not None and (scan.next_poll_at > now or scan.lease_until and scan.lease_until > now):
                 continue
             if scan is None:
-                scan = OfLedgerScan(account_id=account, last_complete_at=None)
+                scan = Scan(account_id=account, last_complete_at=None)
                 s.add(scan)
+            if not _current(runtime, connection, scan, now):
+                scan.last_complete_at = scan.last_full_at = None
             if scan.status not in {"running", "held"} or not _current(runtime, connection, scan, now):
                 scan.binding_id, scan.connection_revision, scan.owner_id = runtime.binding_id, connection.revision, connection.owner_id
                 # Revisit the full supported history daily: a refund can arrive
                 # long after a sale leaves the frequent seven-day window.
                 days = 90 if scan.last_full_at is None or now - scan.last_full_at >= timedelta(days=1) else 7
-                scan.window_start = now - timedelta(days=days)
+                scan.window_start = datetime(1970, 1, 1) if history else now - timedelta(days=days)
                 scan.window_end, scan.page_offset, scan.last_page_hash = now, 0, None
             from .connections import _open
             try:
@@ -306,7 +309,8 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
                 expires_at=expiry.replace(tzinfo=timezone.utc)))
             from .worker import _provider_claim
             budget=_provider_claim(store,tenant,account,transport,connection_revision,'ledger')
-            raw = transport.transaction_page(offset=offset, limit=PAGE_SIZE, start=start, end=end)
+            raw = transport.transaction_page(offset=offset, limit=PAGE_SIZE, start=start, end=end,
+                **({"history": True} if history else {}))
             rows, more = parse_page(raw, owner_id=owner, start=start, end=end)
         except Exception as problem:
             from .provider_read_budget import ReadDeferred
@@ -317,7 +321,7 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
         try:
             with Session(store.engine) as s, s.begin():
                 runtime = store._runtime(s, tenant, account)
-                scan = s.get(OfLedgerScan, account)
+                scan = s.get(Scan, account)
                 if scan.lease_token != token or scan.status != "running":
                     continue
                 now = utcnow()
@@ -332,7 +336,7 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
                 page_hash = hashlib.sha256(canonical(sorted(row["provider_transaction_id"]
                     for row in rows)).encode()).hexdigest() if error is None else None
                 legacy_hash = hashlib.sha256(raw).hexdigest() if error is None else None
-                if error is None and (offset + len(rows) > MAX_OFFSET
+                if error is None and (offset + len(rows) > (1000000000 if history else MAX_OFFSET)
                         or rows and scan.last_page_hash in {page_hash, legacy_hash}):
                     error = "unsupported_ledger_pagination"
                 scan.lease_token = scan.lease_until = None
@@ -348,9 +352,11 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None):
                     # Freshness describes the frozen provider query cutoff, not
                     # the later wall-clock time at which a long scan finished.
                     scan.status, scan.last_complete_at = "idle", end
-                    if end - start == timedelta(days=90):
+                    if history or end - start == timedelta(days=90):
                         scan.last_full_at = end
-                    if now - end > timedelta(minutes=5):
+                    if history:
+                        scan.next_poll_at = now + timedelta(days=1)
+                    elif now - end > timedelta(minutes=5):
                         scan.next_poll_at = now + timedelta(seconds=1)
                 processed += 1
         finally:

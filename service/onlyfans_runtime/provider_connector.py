@@ -398,14 +398,16 @@ class NativeProviderConnector(NativeLoopbackConnector):
         except Exception:
             raise NativeProtocolError("native image read is unavailable") from None
 
-    def transaction_page(self, *, offset, limit=20, start, end):
+    def transaction_page(self, *, offset, limit=20, start, end, history=False):
         """Reuse the legacy ledger endpoint with frozen UTC bounds and no retries."""
         self._ready()
-        if (type(offset) is not int or not 0 <= offset <= 10000
+        if (type(offset) is not int or not 0 <= offset <= (1000000000 if history is True else 10000)
                 or type(limit) is not int or not 1 <= limit <= 20
                 or type(start) is not datetime or type(end) is not datetime
                 or start.tzinfo is not None or end.tzinfo is not None
-                or not timedelta(0) <= end - start <= timedelta(days=90)):
+                or type(history) is not bool
+                or start < datetime(1970, 1, 1)
+                or not timedelta(0) <= end - start <= timedelta(days=60000 if history else 90)):
             raise Refused("invalid bounded native ledger page")
         self.verify_identity()
         path = API_PATH + "/payouts/transactions?" + urlencode({"limit": limit, "offset": offset,

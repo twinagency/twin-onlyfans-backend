@@ -1,4 +1,4 @@
-name: Single creator 2400 per hour
+name: Single creator capacity
 on:
   push:
     branches: ['codex/single-creator-capacity-20261026']
@@ -46,10 +46,14 @@ jobs:
           python service/tests/test_native_pilot_service.py
           python service/tests/test_native_pilot_engine.py
           python service/tests/test_native_pilot_content.py
+      - name: Existing ownership restart and PostgreSQL compatibility
+        run: |
+          python service/tests/test_native_pilot_storage_pg.py
+          python service/tests/test_native_pilot_service_pg.py
       - name: Native engine smoke including reviewed media
         run: |
           mkdir -p test-results
-          python service/native_pilot/tools/load_test.py --scenario single_creator --native-engine --media-every 5 --rate-per-account-hour 2400 --accounts 1 --fans 500 --concurrent-fans 16 --concurrent-sends 4 --provider-latency-seconds 1.6 --history-latency-seconds 1.6 --sim-minutes 1.5 --scale 1 --throttle 1 --out test-results/smoke.json > test-results/stdout.json 2> test-results/progress.log
+          python service/native_pilot/tools/load_test.py --scenario single_creator --native-engine --media-every 5 --rate-per-account-hour 600 --accounts 1 --fans 500 --concurrent-fans 16 --concurrent-sends 4 --provider-latency-seconds 1.6 --history-latency-seconds 1.6 --sim-minutes 1.5 --scale 1 --throttle 1 --out test-results/smoke.json > test-results/stdout.json 2> test-results/progress.log
       - uses: actions/upload-artifact@v4
         if: always()
         with: {name: single-creator-smoke, path: test-results/}
@@ -60,6 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        rate: [600, 1200, 2400]
         burst: [0, 30]
     services:
       postgres:
@@ -84,12 +89,12 @@ jobs:
           docker restart $(docker ps --filter ancestor=postgres:16 --format '{{.ID}}')
           for attempt in {1..20}; do pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
           docker update --memory 256m --memory-swap 256m --cpus .5 $(docker ps --filter ancestor=postgres:16 --format '{{.ID}}')
-      - name: One creator 2400 inputs per hour real engine 20 percent reviewed media
+      - name: One creator real engine two text bubbles or reviewed media
         run: |
           mkdir -p test-results
-          sudo systemd-run --scope --unit single-creator-capacity -p MemoryMax=384M -p MemorySwapMax=0 -p CPUQuota=50% env PATH="$PATH" ONLYFANS_TEST_PG_URL="$ONLYFANS_TEST_PG_URL" PYTHON_DOTENV_DISABLED=1 python service/native_pilot/tools/load_test.py --scenario single_creator --native-engine --media-every 5 --burst-size ${{ matrix.burst }} --rate-per-account-hour 2400 --accounts 1 --fans 500 --concurrent-fans 16 --concurrent-sends 4 --provider-latency-seconds 1.6 --history-latency-seconds 1.6 --sim-minutes 10.5 --scale 1 --throttle 1 --profile --out test-results/capacity.json > test-results/stdout.json 2> test-results/progress.log
+          sudo systemd-run --scope --unit single-creator-capacity -p MemoryMax=384M -p MemorySwapMax=0 -p CPUQuota=50% env PATH="$PATH" ONLYFANS_TEST_PG_URL="$ONLYFANS_TEST_PG_URL" PYTHON_DOTENV_DISABLED=1 python service/native_pilot/tools/load_test.py --scenario single_creator --native-engine --media-every 5 --burst-size ${{ matrix.burst }} --rate-per-account-hour ${{ matrix.rate }} --accounts 1 --fans 500 --concurrent-fans 16 --concurrent-sends 4 --provider-latency-seconds 1.6 --history-latency-seconds 1.6 --sim-minutes 10.5 --scale 1 --throttle 1 --profile --out test-results/capacity.json > test-results/stdout.json 2> test-results/progress.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: single-creator-burst-${{ matrix.burst }}
+          name: single-creator-${{ matrix.rate }}-burst-${{ matrix.burst }}
           path: test-results/

@@ -310,8 +310,16 @@ class FakeHTTP:
         return int(urlsplit(url).path.split("/")[-2])
 
     def get(self, url, **kwargs):
-        w, fan = self.w, self.fan_of(url)
+        w = self.w
         time.sleep(w.cfg.history_latency_s / w.S)
+        path = urlsplit(url).path
+        if "/vault/media/" in path:
+            media_id = int(path.rsplit("/", 1)[-1])
+            if media_id not in (1001, 1002):
+                raise AssertionError("unreviewed-fixture-media")
+            return FakeResponse({"id": media_id, "type": "photo" if media_id == 1001 else "video",
+                                 "canView": True}, url=url)
+        fan = self.fan_of(url)
         with w.lock:
             inbound = [{"id": r["id"], "text": r["text"], "createdAt": r["created"].isoformat() + "Z", "isFromMe": False,
                         "fromUser": {"id": fan}, "withUser": {"id": fan}}
@@ -735,7 +743,7 @@ def install_patches(stack: ExitStack, holder: dict):
             elif cfg.media_every and (fan - FAN_BASE) % cfg.media_every == 0:
                 response_text = "Reviewed video for synthetic fan " + str(fan) + " is $3.\n>>OFFER 1"
             else:
-                response_text = "Hello synthetic fan " + str(fan) + ". My day is going well."
+                response_text = "Hello synthetic fan " + str(fan) + ". Nice to hear from fan " + str(fan) + "."
         return httpx.Response(200, json={
             "model": model_mod.MODEL, "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": response_text}}],
             "usage": {"prompt_tokens": 2500, "completion_tokens": 40}})
@@ -997,13 +1005,27 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
     result["media_posts"] = sum(bool(p.get("media")) for p in w.posts if p["ok"])
     result["provider_posts_by_fan"] = {str(f): len(w.sent.get((w.accts[0], f), [])) for f in w.fans
                                      if (w.accts[0], f) in w.inbound}
+    if cfg.native_engine:
+        # The real engine splits the two-sentence text fixture into two bubbles.
+        # Count a complete answer only after both arrive; a reviewed card is one POST.
+        complete, incomplete = [], 0
+        for (account, fan), incoming in w.inbound.items():
+            expected = 1 if cfg.media_every and (fan - FAN_BASE) % cfg.media_every == 0 else 2
+            sent = [post for post in w.posts if post["ok"] and post["acct"] == account and post["fan"] == fan]
+            if len(incoming) != 1 or len(sent) != expected:
+                incomplete += 1
+            else:
+                complete.append(max(post["t"] for post in sent) - incoming[0]["t"])
+        result["complete_answer_latency_s"] = {**quantiles(complete), "n": len(complete),
+                                               "max": round(max(complete), 2) if complete else None}
+        result["incomplete_answers"] = incomplete
     result["async_pool"] = {"size": async_engine.pool.size(), "max_overflow": async_engine.pool._max_overflow}
     result["wait_samples"] = stats["wait_samples"]
     result["service_crashed"] = crashed
     result["helper_errors"] = helper_errors
     result["runtime_errors"] = [
         f"{reason} ({count})" for reason, count in w.event_reasons.items()
-        if reason.startswith(("held:service-error:", "held:shutdown-turn:",
+        if reason.startswith(("turn-abandoned:", "held:service-error:", "held:shutdown-turn:",
                               "synthetic-budget-error:", "synthetic-budget-settlement-error:",
                               "synthetic-budget-hold-error:"))
     ]
@@ -1214,8 +1236,14 @@ def single_creator_verdict(result):
     if cfg["native_engine"]:
         if not result["native_engine_exercised"] or not result["model_purposes"]:
             failures.append("native engine evidence missing")
-        if any(n != 1 for n in result["provider_posts_by_fan"].values()):
-            failures.append("fixture expects one reply per distinct fan")
+        if any(n != (1 if cfg["media_every"] and (int(f) - FAN_BASE) % cfg["media_every"] == 0 else 2)
+               for f, n in result["provider_posts_by_fan"].items()):
+            failures.append("missing or extra reply bubbles")
+        complete = result["complete_answer_latency_s"]
+        if result["incomplete_answers"] or complete["n"] != count:
+            failures.append("incomplete answers")
+        if complete["max"] is None or complete["max"] > 90:
+            failures.append("complete answer exceeded 90 seconds")
         expected = sum((int(f) - FAN_BASE) % cfg["media_every"] == 0 for f in result["provider_posts_by_fan"]) if cfg["media_every"] else 0
         if result["media_posts"] != expected:
             failures.append("reviewed media count mismatch")

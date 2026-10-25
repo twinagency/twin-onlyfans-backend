@@ -270,6 +270,11 @@ class Service:
         self.args = args
         self.scope = AccountScope.parse(args.account)
         self.db = self.scope.db_id
+        import os
+        account_locks = os.environ.get("FASTT_ACCOUNT_LEDGER_LOCKS", "0")
+        if account_locks not in {"0", "1"}:
+            raise ValueError("FASTT_ACCOUNT_LEDGER_LOCKS must be 0 or 1")
+        self.account_ledger_locks = account_locks == "1" and self.fan_tasks.limit > 1
         self.stop = stop or asyncio.Event()
         self.ttl_s, self.renew_s, self.poll_s, self.hold_s = ttl_s, renew_s, poll_s, hold_s
         self.quiet_s, self.connection_check_s = quiet_s, connection_check_s
@@ -834,7 +839,7 @@ class Service:
                                **({"admission_lock": self.budget_lock} if self.fan_tasks.limit > 1 else {})),
             **({"blocking_call": self.local_call} if self.fan_tasks.limit > 1 else {}))
         runner.emit({"event": "generating", "source_message_id": str(source_id), "engine": "fastt-native"})
-        run_id = await self.local_call(runner.begin_native_run, self.path, self.db)
+        run_id = await self.local_call(runner.begin_native_run, self.path, self.db, account_locks=self.account_ledger_locks)
         stats = error = None
         try:
             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
@@ -851,7 +856,7 @@ class Service:
         except Exception as exc:
             error = exc.reason if isinstance(exc, Refused) else (gateway.stopped_reason or model.stopped_reason or "native-turn-failed")
         finally:
-            await self.local_call(runner.finish_native_run, self.path, run_id, stats, error)
+            await self.local_call(runner.finish_native_run, self.path, run_id, stats, error, account_locks=self.account_ledger_locks)
             if isinstance(stats, dict):
                 # FASTT's own per-turn counters (sell lane, offers, packs, skips): operator visibility only.
                 runner.emit({"event": "turn-stats", "stats": {k: v for k, v in stats.items()
@@ -1170,7 +1175,8 @@ class Service:
             raise Refused("pilot-store-required")
         runner.require_store_schema(self.path)
         self.ledger = Ledger(self.path, allowance=True,
-                             **({"concurrent_reads": True} if self.fan_tasks.limit > 1 else {}))
+                             **({"concurrent_reads": True, "account_locks": self.account_ledger_locks}
+                                if self.fan_tasks.limit > 1 else {}))
         if getattr(self.args, "followups", False):
             from .followups import FollowupQueue
             runner.require_store_schema(self.path, followups=True)

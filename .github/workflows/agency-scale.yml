@@ -33,7 +33,7 @@ jobs:
           cache-dependency-path: requirements-onlyfans-test.txt
       - run: pip install -r requirements-onlyfans-test.txt
       - name: Migration preservation and concurrent budget reservations
-        run: python -m pytest -q -x service/tests/test_onlyfans_delivery_scale_pg.py service/tests/test_native_pilot_budget_concurrency_pg.py service/tests/test_native_pilot_metadata_reads_pg.py
+        run: python -m pytest -q -x service/tests/test_onlyfans_delivery_scale_pg.py service/tests/test_native_pilot_budget_concurrency_pg.py service/tests/test_native_pilot_metadata_reads_pg.py service/tests/test_native_pilot_account_locks_pg.py
       - name: Existing schema, manual activation and account isolation regressions
         run: python -m pytest -q -x service/tests/test_onlyfans_foundation_pg.py service/tests/test_onlyfans_creator_enrollments_pg.py service/tests/test_fastt_activation_pg.py service/tests/test_onlyfans_connections_pg.py service/tests/test_native_pilot_concurrency.py
       - name: Concurrent fan scheduling

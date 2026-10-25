@@ -20,7 +20,7 @@ def workers():
             "offered_load": {"scheduled_messages": 750, "generated_messages": 750,
                              "persisted_messages": 750, "scheduled_messages_per_hour": 10000,
                              "max_ingress_delay_s": 0.1},
-            "delivery_concurrency": 1, "runtime_errors": [],
+            "delivery_concurrency": 1, "account_ledger_locks": False, "runtime_errors": [],
             "worker_database_role": "worker", "async_pool": {"size": 4, "max_overflow": 0},
             "service_crashed": [], "helper_errors": [], "start_epoch": 1000 + offset * 0.001,
             "totals": {"replies": 750}}))
@@ -73,6 +73,15 @@ class FleetEvidenceTests(unittest.TestCase):
                                  provider_latency=1.6, history_latency=1.6)
         self.assertTrue(report["capacity_verdict"]["passed"], report["capacity_verdict"])
         self.assertFalse(combine_workers(rows, [], minutes=5)["capacity_verdict"]["passed"])
+
+    def test_every_worker_must_prove_the_requested_account_lock_mode(self):
+        rows = workers()
+        for _, row in rows:
+            row["account_ledger_locks"] = True
+        self.assertTrue(combine_workers(rows, [], minutes=5, account_locks=True)["capacity_verdict"]["passed"])
+        self.assertFalse(combine_workers(rows, [], minutes=5)["capacity_verdict"]["passed"])
+        del rows[0][1]["account_ledger_locks"]
+        self.assertFalse(combine_workers(rows, [], minutes=5, account_locks=True)["capacity_verdict"]["passed"])
 
     def test_exit_failure_cannot_be_hidden_by_successful_reports(self):
         report = combine_workers(workers(), ["worker 0: exit status 1"], minutes=5)

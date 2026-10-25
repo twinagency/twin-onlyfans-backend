@@ -44,13 +44,15 @@ jobs:
           docker restart $(docker ps --filter ancestor=postgres:16 --format '{{.ID}}')
           for attempt in {1..20}; do pg_isready -h 127.0.0.1 -U postgres && break; sleep 1; done
           PGPASSWORD=disposable_test_only psql -h 127.0.0.1 -U postgres -d postgres -c "SHOW max_connections"
+      - name: Scoped write compatibility proof
+        run: python -m pytest -q -x service/tests/test_native_pilot_account_locks_pg.py
       - name: Fleet evidence validation
         run: python service/tests/test_native_pilot_fleet_report.py
       # Include independent database callback workers; preserve the same offered workload.
       - name: Ten isolated creator processes at 100000 inbound per hour
         run: |
           mkdir -p test-results
-          python service/native_pilot/tools/fleet_load.py --fans ${{ matrix.fans-per-account }} --concurrent-fans 64 --concurrent-sends 16 --provider-latency-seconds 1.6 --history-latency-seconds 1.6 --sim-minutes 5 --throttle 0.25 --profile --pg-container "$(docker ps --filter ancestor=postgres:16 --format '{{.Names}}')" --require-target-sla --out test-results/fleet.json > test-results/stdout.json 2> test-results/progress.log
+          python service/native_pilot/tools/fleet_load.py --fans ${{ matrix.fans-per-account }} --concurrent-fans 64 --concurrent-sends 16 --account-ledger-locks --provider-latency-seconds 1.6 --history-latency-seconds 1.6 --sim-minutes 5 --throttle 0.25 --profile --pg-container "$(docker ps --filter ancestor=postgres:16 --format '{{.Names}}')" --require-target-sla --out test-results/fleet.json > test-results/stdout.json 2> test-results/progress.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

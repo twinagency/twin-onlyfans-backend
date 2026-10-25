@@ -535,17 +535,22 @@ async def report_to_twin(ledger, pilot, run_error=None):
         emit({"event": "twin-report-failed"})
 
 
-def begin_native_run(path, account):
+def begin_native_run(path, account, *, account_locks=False):
     """Create the native audit row without invoking the automation scheduler."""
-    with store.transaction(path) as con:
+    boundary = store.account_transaction(path, lambda con: account) if account_locks else store.transaction(path)
+    with boundary as con:
         return store.insert_id(con, "INSERT INTO automation_runs(account_id,kind,started_at,status) VALUES(?,'ai_chatter',?,'running')",
                                (account, now().isoformat(sep=" ")))
 
 
-def finish_native_run(path, run_id, stats, reason=None):
+def finish_native_run(path, run_id, stats, reason=None, *, account_locks=False):
     # Only aggregate counters/fixed reasons, never native prompt/error text.
     counters = {k: v for k, v in (stats or {}).items() if isinstance(k, str) and type(v) in (int, bool)}
-    with store.transaction(path) as con:
+    def resolve(con):
+        row = con.execute("SELECT account_id FROM automation_runs WHERE id=?", (run_id,)).fetchone()
+        return row[0] if row else None
+    boundary = store.account_transaction(path, resolve) if account_locks else store.transaction(path)
+    with boundary as con:
         con.execute("UPDATE automation_runs SET completed_at=?,status=?,stats_json=?,error_text=? WHERE id=?",
                     (now().isoformat(sep=" "), "error" if reason else "done", json.dumps(counters), reason, run_id))
 

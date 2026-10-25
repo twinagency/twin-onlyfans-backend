@@ -277,6 +277,43 @@ def transaction(target):
 
 
 @contextmanager
+def account_transaction(target, resolve_account):
+    """Opt-in native ledger scope; legacy global writers still exclude every account.
+
+    Lock order is always shared global then exclusive account. The two-integer
+    account namespace is separate from the legacy bigint lock. A hash collision
+    can only cause extra serialization. No lock is released before commit.
+    """
+    if not is_pg(target):
+        with transaction(target) as con:
+            yield con
+        return
+    import hashlib
+    con = connect_pg(target)
+    try:
+        con.execute("SELECT pg_advisory_xact_lock_shared(?)", (PG_LOCK_KEY,))
+        account = resolve_account(con)
+        if account is None:
+            # Never upgrade a held shared lock: concurrent upgrades deadlock.
+            con.rollback()
+            con.execute("BEGIN IMMEDIATE")
+        else:
+            if not isinstance(account, str) or not account or len(account) > 128:
+                raise ValueError("invalid-account-lock-scope")
+            key = int.from_bytes(hashlib.sha256(account.encode("utf-8")).digest()[:4],
+                                 byteorder="big", signed=True)
+            con.execute("SELECT pg_advisory_xact_lock(?,?)", (7811093, key))
+        yield con
+        con.commit()
+    except BaseException:
+        if con.in_transaction:
+            con.rollback()
+        raise
+    finally:
+        con.close()
+
+
+@contextmanager
 def readonly(target):
     """One consistent read-only snapshot; never writes, always rolled back."""
     if is_pg(target):

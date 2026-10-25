@@ -156,7 +156,8 @@ SERVICE_ID = re.compile(r"svc-[A-Za-z0-9_-]{1,92}")
 
 
 class Ledger:
-    def __init__(self, path: str | Path, *, allowance: bool = False, concurrent_reads: bool = False):
+    def __init__(self, path: str | Path, *, allowance: bool = False, concurrent_reads: bool = False,
+                 account_locks: bool = False):
         # A PostgreSQL target is the application URL (never printed or logged).
         self.path = path if store.is_pg(path) else Path(path)
         self.pg = store.is_pg(path)
@@ -165,6 +166,7 @@ class Ledger:
         # transaction as the durable attempt. The bounded pilot never sets it.
         self.allowance = allowance
         self.concurrent_reads = concurrent_reads
+        self.account_locks = account_locks
         # Persistent service only, when fan photos are described (FASTT's inbound_describe): how
         # long a caption-less photo may wait for its description before it is skipped as before.
         # 0 = descriptions are not used here at all (the bounded pilot, every older fixture).
@@ -178,9 +180,23 @@ class Ledger:
             raise Refused("database-missing")
 
     @contextmanager
-    def _tx(self, *, initialize: bool = False) -> Iterator[object]:
+    def _tx(self, *, initialize: bool = False, account_id=None, pilot_id=None, job_id=None) -> Iterator[object]:
         self._check_target()
-        with store.transaction(self.path) as con:
+        def resolve(con):
+            scopes = {account_id} if account_id is not None else set()
+            for table, column, identity in [("native_pilots", "pilot_id", pilot_id),
+                                             ("native_pilot_followups", "job_id", job_id)]:
+                if identity is not None:
+                    row = con.execute(f"SELECT account_id FROM {table} WHERE {column}=?", (identity,)).fetchone()
+                    if row is not None:
+                        scopes.add(row[0])
+            if len(scopes) > 1:
+                raise Refused("account-scope-mismatch")
+            return next(iter(scopes), None)
+
+        boundary = (store.account_transaction(self.path, resolve)
+                    if self.pg and self.account_locks else store.transaction(self.path))
+        with boundary as con:
             # PostgreSQL: fastt_runtime tables are created by store.ensure_runtime_schema (runner/control), not here.
             if initialize and not self.pg:
                 for statement in _SCHEMA:
@@ -234,7 +250,7 @@ class Ledger:
         now_s, cutoff_s, deadline_s = _dt(now), _dt(cutoff), _dt(deadline)
         if cutoff_s > now_s or deadline_s <= now_s:
             raise Refused("invalid-window")
-        with self._tx(initialize=True) as con:
+        with self._tx(initialize=True, account_id=account_id, pilot_id=pilot_id) as con:
             existing = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if existing:
                 expected = (account_id, fan_id, owner_token, cutoff_s, deadline_s, limit)
@@ -359,7 +375,7 @@ class Ledger:
 
     def snapshot(self, *, pilot_id: str, owner_token: str, now: datetime | str) -> SourceSnapshot | None:
         now_s = _dt(now)
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             return self._source(con, self._active(con, pilot_id, owner_token, now_s), now_s)
 
     def claim_input(self, *, pilot_id: str, owner_token: str, snapshot: SourceSnapshot,
@@ -368,7 +384,7 @@ class Ledger:
         if not isinstance(snapshot, SourceSnapshot):
             raise Refused("invalid-snapshot")
         now_s = _dt(now)
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             p = self._active(con, pilot_id, owner_token, now_s)
             if self._source(con, p, now_s) != snapshot:
                 raise Refused("source-changed")
@@ -398,7 +414,7 @@ class Ledger:
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 80:
             raise Refused("invalid-model-limit")
         now_s = _dt(now)
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             p = self._active(con, pilot_id, owner_token, now_s)
             if p["model_calls"] >= limit:
                 raise Refused("model-budget-exhausted")
@@ -413,7 +429,7 @@ class Ledger:
         if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
             raise Refused("invalid-revision")
         now_s = _dt(now)
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             p = self._active(con, pilot_id, owner_token, now_s)
             if bubble_no > 10:
                 # Preserve the ten-bubble limit, excluding definitively refused attempts.
@@ -571,7 +587,7 @@ class Ledger:
         response_s, evidence_s, now_s = _json(validated_response), _json(evidence), _dt(now)
         if len(response_s.encode("utf-8")) > 262144 or len(evidence_s.encode("utf-8")) > 65536:
             raise Refused("oversize-receipt")
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             self._outcome_owner(con, pilot_id, owner_token, attempt_id)
             r = con.execute("SELECT * FROM native_pilot_receipts WHERE attempt_id=?", (attempt_id,)).fetchone()
             if r["state"] == "sent":
@@ -614,13 +630,13 @@ class Ledger:
     def stop(self, *, pilot_id: str, owner_token: str, reason: str, now: datetime | str) -> None:
         if not isinstance(reason, str) or not re.fullmatch(r"[a-z0-9-]{1,64}", reason):
             raise Refused("invalid-reason")
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             self._stop(con, pilot_id, owner_token, reason, _dt(now))
 
     def record_unknown(self, *, pilot_id: str, owner_token: str, attempt_id: int,
                        now: datetime | str) -> None:
         now_s = _dt(now)
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             self._outcome_owner(con, pilot_id, owner_token, attempt_id)
             r = con.execute("SELECT state FROM native_pilot_receipts WHERE attempt_id=?", (attempt_id,)).fetchone()
             if r["state"] == "sent":
@@ -641,7 +657,7 @@ class Ledger:
         already ``sent`` or ``delivery_unknown`` is NEVER converted: refused. Identical replay is a no-op
         (returns False)."""
         now_s = _dt(now)
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             self._outcome_owner(con, pilot_id, owner_token, attempt_id)
             r = con.execute("SELECT state FROM native_pilot_receipts WHERE attempt_id=?", (attempt_id,)).fetchone()
             if r["state"] == "not_sent":
@@ -674,7 +690,7 @@ class Ledger:
         if max_requeues is None and not self.allowance:
             raise Refused("persistent-requeue-required")
         due = _dt(not_before) if not_before is not None else None
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             p = con.execute("SELECT owner_token,account_id FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
@@ -703,7 +719,7 @@ class Ledger:
             return used + 1
 
     def finish_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str) -> None:
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             p = con.execute("SELECT owner_token FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
@@ -740,7 +756,7 @@ class Ledger:
         now_s, run_s = _dt(now), _dt(run_at)
         if run_s > _dt(datetime.fromisoformat(now_s) + FOLLOWUP_MAX_AHEAD):
             raise Refused("followup-run-at")
-        with self._tx(initialize=True) as con:
+        with self._tx(initialize=True, account_id=account_id) as con:
             last_in = con.execute("SELECT message_id,created_at FROM messages WHERE account_id=? AND fan_id=? "
                                   "AND direction='in' ORDER BY created_at DESC,message_id DESC LIMIT 1",
                                   (account_id, fan_id)).fetchone()
@@ -797,7 +813,7 @@ class Ledger:
         """Drop this fan's still-queued jobs of ``kinds`` (a purchase makes the unpaid-offer nudge and discount obsolete)."""
         if not kinds or any(k not in FOLLOWUP_KINDS for k in kinds):
             raise Refused("followup-kind")
-        with self._tx(initialize=True) as con:
+        with self._tx(initialize=True, account_id=account_id) as con:
             return con.execute("UPDATE native_pilot_followups SET state='dropped',reason=?,updated_at=? WHERE account_id=? AND fan_id=? "
                                "AND state='queued' AND kind IN (%s)" % ",".join("?" * len(kinds)),
                                (reason, _dt(now), account_id, fan_id, *kinds)).rowcount
@@ -817,7 +833,7 @@ class Ledger:
         True when this call settled it (a second call is a no-op)."""
         if state not in ("done", "dropped", "failed"):
             raise Refused("followup-state")
-        with self._tx(initialize=True) as con:
+        with self._tx(initialize=True, job_id=job_id) as con:
             return con.execute("UPDATE native_pilot_followups SET state=?,reason=?,updated_at=? WHERE job_id=? "
                                "AND state IN ('queued','claimed')", (state, reason, _dt(now), job_id)).rowcount > 0
 
@@ -827,7 +843,7 @@ class Ledger:
         Refuses (job-specific reasons in FOLLOWUP_DROPS) unless the newest message of the chat is still our
         own AI outbound, newer than the pilot cutoff, and the fan has not spoken since the job was queued."""
         now_s = _dt(now)
-        with self._tx(initialize=True) as con:
+        with self._tx(initialize=True, pilot_id=pilot_id, job_id=job_id) as con:
             p = self._active(con, pilot_id, owner_token, now_s)
             job = con.execute("SELECT * FROM native_pilot_followups WHERE job_id=?", (job_id,)).fetchone()
             if job is None or job["state"] != "queued" or (job["account_id"], job["fan_id"]) != (p["account_id"], p["fan_id"]):
@@ -893,7 +909,7 @@ class Ledger:
         cutoff_s = now_s if cutoff is None else _dt(cutoff)
         if cutoff_s > now_s:
             raise Refused("invalid-cutoff")
-        with self._tx(initialize=True) as con:
+        with self._tx(initialize=True, account_id=account_id, pilot_id=pilot_id) as con:
             c = con.execute("SELECT * FROM twin_bridge_conversations WHERE account_id=? AND fan_id=?",
                             (account_id, fan_id)).fetchone()
             if c is None or c["state"] != "active":
@@ -946,7 +962,7 @@ class Ledger:
         if not isinstance(pilot_id, str) or not SERVICE_ID.fullmatch(pilot_id):
             raise Refused("invalid-pilot-id")
         now_s = _dt(now)
-        with self._tx(initialize=True) as con:
+        with self._tx(initialize=True, account_id=account_id, pilot_id=pilot_id) as con:
             row = con.execute("SELECT account_id,state,cutoff FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if row is not None:
                 if row["account_id"] != account_id or row["state"] != "watermark":
@@ -969,7 +985,7 @@ class Ledger:
             raise Refused("invalid-ttl")
         now_s = _dt(now)
         lease_s = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=ttl_s))
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             # Deliberately NOT ``_active``: a lease must stay renewable while one
             # POST is in flight (an unsettled attempt would make ``_active`` refuse).
             p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
@@ -998,7 +1014,7 @@ class Ledger:
         Unsettled sends are left exactly as they are and still block adoption.
         """
         now_s = _dt(now)
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
@@ -1016,7 +1032,7 @@ class Ledger:
         """Durably count a model attempt for a service pilot (no per-pilot cap; the
         per-call limits and the account's daily budget bound spend)."""
         now_s = _dt(now)
-        with self._tx() as con:
+        with self._tx(pilot_id=pilot_id) as con:
             p = self._active(con, pilot_id, owner_token, now_s)
             con.execute("UPDATE native_pilots SET model_calls=model_calls+1,updated_at=? WHERE pilot_id=?", (now_s, pilot_id))
             return p["model_calls"] + 1

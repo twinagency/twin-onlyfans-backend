@@ -914,6 +914,7 @@ async def run_scenario(cfg: Cfg, db: Db, holder: dict, pg_container=None):
     result["worker_database_role"] = os.environ.get("ONLYFANS_PROCESS_ROLE")
     from native_pilot.delivery_pool import configured_delivery_concurrency
     result["delivery_concurrency"] = configured_delivery_concurrency()
+    result["account_ledger_locks"] = all(svc.ledger.account_locks for svc in services)
     result["async_pool"] = {"size": async_engine.pool.size(), "max_overflow": async_engine.pool._max_overflow}
     result["wait_samples"] = stats["wait_samples"]
     result["service_crashed"] = crashed
@@ -1114,6 +1115,7 @@ def main(argv=None):
     p.add_argument("--out")
     p.add_argument("--profile", action="store_true", help="capture task/thread wait locations without message text or credentials")
     p.add_argument("--require-target-sla", action="store_true", help="fail unless unscaled target traffic and every reply meet the 30-second test SLA")
+    p.add_argument("--account-ledger-locks", action="store_true")
     p.add_argument("--concurrent-sends", type=int, choices=range(1, 17), default=1)
     p.add_argument("--provider-latency-seconds", type=float, default=0.2)
     p.add_argument("--history-latency-seconds", type=float, default=0.0)
@@ -1121,6 +1123,7 @@ def main(argv=None):
     for value in [args.provider_latency_seconds, args.history_latency_seconds]:
         if not math.isfinite(value) or not 0 <= value <= 30:
             p.error("synthetic request latency must be finite and between zero and thirty seconds")
+    os.environ["FASTT_ACCOUNT_LEDGER_LOCKS"] = "1" if args.account_ledger_locks else "0"
     os.environ["FASTT_MAX_CONCURRENT_SENDS"] = str(args.concurrent_sends)
     os.environ["FASTT_MAX_CONCURRENT_FANS"] = str(args.concurrent_fans)
     if args.profile:

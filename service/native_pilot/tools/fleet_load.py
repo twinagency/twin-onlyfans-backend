@@ -16,7 +16,7 @@ sys.path.insert(0, str(SERVICE))
 from native_pilot.tools.capacity_checks import evaluate_capacity
 
 
-def combine_workers(rows, errors, *, minutes, concurrent_sends=1, provider_latency=0.2, history_latency=0.0):
+def combine_workers(rows, errors, *, minutes, concurrent_sends=1, provider_latency=0.2, history_latency=0.0, account_locks=False):
     """Missing, duplicate or differently shaped workers invalidate the fleet result."""
     accounts, starts, offered = {}, [], []
     failures = list(errors)
@@ -26,6 +26,7 @@ def combine_workers(rows, errors, *, minutes, concurrent_sends=1, provider_laten
         if (row.get("scenario") != "target_10k" or config.get("accounts") != 1
                 or config.get("account_offset") != offset or config.get("scale") != 1
                 or config.get("sim_minutes") != minutes or set(row.get("accounts", {})) != {expected}
+                or row.get("account_ledger_locks") is not account_locks
                 or row.get("delivery_concurrency") != concurrent_sends
                 or config.get("send_concurrency") != concurrent_sends
                 or config.get("provider_latency_s") != provider_latency
@@ -91,6 +92,7 @@ def main(argv=None):
     parser.add_argument("--out", required=True)
     parser.add_argument("--require-target-sla", action="store_true")
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--account-ledger-locks", action="store_true")
     parser.add_argument("--concurrent-sends", type=int, choices=range(1, 17), default=1)
     parser.add_argument("--provider-latency-seconds", type=float, default=0.2)
     parser.add_argument("--history-latency-seconds", type=float, default=0.0)
@@ -149,6 +151,8 @@ def main(argv=None):
                            "--provider-latency-seconds", str(args.provider_latency_seconds),
                            "--history-latency-seconds", str(args.history_latency_seconds),
                            "--out", str(child_out)]
+                if args.account_ledger_locks:
+                    command.append("--account-ledger-locks")
                 if args.profile:
                     command.append("--profile")
                 process = subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT,
@@ -202,8 +206,10 @@ def main(argv=None):
         pg_cpu_end = pg_cpu_s(args.pg_container)
         db.drop()  # drops only this parent's freshly named database, after every worker stopped
     report = combine_workers(rows, errors, minutes=args.sim_minutes, concurrent_sends=args.concurrent_sends,
-                             provider_latency=args.provider_latency_seconds, history_latency=args.history_latency_seconds)
-    report["config"].update(send_concurrency=args.concurrent_sends,
+                             provider_latency=args.provider_latency_seconds, history_latency=args.history_latency_seconds,
+                             account_locks=args.account_ledger_locks)
+    report["config"].update(account_ledger_locks=args.account_ledger_locks,
+                            send_concurrency=args.concurrent_sends,
                             provider_latency_s=args.provider_latency_seconds,
                             history_latency_s=args.history_latency_seconds)
     report["resources"] = {

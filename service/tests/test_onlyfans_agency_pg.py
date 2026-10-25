@@ -58,7 +58,8 @@ def test_scope_parser_and_namespace_never_fall_back():
     prefix = "/onlyfans/agency/v1/api/v1/status"
     assert client.get(prefix).status_code == 403
     assert client.get(prefix, headers={HEADER: "{}"}).status_code == 403
-    assert client.get("/onlyfans/agency/v1/api/v1/earnings", headers=headers()).status_code == 403
+    assert client.get("/onlyfans/agency/v1/api/v1/earnings", headers=headers()).status_code == 404
+    assert client.post("/onlyfans/agency/v1/api/v1/earnings", headers=headers()).status_code == 403
     assert client.post(prefix, headers=headers(manage=False)).status_code == 403
     with ThreadPoolExecutor(2) as pool:
         results = list(pool.map(lambda actor: client.get(prefix, headers=headers(actor)), [STAFF, COLLEAGUE]))

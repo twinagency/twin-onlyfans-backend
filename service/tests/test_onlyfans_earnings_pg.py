@@ -101,3 +101,25 @@ def test_bounded_timezone_aware_window_refuses_invalid_ranges():
     for a,b in [("bad","bad"),("2026-10-01","2026-10-02"),("2026-10-02T00:00:00Z","2026-10-01T00:00:00Z"),
             ("2026-01-01T00:00:00Z","2026-10-01T00:00:00Z")]:
         with pytest.raises(BadRequest):window(a,b)
+
+
+def test_agency_earnings_empty_and_foreign_creators_are_isolated(database):
+    from onlyfans_read.agency_scope import AgencyScope, current_scope
+    from test_onlyfans_agency_pg import assign, CREATOR, OTHER, STAFF
+    first=setup(database); second=setup(database,account="acc-b",tenant="tenant-b")
+    assign(database[1],"acc-a",CREATOR); assign(database[1],"acc-b",OTHER)
+    record(first,"acc-a",parsed(transaction(id="agency-a",amount="3.00")))
+    with Session(second.engine) as session,session.begin():
+        from onlyfans_runtime.ledger import apply_observation
+        apply_observation(session,"acc-b",parsed(transaction(id="agency-b",amount="100.00")),now=utcnow())
+    assert read(database,tenant=None)["clearedGrossCents"]==10300
+    for creators,expected in [((CREATOR,),300),((OTHER,),10000),((),None)]:
+        token=current_scope.set(AgencyScope(creators,STAFF,True))
+        try:
+            result=read(database,tenant=None,include_pending=True)
+            assert result["clearedGrossCents"]==expected
+            assert result["accountCount"]==(0 if not creators else 1)
+            if not creators: assert result["reasons"]==["no_bound_accounts"] and result["recorded"] is None
+        finally: current_scope.reset(token)
+    assert read(database,tenant=None)["clearedGrossCents"]==10300
+    first.close();second.close()

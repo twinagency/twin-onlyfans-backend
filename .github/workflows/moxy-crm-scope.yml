@@ -1,0 +1,30 @@
+name: Moxy CRM scope acceptance
+on:
+  push:
+    branches: [codex/moxy-crm-scope-20261025]
+permissions:
+  contents: read
+jobs:
+  isolation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_test_only
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      ONLYFANS_TEST_PG_URL: postgresql://postgres:disposable_test_only@127.0.0.1:5432/postgres
+      PYTHON_DOTENV_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements-onlyfans-test.txt
+      - run: python -m pytest -q service/tests/test_onlyfans_agency_pg.py service/tests/test_onlyfans_earnings_pg.py service/tests/test_onlyfans_operations_pg.py service/tests/test_onlyfans_creator_enrollments_pg.py

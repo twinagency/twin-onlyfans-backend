@@ -120,13 +120,13 @@ def process_one(store, tenant, *, stop=None):
                 from .provider_connector import NativeProviderConnector, session_from_capture
                 transport = NativeProviderConnector(session_from_capture(account_id=ref['account'], owner_id=connection.owner_id,
                     policy_revision=1, capture=clear['capture'], x_hash=clear['xHash'], proxy_url=clear['proxyUrl'],
-                    expires_at=connection.expires_at.replace(tzinfo=timezone.utc)))
+                    expires_at=connection.expires_at.replace(tzinfo=timezone.utc)), timeout_seconds=10)
             if ref['variant'] == 'preview':
                 from of_shapes import still_url
                 url = still_url(media)
                 if not url:
                     raise Refused('message preview unavailable')
-                data = transport.still_bytes(url)
+                data = transport.still_bytes(url, timeout_seconds=10)
             else:
                 from of_shapes import media_urls
                 from .provider_connector import validate_cdn_url

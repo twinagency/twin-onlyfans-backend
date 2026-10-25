@@ -64,12 +64,12 @@ def combine_workers(rows, errors, *, minutes):
     return report
 
 
-def fleet_rss_mb(workers):
+def fleet_rss_mb(workers, field="VmRSS"):
     total = 0
     for process, _ in workers:
         try:
             lines = Path(f"/proc/{process.pid}/status").read_text().splitlines()
-            total += int(next(line for line in lines if line.startswith("VmRSS:")).split()[1]) / 1024
+            total += int(next(line for line in lines if line.startswith(field + ":")).split()[1]) / 1024
         except (OSError, StopIteration, ValueError):
             pass
     return total
@@ -85,6 +85,7 @@ def main(argv=None):
     parser.add_argument("--out", required=True)
     parser.add_argument("--require-target-sla", action="store_true")
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--pg-container", help="disposable PostgreSQL container, for measured database CPU")
     args = parser.parse_args(argv)
     if sys.platform == "win32":
         parser.error("the fleet harness requires Linux process/resource measurements")
@@ -96,7 +97,7 @@ def main(argv=None):
     admin = os.environ.get("ONLYFANS_TEST_PG_URL")
     if not admin:
         parser.error("ONLYFANS_TEST_PG_URL must name a disposable local PostgreSQL server")
-    from native_pilot.tools.load_test import Cfg, Db, World
+    from native_pilot.tools.load_test import Cfg, Db, World, pg_cpu_s
     db = Db(admin)  # refuses every non-loopback database host
     os.environ["PYTHON_DOTENV_DISABLED"] = "1"
     os.environ["DATABASE_URL"] = db.async_url
@@ -109,7 +110,8 @@ def main(argv=None):
     evidence = output.parent / (output.stem + "-workers")
     evidence.mkdir(exist_ok=False)
     token = uuid.uuid4().hex
-    peak_rss, pg_connection_limit = 0, None
+    peak_rss, peak_anon, pg_connection_limit = 0, 0, None
+    pg_cpu_start = pg_cpu_end = resource_started = resource_ended = None
     db.create()
     try:
         db.bootstrap()
@@ -118,6 +120,8 @@ def main(argv=None):
                           scale=1, throttle_s=args.throttle)))
         db.run("CREATE TABLE public.load_harness_fleet(id integer PRIMARY KEY,token text NOT NULL)")
         db.run("INSERT INTO public.load_harness_fleet VALUES(1,:token)", {"token": token})
+        resource_started = time.monotonic()
+        pg_cpu_start = pg_cpu_s(args.pg_container)
         with tempfile.TemporaryDirectory(prefix="synthetic-fleet-barrier-") as directory:
             barrier = Path(directory)
             for offset in range(10):
@@ -140,6 +144,7 @@ def main(argv=None):
             deadline = time.monotonic() + 90
             while not all((barrier / f"ready-{offset}.json").exists() for offset in range(10)):
                 peak_rss = max(peak_rss, fleet_rss_mb(workers))
+                peak_anon = max(peak_anon, fleet_rss_mb(workers, "RssAnon"))
                 if any(process.poll() is not None for process, _ in workers) or time.monotonic() > deadline:
                     raise RuntimeError("one or more creator processes did not become ready")
                 time.sleep(0.1)
@@ -151,6 +156,7 @@ def main(argv=None):
             deadline = time.monotonic() + args.sim_minutes * 60 + 120
             while any(process.poll() is None for process, _ in workers):
                 peak_rss = max(peak_rss, fleet_rss_mb(workers))
+                peak_anon = max(peak_anon, fleet_rss_mb(workers, "RssAnon"))
                 if time.monotonic() > deadline:
                     raise RuntimeError("creator processes exceeded workload and shutdown deadline")
                 time.sleep(0.25)
@@ -179,10 +185,17 @@ def main(argv=None):
                 rows.append((offset, data["results"][0]))
             except (OSError, ValueError, KeyError):
                 errors.append(f"worker {offset}: missing or invalid workload evidence")
+        resource_ended = time.monotonic()
+        pg_cpu_end = pg_cpu_s(args.pg_container)
         db.drop()  # drops only this parent's freshly named database, after every worker stopped
     report = combine_workers(rows, errors, minutes=args.sim_minutes)
     report["resources"] = {
         "creator_process_rss_peak_mb": round(peak_rss, 1),
+        "creator_process_anonymous_rss_peak_mb": round(peak_anon, 1),
+        "postgres_cpu_seconds": round(pg_cpu_end - pg_cpu_start, 2)
+            if pg_cpu_start is not None and pg_cpu_end is not None else None,
+        "database_measurement_wall_seconds": round(resource_ended - resource_started, 2)
+            if resource_started is not None and resource_ended is not None else None,
         "creator_process_cpu_seconds": round(sum(row.get("process", {}).get("cpu_seconds", 0)
                                                  for _, row in rows), 2),
         "host_cpus": os.cpu_count(),

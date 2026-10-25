@@ -83,6 +83,9 @@ def prepare(revision):
         image=call(["docker","image","inspect",tag,"--format","{{.Id}}"])
         code="import py_compile; files="+repr(COMMON[:2]+ROLE[role])+"; [py_compile.compile('/app/'+p,doraise=True) for p in files]; print('compiled')"
         call(["docker","run","--rm","--network","none","--entrypoint","python",image,"-c",code])
+        if role=="worker":
+            probe="import inspect; from onlyfans_runtime.provider_connector import NativeProviderConnector; assert 'history' in inspect.signature(NativeProviderConnector.transaction_page).parameters, 'Full-history importer requires matching connector'"
+            call(["docker","run","--rm","--network","none","-w","/app/service","--entrypoint","python",image,"-c",probe])
         service=item["Config"]["Labels"]["com.docker.compose.service"]
         plan["configs"][cfg]["after"]["services"][service]["image"]=image
         if "migrate" in plan["configs"][cfg]["after"]["services"]:

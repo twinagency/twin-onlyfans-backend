@@ -29,3 +29,11 @@ Both Twin accounts completed the provider history walk: 520 records per account,
 Validation includes 137 PostgreSQL ledger/provider/worker/earnings checks, the additive 0091-to-0092 retention rehearsal, successful lifetime/agency CI, TypeScript, overview/lifetime contracts and Linux runtime route checks. GitHub subsequently blocked new jobs for its billing/spending-limit issue. Dashboard builds were staged against the existing Linux dependencies and verified before cutover. Temporary PostgreSQL acceptance containers and their network were removed after testing.
 
 Follow-up: the source/category loop now has separate amount variables so optional breakdowns cannot overwrite cleared totals. A multi-kind plus pending regression check passed against the actual API image. Flirt received the earnings view in dashboard PR #297, based on its live 4a192c6f media/onboarding source; verification targets dashboard.flirtaiagency.com directly.
+
+## Four-account connector repair
+
+Two newly connected Flirt accounts (Maile and Alva Jay Free) exposed a runtime mismatch: LedgerWorker supplied history=True but the running NativeProviderConnector.transaction_page still had its legacy signature. The resulting TypeError was recorded as ledger_read_failed; with only two completed lifetime baselines, All creators correctly refused an incomplete total.
+
+scripts/repair-history-connector.py overlays only that connector method on each exact observed API, worker and supervisor image, preserves other source and configuration, checks image identity before cutover, and tests the real candidate in a network-isolated container. Ordinary reads retain their 90-day bound; the epoch/history option requires an explicit boolean. Release preparation now checks the worker candidate connector signature as well as compiling files.
+
+Repair images: API 25f0795f9e24e5b3072733d36a6f65da215e2ce8bd12848b0b90f1cae75d3388; worker c2f8abab80fdcb3341a9b567fe88a371e17b75a6f39a0c0846db7b1b129f9592; supervisor cd05dca5e1b91d17861a68836f27f019a50c9d0b9d88005ee6fcb5a5baf4b86c. These supersede the earlier image table. Private receipts are under /var/tmp/of-history-connector-repair-20261026/. No canonical payment, binding, account activation, provider budget or import cursor was reset.

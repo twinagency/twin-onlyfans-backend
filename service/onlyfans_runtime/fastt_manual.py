@@ -57,13 +57,16 @@ def _scope():
 
 def fastt_account_owned(account_id) -> bool:
     """True when the whole account is owned (``<account>:*``, or database mode ``all``)."""
-    return to_fastt_account_id(account_id) in _scope()[1]
+    account = to_fastt_account_id(account_id)
+    return fastt_scope.platform_scope_enabled() or account in _scope()[1]
 
 
 def fastt_owned(account_id, fan_id) -> bool:
     """The legacy worker must not send for this fan (never shrinks within a process)."""
-    pairs, accounts = _scope()
     account = to_fastt_account_id(account_id)
+    if fastt_scope.platform_scope_enabled():
+        return True  # Fail closed: discovery failure never hands an account to a second sender.
+    pairs, accounts = _scope()
     return account in accounts or (account, fan_id) in pairs
 
 

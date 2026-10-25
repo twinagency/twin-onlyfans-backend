@@ -1,4 +1,11 @@
-"""Which fans the FASTT runner owns: a per-account operator setting under a deployment allowlist.
+"""Platform mode ``db:*`` discovers every live registered OnlyFans binding.
+
+New accounts need no deployment edit. With no explicit fan selection, the runner
+serves eligible fans of that account; account activation, verified credentials,
+delivery limits and each conversation's takeover/pause/no-contact still apply.
+The legacy worker is fenced even if discovery is temporarily unavailable.
+
+Which fans the FASTT runner owns: a per-account operator setting under a deployment allowlist.
 
 Two layers, and the env layer is always the upper bound:
 
@@ -48,6 +55,7 @@ from .runtime_stop import to_fastt_account_id
 
 SCOPE_ENV = "ONLYFANS_FASTT_SCOPE"
 KEY = "fastt_scope"
+PLATFORM_SCOPE = "db:*"
 MODES = ("single", "selected", "all")
 MAX_FANS = 5000
 TTL_S = 15.0
@@ -56,6 +64,7 @@ SETTLE_S = 2 * TTL_S + 5.0
 log = logging.getLogger("fastt_scope")
 _clock = time.monotonic       # tests replace these two
 _reader = None                # callable(db account ids) -> {db account id: raw config json | None}
+_discoverer = None            # tests may inject registered OnlyFans account ids
 
 
 # ── strict value validation (also used by the settings route) ────────────────
@@ -101,6 +110,9 @@ def parse_allowlist(raw):
     pairs, anyfan, dbonly = set(), set(), set()
     for item in (raw or "").split(","):
         item = item.strip()
+        if item == PLATFORM_SCOPE:
+            anyfan.update(_platform_accounts())
+            continue
         if item.startswith("db:"):
             account = _account(item[3:].strip())
             if account:
@@ -134,6 +146,9 @@ class _State:
         self.seen = {}          # (account, fan | "*") -> (first seen, in the first read)
         self.engine = None
         self.engine_url = None
+        self.discovery_lock = threading.Lock()
+        self.discovered = set()
+        self.discovery_next = 0.0
 
 
 _state = _State()
@@ -155,11 +170,18 @@ def _db_id(account):
     return "of-" + account if account.isdecimal() else account
 
 
-def _default_read(db_ids):
+def platform_scope_enabled(raw=None):
+    """Platform deployment: discover registered creators, retain per-creator controls."""
+    if raw is None:
+        raw = os.environ.get(SCOPE_ENV, "")
+    return PLATFORM_SCOPE in {v.strip() for v in raw.split(",")}
+
+
+def _scope_engine():
+    from sqlalchemy import create_engine
     url = os.environ.get("DATABASE_URL", "")
     if not url.startswith("postgresql"):
-        return {i: None for i in db_ids}          # no Twin PostgreSQL here: nothing to read, not an error
-    from sqlalchemy import bindparam, create_engine, text
+        return None
     st = _state
     if st.engine is None or st.engine_url != url:
         st.engine = create_engine(url.replace("postgresql://", "postgresql+psycopg2://", 1), pool_size=1,
@@ -167,9 +189,48 @@ def _default_read(db_ids):
                                   connect_args={"options": "-c timezone=UTC -c statement_timeout=3000 -c lock_timeout=1000",
                                                 "connect_timeout": 3})
         st.engine_url = url
+    return st.engine
+
+
+def _default_discover():
+    """Only existing, live OnlyFans bindings may acquire a platform runner."""
+    from sqlalchemy import text
+    engine = _scope_engine()
+    if engine is None:
+        return set()
+    with engine.connect() as con:
+        return {row[0] for row in con.execute(text(
+            "SELECT r.account_id FROM of_runtime r JOIN of_creator_bindings b ON b.id=r.binding_id "
+            "AND b.account_id=r.account_id WHERE b.revoked_at IS NULL AND b.channel='onlyfans' "
+            "AND b.tenant_id<>'deployment'"))}
+
+
+def _platform_accounts():
+    st, now = _state, _clock()
+    if now < st.discovery_next or not st.discovery_lock.acquire(blocking=False):
+        return set(st.discovered)
+    try:
+        if now < st.discovery_next:
+            return set(st.discovered)
+        st.discovery_next = now + TTL_S
+        try:
+            found = (_discoverer or _default_discover)()
+            st.discovered = {account for raw in found if (account := _account(raw)) is not None}
+        except Exception as exc:
+            log.warning("platform scope discovery failed (%s); keeping registered accounts", type(exc).__name__)
+        return set(st.discovered)
+    finally:
+        st.discovery_lock.release()
+
+
+def _default_read(db_ids):
+    from sqlalchemy import bindparam, text
+    engine = _scope_engine()
+    if engine is None:
+        return {i: None for i in db_ids}
     query = text("SELECT account_id, ai_chatter_config_json FROM account_ai_config WHERE account_id IN :ids"
                  ).bindparams(bindparam("ids", expanding=True))
-    with st.engine.connect() as con:
+    with engine.connect() as con:
         found = {row[0]: row[1] for row in con.execute(query, {"ids": list(db_ids)})}
     return {i: found.get(i) for i in db_ids}
 

@@ -340,35 +340,43 @@ class Gateway:
             self.stopped_reason = "time-limit-reached"
         return bool(self.stopped_reason)
 
+    async def local_call(self, function, /, *args, **kwargs):
+        from .fan_tasks import configured_fan_concurrency
+        if configured_fan_concurrency() > 1:
+            from .local_io import run_blocking
+            return await run_blocking(function, *args, **kwargs)
+        return function(*args, **kwargs)
+
     async def _prepare_attempt(self, terms):
         started, retries = time.monotonic(), 0
         while True:
             if self.cancelled:
                 raise Refused("send-cancelled")
             await self.pace()
-            if self.stopped():
+            if await self.local_call(self.stopped):
                 raise Refused(self.stopped_reason)
             since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
             history = await self.reader.preflight_history(self.pilot.fan_id, since=since, source_ids=set(self.sources))
             if self.cancelled:
                 raise Refused("send-cancelled")
-            if self.parallel_admission and self.stopped():
+            if self.parallel_admission and await self.local_call(self.stopped):
                 raise Refused(self.stopped_reason)
-            receipts = self.ledger.receipts(pilot_id=self.pilot.pilot_id, input_key=self.input_key)
+            receipts = await self.local_call(self.ledger.receipts, pilot_id=self.pilot.pilot_id, input_key=self.input_key)
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
             (check_followup_history if self.followup else check_provider_history)(
                 history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
-            check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
+            await self.local_call(check_local, self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
                             approved_item=self.content.catalog_ids if self.content else None)
             if self.hold_check is not None:
                 held = await self.run_blocking(self.hold_check)
                 if held:
                     raise Refused(held)
             if self.content:
-                with readonly(self.ledger.path) as con:
-                    self.content.check_catalog(con, self.pilot.account_id)
-                    if terms:
-                        terms = self.content.check_send(con, self.pilot.account_id, terms)
+                def check_terms():
+                    with readonly(self.ledger.path) as con:
+                        self.content.check_catalog(con, self.pilot.account_id)
+                        return self.content.check_send(con, self.pilot.account_id, terms) if terms else terms
+                terms = await self.local_call(check_terms)
                 if terms:
                     for media_id in terms["media_ids"]:
                         asset = await self.run_blocking(self.client.vault_media_by_id, media_id)
@@ -379,7 +387,7 @@ class Gateway:
             if self.cancelled:
                 raise Refused("send-cancelled")
             try:
-                attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                attempt = await self.local_call(self.ledger.begin_attempt, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                     input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
                 return attempt, terms
             except Refused as exc:
@@ -402,7 +410,7 @@ class Gateway:
         settled = False
         unsend_id, self.unsend_id = self.unsend_id, None      # armed for THIS send only, never carried to another
         try:
-            if self.stopped() or not self.input_key:
+            if await self.local_call(self.stopped) or not self.input_key:
                 raise Refused(self.stopped_reason or "pilot-stopped")
             if unsend_id is not None and not terms:
                 raise Refused("unsend-needs-card")
@@ -414,9 +422,11 @@ class Gateway:
             if terms:
                 # Retain the frozen media/price intent even if the POST outcome
                 # is unknown. No new table and no automatic delivery recovery.
-                with store.transaction(self.ledger.path) as con:
-                    con.execute("UPDATE native_pilot_receipts SET evidence_json=? WHERE attempt_id=? AND state='dispatching'",
-                                (json.dumps({"content_intent": terms}, sort_keys=True), attempt.id))
+                def save_intent():
+                    with store.transaction(self.ledger.path) as con:
+                        con.execute("UPDATE native_pilot_receipts SET evidence_json=? WHERE attempt_id=? AND state='dispatching'",
+                                    (json.dumps({"content_intent": terms}, sort_keys=True), attempt.id))
+                await self.local_call(save_intent)
 
             wire = [False]
 
@@ -477,12 +487,12 @@ class Gateway:
                     any(raw.get(k) for k in ("media", "mediaFiles", "mediaCount", "previews", "lockedText", "isTip", "isUnsent")) or
                     isinstance(raw.get("price"), bool) or raw.get("price") not in (None, 0, 0.0, "0", "0.00")):
                 raise Refused("provider-response-contradicts-text-send")
-            self.ledger.record_sent(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+            await self.local_call(self.ledger.record_sent, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                 attempt_id=attempt.id, provider_message_id=validated.provider_message_id,
                 validated_response=raw, evidence={**validated.evidence, **({"content": content_evidence} if terms else {})}, now=now())
             settled = True
             emit({"event": "sent", "engine": "fastt-native", "provider_message_id": validated.provider_message_id,
-                  "pilot_sent": len([r for r in self.ledger.receipts(pilot_id=self.pilot.pilot_id) if r["state"] == "sent"]),
+                  "pilot_sent": len([r for r in await self.local_call(self.ledger.receipts, pilot_id=self.pilot.pilot_id) if r["state"] == "sent"]),
                   "limit": self.limit_label()})
             return raw
         except Exception as exc:
@@ -491,13 +501,13 @@ class Gateway:
                 certain = False
                 if isinstance(exc, NotSent):
                     try:
-                        self.ledger.record_not_sent(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                        await self.local_call(self.ledger.record_not_sent, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                                                     attempt_id=attempt.id, now=now())
                         certain, self.not_sent = True, exc
                     except Exception:
                         pass   # could not settle it as certain: keep the old, safe reading below
                 if not certain:
-                    self.ledger.record_unknown(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                    await self.local_call(self.ledger.record_unknown, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                                                attempt_id=attempt.id, now=now())
                     self.stopped_reason = "delivery-unknown"
             raise Refused(self.stopped_reason) from None

@@ -46,6 +46,7 @@ jobs:
           PGPASSWORD=disposable_test_only psql -h 127.0.0.1 -U postgres -d postgres -c "SHOW max_connections"
       - name: Fleet evidence validation
         run: python service/tests/test_native_pilot_fleet_report.py
+      # Include independent database callback workers; preserve the same offered workload.
       - name: Ten isolated creator processes at 100000 inbound per hour
         run: |
           mkdir -p test-results

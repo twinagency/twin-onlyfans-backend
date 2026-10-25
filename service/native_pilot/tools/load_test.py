@@ -167,6 +167,16 @@ class Timers:
         timed.__wrapped__ = fn
         return timed
 
+    def async_wrap(self, label, fn):
+        async def timed(*args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return await fn(*args, **kwargs)
+            finally:
+                with self.lock:
+                    self.rows.setdefault(label, []).append((time.perf_counter() - started) * 1000)
+        return timed
+
     def report(self):
         out = {}
         for label, v in sorted(self.rows.items()):
@@ -735,9 +745,18 @@ def install_patches(stack: ExitStack, holder: dict):
     stack.enter_context(patch.object(model_mod, "NativePilotModel", SyntheticModel))
     from native_pilot import budget as budget_mod
     class ProfileBudget(budget_mod.DailyBudget):
+        async def _reserve(self, **kwargs):
+            return await W().timers.async_wrap("budget.reserve_database", super()._reserve)(**kwargs)
+
+        async def _settle(self, *args, **kwargs):
+            return await W().timers.async_wrap("budget.settle_database", super()._settle)(*args, **kwargs)
+
+        async def _hold(self, *args, **kwargs):
+            return await W().timers.async_wrap("budget.hold_database", super()._hold)(*args, **kwargs)
+
         async def reserve(self, **kwargs):
             try:
-                return await super().reserve(**kwargs)
+                return await W().timers.async_wrap("budget.reserve_with_queue", super().reserve)(**kwargs)
             except Exception as exc:
                 cause = getattr(exc, "orig", None)
                 state = getattr(cause, "sqlstate", None) or getattr(cause, "pgcode", None)
@@ -746,7 +765,7 @@ def install_patches(stack: ExitStack, holder: dict):
                 raise
         async def settle(self, *args, **kwargs):
             try:
-                return await super().settle(*args, **kwargs)
+                return await W().timers.async_wrap("budget.settle_with_queue", super().settle)(*args, **kwargs)
             except Exception as exc:
                 W().emit({"event": "synthetic-budget-settlement-error",
                           "reason": type(exc).__module__ + "." + type(exc).__name__})

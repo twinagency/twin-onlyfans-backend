@@ -45,6 +45,8 @@ jobs:
           python service/tests/test_native_pilot_delivery_pool.py
           python service/tests/test_native_pilot_load_schedule.py
           python service/tests/test_native_pilot_send_io.py
+          python service/tests/test_native_pilot_local_io.py
+          python service/tests/test_native_pilot_model.py
       - name: Existing assembled service and send-boundary regression
         run: python service/tests/test_native_pilot_service.py
       - name: Existing engine boundaries

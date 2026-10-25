@@ -5,7 +5,9 @@ from contextvars import ContextVar
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import os
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from native_pilot.runner import Gateway
@@ -43,6 +45,14 @@ class SendWorkerTests(unittest.IsolatedAsyncioTestCase):
                     task.cancel()
             await asyncio.gather(*entered, return_exceptions=True)
             await asyncio.gather(*sends, return_exceptions=True)
+
+    async def test_serial_fallback_keeps_original_worker_path(self):
+        pilot = SimpleNamespace(account_id="of-100", fan_id=1, deadline="2099-01-01T00:00:00")
+        for value, expected in [("1", asyncio.to_thread), ("2", run_blocking)]:
+            with self.subTest(concurrency=value), patch.dict(os.environ, {"FASTT_MAX_CONCURRENT_FANS": value}):
+                gateway = Gateway(None, pilot, object(), asyncio.get_running_loop())
+                self.assertIs(gateway.run_blocking, expected)
+                self.assertIs(gateway.reader._run_blocking, expected)
 
     async def test_manual_pause_still_refuses_before_send(self):
         from native_pilot.service import ServiceGateway

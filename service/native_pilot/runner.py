@@ -267,8 +267,9 @@ class Gateway:
         self.scope = scope or AccountScope.parse(pilot.account_id)
         from twin_bridge.platform import OnlyFansTextAdapter
         from .send_io import run_blocking
-        self.run_blocking = run_blocking
-        self.reader = OnlyFansTextAdapter(self.scope.provider_id, client=client, blocking_call=run_blocking)
+        from .fan_tasks import configured_fan_concurrency
+        self.run_blocking = run_blocking if configured_fan_concurrency() > 1 else asyncio.to_thread
+        self.reader = OnlyFansTextAdapter(self.scope.provider_id, client=client, blocking_call=self.run_blocking)
         self.input_key = None
         self.followup = False   # True: the "sources" are our own anchor message (a follow-up), not fan input
         self.sources = {}

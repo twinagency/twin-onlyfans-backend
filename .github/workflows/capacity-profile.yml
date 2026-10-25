@@ -1,5 +1,8 @@
 name: Synthetic messaging wait diagnostics
 on:
+  push:
+    branches: ['codex/agency-scale-20261025']
+    paths: ['service/native_pilot/**', 'service/twin_bridge/platform.py', '.github/workflows/capacity-profile.yml']
   workflow_dispatch:
 permissions:
   contents: read

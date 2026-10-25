@@ -75,7 +75,15 @@ def test_refresh_restart_and_reconnect_do_not_duplicate_or_reset_imports(databas
     assert save(store,account,payload,1,'d'*64)==2
     load_worker_cohort(store,TENANT,include_read_only=True)
     assert not ensure_started(store,TENANT,account,connection_revision=2)
-    with Session(store.engine) as s:assert s.scalar(select(OfVaultSyncJob)).page_offset==240
+    with Session(store.engine) as s:
+        job=s.scalar(select(OfVaultSyncJob))
+        assert job.page_offset==240 and job.connection_revision==2
+    def continued(self,**kw):
+        assert kw['offset']==240
+        return page([media(601)])
+    monkeypatch.setattr(NativeProviderConnector,'vault_page',continued)
+    assert process_vault_jobs(store,TENANT,limit=1,stop=threading.Event())==1
+    with Session(store.engine) as s:assert s.scalar(select(OfVaultSyncJob)).page_offset==241
     assert count(store,OfOfferImportJob)==count(store,OfVaultSyncJob)==1
     store.close()
 

@@ -47,6 +47,8 @@ jobs:
         run: python service/tests/test_native_pilot_service.py
       - name: Existing engine boundaries
         run: python service/tests/test_native_pilot_engine.py
+      - name: Real engine reviewed media and concurrent fan isolation
+        run: python service/tests/test_native_pilot_content.py
   target-load:
     if: github.event_name == 'workflow_dispatch'
     needs: checks

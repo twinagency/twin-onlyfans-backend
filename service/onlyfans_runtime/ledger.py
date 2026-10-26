@@ -257,7 +257,9 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                 OfCreatorBinding.revoked_at.is_(None), OfProviderConnection.binding_id == OfRuntime.binding_id,
                 OfProviderConnection.status.in_(("verified", "paused")), OfProviderConnection.verified_at.is_not(None),
                 OfProviderConnection.expires_at > now,
-                or_(Scan.account_id.is_(None), and_(Scan.next_poll_at <= now,
+                or_(Scan.account_id.is_(None), Scan.binding_id != OfRuntime.binding_id,
+                    Scan.connection_revision != OfProviderConnection.revision,
+                    Scan.owner_id != OfProviderConnection.owner_id, and_(Scan.next_poll_at <= now,
                     or_(Scan.lease_until.is_(None), Scan.lease_until <= now))))
                 .order_by(Scan.next_poll_at.asc().nullsfirst(), OfRuntime.account_id).limit(1))
         if candidate is None:
@@ -269,7 +271,8 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
             now = utcnow()
             if not _current(runtime, connection, None, now):
                 continue
-            if scan is not None and (scan.next_poll_at > now or scan.lease_until and scan.lease_until > now):
+            if (scan is not None and _current(runtime, connection, scan, now)
+                    and (scan.next_poll_at > now or scan.lease_until and scan.lease_until > now)):
                 continue
             if scan is None:
                 scan = Scan(account_id=account, last_complete_at=None)

@@ -1,5 +1,6 @@
 """Lifetime imports use real PostgreSQL and synthetic provider pages."""
 import threading
+import pytest
 from datetime import datetime,timedelta
 from sqlalchemy import select,func
 from sqlalchemy.orm import Session
@@ -14,6 +15,81 @@ from onlyfans_runtime.ledger import process_ledger_pages,parse_page
 from onlyfans_runtime.provider_connector import NativeProviderConnector
 from onlyfans_runtime.ledger_worker import LedgerWorker
 from onlyfans_runtime.store import utcnow
+
+
+@pytest.mark.parametrize("history", [False, True])
+@pytest.mark.parametrize("active_old_lease", [False, True])
+@pytest.mark.parametrize("read_fails", [False, True])
+def test_verified_reconnect_revalidates_future_scan_without_reusing_old_coverage(
+        database, monkeypatch, history, active_old_lease, read_fails):
+    from db.onlyfans_connection_models import OfProviderConnection
+    from db.onlyfans_models import OfRuntime
+    from onlyfans_runtime.connections import _open, _seal
+    from onlyfans_runtime.native_protocol import NativeProtocolError
+    store,account,_=verified(database,monkeypatch)
+    model=OfLedgerHistory if history else OfLedgerScan
+    now=utcnow()
+    old_token="f"*36 if active_old_lease else None
+    with Session(database[1]) as s,s.begin():
+        runtime=s.get(OfRuntime,account)
+        connection=s.get(OfProviderConnection,account)
+        old_revision=connection.revision
+        s.add(model(account_id=account,binding_id=runtime.binding_id,owner_id=connection.owner_id,
+            connection_revision=old_revision,window_start=datetime(1970,1,1) if history else now-timedelta(days=90),
+            window_end=now,page_offset=70,status="running" if active_old_lease else "idle",
+            lease_token=old_token,lease_until=now+timedelta(seconds=60) if active_old_lease else None,
+            next_poll_at=now+timedelta(days=1),last_complete_at=now,last_full_at=now,updated_at=now))
+        # The credential generation is verified and sealed by the same owner;
+        # retaining yesterday's deadline must not delay its coverage recovery.
+        clear=_open(connection,TENANT)
+        connection.revision+=1
+        connection.sealed_config=_seal(clear,TENANT,account,runtime.binding_id,connection.revision)
+    calls=[]
+    def page(self,**kw):
+        calls.append(kw)
+        assert kw["offset"]==0
+        if read_fails:
+            raise NativeProtocolError("synthetic read failure")
+        return payload([])
+    monkeypatch.setattr(NativeProviderConnector,"transaction_page",page)
+    assert process_ledger_pages(store,TENANT,history=history)==(0 if read_fails else 1)
+    assert len(calls)==1
+    with Session(database[1]) as s:
+        scan=s.get(model,account)
+        assert scan.connection_revision==old_revision+1 and scan.page_offset==0
+        assert scan.lease_token is None and scan.lease_until is None
+        assert s.get(OfRuntime,account).enabled is False
+        if read_fails:
+            assert scan.status=="held" and scan.last_complete_at is None and scan.last_full_at is None
+        else:
+            assert scan.status=="idle" and scan.last_complete_at and scan.last_full_at
+    store.close()
+
+
+@pytest.mark.parametrize("history", [False, True])
+def test_current_generation_still_respects_scan_deadline_and_active_lease(database,monkeypatch,history):
+    from db.onlyfans_connection_models import OfProviderConnection
+    from db.onlyfans_models import OfRuntime
+    store,account,_=verified(database,monkeypatch)
+    model=OfLedgerHistory if history else OfLedgerScan
+    now=utcnow()
+    with Session(database[1]) as s,s.begin():
+        runtime=s.get(OfRuntime,account);connection=s.get(OfProviderConnection,account)
+        s.add(model(account_id=account,binding_id=runtime.binding_id,owner_id=connection.owner_id,
+            connection_revision=connection.revision,window_start=datetime(1970,1,1) if history else now-timedelta(days=90),
+            window_end=now,page_offset=70,status="running",lease_token="f"*36,lease_until=now+timedelta(seconds=60),
+            next_poll_at=now-timedelta(seconds=1),updated_at=now))
+    def forbidden(*args,**kwargs):
+        raise AssertionError("same-generation active scan must retain its lease")
+    monkeypatch.setattr(NativeProviderConnector,"transaction_page",forbidden)
+    assert process_ledger_pages(store,TENANT,history=history)==0
+    with Session(database[1]) as s,s.begin():
+        scan=s.get(model,account)
+        assert scan.lease_token=="f"*36
+        scan.lease_token=scan.lease_until=None
+        scan.next_poll_at=now+timedelta(days=1)
+    assert process_ledger_pages(store,TENANT,history=history)==0
+    store.close()
 
 def due(engine,account,model=OfLedgerHistory):
     with Session(engine) as s,s.begin():

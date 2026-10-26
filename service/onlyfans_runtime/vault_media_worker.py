@@ -15,6 +15,7 @@ from db.onlyfans_media_models import OfVaultMediaJob
 from .store import Refused, utcnow
 from .vault_media import ACTIVE, _dir, _run, process_upload
 from .vault_video import process_video, expire_videos
+from .message_media import process_one as process_message_media
 from vault_upload_state import intent_unresolved
 
 
@@ -135,7 +136,7 @@ class MediaWorker:
         self.threads = []
 
     def start(self):
-        for name, operation in [("upload", process_upload), ("video", process_video)]:
+        for name, operation in [("upload", process_upload), ("video", process_video), ("message", process_message_media)]:
             def work(operation=operation, name=name):
                 swept_at = 0
                 while not self.stop.is_set():
@@ -143,7 +144,7 @@ class MediaWorker:
                         if name == "upload":
                             recover(self.store, self.tenant)
                             clean_one(self.store, self.tenant)
-                        elif time.monotonic() - swept_at >= 60:
+                        elif name == "video" and time.monotonic() - swept_at >= 60:
                             expire_videos(self.store, self.tenant)
                             swept_at = time.monotonic()
                         operation(self.store, self.tenant, stop=self.stop)

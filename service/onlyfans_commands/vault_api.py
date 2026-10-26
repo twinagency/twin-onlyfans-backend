@@ -190,3 +190,23 @@ async def folder_edit(request:Request,account_id:str,folder_id:str=None):
             expected_fingerprint=value["expectedFingerprint"],command_key=value["commandKey"],actor=value["actor"])
         return response({"ok":True,"applied":True,"accountId":account_id,"commandKey":value["commandKey"],**result})
     except Exception as exc:return failure(exc)
+
+
+@router.get("/accounts/{account_id}/message-media/{fan_id}/{message_id}/{media_id}/{variant}")
+async def message_media(request: Request, account_id: str, fan_id: str, message_id: str, media_id: str, variant: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse): return context
+    try:
+        if request.query_params: raise InvalidVault("Message media reads do not accept query parameters.")
+        from onlyfans_runtime.message_media import read_or_queue, reference
+        ref = reference(account_id, fan_id, message_id, media_id, variant)
+        value = await asyncio.to_thread(read_or_queue, *context, ref)
+        if value is None:
+            return JSONResponse({"status": "preparing"}, status_code=202, headers={"Cache-Control": "private, no-store", "Retry-After": "2"})
+        data, mime = value
+        return Response(data, media_type=mime, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox"})
+    except Refused:
+        return refuse("message_media_unavailable", 404, "That message attachment is unavailable.")
+    except Exception:
+        return refuse("message_media_unavailable", 503, "That message attachment could not be read.")

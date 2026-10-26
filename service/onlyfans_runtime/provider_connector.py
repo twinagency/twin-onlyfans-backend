@@ -358,13 +358,15 @@ class NativeProviderConnector(NativeLoopbackConnector):
         return self._signed_request("GET", API_PATH + f"/posts/{post_id}", b"{}",
             max_response_bytes=self._vault_max_bytes, accepted_statuses=(200, 404), with_status=True)
 
-    def still_bytes(self, url):
+    def still_bytes(self, url, *, timeout_seconds=2):
         """One credential-free CDN image GET, through this account's fixed proxy.
 
         URLs come only from a validated vault page, never from an HTTP caller.
         No cookies/signing headers, redirects, decompression or retries. The
         permanent still store owns format detection and its existing byte cap.
         """
+        if type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds) or not .05 <= timeout_seconds <= 10:
+            raise NativeProtocolError("invalid native image timeout")
         self._ready()
         self._handle.current()
         from vault_still_store import MAX_STILL_BYTES, image_type
@@ -383,7 +385,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 response = client.request("GET", url,
                     headers={"Accept": "image/jpeg,image/png,image/webp,image/gif", "Accept-Encoding": "identity",
                              "User-Agent": self._handle.user_agent, "Referer": ORIGIN + "/"},
-                    proxy=self._handle.proxy_url, timeout=min(self._timeout, 2),
+                    proxy=self._handle.proxy_url, timeout=min(self._timeout, timeout_seconds),
                     allow_redirects=False, verify=True, accept_encoding="identity",
                     content_callback=bounded, discard_cookies=True)
                 data = b"".join(chunks)

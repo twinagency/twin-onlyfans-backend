@@ -26,6 +26,7 @@ Two rules this module exists to keep:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -39,6 +40,8 @@ from db.models import (
     Chat,
     Fan,
     Message,
+    VaultItem,
+    VaultSend,
     OfConversationState,
     OfCreatorBinding,
     OfMessageDelivery,
@@ -114,6 +117,8 @@ class MessageRow:
     temp_id: str | None
     automation_kind: str | None
     sent_by_employee_id: int | None
+    media: tuple[tuple[int, str], ...] = ()
+    message_media_ids: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -588,48 +593,45 @@ class SqlOnlyFansReadRepo:
         try:
             async with get_session() as s:
                 await lock_read_scope(s, account_id)
-                rows = (
-                    await s.execute(
-                        select(
-                            Message.message_id,
-                            Message.direction,
-                            Message.body,
-                            created_at_text(),
-                            Message.media_count,
-                            Message.price_cents,
-                            Message.is_paid,
-                            Message.purchased_at,
-                            Message.is_unsent,
-                            Message.temp_id,
-                            Message.automation_kind,
-                            Message.sent_by_employee_id,
-                        )
-                        .where(Message.account_id == account_id, Message.fan_id == fan_id)
-                        .order_by(Message.message_id.desc())
-                        .limit(limit)
-                    )
-                ).all()
+                rows = (await s.execute(select(
+                    Message.message_id, Message.direction, Message.body, created_at_text(),
+                    Message.media_count, Message.price_cents, Message.is_paid, Message.purchased_at,
+                    Message.is_unsent, Message.temp_id, Message.automation_kind,
+                    Message.sent_by_employee_id, Message.media_ids, Message.raw_json,
+                ).where(Message.account_id == account_id, Message.fan_id == fan_id)
+                    .order_by(Message.message_id.desc()).limit(limit))).all()
+                refs = {int(row[0]): _message_media_ids(row[12]) for row in rows}
+                raw_media = {int(row[0]): _message_media_kinds(row[13], refs[int(row[0])]) for row in rows}
+                missing = [int(row[0]) for row in rows if not refs[int(row[0])]
+                           and (int(row[4] or 0) > 0 or int(row[5] or 0) > 0)]
+                if missing:
+                    # Older pack sends saved file identities in this existing
+                    # send ledger only. One bounded, account-and-fan-scoped read.
+                    saved = (await s.execute(select(VaultSend.message_id, VaultSend.media_id)
+                        .where(VaultSend.account_id == account_id, VaultSend.fan_id == fan_id,
+                               VaultSend.message_id.in_(missing))
+                        .order_by(VaultSend.message_id, VaultSend.id).limit(limit * 100))).all()
+                    for message_id, media_id in saved:
+                        group = refs[int(message_id)]
+                        if len(group) < 100 and int(media_id) not in group:
+                            group.append(int(media_id))
+                ids = {mid for values in refs.values() for mid in values}
+                kinds = dict((await s.execute(select(VaultItem.media_id, VaultItem.kind)
+                    .where(VaultItem.account_id == account_id, VaultItem.media_id.in_(ids))
+                    .limit(limit * 100))).all()) if ids else {}
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
-        out = [
-            MessageRow(
-                message_id=int(row[0]),
-                direction=row[1] or "in",
-                body=row[2] or "",
-                created_at=parse_ts(row[3]),
-                media_count=int(row[4] or 0),
-                price_cents=int(row[5] or 0),
-                is_paid=row[6],
-                purchased_at=row[7],
-                is_unsent=bool(row[8]),
-                temp_id=row[9],
-                automation_kind=row[10],
-                sent_by_employee_id=row[11],
-            )
-            for row in rows
-        ]
-        # The query walks backwards from the newest message; the thread renders
-        # forwards.
+        out = [MessageRow(
+            message_id=int(row[0]), direction=row[1] or "in", body=row[2] or "",
+            created_at=parse_ts(row[3]), media_count=max(int(row[4] or 0), len(refs[int(row[0])])),
+            price_cents=int(row[5] or 0), is_paid=row[6], purchased_at=row[7],
+            is_unsent=bool(row[8]), temp_id=row[9], automation_kind=row[10],
+            sent_by_employee_id=row[11],
+            media=tuple((mid, raw_media[int(row[0])].get(mid) or ("photo" if kinds.get(mid) in {"image", "photo"}
+                         else kinds.get(mid) if kinds.get(mid) in {"video", "audio"}
+                         else "unknown")) for mid in refs[int(row[0])]),
+            message_media_ids=tuple(raw_media[int(row[0])]),
+        ) for row in rows]
         out.reverse()
         return out
 
@@ -774,3 +776,29 @@ def _label(body: str | None) -> str:
     if not text:
         return "Purchased content"
     return text[:60]
+
+
+def _message_media_ids(raw: str | None) -> list[int]:
+    """Never invent an attachment from a message id or malformed history."""
+    try:
+        values = json.loads(raw or "[]")
+    except (ValueError, TypeError):
+        return []
+    if (not isinstance(values, list) or len(values) > 100
+            or any(type(mid) is not int or not 0 < mid < 2**63 for mid in values)
+            or len(set(values)) != len(values)):
+        return []
+    return values
+
+
+def _message_media_kinds(raw, ids):
+    try:
+        frame = json.loads(raw or '{}')
+        media = frame.get('media', [])
+        if type(media) is not list or len(media) > 100:
+            return {}
+        return {m['id']: 'photo' if m.get('type') in {'photo','image','gif'} else m['type']
+                for m in media if type(m) is dict and type(m.get('id')) is int and m['id'] in ids
+                and m.get('type') in {'photo','image','gif','video','audio'}}
+    except (ValueError, TypeError, AttributeError):
+        return {}

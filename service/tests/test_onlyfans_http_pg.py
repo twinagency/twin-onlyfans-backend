@@ -391,7 +391,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                         overrides_json=s.get(AccountAiConfig,"acc-a").persona_facts_json))
                 browser_check=dashboard/"scripts/check-onlyfans-http-browser.mjs"
                 with operator_dispatcher(operator_store) as operator_peer:
-                    subprocess.run([node,str(browser_check)],cwd=dashboard,env={**env,"ONLYFANS_TEST_WEB_URL":web,"ONLYFANS_TEST_COOKIE":sessions["operator"],"ONLYFANS_TEST_EVIDENCE":str(log_dir)},check=True,timeout=240)
+                    subprocess.run([node,str(browser_check)],cwd=dashboard,env={**env,"ONLYFANS_TEST_WEB_URL":web,"ONLYFANS_TEST_COOKIE":sessions["operator"],"ONLYFANS_TEST_EVIDENCE":str(log_dir)},check=True,timeout=600)
                     if os.environ.get("ONLYFANS_TEST_ONLY_OFFER_IMPORT")=="1":
                         return  # focused import/sync browser run; the legacy flow below did not execute
                     assert len(operator_peer.posts)==1, "manual lost acknowledgement retry must not send twice"

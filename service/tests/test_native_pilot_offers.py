@@ -48,6 +48,7 @@ async def exercise(tmp):
                            duration_sec=60, price_cents=300, is_free_teaser=False, enabled=True, pricing_mode='fixed')
     async with get_session() as s:
         s.add(Account(id=ACCOUNT, nickname='Fixture'))
+        s.add(AccountAiConfig(account_id=ACCOUNT, ai_chatter_config_json=json.dumps({"pack_send_enabled":True,"pack_on_ask_enabled":True,"qualification_gate_enabled":True})))
         s.add(Employee(id=1, display_name='Automation', is_active=True))
         s.add(Fan(account_id=ACCOUNT, fan_id=FAN))
         s.add_all([item(n, m) for n, m in ITEMS.items()])
@@ -103,8 +104,7 @@ async def exercise(tmp):
         async with get_session() as s:
             await s.execute(delete(ContentOffer))
             await s.execute(delete(AccountAiConfig))
-            if config:
-                s.add(AccountAiConfig(account_id=ACCOUNT, ai_chatter_config_json=json.dumps(config)))
+            s.add(AccountAiConfig(account_id=ACCOUNT, ai_chatter_config_json=json.dumps({**{"pack_send_enabled":True,"pack_on_ask_enabled":True,"qualification_gate_enabled":True}, **(config or {})})))
 
     def cards(out):
         return [k for _, k in out if k]

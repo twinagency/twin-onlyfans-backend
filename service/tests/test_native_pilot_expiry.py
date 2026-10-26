@@ -65,7 +65,7 @@ def plan_db(path):
 async def exercise(tmp):
     from sqlalchemy import select
     from db.engine import engine, get_session
-    from db.models import Base, Account, CatalogItem, ContentOffer, Employee, Fan, Message, VaultItem
+    from db.models import Base, Account, AccountAiConfig, CatalogItem, ContentOffer, Employee, Fan, Message, VaultItem
     from native_pilot.content import VaultPlan
     from native_pilot.engine import NativeEngine, PilotBoundaryError, _ResolverClient, _ResolverRefused
     from automations import ai_chatter
@@ -78,6 +78,7 @@ async def exercise(tmp):
     now = datetime.utcnow()
     async with get_session() as s:
         s.add(Account(id=ACCOUNT, nickname="Synthetic"))
+        s.add(AccountAiConfig(account_id=ACCOUNT, ai_chatter_config_json=json.dumps({"pack_send_enabled":True,"pack_on_ask_enabled":True,"qualification_gate_enabled":True})))
         s.add(Employee(id=1, display_name="Automation", is_active=True))
         s.add_all([Fan(account_id=ACCOUNT, fan_id=FAN), Fan(account_id=ACCOUNT, fan_id=OTHER_FAN)])
         for n in (1, 2):

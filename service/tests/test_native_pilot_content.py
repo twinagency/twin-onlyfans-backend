@@ -133,7 +133,7 @@ def plan_checks(tmp, db_path):
 
 async def exercise(tmp):
     from db.engine import engine, get_session
-    from db.models import Base, Account, Fan, Employee, Message, CatalogItem, ContentOffer
+    from db.models import Base, Account, AccountAiConfig, Fan, Employee, Message, CatalogItem, ContentOffer
     from sqlalchemy import delete, select
     from native_pilot.engine import NativeEngine
     async with engine.begin() as c:
@@ -142,6 +142,7 @@ async def exercise(tmp):
     plan = plan_checks(tmp, db_path)
     async with get_session() as s:
         s.add(Account(id=ACCOUNT, nickname='Fixture'))
+        s.add(AccountAiConfig(account_id=ACCOUNT, ai_chatter_config_json=json.dumps({"pack_send_enabled":True,"pack_on_ask_enabled":True,"qualification_gate_enabled":True})))
         s.add(Employee(id=1, display_name='Automation', is_active=True))
         s.add_all([Fan(account_id=ACCOUNT, fan_id=FAN), Fan(account_id=ACCOUNT, fan_id=FAN + 1)])
         s.add(Message(account_id=ACCOUNT, fan_id=FAN, message_id=200, direction='in', body='Send the three dollar video please',

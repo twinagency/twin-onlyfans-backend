@@ -80,7 +80,7 @@ class Wire:
 
 async def exercise(tmp):
     from db.engine import engine, get_session
-    from db.models import (Base, Account, Fan, Employee, Message, CatalogItem, ContentOffer, VaultItem, VaultSend,
+    from db.models import (Base, Account, AccountAiConfig, Fan, Employee, Message, CatalogItem, ContentOffer, VaultItem, VaultSend,
                            LadderState, LadderQuote)
     from sqlalchemy import delete, select, func
     import automation_executor as ax
@@ -105,6 +105,7 @@ async def exercise(tmp):
 
     async with get_session() as s:
         s.add(Account(id=ACCOUNT, nickname='Fixture'))
+        s.add(AccountAiConfig(account_id=ACCOUNT, ai_chatter_config_json=json.dumps({**{"pack_send_enabled":True,"pack_on_ask_enabled":True,"qualification_gate_enabled":True}, "fastt_discount_resend":True,"fastt_post_buy_upsell":True})))
         s.add(Employee(id=1, display_name='Automation', is_active=True))
         s.add_all([Fan(account_id=ACCOUNT, fan_id=FAN), Fan(account_id=ACCOUNT, fan_id=FAN2)])
         s.add(CatalogItem(id=2, account_id=ACCOUNT, label='vault - asked for', kind='image_set', enabled=False,
@@ -614,6 +615,7 @@ async def exercise(tmp):
     async def switch(**on):
         """Save the account's FASTT switches (ai_chatter_config_json) the way the dashboard does."""
         from db.models import AccountAiConfig
+        on = {**{"pack_send_enabled":True,"pack_on_ask_enabled":True,"qualification_gate_enabled":True}, **on}
         async with get_session() as s:
             row = await s.get(AccountAiConfig, ACCOUNT)
             if row is None:
@@ -701,7 +703,7 @@ async def exercise(tmp):
     await reset()
     oid = await put_purchase()
     await owned_now([7001, 7002])
-    await switch(fastt_post_buy_upsell=True)
+    await switch(fastt_post_buy_upsell=True,pack_send_enabled=False,pack_on_ask_enabled=False,qualification_gate_enabled=False)
     stats, out, gw = await post_buy(oid)
     check(stats.get('post_buy') is True and stats.get('post_buy_bridged') == 1, ('G: acknowledgement sent', stats))
     check(len([o for o in out if not o[1]]) == 1 and [o for o in out if not o[1]][0][0].strip(), 'G: one plain acknowledgement bubble')
@@ -843,6 +845,7 @@ async def exercise(tmp):
     check(stats.get('reason') == 'superseded' and not out, ('I: a newer purchase supersedes the older job', stats))
 
     # J. pause / takeover right before dispatch
+    await switch(fastt_post_buy_upsell=True,fastt_discount_resend=True)
     await reset()
     oid = await put_purchase()
     async with get_session() as s:

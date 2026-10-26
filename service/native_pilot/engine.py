@@ -261,7 +261,11 @@ class NativeEngine:
         if self._job == POST_BUY_KIND:
             # FASTT's own post-buy bridge, then ONE follow-up card from the vault (ai_chatter._fire_post_buy_vault_rung),
             # for this job only: the rung switch stays off for every ordinary turn.
-            result.update(post_buy_rung_enabled=True, fastt_vault_post_buy=True)
+            allowed = native.get("fastt_post_buy_upsell") is True
+            result.update(enabled=allowed, post_buy_rung_enabled=allowed, fastt_vault_post_buy=allowed,
+                          pack_send_enabled=allowed, pack_on_ask_enabled=allowed)
+        elif self._job == DISCOUNT_KIND:
+            result["enabled"] = native.get("fastt_discount_resend") is True
         if self.context:
             # Approved creator facts ride the system prompt on every turn, not
             # only when the fan asks about her (FASTT's token-saving default).

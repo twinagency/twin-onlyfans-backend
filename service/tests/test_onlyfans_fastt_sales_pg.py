@@ -48,7 +48,7 @@ def read(client):
     return response.json()["configuration"]
 
 
-async def effective(store, monkeypatch, *, reply=False):
+async def effective(store, monkeypatch, *, reply=False, job=None):
     from automations import ai_chatter as native
     from native_pilot.content import VaultPlan
     from native_pilot.engine import NativeEngine
@@ -81,6 +81,7 @@ async def effective(store, monkeypatch, *, reply=False):
 
     try:
         with NativeEngine(ACCOUNT, FAN, chat=chat, send=send, content=VaultPlan(ACCOUNT, FAN)) as pilot:
+            pilot._job = job
             value = await native._load_config(ACCOUNT)
             assert "_native_on_request_sales_enabled" not in value
             if reply:
@@ -156,6 +157,27 @@ finally:
             "PYTHONPATH": os.pathsep.join((str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parent)))}
         result = subprocess.run([sys.executable, "-c", program], env=env, capture_output=True, text=True, timeout=60)
         assert result.returncode == 0, result.stdout + result.stderr
+    finally:
+        client.close()
+        store.close()
+
+
+@pytest.mark.parametrize("job,key,value,enabled,pack", [
+    ("post_buy", "fastt_post_buy_upsell", True, True, True),
+    ("post_buy", "fastt_post_buy_upsell", False, False, False),
+    ("post_buy", "fastt_post_buy_upsell", "true", False, False),
+    ("discount", "fastt_discount_resend", True, True, False),
+    ("discount", "fastt_discount_resend", False, False, False),
+])
+def test_followup_permission_is_independent_from_on_request_sales(database, monkeypatch, job, key, value, enabled, pack):
+    from native_pilot.followups import POST_BUY_KIND,DISCOUNT_KIND
+    store,client=setup(database,monkeypatch,json.dumps({key:value}))
+    try:
+        assert read(client)["onRequestSalesEnabled"] is False
+        kind=POST_BUY_KIND if job=="post_buy" else DISCOUNT_KIND
+        cfg=asyncio.run(effective(store,monkeypatch,job=kind))
+        assert cfg["enabled"] is enabled and cfg["pack_send_enabled"] is pack
+        assert cfg["qualification_gate_enabled"] is False
     finally:
         client.close()
         store.close()

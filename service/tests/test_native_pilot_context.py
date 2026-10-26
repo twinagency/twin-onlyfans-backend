@@ -75,6 +75,7 @@ async def exercise(tag):
         if not PG:
             s.add(Employee(id=1, display_name="Automation", is_active=True))
         s.add(AccountAiConfig(account_id=account, persona=PERSONA,
+                              ai_chatter_config_json=json.dumps({"pack_send_enabled":True,"pack_on_ask_enabled":True,"qualification_gate_enabled":True}),
                               persona_facts_json=json.dumps({"job": "Superseded job"})))
         s.add(OfCreatorBinding(id="bind-" + account, tenant_id="twin-test", creator_id="creator-" + account,
                                account_id=account))

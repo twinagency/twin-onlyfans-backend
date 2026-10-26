@@ -44,6 +44,7 @@ async def exercise(tmp):
     plan = ContentPlan(manifest, ACCOUNT, FAN)
     async with get_session() as s:
         s.add(Account(id=ACCOUNT, nickname='Fixture'))
+        s.add(AccountAiConfig(account_id=ACCOUNT, ai_chatter_config_json=json.dumps({"pack_send_enabled":True,"pack_on_ask_enabled":True,"qualification_gate_enabled":True})))
         s.add(Employee(id=1, display_name='Automation', is_active=True))
         s.add(Fan(account_id=ACCOUNT, fan_id=FAN))
         s.add(CatalogItem(id=1, account_id=ACCOUNT, label='Video 1', kind='video',

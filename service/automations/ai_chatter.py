@@ -6949,7 +6949,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                 "a mismatch, custom request, exclusion, or identity question. Never "
                 "substitute something adjacent. Do not claim a send or purchase happened. "
                 "Keep reply free of prices, media promises and claims; the delivery "
-                "authority will render the exact approved description and quote.")
+                "authority will place the exact approved description and quote after your reply.")
     sell_section = f"\n\n{sell.block.strip()}\n\n" if has_sell else "\n\n"
     if onlyfans_sales:
         shelf = [{"item_id": x["item"]["id"], "description": x["item"]["description_for_ai"],

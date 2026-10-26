@@ -124,7 +124,13 @@ async def _draft(context, messages, model, timeout):
     sale = memory.pop("sale", None)
     if sale is not None:
         from .native_sales import caption
-        text = caption(sale) + "\n\n" + text
+        # The conversational answer leads. The saved description and exact
+        # price are part of the outbound draft and must pass the same floor.
+        text = text + "\n\n" + caption(sale)
+        text, leak = await finalize_draft(text, account_id=context["account_id"],
+            fan_id=context["fan"]["fan_id"], purpose="onlyfans_native_media")
+        if leak or not text.strip():
+            raise Refused("unbacked native media caption")
         if len(text.encode()) > 20000:
             raise Refused("native media caption exceeds its byte budget")
     return text, memory, sale

@@ -36,6 +36,8 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - run: pip install -r requirements-onlyfans-test.txt
+      - name: Verify final paid captions and exact fixed prices
+        run: python -m pytest -q service/tests/test_onlyfans_native_caption_pg.py service/tests/test_onlyfans_fixed_price_pg.py service/tests/test_onlyfans_worker_media_pg.py
       - name: Verify expired owner recovery against both retained ledgers
         run: python -m pytest -q service/tests/test_native_pilot_recovery.py service/tests/test_onlyfans_fastt_recovery_pg.py
       - name: Verify the FASTT manual queue and paid payload boundary

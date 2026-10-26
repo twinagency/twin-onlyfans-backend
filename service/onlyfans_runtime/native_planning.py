@@ -128,7 +128,7 @@ async def _draft(context, messages, model, timeout):
         # price are part of the outbound draft and must pass the same floor.
         text = text + "\n\n" + caption(sale)
         text, leak = await finalize_draft(text, account_id=context["account_id"],
-            fan_id=context["fan"]["fan_id"], purpose="onlyfans_native_media")
+            fan_id=context["fan"]["fan_id"], purpose="onlyfans_native_media", block_links=True)
         if leak or not text.strip():
             raise Refused("unbacked native media caption")
         if len(text.encode()) > 20000:

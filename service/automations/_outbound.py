@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 from dataclasses import dataclass
 
 from db.models import Fan
@@ -85,6 +86,7 @@ async def finalize_draft(
     purpose: str,
     consistency: ConsistencyCtx | None = None,
     strip_emoji: bool = False,
+    block_links: bool = False,
     v: "_voice.VoiceBlocks" = _voice.HER,
 ) -> tuple[str, list[str]]:
     """Run the whole-draft guards and return `(text, leak_reasons)`.
@@ -121,7 +123,7 @@ async def finalize_draft(
     different outcome.
     """
     text, leak = _guard(text, account_id=account_id, fan_id=fan_id, purpose=purpose,
-                        v=v)
+                        v=v, block_links=block_links)
     if consistency is not None:
         fixed = await verify_self_consistency(
             account_id, fan_id, consistency.fan, text, consistency.persona,
@@ -129,7 +131,7 @@ async def finalize_draft(
         if fixed != text:
             fixed, refix = _guard(fixed, account_id=account_id, fan_id=fan_id,
                                   purpose=f"{purpose}/consistency-fix",
-                                  v=v)
+                                  v=v, block_links=block_links)
             # Merged, not replaced: a caller acting on `leak` (ai_chatter drops the
             # paid attach) must hear about a leak from EITHER pass. Order-preserving
             # de-dupe keeps the reason list readable when both fire on the same tell.
@@ -141,7 +143,7 @@ async def finalize_draft(
 
 
 def _guard(text: str, *, account_id: str, fan_id: int, purpose: str,
-           v: "_voice.VoiceBlocks" = _voice.HER) -> tuple[str, list[str]]:
+           block_links: bool = False, v: "_voice.VoiceBlocks" = _voice.HER) -> tuple[str, list[str]]:
     """The whole floor under untrusted model output — narration strip, then
     `guard_offplatform`, then the log line — so the two passes above cannot drift
     in what they enforce OR in how they report. On a leak the guard REPLACES the
@@ -152,6 +154,8 @@ def _guard(text: str, *, account_id: str, fan_id: int, purpose: str,
     output, and a rewrite is exactly as likely to arrive wearing `*giggles*` as
     the original draft was. One line in the shared floor covers both drafts;
     stripping at the top would have covered only the first."""
+    if block_links and re.search(r"(?i)\b(?:https?://|www\.)", text):
+        return "", ["url"]
     text = strip_narration(text)
     text, leak = guard_offplatform(text, random.Random(f"{fan_id}:{text}"), v)
     if leak:

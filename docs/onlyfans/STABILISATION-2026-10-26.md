@@ -49,3 +49,19 @@ Tested backend SHA: 3e231c1a554be09be47bd23643b641a63796aa04 (implementation 142
 3. Continue required clean PostgreSQL/paired builds and the financial/sending/AI corrections in work 1–4. Preserve the known post-buy failure until the existing responsible boundary is corrected and tested. No midpoint review or production-ready claim is justified yet.
 
 No deployment, production schema change, financial backfill, live fan message, campaign, account reconnect or permission change was performed.
+
+## Verified candidate progress
+
+E-002 was repaired in candidate commit 4a26f6703272447f973c7dfba7451b689292b556. The writer and reader now share the existing provider-free financial status contract. Failed payments remain non-revenue and do not blank supported earnings; unknown statuses still refuse complete totals. No financial records, purchase links, migration or production configuration were changed.
+
+The existing PostgreSQL 16 earnings workflow passed 146 tests on 730f7df026da48cb854c9c25153f61e2ad08ee40, including failed-only, mixed failed/cleared/pending/reversed and unsupported-status cases. Evidence: https://github.com/twinagency/twin-onlyfans-backend/actions/runs/40255159424 . Earlier suite counts overlap and are not added to this count. An additional 63 local provider/breakdown checks passed.
+
+The existing earnings workflow gained workflow_dispatch so this exact candidate could run the original full test command without opening a PR or weakening assertions. Schema remains 0092_ledger_history. Rollback of E-002 is code-only and requires no financial evidence deletion or data restore. The repair is not deployed or verified live.
+
+AWS authentication was restored and read-only SSM commands succeeded on the CRM Dashboard host. Selected running source/image fingerprints were refreshed; sender/dashboard image identities have advanced since the audit. The API earnings source still matches the audited implementation. Subsequent AWS commands were blocked again by a full laptop and an unreadable login cache. The prepared lock/content inspection did not execute, so no new root cause was established.
+
+AI-02 remains open: investigation found a three-flag displayed sales permission and a runtime adapter that suppresses the legacy ladder. A two-flag exploratory patch was discarded before commit because it would leave default/display inconsistencies. The known direct post-buy replay defect also remains open.
+
+Jesse explicitly authorized the private pinned dashboard archive transfer through his private S3 bucket to GitHub CI, a draft PR, and this technical progress report. The paired source gate is preserved. The transfer is still pending successful AWS access; previous rejected attempts did not upload the archive.
+
+Sections 1–4 and the 50% checkpoint remain incomplete. This branch is a partially tested candidate; nothing has been deployed.

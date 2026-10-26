@@ -62,7 +62,7 @@ def state(store):
         return row.takeover_state,row.unresolved_attempt_id,row.revision
 
 
-async def report(store,ledger,pilot,monkeypatch):
+async def report(store,ledger,pilot,monkeypatch,*,project_attempt=None):
     from importlib import import_module
     db_engine=import_module("db.engine")
     engine=create_async_engine(store.engine.url.set(drivername="postgresql+asyncpg"))
@@ -74,6 +74,11 @@ async def report(store,ledger,pilot,monkeypatch):
             await s.commit()
     monkeypatch.setattr(db_engine,"get_session",session)
     try:
+        if project_attempt is not None:
+            import attribution
+            from native_pilot.recovery import project
+            monkeypatch.setattr(attribution,"get_session",session)
+            await project(ledger,pilot_id=pilot.pilot_id,attempt_id=project_attempt,account_id=ACCOUNT,fan_id=FAN)
         return await reporting.report_outcomes(account_id=ACCOUNT,fan_id=FAN,receipts=ledger.receipts(pilot_id=pilot.pilot_id))
     finally:
         await engine.dispose()

@@ -52,7 +52,10 @@ def test_native_recovery_settles_takeover_without_replay_or_budget_reset(databas
         assert recovery.reconcile(ledger,**kwargs)
         kwargs["history"][0]["isOpened"]=True
         assert not recovery.reconcile(ledger,**kwargs)
-        asyncio.run(report(store,ledger,pilot,monkeypatch))
+        from db.models import Employee
+        with Session(store.engine) as s,s.begin():
+            s.add(Employee(id=1,display_name="Automation",is_active=False))
+        asyncio.run(report(store,ledger,pilot,monkeypatch,project_attempt=attempt.id))
         assert state(store)==("effective",None,1)
         with Session(store.engine) as s:
             assert s.get(OfDeliveryPolicy,ACCOUNT).used_units==1

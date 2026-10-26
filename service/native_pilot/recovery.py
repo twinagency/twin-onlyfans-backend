@@ -224,9 +224,50 @@ async def command(ledger,args):
         changed=await asyncio.to_thread(reconcile,ledger,pilot_id=args.pilot_id,attempt_id=args.attempt_id,
             account_id=scope.db_id,fan_id=args.fan,provider_message_id=args.message_id,history=history,complete=complete,
             command_key=args.command_key,actor=args.actor,reason=args.reason,now=datetime.utcnow())
+        await project(ledger,pilot_id=args.pilot_id,attempt_id=args.attempt_id,account_id=scope.db_id,fan_id=args.fan)
         await report_outcomes(account_id=scope.db_id,fan_id=args.fan,receipts=ledger.receipts(pilot_id=args.pilot_id))
         return {"recorded":True,"changed":changed,"outcome":"sent","attemptId":args.attempt_id,"resumed":False}
     finally:
         close=getattr(client,"close",None)
         if close:await asyncio.to_thread(close)
         if canonical_store is not None:canonical_store.close()
+
+
+async def project(ledger, *, pilot_id,attempt_id,account_id,fan_id):
+    """Repair the accepted transcript through FASTT's existing attribution writer."""
+    from sqlalchemy import select
+    from db.engine import get_session
+    from db.models import Message,Employee
+    from db.onlyfans_models import OfRuntime
+    from attribution import write_outbound_attribution
+    with store.readonly(ledger.path) as con:
+        r=con.execute("SELECT * FROM native_pilot_receipts WHERE pilot_id=? AND attempt_id=?",(pilot_id,attempt_id)).fetchone()
+        evidence=json.loads(r["evidence_json"] or "{}") if r else {}
+        if not r or r["state"]!="sent" or not evidence.get("reconciliation"):
+            raise Refused("reconciled-receipt-required")
+        intent=snapshot(ledger,pilot_id=pilot_id,attempt_id=attempt_id,account_id=account_id,fan_id=fan_id)
+        raw=json.loads(r["response_json"])
+    event=_matches(raw,intent)
+    terms=intent["content"]
+    async with get_session() as s:
+        runtime=await s.get(OfRuntime,account_id)
+        if runtime is None or runtime.binding_id!=intent["binding_id"]:
+            raise Refused("recovery-binding-changed")
+        messages=(await s.scalars(select(Message).where(Message.account_id==account_id,Message.message_id==event.message_id))).all()
+        if any(m.fan_id!=fan_id or m.direction!="out" or m.body!=event.body or m.price_cents!=event.price_cents
+               or tuple(json.loads(m.media_ids))!=event.media_ids for m in messages):
+            raise Refused("recovery-canonical-conflict")
+        employees=(await s.scalars(select(Employee.id).where(Employee.display_name=="Automation",Employee.is_active.is_(False)))).all()
+        if len(employees)!=1:
+            raise Refused("attribution-sentinels-missing")
+        employee=employees[0]
+    await write_outbound_attribution(account_id=account_id,fan_id=fan_id,message_id=event.message_id,
+        sent_by_employee_id=employee,body=event.body,price_cents=event.price_cents,
+        created_at=datetime.fromisoformat(_dt(event.created_at)),automation_kind="ai_chatter",
+        media_ids=list(event.media_ids),emit_live=False)
+    async with get_session() as s:
+        row=await s.get(Message,(account_id,fan_id,event.message_id))
+        if (row is None or row.direction!="out" or row.body!=event.body or row.price_cents!=event.price_cents
+            or tuple(json.loads(row.media_ids))!=event.media_ids or row.sent_by_employee_id!=employee):
+            raise Refused("recovery-attribution-unavailable")
+    return True

@@ -135,7 +135,7 @@ def history_row(account,*,complete=True,revision=1):
         window_end=now,page_offset=1,status="idle" if complete else "running",
         next_poll_at=now+timedelta(hours=24),last_complete_at=now if complete else None,
         last_full_at=now if complete else None,updated_at=now)
-        row.coverage_json=_coverage_receipt(row) if complete else None
+    row.coverage_json=_coverage_receipt(row) if complete else None
     return row
 
 def test_lifetime_total_requires_terminal_history_and_current_binding(database):
@@ -194,6 +194,8 @@ def test_additive_upgrade_from_91_retains_financial_evidence(database):
     with database[1].begin() as conn:
         # Reconstruct the previous additive schema in this disposable DB.
         conn.exec_driver_sql("DROP TABLE of_ledger_history")
+        conn.exec_driver_sql("ALTER TABLE of_ledger_scan DROP COLUMN continuation_json CASCADE, DROP COLUMN coverage_json CASCADE")
+        conn.exec_driver_sql("ALTER TABLE content_offers DROP COLUMN post_buy_started_at")
         conn.exec_driver_sql("UPDATE alembic_version SET version_num='0091_launch_controls'")
         check_schema(conn,expected="0091_launch_controls")
         upgrade(conn)

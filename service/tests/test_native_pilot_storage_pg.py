@@ -5,13 +5,12 @@ ONLYFANS_TEST_PG_URL must be an admin URL of a disposable server on which this
 script may create and drop its own uniquely named database (prefix from
 ONLYFANS_TEST_DB_PREFIX, default ``of_test_``). Run as a plain script.
 
-It proves, against the real schema produced by ``bootstrap`` (application revision 0091,
-which this change deliberately does NOT advance):
+It proves, against the real schema produced by ``bootstrap`` (application revision 0094):
 
-1. the schema check passes AT 0091 both before and after the nine bridge/pilot tables are
+1. the schema check passes AT 0094 both before and after the bridge/pilot tables are
    created idempotently in the separate ``fastt_runtime`` schema (none in ``public``), with the
    boolean default fixed for PostgreSQL; the ORIGINAL release (8a427a3) ``check_schema`` still
-   passes on that database (rollback compatibility, run in a subprocess from a clean copy);
+   refuses that advanced database (safe rollback refusal, from a clean copy);
 2. the ENTIRE existing ledger suite (admission before each provider POST, unknown
    outcome stops and is never resent, send allowance, model-call reservation,
    receipts surviving stop/deadline, races) passes unchanged on PostgreSQL;
@@ -168,7 +167,7 @@ class PgFixture(ledger_test.Fixture):
 RELEASE_SERVICE = os.environ.get(
     "ONLYFANS_RELEASE_SERVICE_DIR",
     "/tmp/claude-1000/-home-ronan-twin/1f28717a-be90-4d45-ac41-136eed78da59/scratchpad/rel/service")
-LIVE_REVISION = "0092_ledger_history"
+LIVE_REVISION = "0094_purchase_reply"
 PREVIOUS_RELEASE_REVISION = "0091_launch_controls"
 
 
@@ -192,7 +191,7 @@ def original_release_check():
 
 def schema_checks():
     from db.schema import HEAD, _metadata, check_schema
-    check(HEAD == LIVE_REVISION, "application schema head includes the financial history migration")
+    check(HEAD == LIVE_REVISION, "application schema head includes financial continuation and purchase-reply migrations")
     check(not set(TABLES) & set(_metadata().tables), "app metadata/check_schema must not include the pilot tables")
     with create_engine(SYNC_URL).connect() as conn:
         check_schema(conn)  # fresh application database, pilot tables not created yet
@@ -216,7 +215,7 @@ def schema_checks():
         check(conn.scalar(text("SELECT count(*) FROM information_schema.tables WHERE table_name IN :t "
                                "AND table_schema<>'fastt_runtime'").bindparams(bindparam("t", expanding=True)),
                           {"t": list(TABLES)}) == 0)
-    original_release_check()  # rollback compatibility: the previous image's own schema check still passes
+    original_release_check()  # the previous image must still refuse the advanced schema
     # The default is PostgreSQL-valid: a conversation inserted without `reserved` is reserved.
     reset()
     rows("INSERT INTO twin_bridge_conversations(account_id,fan_id,creator_slug,conversation_id,scope_fingerprint,state,"

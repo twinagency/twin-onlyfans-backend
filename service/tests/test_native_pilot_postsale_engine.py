@@ -80,7 +80,7 @@ class Wire:
 
 async def exercise(tmp):
     from db.engine import engine, get_session
-    from db.models import (Base, Account, AccountAiConfig, Fan, Employee, Message, CatalogItem, ContentOffer, VaultItem, VaultSend,
+    from db.models import (Base, Account, AccountAiConfig, AutomationRun, Fan, Employee, Message, CatalogItem, ContentOffer, VaultItem, VaultSend,
                            LadderState, LadderQuote)
     from sqlalchemy import delete, select, func
     import automation_executor as ax
@@ -168,7 +168,7 @@ async def exercise(tmp):
     # ── fixtures ──────────────────────────────────────────────────────────────────────────────────────────────
     async def reset():
         async with get_session() as s:
-            for model in (ContentOffer, Message, VaultSend, LadderState, LadderQuote):
+            for model in (AutomationRun, ContentOffer, Message, VaultSend, LadderState, LadderQuote):
                 await s.execute(delete(model))
             for f in (await s.execute(select(Fan))).scalars():
                 f.automation_paused_until = None
@@ -815,6 +815,24 @@ async def exercise(tmp):
         'G: ai_chatter.py:4844 _run_post_buy is not idempotent per offer: once the fan cooldown lapses, a re-run of the same post_buy offer '
         'sends the acknowledgement%s again (no per-offer "already acknowledged" marker; only the runner queue prevents it): %r'
         % (' and a second card' if [o for o in out3 if o[1]] else '', stats3))
+
+    # An uncertain bridge is an attempted send, never permission to replay.
+    await reset()
+    oid = await put_purchase()
+    async def uncertain_bridge(*args, **kwargs):
+        raise TimeoutError("synthetic uncertain provider response")
+    try:
+        with patch.object(ai_chatter, "_send_free_bubble", uncertain_bridge):
+            await post_buy(oid)
+        check(False, "uncertain bridge must surface")
+    except TimeoutError:
+        check(True, "uncertain bridge surfaced")
+    async with get_session() as s:
+        for f in (await s.execute(select(Fan))).scalars():
+            f.automation_paused_until = None
+    stats, out, gw = await post_buy(oid)
+    check(stats.get("reason") == "post_buy_already_started" and not out,
+          "uncertain attempt is not replayed after cooldown or restart")
 
     # I. the fan replies after the purchase
     await reset()

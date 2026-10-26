@@ -146,12 +146,9 @@ def _status(previous, incoming):
     return "applied" if previous in PAID and incoming in STATUSES else "conflict"
 
 
-def apply_observation(s, account, observation, *, now, backfill=False):
-    """Caller holds the runtime lock; all canonical effects are one transaction."""
+def _project_receipt(s, account, observation, *, now, backfill=False):
+    """Project validated evidence under the caller's runtime lock and audit owner."""
     encoded = canonical(observation)
-    fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
-    if s.get(OfLedgerEvidence, (account, fingerprint)) is not None:
-        return "duplicate"
     provider = observation["provider_transaction_id"]
     tx = s.scalar(select(Transaction).where(Transaction.account_id == account,
         Transaction.provider_transaction_id == provider).with_for_update())
@@ -240,8 +237,19 @@ def apply_observation(s, account, observation, *, now, backfill=False):
             s.flush()
             from .launch_engagement.events import cancel_for_fan
             cancel_for_fan(s, account, fan_id, "purchase", now=now)
+    s.flush()
+    return tx, outcome
+
+
+def apply_observation(s, account, observation, *, now, backfill=False):
+    """Caller holds the runtime lock; all canonical effects are one transaction."""
+    encoded = canonical(observation)
+    fingerprint = hashlib.sha256(encoded.encode()).hexdigest()
+    if s.get(OfLedgerEvidence, (account, fingerprint)) is not None:
+        return "duplicate"
+    tx, outcome = _project_receipt(s, account, observation, now=now, backfill=backfill)
     s.add(OfLedgerEvidence(account_id=account, evidence_hash=fingerprint,
-        provider_transaction_id=provider, fan_id=fan_id, transaction_id=tx.id if tx else None,
+        provider_transaction_id=observation["provider_transaction_id"], fan_id=observation["fan_id"], transaction_id=tx.id if tx else None,
         outcome=outcome, observation_json=encoded, recorded_at=now))
     s.flush()
     return outcome

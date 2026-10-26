@@ -276,6 +276,19 @@ def test_verified_resolution_after_missing_history_links_purchase_and_replay_is_
                 assert tx.amount_cents == 1001 and tx.message_id is None
                 assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1001
             assert owned_media_in_session(s, account, 101) == set()
+        missing = ledger_status(store, TENANT, account)
+        missing_args = dict(evidence_hash=missing["evidence"][0]["evidenceHash"], command_key="0" * 64,
+            actor=ACTOR, reason="Recover verified financial evidence while history is missing",
+            expected_fingerprint=missing["fingerprint"])
+        unresolved = resolve_ledger(store, TENANT, account, **missing_args)
+        assert unresolved["resolved"] is False and unresolved["blocker"] == "canonical_paid_message_conflict"
+        assert resolve_ledger(store, TENANT, account, **missing_args) == unresolved
+        with Session(store.engine) as s:
+            tx = s.scalar(select(Transaction))
+            assert tx.amount_cents == 1001 and tx.message_id is None
+            assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1001
+            assert owned_media_in_session(s, account, 101) == set()
+            assert s.scalar(select(func.count()).select_from(OfLedgerEvidence)) == 1
         with Session(store.engine) as s, s.begin():
             if s.get(Fan, (account, 101)) is None:
                 s.add(Fan(account_id=account, fan_id=101))
@@ -304,7 +317,7 @@ def test_verified_resolution_after_missing_history_links_purchase_and_replay_is_
             assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1001
             assert s.scalar(select(OfLedgerEvidence.outcome)) == "conflict", "original evidence stays immutable"
             assert s.scalar(select(func.count()).select_from(OfLedgerResolution)) == 1
-            assert s.scalar(select(func.count()).select_from(OfLaunchCommand)) == 1
+            assert s.scalar(select(func.count()).select_from(OfLaunchCommand)) == 2
             assert s.scalar(select(func.count()).select_from(Transaction)) == 1
     finally:
         store.close()

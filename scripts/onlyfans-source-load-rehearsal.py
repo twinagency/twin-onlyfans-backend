@@ -28,6 +28,10 @@ try:
   c.exec_driver_sql('DELETE FROM of_content_sync_source WHERE source_id=1000001')
   c.exec_driver_sql('UPDATE messages SET price_cents=200 WHERE message_id=1000002')
   before=c.execute(text('SELECT enabled,binding_id FROM of_runtime')).all()
+  # Release preflight: refresh statistics after a bulk restore, before DDL/backfill.
+  for table in ['messages','of_content_sync_source','of_runtime','of_content_sync_account','of_offer_import_job']:
+   c.exec_driver_sql('ANALYZE '+table)
+  report['releasePreflight']='ANALYZE canonical messages and source/join tables before migration'
   start=time.perf_counter();upgrade(c);check_schema(c);report['upgradeSeconds']=round(time.perf_counter()-start,3)
   assert c.execute(text('SELECT enabled,binding_id FROM of_runtime')).all()==before
   pending=c.execute(text('SELECT source_id FROM of_content_sync_source WHERE fold_pending IS TRUE ORDER BY source_id')).scalars().all()

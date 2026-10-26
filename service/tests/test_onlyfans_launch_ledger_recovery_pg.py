@@ -178,11 +178,11 @@ def test_interrupted_page_rolls_back_all_effects_and_replays_same_window(databas
     original = ledger.apply_observation
     applied = []
 
-    def interrupt(s, account_id, observation, *, now):
+    def interrupt(s, account_id, observation, *, now, backfill=False):
         applied.append(observation["provider_transaction_id"])
         if len(applied) == 2:
             raise RuntimeError("synthetic interrupted page")
-        return original(s, account_id, observation, now=now)
+        return original(s, account_id, observation, now=now, backfill=backfill)
 
     monkeypatch.setattr(NativeProviderConnector, "transaction_page", read)
     monkeypatch.setattr(ledger, "apply_observation", interrupt)
@@ -301,12 +301,18 @@ def test_same_provider_and_fan_ids_cannot_transfer_ownership_between_creators(da
     store, observation = purchased_media(database, monkeypatch)
     other = seed(*database, account="synthetic-other-creator", tenant=TENANT, fan=FAN)
     # Same provider/fan/message ID is insufficient when the message exists
-    # only under the first creator. No transaction or ownership is fabricated.
+    # only under the first creator. Financial evidence stays scoped to each
+    # account; the missing local message cannot transfer ownership between them.
     assert record(other, "synthetic-other-creator", observation) == "conflict"
     unlinked = {**observation, "message_id": None}
-    assert record(other, "synthetic-other-creator", unlinked) == "applied"
+    assert record(other, "synthetic-other-creator", unlinked) == "conflict"
+    with Session(database[1]) as s:
+        tx = s.scalar(select(Transaction).where(Transaction.account_id == "synthetic-other-creator"))
+        assert tx.amount_cents == 1000 and tx.message_id is None
+        assert s.get(Fan, ("synthetic-other-creator", FAN)).lifetime_spend_cents == 1000
+        assert owned_media_in_session(s, "synthetic-other-creator", FAN) == set()
     assert record(other, "synthetic-other-creator", unlinked) == "duplicate"
-    assert record(other, "synthetic-other-creator", {**unlinked, "status": "refunded"}) == "applied"
+    assert record(other, "synthetic-other-creator", {**unlinked, "status": "refunded"}) == "conflict"
     with Session(database[1]) as s:
         assert s.get(Fan, (ACCOUNT, FAN)).lifetime_spend_cents == 1000
         assert s.get(Fan, ("synthetic-other-creator", FAN)).lifetime_spend_cents == 0

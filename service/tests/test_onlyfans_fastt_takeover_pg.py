@@ -59,7 +59,8 @@ def state(store):
 
 
 async def report(store,ledger,pilot,monkeypatch):
-    import db.engine as db_engine
+    from importlib import import_module
+    db_engine=import_module("db.engine")
     engine=create_async_engine(store.engine.url.set(drivername="postgresql+asyncpg"))
     factory=async_sessionmaker(engine,expire_on_commit=False)
     @asynccontextmanager

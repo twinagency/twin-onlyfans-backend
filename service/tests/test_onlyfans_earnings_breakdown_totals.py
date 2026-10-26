@@ -8,6 +8,8 @@ def test_breakdowns_do_not_replace_cleared_totals():
     plain=now.replace(tzinfo=None)
     scan=SimpleNamespace(account_id="account",binding_id="binding",owner_id=1,connection_revision=1,
         last_complete_at=plain,last_full_at=plain,status="idle")
+    from onlyfans_runtime.ledger import _coverage_receipt
+    scan.coverage_json=_coverage_receipt(scan)
     class Session:
         def __init__(self):self.scalar_calls=0;self.list_calls=0;self.rows_calls=0
         async def connection(self,**kw):return None

@@ -18,6 +18,18 @@ def test_paid_manual_runner_queue_preserves_money_and_unknown_hold(database,monk
     try:
         authority.configure(TENANT,ACCOUNT,expected_revision=2,enabled=True,media_enabled=True,
             limit_units=20,throttle_seconds=1,actor="synthetic-operator",reason="Offline manual native boundary",transport_kind="native")
+        from datetime import timedelta
+        from db.onlyfans_ledger_models import OfLedgerScan
+        from db.onlyfans_models import OfRuntime
+        from onlyfans_runtime.ledger import _coverage_receipt
+        from onlyfans_runtime.store import utcnow
+        with Session(store.engine) as s,s.begin():
+            now=utcnow()
+            scan=OfLedgerScan(account_id=ACCOUNT,binding_id=s.get(OfRuntime,ACCOUNT).binding_id,
+                owner_id=7001,connection_revision=1,window_start=now-timedelta(days=90),window_end=now,
+                page_offset=0,status="idle",last_complete_at=now,last_full_at=now,next_poll_at=now)
+            scan.coverage_json=_coverage_receipt(scan)
+            s.add(scan)
         monkeypatch.setattr(fastt_scope,"owned_scope",lambda:({(ACCOUNT,FAN)},set()))
         monkeypatch.setattr(fastt_scope,"serve_scope",lambda:({(ACCOUNT,FAN)},set()))
         change=(lambda row:row.update(price=0)) if failure=="price" else (

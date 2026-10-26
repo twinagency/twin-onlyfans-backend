@@ -1159,3 +1159,43 @@ def test_process_due_requires_the_worker_role_and_valid_bounds(synced, monkeypat
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "api")
     with pytest.raises(Refused):
         process_due(store, TENANT)
+
+
+@pytest.mark.parametrize("reconnect", [False, True])
+def test_discovery_scan_releases_runtime_lock_and_rechecks_connection(synced, reconnect):
+    from sqlalchemy import event as sql_event
+    store, account = synced
+    enable(store, account)
+    claim = claim_due(store, TENANT, now=clock())
+    assert claim is not None
+    entered, release = threading.Event(), threading.Event()
+    observed = []
+    def hold_discovery(conn, cursor, statement, parameters, context, many):
+        if (not entered.is_set() and "LEFT OUTER JOIN of_content_sync_source" in statement
+                and " IN (" not in statement and statement.lstrip().startswith("SELECT")):
+            entered.set()
+            assert release.wait(10), "test never released discovery"
+    sql_event.listen(store.engine, "before_cursor_execute", hold_discovery)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(content_sync._fold, store, TENANT, claim)
+            assert entered.wait(10), "did not reach full discovery scan"
+            try:
+                with Session(store.engine) as session, session.begin():
+                    session.execute(text("SET LOCAL lock_timeout='250ms'"))
+                    runtime = session.get(OfRuntime, account, with_for_update=True)
+                    observed.append(runtime.binding_id)
+                    if reconnect:
+                        session.get(OfProviderConnection, account).revision += 1
+            finally:
+                release.set()
+            if reconnect:
+                with pytest.raises(content_sync.StaleClaim):
+                    future.result(timeout=15)
+                assert candidate_total(store, account) == 0, "stale discovery persisted a candidate"
+            else:
+                future.result(timeout=15)
+            assert observed == [claim.binding_id]
+    finally:
+        release.set()
+        sql_event.remove(store.engine, "before_cursor_execute", hold_discovery)

@@ -212,11 +212,12 @@ async def get_conversation(
     request: Request,
     account_id: str,
     conversation_id: str,
+    cursor: str | None = Query(default=None),
 ) -> JSONResponse:
     try:
         principal = await _authenticate(request)
         body = await service.get_conversation(
-            _repo(), principal, account_id=account_id, conversation_id=conversation_id
+            _repo(), principal, account_id=account_id, conversation_id=conversation_id, cursor=cursor
         )
     except OnlyFansReadError as exc:
         return _refusal(exc)

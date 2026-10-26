@@ -356,3 +356,50 @@ def test_api_requires_distinct_purpose_credential_and_rejects_duplicate_json(dat
             assert client.get(url, headers=headers).status_code == 503
             monkeypatch.delenv(purpose)
     store.close()
+
+
+def test_campaign_fairness_advances_past_32_stale_recipients(database, monkeypatch):
+    store, authority = configured(database, mode="automated")
+    for fan in range(FAN+1,FAN+40):
+        add_fan(database[1],fan)
+    service=CampaignService(store)
+    result=create(service)
+    original=TextAuthority.prepare
+    inspected=[]
+    def guarded(self, tenant, account, fan, **kwargs):
+        inspected.append(fan)
+        if fan<FAN+32:
+            raise Refused("history not current")
+        return original(self,tenant,account,fan,**kwargs)
+    monkeypatch.setattr(TextAuthority,"prepare",guarded)
+    assert service.queue_due(TENANT,ACCOUNT) is None
+    identity=service.queue_due(TENANT,ACCOUNT)
+    assert identity is not None, "first 32 deferred fans starved a later eligible recipient"
+    with Session(database[1]) as session:
+        intent=session.get(OfTextIntent,(ACCOUNT,identity))
+        assert intent.fan_id==FAN+32 and intent.origin=="campaign"
+        assert session.scalar(select(func.count()).select_from(OfTextIntent))==1
+    assert len(inspected)<=64
+    store.close()
+
+def test_stale_campaign_does_not_hold_independent_eligible_campaign(database,monkeypatch):
+    store, authority=configured(database,mode="automated")
+    service=CampaignService(store)
+    stale=create(service,command="stale")
+    healthy=create(service,command="healthy")
+    original=TextAuthority.prepare
+    calls=[]
+    def guarded(self,tenant,account,fan,**kwargs):
+        calls.append(kwargs["campaign_id"])
+        if kwargs["campaign_id"]==stale["campaignId"]:
+            raise Refused("history not current")
+        return original(self,tenant,account,fan,**kwargs)
+    monkeypatch.setattr(TextAuthority,"prepare",guarded)
+    identity=service.queue_due(TENANT,ACCOUNT)
+    if identity is None:
+        identity=service.queue_due(TENANT,ACCOUNT)
+    assert identity is not None
+    with Session(database[1]) as session:
+        recipient=session.get(OfCampaignRecipient,(ACCOUNT,healthy["campaignId"],FAN))
+        assert recipient.intent_id==identity
+    store.close()

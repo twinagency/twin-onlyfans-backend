@@ -16,6 +16,7 @@ import re
 import signal
 import sys
 import threading
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -100,6 +101,35 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
     observe = _emit if observe is None else observe
     cursor = None
     maintenance_cursor = 0
+    maintenance_backoff = {}
+
+    def maintain(job, phase):
+        nonlocal failed
+        count, due = maintenance_backoff.get(phase, (0, 0))
+        if time.monotonic() < due:
+            return
+        try:
+            job(store, tenant, limit=1, stop=stop)
+        except Exception as exc:
+            from onlyfans_runtime.store import Refused
+            from sqlalchemy.exc import DBAPIError
+            # A statement/lock timeout rolls back this job's transaction.
+            # Connection loss, schema failures and unclassified errors still
+            # abort the cycle through the existing outer failure boundary.
+            local = isinstance(exc, Refused) or (
+                isinstance(exc, DBAPIError) and not exc.connection_invalidated
+                and getattr(exc.orig, "pgcode", None) in {"55P03", "57014"})
+            if not local:
+                raise
+            failed = True
+            count = min(count + 1, 6)
+            delay = min(60, 2 ** count)
+            maintenance_backoff[phase] = (count, time.monotonic() + delay)
+            observe({"schemaVersion":"of-worker.v1", "state":"maintenance_deferred",
+                     "phase":phase, "retrySeconds":delay})
+        else:
+            maintenance_backoff.pop(phase, None)
+
     while not stop.is_set():
         failed = False
         try:
@@ -107,18 +137,20 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
             # outgoing-message activation or AI key. The job owner rechecks its
             # frozen scope/generation and bounds each page before persistence.
             if enrollment_jobs is not None:
-                enrollment_jobs(store, tenant, limit=1, stop=stop)
+                maintain(enrollment_jobs, "enrollment")
                 if stop.is_set():
                     break
             # Rotate the first background turn so a long vault/archive catch-up
             # cannot repeatedly consume the shared spare token before ledger or
             # content work. Recent intake retains its separate token reserve.
-            maintenance = tuple(job for job in (vault_jobs, ledger_jobs, offer_jobs, content_sync_jobs) if job is not None)
+            maintenance = tuple((phase, job) for phase, job in (
+                ("vault", vault_jobs), ("ledger", ledger_jobs),
+                ("offer", offer_jobs), ("content_sync", content_sync_jobs)) if job is not None)
             if maintenance:
                 first = maintenance_cursor % len(maintenance)
                 maintenance_cursor += 1
-                for job in maintenance[first:] + maintenance[:first]:
-                    job(store, tenant, limit=1, stop=stop)
+                for phase, job in maintenance[first:] + maintenance[:first]:
+                    maintain(job, phase)
                     if stop.is_set():
                         break
                 if stop.is_set():

@@ -538,10 +538,14 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 job.lease_token = job.lease_until = None
                 if not more:
                     _terminal(job, "complete")
-                elif job.pages_read >= job.max_pages:
-                    _terminal(job, "failed", "vault_page_limit")
                 else:
+                    # The cursor is committed after each bounded page. Crossing
+                    # the original 200-page window must not restart at offset 0
+                    # or report an incomplete large vault as a terminal failure.
+                    # Each worker pass still admits one page per account; stale
+                    # connection, inactivity and repeated-page fences remain.
                     job.status = "pending"
+                    job.last_error = None
                 processed += 1
         finally:
             from .worker import _release_provider

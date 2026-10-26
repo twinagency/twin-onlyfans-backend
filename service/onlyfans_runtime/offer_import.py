@@ -270,6 +270,7 @@ def inventory_batch(store, tenant, account, job_id, *, token=None):
                     raise Refused("source fan changed")
                 receipt.folded_message_media_json, receipt.folded_message_price_cents = raw, price
                 receipt.folded_message_unsent, receipt.folded_at = unsent, now
+                receipt.fold_pending = False
                 if not media or mid in echoes or unsent:
                     if (unsent or not media) and receipt.current_observation_id is not None:
                         from .content_sync import mark_source_unavailable

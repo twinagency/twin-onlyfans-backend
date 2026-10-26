@@ -30,7 +30,7 @@ import json
 from datetime import datetime, timezone
 from typing import Protocol
 
-from sqlalchemy import and_, or_, select, func, case
+from sqlalchemy import and_, or_, select, func, case, tuple_
 from sqlalchemy.exc import SQLAlchemyError
 
 from db.engine import get_session
@@ -181,9 +181,9 @@ class OnlyFansReadRepo(Protocol):
 
     async def conversation_state(self, *, account_id: str, fan_id: int) -> StateRow | None: ...
 
-    async def messages(self, *, account_id: str, fan_id: int, limit: int) -> list[MessageRow]: ...
+    async def messages(self, *, account_id: str, fan_id: int, limit: int, before_message_id: int | None = None) -> list[MessageRow]: ...
 
-    async def deliveries(self, *, account_id: str, fan_id: int) -> dict[int, DeliveryRow]: ...
+    async def deliveries(self, *, account_id: str, fan_id: int, before_message_id: int | None = None) -> dict[int, DeliveryRow]: ...
 
     async def fan_facts(self, *, account_id: str, fan_id: int) -> list[FactRow]: ...
 
@@ -541,6 +541,60 @@ class SqlOnlyFansReadRepo:
             fan_display_name=row[9],
         )
 
+    async def conversation_metadata(self, *, account_id: str, rows):
+        """One scoped session and three bounded set reads for a list page."""
+        fans = list(dict.fromkeys(row.fan_id for row in rows))
+        if not fans:
+            return {}, {}
+        if len(fans) > 100:
+            raise ValueError("conversation metadata page exceeds limit")
+        try:
+            async with get_session() as session:
+                await lock_read_scope(session, account_id)
+                states = (await session.execute(select(
+                    OfConversationState.fan_id, OfConversationState.mode,
+                    OfConversationState.revision, OfConversationState.takeover_state,
+                    OfConversationState.unresolved_attempt_id,
+                    OfConversationState.requires_attention, OfConversationState.updated_at
+                ).where(OfConversationState.account_id == account_id,
+                        OfConversationState.fan_id.in_(fans)))).all()
+                held = select(
+                    OfMessageDelivery.fan_id, OfMessageDelivery.attempt_id,
+                    OfMessageDelivery.message_id, OfMessageDelivery.recorded_at,
+                    func.row_number().over(partition_by=OfMessageDelivery.fan_id,
+                        order_by=(OfMessageDelivery.recorded_at.desc().nulls_last(),
+                                  OfMessageDelivery.message_id.desc())).label("position")
+                ).where(OfMessageDelivery.account_id == account_id,
+                        OfMessageDelivery.fan_id.in_(fans),
+                        OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES)).subquery()
+                unresolved = {row[0]: row for row in (await session.execute(
+                    select(held).where(held.c.position == 1))).all()}
+                latest = [(row.fan_id, int(row.last_message_id)) for row in rows
+                          if row.last_message_id is not None]
+                outcomes = dict((await session.execute(select(
+                    OfMessageDelivery.fan_id, OfMessageDelivery.outcome).where(
+                    OfMessageDelivery.account_id == account_id,
+                    tuple_(OfMessageDelivery.fan_id, OfMessageDelivery.message_id).in_(latest)
+                ))).all()) if latest else {}
+        except SQLAlchemyError as exc:
+            raise _storage_failure(exc) from exc
+        by_fan = {row[0]: row for row in states}
+        result = {}
+        for fan in fans:
+            row = by_fan.get(fan)
+            pending = unresolved.get(fan) if row is None or not row[4] else None
+            if row is None and pending is None:
+                result[fan] = None
+                continue
+            result[fan] = StateRow(
+                mode=(row[1] or "paused") if row else "paused",
+                revision=int(row[2] or 0) if row else 0,
+                takeover_state=(row[3] or "none") if row else "none",
+                unresolved_attempt_id=(pending[1] or f"message:{pending[2]}") if pending else row[4],
+                requires_attention=bool(pending or (row and row[5])),
+                updated_at=pending[3] if pending else row[6])
+        return result, outcomes
+
     async def conversation_state(self, *, account_id: str, fan_id: int) -> StateRow | None:
         unresolved = None
         try:
@@ -598,7 +652,7 @@ class SqlOnlyFansReadRepo:
             updated_at=unresolved[2] if unresolved is not None else row[5],
         )
 
-    async def messages(self, *, account_id: str, fan_id: int, limit: int) -> list[MessageRow]:
+    async def messages(self, *, account_id: str, fan_id: int, limit: int, before_message_id: int | None = None) -> list[MessageRow]:
         try:
             async with get_session() as s:
                 await lock_read_scope(s, account_id)
@@ -607,7 +661,8 @@ class SqlOnlyFansReadRepo:
                     Message.media_count, Message.price_cents, Message.is_paid, Message.purchased_at,
                     Message.is_unsent, Message.temp_id, Message.automation_kind,
                     Message.sent_by_employee_id, Message.media_ids, Message.raw_json,
-                ).where(Message.account_id == account_id, Message.fan_id == fan_id)
+                ).where(Message.account_id == account_id, Message.fan_id == fan_id,
+                    Message.message_id < before_message_id if before_message_id is not None else True)
                     .order_by(Message.message_id.desc()).limit(limit))).all()
                 refs = {int(row[0]): _message_media_ids(row[12]) for row in rows}
                 raw_media = {int(row[0]): _message_media_kinds(row[13], refs[int(row[0])]) for row in rows}
@@ -644,7 +699,7 @@ class SqlOnlyFansReadRepo:
         out.reverse()
         return out
 
-    async def deliveries(self, *, account_id: str, fan_id: int) -> dict[int, DeliveryRow]:
+    async def deliveries(self, *, account_id: str, fan_id: int, before_message_id: int | None = None) -> dict[int, DeliveryRow]:
         try:
             async with get_session() as s:
                 await lock_read_scope(s, account_id)
@@ -661,7 +716,7 @@ class SqlOnlyFansReadRepo:
                         ).where(
                             OfMessageDelivery.account_id == account_id,
                             OfMessageDelivery.fan_id == fan_id,
-                            OfMessageDelivery.message_id.in_(select(Message.message_id).where(Message.account_id == account_id, Message.fan_id == fan_id).order_by(Message.message_id.desc()).limit(DETAIL_MESSAGE_LIMIT)),
+                            OfMessageDelivery.message_id.in_(select(Message.message_id).where(Message.account_id == account_id, Message.fan_id == fan_id, Message.message_id < before_message_id if before_message_id is not None else True).order_by(Message.message_id.desc()).limit(DETAIL_MESSAGE_LIMIT)),
                         )
                     )
                 ).all()

@@ -193,7 +193,9 @@ jobs:
           if-no-files-found: error
   acceptance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Dependency installation consumed 34 minutes on the last hosted runner.
+    # Keep every test/assertion; budget setup separately from product timeouts.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

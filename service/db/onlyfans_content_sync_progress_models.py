@@ -4,7 +4,7 @@ Offer snapshots remain immutable. These rows describe the current occurrence
 and outstanding work, so returning to an older snapshot cannot erase a change.
 """
 from sqlalchemy import (BigInteger, Boolean, CheckConstraint, Column, DateTime,
-    ForeignKey, Index, Integer, String, Text)
+    ForeignKey, Index, Integer, String, Text, false, text)
 
 from .models import Base
 
@@ -17,6 +17,8 @@ class OfContentSyncSource(Base):
         CheckConstraint("source_kind IN ('message','post')", name="kind"),
         CheckConstraint("source_id > 0 AND occurrence >= 0", name="bounds"),
         Index("ix_of_content_sync_source_refresh", "account_id", "binding_id", "refresh_requested_at"),
+        Index("ix_of_content_sync_source_fold_pending", "account_id", "binding_id", "source_kind", "source_id",
+            postgresql_where=text("fold_pending IS TRUE"), info={"onlyfans_since":"0095_content_fold_pending"}),
         {"info": INFO},
     )
     account_id = Column(String, ForeignKey("of_runtime.account_id", ondelete="RESTRICT"), primary_key=True)
@@ -32,6 +34,8 @@ class OfContentSyncSource(Base):
     folded_message_price_cents = Column(Integer)
     folded_message_unsent = Column(Boolean)
     folded_at = Column(DateTime)
+    fold_pending = Column(Boolean, nullable=False, default=False, server_default=false(),
+        info={"onlyfans_since":"0095_content_fold_pending"})
     candidate_job_id = Column(String(36))
     candidate_media_key = Column(String(64))
     refresh_requested_at = Column(DateTime)

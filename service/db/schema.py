@@ -40,8 +40,10 @@ LAUNCH = "0090_launch"
 LAUNCH_CONTROLS = "0091_launch_controls"
 LEDGER_HISTORY = "0092_ledger_history"
 LEDGER_MARKERS = "0093_ledger_markers"
-HEAD = "0094_purchase_reply"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, HEAD:94}
+PURCHASE_REPLY = "0094_purchase_reply"
+CONTENT_FOLD_PENDING = "0095_content_fold_pending"
+HEAD = "0096_vault_continuation"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, HEAD:96}
 HERE = Path(__file__).resolve().parent
 
 
@@ -190,6 +192,14 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 or rows[0][3] != trigger or rows[0][5] != "plpgsql"
                 or " ".join(rows[0][4].split()) != f"BEGIN RAISE EXCEPTION '{message}'; END;"):
             failures.append(f"missing append-only protection {table}")
+    if expected_rank >= 95:
+        marker = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.prosrc::text
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+            WHERE t.tgrelid=to_regclass('messages') AND t.tgname='of_content_fold_pending'
+            AND NOT t.tgisinternal""")).all()
+        if (len(marker) != 1 or marker[0][0] not in {"O", "A"} or marker[0][1] != 21
+                or hashlib.sha256(" ".join(marker[0][2].split()).encode()).hexdigest() != "09ec9f01495ba504c532a303d68f6a7e388c3d300ef61173046edc9e3535428b"):
+            failures.append("missing content change continuation trigger")
     if expected_rank >= 88:
         guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text
             FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 import hashlib
 import json
+import logging
+import traceback
 import os
 import re
 import uuid
@@ -807,7 +809,13 @@ def run_claim(store, tenant, claim):
     except StaleClaim:
         _abandon(store, claim, "scope_changed")
         return "stale"
-    except Exception:
+    except Exception as exc:
+        frames = [frame for frame in traceback.extract_tb(exc.__traceback__)
+                  if frame.filename.replace("\\", "/").endswith("/content_sync.py")]
+        phase = frames[-1].name if frames else "run_claim"
+        code = getattr(getattr(exc, "orig", None), "pgcode", None)
+        logging.getLogger(__name__).warning("content_sync_pass_failed phase=%s error=%s sqlstate=%s",
+            phase, type(exc).__name__, code if code and re.fullmatch(r"[0-9A-Z]{5}", code) else "none")
         _fail(store, tenant, claim)
         return "failed"
 
@@ -982,6 +990,39 @@ def _unfolded(runtime, job=None, covered=None):
     return joined, changed
 
 
+def _fold_query(runtime, job, covered):
+    joined, _ = _unfolded(runtime, job, covered)
+    # A pending marker is consumed even if a duplicate ingestion preserved the
+    # payload. Otherwise such markers accumulate and recreate the full scan.
+    # The existing initial inventory still owns its frozen historical rows.
+    changed = true()
+    if job is not None and job.status in {"pending", "running"}:
+        changed = or_(Source.folded_at.is_not(None),
+            Message.message_id > (covered if covered is not None else job.upper_message_id or 0),
+            Message.ingested_at > job.requested_at,
+            and_(Source.current_observation_id.is_not(None),
+                 or_(Message.is_unsent.is_(True), Message.price_cents <= 0)))
+    return select(Message.fan_id, Message.message_id, Message.media_ids, Message.price_cents,
+            Message.created_at, Message.is_unsent).outerjoin(Source, joined).where(
+        Message.account_id == runtime.account_id, Message.direction == "out",
+        Source.fold_pending.is_(True),
+        or_(Message.price_cents > 0, Source.folded_at.is_not(None),
+            Source.current_observation_id.is_not(None)), changed)
+
+
+def _discover_fold(store, tenant, claim):
+    # Validate/create the durable owner in a short transaction. Building a SQL
+    # expression performs no scan. The potentially large anti-join runs only
+    # after this transaction has released the runtime authority lock.
+    with Session(store.engine) as s, s.begin():
+        runtime, row, op = _check(store, tenant, s, claim)
+        job = _ensure_initial(s, runtime, row, claim.now, claim.operation_id)
+        query = _fold_query(runtime, job, row.covered_through_message_id).order_by(
+            Message.message_id, Message.fan_id).limit(FOLD_ROWS)
+    with Session(store.engine) as s:
+        return s.execute(query).all()
+
+
 def _fold(store, tenant, claim):
     """Fold durable local work, including old provider IDs ingested after a cursor.
 
@@ -992,26 +1033,42 @@ def _fold(store, tenant, claim):
     from .offer_import import _date as day, _merge
     folded, lacking, last = 0, {}, None
     for _ in range(FOLD_BATCHES):
+        discovered = _discover_fold(store, tenant, claim)
+        keys = [(r[0], r[1]) for r in discovered]
         with Session(store.engine) as s, s.begin():
             runtime, row, op = _check(store, tenant, s, claim)
             job = _ensure_initial(s, runtime, row, claim.now, claim.operation_id)
-            joined, changed = _unfolded(runtime, job, row.covered_through_message_id)
-            rows = s.execute(select(Message.fan_id, Message.message_id, Message.media_ids, Message.price_cents,
-                    Message.created_at, Message.is_unsent).outerjoin(Source, joined)
-                .where(Message.account_id == claim.account, Message.direction == "out",
-                    or_(Message.price_cents > 0, Source.folded_at.is_not(None), Source.current_observation_id.is_not(None)), changed)
-                .order_by(Message.message_id, Message.fan_id).limit(FOLD_ROWS)).all()
+            # Discovery grants no write authority: re-read only its bounded
+            # identities under the original locks, with current payloads and
+            # eligibility. Reconnect, edits, disable and lease replacement are
+            # revalidated before anything from discovery can be persisted.
+            rows = s.execute(_fold_query(runtime, job, row.covered_through_message_id)
+                .where(tuple_(Message.fan_id, Message.message_id).in_(keys))
+                .order_by(Message.message_id, Message.fan_id)).all() if keys else []
             ids = [r[1] for r in rows]
             echoes = echo_map(s, claim.account, runtime.binding_id, ids)
-            touched = {}
-            for fan, mid, raw, price, created, unsent in rows:
-                source = _source(s, runtime, "message", mid, fan_id=fan)
-                media = _ids(raw)
+            receipts = {source.source_id: source for source in s.scalars(select(Source).where(
+                Source.account_id == claim.account, Source.binding_id == runtime.binding_id,
+                Source.source_kind == "message", Source.source_id.in_(ids)).with_for_update())} if ids else {}
+            parsed = [(fan, mid, raw, price, created, unsent, _ids(raw))
+                      for fan, mid, raw, price, created, unsent in rows]
+            keys = {media_key(media) for fan, mid, raw, price, created, unsent, media in parsed
+                    if media and price > 0 and not unsent and mid not in echoes}
+            touched = {candidate.media_key: candidate for candidate in s.scalars(
+                select(OfOfferImportCandidate).where(
+                    OfOfferImportCandidate.account_id == claim.account,
+                    OfOfferImportCandidate.job_id == job.job_id,
+                    OfOfferImportCandidate.media_key.in_(keys)).with_for_update())} if keys else {}
+            for fan, mid, raw, price, created, unsent, media in parsed:
+                source = receipts.get(mid)
+                if source is None:
+                    source = _source(s, runtime, "message", mid, fan_id=fan)
+                elif source.fan_id != fan:
+                    raise Refused("source fan changed")
                 if media and price > 0 and not unsent and mid not in echoes:
                     mkey = media_key(media)
                     if source.candidate_job_id != job.job_id or source.candidate_media_key != mkey:
-                        candidate = touched.get(mkey) or s.get(OfOfferImportCandidate,
-                            (claim.account, job.job_id, mkey), with_for_update=True)
+                        candidate = touched.get(mkey)
                         if candidate is None:
                             candidate = OfOfferImportCandidate(account_id=claim.account, job_id=job.job_id,
                                 media_key=mkey, media_json=canonical(sorted(media)), source_count=0,
@@ -1033,6 +1090,7 @@ def _fold(store, tenant, claim):
                             source.refresh_job_id, source.refresh_error = None, None
                 source.folded_message_media_json, source.folded_message_price_cents = raw, price
                 source.folded_message_unsent, source.folded_at = unsent, claim.now
+                source.fold_pending = False
                 if unsent or price <= 0 or not media:
                     mark_source_unavailable(s, runtime, source, claim.now,
                         "source_retracted" if unsent else "source_terms_unusable")
@@ -1041,19 +1099,21 @@ def _fold(store, tenant, claim):
                 last = rows[-1][1]
             row.updated_at = claim.now
             folded += len(rows)
-            more = len(rows) == FOLD_ROWS
+            more = len(discovered) == FOLD_ROWS
         if not more:
             break
     with Session(store.engine) as s, s.begin():
         runtime, row, op = _check(store, tenant, s, claim)
         job = s.get(OfOfferImportJob, (claim.account, row.initial_job_id))
-        joined, changed = _unfolded(runtime, job, row.covered_through_message_id)
-        backlog = s.scalar(select(func.count()).select_from(select(Message.message_id).outerjoin(Source, joined).where(
-            Message.account_id == claim.account, Message.direction == "out",
-            or_(Message.price_cents > 0, Source.folded_at.is_not(None), Source.current_observation_id.is_not(None)), changed)
-            .limit(BACKLOG_PROBE).subquery())) or 0
+        backlog_query = select(func.count()).select_from(
+            _fold_query(runtime, job, row.covered_through_message_id)
+            .with_only_columns(Message.message_id).limit(BACKLOG_PROBE).subquery())
         conflicts = detect_conflicts(s, claim.account, runtime.binding_id, claim.now)
         actor, covered = row.actor, row.covered_through_message_id
+    # Backlog is advisory progress, not authority or completeness evidence.
+    # Its potentially large discovery scan must not hold account control locks.
+    with Session(store.engine) as s:
+        backlog = s.scalar(backlog_query) or 0
     return folded, lacking, backlog, conflicts, actor, covered, last
 
 

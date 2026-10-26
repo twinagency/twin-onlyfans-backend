@@ -140,14 +140,22 @@ async def list_conversations(
 
     anchor = await repo.account_activity_anchor(account_id=account)
     items = []
+    # Production repository batches the page; simple offline fixture repos can
+    # retain their individual methods without changing the wire contract.
+    metadata = getattr(repo, "conversation_metadata", None)
+    batched = await metadata(account_id=account, rows=page_rows) if callable(metadata) else None
     for row in page_rows:
-        state = await repo.conversation_state(account_id=account, fan_id=row.fan_id)
-        deliveries = await repo.deliveries(account_id=account, fan_id=row.fan_id)
-        last_outcome = "none"
-        if row.last_message_id is not None:
-            recorded = deliveries.get(int(row.last_message_id))
-            if recorded is not None:
-                last_outcome = projections.delivery_outcome(recorded.outcome)
+        if batched is not None:
+            state = batched[0].get(row.fan_id)
+            last_outcome = projections.delivery_outcome(batched[1].get(row.fan_id, "none"))
+        else:
+            state = await repo.conversation_state(account_id=account, fan_id=row.fan_id)
+            deliveries = await repo.deliveries(account_id=account, fan_id=row.fan_id)
+            last_outcome = "none"
+            if row.last_message_id is not None:
+                recorded = deliveries.get(int(row.last_message_id))
+                if recorded is not None:
+                    last_outcome = projections.delivery_outcome(recorded.outcome)
         summary = projections.conversation_summary(
             conversation=row,
             state=state,
@@ -176,6 +184,7 @@ async def get_conversation(
     account_id: str,
     conversation_id: str,
     now: datetime | None = None,
+    cursor: str | None = None,
 ) -> dict:
     """One conversation and its messages.
 
@@ -200,10 +209,17 @@ async def get_conversation(
     if row is None:
         raise Refused("unknown_conversation")
 
+    from .contract import decode_thread_cursor, encode_thread_cursor
+    paging = {}
+    if cursor is not None:
+        try:
+            paging["before_message_id"] = decode_thread_cursor(cursor, account_id=account, fan_id=fan_id)
+        except ValueError as exc:
+            raise BadRequest("invalid_thread_cursor", "That history cursor is not usable.") from exc
     messages = await repo.messages(
-        account_id=account, fan_id=fan_id, limit=DETAIL_MESSAGE_LIMIT
+        account_id=account, fan_id=fan_id, limit=DETAIL_MESSAGE_LIMIT, **paging
     )
-    deliveries = await repo.deliveries(account_id=account, fan_id=fan_id)
+    deliveries = await repo.deliveries(account_id=account, fan_id=fan_id, **paging)
     state = await repo.conversation_state(account_id=account, fan_id=fan_id)
     facts = await repo.fan_facts(account_id=account, fan_id=fan_id)
     owned = await repo.owned_media(
@@ -221,6 +237,8 @@ async def get_conversation(
         anchor=anchor,
         now=now,
     )
+    detail["previousCursor"] = (encode_thread_cursor(account_id=account, fan_id=fan_id,
+        before_message_id=messages[0].message_id) if len(messages) == DETAIL_MESSAGE_LIMIT else None)
     return conversation_envelope(account_id=account, conversation=detail)
 
 

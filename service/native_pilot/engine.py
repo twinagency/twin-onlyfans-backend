@@ -170,13 +170,17 @@ class NativeEngine:
     _active = False
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
-                 own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None):
+                 own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
+                 unanswered_reply_ids=()):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
             raise ValueError("invalid-pilot-identity")
         self.account_id = account_id
         self.fan_id = fan_id
+        if any(type(mid) is not int or mid <= 0 for mid in unanswered_reply_ids):
+            raise ValueError("invalid-unanswered-reply-ids")
+        self._unanswered_replies = frozenset((fan_id, mid) for mid in unanswered_reply_ids)
         if not isinstance(model, str) or not model.strip():
             raise ValueError("invalid-pilot-model")
         self.model = model
@@ -283,6 +287,11 @@ class NativeEngine:
             return resumed is not None and (human is None or resumed > human)
         except Exception:
             return False
+
+    def unanswered_replies(self, account_id):
+        """Exact receipts supplied by the durable input gate, never an automation-kind exemption."""
+        self._account(account_id)
+        return self._unanswered_replies
 
     async def prompt_context(self, account_id, fan_id, *, last_inbound):
         """The single prompt hook (see ai_chatter._runtime_prompt_context)."""

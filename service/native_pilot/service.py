@@ -448,6 +448,7 @@ class Service:
         (paused or not: Twin's controls still run for them), plus ``serve``.
         """
         from .ledger import _dt
+        from .overlap import older_reply_sql
         since, now, owned = _dt(self.started_at), runner.now(), {}
 
         def is_owned(fan):
@@ -461,6 +462,10 @@ class Service:
                 "AND (n.created_at>m.created_at OR (n.created_at=m.created_at AND n.message_id>m.message_id)))")
         serve, controlled = [], []
         with runner.readonly(self.path) as con:
+            if store.has_table(con, "native_pilot_receipts"):
+                # A confirmed reply to an older input cannot consume a message
+                # which arrived during that reply. Every other newer row still blocks.
+                base = base[:-1] + " AND NOT (" + older_reply_sql() + "))"
             for fan, _, created in con.execute(base + " ORDER BY m.created_at DESC,m.message_id DESC LIMIT ?",
                                                (self.db, since, CANDIDATES_MAX)).fetchall():
                 if _dt(created) > since and is_owned(fan) and fan not in controlled:
@@ -686,8 +691,11 @@ class Service:
         run_id = runner.begin_native_run(self.path, self.db)
         stats = error = None
         try:
+            unanswered = ledger.unanswered_reply_ids(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
+                                                     input_key=key, now=runner.now()) if job is None else ()
             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
                               content=self.content, context=self.context,
+                              **({"unanswered_reply_ids": unanswered} if unanswered else {}),
                               **({"own_offers_only": True} if self.strict else {}),
                               arm_unsend=gateway.arm_unsend, unsent=lambda: gateway.unsent_ids,
                               card_of=lambda mid: ledger.card_evidence(account_id=self.db, fan_id=args.fan, provider_message_id=str(mid)),

@@ -115,6 +115,12 @@ def reconcile(ledger, *, pilot_id, attempt_id, account_id, fan_id, provider_mess
             binding=con.execute("SELECT binding_id FROM public.of_runtime WHERE account_id=? FOR UPDATE",(account_id,)).fetchone()
             if not intent["binding_id"] or not binding or binding[0]!=intent["binding_id"]:
                 raise Refused("recovery-binding-changed")
+        command_hash=hashlib.sha256(_json([pilot_id,attempt_id,audit]).encode()).hexdigest()
+        if ledger.pg:
+            command=con.execute("SELECT binding_id,kind,request_hash FROM public.of_launch_command "
+                "WHERE account_id=? AND command_key=?",(account_id,command_key)).fetchone()
+            if command and (command["binding_id"],command["kind"],command["request_hash"])!=(intent["binding_id"],"native_send_reconciliation",command_hash):
+                raise Refused("recovery-command-conflict")
         prior=retained.get("reconciliation")
         if prior:
             if prior!=audit or r["state"]!="sent" or a["state"]!="sent":
@@ -128,6 +134,11 @@ def reconcile(ledger, *, pilot_id, attempt_id, account_id, fan_id, provider_mess
             "WHERE p.account_id=? AND r.provider_message_id=? AND r.attempt_id<>? LIMIT 1",
             (account_id,str(provider_message_id),attempt_id)).fetchone():
             raise Refused("provider-id-reused")
+        if ledger.pg and not command:
+            con.execute("INSERT INTO public.of_launch_command(account_id,command_key,binding_id,kind,request_hash,actor,reason,"
+                "before_json,result_json,created_at) VALUES(?,?,?,'native_send_reconciliation',?,?,?,?,?,?)",
+                (account_id,command_key,intent["binding_id"],command_hash,actor,reason,
+                _json({"attemptId":attempt_id,"state":r["state"]}),_json(audit),now_s))
         retained["reconciliation"]=audit
         if intent["content"]:
             from .content import ContentPlan
@@ -182,6 +193,10 @@ async def command(ledger,args):
     if (not scope.twin_form or not args.tenant or not args.fan or not args.message_id
         or bool(args.intent_id)==bool(args.pilot_id)):
         raise Refused("recovery-scope-required")
+    from onlyfans_read.agency_scope import actor_allowed
+    if (not actor_allowed(args.actor) or type(args.reason) is not str or not args.reason.strip() or len(args.reason)>512
+        or type(args.command_key) is not str or not re.fullmatch("[a-f0-9]{64}",args.command_key)):
+        raise Refused("invalid-recovery-command")
     canonical_store=None
     if args.intent_id:
         from onlyfans_runtime.store import Store

@@ -56,6 +56,7 @@ def test_native_recovery_settles_takeover_without_replay_or_budget_reset(databas
         assert state(store)==("effective",None,1)
         with Session(store.engine) as s:
             assert s.get(OfDeliveryPolicy,ACCOUNT).used_units==1
+            assert s.scalar(select(func.count()).select_from(OfLaunchCommand))==1
             assert s.get(Message,(ACCOUNT,FAN,9001)).body=="Synthetic reply."
             assert s.scalar(select(func.count()).select_from(Transaction))==0
     finally:store.close()

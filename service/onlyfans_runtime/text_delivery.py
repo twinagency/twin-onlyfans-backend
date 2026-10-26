@@ -165,6 +165,26 @@ class TextAuthority:
         except (ValueError, TypeError):
             return None
 
+    def _input_current(self, s, row, state):
+        if row.input_revision == state.input_revision:
+            return True
+        delta=state.input_revision-row.input_revision
+        if row.origin!="manual" or not 0<delta<=MAX_QUEUED:
+            return False
+        # Only this operator's already confirmed outputs may advance a queued
+        # manual message's transcript. New fan input and unrelated edits still
+        # invalidate it; controls and media terms are checked independently.
+        changed=s.execute(select(Message,OfTextIntent).outerjoin(OfTextIntent,
+            (OfTextIntent.account_id==Message.account_id)&(OfTextIntent.fan_id==Message.fan_id)
+            &(OfTextIntent.provider_message_id==Message.message_id)&(OfTextIntent.origin=="manual")
+            &(OfTextIntent.actor==row.actor)&(OfTextIntent.control_revision==row.control_revision)
+            &(OfTextIntent.status=="accepted")&(OfTextIntent.projected_at>=row.created_at))
+            .where(Message.account_id==row.account_id,Message.fan_id==row.fan_id,
+                Message.ingested_at>=row.created_at).limit(delta+1)).all()
+        return len(changed)==delta and all(proof is not None and msg.direction=="out" and not msg.is_unsent
+            and msg.body==proof.body and msg.price_cents==proof.price_cents and msg.media_ids==proof.media_json
+            and proof.payload_hash==self._intent_hash(proof) for msg,proof in changed)
+
     @staticmethod
     def _media_current(s, row, policy, now):
         if row.catalog_item_id is None:
@@ -444,7 +464,7 @@ class TextAuthority:
             obsolete = (intent.wire_version != 1 or intent.expires_at <= now or state is None
                         or intent.binding_id != runtime.binding_id
                         or intent.control_revision != state.revision
-                        or (intent.origin != "manual" and intent.input_revision != state.input_revision)
+                        or not self._input_current(s, intent, state)
                         or intent.payload_hash != self._intent_hash(intent)
                         or not self._media_current(s, intent, policy, now)
                         or policy is None or intent.policy_revision != policy.revision
@@ -564,7 +584,7 @@ class TextAuthority:
             work = s.get(OfWork, (row.account_id, row.fan_id)) if row.work_generation is not None else None
             obsolete = (binding is None or binding.id != runtime.binding_id or binding.revoked_at is not None
                         or state is None or state.revision != row.control_revision
-                        or (row.origin != "manual" and state.input_revision != row.input_revision)
+                        or not self._input_current(s, row, state)
                         or policy is None or policy.revision != row.policy_revision
                         or (transport_generation is not None and transport_generation != row.policy_revision)
                         or row.payload_hash != self._intent_hash(row)

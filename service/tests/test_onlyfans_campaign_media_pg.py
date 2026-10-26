@@ -115,7 +115,7 @@ def test_paid_campaign_terms_and_ownership_are_rechecked_before_wire(database, s
     store.close()
 
 
-@pytest.mark.parametrize("change", ["free_price", "below_floor", "above_ceiling", "free_teaser", "all_preview", "video_preview"])
+@pytest.mark.parametrize("change", ["free_price", "below_floor", "above_ceiling", "free_teaser", "all_preview"])
 def test_paid_campaign_refuses_free_or_invalid_catalogue_terms(database, change):
     _, engine = database
     store, _, item, service = paid(database)
@@ -126,7 +126,6 @@ def test_paid_campaign_refuses_free_or_invalid_catalogue_terms(database, change)
         elif change == "above_ceiling": row.price_cents = 20001
         elif change == "free_teaser": row.is_free_teaser = True
         elif change == "all_preview": row.preview_media_ids = "[11,12,13]"
-        else: row.preview_media_ids = "[12]"
     with pytest.raises(Refused):
         create(service, catalog_item_id=item)
     with Session(engine) as s:
@@ -283,3 +282,20 @@ def test_campaign_api_accepts_optional_paid_item_and_preserves_text_only_request
         text_detail = client.get(endpoint + "/" + posted_text.json()["campaignId"], headers=headers).json()
         assert text_detail["campaign"]["offer"] is None
     store.close()
+
+
+def test_paid_campaign_preserves_the_approved_video_preview_without_unlocking_all_assets(database):
+    # The owner explicitly permitted video free previews in the existing catalogue.
+    store,authority,item,service=paid(database)
+    try:
+        with Session(store.engine) as s,s.begin():
+            s.get(CatalogItem,item).preview_media_ids="[12]"
+        created=create(service,catalog_item_id=item)
+        offer=service.detail(TENANT,ACCOUNT,created["campaignId"])["campaign"]["offer"]
+        assert offer["previewIds"]==["12"] and offer["mediaIds"]==["11","12","13"]
+        identity=service.queue_due(TENANT,ACCOUNT)
+        wire=SyntheticTextTransport(ACCOUNT)
+        assert authority.dispatch(TENANT,ACCOUNT,identity,wire)=="accepted"
+        assert wire.calls[0].preview_ids==(12,) and wire.calls[0].price_cents==1000
+        assert set(wire.calls[0].media_ids)-set(wire.calls[0].preview_ids)=={11,13}
+    finally:store.close()

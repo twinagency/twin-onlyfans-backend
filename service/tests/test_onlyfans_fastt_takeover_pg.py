@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select, text, func
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from test_fastt_controls_pg import database
+from test_fastt_controls_pg import database, template
 from test_onlyfans_foundation_pg import seed
 from test_onlyfans_text_delivery_pg import current, TENANT
 from db.models import Message, OfConversationState

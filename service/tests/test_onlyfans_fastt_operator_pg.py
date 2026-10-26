@@ -2,7 +2,7 @@
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from test_fastt_controls_pg import database
+from test_fastt_controls_pg import database, template
 from test_onlyfans_media_pg import manual
 from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT
 from test_onlyfans_fastt_operator import Client

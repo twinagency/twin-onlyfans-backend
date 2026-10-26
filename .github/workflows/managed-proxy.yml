@@ -1,0 +1,35 @@
+name: IPRoyal managed proxy assignment
+on:
+  push:
+    branches: ['codex/iproyal-managed-proxy-20261025', 'codex/iproyal-country-order-20261025']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  assignment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: proxy-fixture
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ONLYFANS_PROXY_TEST_PG_URL: postgresql://postgres:proxy-fixture@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - run: pip install psycopg2-binary==2.9.10 cryptography==46.0.3 pytest==8.4.2
+      - run: python -m unittest discover -s managed_proxy_tests -p test_managed_proxy.py -v
+      - run: pytest -q managed_proxy_tests/test_managed_proxy_pg.py
+      - run: python -m compileall -q service/managed_proxy

@@ -1,4 +1,3 @@
-from onlyfans_runtime.ledger import _coverage_receipt
 """Paid campaign snapshots share canonical media/ownership/delivery owners."""
 from datetime import timedelta, timezone
 import json
@@ -21,6 +20,8 @@ from onlyfans_runtime.store import Refused, utcnow
 from onlyfans_runtime.text_delivery import SyntheticTextTransport
 from ownership import owned_media_in_session
 
+
+from onlyfans_runtime.ledger import _coverage_receipt
 
 def paid(database):
     store, authority = configured(database, mode="automated")

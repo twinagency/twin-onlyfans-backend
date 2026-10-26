@@ -1,4 +1,3 @@
-from onlyfans_runtime.ledger import _coverage_receipt
 """Same native ledger owners, scoped report window, no real provider or model."""
 import asyncio
 from datetime import timedelta
@@ -17,6 +16,8 @@ from onlyfans_runtime.store import utcnow
 from onlyfans_read.earnings import read_earnings,window
 from onlyfans_read.errors import BadRequest
 
+
+from onlyfans_runtime.ledger import _coverage_receipt
 
 def setup(database,*,account="acc-a",tenant="tenant-a",coverage=True):
     store=seed(*database,account=account,tenant=tenant)

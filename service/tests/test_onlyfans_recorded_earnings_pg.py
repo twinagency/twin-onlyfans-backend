@@ -1,4 +1,3 @@
-from onlyfans_runtime.ledger import _coverage_receipt
 from datetime import timedelta
 from sqlalchemy.orm import Session
 from test_onlyfans_foundation_pg import database
@@ -6,6 +5,8 @@ from test_onlyfans_earnings_pg import setup,read
 from test_onlyfans_ledger_pg import record,parsed,transaction
 from db.onlyfans_ledger_models import OfLedgerScan
 from onlyfans_runtime.store import utcnow
+
+from onlyfans_runtime.ledger import _coverage_receipt
 
 def test_pending_earnings_are_included_without_counting_reversals(database):
     store=setup(database)

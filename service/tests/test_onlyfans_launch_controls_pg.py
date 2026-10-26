@@ -1,4 +1,3 @@
-from onlyfans_runtime.ledger import _coverage_receipt
 """Combined operator projections and commands over disposable PostgreSQL only."""
 from datetime import datetime, timedelta
 import json
@@ -35,6 +34,8 @@ from onlyfans_runtime.text_delivery import SyntheticTextTransport, TextAuthority
 ACTOR = "op-session:" + "a" * 64
 ACCOUNT, TENANT, FAN = "acc-a", "tenant-a", 101
 
+
+from onlyfans_runtime.ledger import _coverage_receipt
 
 def client(store, monkeypatch):
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "api")

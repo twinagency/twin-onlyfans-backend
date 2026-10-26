@@ -1,4 +1,3 @@
-from onlyfans_runtime.ledger import _coverage_receipt
 """Campaign observations and exact purchase attribution, owned PostgreSQL only."""
 from datetime import timedelta
 
@@ -16,6 +15,8 @@ from db.onlyfans_ledger_models import OfLedgerScan
 from onlyfans_runtime.store import utcnow
 from onlyfans_runtime.text_delivery import SyntheticTextTransport
 
+
+from onlyfans_runtime.ledger import _coverage_receipt
 
 def sent(database):
     store, authority, item, service = paid(database)

@@ -1,4 +1,3 @@
-from onlyfans_runtime.ledger import _coverage_receipt
 """Lifetime imports use real PostgreSQL and synthetic provider pages."""
 import threading
 import pytest
@@ -21,6 +20,8 @@ from onlyfans_runtime.store import utcnow
 @pytest.mark.parametrize("history", [False, True])
 @pytest.mark.parametrize("active_old_lease", [False, True])
 @pytest.mark.parametrize("read_fails", [False, True])
+from onlyfans_runtime.ledger import _coverage_receipt
+
 def test_verified_reconnect_revalidates_future_scan_without_reusing_old_coverage(
         database, monkeypatch, history, active_old_lease, read_fails):
     from db.onlyfans_connection_models import OfProviderConnection

@@ -28,6 +28,7 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 12
     env:
       ONLYFANS_TEST_PG_URL: postgresql://postgres:disposable_test_only@127.0.0.1:5432/postgres
+      PYTHONPATH: service:service/tests
       PYTHON_DOTENV_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4

@@ -1,4 +1,3 @@
-from onlyfans_runtime.ledger import _coverage_receipt
 """Operator manual-message API over real PG and the common intent ledger."""
 import hashlib
 
@@ -16,6 +15,8 @@ from db.onlyfans_delivery_models import OfTextIntent
 from onlyfans_read.contract import conversation_id_for
 from onlyfans_runtime.text_delivery import TextAuthority, SyntheticTextTransport
 
+
+from onlyfans_runtime.ledger import _coverage_receipt
 
 def context(database, monkeypatch, *, mode="human_controlled", enabled=True):
     from onlyfans_commands.api import router

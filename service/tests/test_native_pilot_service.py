@@ -134,7 +134,7 @@ def ts(value):
 # ── ledger level ──────────────────────────────────────────────────────────────
 
 async def settle_unknown(backend,f,ledger):
-    from native_pilot.recovery import snapshot,reconcile,project
+    from native_pilot.recovery import snapshot,reconcile,project,_matches
     from native_pilot.reporting import report_outcomes
     from twin_bridge.platform import escape_plain_text
     from native_pilot.ledger import _dt
@@ -148,6 +148,7 @@ async def settle_unknown(backend,f,ledger):
     raw={"id":mid,"fromUser":{"id":int(account)},"toUser":{"id":fan},"createdAt":stamp.isoformat()+"Z",
         "text":escape_plain_text(intent["body"]),"media":[],"mediaCount":0,"price":0,"previews":[],
         "lockedText":False,"responseType":"message"}
+    _matches(raw,intent)  # Keep the exact refusal visible when synthetic proof is malformed.
     reconcile(ledger,pilot_id=pilot,attempt_id=attempt,account_id=account,fan_id=fan,
         provider_message_id=mid,history=[raw],complete=True,
         command_key=hashlib.sha256((pilot+str(attempt)).encode()).hexdigest(),

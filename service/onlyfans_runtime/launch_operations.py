@@ -270,6 +270,7 @@ def resolve_ledger(store, tenant, account, *, evidence_hash, command_key, actor,
         elif tx is not None and (tx.source != "ledger" or tx.fan_id != fan_id
                 or tx.amount_cents != observed.get("amount_cents") or tx.currency != observed.get("currency")
                 or tx.kind != observed.get("kind") or tx.message_id not in {None, mid}
+                or json.loads(tx.raw_json or "{}").get("message_id") not in {None, mid}
                 or tx.occurred_at.isoformat() != observed.get("occurred_at")):
             blocker = "transaction_identity_conflict"
         elif tx is not None and _status(tx.status, observed.get("status")) == "conflict":
@@ -296,7 +297,9 @@ def resolve_ledger(store, tenant, account, *, evidence_hash, command_key, actor,
                 tx = Transaction(account_id=account, provider_transaction_id=evidence.provider_transaction_id,
                     fan_id=fan_id, kind="ppv_message", amount_cents=observed["amount_cents"],
                     currency=observed["currency"], status=status, occurred_at=occurred, source="ledger",
-                    description=observed.get("description"), raw_json=canonical(observed))
+                    description=observed.get("description"), raw_json=canonical(observed),
+                    cleared_at=datetime.fromisoformat(observed["cleared_at"]) if observed.get("cleared_at") else None,
+                    **{key: observed.get(key) for key in ("net_cents", "fee_cents", "vat_cents", "payout_pending_days")})
                 s.add(tx)
                 s.flush()
             # A stale observation may link an existing paid transaction but can
@@ -315,9 +318,10 @@ def resolve_ledger(store, tenant, account, *, evidence_hash, command_key, actor,
                 binding_id=runtime.binding_id, command_key=command_key, transaction_id=tx.id,
                 fan_id=fan_id, message_id=mid, decision_json=canonical({"observed": observed,
                     "transactionStatus": tx.status, "actor": actor, "reason": reason}), created_at=now))
-            from .launch_engagement.service import invalidate
-            invalidate(s, runtime, reason="purchase" if tx.status in PAID else "refund", actor=actor,
-                fan_id=fan_id, now=now)
+            if occurred >= now - timedelta(minutes=5):
+                from .launch_engagement.service import invalidate
+                invalidate(s, runtime, reason="purchase" if tx.status in PAID else "refund", actor=actor,
+                    fan_id=fan_id, now=now)
         return result
 
 

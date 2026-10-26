@@ -6,6 +6,7 @@ never grants ownership. The worker can reconcile while messaging is paused.
 """
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import os
 import re
 import uuid
@@ -157,15 +158,28 @@ def apply_observation(s, account, observation, *, now, backfill=False):
     outcome = "applied"
     core = ("fan_id", "kind", "amount_cents", "currency")
     occurred = datetime.fromisoformat(observation["occurred_at"])
+    prior_mid = tx.message_id if tx is not None else None
     if tx is not None:
+        # Retain the provider's intended message even before history can prove
+        # its ownership link. A later observation cannot change that identity.
+        try:
+            retained_mid = json.loads(tx.raw_json or "{}").get("message_id")
+        except (ValueError, AttributeError):
+            retained_mid = None
+            outcome = "conflict"
+        if retained_mid is not None:
+            if prior_mid is not None and prior_mid != retained_mid:
+                outcome = "conflict"
+            prior_mid = retained_mid
         if (tx.source != "ledger" or any(getattr(tx, key) != observation[key] for key in core)
                 or tx.occurred_at != occurred
-                or tx.message_id is not None and observation["message_id"] not in {None, tx.message_id}):
+                or prior_mid is not None and observation["message_id"] not in {None, prior_mid}):
             outcome = "conflict"
-        else:
+        elif outcome != "conflict":
             outcome = _status(tx.status, observation["status"])
+    financial_outcome = outcome
     message, offer = None, None
-    mid = observation["message_id"] if observation["message_id"] is not None else tx.message_id if tx else None
+    mid = observation["message_id"] if observation["message_id"] is not None else prior_mid
     fan_id = observation["fan_id"]
     if mid is not None and outcome == "applied":
         message = s.get(Message, (account, fan_id, mid), with_for_update=True)
@@ -186,17 +200,23 @@ def apply_observation(s, account, observation, *, now, backfill=False):
                     or message.price_cents != observation["amount_cents"] or occurred < message.created_at
                     or offers and offers[0].price_cents != observation["amount_cents"])):
             outcome = "conflict"
+            message = None
         else:
             offer = offers[0] if offers else None
-    if outcome == "applied":
+    if financial_outcome == "applied":
+        # Verified money is independent of imported message availability. Keep
+        # unresolved linkage in immutable evidence and retain the commerce hold;
+        # only exact canonical history may project media ownership.
+        linked_mid = mid if message is not None else tx.message_id if tx is not None else None
         was_paid = tx is not None and tx.status in PAID
-        moved = tx is None or tx.status != observation["status"] or tx.message_id != mid
+        moved = tx is None or tx.status != observation["status"] or tx.message_id != linked_mid
         if tx is None:
             tx = Transaction(account_id=account, provider_transaction_id=provider,
                 occurred_at=occurred, source="ledger", **{key: observation[key] for key in core})
             s.add(tx)
             s.flush()
-        tx.status, tx.message_id, tx.raw_json = observation["status"], mid, encoded
+        tx.status, tx.message_id = observation["status"], linked_mid
+        tx.raw_json = canonical({**observation, "message_id": mid})
         if observation["cleared_at"] is not None:
             tx.cleared_at = datetime.fromisoformat(observation["cleared_at"])
         for field in ("net_cents", "fee_cents", "vat_cents", "payout_pending_days", "description"):

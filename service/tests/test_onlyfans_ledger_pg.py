@@ -68,6 +68,66 @@ def record(store, account, observation):
         return apply_observation(s, account, observation, now=utcnow())
 
 
+@pytest.mark.parametrize("status,spend", [("pending", 1000), ("cleared", 1000),
+    ("failed", 0), ("refunded", 0), ("chargedback", 0)])
+def test_missing_message_retains_verified_money_without_purchase_rights(database, monkeypatch, status, spend):
+    store, account, _ = verified(database, monkeypatch)
+    observation = parsed(transaction(messageId=123, net="8.00", fee="2.00"))
+    observation["status"] = status
+    assert record(store, account, observation) == "conflict"
+    assert record(store, account, observation) == "duplicate"
+    with Session(database[1]) as s:
+        tx = s.scalar(select(Transaction))
+        assert (tx.provider_transaction_id, tx.amount_cents, tx.currency, tx.status) == ("native-tx-1", 1000, "USD", status)
+        assert (tx.net_cents, tx.fee_cents, tx.message_id) == (800, 200, None)
+        assert json.loads(tx.raw_json)["message_id"] == 123
+        assert s.get(Fan, (account, 101)).lifetime_spend_cents == spend
+        evidence = s.scalar(select(OfLedgerEvidence))
+        assert evidence.outcome == "conflict" and evidence.transaction_id == tx.id
+        assert s.scalar(select(func.count()).select_from(OfLedgerEvidence)) == 1
+        assert s.scalar(select(func.count()).select_from(Message)) == 0
+        assert s.scalar(select(func.count()).select_from(VaultSend)) == 0
+        assert held(s, account), "linkage remains unresolved even though money is recorded"
+    store.close()
+
+
+@pytest.mark.parametrize("field,value", [("fan_id", 102), ("kind", "tip"),
+    ("amount_cents", 1001), ("currency", "AUD"), ("message_id", 124),
+    ("occurred_at", "2026-01-01T00:00:00")])
+def test_unlinked_receipt_cannot_change_its_immutable_identity(database, monkeypatch, field, value):
+    store, account, _ = verified(database, monkeypatch)
+    observation = parsed(transaction(messageId=123))
+    assert record(store, account, observation) == "conflict"
+    assert record(store, account, {**observation, "status": "refunded", field: value}) == "conflict"
+    with Session(database[1]) as s:
+        tx = s.scalar(select(Transaction))
+        assert (tx.fan_id, tx.kind, tx.amount_cents, tx.currency, tx.status) == (101, "ppv_message", 1000, "USD", "cleared")
+        assert tx.occurred_at.isoformat() == observation["occurred_at"] and tx.message_id is None
+        assert json.loads(tx.raw_json)["message_id"] == 123
+        assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1000
+        assert s.scalar(select(func.count()).select_from(Transaction)) == 1
+        assert held(s, account)
+    store.close()
+
+
+def test_unlinked_reversal_keeps_exact_money_and_retained_message_identity(database, monkeypatch):
+    store, account, _ = verified(database, monkeypatch)
+    observation = parsed(transaction(messageId=123, net="8.00", fee="2.00"))
+    assert record(store, account, observation) == "conflict"
+    reversal = {**observation, "status": "refunded", "message_id": None, "net_cents": None, "fee_cents": None}
+    assert record(store, account, reversal) == "conflict"
+    assert record(store, account, reversal) == "duplicate"
+    assert record(store, account, {**observation, "description": "Payment for message from stale display"}) == "stale"
+    with Session(database[1]) as s:
+        tx = s.scalar(select(Transaction))
+        assert (tx.status, tx.amount_cents, tx.net_cents, tx.fee_cents, tx.message_id) == ("refunded", 1000, 800, 200, None)
+        assert json.loads(tx.raw_json)["message_id"] == 123
+        assert s.get(Fan, (account, 101)).lifetime_spend_cents == 0
+        assert s.scalar(select(func.count()).select_from(Transaction)) == 1
+        assert s.scalar(select(func.count()).select_from(VaultSend)) == 0
+    store.close()
+
+
 def test_duplicate_pending_cleared_refund_and_stale_page_change_money_once(database, monkeypatch):
     store, account, _ = verified(database, monkeypatch)
     row = transaction(); row["status"] = "loading"

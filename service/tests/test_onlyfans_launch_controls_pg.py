@@ -1,5 +1,5 @@
 """Combined operator projections and commands over disposable PostgreSQL only."""
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 import uuid
 
@@ -249,26 +249,50 @@ def test_resolution_requires_verified_provider_message_identity_and_keeps_eviden
         store.close()
 
 
-def test_verified_resolution_after_missing_history_links_purchase_and_replay_is_exact(database, monkeypatch):
+@pytest.mark.parametrize("legacy_evidence", [False, True])
+@pytest.mark.parametrize("historical", [False, True])
+def test_verified_resolution_after_missing_history_links_purchase_and_replay_is_exact(database, monkeypatch, legacy_evidence, historical):
     from ownership import owned_media_in_session
     from onlyfans_runtime.launch_operations_models import OfLedgerResolution
     store, account, _ = verified(database, monkeypatch)
     try:
         scan_seed(store, account)
-        observation = parsed(transaction(messageId=123, amount="10.01"))
-        assert record(store, account, observation) == "conflict", "missing history does not grant ownership"
+        observation = parsed(transaction(messageId=123, amount="10.01", net="8.01", fee="2.00"))
+        if historical:
+            observation["occurred_at"] = (utcnow() - timedelta(days=30)).isoformat()
+        if legacy_evidence:
+            from onlyfans_runtime.launch_operations import digest
+            with Session(store.engine) as s, s.begin():
+                s.add(OfLedgerEvidence(account_id=account, evidence_hash=digest(observation),
+                    provider_transaction_id=observation["provider_transaction_id"], fan_id=101,
+                    outcome="conflict", observation_json=canonical(observation), recorded_at=utcnow()))
+        else:
+            assert record(store, account, observation) == "conflict", "missing history does not grant ownership"
+        assert record(store, account, observation) == "duplicate", "observation dedup remains intact"
+        with Session(store.engine) as s:
+            tx = s.scalar(select(Transaction))
+            assert (tx is None) is legacy_evidence
+            if tx is not None:
+                assert tx.amount_cents == 1001 and tx.message_id is None
+                assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1001
+            assert owned_media_in_session(s, account, 101) == set()
         with Session(store.engine) as s, s.begin():
-            s.add(Fan(account_id=account, fan_id=101))
+            if s.get(Fan, (account, 101)) is None:
+                s.add(Fan(account_id=account, fan_id=101))
             s.flush()
             s.add(Message(account_id=account, fan_id=101, message_id=123,
                 direction="out", body="Retained original bundle", media_ids="[12,11]", media_count=2,
-                price_cents=1001, created_at=utcnow() - timedelta(hours=1)))
+                price_cents=1001, created_at=datetime.fromisoformat(observation["occurred_at"]) - timedelta(hours=1)))
+        invalidations = []
+        monkeypatch.setattr("onlyfans_runtime.launch_engagement.service.invalidate",
+            lambda *args, **kwargs: invalidations.append(kwargs))
         state = ledger_status(store, TENANT, account)
         args = dict(evidence_hash=state["evidence"][0]["evidenceHash"], command_key="1" * 64,
             actor=ACTOR, reason="Exact provider identity is now supported by retained history", expected_fingerprint=state["fingerprint"])
         result = resolve_ledger(store, TENANT, account, **args)
         assert result["resolved"] is True
         assert resolve_ledger(store, TENANT, account, **args) == result
+        assert len(invalidations) == (0 if historical else 1)
         after = ledger_status(store, TENANT, account)
         assert after["conflictingEvidence"] == 0 and after["evidence"][0]["resolved"] is True
         assert after["commerceHold"] is True, "resolving evidence does not complete the still-held scan"
@@ -276,10 +300,40 @@ def test_verified_resolution_after_missing_history_links_purchase_and_replay_is_
             assert owned_media_in_session(s, account, 101) == {11, 12}
             tx = s.scalar(select(Transaction))
             assert tx.amount_cents == 1001 and tx.message_id == 123
+            assert (tx.net_cents, tx.fee_cents) == (801, 200)
             assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1001
             assert s.scalar(select(OfLedgerEvidence.outcome)) == "conflict", "original evidence stays immutable"
             assert s.scalar(select(func.count()).select_from(OfLedgerResolution)) == 1
             assert s.scalar(select(func.count()).select_from(OfLaunchCommand)) == 1
+            assert s.scalar(select(func.count()).select_from(Transaction)) == 1
+    finally:
+        store.close()
+
+
+def test_resolution_cannot_change_message_identity_retained_before_history(database, monkeypatch):
+    from ownership import owned_media_in_session
+    store, account, _ = verified(database, monkeypatch)
+    try:
+        scan_seed(store, account)
+        observed = parsed(transaction(messageId=123))
+        assert record(store, account, observed) == "conflict"
+        changed = {**observed, "message_id": 124}
+        assert record(store, account, changed) == "conflict"
+        with Session(store.engine) as s, s.begin():
+            s.add(Message(account_id=account, fan_id=101, message_id=124,
+                direction="out", body="Different paid message", media_ids="[12]", media_count=1,
+                price_cents=1000, created_at=utcnow() - timedelta(hours=1)))
+        state = ledger_status(store, TENANT, account)
+        from onlyfans_runtime.launch_operations import digest
+        result = resolve_ledger(store, TENANT, account, evidence_hash=digest(changed),
+            command_key="3" * 64, actor=ACTOR, reason="Check conflicting retained identity",
+            expected_fingerprint=state["fingerprint"])
+        assert result["resolved"] is False and result["blocker"] == "transaction_identity_conflict"
+        with Session(store.engine) as s:
+            assert owned_media_in_session(s, account, 101) == set()
+            assert s.scalar(select(Transaction.message_id)) is None
+            assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1000
+            assert s.scalar(select(func.count()).select_from(Transaction)) == 1
     finally:
         store.close()
 

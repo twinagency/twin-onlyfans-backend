@@ -489,7 +489,7 @@ class TextAuthority:
                 if policy is not None:
                     policy.queued_count -= 1
                 return intent.status
-            if policy.active_intent_id or Store._native_unresolved(s, account_id):
+            if policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True):
                 intent.reason = "account_busy"
                 return "queued"
             if policy.next_dispatch_at is not None and policy.next_dispatch_at > now:

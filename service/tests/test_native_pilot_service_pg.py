@@ -30,7 +30,7 @@ class PgBackend(suite.SqliteBackend):
     pg = True
 
     def fixture(self, root, name):
-        for table in ("of_delivery_policy", "of_runtime", "of_creator_bindings", "skip_list", "of_conversation_state",
+        for table in ("of_launch_command", "of_delivery_policy", "of_runtime", "of_creator_bindings", "skip_list", "of_conversation_state",
                       "chats", "fans"):
             try:
                 base.rows("DELETE FROM " + table)
@@ -49,8 +49,11 @@ class PgBackend(suite.SqliteBackend):
         base.rows("INSERT INTO of_creator_bindings(id,tenant_id,creator_id,creator_name,account_id,handle,channel) "
                   "VALUES('binding-1','synthetic-tenant','creator-1','Synthetic',?,'synthetic','onlyfans') ON CONFLICT DO NOTHING",
                   (L.ACCT,))
-        base.rows("INSERT INTO of_runtime(account_id,binding_id,enabled,activated_at) VALUES(?,'binding-1',false,CURRENT_TIMESTAMP) "
+        base.rows("INSERT INTO of_runtime(account_id,binding_id,enabled,activated_at) VALUES(?,'binding-1',true,CURRENT_TIMESTAMP) "
                   "ON CONFLICT DO NOTHING", (L.ACCT,))
+        self._fan(L.FAN)
+        base.rows("INSERT INTO of_conversation_state(account_id,fan_id,mode,takeover_state) VALUES(?,?,'automated','none') "
+                  "ON CONFLICT DO NOTHING", (L.ACCT,L.FAN))
         base.rows("INSERT INTO of_delivery_policy(account_id,revision,enabled,transport_kind,limit_units,used_units,queued_count,"
                   "throttle_seconds,next_dispatch_at,active_intent_id,media_enabled) VALUES(?,1,?,'native',?,?,0,?,?,?,false)",
                   (L.ACCT, bool(enabled), limit, used, throttle, nxt, busy))
@@ -61,8 +64,9 @@ class PgBackend(suite.SqliteBackend):
         from db.models import Fan
         engine = create_engine(base.SYNC_URL)
         with Session(engine) as session:
-            session.add(Fan(account_id=L.ACCT, fan_id=L.FAN))
-            session.commit()
+            if session.get(Fan,(L.ACCT,L.FAN)) is None:
+                session.add(Fan(account_id=L.ACCT, fan_id=L.FAN))
+                session.commit()
         engine.dispose()
         base.rows("INSERT INTO of_conversation_state(account_id,fan_id,mode,takeover_state) VALUES(?,?,'automated','none') "
                   "ON CONFLICT DO NOTHING", (L.ACCT, L.FAN))

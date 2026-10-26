@@ -400,7 +400,7 @@ class Db:
                      "VALUES(:b,'synthetic-tenant',:c,'Synthetic',:a,'synthetic','onlyfans')",
                      {"b": "binding-" + a, "c": "creator-" + a, "a": a})
             self.run("INSERT INTO of_runtime(account_id,binding_id,enabled,activated_at) "
-                     "VALUES(:a,:b,false,CURRENT_TIMESTAMP)", {"a": a, "b": "binding-" + a})
+                     "VALUES(:a,:b,true,CURRENT_TIMESTAMP)", {"a": a, "b": "binding-" + a})
             self.run("INSERT INTO of_delivery_policy(account_id,revision,enabled,transport_kind,limit_units,used_units,"
                      "queued_count,throttle_seconds,next_dispatch_at,active_intent_id,media_enabled) "
                      "VALUES(:a,1,true,'native',10000,4,0,:t,NULL,NULL,false)", {"a": a, "t": w.cfg.throttle_s})

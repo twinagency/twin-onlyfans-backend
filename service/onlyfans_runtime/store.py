@@ -589,14 +589,15 @@ class Store:
             return True
 
     @staticmethod
-    def _native_unresolved(s, account_id, fan_id=None):
+    def _native_unresolved(s, account_id, fan_id=None, *, dispatching_only=False):
         """Retained native/bridge admission is authoritative before reporting runs."""
         from sqlalchemy import text
         if s.bind.dialect.name != "postgresql" or not s.scalar(text(
                 "SELECT to_regclass('fastt_runtime.twin_bridge_send_attempts') IS NOT NULL")):
             return False
         return s.scalar(text("SELECT 1 FROM fastt_runtime.twin_bridge_send_attempts "
-            "WHERE account_id=:account AND state IN ('dispatching','delivery_unknown') " +
+            "WHERE account_id=:account AND " +
+            ("state='dispatching' " if dispatching_only else "state IN ('dispatching','delivery_unknown') ") +
             ("AND fan_id=:fan " if fan_id is not None else "") + "LIMIT 1"),
             {"account":account_id,"fan":fan_id}) is not None
 

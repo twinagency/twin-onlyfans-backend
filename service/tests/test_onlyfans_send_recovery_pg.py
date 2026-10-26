@@ -56,7 +56,8 @@ def test_native_recovery_settles_takeover_without_replay_or_budget_reset(databas
         with Session(store.engine) as s,s.begin():
             s.add(Employee(id=1,display_name="Automation",is_active=False))
         asyncio.run(report(store,ledger,pilot,monkeypatch,project_attempt=attempt.id))
-        assert state(store)==("effective",None,1)
+        # Completion is a separate audited control event after the request.
+        assert state(store)==("effective",None,2)
         with Session(store.engine) as s:
             assert s.get(OfDeliveryPolicy,ACCOUNT).used_units==1
             assert s.scalar(select(func.count()).select_from(OfLaunchCommand))==1

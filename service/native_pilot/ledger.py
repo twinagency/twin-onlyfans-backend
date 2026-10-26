@@ -522,7 +522,7 @@ class Ledger:
         if row["used_units"] >= row["limit_units"]:
             raise Refused("allowance-exhausted")
         if row["active_intent_id"] or con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? "
-                "AND state IN ('dispatching','delivery_unknown') LIMIT 1", (account,)).fetchone():
+                "AND state='dispatching' LIMIT 1", (account,)).fetchone():
             raise Refused("allowance-busy")
         if row["next_dispatch_at"] is not None and _dt(row["next_dispatch_at"]) > now_s:
             raise Refused("allowance-throttled")

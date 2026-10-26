@@ -133,6 +133,32 @@ def ts(value):
 
 # ── ledger level ──────────────────────────────────────────────────────────────
 
+async def settle_unknown(backend,f,ledger):
+    from native_pilot.recovery import snapshot,reconcile,project
+    from native_pilot.reporting import report_outcomes
+    from twin_bridge.platform import escape_plain_text
+    from native_pilot.ledger import _dt
+    import hashlib
+    row=f.sql("SELECT r.pilot_id,r.attempt_id,p.account_id,p.fan_id FROM native_pilot_receipts r "
+        "JOIN native_pilots p ON p.pilot_id=r.pilot_id WHERE r.state='delivery_unknown'")[0]
+    pilot,attempt,account,fan=row
+    intent=snapshot(ledger,pilot_id=pilot,attempt_id=attempt,account_id=account,fan_id=fan)
+    stamp=datetime.fromisoformat(_dt(intent["created_at"]))
+    mid=900000+attempt
+    raw={"id":mid,"fromUser":{"id":int(account)},"toUser":{"id":fan},"createdAt":stamp.isoformat()+"Z",
+        "text":escape_plain_text(intent["body"]),"media":[],"mediaCount":0,"price":0,"previews":[],
+        "lockedText":False,"responseType":"message"}
+    reconcile(ledger,pilot_id=pilot,attempt_id=attempt,account_id=account,fan_id=fan,
+        provider_message_id=mid,history=[raw],complete=True,
+        command_key=hashlib.sha256((pilot+str(attempt)).encode()).hexdigest(),
+        actor="op-session:"+"a"*64,reason="Synthetic positive recovery proof",now=stamp+timedelta(minutes=20))
+    if backend.pg:
+        await project(ledger,pilot_id=pilot,attempt_id=attempt,account_id=account,fan_id=fan)
+        await report_outcomes(account_id=account,fan_id=fan,receipts=ledger.receipts(pilot_id=pilot))
+    else:
+        f.source(mid,direction="out",body=intent["body"],created_at=stamp.isoformat(),ingested_at=stamp.isoformat())
+
+
 def ledger_level(backend, root):
     from native_pilot.ledger import Ledger, Refused, SERVICE_BUDGET_CEILING
     L = backend.L
@@ -213,7 +239,9 @@ def ledger_level(backend, root):
     call2 = dict(pilot_id=PID, owner_token=TOK2)
     snap = led2.snapshot(**call2, now=t3)
     key2 = led2.claim_input(**call2, snapshot=snap, now=t3)
-    a3 = led2.begin_attempt(**call2, input_key=key2, bubble_no=1, revision=p2.revision, now=t3)  # crash after this
+    a3 = led2.begin_attempt(**call2, input_key=key2, bubble_no=1, revision=p2.revision, now=t3)
+    from native_pilot.recovery import freeze, reconcile
+    freeze(led2,**call2,attempt_id=a3.id,body="Synthetic recovered reply.",terms=None)  # crash after this
     t4 = t3 + timedelta(seconds=1000)
     led3 = Ledger(f.path, allowance=True)
     refuses(L, "delivery-unresolved", lambda: led3.activate_service(pilot_id=PID, account_id=A, fan_id=F,
@@ -226,10 +254,10 @@ def ledger_level(backend, root):
     f.sql("UPDATE twin_bridge_conversations SET state='active'")  # operator resumes ...
     refuses(L, "delivery-unresolved", lambda: led3.activate_service(pilot_id=PID, account_id=A, fan_id=F,
                                                                     owner_token="synthetic-owner-svc-0003", now=t4, ttl_s=120))
-    f.sql("UPDATE twin_bridge_send_attempts SET state='failed' WHERE state='delivery_unknown'")  # ... and resolves it
+    asyncio.run(settle_unknown(backend,f,led2))  # exact positive evidence settles both ledgers; no resend
     used_before = f.sql("SELECT used_units FROM of_delivery_policy")[0][0]
     p3 = led3.activate_service(pilot_id=PID, account_id=A, fan_id=F, owner_token="synthetic-owner-svc-0003", now=t4, ttl_s=120)
-    check(p3.state == "active" and f.sql("SELECT state FROM native_pilot_receipts WHERE attempt_id=?", (a3.id,))[0][0] == "delivery_unknown")
+    check(p3.state == "active" and f.sql("SELECT state FROM native_pilot_receipts WHERE attempt_id=?", (a3.id,))[0][0] == "sent")
     check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == used_before == 7, "the unknown send keeps its unit")
 
     # 4. Clean release: unsent claim dropped (regenerated later), claimed-with-receipt kept, immediate re-adoption.
@@ -856,14 +884,17 @@ async def loop_level(backend, root):
         for _ in range(40):
             await asyncio.sleep(0.003)
         check(len(http.posts) == 1 and not kinds("ready"), "resuming alone does not clear an unresolved send")
-        f.sql("UPDATE twin_bridge_send_attempts SET state='failed' WHERE state='delivery_unknown'")
+        from native_pilot.ledger import Ledger
+        await stop(task,patcher)
+        await settle_unknown(backend,f,Ledger(f.path,allowance=True))
+        task,patcher=start(client)
         await until(lambda: kinds("ready"), "ready after operator resolution", events)
-        await replied(f, http, 2, "reply to the message that arrived while held", outs=1)
+        await replied(f, http, 2, "reply to the message that arrived while held", outs=2)
         check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 6)
         fan_says(f, "third")
-        await replied(f, http, 3, "reply to the new message", outs=2)
+        await replied(f, http, 3, "reply to the new message", outs=3)
         check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 7)
-        check(f.sql("SELECT count(*) FROM native_pilot_receipts WHERE state='delivery_unknown'")[0][0] == 1)
+        check(f.sql("SELECT count(*) FROM native_pilot_receipts WHERE state='delivery_unknown'")[0][0] == 0)
         await stop(task, patcher)
         _ = first
 

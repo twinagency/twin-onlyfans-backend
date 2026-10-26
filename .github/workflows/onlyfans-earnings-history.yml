@@ -36,6 +36,11 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - run: pip install -r requirements-onlyfans-test.txt
+      - name: Verify supervised native runtime and load harness
+        run: |
+          python service/tests/test_native_pilot_service.py
+          python service/tests/test_native_pilot_service_pg.py
+          python service/tests/test_native_pilot_load_pg.py
       - name: Verify positive receipt reconciliation and consecutive operator messages
         run: python -m pytest -q service/tests/test_native_pilot_receipt_recovery.py service/tests/test_onlyfans_send_recovery_pg.py service/tests/test_onlyfans_text_delivery_pg.py
       - name: Verify final paid captions and exact fixed prices

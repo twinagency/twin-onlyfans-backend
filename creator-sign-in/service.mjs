@@ -2,6 +2,7 @@
 // owned by Twin's existing dashboard and native worker.
 import {randomUUID,createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
+import {createPublicAssetCache} from './public-assets.mjs';
 
 const OF='https://onlyfans.com', WIDTH=432, HEIGHT=720;
 const id=v=>typeof v==='string'&&/^[A-Za-z0-9._:-]{1,64}$/.test(v);
@@ -37,12 +38,12 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
   if(!Number.isInteger(maxActive)||maxActive<1||maxActive>4||!Number.isFinite(ttl)||ttl<60_000||ttl>15*60_000)throw Error('Invalid sign-in capacity or lifetime');
   // An abandoned page (closed tab, lost phone) must not hold a browser for the whole lifetime.
   if(!Number.isFinite(idleTtl)||idleTtl<30_000||idleTtl>ttl||!Number.isFinite(launchTimeout)||launchTimeout<10||launchTimeout>120_000)throw Error('Invalid sign-in idle or launch limit');
-  const jobs=new Map(),scopes=new Map(),starts=new Map();let allocation=Promise.resolve();
+  const jobs=new Map(),scopes=new Map(),starts=new Map(),assets=createPublicAssetCache();let allocation=Promise.resolve();
   const scopeKey=s=>{if(!s||!id(s.creatorId)||!actor(s.actor))fail('invalid_scope',400);return s.actor+':'+s.creatorId;};
   const view=j=>({id:j.id,phase:j.phase,handle:j.handle??null,expiresAt:new Date(j.deadline).toISOString(),enrollmentId:j.enrollmentId??null,width:WIDTH,height:HEIGHT,keyboard:j.keyboard??null});
   async function discard(j,phase,reason=phase){
     j.closed=true;j.phase=phase;j.reason=reason;delete j.capture;delete j.samples;delete j.identity;delete j.captureScope;
-    const b=j.browser;j.browser=null;j.page=null;if(b)await b.close().catch(()=>{});
+    const b=j.browser;j.browser=null;j.page=null;j.cdp=null;if(b)await b.close().catch(()=>{});
   }
   const idle=j=>LIVE.includes(j.phase)&&now()-j.touched>idleTtl;
   const live=j=>!j.closed&&j.deadline>now()&&LIVE.includes(j.phase)&&!idle(j);
@@ -98,8 +99,10 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
       await j.context.route('**/*',async route=>{
         if(!allowedRequest(route.request()))return route.abort('blockedbyclient');
         try{if(challengeHost(new URL(route.request().url()).hostname))j.challengeAt=now();}catch{}
+        if(!transport){try{if(await assets.serve(route))return;}catch{}}
         return transport?transport(route,j.context):route.continue();
       });
+      if(!transport)j.context.on('response',response=>{if(!j.closed)void assets.remember(response).catch(()=>{});});
       j.observations=Promise.resolve();
       await j.context.exposeBinding('__twinSignInObservation',(source,p)=>{
         j.observations=j.observations.then(()=>observe(j,source,p)).catch(()=>discard(j,'failed'));
@@ -144,7 +147,17 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
     async frame(s,identity,{format='jpeg'}={}){if(!['jpeg','png'].includes(format))fail('invalid_frame_format',400);const j=lookup(s,identity);return sequential(j,async()=>{
       if(j.closed||j.phase!=='waiting'||!j.page)fail('frame_unavailable',409);
       if(now()-(j.lastFrame??0)<350)fail('frame_limit',429,1);j.lastFrame=now();
-      const frame=await j.page.screenshot({type:format,...(format==='jpeg'?{quality:95}:{}),timeout:3000});
+      // Capture the current viewport directly. Playwright's screenshot wrapper
+      // waits for remote fonts, which can hold the first screen for seconds.
+      // Explicit 2x scaling preserves the existing 864x1440 input/display grid.
+      if(!j.cdp)j.cdp=await j.context.newCDPSession(j.page);
+      let timer;
+      const rendering=(async()=>{
+        const {cssVisualViewport:viewport}=await j.cdp.send('Page.getLayoutMetrics');
+        return j.cdp.send('Page.captureScreenshot',{format,...(format==='jpeg'?{quality:95}:{}),fromSurface:true,captureBeyondViewport:false,clip:{x:viewport.pageX,y:viewport.pageY,width:WIDTH,height:HEIGHT,scale:2}});
+      })();
+      const shot=await Promise.race([rendering,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new SignInError('frame_unavailable',409)),3000);})]).finally(()=>clearTimeout(timer));
+      const frame=Buffer.from(shot.data,'base64');
       if(frame.length>2*1024*1024)fail('frame_unavailable',409);return frame;
     });},
     async input(s,identity,event){const j=lookup(s,identity);return sequential(j,async()=>{
@@ -168,7 +181,7 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
     async acknowledge(s,identity,enrollmentId){const j=lookup(s,identity);if(!uuid(enrollmentId))fail('invalid_enrollment',400);if(j.phase==='submitted'&&j.enrollmentId===enrollmentId)return view(j);if(j.phase!=='ready'||!j.capture)fail('capture_unavailable',409);j.enrollmentId=enrollmentId;await discard(j,'submitted','submitted');return view(j);},
     async cancel(s,identity){const j=lookup(s,identity);await discard(j,'cancelled');return view(j);},
     async collect(){for(const [identity,j]of jobs){if(idle(j))await discard(j,'expired','idle');if(j.deadline<=now()){await discard(j,'expired','lifetime');jobs.delete(identity);if(scopes.get(j.scopeKey)===identity)scopes.delete(j.scopeKey);}}for(const [key,times]of starts){const recent=times.filter(t=>t>now()-3600_000);if(recent.length)starts.set(key,recent);else starts.delete(key);}},
-    async close(){await Promise.allSettled([...jobs.values()].map(async j=>{await discard(j,'cancelled');await j.launching;await discard(j,'cancelled');}));jobs.clear();scopes.clear();}
+    async close(){assets.close();await Promise.allSettled([...jobs.values()].map(async j=>{await discard(j,'cancelled');await j.launching;await discard(j,'cancelled');}));jobs.clear();scopes.clear();}
   };
   return api;
 }

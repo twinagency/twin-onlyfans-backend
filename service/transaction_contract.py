@@ -18,6 +18,11 @@ KIND_CATALOG = (
 )
 STATUS_MAP = {"done": "cleared", "loading": "pending", "undo": "chargedback",
     "pending_return": "refund_pending"}
+# Canonical native ledger states. A failed payment is known non-revenue;
+# unrecognised states must still refuse complete financial coverage.
+PAID = frozenset({"pending", "cleared", "refund_pending"})
+TERMINAL = frozenset({"refunded", "chargedback", "failed"})
+STATUSES = PAID | TERMINAL
 _HTML_TAG = re.compile(r"<[^>]+>")
 
 

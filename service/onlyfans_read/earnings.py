@@ -12,6 +12,7 @@ from db.onlyfans_ledger_models import OfLedgerEvidence,OfLedgerScan,OfLedgerHist
 from onlyfans_runtime.text_delivery import _stamp
 from onlyfans_runtime.store import Refused as InvalidStamp
 from .errors import BadRequest,Unavailable
+from transaction_contract import STATUSES
 
 SCHEMA="of-earnings.v1"
 REASONS={"no_bound_accounts","ledger_unavailable","ledger_stale","ledger_held","outside_coverage","unsupported_currency","unsupported_status","unverified_ledger_rows"}
@@ -122,7 +123,7 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False,incl
         func.sum(Transaction.net_cents),func.count(Transaction.net_cents)).where(Transaction.account_id.in_(ids),
         Transaction.occurred_at>=begin,Transaction.occurred_at<finish,applied).group_by(Transaction.currency,Transaction.status).limit(16))).all()
     if any(currency!="USD" for currency,*_ in groups):result["reasons"]=["unsupported_currency"];return result
-    if any(status not in {"cleared","pending","refund_pending","refunded","chargedback"} for _,status,*_ in groups):
+    if any(status not in STATUSES for _,status,*_ in groups):
         result["reasons"]=["unsupported_status"];return result
     values={status:(count,gross,net,net_count) for _,status,count,gross,net,net_count in groups}
     cleared,gross,net,net_count=values.get("cleared",(0,0,0,0))

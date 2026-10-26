@@ -69,6 +69,40 @@ def test_native_payments_are_counted_once_with_refunds_pending_and_missing_net_e
     store.close()
 
 
+@pytest.mark.parametrize("failed_only", [False, True])
+def test_failed_payments_are_known_non_revenue_without_hiding_other_payments(database, failed_only):
+    store=setup(database)
+    record(store,"acc-a",parsed(transaction(id="failed",amount="99.00",net="99.00",status="failed")))
+    if not failed_only:
+        record(store,"acc-a",parsed(transaction(id="cleared",net="8.00")))
+        record(store,"acc-a",parsed(transaction(id="pending",amount="6.00",net="4.80",status="loading")))
+        record(store,"acc-a",parsed(transaction(id="reversed",status="undo")))
+    result=read(database,include_pending=True,include_history=True)
+    assert result["status"]=="current" and result["reasons"]==[]
+    assert (result["clearedGrossCents"],result["clearedNetCents"],result["clearedCount"],
+        result["pendingCount"],result["refundedCount"])==((0,0,0,0,0) if failed_only else (1000,800,1,1,1))
+    recorded=result["recorded"]
+    assert (recorded["grossCents"],recorded["netCents"],recorded["paymentCount"],recorded["pendingGrossCents"]
+        )==((0,0,0,0) if failed_only else (1600,1280,2,600))
+    assert sum(row["grossCents"] for row in result["statistics"]["byKind"])==(0 if failed_only else 1600)
+    with Session(database[1]) as s:
+        failed=s.scalar(select(Transaction).where(Transaction.provider_transaction_id=="failed"))
+        assert failed.status=="failed" and failed.amount_cents==9900 and failed.message_id is None
+    store.close()
+
+
+def test_unknown_financial_status_still_refuses_complete_totals(database):
+    store=setup(database)
+    record(store,"acc-a",parsed(transaction(id="failed",status="failed")))
+    with Session(database[1]) as s,s.begin():
+        row=s.scalar(select(Transaction).where(Transaction.provider_transaction_id=="failed"))
+        row.status="unsupported-new-state"
+    result=read(database,include_pending=True)
+    assert result["status"]=="unavailable" and result["reasons"]==["unsupported_status"]
+    assert result["clearedGrossCents"] is None and result["recorded"] is None
+    store.close()
+
+
 def test_scope_and_window_exclude_other_tenants_and_old_transactions(database):
     store=setup(database);other=setup(database,account="acc-b",tenant="tenant-b")
     record(store,"acc-a",parsed(transaction(id="current",amount="3.00")))

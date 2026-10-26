@@ -17,7 +17,7 @@ from db.models import ContentOffer, Fan, Message, OfCreatorBinding, Transaction
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan, OfLedgerHistory
-from transaction_contract import STATUS_MAP, classify_kind, strip_html
+from transaction_contract import STATUS_MAP, PAID, TERMINAL, STATUSES, classify_kind, strip_html
 from .native_context import canonical
 from .native_protocol import MAX_BYTES, NativeProtocolError, cents, load
 from .launch_ledger.validation import LedgerValidationError
@@ -25,9 +25,6 @@ from .store import Refused, _id, utcnow
 
 PAGE_SIZE = 20
 MAX_OFFSET = 10000
-PAID = frozenset({"pending", "cleared", "refund_pending"})
-TERMINAL = frozenset({"refunded", "chargedback", "failed"})
-STATUSES = PAID | TERMINAL
 
 
 def timestamp(value):

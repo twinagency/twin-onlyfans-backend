@@ -20,7 +20,7 @@ class Client:
     def response(self, body):
         if self.timeout: raise TimeoutError("synthetic lost acknowledgement")
         result={"id":9001, "fromUser":{"id":7001}, "toUser":{"id":101},
-            "createdAt":"2026-10-26T05:00:00Z", "text":body["text"],
+            "createdAt":datetime.utcnow().isoformat()+"Z", "text":body["text"],
             "media":[{"id":m} for m in body["mediaFiles"]], "mediaCount":len(body["mediaFiles"]),
             "price":body["price"], "previews":body["previews"],
             "lockedText":False, "responseType":"message"}

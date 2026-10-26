@@ -82,7 +82,7 @@ from attribution import (
 from automation_registry import LEGACY_KINDS, register
 from db.engine import get_session
 from db.models import (
-    CATALOG_IS_SINGLE, AccountAiConfig, Blacklist, CatalogItem,
+    CATALOG_IS_SINGLE, AccountAiConfig, AutomationRun, Blacklist, CatalogItem,
     ContentOffer, Fan, FanProfile, LadderQuote, LadderState, MassRun, Message,
     PendingOffer, QuotaAudit, RhythmState, ScheduledJob, SkipList, Transaction,
     VaultSend, created_at_text, parse_ts,
@@ -4850,13 +4850,13 @@ async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:
     standing in for fan_spoke_last (an unlock is an event, not a turn — the silent
     buyer was structurally unsellable) — fires ONE next rung after the §3.6 pacing
     floor. NO revenue claim: this ships as a bug fix, not a +30pp promise. Idempotent:
-    one job per content_offers.id; the offer is 'delivered', so a re-run just re-bridges
-    a fan who hasn't spoken (harmless) and never double-rungs (the ladder open-guard)."""
+    a durable per-offer attempt is claimed under the fan lease before dispatch.
+    A failed or uncertain attempt is never replayed automatically."""
     offer_id = payload.get("post_buy")
     if not cfg.get("enabled") or offer_id is None:
         return {"status": "skipped", "reason": "post_buy_disabled", "post_buy": True}
     offer = await _load_offer(int(offer_id))
-    if offer is None:
+    if offer is None or str(offer.account_id) != str(account_id):
         return {"status": "skipped", "reason": "no_offer", "post_buy": True}
     if cfg.get("fastt_vault_post_buy") and not (offer.status == "delivered" and offer.resolved_by == "ppv_ledger"):
         # The runner's job: only a purchase the payment ledger settled (never an open card or a claim).
@@ -4884,11 +4884,27 @@ async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:
     if not await ax.acquire_fan_lease(account_id, fan_id, _PURPOSE):
         return {"status": "skipped", "reason": "locked", "post_buy": True}
 
-    typing_wpm = await load_typing_wpm(account_id)
-    typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
-    client = await asyncio.to_thread(_runtime_client, account_id)
     bridged = rung_fired = 0
     try:
+        # Reuse the audit table, not an in-memory flag: a restart must not replay
+        # a purchase acknowledgement or an uncertain provider send.
+        kind = f"post_buy:{int(offer.id)}"
+        async with get_session() as s:
+            await s.execute(select(ContentOffer.id).where(
+                ContentOffer.id == offer.id,
+                ContentOffer.account_id == str(account_id)).with_for_update())
+            claimed = (await s.execute(select(AutomationRun.id).where(
+                AutomationRun.account_id == str(account_id),
+                AutomationRun.kind == kind).limit(1))).scalar()
+            if claimed is not None:
+                return {"status": "skipped", "reason": "already_attempted", "post_buy": True}
+            s.add(AutomationRun(account_id=str(account_id), kind=kind, status="attempted",
+                                started_at=now, completed_at=now,
+                                stats_json=json.dumps({"offer_id": int(offer.id), "fan_id": fan_id})))
+            await s.commit()
+        typing_wpm = await load_typing_wpm(account_id)
+        typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
+        client = await asyncio.to_thread(_runtime_client, account_id)
         name = _greetable(f, await load_voice_blocks(account_id))
         bridge = _pack_line("post_buy_bridge", cfg, fan_id, name=name)
         if bridge and await _send_free_bubble(client, account_id, fan_id, bridge,

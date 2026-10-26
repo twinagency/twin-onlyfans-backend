@@ -444,7 +444,7 @@ class TextAuthority:
             obsolete = (intent.wire_version != 1 or intent.expires_at <= now or state is None
                         or intent.binding_id != runtime.binding_id
                         or intent.control_revision != state.revision
-                        or intent.input_revision != state.input_revision
+                        or (intent.origin != "manual" and intent.input_revision != state.input_revision)
                         or intent.payload_hash != self._intent_hash(intent)
                         or not self._media_current(s, intent, policy, now)
                         or policy is None or intent.policy_revision != policy.revision
@@ -563,7 +563,8 @@ class TextAuthority:
             binding = s.get(OfCreatorBinding, row.binding_id)
             work = s.get(OfWork, (row.account_id, row.fan_id)) if row.work_generation is not None else None
             obsolete = (binding is None or binding.id != runtime.binding_id or binding.revoked_at is not None
-                        or state is None or state.revision != row.control_revision or state.input_revision != row.input_revision
+                        or state is None or state.revision != row.control_revision
+                        or (row.origin != "manual" and state.input_revision != row.input_revision)
                         or policy is None or policy.revision != row.policy_revision
                         or (transport_generation is not None and transport_generation != row.policy_revision)
                         or row.payload_hash != self._intent_hash(row)
@@ -616,8 +617,10 @@ class TextAuthority:
         return runtime
 
     def _attempt(self, s, tenant_id, account_id, intent_id, token):
-        self._historical_runtime(s, tenant_id, account_id)
+        runtime = self._historical_runtime(s, tenant_id, account_id)
         row = self._intent(s, account_id, intent_id)
+        if row.binding_id != runtime.binding_id:
+            raise Refused("scope unavailable")
         if not row.dispatch_token or row.dispatch_token != token or not row.attempt_id:
             raise Refused("stale dispatch token")
         return row

@@ -1,7 +1,8 @@
-"""Local status/stop controls; never starts an engine or makes network calls."""
+"""Management controls; explicit receipt reconciliation reads scoped history and never sends."""
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -12,8 +13,17 @@ from .ledger import Ledger, Refused
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("status", "stop"))
-    parser.add_argument("--pilot-id", required=True)
+    parser.add_argument("action", choices=("status", "stop", "reconcile"))
+    parser.add_argument("--pilot-id")
+    parser.add_argument("--intent-id")
+    parser.add_argument("--account")
+    parser.add_argument("--tenant")
+    parser.add_argument("--fan", type=int)
+    parser.add_argument("--attempt-id", type=int)
+    parser.add_argument("--message-id", type=int)
+    parser.add_argument("--command-key")
+    parser.add_argument("--actor")
+    parser.add_argument("--reason")
     args = parser.parse_args()
     try:
         from twin_bridge.coordination import store_target
@@ -22,6 +32,12 @@ def main():
             raise Refused("pilot-store-required")
         store.ensure_runtime_schema(path)
         ledger = Ledger(path)
+        if args.action == "reconcile":
+            from .recovery import command
+            print(json.dumps(asyncio.run(command(ledger, args)), sort_keys=True))
+            return 0
+        if not args.pilot_id:
+            raise Refused("pilot-id-required")
         if args.action == "stop":
             # Ownership is used privately; never expose the token in output or
             # pass it through command-line arguments/process listings.

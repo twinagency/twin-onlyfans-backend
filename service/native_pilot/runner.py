@@ -378,14 +378,14 @@ class Gateway:
             self.bubble += 1
             attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                 input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+            from .recovery import freeze
+            try:
+                freeze(self.ledger, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                       attempt_id=attempt.id, body=text, terms=terms)
+            except Exception:
+                raise NotSent("dispatch-proof-not-saved", retry=True) from None
             token = authorize_dispatch(self.pilot.account_id, self.pilot.fan_id, turn_id=attempt.turn_id,
                 attempt_no=attempt.attempt_no, owner_token=self.pilot.owner_token, revision=self.pilot.revision)
-            if terms:
-                # Retain the frozen media/price intent even if the POST outcome
-                # is unknown. No new table and no automatic delivery recovery.
-                with store.transaction(self.ledger.path) as con:
-                    con.execute("UPDATE native_pilot_receipts SET evidence_json=? WHERE attempt_id=? AND state='dispatching'",
-                                (json.dumps({"content_intent": terms}, sort_keys=True), attempt.id))
 
             wire = [False]
 

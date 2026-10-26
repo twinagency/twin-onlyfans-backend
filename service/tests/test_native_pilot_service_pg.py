@@ -33,6 +33,8 @@ class PgBackend(suite.SqliteBackend):
         # base owns a freshly created UUID-named disposable database. Reset its
         # account graph completely; new canonical evidence has RESTRICT FKs.
         # Never ignore a failed cleanup and leak state into the next fixture.
+        # skip_list deliberately has no account FK, so CASCADE cannot clear it.
+        base.rows("DELETE FROM public.skip_list")
         base.rows("TRUNCATE public.accounts CASCADE")
         return base.PgFixture(root, name)
 

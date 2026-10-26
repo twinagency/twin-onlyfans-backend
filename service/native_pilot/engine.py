@@ -28,6 +28,7 @@ TEXT_ONLY = {
     "payers_only": False,              # stock True would ignore every non-payer
     "pack_send_enabled": False, "pack_on_ask_enabled": False,  # packs/gifts send media outside the
     "gift_enabled": False,                                     # approved catalogue: refused at the send boundary
+    "qualification_gate_enabled": False,                      # the full legacy ladder stays suppressed
     "nudge_enabled": False, "rhythm_enabled": False,  # need FASTT's background job runner; jobs are
     "post_buy_rung_enabled": False,                   # suppressed here (rhythm would "brb" and never return)
     "rhythm_return_single_bubble_s": 0,
@@ -238,6 +239,7 @@ class NativeEngine:
     async def load_config(self, account_id, native):
         self._account(account_id)
         result = dict(native)
+        sales_enabled = result.pop("_native_on_request_sales_enabled", False) is True
         result.update(TEXT_ONLY)
         if self.followups is not None:
             result.update(copy.deepcopy(FOLLOWUPS))
@@ -246,14 +248,15 @@ class NativeEngine:
         if getattr(self.content, "vault_mode", False):
             # FASTT's stock vault-wide ask lane (sell_lane -> pack_sender -> content_resolver), nothing else:
             # the model never writes an offer (stock prompt_sell_catalog False) and the ask lane
-            # is armed by exactly its two stock shelf switches. Every other media writer stays off (TEXT_ONLY).
-            result.update(pack_send_enabled=True, pack_on_ask_enabled=True, prompt_sell_catalog=False,
+            # requires the same explicit saved permission displayed by the editor.
+            # Every other media writer stays off (TEXT_ONLY).
+            result.update(pack_send_enabled=sales_enabled, pack_on_ask_enabled=sales_enabled, prompt_sell_catalog=False,
                           ppv_caption_1to1=False, **offer_limits(native))
             self._offer_cfg = {k: result[k] for k in ("max_open_offers", "max_offers_per_fan_per_day")}
         elif self.content:
             # Explicit pilot configuration of the existing catalogue path;
             # the vault-wide resolver and all other media writers stay off.
-            result.update(prompt_sell_catalog=True, ppv_caption_1to1=False, **offer_limits(native))
+            result.update(prompt_sell_catalog=sales_enabled, ppv_caption_1to1=False, **offer_limits(native))
             self._offer_cfg = {k: result[k] for k in ("max_open_offers", "max_offers_per_fan_per_day")}
         if self._job == POST_BUY_KIND:
             # FASTT's own post-buy bridge, then ONE follow-up card from the vault (ai_chatter._fire_post_buy_vault_rung),

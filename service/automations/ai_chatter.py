@@ -1236,6 +1236,11 @@ async def _load_config(account_id: str) -> dict:
     merged = config_from_row(cfg)
     cap = active_telegram_capabilities()
     if cap is not None:
+        from onlyfans_runtime.configuration import sales_settings, on_request_sales_enabled
+        saved, valid = sales_settings(cfg) if cfg is not None else ({}, False)
+        # Compute from the row already read, before defaults can invent consent.
+        # This is transient capability metadata, never a saved setting.
+        merged["_native_on_request_sales_enabled"] = on_request_sales_enabled(saved, valid=valid)
         return await cap.load_config(str(account_id), merged)
     return merged
 

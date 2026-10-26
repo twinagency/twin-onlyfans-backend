@@ -144,7 +144,8 @@ async def config():
     parser = service.build_parser()
     check(parser.parse_args(['--account', ACCOUNT, '--fan', str(FAN), '--handle', 'x']).vault_mode is False, 'service flag default off')
     check(parser.parse_args(['--account', ACCOUNT, '--all-fans', '--handle', 'x', '--vault-mode']).vault_mode is True, 'service flag parses')
-    stock = {'pack_send_enabled': True, 'pack_on_ask_enabled': True, 'prompt_sell_catalog': False}
+    stock = {'pack_send_enabled': True, 'pack_on_ask_enabled': True, 'prompt_sell_catalog': False,
+             '_native_on_request_sales_enabled': True}
     def engine(content):
         return NativeEngine(ACCOUNT, FAN, chat=None, send=None, content=content)
     text = await engine(None).load_config(ACCOUNT, dict(stock))
@@ -157,6 +158,11 @@ async def config():
     check(vault['pack_send_enabled'] is True and vault['pack_on_ask_enabled'] is True and vault['prompt_sell_catalog'] is False, 'vault keys')
     check(vault['pack_on_ask_enabled'] and vault['gift_enabled'] is False and vault['pack_on_ask_enabled'] and vault['post_buy_rung_enabled'] is False
           and vault['nudge_enabled'] is False and vault['cadence_enabled'] is False, 'other media writers stay off')
+    for supplied in ({}, dict(stock, _native_on_request_sales_enabled=False)):
+        off = await engine(VaultPlan(ACCOUNT, FAN)).load_config(ACCOUNT, supplied)
+        check(off['pack_send_enabled'] is False and off['pack_on_ask_enabled'] is False and off['enabled'] is True,
+              'sales off leaves ordinary replies enabled')
+    check(vault['qualification_gate_enabled'] is False, 'sales permission never arms the legacy ladder')
 
 
 def supervisor(tmp):

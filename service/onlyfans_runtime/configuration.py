@@ -42,6 +42,11 @@ def sales_settings(row):
 def digest(value):return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+def on_request_sales_enabled(sales, *, valid):
+    """The editor and active adapter share the explicit saved permission."""
+    return valid and all(sales.get(key) is True for key in SALES_FLAGS)
+
+
 def fingerprint(row):
     value={column.name:getattr(row,column.name) for column in row.__table__.columns}
     encoded=canonical(value).encode()
@@ -98,7 +103,7 @@ def editable(row,runtime,session,*,include_activation=False):
         "dailyCostCapCents":row.daily_cost_cap_cents, "reasoningEffort":row.reasoning_effort,
         "reasoningOptions":{key:list(model.effort_choices) for key,model in MODELS.items()},
         "salesConfigurationValid":sales_valid,
-        "onRequestSalesEnabled":sales_valid and all(sales.get(key) is True for key in SALES_FLAGS),
+        "onRequestSalesEnabled":on_request_sales_enabled(sales, valid=sales_valid),
         **{name:sales_valid and sales.get(key) is True for name,key in FASTT_SWITCHES.items()},
         **({"activation": activation_view(session,row.account_id,sales,binding_id=runtime.binding_id,model_id=resolved)} if include_activation else {})}
 

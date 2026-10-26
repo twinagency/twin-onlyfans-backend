@@ -186,7 +186,7 @@ def test_paged_cohorts_service_accounts_after_first_32_and_cover_each_cohort_bef
         return [SimpleNamespace(account_id=i) for i in (32,33)],None,2
     class Worker:
         def __init__(self,store,tenant,accounts):self.accounts=accounts
-        def run(self,current_stop,*,max_cycles,poll_seconds,observe):
+        def run(self,current_stop,*,max_cycles,poll_seconds,observe,max_seconds,minimum_cycles):
             assert poll_seconds==.5
             assert max_cycles>=max(1,(len(self.accounts)+3)//4)
             seen.extend(item.account_id for item in self.accounts)

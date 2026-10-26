@@ -148,7 +148,8 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
                 # advancing its DB cursor, even for a short refresh interval.
                 # --once intentionally performs one bounded four-account cycle.
                 cycles = 1 if once else max(math.ceil(len(accounts)/4), math.ceil(refresh_seconds/.5))
-                worker.run(stop, max_cycles=cycles, poll_seconds=.5, observe=observe)
+                worker.run(stop, max_cycles=cycles, poll_seconds=.5, observe=observe,
+                    **({"max_seconds":refresh_seconds,"minimum_cycles":max(1,math.ceil(len(accounts)/4))} if not once else {}))
             else:
                 observe({"schemaVersion":"of-worker.v1", "state":"idle", "connectedAccounts":0,
                          "scannedAccounts":scanned})

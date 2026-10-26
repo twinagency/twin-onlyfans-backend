@@ -37,6 +37,13 @@ class NativeRateLimitError(NativeProtocolError):
         super().__init__('native provider rate limit')
 
 
+class NativeReadTransientError(NativeProtocolError):
+    """A read-only request may retry its same checkpoint after bounded backoff."""
+    def __init__(self, retry_after=5):
+        self.retry_after = min(3600, max(1, int(retry_after)))
+        super().__init__('native provider read temporarily unavailable')
+
+
 def _rate_limit_seconds(value):
     try:
         if type(value) is not str or len(value) > 128:
@@ -290,6 +297,8 @@ class NativeProviderConnector(NativeLoopbackConnector):
                     raise NativeAuthenticationError("native provider rejected authentication")
                 if response.status_code == 429:
                     raise NativeRateLimitError(_rate_limit_seconds(response.headers.get('retry-after')))
+                if method == "GET" and response.status_code in {408, 425, 500, 502, 503, 504}:
+                    raise NativeReadTransientError()
                 if response.status_code not in accepted_statuses:
                     raise NativeProtocolError("native HTTPS status is not delivery evidence")
                 if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
@@ -305,6 +314,8 @@ class NativeProviderConnector(NativeLoopbackConnector):
         except Exception:
             # curl errors may contain authenticated proxy URLs or response
             # bodies. Never propagate those to logs/API/worker observations.
+            if method == "GET":
+                raise NativeReadTransientError() from None
             raise NativeProtocolError("native HTTPS request outcome is uncertain") from None
 
     def vault_page(self, *, offset, limit=24):

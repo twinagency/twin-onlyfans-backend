@@ -397,6 +397,12 @@ def _current(runtime, connection, job):
         and connection.status == "verified" and connection.expires_at > utcnow())
 
 
+def _vault_job_expired(requested_at, last_progress_at, now):
+    """Expire a stalled import, while preserving a long import that is advancing."""
+    last_activity = max(requested_at, last_progress_at or requested_at)
+    return now - last_activity > timedelta(hours=1)
+
+
 def process_vault_jobs(store, tenant, *, limit=1, stop=None):
     """At most limit GET pages, including identity checks, outside transactions.
 
@@ -437,8 +443,10 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 _terminal(job, "superseded", "connection_changed")
                 continue
             if utcnow() - job.requested_at > timedelta(hours=1):
-                _terminal(job, "failed", "vault_job_expired")
-                continue
+                last_progress = s.scalar(select(func.max(OfVaultObservation.observed_at)).where(OfVaultObservation.account_id == account, OfVaultObservation.job_id == identity))
+                if _vault_job_expired(job.requested_at, last_progress, utcnow()):
+                    _terminal(job, 'failed', 'vault_job_expired')
+                    continue
             from .connections import _open
             try:
                 clear = _open(connection, tenant)
@@ -454,7 +462,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             break
         error = budget = failure = deferred = None
         try:
-            from .provider_connector import NativeProviderConnector, session_from_capture
+            from .provider_connector import NativeProviderConnector, NativeReadTransientError, NativeAuthenticationError, session_from_capture
             transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
                 policy_revision=1, capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"],
                 expires_at=expires.replace(tzinfo=timezone.utc)))
@@ -469,6 +477,8 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             from .provider_read_budget import ReadDeferred
             failure=problem
             if isinstance(problem,ReadDeferred):deferred=problem.retry_at;error='provider_read_deferred'
+            elif isinstance(problem,NativeAuthenticationError):error='connection_unavailable'
+            elif isinstance(problem,NativeReadTransientError):error='vault_read_failed'
             elif isinstance(problem,NativeProtocolError):error='provider_rate_limited' if hasattr(problem,'retry_after') else 'unsupported_vault_response'
             else:error='vault_read_failed'
         try:
@@ -494,7 +504,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                     job.lease_until=deferred;job.updated_at=utcnow()
                     continue
                 if failure is not None and hasattr(failure,'retry_after'):
-                    job.status='running';job.last_error='provider_rate_limited'
+                    job.status='running';job.last_error=error
                     job.lease_until=utcnow()+timedelta(seconds=min(3600,max(1,int(failure.retry_after))))
                     job.updated_at=utcnow()
                     continue

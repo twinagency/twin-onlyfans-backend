@@ -303,16 +303,16 @@ def test_same_provider_and_fan_ids_cannot_transfer_ownership_between_creators(da
     # Same provider/fan/message ID is insufficient when the message exists
     # only under the first creator. Financial evidence stays scoped to each
     # account; the missing local message cannot transfer ownership between them.
-    assert record(other, "synthetic-other-creator", observation) == "conflict"
+    assert record(other, "synthetic-other-creator", observation) == "applied"
     unlinked = {**observation, "message_id": None}
-    assert record(other, "synthetic-other-creator", unlinked) == "conflict"
+    assert record(other, "synthetic-other-creator", unlinked) == "applied"
     with Session(database[1]) as s:
         tx = s.scalar(select(Transaction).where(Transaction.account_id == "synthetic-other-creator"))
         assert tx.amount_cents == 1000 and tx.message_id is None
         assert s.get(Fan, ("synthetic-other-creator", FAN)).lifetime_spend_cents == 1000
         assert owned_media_in_session(s, "synthetic-other-creator", FAN) == set()
     assert record(other, "synthetic-other-creator", unlinked) == "duplicate"
-    assert record(other, "synthetic-other-creator", {**unlinked, "status": "refunded"}) == "conflict"
+    assert record(other, "synthetic-other-creator", {**unlinked, "status": "refunded"}) == "applied"
     with Session(database[1]) as s:
         assert s.get(Fan, (ACCOUNT, FAN)).lifetime_spend_cents == 1000
         assert s.get(Fan, ("synthetic-other-creator", FAN)).lifetime_spend_cents == 0

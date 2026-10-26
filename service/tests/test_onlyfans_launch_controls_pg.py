@@ -267,7 +267,7 @@ def test_verified_resolution_after_missing_history_links_purchase_and_replay_is_
                     provider_transaction_id=observation["provider_transaction_id"], fan_id=101,
                     outcome="conflict", observation_json=canonical(observation), recorded_at=utcnow()))
         else:
-            assert record(store, account, observation) == "conflict", "missing history does not grant ownership"
+            assert record(store, account, observation) == "applied", "verified money grants no media without history"
         assert record(store, account, observation) == "duplicate", "observation dedup remains intact"
         with Session(store.engine) as s:
             tx = s.scalar(select(Transaction))
@@ -315,7 +315,7 @@ def test_verified_resolution_after_missing_history_links_purchase_and_replay_is_
             assert tx.amount_cents == 1001 and tx.message_id == 123
             assert (tx.net_cents, tx.fee_cents) == (801, 200)
             assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1001
-            assert s.scalar(select(OfLedgerEvidence.outcome)) == "conflict", "original evidence stays immutable"
+            assert s.scalar(select(OfLedgerEvidence.outcome)) == ("conflict" if legacy_evidence else "applied"), "original evidence stays immutable"
             assert s.scalar(select(func.count()).select_from(OfLedgerResolution)) == 1
             assert s.scalar(select(func.count()).select_from(OfLaunchCommand)) == 2
             assert s.scalar(select(func.count()).select_from(Transaction)) == 1
@@ -329,7 +329,7 @@ def test_resolution_cannot_change_message_identity_retained_before_history(datab
     try:
         scan_seed(store, account)
         observed = parsed(transaction(messageId=123))
-        assert record(store, account, observed) == "conflict"
+        assert record(store, account, observed) == "applied"
         changed = {**observed, "message_id": 124}
         assert record(store, account, changed) == "conflict"
         with Session(store.engine) as s, s.begin():

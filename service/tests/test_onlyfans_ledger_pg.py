@@ -72,9 +72,9 @@ def record(store, account, observation):
     ("failed", 0), ("refunded", 0), ("chargedback", 0)])
 def test_missing_message_retains_verified_money_without_purchase_rights(database, monkeypatch, status, spend):
     store, account, _ = verified(database, monkeypatch)
-    observation = parsed(transaction(messageId=123, net="8.00", fee="2.00"))
+    observation = parsed(transaction(messageId=123, net="8.00", fee="2.00", createdAt=utcnow().isoformat() + "Z"))
     observation["status"] = status
-    assert record(store, account, observation) == "conflict"
+    assert record(store, account, observation) == "applied"
     assert record(store, account, observation) == "duplicate"
     with Session(database[1]) as s:
         tx = s.scalar(select(Transaction))
@@ -83,11 +83,11 @@ def test_missing_message_retains_verified_money_without_purchase_rights(database
         assert json.loads(tx.raw_json)["message_id"] == 123
         assert s.get(Fan, (account, 101)).lifetime_spend_cents == spend
         evidence = s.scalar(select(OfLedgerEvidence))
-        assert evidence.outcome == "conflict" and evidence.transaction_id == tx.id
+        assert evidence.outcome == "applied" and evidence.transaction_id == tx.id
         assert s.scalar(select(func.count()).select_from(OfLedgerEvidence)) == 1
         assert s.scalar(select(func.count()).select_from(Message)) == 0
         assert s.scalar(select(func.count()).select_from(VaultSend)) == 0
-        assert held(s, account), "linkage remains unresolved even though money is recorded"
+        assert held(s, account) is (spend > 0), "current unpaid linkage holds selling without hiding verified money"
     store.close()
 
 
@@ -97,7 +97,7 @@ def test_missing_message_retains_verified_money_without_purchase_rights(database
 def test_unlinked_receipt_cannot_change_its_immutable_identity(database, monkeypatch, field, value):
     store, account, _ = verified(database, monkeypatch)
     observation = parsed(transaction(messageId=123))
-    assert record(store, account, observation) == "conflict"
+    assert record(store, account, observation) == "applied"
     assert record(store, account, {**observation, "status": "refunded", field: value}) == "conflict"
     with Session(database[1]) as s:
         tx = s.scalar(select(Transaction))
@@ -113,9 +113,9 @@ def test_unlinked_receipt_cannot_change_its_immutable_identity(database, monkeyp
 def test_unlinked_reversal_keeps_exact_money_and_retained_message_identity(database, monkeypatch):
     store, account, _ = verified(database, monkeypatch)
     observation = parsed(transaction(messageId=123, net="8.00", fee="2.00"))
-    assert record(store, account, observation) == "conflict"
+    assert record(store, account, observation) == "applied"
     reversal = {**observation, "status": "refunded", "message_id": None, "net_cents": None, "fee_cents": None}
-    assert record(store, account, reversal) == "conflict"
+    assert record(store, account, reversal) == "applied"
     assert record(store, account, reversal) == "duplicate"
     assert record(store, account, {**observation, "description": "Payment for message from stale display"}) == "stale"
     with Session(database[1]) as s:

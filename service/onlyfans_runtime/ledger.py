@@ -196,7 +196,6 @@ def _project_receipt(s, account, observation, *, now, backfill=False):
                 or not bound_reversal and (message.direction != "out" or message.is_unsent
                     or message.price_cents != observation["amount_cents"] or occurred < message.created_at
                     or offers and offers[0].price_cents != observation["amount_cents"])):
-            outcome = "conflict"
             message = None
         else:
             offer = offers[0] if offers else None
@@ -238,7 +237,7 @@ def _project_receipt(s, account, observation, *, now, backfill=False):
             from .launch_engagement.events import cancel_for_fan
             cancel_for_fan(s, account, fan_id, "purchase", now=now)
     s.flush()
-    return tx, outcome
+    return tx, financial_outcome
 
 
 def apply_observation(s, account, observation, *, now, backfill=False):

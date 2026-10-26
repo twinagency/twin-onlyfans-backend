@@ -4,7 +4,8 @@ Amounts are not offers, opens or fan balances. A missing baseline is unknown,
 never zero. Refund/pending states stay separate from cleared gross receipts.
 """
 from datetime import datetime,timedelta
-from sqlalchemy import select,func,and_,text
+from sqlalchemy import select,func,and_,or_,text,cast,String
+from sqlalchemy.dialects.postgresql import JSONB
 from db.models import Transaction,OfCreatorBinding
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
@@ -13,6 +14,7 @@ from onlyfans_runtime.text_delivery import _stamp
 from onlyfans_runtime.store import Refused as InvalidStamp
 from .errors import BadRequest,Unavailable
 from transaction_contract import STATUSES
+from onlyfans_runtime.launch_operations_models import OfLaunchCommand,OfLedgerResolution
 
 SCHEMA="of-earnings.v1"
 REASONS={"no_bound_accounts","ledger_unavailable","ledger_stale","ledger_held","outside_coverage","unsupported_currency","unsupported_status","unverified_ledger_rows"}
@@ -116,6 +118,35 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False,incl
     applied=select(OfLedgerEvidence.evidence_hash).where(OfLedgerEvidence.account_id==Transaction.account_id,
         OfLedgerEvidence.provider_transaction_id==Transaction.provider_transaction_id,
         OfLedgerEvidence.transaction_id==Transaction.id,OfLedgerEvidence.outcome=="applied").exists()
+    # Legacy conflicts can be reprocessed by the existing audited action while
+    # message history is still missing. These receipts prove money independently
+    # of a later media-link decision; no observation or purchase right is forged.
+    decision=cast(OfLaunchCommand.result_json,JSONB)
+    replayed=select(OfLedgerEvidence.evidence_hash).join(OfLaunchCommand,and_(
+        OfLaunchCommand.account_id==OfLedgerEvidence.account_id,
+        decision["evidenceHash"].astext==OfLedgerEvidence.evidence_hash)).where(
+        OfLedgerEvidence.account_id==Transaction.account_id,
+        OfLedgerEvidence.provider_transaction_id==Transaction.provider_transaction_id,
+        OfLaunchCommand.kind=="ledger_resolution",decision["financialRecorded"].astext=="true",
+        decision["transactionId"].astext==cast(Transaction.id,String)).exists()
+    resolved=select(OfLedgerResolution.transaction_id).where(
+        OfLedgerResolution.account_id==Transaction.account_id,
+        OfLedgerResolution.transaction_id==Transaction.id).exists()
+    applied=or_(applied,replayed,resolved)
+    financial_decision=select(OfLaunchCommand.command_key).join(Transaction,and_(
+        Transaction.account_id==OfLaunchCommand.account_id,
+        decision["transactionId"].astext==cast(Transaction.id,String))).where(
+        OfLaunchCommand.account_id==OfLedgerEvidence.account_id,OfLaunchCommand.kind=="ledger_resolution",
+        decision["evidenceHash"].astext==OfLedgerEvidence.evidence_hash,
+        decision["financialRecorded"].astext=="true",
+        Transaction.provider_transaction_id==OfLedgerEvidence.provider_transaction_id).correlate(OfLedgerEvidence).exists()
+    resolved_conflict=select(OfLedgerResolution.evidence_hash).where(
+        OfLedgerResolution.account_id==OfLedgerEvidence.account_id,
+        OfLedgerResolution.evidence_hash==OfLedgerEvidence.evidence_hash).correlate(OfLedgerEvidence).exists()
+    conflict=await session.scalar(select(OfLedgerEvidence.evidence_hash).where(
+        OfLedgerEvidence.account_id.in_(ids),OfLedgerEvidence.outcome=="conflict",
+        ~resolved_conflict,~financial_decision).limit(1))
+    if conflict is not None:result["reasons"]=["unverified_ledger_rows"];return result
     unknown=await session.scalar(select(Transaction.id).where(Transaction.account_id.in_(ids),
         Transaction.occurred_at>=begin,Transaction.occurred_at<finish,Transaction.kind!="ppv_pending",~applied).limit(1))
     if unknown is not None:result["reasons"]=["unverified_ledger_rows"];return result

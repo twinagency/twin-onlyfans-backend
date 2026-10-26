@@ -91,6 +91,70 @@ def test_failed_payments_are_known_non_revenue_without_hiding_other_payments(dat
     store.close()
 
 
+@pytest.mark.parametrize("legacy_evidence", [False, True])
+def test_missing_message_money_is_reported_before_exact_media_recovery(database, legacy_evidence):
+    from db.models import Fan,Message,VaultSend
+    from db.onlyfans_ledger_models import OfLedgerEvidence
+    from onlyfans_runtime.launch_operations import digest,ledger_status,resolve_ledger
+    from onlyfans_runtime.native_context import canonical
+    from ownership import owned_media_in_session
+    store=setup(database)
+    observed=parsed(transaction(messageId=123,net="8.00",fee="2.00",createdAt=utcnow().isoformat()+"Z"))
+    if legacy_evidence:
+        with Session(store.engine) as s,s.begin():
+            s.add(OfLedgerEvidence(account_id="acc-a",evidence_hash=digest(observed),
+                provider_transaction_id=observed["provider_transaction_id"],fan_id=101,
+                outcome="conflict",observation_json=canonical(observed),recorded_at=utcnow()))
+        assert read(database,include_pending=True)["recorded"] is None
+        state=ledger_status(store,"tenant-a","acc-a")
+        args=dict(evidence_hash=digest(observed),command_key="a"*64,actor="op-session:"+"a"*64,
+            reason="Recover retained financial evidence before history arrives",expected_fingerprint=state["fingerprint"])
+        result=resolve_ledger(store,"tenant-a","acc-a",**args)
+        assert result["resolved"] is False and result["financialRecorded"] is True
+        assert resolve_ledger(store,"tenant-a","acc-a",**args)==result
+    else:
+        assert record(store,"acc-a",observed)=="applied"
+    assert record(store,"acc-a",observed)=="duplicate"
+    result=read(database,include_pending=True,include_history=True)
+    assert result["status"]=="current" and result["reasons"]==[]
+    assert (result["clearedGrossCents"],result["clearedNetCents"],result["clearedCount"])==(1000,800,1)
+    assert result["recorded"]["paymentCount"]==1 and result["statistics"]["byKind"][0]["paymentCount"]==1
+    with Session(store.engine) as s,s.begin():
+        assert s.scalar(select(Transaction.message_id)) is None
+        assert s.get(Fan,("acc-a",101)).lifetime_spend_cents==1000
+        assert owned_media_in_session(s,"acc-a",101)==set()
+        assert s.scalar(select(func.count()).select_from(VaultSend))==0
+        s.add(Message(account_id="acc-a",fan_id=101,message_id=123,direction="out",
+            body="Retained bundle",media_ids="[11,12,13]",media_count=3,price_cents=1000,
+            created_at=utcnow()-timedelta(hours=1)))
+    state=ledger_status(store,"tenant-a","acc-a")
+    resolved=resolve_ledger(store,"tenant-a","acc-a",evidence_hash=digest(observed),command_key="b"*64,
+        actor="op-session:"+"a"*64,reason="Match the exact retained message",expected_fingerprint=state["fingerprint"])
+    assert resolved["resolved"] is True
+    result=read(database,include_pending=True)
+    assert result["recorded"]["paymentCount"]==1 and result["recorded"]["grossCents"]==1000
+    with Session(store.engine) as s:
+        assert owned_media_in_session(s,"acc-a",101)=={11,12,13}
+        assert s.get(Fan,("acc-a",101)).lifetime_spend_cents==1000
+        assert s.scalar(select(func.count()).select_from(Transaction))==1
+        assert s.scalar(select(func.count()).select_from(OfLedgerEvidence))==1
+    store.close()
+
+
+def test_conflicting_money_cannot_be_hidden_by_an_earlier_applied_receipt(database):
+    store=setup(database)
+    observed=parsed(transaction(net="8.00"))
+    assert record(store,"acc-a",observed)=="applied"
+    assert read(database)["clearedGrossCents"]==1000
+    assert record(store,"acc-a",{**observed,"amount_cents":1100})=="conflict"
+    result=read(database,include_pending=True)
+    assert result["status"]=="unavailable" and result["reasons"]==["unverified_ledger_rows"]
+    assert result["clearedGrossCents"] is None and result["recorded"] is None
+    with Session(store.engine) as s:
+        assert s.scalar(select(Transaction.amount_cents))==1000
+    store.close()
+
+
 def test_unknown_financial_status_still_refuses_complete_totals(database):
     store=setup(database)
     record(store,"acc-a",parsed(transaction(id="failed",status="failed")))

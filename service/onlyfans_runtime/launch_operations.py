@@ -285,15 +285,20 @@ def resolve_ledger(store, tenant, account, *, evidence_hash, command_key, actor,
                 Transaction.fan_id == fan_id, Transaction.message_id == mid,
                 Transaction.id != tx.id if tx is not None else Transaction.id.is_not(None)).limit(1)) is not None:
             blocker = "message_purchase_identity_conflict"
+        financial_projection = None
         if blocker == "canonical_paid_message_conflict" and tx is None:
             # Older immutable conflicts may predate money/linkage separation.
             # This explicit audited replay recovers their verified money even
             # while history is unavailable; it never clears the linkage hold.
             from .ledger import _project_receipt
-            _project_receipt(s, account, observed, now=now, backfill=True)
+            projected, financial_outcome = _project_receipt(s, account, observed, now=now, backfill=True)
+            if financial_outcome == "applied":
+                financial_projection = projected.id
         result = {"recorded": True, "resolved": blocker is None, "evidenceHash": evidence_hash,
             "outcome": "verified_projection" if blocker is None else "unresolved", "blocker": blocker,
             "commandKey": command_key}
+        if financial_projection is not None:
+            result.update(financialRecorded=True, transactionId=financial_projection)
         _record(s, runtime, command_key, "ledger_resolution", request_hash, actor, reason, before, result, now)
         if blocker is None:
             from .commerce import settle_media_purchase

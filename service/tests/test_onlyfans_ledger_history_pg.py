@@ -1,3 +1,4 @@
+from onlyfans_runtime.ledger import _coverage_receipt
 """Lifetime imports use real PostgreSQL and synthetic provider pages."""
 import threading
 import pytest
@@ -128,11 +129,14 @@ def test_full_history_resumes_deduplicates_and_keeps_recent_poll_independent(dat
 
 def history_row(account,*,complete=True,revision=1):
     now=utcnow()
-    return OfLedgerHistory(account_id=account,binding_id="binding-"+account,
+    row=OfLedgerHistory(account_id=account,binding_id="binding-"+account,
         connection_revision=revision,owner_id=OWNER,window_start=datetime(1970,1,1),
         window_end=now,page_offset=1,status="idle" if complete else "running",
         next_poll_at=now+timedelta(hours=24),last_complete_at=now if complete else None,
         last_full_at=now if complete else None,updated_at=now)
+    from onlyfans_runtime.ledger import _coverage_receipt
+    row.coverage_json=_coverage_receipt(row) if complete else None
+    return row
 
 def test_lifetime_total_requires_terminal_history_and_current_binding(database):
     store=setup(database)
@@ -148,7 +152,7 @@ def test_lifetime_total_requires_terminal_history_and_current_binding(database):
     with Session(database[1]) as s,s.begin():s.add(history_row("acc-a",complete=False))
     assert read(database,start=start,include_pending=True,include_history=True)["recorded"] is None
     with Session(database[1]) as s,s.begin():
-        h=s.get(OfLedgerHistory,"acc-a");h.last_full_at=h.last_complete_at=utcnow();h.status="idle"
+        h=s.get(OfLedgerHistory,"acc-a");h.last_full_at=h.last_complete_at=utcnow();h.status="idle";h.coverage_json=_coverage_receipt(h)
     result=read(database,start=start,include_pending=True,include_history=True)
     assert result["status"]=="current" and result["recorded"]["netCents"]==1200
     assert result["history"]["completedAccountCount"]==1

@@ -1,3 +1,4 @@
+from onlyfans_runtime.ledger import _coverage_receipt
 from datetime import timedelta
 from sqlalchemy.orm import Session
 from test_onlyfans_foundation_pg import database
@@ -28,7 +29,8 @@ def test_delayed_sync_keeps_recorded_payments_explicitly_unavailable_for_current
     assert result['clearedGrossCents'] is None
     assert result['recorded']['grossCents']==300
     assert result['recorded']['lastSuccessfulSyncAt']==result['recentLedgerAt']
-    with Session(database[1]) as s,s.begin():s.get(OfLedgerScan,'acc-a').last_full_at=utcnow()-timedelta(days=2)
+    with Session(database[1]) as s,s.begin():
+        scan=s.get(OfLedgerScan,'acc-a');scan.last_full_at=utcnow()-timedelta(days=2);scan.coverage_json=_coverage_receipt(scan)
     assert read(database,include_pending=True)['recorded'] is None
     assert read(database,tenant='other',include_pending=True)['recorded'] is None
     store.close()

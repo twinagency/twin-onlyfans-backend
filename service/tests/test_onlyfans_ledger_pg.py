@@ -34,7 +34,9 @@ def transaction(**changes):
 
 
 def payload(rows, more=False):
-    return json.dumps({"list": rows, "hasMore": more}).encode()
+    value = {"list": rows, "hasMore": more}
+    if more:value["nextMarker"] = str(rows[-1].get("id", "invalid")) if rows else "empty"
+    return json.dumps(value).encode()
 
 
 def parsed(row):

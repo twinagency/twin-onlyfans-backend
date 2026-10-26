@@ -1,3 +1,4 @@
+from onlyfans_runtime.ledger import _coverage_receipt
 """Paid campaign snapshots share canonical media/ownership/delivery owners."""
 from datetime import timedelta, timezone
 import json
@@ -228,6 +229,8 @@ def test_native_paid_campaign_and_manual_media_use_same_wire_without_model(datab
             connection_revision=1, owner_id=7001, window_start=now-timedelta(days=90), window_end=now,
             page_offset=0, status="idle", next_poll_at=now+timedelta(minutes=5),
             last_complete_at=now, last_full_at=now, updated_at=now))
+        s.flush()
+        scan=s.get(OfLedgerScan,ACCOUNT);scan.coverage_json=_coverage_receipt(scan)
     wire = NativeProviderConnector(credential(policy_revision=3))
     worker = NativeWorker(store, TENANT, (WorkerAccount(ACCOUNT, None, wire, wire),))
     report = worker.step()

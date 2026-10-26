@@ -25,7 +25,7 @@ from .models import LedgerRetryCommand
 
 SCHEMA = "of-ledger.v1"
 # Static public codes only; anything else (a future or corrupt value) is reported as unknown_error.
-ERRORS = frozenset({"connection_unavailable", "connection_changed", "unsupported_ledger_response",
+ERRORS = frozenset({"connection_unavailable", "connection_changed", "unsupported_ledger_response", "marker_revalidation",
                     "unsupported_ledger_pagination", "ledger_read_failed", "provider_read_deferred",
                     "provider_read_stale", "provider_rate_limited"})
 INVESTIGATE = frozenset({"unsupported_ledger_response", "unsupported_ledger_pagination"})

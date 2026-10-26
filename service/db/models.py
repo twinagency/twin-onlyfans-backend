@@ -1941,6 +1941,7 @@ class ContentOffer(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="open")
     resolved_by: Mapped[str | None] = mapped_column(String)  # tip|ppv_ledger|ppv_fastpath|manual
     tips_accum_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    post_buy_started_at: Mapped[datetime | None] = mapped_column(DateTime, info={"onlyfans_since":"0094_purchase_reply"})
     delivery_message_id: Mapped[int | None] = mapped_column(BigInteger)
     offered_at: Mapped[datetime] = _ts_now()
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime)

@@ -18,7 +18,7 @@ from db.models import ContentOffer, Fan, Message, OfCreatorBinding, Transaction
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan, OfLedgerHistory
-from transaction_contract import STATUS_MAP, PAID, TERMINAL, STATUSES, classify_kind, strip_html
+from transaction_contract import STATUS_MAP, PAID, TERMINAL, STATUSES, classify_kind, strip_html, transaction_marker
 from .native_context import canonical
 from .native_protocol import MAX_BYTES, NativeProtocolError, cents, load
 from .launch_ledger.validation import LedgerValidationError
@@ -41,6 +41,11 @@ def timestamp(value):
 
 
 def parse_page(raw, *, owner_id, start, end):
+    rows, more, _, _ = _provider_page(raw, owner_id=owner_id, start=start, end=end)
+    return rows, more
+
+
+def _provider_page(raw, *, owner_id, start, end):
     """Validate a complete page; diagnostics expose fixed codes, never values."""
     _id(owner_id)
     if (type(start) is not datetime or type(end) is not datetime
@@ -59,7 +64,13 @@ def parse_page(raw, *, owner_id, start, end):
         raise LedgerValidationError("invalid_has_more", "hasMore")
     if more and not rows:
         raise LedgerValidationError("empty_nonterminal_page", "list")
-    result, seen, dates = [], set(), []
+    marker = None
+    if more:
+        try:
+            marker = transaction_marker(value.get("nextMarker"))
+        except (ValueError, UnicodeError):
+            raise LedgerValidationError("invalid_next_marker", "nextMarker") from None
+    result, seen = [], set()
     for index, row in enumerate(rows):
         def require(condition, code, path):
             if not condition:
@@ -102,8 +113,6 @@ def parse_page(raw, *, owner_id, start, end):
         amount = checked(cents, row.get("amount"), "invalid_amount", "amount")
         require(amount > 0, "nonpositive_amount", "amount")
         occurred = checked(timestamp, row.get("createdAt"), "invalid_created_at", "createdAt")
-        require(occurred <= end, "outside_window", "createdAt")
-        dates.append(occurred)
         message = row.get("messageId")
         if message is not None:
             message = checked(_id, message, "invalid_message_id", "messageId")
@@ -118,19 +127,78 @@ def parse_page(raw, *, owner_id, start, end):
         # The provider's descending page can include an older tail despite the
         # requested start bound. Validate every field even in that tail; only
         # in-window observations may reach the transaction/ownership writer.
-        if occurred >= start:
+        if start <= occurred <= end:
             result.append(dict(provider_transaction_id=provider, fan_id=fan, kind=kind,
                 message_id=message, amount_cents=amount, currency="USD", status=status,
                 occurred_at=occurred.isoformat(), cleared_at=cleared.isoformat() if cleared else None,
                 payout_pending_days=days, description=strip_html(description), **optional))
-    if any(date < start for date in dates):
-        # A boundary may end this window only with a fully validated newest-first
-        # page. Never silently truncate an interleaved or out-of-order page.
-        for index in range(1, len(dates)):
-            if dates[index] > dates[index - 1]:
-                raise LedgerValidationError("invalid_window_order", "createdAt", index)
-        more = False
-    return result, more
+    # Date parameters are not a verified ordering/termination contract. Validate
+    # every row, filter locally, and follow the provider's continuation to its end.
+    return result, more, marker, sorted(seen)
+
+
+def _generation(scan):
+    return hashlib.sha256(canonical([scan.account_id, scan.binding_id,
+        scan.connection_revision, scan.owner_id]).encode()).hexdigest()
+
+
+def _cursor_scope(scan):
+    return hashlib.sha256(canonical([_generation(scan), scan.window_start, scan.window_end]).encode()).hexdigest()
+
+
+def _new_cursor(scan):
+    return dict(version=1, scope=_cursor_scope(scan), marker=None, anchor=None, power=1, distance=0)
+
+
+def _cursor(scan):
+    try:
+        if not scan.continuation_json or len(scan.continuation_json.encode()) > 8192:
+            return None
+        value = load(scan.continuation_json.encode())
+        if (set(value) != {"version", "scope", "marker", "anchor", "power", "distance"}
+                or type(value["version"]) is not int or value["version"] != 1
+                or value["scope"] != _cursor_scope(scan)
+                or type(value["power"]) is not int or not 1 <= value["power"] <= 2**31
+                or type(value["distance"]) is not int or not 0 <= value["distance"] < value["power"]):
+            return None
+        for key in ("marker", "anchor"):
+            if value[key] is not None and transaction_marker(value[key]) != value[key]:
+                return None
+        return value
+    except (NativeProtocolError, ValueError, TypeError, UnicodeError):
+        return None
+
+
+def _advance_cursor(cursor, marker):
+    """Brent cycle detection: constant durable space, no extra provider reads."""
+    result = dict(cursor)
+    if marker is not None:
+        if marker in {cursor["marker"], cursor["anchor"]}:
+            raise NativeProtocolError("unsupported ledger pagination")
+        if cursor["anchor"] is None:
+            result.update(anchor=marker, distance=0)
+        else:
+            result["distance"] += 1
+            if result["distance"] == result["power"]:
+                result.update(anchor=marker, distance=0, power=result["power"] * 2)
+    result["marker"] = marker
+    return result
+
+
+def _coverage_receipt(scan):
+    return canonical(dict(version=1, generation=_generation(scan),
+        recent=scan.last_complete_at.isoformat() if scan.last_complete_at else None,
+        full=scan.last_full_at.isoformat() if scan.last_full_at else None))
+
+
+def coverage_proven(scan):
+    try:
+        if scan is None or not scan.last_complete_at or not scan.coverage_json or len(scan.coverage_json.encode()) > 2048:
+            return False
+        value = load(scan.coverage_json.encode())
+        return type(value.get("version")) is int and value == load(_coverage_receipt(scan).encode())
+    except (NativeProtocolError, ValueError, TypeError, UnicodeError):
+        return False
 
 
 def _status(previous, incoming):
@@ -306,6 +374,9 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                 s.add(scan)
             if not _current(runtime, connection, scan, now):
                 scan.last_complete_at = scan.last_full_at = None
+                scan.coverage_json = None
+            elif scan.last_complete_at and not coverage_proven(scan):
+                scan.last_complete_at = scan.last_full_at = scan.coverage_json = None
             if scan.status not in {"running", "held"} or not _current(runtime, connection, scan, now):
                 scan.binding_id, scan.connection_revision, scan.owner_id = runtime.binding_id, connection.revision, connection.owner_id
                 # Revisit the full supported history daily: a refund can arrive
@@ -313,6 +384,12 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                 days = 90 if scan.last_full_at is None or now - scan.last_full_at >= timedelta(days=1) else 7
                 scan.window_start = datetime(1970, 1, 1) if history else now - timedelta(days=days)
                 scan.window_end, scan.page_offset, scan.last_page_hash = now, 0, None
+                scan.continuation_json = None
+            cursor = _cursor(scan)
+            if cursor is None:
+                scan.page_offset, scan.last_page_hash = 0, None
+                cursor = _new_cursor(scan)
+                scan.continuation_json = canonical(cursor)
             from .connections import _open
             try:
                 clear = _open(connection, tenant)
@@ -337,8 +414,8 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
             from .worker import _provider_claim
             budget=_provider_claim(store,tenant,account,transport,connection_revision,'ledger')
             raw = transport.transaction_page(offset=offset, limit=PAGE_SIZE, start=start, end=end,
-                **({"history": True} if history else {}))
-            rows, more = parse_page(raw, owner_id=owner, start=start, end=end)
+                **({"history": True} if history else {}), **({"marker": cursor["marker"]} if cursor["marker"] is not None else {}))
+            rows, more, next_marker, identities = _provider_page(raw, owner_id=owner, start=start, end=end)
         except Exception as problem:
             from .provider_read_budget import ReadDeferred
             failure=problem
@@ -360,12 +437,16 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                     except Refused:error=error or 'provider_read_stale'
                 # Detect repeated provider identities regardless of JSON formatting,
                 # row order, optional metadata or a changed terminal-page flag.
-                page_hash = hashlib.sha256(canonical(sorted(row["provider_transaction_id"]
-                    for row in rows)).encode()).hexdigest() if error is None else None
+                page_hash = hashlib.sha256(canonical(identities).encode()).hexdigest() if error is None else None
                 legacy_hash = hashlib.sha256(raw).hexdigest() if error is None else None
-                if error is None and (offset + len(rows) > (1000000000 if history else MAX_OFFSET)
-                        or rows and scan.last_page_hash in {page_hash, legacy_hash}):
+                if error is None and (offset + len(identities) > (1000000000 if history else MAX_OFFSET)
+                        or identities and scan.last_page_hash in {page_hash, legacy_hash}):
                     error = "unsupported_ledger_pagination"
+                if error is None:
+                    try:
+                        next_cursor = _advance_cursor(cursor, next_marker)
+                    except NativeProtocolError:
+                        error = "unsupported_ledger_pagination"
                 scan.lease_token = scan.lease_until = None
                 scan.updated_at = now
                 if error:
@@ -373,7 +454,8 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                     continue
                 for row in rows:
                     apply_observation(s, account, row, now=now, backfill=history)
-                scan.page_offset, scan.last_page_hash = offset + len(rows), page_hash
+                scan.page_offset, scan.last_page_hash = offset + len(identities), page_hash
+                scan.continuation_json = canonical(next_cursor)
                 scan.next_poll_at = now + timedelta(seconds=1 if more else 300)
                 if not more:
                     # Freshness describes the frozen provider query cutoff, not
@@ -381,6 +463,7 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                     scan.status, scan.last_complete_at = "idle", end
                     if history or end - start == timedelta(days=90):
                         scan.last_full_at = end
+                    scan.coverage_json = _coverage_receipt(scan)
                     if history:
                         scan.next_poll_at = now + timedelta(days=1)
                     elif now - end > timedelta(minutes=5):

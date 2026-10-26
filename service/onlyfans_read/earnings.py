@@ -14,6 +14,7 @@ from onlyfans_runtime.text_delivery import _stamp
 from onlyfans_runtime.store import Refused as InvalidStamp
 from .errors import BadRequest,Unavailable
 from transaction_contract import STATUSES
+from onlyfans_runtime.ledger import coverage_proven
 from onlyfans_runtime.launch_operations_models import OfLaunchCommand,OfLedgerResolution
 
 SCHEMA="of-earnings.v1"
@@ -75,7 +76,7 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False,incl
             valid=(h is not None and data is not None and
                 (h.binding_id,h.owner_id,h.connection_revision)==(binding.id,data[3],data[4])
                 and data[1]==binding.id and data[2]==binding.id)
-            complete=bool(valid and h.last_complete_at and h.last_full_at and h.status!="held")
+            complete=bool(valid and coverage_proven(h) and h.last_full_at and h.status!="held")
             state="complete" if complete else "held" if valid and h.status=="held" else "syncing" if valid else "unavailable"
             result["history"]["completedAccountCount"]+=int(complete)
             result["history"]["accounts"].append({"accountId":binding.account_id,"status":state,
@@ -87,11 +88,11 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False,incl
         if data is None:reasons.add("ledger_unavailable");continue
         scan,runtime_binding,connection_binding,owner,revision=data
         if (scan.binding_id!=binding.id or runtime_binding!=binding.id or connection_binding!=binding.id
-                or owner!=scan.owner_id or revision!=scan.connection_revision or scan.last_complete_at is None or scan.last_full_at is None):
+                or owner!=scan.owner_id or revision!=scan.connection_revision or not coverage_proven(scan) or scan.last_full_at is None):
             reasons.add("ledger_unavailable");continue
         h=histories.get(binding.account_id)
         history_current=(h is not None and (h.binding_id,h.owner_id,h.connection_revision)==
-            (binding.id,owner,revision) and h.last_complete_at is not None and h.last_full_at is not None
+            (binding.id,owner,revision) and coverage_proven(h) and h.last_full_at is not None
             and h.window_start==datetime(1970,1,1) and h.status!="held"
             and timedelta(0)<=now-h.last_full_at<=timedelta(hours=26))
         baseline=h.last_full_at if history_current else scan.last_full_at

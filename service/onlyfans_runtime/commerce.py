@@ -43,13 +43,13 @@ def held(s, account_id):
     from db.onlyfans_models import OfRuntime
     from db.models import OfCreatorBinding
     from db.onlyfans_delivery_models import OfDeliveryPolicy
-    from .ledger import PAID
+    from .ledger import PAID, coverage_proven
     from .store import utcnow
     policy = s.get(OfDeliveryPolicy, account_id)
     scan = s.get(OfLedgerScan, account_id)
     if policy is not None and policy.transport_kind == "native" and policy.media_enabled:
         now = utcnow()
-        if scan is None or scan.last_complete_at is None or not timedelta(0) <= now - scan.last_complete_at <= timedelta(minutes=15):
+        if scan is None or not coverage_proven(scan) or not timedelta(0) <= now - scan.last_complete_at <= timedelta(minutes=15):
             return True
     return (s.scalar(select(OfCommerceEvidence.evidence_hash).where(
         OfCommerceEvidence.account_id == account_id, OfCommerceEvidence.status == "conflict").limit(1)) is not None

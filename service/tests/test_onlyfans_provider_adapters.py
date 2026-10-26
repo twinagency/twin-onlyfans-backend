@@ -134,6 +134,24 @@ def test_ledger_get_uses_selected_identity_frozen_utc_window_and_no_write(monkey
         with pytest.raises(Refused): wire.transaction_page(**args)
 
 
+def test_ledger_marker_is_opaque_exact_and_replaces_the_offset(monkeypatch):
+    from urllib.parse import parse_qs,urlsplit
+    monkeypatch.setenv("ONLYFANS_PROCESS_ROLE","worker")
+    wire=NativeProviderConnector(credential())
+    calls=[]
+    monkeypatch.setattr(wire,"verify_identity",lambda:None)
+    monkeypatch.setattr(wire,"_call",lambda method,path: calls.append((method,path)) or b'{"list":[],"hasMore":false}')
+    for marker in (12345678901234567890,"opaque+/=&value"):
+        wire.transaction_page(offset=520,start=datetime(2026,10,1),end=datetime(2026,10,8),marker=marker)
+        method,path=calls[-1];query=parse_qs(urlsplit(path).query)
+        assert method=="GET" and query["marker"]==[str(marker)] and "offset" not in query
+    count=len(calls)
+    for marker in (True,1.5,"",-1,"x"*2049,"bad\nmarker"):
+        with pytest.raises(Refused):
+            wire.transaction_page(offset=0,start=datetime(2026,10,1),end=datetime(2026,10,8),marker=marker)
+    assert len(calls)==count
+
+
 @pytest.mark.parametrize("options", [
     {"status":302}, {"status":401}, {"status":429}, {"status":500},
     {"headers":{"content-type":"text/html"}}, {"headers":{"content-encoding":"gzip"}},

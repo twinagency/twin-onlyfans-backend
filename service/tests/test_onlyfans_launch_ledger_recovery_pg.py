@@ -29,11 +29,15 @@ def frozen_scan(engine, account, *, offset=40, status="held"):
     start = end - timedelta(days=90)
     with Session(engine) as s, s.begin():
         connection = s.get(OfProviderConnection, account)
-        s.add(OfLedgerScan(account_id=account, binding_id=connection.binding_id,
+        scan=OfLedgerScan(account_id=account, binding_id=connection.binding_id,
             connection_revision=connection.revision, owner_id=connection.owner_id,
             window_start=start, window_end=end, page_offset=offset, status=status,
             last_error="unsupported_ledger_response" if status == "held" else None,
-            next_poll_at=utcnow() - timedelta(seconds=1), updated_at=utcnow()))
+            next_poll_at=utcnow() - timedelta(seconds=1), updated_at=utcnow())
+        cursor=ledger._new_cursor(scan)
+        cursor["marker"]="fixture-offset-"+str(offset) if offset else None
+        scan.continuation_json=ledger.canonical(cursor)
+        s.add(scan)
     return start, end
 
 
@@ -60,7 +64,7 @@ def test_held_offset_40_resumes_the_original_frozen_window(database, monkeypatch
 
     monkeypatch.setattr(NativeProviderConnector, "transaction_page", read)
     assert ledger.process_ledger_pages(store, TENANT) == 1
-    assert calls == [{"offset": 40, "limit": 20, "start": start, "end": end}]
+    assert calls == [{"offset": 40, "limit": 20, "start": start, "end": end, "marker":"fixture-offset-40"}]
     with Session(database[1]) as s:
         scan = s.get(OfLedgerScan, account)
         assert (scan.window_start, scan.window_end, scan.page_offset) == (start, end, 41)
@@ -80,11 +84,11 @@ def test_reported_offset_40_boundary_commits_only_fourteen_in_window_rows(databa
         return boundary_payload(source)
     monkeypatch.setattr(NativeProviderConnector, "transaction_page", read)
     assert ledger.process_ledger_pages(store, TENANT) == 1
-    assert calls == [{"offset": 40, "limit": 20, "start": start, "end": end}]
+    assert calls == [{"offset": 40, "limit": 20, "start": start, "end": end, "marker":"fixture-offset-40"}]
     with Session(database[1]) as s:
         scan = s.get(OfLedgerScan, account)
-        assert scan.status == "idle" and scan.page_offset == 54
-        assert scan.last_complete_at == scan.last_full_at == end
+        assert scan.status == "running" and scan.page_offset == 60
+        assert scan.last_complete_at is None and scan.last_full_at is None
         assert s.scalar(select(func.count()).select_from(Transaction)) == 14
         assert s.scalar(select(func.count()).select_from(OfLedgerEvidence)) == 14
         assert s.get(Fan, (account, 101)).lifetime_spend_cents == 14014
@@ -123,7 +127,7 @@ def test_final_page_crossing_maximum_offset_is_held_without_money(database, monk
 
     monkeypatch.setattr(NativeProviderConnector, "transaction_page", read)
     assert ledger.process_ledger_pages(store, TENANT) == 0
-    assert calls == [{"offset": ledger.MAX_OFFSET, "limit": 20, "start": start, "end": end}]
+    assert calls == [{"offset": ledger.MAX_OFFSET, "limit": 20, "start": start, "end": end, "marker":"fixture-offset-"+str(ledger.MAX_OFFSET)}]
     with Session(database[1]) as s:
         scan = s.get(OfLedgerScan, account)
         assert scan.status == "held" and scan.last_error == "unsupported_ledger_pagination"
@@ -146,7 +150,7 @@ def test_repeated_page_with_different_json_format_cannot_complete_scan(database,
             return payload([row], more=True)
         # Provider row identity is unchanged despite whitespace/key order and
         # a changed pagination flag. The repeat is not fresh coverage.
-        return json.dumps({"hasMore": last_more, "list": [dict(reversed(list(row.items())))]},
+        return json.dumps({"hasMore": last_more,"nextMarker":row["id"], "list": [dict(reversed(list(row.items())))]},
             indent=2).encode()
 
     monkeypatch.setattr(NativeProviderConnector, "transaction_page", read)

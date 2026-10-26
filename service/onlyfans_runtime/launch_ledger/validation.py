@@ -3,12 +3,12 @@ from ..native_protocol import NativeProtocolError
 
 
 VALIDATION_PATHS = frozenset({
-    "$", "list", "hasMore", "id", "ownerId", "user", "user.id", "description",
+    "$", "list", "hasMore", "nextMarker", "id", "ownerId", "user", "user.id", "description",
     "status", "currency", "amount", "createdAt", "messageId", "clearedAt",
     "payoutPendingDays", "net", "fee", "vatAmount",
 })
 VALIDATION_CODES = frozenset({
-    "invalid_json", "invalid_response_size", "invalid_page_list", "invalid_has_more",
+    "invalid_json", "invalid_response_size", "invalid_page_list", "invalid_has_more", "invalid_next_marker",
     "empty_nonterminal_page", "invalid_row", "invalid_provider_id", "duplicate_provider_id",
     "invalid_owner_id", "owner_mismatch", "invalid_user", "invalid_fan_id", "fan_is_owner",
     "invalid_description", "unknown_kind", "invalid_status", "invalid_currency",

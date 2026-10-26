@@ -1,3 +1,4 @@
+from onlyfans_runtime.ledger import _coverage_receipt
 """Combined operator projections and commands over disposable PostgreSQL only."""
 from datetime import datetime, timedelta
 import json
@@ -359,6 +360,7 @@ def test_ledger_freshness_follows_current_connection_revision_without_erasing_wi
         with Session(store.engine) as s, s.begin():
             scan = s.get(OfLedgerScan, account)
             scan.status, scan.last_error, scan.last_complete_at = "idle", None, utcnow()
+            scan.coverage_json=_coverage_receipt(scan)
         before = ledger_status(store, TENANT, account)
         assert before["fresh"] is True
         with Session(store.engine) as s, s.begin():
@@ -482,6 +484,7 @@ def test_explicit_resume_uses_actual_ready_owners_and_leaves_old_work_blocked(da
         with Session(store.engine) as s, s.begin():
             scan = s.get(OfLedgerScan, account)
             scan.status, scan.last_error, scan.last_complete_at, scan.window_end = "idle", None, now, now
+            scan.coverage_json=_coverage_receipt(scan)
         credentials = lambda s, a, b: {"accountId": a, "modelId": MODEL, "configured": True,
             "expiresAt": (now + timedelta(hours=1)).isoformat() + "Z"}
         workflow = PersonalityWorkflow(store, credential_status_reader=credentials)

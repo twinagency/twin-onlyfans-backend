@@ -1,3 +1,4 @@
+from onlyfans_runtime.ledger import _coverage_receipt
 """Same native ledger owners, scoped report window, no real provider or model."""
 import asyncio
 from datetime import timedelta
@@ -26,6 +27,10 @@ def setup(database,*,account="acc-a",tenant="tenant-a",coverage=True):
         if coverage:s.add(OfLedgerScan(account_id=account,binding_id="binding-"+account,owner_id=OWNER+(0 if account=="acc-a" else 1),connection_revision=1,
             window_start=now-timedelta(days=90),window_end=now,page_offset=0,status="idle",next_poll_at=now+timedelta(minutes=5),
             last_complete_at=now,last_full_at=now,updated_at=now))
+    if coverage:
+        from onlyfans_runtime.ledger import _coverage_receipt
+        with Session(database[1]) as s,s.begin():
+            scan=s.get(OfLedgerScan,account);scan.coverage_json=_coverage_receipt(scan)
     return store
 
 
@@ -183,10 +188,11 @@ def test_scope_and_window_exclude_other_tenants_and_old_transactions(database):
 def test_stale_held_or_unverified_records_are_never_a_false_complete_total(database):
     store=setup(database)
     assert read(database)["clearedGrossCents"]==0
-    with Session(database[1]) as s,s.begin():s.get(OfLedgerScan,"acc-a").last_complete_at=utcnow()-timedelta(minutes=16)
+    with Session(database[1]) as s,s.begin():
+        scan=s.get(OfLedgerScan,"acc-a");scan.last_complete_at=utcnow()-timedelta(minutes=16);scan.coverage_json=_coverage_receipt(scan)
     result=read(database);assert result["clearedGrossCents"] is None and result["reasons"]==["ledger_stale"]
     with Session(database[1]) as s,s.begin():
-        scan=s.get(OfLedgerScan,"acc-a");scan.last_complete_at=utcnow();scan.status="held"
+        scan=s.get(OfLedgerScan,"acc-a");scan.last_complete_at=utcnow();scan.status="held";scan.coverage_json=_coverage_receipt(scan)
     assert read(database)["reasons"]==["ledger_held"]
     with Session(database[1]) as s,s.begin():
         s.get(OfLedgerScan,"acc-a").status="idle"

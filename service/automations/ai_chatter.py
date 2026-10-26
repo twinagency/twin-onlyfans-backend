@@ -4861,21 +4861,38 @@ async def _run_discount(account_id: str, payload: dict, cfg: dict) -> dict:
     return out
 
 
+async def _claim_post_buy(account_id: str, offer: ContentOffer, now: datetime) -> bool:
+    """One durable start per verified purchase, before any reply reaches the wire.
+
+    A started reply may be accepted or ambiguous; elapsed time never resets it.
+    Distinct offers have separate receipts. This creates no second sender.
+    """
+    async with get_session() as s:
+        result=await s.execute(update(ContentOffer).where(ContentOffer.id==offer.id,
+            ContentOffer.account_id==str(account_id),ContentOffer.fan_id==offer.fan_id,
+            ContentOffer.status=="delivered",ContentOffer.resolved_at==offer.resolved_at,
+            ContentOffer.resolved_by==offer.resolved_by,ContentOffer.offer_message_id==offer.offer_message_id,
+            ContentOffer.post_buy_started_at.is_(None)).values(post_buy_started_at=now)
+            .execution_options(synchronize_session=False))
+        return result.rowcount==1
+
+
 async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:
     """§4.4b — fired ~90-240s after a PAID unlock. ALWAYS sends the free post_buy_bridge
     bubble (keeps the scene alive on a conversation, not silence). THEN — only if
     post_buy_rung_enabled AND the §6 brakes pass AND qualify() passes with the PURCHASE
     standing in for fan_spoke_last (an unlock is an event, not a turn — the silent
     buyer was structurally unsellable) — fires ONE next rung after the §3.6 pacing
-    floor. NO revenue claim: this ships as a bug fix, not a +30pp promise. Idempotent:
-    one job per content_offers.id; the offer is 'delivered', so a re-run just re-bridges
-    a fan who hasn't spoken (harmless) and never double-rungs (the ladder open-guard)."""
+    floor. The existing offer receipt fences the first attempted reply durably;
+    direct replay after cooldown cannot repeat an accepted or ambiguous reply."""
     offer_id = payload.get("post_buy")
     if not cfg.get("enabled") or offer_id is None:
         return {"status": "skipped", "reason": "post_buy_disabled", "post_buy": True}
     offer = await _load_offer(int(offer_id))
-    if offer is None:
+    if offer is None or str(offer.account_id)!=str(account_id):
         return {"status": "skipped", "reason": "no_offer", "post_buy": True}
+    if offer.status!="delivered" or offer.resolved_at is None:
+        return {"status":"skipped","reason":"not_purchased","post_buy":True}
     if cfg.get("fastt_vault_post_buy") and not (offer.status == "delivered" and offer.resolved_by == "ppv_ledger"):
         # The runner's job: only a purchase the payment ledger settled (never an open card or a claim).
         return {"status": "skipped", "reason": "not_purchased", "post_buy": True}
@@ -4907,6 +4924,8 @@ async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:
     client = await asyncio.to_thread(_runtime_client, account_id)
     bridged = rung_fired = 0
     try:
+        if not await _claim_post_buy(account_id,offer,now):
+            return {"status":"skipped","reason":"post_buy_already_started","post_buy":True}
         name = _greetable(f, await load_voice_blocks(account_id))
         bridge = _pack_line("post_buy_bridge", cfg, fan_id, name=name)
         if bridge and await _send_free_bubble(client, account_id, fan_id, bridge,

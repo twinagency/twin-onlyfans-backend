@@ -23,7 +23,18 @@ STATUS_MAP = {"done": "cleared", "loading": "pending", "undo": "chargedback",
 PAID = frozenset({"pending", "cleared", "refund_pending"})
 TERMINAL = frozenset({"refunded", "chargedback", "failed"})
 STATUSES = PAID | TERMINAL
+MAX_MARKER_BYTES = 2048
 _HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def transaction_marker(value):
+    """A bounded opaque query value; verified provider integers remain exact."""
+    if type(value) is int and 0 < value < 10**64:
+        value = str(value)
+    if (type(value) is not str or not value or len(value.encode()) > MAX_MARKER_BYTES
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise ValueError("unsupported transaction continuation")
+    return value
 
 
 def strip_html(value):

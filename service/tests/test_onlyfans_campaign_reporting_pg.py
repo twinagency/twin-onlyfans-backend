@@ -1,3 +1,4 @@
+from onlyfans_runtime.ledger import _coverage_receipt
 """Campaign observations and exact purchase attribution, owned PostgreSQL only."""
 from datetime import timedelta
 
@@ -36,6 +37,7 @@ def fresh(engine, *, account=ACCOUNT):
                 page_offset=0, status="idle", next_poll_at=now+timedelta(minutes=5), updated_at=now)
             s.add(scan)
         scan.last_complete_at = scan.last_full_at = now
+        scan.coverage_json=_coverage_receipt(scan)
 
 
 def details(service, campaign):

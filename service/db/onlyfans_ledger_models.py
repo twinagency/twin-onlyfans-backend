@@ -3,6 +3,7 @@ from sqlalchemy import Column, String, Integer, BigInteger, DateTime, ForeignKey
 from .models import Base
 
 INFO = {"onlyfans_since": "0084_native_ledger"}
+MARKERS = {"onlyfans_since": "0093_ledger_markers"}
 
 
 class OfLedgerScan(Base):
@@ -11,6 +12,8 @@ class OfLedgerScan(Base):
         CheckConstraint("page_offset >= 0 AND page_offset <= 10000", name="offset"),
         CheckConstraint("status IN ('idle','running','held')", name="status"),
         CheckConstraint("(lease_token IS NULL) = (lease_until IS NULL)", name="lease"),
+        CheckConstraint("continuation_json IS NULL OR length(continuation_json) <= 8192", name="continuation", info=MARKERS),
+        CheckConstraint("coverage_json IS NULL OR length(coverage_json) <= 2048", name="coverage", info=MARKERS),
         Index("ix_of_ledger_due", "next_poll_at", "account_id"),
         {"info": INFO},
     )
@@ -21,6 +24,8 @@ class OfLedgerScan(Base):
     window_start = Column(DateTime, nullable=False)
     window_end = Column(DateTime, nullable=False)
     page_offset = Column(Integer, nullable=False)
+    continuation_json = Column(Text, info=MARKERS)
+    coverage_json = Column(Text, info=MARKERS)
     status = Column(String(16), nullable=False)
     lease_token = Column(String(36))
     lease_until = Column(DateTime)
@@ -55,6 +60,8 @@ class OfLedgerHistory(Base):
         CheckConstraint("page_offset >= 0 AND page_offset <= 1000000000", name="offset"),
         CheckConstraint("status IN ('idle','running','held')", name="status"),
         CheckConstraint("(lease_token IS NULL) = (lease_until IS NULL)", name="lease"),
+        CheckConstraint("continuation_json IS NULL OR length(continuation_json) <= 8192", name="continuation", info=MARKERS),
+        CheckConstraint("coverage_json IS NULL OR length(coverage_json) <= 2048", name="coverage", info=MARKERS),
         Index("ix_of_ledger_history_due", "next_poll_at", "account_id"),
         {"info": {"onlyfans_since": "0092_ledger_history"}},
     )
@@ -65,6 +72,8 @@ class OfLedgerHistory(Base):
     window_start = Column(DateTime, nullable=False)
     window_end = Column(DateTime, nullable=False)
     page_offset = Column(Integer, nullable=False)
+    continuation_json = Column(Text, info=MARKERS)
+    coverage_json = Column(Text, info=MARKERS)
     status = Column(String(16), nullable=False)
     lease_token = Column(String(36))
     lease_until = Column(DateTime)

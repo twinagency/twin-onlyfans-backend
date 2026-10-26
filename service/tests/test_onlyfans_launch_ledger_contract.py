@@ -54,7 +54,7 @@ def test_fractional_json_number_uses_exact_decimal_without_binary_float():
     ({"user": None, "messageId": None}, "missing_fan", "user.id"),
     ({"messageId": True}, "invalid_message_id", "messageId"),
     ({"status": "paid"}, "invalid_status", "status"),
-    ({"createdAt": "2026-10-24T00:00:00Z"}, "outside_window", "createdAt"),
+    ({"createdAt": "2026-10-24T00:00:00"}, "invalid_created_at", "createdAt"),
     ({"createdAt": "2026-10-18T10:00:00"}, "invalid_created_at", "createdAt"),
     ({"clearedAt": "2026-10-17T10:00:00Z"}, "cleared_before_created", "clearedAt"),
     ({"net": "8.001"}, "invalid_net", "net"),

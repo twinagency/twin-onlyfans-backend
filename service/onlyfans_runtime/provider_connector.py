@@ -16,6 +16,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urlsplit
 
 from of_signer import sign
+from transaction_contract import transaction_marker
 from onlyfans_read.contract import ID_PATTERN
 from .native_connector import NativeLoopbackConnector
 from .native_protocol import API_PATH, MAX_BYTES, MAX_VAULT_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, request, load
@@ -411,7 +412,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
         except Exception:
             raise NativeProtocolError("native image read is unavailable") from None
 
-    def transaction_page(self, *, offset, limit=20, start, end, history=False):
+    def transaction_page(self, *, offset, limit=20, start, end, history=False, marker=None):
         """Reuse the legacy ledger endpoint with frozen UTC bounds and no retries."""
         self._ready()
         if (type(offset) is not int or not 0 <= offset <= (1000000000 if history is True else 10000)
@@ -422,9 +423,16 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 or start < datetime(1970, 1, 1)
                 or not timedelta(0) <= end - start <= timedelta(days=60000 if history else 90)):
             raise Refused("invalid bounded native ledger page")
+        params = {"limit": limit, "start": start.isoformat() + "Z", "end": end.isoformat() + "Z"}
+        if marker is None:
+            params["offset"] = offset
+        else:
+            try:
+                params["marker"] = transaction_marker(marker)
+            except (ValueError, UnicodeError):
+                raise Refused("invalid bounded native ledger marker") from None
         self.verify_identity()
-        path = API_PATH + "/payouts/transactions?" + urlencode({"limit": limit, "offset": offset,
-            "start": start.isoformat() + "Z", "end": end.isoformat() + "Z"})
+        path = API_PATH + "/payouts/transactions?" + urlencode(params)
         return self._call("GET", path)
 
     def send(self, dispatch, *, authority, tenant_id):

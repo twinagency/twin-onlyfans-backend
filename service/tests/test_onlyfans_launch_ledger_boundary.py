@@ -37,12 +37,12 @@ def parse(rows, more=True):
 
 
 @pytest.mark.parametrize("provider_more", [True, False])
-def test_reported_fourteen_valid_plus_six_older_shape_ends_the_window(provider_more):
+def test_reported_fourteen_valid_plus_six_older_shape_preserves_provider_continuation(provider_more):
     source = boundary_rows()
     assert set(source[0]) == {"amount", "createdAt", "currency", "description", "descriptionDetails",
         "fee", "id", "mediaTaxAmount", "net", "status", "taxAmount", "user", "vatAmount"}
     rows, more = parse(source, provider_more)
-    assert len(rows) == 14 and more is False
+    assert len(rows) == 14 and more is provider_more
     assert [r["kind"] for r in rows] == ["ppv_message"] * 8 + ["ppv_post"] * 2 + ["tip"] * 4
     assert all(r["amount_cents"] == 1001 and r["message_id"] is None for r in rows)
     assert {r["provider_transaction_id"] for r in rows}.isdisjoint({r["id"] for r in source[14:]})
@@ -52,7 +52,7 @@ def test_reported_fourteen_valid_plus_six_older_shape_ends_the_window(provider_m
 
 def test_an_entire_older_page_validates_but_applies_nothing():
     rows, more = parse(boundary_rows()[14:])
-    assert rows == [] and more is False
+    assert rows == [] and more is True
 
 
 def test_both_window_boundaries_are_inclusive_and_equal_timestamps_allowed():
@@ -63,21 +63,21 @@ def test_both_window_boundaries_are_inclusive_and_equal_timestamps_allowed():
     assert len(rows) == 3 and more is True
 
 
-def test_rows_newer_than_frozen_end_still_refuse_whole_page():
+def test_rows_newer_than_frozen_end_are_validated_but_not_applied():
     source = boundary_rows()
     source[0]["createdAt"] = (END + timedelta(seconds=1)).isoformat() + "Z"
-    with pytest.raises(LedgerValidationError) as caught:
-        parse(source)
-    assert (caught.value.code, caught.value.row_index) == ("outside_window", 0)
+    rows,more=parse(source)
+    assert source[0]["id"] not in {row["provider_transaction_id"] for row in rows}
+    assert len(rows)==13 and more is True
 
 
 @pytest.mark.parametrize("left,right", [(0, 1), (13, 14), (14, 15), (0, 19)])
-def test_boundary_requires_a_monotone_newest_first_page(left, right):
+def test_row_order_never_substitutes_for_provider_exhaustion(left, right):
     source = boundary_rows()
     source[left], source[right] = source[right], source[left]
-    with pytest.raises(LedgerValidationError) as caught:
-        parse(source)
-    assert caught.value.code == "invalid_window_order"
+    rows,more=parse(source)
+    assert len(rows)==14 and more is True
+    assert all(START<=datetime.fromisoformat(row["occurred_at"])<=END for row in rows)
 
 
 @pytest.mark.parametrize("change", [

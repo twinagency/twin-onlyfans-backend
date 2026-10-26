@@ -1,3 +1,4 @@
+from onlyfans_runtime.ledger import _coverage_receipt
 """Operator manual-message API over real PG and the common intent ledger."""
 import hashlib
 
@@ -153,6 +154,8 @@ def test_paid_manual_api_uses_native_wire_without_model_or_purchase(database, mo
                 owner_id=OWNER, connection_revision=1, window_start=now-timedelta(days=90),
                 window_end=now, page_offset=0, status="idle", next_poll_at=now+timedelta(minutes=1),
                 last_complete_at=now, last_full_at=now, updated_at=now))
+            s.flush()
+            scan=s.get(OfLedgerScan,ACCOUNT);scan.coverage_json=_coverage_receipt(scan)
         queued = client.post(url, headers=headers, json=payload)
         assert queued.status_code == 200, queued.text
         ack = queued.json()

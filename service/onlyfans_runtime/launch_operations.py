@@ -148,7 +148,7 @@ def _ledger_core(s, runtime, *, now=None):
     binding = s.get(OfCreatorBinding, runtime.binding_id)
     now = now or utcnow()
     connection = s.get(OfProviderConnection, runtime.account_id)
-    from .ledger import _current
+    from .ledger import _current, coverage_proven
     from .launch_ledger.dashboard import ERRORS, fingerprint
     connection_current = bool(current and _current(runtime, connection, scan, now))
     conflicts = select(OfLedgerEvidence.evidence_hash).where(OfLedgerEvidence.account_id == runtime.account_id,
@@ -174,7 +174,7 @@ def _ledger_core(s, runtime, *, now=None):
         "lastError": (scan.last_error if scan.last_error in ERRORS else "unknown_error")
             if current and scan.last_error is not None else None,
         "updatedAt": z(scan.updated_at) if current else None,
-        "fresh": bool(connection_current and scan.last_complete_at
+        "fresh": bool(connection_current and coverage_proven(scan)
             and timedelta(0) <= now - scan.last_complete_at <= timedelta(minutes=15)),
         "unresolvedTransactions": unlinked, "conflictingEvidence": conflict_count, "commerceHold": bool(held(s, runtime.account_id))}
     return {**value, "fingerprint": digest({"binding": runtime.binding_id,

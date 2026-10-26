@@ -1,5 +1,7 @@
 name: Twin CRM synthetic source load rehearsal
 on:
+  push:
+    branches: [codex/twin-crm-load-rehearsal-20261027]
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,15 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Verify unchanged candidate runtime
         run: |
-          test "$(git rev-parse HEAD^)" = d6811b124928f8167e6625ce9db5db81bf227fad
-          git diff --name-only HEAD^ HEAD
-          test "$(git diff --name-only HEAD^ HEAD | wc -l)" -eq 2
+          git merge-base --is-ancestor d6811b124928f8167e6625ce9db5db81bf227fad HEAD
+          git diff --name-only d6811b124928f8167e6625ce9db5db81bf227fad HEAD
+          test "$(git diff --name-only d6811b124928f8167e6625ce9db5db81bf227fad HEAD | wc -l)" -eq 2
           git rev-parse HEAD
       - name: Install the candidate test requirements
         run: python -m pip install -r requirements-onlyfans-test.txt

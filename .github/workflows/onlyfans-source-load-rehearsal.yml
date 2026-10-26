@@ -1,0 +1,46 @@
+name: Twin CRM synthetic source load rehearsal
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-load:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: synthetic-source-load-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-source-load-only@127.0.0.1:5432/postgres
+      PYTHON_DOTENV_DISABLED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: service:service/tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify unchanged candidate runtime
+        run: |
+          test "$(git rev-parse HEAD^)" = d6811b124928f8167e6625ce9db5db81bf227fad
+          git diff --name-only HEAD^ HEAD
+          test "$(git diff --name-only HEAD^ HEAD | wc -l)" -eq 2
+          git rev-parse HEAD
+      - name: Install the candidate test requirements
+        run: python -m pip install -r requirements-onlyfans-test.txt
+      - name: Rehearse 750000 canonical messages and populated upgrade
+        run: python scripts/onlyfans-source-load-rehearsal.py
+      - name: Retain bounded plan and synthetic measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twin-crm-source-load-evidence
+          path: source-load-evidence

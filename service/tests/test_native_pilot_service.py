@@ -1174,7 +1174,8 @@ async def multi_level(backend, root):
                 if code:
                     return R.FakeResponse({"error": "refused"}, status=code)
             result = {"id": 7000 + len(self.posts), "text": json["text"], "isFromMe": True, "fromUser": {"id": int(A)},
-                      "withUser": {"id": fan}, "createdAt": clock().isoformat() + "Z", "price": 0, "media": []}
+                      "withUser": {"id": fan}, "createdAt": clock().isoformat() + "Z", "price": 0, "media": [],
+                      "mediaCount": 0, "responseType": "message", "previews": [], "lockedText": False}
             self.sent.append(result)
             return R.FakeResponse(result)
 
@@ -1423,14 +1424,17 @@ async def multi_level(backend, root):
                 return None
             grant = grants.pop(0)
             try:
-                transport.post_once(grant)
+                with patch("onlyfans_runtime.text_delivery.utcnow", side_effect=clock):
+                    transport.post_once(grant)
             except Exception as exc:
                 return type(exc).__name__
             return "accepted"
 
-        class Grant:
-            def __init__(self, fan, body):
-                self.fan_id, self.body = fan, body
+        def Grant(fan, body):
+            from onlyfans_runtime.text_delivery import Dispatch
+            return Dispatch(account_id=A, fan_id=fan, intent_id="human-"+str(fan),
+                attempt_id="attempt-"+str(fan), token="synthetic-manual-token", body=body,
+                payload_hash="a"*64, origin="manual", deadline=clock()+timedelta(seconds=30))
 
         import onlyfans_runtime.fastt_manual as manual
         import onlyfans_runtime.store as twin_store
@@ -1789,7 +1793,8 @@ async def followup_loop_level(backend, root):
             if fan in self.fail_for:
                 raise self.fail_for[fan]
             result = {"id": 7000 + len(self.posts), "text": json["text"], "isFromMe": True, "fromUser": {"id": int(A)},
-                      "withUser": {"id": fan}, "createdAt": clock().isoformat() + "Z", "price": 0, "media": []}
+                      "withUser": {"id": fan}, "createdAt": clock().isoformat() + "Z", "price": 0, "media": [],
+                      "mediaCount": 0, "responseType": "message", "previews": [], "lockedText": False}
             self.sent.append(result)
             return R.FakeResponse(result)
 

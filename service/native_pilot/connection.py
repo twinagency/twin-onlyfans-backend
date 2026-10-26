@@ -43,6 +43,17 @@ class PilotConnection:
     daily_cost_cap_cents: int = 0
 
 
+def supports_reply_model(model_id: str) -> bool:
+    """The existing transport's actual route; no credential or model call."""
+    from llm_models import MODELS
+    from llm_providers import PROVIDERS
+    from .model import ENDPOINT, MODEL
+    spec=MODELS.get(model_id)
+    provider=PROVIDERS.get(spec.provider) if spec is not None else None
+    return bool(provider is not None and spec.wire_model()==MODEL
+        and provider.base_url.rstrip("/")+"/chat/completions"==ENDPOINT)
+
+
 async def load_verified_connection(scope: AccountScope, *, now: datetime | None = None) -> PilotConnection:
     from sqlalchemy import select
     from db.engine import get_session
@@ -128,10 +139,7 @@ async def load_verified_connection(scope: AccountScope, *, now: datetime | None 
         raise Refused("model-config-invalid") from None
     if model["modelId"] != saved:
         raise Refused("model-credential-mismatch")
-    spec = MODELS[saved]
-    provider = PROVIDERS.get(spec.provider)
-    if (provider is None or spec.wire_model() != MODEL
-            or provider.base_url.rstrip("/") + "/chat/completions" != ENDPOINT):
+    if not supports_reply_model(saved):
         # The pilot's transport is pinned to one wire model and one endpoint; a
         # different saved model must not silently receive this credential.
         raise Refused("model-route-unsupported")

@@ -68,6 +68,20 @@ def object_value(raw):
     return value
 
 
+def runtime_model_options(account_id):
+    """Constrain only accounts already owned by the existing FASTT authority."""
+    from . import fastt_scope
+    from .runtime_stop import to_fastt_account_id
+    account=to_fastt_account_id(account_id)
+    active=fastt_scope.platform_scope_enabled()
+    if not active:
+        pairs,whole=fastt_scope.owned_scope()
+        active=account in whole or any(owner==account for owner,_ in pairs)
+    if not active:return None
+    from native_pilot.connection import supports_reply_model
+    return sorted(model for model in MODELS if supports_reply_model(model))
+
+
 def editable(row,runtime,session,*,include_activation=False):
     """Only approved fields and catalogue IDs; no arbitrary config or credentials."""
     from automations._voice import fact_labels
@@ -84,6 +98,7 @@ def editable(row,runtime,session,*,include_activation=False):
         override=purpose.get("ai_chatter")
         if override is not None and (type(override) is not str or len(override)>160):raise ValueError()
     except (ValueError,TypeError,RecursionError):override=None;models_valid=False
+    purpose_valid=models_valid
     values={};readonly=[]
     for key,_ in fact_fields():
         value=facts.get(key)
@@ -93,15 +108,22 @@ def editable(row,runtime,session,*,include_activation=False):
     persona=row.persona or ""
     try:resolved=explicit_model(row,"ai_chatter",MODELS)
     except (ValueError,RecursionError):resolved=None
+    options=runtime_model_options(row.account_id)
+    if options is not None:
+        from .connections import personality_credential_status
+        credential=personality_credential_status(session,row.account_id,runtime.binding_id)
+        models_valid=models_valid and resolved in options and row.reasoning_effort is None and bool(
+            credential and credential.get("configured") and credential.get("modelId")==resolved)
+        if not models_valid:resolved=None
     sales, sales_valid = sales_settings(row)
     return {"configurationRevision":runtime.configuration_revision,"fingerprint":fingerprint(row),
         "persona":persona if len(persona)<=4096 else None,"personaTruncated":len(persona)>4096,
         "creatorFacts":values,"factFields":[{"key":key,"label":labels.get(key,label)} for key,label in fact_fields()],
         "factsValid":facts_valid,"readOnlyFacts":readonly,"modelsValid":models_valid,"sharedFacts":source,
-        "defaultModel":row.model,"replyModelOverride":override,"replyOverridePresent":models_valid and "ai_chatter" in purpose,"resolvedReplyModel":resolved,
-        "modelOptions":sorted(MODELS),
+        "defaultModel":row.model,"replyModelOverride":override,"replyOverridePresent":purpose_valid and "ai_chatter" in purpose,"resolvedReplyModel":resolved,
+        "modelOptions":sorted(MODELS) if options is None else options,
         "dailyCostCapCents":row.daily_cost_cap_cents, "reasoningEffort":row.reasoning_effort,
-        "reasoningOptions":{key:list(model.effort_choices) for key,model in MODELS.items()},
+        "reasoningOptions":({key:list(model.effort_choices) for key,model in MODELS.items()} if options is None else {key:[] for key in options}),
         "salesConfigurationValid":sales_valid,
         "onRequestSalesEnabled":on_request_sales_enabled(sales, valid=sales_valid),
         **{name:sales_valid and sales.get(key) is True for name,key in FASTT_SWITCHES.items()},
@@ -307,6 +329,19 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
             from model_selection import explicit_model
             try:explicit_model(row,"ai_chatter",MODELS)
             except (ValueError,RecursionError) as exc:raise InvalidConfiguration("The resulting saved reply model must resolve to a supported explicit choice.") from exc
+        options=runtime_model_options(account_id)
+        if options is not None:
+            if patch.get("reasoningEffort") is not None:
+                raise InvalidConfiguration("This account’s reply runtime requires reasoning to remain off.")
+            if "defaultModel" in patch or "replyModelOverride" in patch:
+                from model_selection import explicit_model
+                from .connections import personality_credential_status
+                resolved=explicit_model(row,"ai_chatter",MODELS)
+                if any(patch.get(field) is not None and patch[field] not in options for field in ("defaultModel","replyModelOverride")) or resolved not in options:
+                    raise InvalidConfiguration("Choose a reply model supported by this account’s active runtime.")
+                credential=personality_credential_status(s,account_id,runtime.binding_id)
+                if not credential or not credential.get("configured") or credential.get("modelId")!=resolved:
+                    raise InvalidConfiguration("A verified model credential matching this reply model is required before saving it.")
         if not changed:raise InvalidConfiguration("No configuration change was needed.")
         row.updated_at=utcnow()
         s.flush()

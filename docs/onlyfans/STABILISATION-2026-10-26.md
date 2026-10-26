@@ -65,3 +65,17 @@ AI-02 remains open: investigation found a three-flag displayed sales permission 
 Jesse explicitly authorized the private pinned dashboard archive transfer through his private S3 bucket to GitHub CI, a draft PR, and this technical progress report. The paired source gate is preserved. The transfer is still pending successful AWS access; previous rejected attempts did not upload the archive.
 
 Sections 1–4 and the 50% checkpoint remain incomplete. This branch is a partially tested candidate; nothing has been deployed.
+
+## Reconnect recovery candidate
+
+E-006: candidate a7fb3f344d58456ced3e4b1d3065f2f0a360c67b makes a verified newer connection/binding generation eligible for ledger revalidation without yesterday's deadline delaying it. Replacement claims overwrite the stale scan token/generation under the existing runtime lock; an old read cannot commit through the new token. Current-generation deadlines and active leases remain respected.
+
+The new generation starts from a fresh frozen window and clears stale completeness evidence. A failed provider read remains held without inheriting the old completion timestamps. Existing financial records are retained and outgoing activation remains disabled. No new sender, importer, queue or schema field was added.
+
+Validation: the PostgreSQL 16 earnings workflow passed 156 tests on the exact branch implementation a7fb3f344d58456ced3e4b1d3065f2f0a360c67b via workflow_dispatch: https://github.com/twinagency/twin-onlyfans-backend/actions/runs/40257338423 . The PR merge rehearsal also passed 156 tests: https://github.com/twinagency/twin-onlyfans-backend/actions/runs/40256855552 . These are overlapping runs, not 312 unique tests. Ten new cases cover recent/history scans, stale active leases, read success/failure and current-generation deadline/lease protection.
+
+E-006 is fixed and tested in candidate code only, not deployed or verified live. E-007 marker pagination, E-001 receipt recovery, post-buy replay, sending/takeover repairs and the rest of sections 1–4 remain open. This change alone does not establish full historical coverage.
+
+Draft PR: https://github.com/twinagency/twin-onlyfans-backend/pull/33 . The user-authorized private dashboard archive handoff remains pending AWS authentication. Approximately 447 MB was recovered by clearing only npm's rebuildable _cacache download cache; the active _npx runtime, installed dependencies and project sources were preserved. AWS login was reopened after the full disk had damaged its cache. The most recent pending authorization expired before completion; a fresh login is required.
+
+The 50% checkpoint has not been reached. No production deployment, live fan send, financial backfill or account permission change has been performed.

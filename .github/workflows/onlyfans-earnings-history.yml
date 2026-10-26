@@ -1,5 +1,6 @@
 name: OnlyFans lifetime earnings acceptance
 on:
+  workflow_dispatch:
   push:
     branches: [codex/full-earnings-history-20261026]
   pull_request:

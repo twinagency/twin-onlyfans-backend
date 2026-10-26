@@ -111,6 +111,7 @@ async def list_conversations(
     cursor: str | None = None,
     limit: int | None = None,
     now: datetime | None = None,
+    ai_only: bool = False,
 ) -> dict:
     """One page of an account's conversations, newest activity first."""
     account = _require_id(account_id, what="account")
@@ -132,7 +133,8 @@ async def list_conversations(
     size = clamp_limit(limit)
     # One extra row, so "is there another page" is answered by the data rather
     # than by a count that would be a second query.
-    rows = await repo.conversation_page(account_id=account, before=before, limit=size + 1)
+    narrowing = {"ai_only": True} if ai_only else {}
+    rows = await repo.conversation_page(account_id=account, before=before, limit=size + 1, **narrowing)
     has_more = len(rows) > size
     page_rows = rows[:size]
 

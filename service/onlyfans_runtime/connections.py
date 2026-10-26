@@ -419,6 +419,9 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                     transport=NativeProviderConnector(session_from_capture(account_id=account,owner_id=clear['ownerId'],policy_revision=policy_revision,
                         capture=clear['capture'],x_hash=clear['xHash'],proxy_url=clear['proxyUrl'],expires_at=expires))
             elif status!='verified':continue
+            if os.environ.get("ONLYFANS_AUTOMATIC_IMPORTS_ENABLED") == "1":
+                from .automatic_imports import ensure_started
+                ensure_started(store, tenant, account, connection_revision=generation)
             if facts_reader is not None:
                 from .creator_facts import refresh
                 try:refresh(store,tenant,account,facts_reader)

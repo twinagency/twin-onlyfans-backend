@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 import json
 import re
+import os
 
 HEADER = "x-onlyfans-agency-scope"
 VERSION_HEADER = "X-OnlyFans-Access-Version"
@@ -53,6 +54,11 @@ def creator_allowed(creator_id):
 
 def actor_allowed(actor):
     scope = current_scope.get()
+    # Internal import tasks are named explicitly, never as fabricated users.
+    # They exist only in the worker and cannot enter an HTTP agency scope.
+    if (scope is None and os.environ.get("ONLYFANS_PROCESS_ROLE") == "worker"
+            and type(actor) is str and re.fullmatch(r"worker-import:[a-f0-9]{64}", actor)):
+        return True
     return (type(actor) is str and re.fullmatch(ACTOR_PATTERN, actor) is not None
             and (scope is None or scope.can_manage and actor == scope.actor))
 

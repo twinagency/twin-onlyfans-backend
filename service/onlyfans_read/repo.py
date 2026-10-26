@@ -174,7 +174,7 @@ class OnlyFansReadRepo(Protocol):
     async def get_binding(self, *, tenant_id: str | None, account_id: str) -> BindingRow | None: ...
 
     async def conversation_page(
-        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int
+        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False
     ) -> list[ConversationRow]: ...
 
     async def conversation(self, *, account_id: str, fan_id: int) -> ConversationRow | None: ...
@@ -422,7 +422,7 @@ class SqlOnlyFansReadRepo:
         return rows[0] if rows else None
 
     async def conversation_page(
-        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int
+        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False
     ) -> list[ConversationRow]:
         try:
             async with get_session() as s:
@@ -450,6 +450,15 @@ class SqlOnlyFansReadRepo:
                     .order_by(Chat.last_message_at.desc().nullslast(), Chat.fan_id.desc())
                     .limit(limit)
                 )
+                if ai_only:
+                    # Filter before the keyset limit, including enabled fans on later pages.
+                    # Both identity columns are required: fan ids can repeat across creators.
+                    stmt = stmt.where(select(OfConversationState.fan_id).where(
+                        OfConversationState.account_id == Chat.account_id,
+                        OfConversationState.fan_id == Chat.fan_id,
+                        OfConversationState.mode == "automated",
+                        OfConversationState.takeover_state == "none",
+                    ).exists())
                 if before is not None:
                     anchor_at, anchor_fan = before
                     if anchor_at is None:

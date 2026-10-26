@@ -13,7 +13,8 @@ os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{TMP}/t.db"
 import automation_executor as ax
 import llm_client, vault_frames, vault_ai_api as api
 from db.engine import engine, get_session
-from db.models import Account, VaultItem
+from db.models import Account, VaultItem, VaultFolder, VaultFolderItem
+from sqlalchemy import select, delete
 from native_pilot.tools import caption_vault as cv
 
 ACCOUNT = "of-900001"
@@ -31,7 +32,8 @@ NOW = datetime(2026, 1, 1)
 
 async def seed():
     async with engine.begin() as c:
-        await c.run_sync(lambda sc: [t.create(sc) for t in (Account.__table__, VaultItem.__table__)])
+        await c.run_sync(lambda sc: [t.create(sc) for t in (Account.__table__, VaultItem.__table__,
+                                                          VaultFolder.__table__, VaultFolderItem.__table__)])
     async with get_session() as s:
         s.add(Account(id=ACCOUNT)); s.add(Account(id="of-900009"))
         rows = [  # (account, media, kind, age days, status, removed)
@@ -101,6 +103,19 @@ async def main():
     check(json.loads(photo.tags) == ["test"] and "synthetic" in photo.search_text, "tags + search_text")
     check(json.loads(photo.ai_fields_json)["_prompt_version"] == "v2" and photo.describe_model == cv.DEFAULT_MODEL
           and photo.describe_call_id == 77, "ai_fields_json / model / call id")
+    check(json.loads(photo.ai_fields_json)["_auto_folders_v1"] is True, "description hook categorised photo")
+    async with get_session() as s:
+        folders = list(await s.scalars(select(VaultFolder)))
+        members = list(await s.scalars(select(VaultFolderItem)))
+        check(len(folders) == 1 and folders[0].name == "Uncategorised", "existing folder owner reused")
+        check(sorted(m.media_id for m in members) == [1, 2], "photo and video filed without duplicate folders")
+        await s.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == ACCOUNT,
+                                                     VaultFolderItem.media_id == 1))
+        await s.commit()
+    await api._describe_one(ACCOUNT, 1, model=cv.DEFAULT_MODEL)
+    async with get_session() as s:
+        check(await s.get(VaultFolderItem, (ACCOUNT, folders[0].id, 1)) is None,
+              "reanalysis preserves manual category removal")
 
     # idempotent: described items are skipped on the next run
     check(await cv.candidates(api, ACCOUNT, 50) == [6, 7], "described items skipped")

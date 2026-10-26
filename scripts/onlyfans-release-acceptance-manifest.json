@@ -1,7 +1,7 @@
 {
   "schemaVersion": "of-release-acceptance.v1",
   "combined": {
-    "patterns": ["service/tests/test_onlyfans*.py"],
+    "patterns": ["service/tests/test_onlyfans*.py", "service/tests/test_vault_auto_folders*.py"],
     "separateScripts": ["service/tests/test_onlyfans_read.py", "service/tests/test_onlyfans_migration_pg.py"]
   },
   "commerce": {
@@ -26,7 +26,8 @@
       "service/tests/test_onlyfans_ledger_pg.py",
       "service/tests/test_onlyfans_worker_entry.py",
       "service/tests/test_onlyfans_http_pg.py",
-      "service/tests/test_onlyfans_release_rehearsal_pg.py"
+      "service/tests/test_onlyfans_release_rehearsal_pg.py",
+      "service/tests/test_vault_auto_folders*.py"
     ],
     "separateScripts": ["service/tests/test_onlyfans_read.py", "service/tests/test_onlyfans_migration_pg.py"]
   }

@@ -22,7 +22,7 @@ from twin_bridge import store as bridge
 ACCOUNT="of-7001"; FAN=101; OWNER="synthetic-native-owner-0001"
 
 
-def prepared(database):
+def prepared(database, *, service=False):
     store=seed(*database,account=ACCOUNT,tenant=TENANT,fan=FAN)
     current(store.engine,account=ACCOUNT,fan=FAN,mode="automated")
     authority=TextAuthority(store)
@@ -35,8 +35,12 @@ def prepared(database):
             "state,revision,reserved,send_budget_limit,send_budget_used,updated_at) "
             "VALUES(?,?,'synthetic','c','f','active',1,true,0,0,?)",(ACCOUNT,FAN,now.isoformat()))
     ledger=Ledger(database[0],allowance=True)
-    pilot=ledger.activate(pilot_id="takeover-proof",account_id=ACCOUNT,fan_id=FAN,owner_token=OWNER,
-        cutoff=now-timedelta(seconds=10),deadline=now+timedelta(minutes=10),limit=3,now=now)
+    if service:
+        pilot=ledger.activate_service(pilot_id="svc-recovery-proof",account_id=ACCOUNT,fan_id=FAN,owner_token=OWNER,
+            cutoff=now-timedelta(seconds=10),ttl_s=20,now=now)
+    else:
+        pilot=ledger.activate(pilot_id="takeover-proof",account_id=ACCOUNT,fan_id=FAN,owner_token=OWNER,
+            cutoff=now-timedelta(seconds=10),deadline=now+timedelta(minutes=10),limit=3,now=now)
     with Session(store.engine) as s,s.begin():
         s.add(Message(account_id=ACCOUNT,fan_id=FAN,message_id=100,direction="in",body="Synthetic inbound",
             created_at=now-timedelta(seconds=5),ingested_at=now-timedelta(seconds=4),media_ids="[]",media_count=0))

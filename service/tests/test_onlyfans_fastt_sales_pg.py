@@ -4,6 +4,10 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 import importlib
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -131,8 +135,27 @@ def test_api_sales_off_preserves_followup_switches_and_ordinary_reply(database, 
             s.add(Employee(id=1, display_name="Automation", is_active=True))
             s.add(Message(account_id=ACCOUNT, fan_id=FAN, message_id=1, direction="in",
                 body="How was your morning?", created_at=utcnow() - timedelta(minutes=1)))
-        value = asyncio.run(effective(store, monkeypatch, reply=True))
-        assert value["pack_send_enabled"] is False
+        # Native helpers bind their session imports at process startup. Rehearse
+        # the real reply in a fresh process whose entire DB boundary is this PG
+        # fixture, rather than leaving any helper on the suite's default SQLite.
+        program = """
+import asyncio, os, pytest
+from sqlalchemy.engine import make_url
+from onlyfans_runtime.store import Store
+from test_onlyfans_fastt_sales_pg import effective
+store = Store(make_url(os.environ['DATABASE_URL']).set(drivername='postgresql+psycopg2').render_as_string(hide_password=False))
+try:
+    with pytest.MonkeyPatch.context() as patch:
+        value = asyncio.run(effective(store, patch, reply=True))
+        assert value['pack_send_enabled'] is False
+finally:
+    store.close()
+"""
+        env = {**os.environ, "DATABASE_URL": store.engine.url.set(drivername="postgresql+asyncpg").render_as_string(hide_password=False),
+            "PYTHON_DOTENV_DISABLED": "1", "TWIN_FASTT_CONFIG_ISOLATED": "1",
+            "PYTHONPATH": os.pathsep.join((str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parent)))}
+        result = subprocess.run([sys.executable, "-c", program], env=env, capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stdout + result.stderr
     finally:
         client.close()
         store.close()

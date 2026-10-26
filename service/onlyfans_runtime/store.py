@@ -589,11 +589,23 @@ class Store:
             return True
 
     @staticmethod
+    def _native_unresolved(s, account_id, fan_id=None):
+        """Retained native/bridge admission is authoritative before reporting runs."""
+        from sqlalchemy import text
+        if s.bind.dialect.name != "postgresql" or not s.scalar(text(
+                "SELECT to_regclass('fastt_runtime.twin_bridge_send_attempts') IS NOT NULL")):
+            return False
+        return s.scalar(text("SELECT 1 FROM fastt_runtime.twin_bridge_send_attempts "
+            "WHERE account_id=:account AND state IN ('dispatching','delivery_unknown') " +
+            ("AND fan_id=:fan " if fan_id is not None else "") + "LIMIT 1"),
+            {"account":account_id,"fan":fan_id}) is not None
+
+    @staticmethod
     def _unresolved(s, account_id, fan_id, state):
         # Retained receipts are evidence even if an older control row never
         # acquired its pointer. Never infer resolution from a missing pointer,
         # or from the receipt falling outside the latest history page.
-        return state.unresolved_attempt_id is not None or s.scalar(
+        return state.unresolved_attempt_id is not None or Store._native_unresolved(s, account_id, fan_id) or s.scalar(
             select(OfMessageDelivery.message_id).where(
                 OfMessageDelivery.account_id == account_id,
                 OfMessageDelivery.fan_id == fan_id,

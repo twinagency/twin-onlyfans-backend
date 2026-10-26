@@ -64,11 +64,19 @@ async def report_outcomes(*, account_id, fan_id, receipts, run_error=None, now=N
     account_id, fan_id, now = str(account_id), int(fan_id), now or _now()
     out = {"recorded": 0, "unchanged": 0, "conflicts": 0, "missing_message": 0, "unknown": 0}
     async with get_session() as s:
+        from sqlalchemy import select
+        from db.onlyfans_models import OfRuntime
+        from db.models import OfConversationState
+        from onlyfans_runtime.store import Store
+        if s.bind.dialect.name == "postgresql":
+            await s.execute(select(OfRuntime.account_id).where(OfRuntime.account_id==account_id).with_for_update())
+        settled = set()
         unknown_attempt = None
         attention = bool(run_error)
         for r in sorted(receipts, key=lambda x: int(x["attempt_id"])):
             ref = attempt_ref(r["attempt_id"])
             if r["state"] == "not_sent":
+                settled.add(ref)
                 continue  # certainly never sent (see Ledger.record_not_sent): nothing to attribute, nothing unknown
             if r["state"] != "sent":
                 # delivery_unknown, or dispatching when the run ended: never "sent".
@@ -88,14 +96,23 @@ async def report_outcomes(*, account_id, fan_id, receipts, run_error=None, now=N
                                         outcome="sent", attempt_id=ref, evidence_ref=ref,
                                         detail=DETAIL, origin="ai", recorded_at=now))
                 out["recorded"] += 1
+                settled.add(ref)
             elif (row.outcome, row.attempt_id, row.origin) == ("sent", ref, "ai"):
                 out["unchanged"] += 1
+                settled.add(ref)
             else:
                 out["conflicts"] += 1
                 attention = True
         if unknown_attempt or attention:
             await s.flush()
             await _attention(s, account_id, fan_id, attempt=unknown_attempt, now=now)
+        state = await s.get(OfConversationState, (account_id,fan_id))
+        if (state is not None and state.unresolved_attempt_id in settled
+                and not await s.run_sync(lambda sync: Store._native_unresolved(sync,account_id,fan_id))):
+            # Never clear a newer or foreign attempt, even on stale reporting replay.
+            state.unresolved_attempt_id = None
+            await s.flush()
+            await s.run_sync(lambda sync: Store.complete_takeover(sync,account_id,fan_id))
     return out
 
 

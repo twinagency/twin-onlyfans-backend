@@ -226,7 +226,7 @@ class TextAuthority:
 
     @staticmethod
     def _retained_hold(s, account_id, fan_id):
-        return s.scalar(select(OfMessageDelivery.message_id).where(
+        return Store._native_unresolved(s, account_id, fan_id) or s.scalar(select(OfMessageDelivery.message_id).where(
             OfMessageDelivery.account_id == account_id, OfMessageDelivery.fan_id == fan_id,
             OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES)).limit(1)) is not None
 
@@ -469,7 +469,7 @@ class TextAuthority:
                 if policy is not None:
                     policy.queued_count -= 1
                 return intent.status
-            if policy.active_intent_id:
+            if policy.active_intent_id or Store._native_unresolved(s, account_id):
                 intent.reason = "account_busy"
                 return "queued"
             if policy.next_dispatch_at is not None and policy.next_dispatch_at > now:

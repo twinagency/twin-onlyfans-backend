@@ -410,6 +410,47 @@ class Ledger:
             con.execute("UPDATE native_pilots SET model_calls=model_calls+1,updated_at=? WHERE pilot_id=?", (now_s, pilot_id))
             return p["model_calls"] + 1
 
+    def _canonical_guard(self, con, pilot, *, lock=False, own_attempt=None):
+        """Order native admission with Twin controls when this is a managed account.
+
+        The pilot advisory lock is already held on admission. Canonical controls
+        never acquire it: both sides serialize on the existing account runtime row.
+        Standalone fixtures/pilots without a canonical account retain their contract.
+        """
+        if not self.pg or not store.has_table(con, "public.of_runtime"):
+            return False
+        runtime = con.execute("SELECT enabled,binding_id FROM public.of_runtime WHERE account_id=?" +
+            (" FOR UPDATE" if lock else ""), (pilot["account_id"],)).fetchone()
+        if runtime is None:
+            return False
+        binding = con.execute("SELECT account_id,channel,revoked_at FROM public.of_creator_bindings WHERE id=?",
+            (runtime["binding_id"],)).fetchone()
+        state = con.execute("SELECT s.mode,s.takeover_state,s.unresolved_attempt_id,f.is_muted "
+            "FROM public.of_conversation_state s JOIN public.fans f ON f.account_id=s.account_id AND f.fan_id=s.fan_id "
+            "WHERE s.account_id=? AND s.fan_id=?", (pilot["account_id"],pilot["fan_id"])).fetchone()
+        from .reporting import attempt_ref
+        own = attempt_ref(own_attempt) if own_attempt is not None else None
+        pointer = state["unresolved_attempt_id"] if state else None
+        settled = False
+        if (pointer and pointer.startswith("fastt-pilot-") and pointer[12:].isascii()
+                and pointer[12:].isdigit() and len(pointer[12:]) <= 19 and 0 < int(pointer[12:]) < 2**63):
+            settled = con.execute("SELECT 1 FROM twin_bridge_send_attempts a JOIN native_pilot_receipts r ON r.attempt_id=a.id "
+                "WHERE a.id=? AND a.account_id=? AND a.fan_id=? AND "
+                "((a.state='sent' AND r.state='sent') OR (a.state='refused' AND r.state='not_sent'))",
+                (int(pointer[12:]),pilot["account_id"],pilot["fan_id"])).fetchone() is not None
+        if (not runtime["enabled"] or not binding or binding["account_id"] != pilot["account_id"]
+                or binding["channel"] != "onlyfans" or binding["revoked_at"] is not None
+                or not state or state["mode"] != "automated" or state["takeover_state"] != "none"
+                or state["is_muted"] or (pointer not in (None,own) and not settled)):
+            raise Refused("canonical-control-held")
+        from onlyfans_read.contract import UNRESOLVED_OUTCOMES
+        values=tuple(sorted(UNRESOLVED_OUTCOMES))
+        if con.execute("SELECT 1 FROM public.of_message_delivery WHERE account_id=? AND fan_id=? "
+                "AND outcome IN (" + ",".join("?" for _ in values) + ") LIMIT 1",
+                (pilot["account_id"],pilot["fan_id"],*values)).fetchone():
+            raise Refused("canonical-delivery-unresolved")
+        return True
+
     def begin_attempt(self, *, pilot_id: str, owner_token: str, input_key: str,
                       bubble_no: int, revision: int, now: datetime | str) -> Attempt:
         """Atomic final source + authority check, budget charge, durable intent."""
@@ -420,6 +461,7 @@ class Ledger:
         now_s = _dt(now)
         with self._tx() as con:
             p = self._active(con, pilot_id, owner_token, now_s)
+            canonical = self._canonical_guard(con, p, lock=True)
             if bubble_no > 10:
                 # Preserve the ten-bubble limit, excluding definitively refused attempts.
                 # Each retry still gets a distinct immutable attempt/receipt sequence number.
@@ -451,6 +493,10 @@ class Ledger:
                         "WHERE account_id=? AND fan_id=?", (now_s, p["account_id"], p["fan_id"]))
             con.execute("INSERT INTO native_pilot_receipts(attempt_id,pilot_id,input_key,bubble_no,state,created_at,updated_at) "
                         "VALUES(?,?,?,?,'dispatching',?,?)", (aid, pilot_id, input_key, bubble_no, now_s, now_s))
+            if canonical:
+                from .reporting import attempt_ref
+                con.execute("UPDATE public.of_conversation_state SET unresolved_attempt_id=? WHERE account_id=? AND fan_id=?",
+                    (attempt_ref(aid),p["account_id"],p["fan_id"]))
             return Attempt(aid, p["account_id"], p["fan_id"], tid, 1, owner_token, revision)
 
     @staticmethod
@@ -475,7 +521,8 @@ class Ledger:
             raise Refused("allowance-disabled")
         if row["used_units"] >= row["limit_units"]:
             raise Refused("allowance-exhausted")
-        if row["active_intent_id"]:
+        if row["active_intent_id"] or con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? "
+                "AND state IN ('dispatching','delivery_unknown') LIMIT 1", (account,)).fetchone():
             raise Refused("allowance-busy")
         if row["next_dispatch_at"] is not None and _dt(row["next_dispatch_at"]) > now_s:
             raise Refused("allowance-throttled")
@@ -534,6 +581,7 @@ class Ledger:
                 raise Refused("attempt-owner-mismatch")
             if a["state"] != "dispatching" or r["state"] != "dispatching":
                 raise Refused("attempt-not-dispatching")
+            self._canonical_guard(con, p, own_attempt=attempt_id)
             if con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? AND fan_id=? "
                            "AND id<>? AND state IN ('dispatching','delivery_unknown') LIMIT 1",
                            (p["account_id"], p["fan_id"], attempt_id)).fetchone():

@@ -2,6 +2,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
+import importlib
 import json
 from types import SimpleNamespace
 
@@ -61,7 +62,7 @@ async def effective(store, monkeypatch, *, reply=False):
                 raise
 
     monkeypatch.setattr(native, "get_session", session)
-    monkeypatch.setattr("db.engine.get_session", session)
+    monkeypatch.setattr(importlib.import_module("db.engine"), "get_session", session)
     sent = []
 
     async def chat(**kwargs):

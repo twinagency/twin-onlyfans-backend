@@ -148,11 +148,14 @@ async def settle_unknown(backend,f,ledger):
     raw={"id":mid,"fromUser":{"id":int(account)},"toUser":{"id":fan},"createdAt":stamp.isoformat()+"Z",
         "text":escape_plain_text(intent["body"]),"media":[],"mediaCount":0,"price":0,"previews":[],
         "lockedText":False,"responseType":"message"}
-    _matches(raw,intent)  # Keep the exact refusal visible when synthetic proof is malformed.
-    reconcile(ledger,pilot_id=pilot,attempt_id=attempt,account_id=account,fan_id=fan,
-        provider_message_id=mid,history=[raw],complete=True,
-        command_key=hashlib.sha256((pilot+str(attempt)).encode()).hexdigest(),
-        actor="op-session:"+"a"*64,reason="Synthetic positive recovery proof",now=stamp+timedelta(minutes=20))
+    # The service fixture advances virtual time while pacing and waiting.
+    # Validate its synthetic provider receipt against that same clock.
+    with patch("onlyfans_runtime.text_delivery.utcnow", return_value=stamp+timedelta(minutes=20)):
+        _matches(raw,intent)
+        reconcile(ledger,pilot_id=pilot,attempt_id=attempt,account_id=account,fan_id=fan,
+            provider_message_id=mid,history=[raw],complete=True,
+            command_key=hashlib.sha256((pilot+str(attempt)).encode()).hexdigest(),
+            actor="op-session:"+"a"*64,reason="Synthetic positive recovery proof",now=stamp+timedelta(minutes=20))
     if backend.pg:
         await project(ledger,pilot_id=pilot,attempt_id=attempt,account_id=account,fan_id=fan)
         await report_outcomes(account_id=account,fan_id=fan,receipts=ledger.receipts(pilot_id=pilot))

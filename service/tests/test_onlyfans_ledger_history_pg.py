@@ -15,12 +15,12 @@ from onlyfans_runtime.ledger import process_ledger_pages,parse_page
 from onlyfans_runtime.provider_connector import NativeProviderConnector
 from onlyfans_runtime.ledger_worker import LedgerWorker
 from onlyfans_runtime.store import utcnow
+from onlyfans_runtime.ledger import _coverage_receipt
 
 
 @pytest.mark.parametrize("history", [False, True])
 @pytest.mark.parametrize("active_old_lease", [False, True])
 @pytest.mark.parametrize("read_fails", [False, True])
-from onlyfans_runtime.ledger import _coverage_receipt
 
 def test_verified_reconnect_revalidates_future_scan_without_reusing_old_coverage(
         database, monkeypatch, history, active_old_lease, read_fails):
@@ -135,8 +135,7 @@ def history_row(account,*,complete=True,revision=1):
         window_end=now,page_offset=1,status="idle" if complete else "running",
         next_poll_at=now+timedelta(hours=24),last_complete_at=now if complete else None,
         last_full_at=now if complete else None,updated_at=now)
-    from onlyfans_runtime.ledger import _coverage_receipt
-    row.coverage_json=_coverage_receipt(row) if complete else None
+        row.coverage_json=_coverage_receipt(row) if complete else None
     return row
 
 def test_lifetime_total_requires_terminal_history_and_current_binding(database):

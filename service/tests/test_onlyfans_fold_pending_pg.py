@@ -65,10 +65,8 @@ def test_populated_94_upgrade_queues_only_unfolded_or_changed_sources(database):
             folded_message_unsent=false,fold_pending=false"""))
     with database[1].begin() as conn:
         # Reconstruct precisely the old shape in this disposable database.
-        conn.exec_driver_sql("DROP TRIGGER of_content_fold_pending ON messages")
-        conn.exec_driver_sql("DROP FUNCTION public.of_content_fold_pending()")
-        conn.exec_driver_sql("DROP INDEX ix_of_content_sync_source_fold_pending")
-        conn.exec_driver_sql("ALTER TABLE of_content_sync_source DROP COLUMN fold_pending")
+        from onlyfans_upgrade_fixture import restore_pre95_content_vault_shape
+        restore_pre95_content_vault_shape(conn)
         command.stamp(_config(conn),PURCHASE_REPLY)
         conn.exec_driver_sql("DELETE FROM of_content_sync_source WHERE source_id=100001")
         conn.exec_driver_sql("UPDATE messages SET price_cents=0 WHERE message_id=100002")

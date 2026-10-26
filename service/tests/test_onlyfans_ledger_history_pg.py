@@ -195,6 +195,8 @@ def test_additive_upgrade_from_91_retains_financial_evidence(database):
         # Reconstruct the previous additive schema in this disposable DB.
         conn.exec_driver_sql("DROP TABLE of_ledger_history")
         conn.exec_driver_sql("ALTER TABLE of_ledger_scan DROP COLUMN continuation_json CASCADE, DROP COLUMN coverage_json CASCADE")
+        from onlyfans_upgrade_fixture import restore_pre95_content_vault_shape
+        restore_pre95_content_vault_shape(conn)
         conn.exec_driver_sql("ALTER TABLE content_offers DROP COLUMN post_buy_started_at")
         conn.exec_driver_sql("UPDATE alembic_version SET version_num='0091_launch_controls'")
         check_schema(conn,expected="0091_launch_controls")

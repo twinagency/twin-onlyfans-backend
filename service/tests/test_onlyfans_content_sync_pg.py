@@ -1199,3 +1199,32 @@ def test_discovery_scan_releases_runtime_lock_and_rechecks_connection(synced, re
     finally:
         release.set()
         sql_event.remove(store.engine, "before_cursor_execute", hold_discovery)
+
+
+def test_committed_message_update_before_receipt_lock_is_not_lost(synced):
+    from sqlalchemy import event as sql_event
+    from db.onlyfans_content_sync_progress_models import OfContentSyncSource as Source
+    store, account = synced
+    enable(store, account)
+    with Session(store.engine) as s,s.begin():
+        s.add(Fan(account_id=account,fan_id=8123));s.flush()
+        s.add(Message(account_id=account,fan_id=8123,message_id=99123,direction='out',
+            body='Synthetic source race',media_ids='[11]',media_count=1,price_cents=100,
+            created_at=utcnow(),ingested_at=utcnow()))
+    claim=claim_due(store,TENANT,now=clock())
+    assert claim is not None
+    updated=[]
+    def change_before_receipt_lock(conn,cursor,statement,parameters,context,many):
+        if not updated and statement.startswith('SELECT of_content_sync_source.') and 'FOR UPDATE' in statement:
+            updated.append(True)
+            with store.engine.begin() as other:
+                other.execute(text('UPDATE messages SET price_cents=200 WHERE account_id=:a AND message_id=99123'),{'a':account})
+    sql_event.listen(store.engine,'before_cursor_execute',change_before_receipt_lock)
+    try:
+        content_sync._fold(store,TENANT,claim)
+        assert updated, 'the race must occur after message discovery and before the receipt fence'
+        with Session(store.engine) as s:
+            source=s.get(Source,(account,claim.binding_id,'message',99123))
+            assert source.folded_message_price_cents==200 or source.fold_pending, 'a committed update lost its pending marker'
+    finally:
+        sql_event.remove(store.engine,'before_cursor_execute',change_before_receipt_lock)

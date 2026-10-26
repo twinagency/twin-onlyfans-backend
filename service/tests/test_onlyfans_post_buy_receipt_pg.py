@@ -76,6 +76,8 @@ def test_purchase_claim_upgrade_preserves_existing_offer_identity(database):
     from db.schema import upgrade,check_schema,LEDGER_MARKERS,SchemaMismatch
     store=purchase(database)
     with store.engine.begin() as c:
+        from onlyfans_upgrade_fixture import restore_pre95_content_vault_shape
+        restore_pre95_content_vault_shape(c)
         c.exec_driver_sql("ALTER TABLE content_offers DROP COLUMN post_buy_started_at")
         c.execute(text("UPDATE alembic_version SET version_num=:v"),{"v":LEDGER_MARKERS})
         check_schema(c,expected=LEDGER_MARKERS)
@@ -98,6 +100,8 @@ def test_deployed_attempt_receipts_survive_upgrade_without_replaying_a_purchase(
             s.add(AutomationRun(account_id=ACCOUNT,kind="post_buy:1",status=status,
                                 started_at=utcnow(),stats_json='{"offer_id":1,"fan_id":101}'))
         with store.engine.begin() as c:
+            from onlyfans_upgrade_fixture import restore_pre95_content_vault_shape
+            restore_pre95_content_vault_shape(c)
             c.exec_driver_sql("ALTER TABLE content_offers DROP COLUMN post_buy_started_at")
             c.execute(text("UPDATE alembic_version SET version_num=:v"),{"v":LEDGER_MARKERS})
             upgrade(c)

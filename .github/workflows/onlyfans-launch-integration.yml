@@ -62,8 +62,10 @@ jobs:
           python-version: '3.12'
       - name: Install the pinned native runtime
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
+          fi
           python -m pip install -r requirements-onlyfans-test.txt
       - name: Run every SQLite FASTT boundary suite on this exact commit
         shell: bash
@@ -145,8 +147,10 @@ jobs:
           python-version: '3.12'
       - name: Install the pinned native runtime
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
+          fi
           python -m pip install -r requirements-onlyfans-test.txt
       - name: Run every PostgreSQL FASTT boundary suite on this exact commit
         shell: bash
@@ -262,8 +266,14 @@ jobs:
       - name: Install pinned runtimes and matching PostgreSQL clients
         working-directory: backend
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-client-16 ffmpeg
+          # Hosted-runner images already supply these tools in many runs. Avoid
+          # an unrelated mirror refresh when the exact client is present.
+          if ! test -x /usr/lib/postgresql/16/bin/pg_dump || ! command -v ffmpeg >/dev/null; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends postgresql-client-16 ffmpeg
+          fi
+          /usr/lib/postgresql/16/bin/pg_dump --version | grep -E 'PostgreSQL\) 16\.'
+          command -v ffmpeg
           python -m pip install -r requirements-onlyfans-test.txt
           PGPASSWORD=synthetic-acceptance-only createdb -h 127.0.0.1 -U postgres personality_acceptance
       - name: Install the paired lockfile and browser

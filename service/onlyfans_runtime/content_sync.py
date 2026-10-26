@@ -1042,14 +1042,19 @@ def _fold(store, tenant, claim):
             # identities under the original locks, with current payloads and
             # eligibility. Reconnect, edits, disable and lease replacement are
             # revalidated before anything from discovery can be persisted.
+            # Fence the existing pending receipts before reading payloads. A
+            # canonical update committed between discovery and this lock must
+            # be included in the payload we fold. An update waiting behind this
+            # receipt lock marks it pending after our commit, so no wakeup is lost.
+            ids = [mid for fan, mid in keys]
+            receipts = {source.source_id: source for source in s.scalars(select(Source).where(
+                Source.account_id == claim.account, Source.binding_id == runtime.binding_id,
+                Source.source_kind == "message", Source.source_id.in_(ids)).with_for_update())} if ids else {}
             rows = s.execute(_fold_query(runtime, job, row.covered_through_message_id)
                 .where(tuple_(Message.fan_id, Message.message_id).in_(keys))
                 .order_by(Message.message_id, Message.fan_id)).all() if keys else []
             ids = [r[1] for r in rows]
             echoes = echo_map(s, claim.account, runtime.binding_id, ids)
-            receipts = {source.source_id: source for source in s.scalars(select(Source).where(
-                Source.account_id == claim.account, Source.binding_id == runtime.binding_id,
-                Source.source_kind == "message", Source.source_id.in_(ids)).with_for_update())} if ids else {}
             parsed = [(fan, mid, raw, price, created, unsent, _ids(raw))
                       for fan, mid, raw, price, created, unsent in rows]
             keys = {media_key(media) for fan, mid, raw, price, created, unsent, media in parsed

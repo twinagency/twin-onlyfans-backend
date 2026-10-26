@@ -5,9 +5,9 @@ ONLYFANS_TEST_PG_URL must be an admin URL of a disposable server on which this
 script may create and drop its own uniquely named database (prefix from
 ONLYFANS_TEST_DB_PREFIX, default ``of_test_``). Run as a plain script.
 
-It proves, against the real schema produced by ``bootstrap`` (application revision 0094):
+It proves, against the real schema produced by ``bootstrap`` (application revision 0096):
 
-1. the schema check passes AT 0094 both before and after the bridge/pilot tables are
+1. the schema check passes AT 0096 both before and after the bridge/pilot tables are
    created idempotently in the separate ``fastt_runtime`` schema (none in ``public``), with the
    boolean default fixed for PostgreSQL; the ORIGINAL release (8a427a3) ``check_schema`` still
    refuses that advanced database (safe rollback refusal, from a clean copy);
@@ -167,7 +167,7 @@ class PgFixture(ledger_test.Fixture):
 RELEASE_SERVICE = os.environ.get(
     "ONLYFANS_RELEASE_SERVICE_DIR",
     "/tmp/claude-1000/-home-ronan-twin/1f28717a-be90-4d45-ac41-136eed78da59/scratchpad/rel/service")
-LIVE_REVISION = "0094_purchase_reply"
+LIVE_REVISION = "0096_vault_continuation"
 PREVIOUS_RELEASE_REVISION = "0091_launch_controls"
 
 
@@ -178,7 +178,10 @@ def original_release_check():
         sys.exit("FAILED: ONLYFANS_RELEASE_SERVICE_DIR (clean 8a427a3 service dir) is required for the rollback check")
     code = ("import sys; from sqlalchemy import create_engine; from db.schema import HEAD, check_schema; "
             "e=create_engine(sys.argv[1]); c=e.connect(); check_schema(c); print('release-check-ok', HEAD)")
-    env = {"PATH": os.environ.get("PATH", ""), "PYTHON_DOTENV_DISABLED": "1", "DATABASE_URL": ASYNC_URL}
+    # Windows needs its system environment to initialize Winsock. Keep the
+    # child isolated from provider credentials and use only this owned DB.
+    env = {name: os.environ[name] for name in ("PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE") if name in os.environ}
+    env.update(PYTHON_DOTENV_DISABLED="1", DATABASE_URL=ASYNC_URL)
     done = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv.pop(1)); exec(sys.argv.pop(1))",
                            RELEASE_SERVICE, code, SYNC_URL],
                           cwd=RELEASE_SERVICE, env=env, capture_output=True, text=True, timeout=120)
@@ -191,7 +194,7 @@ def original_release_check():
 
 def schema_checks():
     from db.schema import HEAD, _metadata, check_schema
-    check(HEAD == LIVE_REVISION, "application schema head includes financial continuation and purchase-reply migrations")
+    check(HEAD == LIVE_REVISION, "application schema head includes financial, purchase-reply, content-fold and vault continuation migrations")
     check(not set(TABLES) & set(_metadata().tables), "app metadata/check_schema must not include the pilot tables")
     with create_engine(SYNC_URL).connect() as conn:
         check_schema(conn)  # fresh application database, pilot tables not created yet

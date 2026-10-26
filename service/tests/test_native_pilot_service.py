@@ -156,11 +156,11 @@ async def settle_unknown(backend,f,ledger):
             provider_message_id=mid,history=[raw],complete=True,
             command_key=hashlib.sha256((pilot+str(attempt)).encode()).hexdigest(),
             actor="op-session:"+"a"*64,reason="Synthetic positive recovery proof",now=stamp+timedelta(minutes=20))
-    if backend.pg:
-        await project(ledger,pilot_id=pilot,attempt_id=attempt,account_id=account,fan_id=fan)
-        await report_outcomes(account_id=account,fan_id=fan,receipts=ledger.receipts(pilot_id=pilot))
-    else:
-        f.source(mid,direction="out",body=intent["body"],created_at=stamp.isoformat(sep=" "),ingested_at=stamp.isoformat(sep=" "))
+        if backend.pg:
+            await project(ledger,pilot_id=pilot,attempt_id=attempt,account_id=account,fan_id=fan)
+            await report_outcomes(account_id=account,fan_id=fan,receipts=ledger.receipts(pilot_id=pilot))
+        else:
+            f.source(mid,direction="out",body=intent["body"],created_at=stamp.isoformat(sep=" "),ingested_at=stamp.isoformat(sep=" "))
 
 
 def ledger_level(backend, root):

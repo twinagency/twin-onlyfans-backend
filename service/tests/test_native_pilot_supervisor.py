@@ -119,6 +119,29 @@ class Rig:
 ALL = (set(), {'900001', '900002'})
 
 with tempfile.TemporaryDirectory() as tmp:
+    # Explicit chat-only mode works without an approved paid-media catalogue.
+    r = Rig(tmp, ({('900001', 7)}, {'900002'}))
+    r.sql("CREATE TABLE account_ai_config (account_id TEXT, ai_chatter_config_json TEXT)")
+    r.sql("INSERT INTO account_ai_config VALUES (?,?)", A, json.dumps({'fastt_text_only': True}))
+    r.sql("DELETE FROM catalog_items WHERE account_id=?", A)
+    r.tick()
+    a = r.live(A)[0]
+    check(a.argv == ['--account', A, '--fan', '7', '--handle', 'creator1', '--twin-context', '--enable-send'], a.argv)
+    check(not (Path(tmp) / 'manifests' / f'{A}.json').exists(), 'chat-only creates no paid-media manifest')
+    check('--content-manifest' in r.live(B)[0].argv, 'other accounts keep their content configuration')
+    check(S.text_only_enabled(r.db, A) and not S.text_only_enabled(r.db, B), 'chat-only flag is account scoped')
+    r.sql("UPDATE account_ai_config SET ai_chatter_config_json=? WHERE account_id=?", json.dumps({'fastt_text_only': 'true'}), A)
+    r.tick(30)
+    check(r.state(A) == ('held', 'manifest:no-approved-items'), 'string true never enables chat-only')
+    r.sql("UPDATE account_ai_config SET ai_chatter_config_json=? WHERE account_id=?", json.dumps({'fastt_text_only': True, 'fastt_vault_mode': True}), A)
+    r.tick(30)
+    check(r.state(A) == ('held', 'content-mode-conflict') and not r.live(A), 'conflicting content modes fail closed')
+    r.sql("UPDATE account_ai_config SET ai_chatter_config_json=? WHERE account_id=?", json.dumps({'fastt_text_only': True}), A)
+    r.sql("UPDATE of_runtime SET enabled=0 WHERE account_id=?", A)
+    r.tick(30)
+    check(r.state(A) == ('held', 'runtime-disabled'), 'chat-only preserves account activation gate')
+
+with tempfile.TemporaryDirectory() as tmp:
     # --- start: exact arguments, manifest written privately, status file, handle from the binding ---
     r = Rig(tmp, ALL)
     r.tick()

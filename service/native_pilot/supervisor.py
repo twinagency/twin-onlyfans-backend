@@ -139,6 +139,11 @@ def followups_enabled(db, account):
     return _config_flag(db, account, "fastt_followups")
 
 
+def text_only_enabled(db, account):
+    """Explicit chat-only activation never authorizes catalogue or vault sending."""
+    return _config_flag(db, account, "fastt_text_only")
+
+
 def _config_flag(db, account, key):
     try:
         with store.readonly(db) as con:
@@ -359,7 +364,13 @@ class Supervisor:
         scope_args = ("--account", account, *(("--all-fans",) if fan == "*" else ("--fan", str(fan))),
                       "--handle", handle, "--twin-context",
                       *(("--followups",) if followups_enabled(self.db, account) else ()))
-        if vault_mode_enabled(self.db, account):
+        text_only = text_only_enabled(self.db, account)
+        vault_mode = vault_mode_enabled(self.db, account)
+        if text_only and vault_mode:
+            return Hold("content-mode-conflict")
+        if text_only:
+            manifest, args = b"", (*scope_args, "--enable-send")
+        elif vault_mode:
             # FASTT's stock vault selling: no manifest is built or listed (see content.VaultPlan).
             manifest, args = b"", (*scope_args, "--vault-mode", "--enable-send")
         else:

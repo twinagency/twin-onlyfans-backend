@@ -38,6 +38,9 @@ jobs:
       - run: pip install -r requirements-onlyfans-test.txt
       - run: python -m pytest -q service/tests/test_onlyfans_ledger_history_pg.py service/tests/test_onlyfans_ledger_pg.py service/tests/test_onlyfans_earnings_pg.py service/tests/test_onlyfans_recorded_earnings_pg.py service/tests/test_onlyfans_worker_entry.py service/tests/test_onlyfans_provider_adapters.py service/tests/test_onlyfans_agency_pg.py service/tests/test_onlyfans_launch_ledger_recovery_pg.py service/tests/test_onlyfans_launch_controls_pg.py service/tests/test_onlyfans_fastt_sales_pg.py service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_ledger_markers_pg.py service/tests/test_onlyfans_post_buy_receipt_pg.py service/tests/test_onlyfans_foundation_pg.py
 
+      - name: Verify the FASTT manual queue and paid payload boundary
+        run: python -m pytest -q service/tests/test_onlyfans_fastt_operator.py service/tests/test_onlyfans_fastt_operator_pg.py service/tests/test_fastt_controls_pg.py service/tests/test_onlyfans_manual_pg.py
+
       - name: Verify the native reply and vault boundaries
         run: |
           python service/tests/test_native_pilot_engine.py

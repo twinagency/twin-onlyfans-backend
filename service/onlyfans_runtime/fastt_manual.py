@@ -125,3 +125,40 @@ def dispatch_next_manual(authority, tenant_id, account_id, transport):
     """Runner entry point: send one queued human message, if any. Returns the outcome or None."""
     identity = next_queued_manual(authority.store, tenant_id, account_id)
     return None if identity is None else authority.dispatch(tenant_id, account_id, identity, transport)
+
+
+def post_operator_once(client, grant, *, owner_id):
+    """Send the admitted manual payload once and require its matching receipt.
+
+    Admission and uncertain-outcome holds remain owned by TextAuthority. This
+    adapter reuses the current client; it adds no retry or alternate sender.
+    """
+    import json
+    from twin_bridge.platform import escape_plain_text, validate_created_message
+    from .native_protocol import API_PATH, acceptance, message, request
+    from .text_delivery import Dispatch
+    if type(grant) is not Dispatch or grant.origin != "manual":
+        raise NotSent()
+    if grant.media_ids:
+        try:
+            frozen = request(grant)
+            payload = json.loads(frozen)
+        except (ValueError, TypeError):
+            raise NotSent() from None
+        raw = client.post_json(f"{API_PATH}/chats/{grant.fan_id}/messages", json_body=payload,
+            proxy_tries=1, allow_redirects=False)
+        # Any malformed or contradictory response is UNKNOWN, never NotSent.
+        acceptance(json.dumps(raw, ensure_ascii=False, allow_nan=False).encode(), grant,
+            owner_id=owner_id, request_bytes=frozen)
+    else:
+        if grant.price_cents or grant.preview_ids:
+            raise NotSent()
+        body = escape_plain_text(grant.body)
+        raw = client.send_text_once_body(grant.fan_id, body)
+        event = message(raw, owner_id=owner_id, fan_id=grant.fan_id)
+        if (event.direction != "out" or event.body != grant.body or event.media_ids
+                or event.price_cents or raw.get("previews", []) != []
+                or raw.get("lockedText") is not False or raw["text"] != body):
+            raise Refused("provider response differs from the frozen manual text")
+    validate_created_message(raw, chat_id=grant.fan_id, creator_id=owner_id)
+    return raw

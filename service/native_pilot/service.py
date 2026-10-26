@@ -392,7 +392,7 @@ class Service:
         url, tenant = os.environ.get("DATABASE_URL", ""), os.environ.get("ONLYFANS_WORKER_TENANT", "")
         if not url.startswith("postgresql") or not tenant:
             return None
-        from onlyfans_runtime.fastt_manual import FasttManualTransport, NotSent, dispatch_next_manual
+        from onlyfans_runtime.fastt_manual import FasttManualTransport, NotSent, dispatch_next_manual, post_operator_once
         from onlyfans_runtime.store import Refused as TwinRefused, Store
         from onlyfans_runtime.text_delivery import TextAuthority
         from sqlalchemy import text as sql
@@ -416,12 +416,10 @@ class Service:
             rev = c.execute(sql("SELECT revision FROM of_delivery_policy WHERE account_id=:a"), {"a": self.db}).scalar()
         if rev is None or self.client is None:
             return None
-        from twin_bridge.platform import escape_plain_text
-
         def post_once(grant):
             if (not self._owned(grant.fan_id)) if self.all_fans else grant.fan_id != self.args.fan:
                 raise NotSent()
-            return self.client.send_text_once_body(grant.fan_id, escape_plain_text(grant.body))
+            return post_operator_once(self.client, grant, owner_id=int(self.scope.provider_id))
 
         outcome = None
         for _ in range(HUMAN_SENDS_PER_TICK if self.all_fans else 1):

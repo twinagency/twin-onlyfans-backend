@@ -30,12 +30,10 @@ class PgBackend(suite.SqliteBackend):
     pg = True
 
     def fixture(self, root, name):
-        for table in ("of_launch_command", "of_delivery_policy", "of_runtime", "of_creator_bindings", "skip_list", "of_conversation_state",
-                      "chats", "fans"):
-            try:
-                base.rows("DELETE FROM " + table)
-            except store.psycopg2.Error:
-                pass
+        # base owns a freshly created UUID-named disposable database. Reset its
+        # account graph completely; new canonical evidence has RESTRICT FKs.
+        # Never ignore a failed cleanup and leak state into the next fixture.
+        base.rows("TRUNCATE public.accounts CASCADE")
         return base.PgFixture(root, name)
 
     def _account(self):

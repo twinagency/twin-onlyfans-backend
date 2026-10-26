@@ -82,7 +82,7 @@ from attribution import (
 from automation_registry import LEGACY_KINDS, register
 from db.engine import get_session
 from db.models import (
-    CATALOG_IS_SINGLE, AccountAiConfig, Blacklist, CatalogItem,
+    CATALOG_IS_SINGLE, AccountAiConfig, AutomationRun, Blacklist, CatalogItem,
     ContentOffer, Fan, FanProfile, LadderQuote, LadderState, MassRun, Message,
     PendingOffer, QuotaAudit, RhythmState, ScheduledJob, SkipList, Transaction,
     VaultSend, created_at_text, parse_ts,
@@ -4862,19 +4862,30 @@ async def _run_discount(account_id: str, payload: dict, cfg: dict) -> dict:
 
 
 async def _claim_post_buy(account_id: str, offer: ContentOffer, now: datetime) -> bool:
-    """One durable start per verified purchase, before any reply reaches the wire.
+    """Claim once under the offer lock, preserving deployed attempt receipts.
 
-    A started reply may be accepted or ambiguous; elapsed time never resets it.
-    Distinct offers have separate receipts. This creates no second sender.
+    An earlier audit attempt may be accepted or ambiguous. Neither a new
+    schema column nor elapsed time permits its acknowledgement to repeat.
     """
     async with get_session() as s:
-        result=await s.execute(update(ContentOffer).where(ContentOffer.id==offer.id,
-            ContentOffer.account_id==str(account_id),ContentOffer.fan_id==offer.fan_id,
-            ContentOffer.status=="delivered",ContentOffer.resolved_at==offer.resolved_at,
-            ContentOffer.resolved_by==offer.resolved_by,ContentOffer.offer_message_id==offer.offer_message_id,
-            ContentOffer.post_buy_started_at.is_(None)).values(post_buy_started_at=now)
-            .execution_options(synchronize_session=False))
-        return result.rowcount==1
+        current=(await s.execute(select(ContentOffer).where(ContentOffer.id==offer.id,
+            ContentOffer.account_id==str(account_id)).with_for_update())).scalar_one_or_none()
+        if (current is None or current.fan_id!=offer.fan_id or current.status!="delivered"
+                or current.resolved_at!=offer.resolved_at or current.resolved_by!=offer.resolved_by
+                or current.offer_message_id!=offer.offer_message_id or current.post_buy_started_at is not None):
+            return False
+        kind=f"post_buy:{int(offer.id)}"
+        prior=(await s.execute(select(AutomationRun.id).where(
+            AutomationRun.account_id==str(account_id),AutomationRun.kind==kind).limit(1))).scalar()
+        if prior is not None:
+            return False
+        current.post_buy_started_at=now
+        # Retain the deployed reader's receipt too: compatible binaries must
+        # also see this attempt, including when its provider outcome is unknown.
+        s.add(AutomationRun(account_id=str(account_id),kind=kind,status="attempted",
+            started_at=now,completed_at=now,
+            stats_json=json.dumps({"offer_id":int(offer.id),"fan_id":offer.fan_id})))
+        return True
 
 
 async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:

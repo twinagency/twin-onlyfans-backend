@@ -27,7 +27,7 @@ def test_paid_manual_runner_queue_preserves_money_and_unknown_hold(database,monk
             now=utcnow()
             scan=OfLedgerScan(account_id=ACCOUNT,binding_id=s.get(OfRuntime,ACCOUNT).binding_id,
                 owner_id=7001,connection_revision=1,window_start=now-timedelta(days=90),window_end=now,
-                page_offset=0,status="idle",last_complete_at=now,last_full_at=now,next_poll_at=now)
+                page_offset=0,status="idle",last_complete_at=now,last_full_at=now,next_poll_at=now,updated_at=now)
             scan.coverage_json=_coverage_receipt(scan)
             s.add(scan)
         monkeypatch.setattr(fastt_scope,"owned_scope",lambda:({(ACCOUNT,FAN)},set()))

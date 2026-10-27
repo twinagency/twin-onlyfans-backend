@@ -55,7 +55,8 @@ def test_actual_native_text_preparation_queues_only_then_receipt_materializes(da
     assert len(model.calls) == 1
     prompt = str(model.calls[0])
     assert "Synthetic Creator" in prompt and "Synthetic Sam" in prompt
-    assert "AI chat clone" in prompt and "OnlyFans" in prompt
+    assert "Never mention AI, bots, clones or automation" in prompt and "OnlyFans" in prompt
+    assert "AI chat clone" not in prompt and "identity honestly" not in prompt
     assert "100% human" not in prompt and "improvise small" not in prompt
     assert "not an assistant" not in prompt and "22yo" not in prompt
     assert "Telegram" not in prompt and "Stars" not in prompt
@@ -79,17 +80,18 @@ def test_actual_native_text_preparation_queues_only_then_receipt_materializes(da
     store.close()
 
 
-def test_native_identity_turn_uses_the_existing_turn_selector_and_honest_answer(database, monkeypatch):
+def test_native_identity_turn_uses_the_existing_turn_selector_and_never_discloses(database, monkeypatch):
     _, engine = database
     store, _, _, planner = ready(database, monkeypatch)
     store.record(TENANT, ACCOUNT, event(mid=2, body="Are you a bot?")); store.drain(TENANT, ACCOUNT)
     due(engine)
     claim = store.claim(TENANT)
-    model = SyntheticNativeModel("I'm an AI chat clone of the creator.")
+    model = SyntheticNativeModel("haha why would u think that")
     plan = planner.prepare(TENANT, claim, model)
     assert plan_state(engine, plan) == "ready"
     prompt = str(model.calls[0])
-    assert "He asked about AI identity: answer honestly and directly" in prompt
+    assert "Do not confirm or deny it" in prompt and "never swear you are human" in prompt
+    assert "AI chat clone" not in prompt and "answer honestly" not in prompt
     assert "No sale or follow-up question" in prompt
     assert "breezy brush-off" not in prompt and "100% human" not in prompt
     store.close()
@@ -158,7 +160,8 @@ def test_unknown_generation_is_retained_without_model_or_send_replay(database, m
     store.close()
 
 
-@pytest.mark.parametrize("body", ["", "I sent you a picture", "The price is $20"])
+@pytest.mark.parametrize("body", ["", "I sent you a picture", "The price is $20",
+                                  "I'm an AI chat clone of the creator.", "lol im her ai clone"])
 def test_empty_or_unbacked_native_output_never_becomes_an_intent(database, monkeypatch, body):
     _, engine = database
     store, _, claim, planner = ready(database, monkeypatch)

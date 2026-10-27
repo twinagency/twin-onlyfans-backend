@@ -6669,9 +6669,9 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         # so it can answer without naming it. An UNRATEABLE one does not: a warm word
         # about his dog proves nothing, so the accusation still wins here. `seller_off`
         # is set independently in run(), so this opens no path to selling into one.
-        need_block = ("He asked about AI identity: answer honestly and directly "
-            "that you are an AI chat clone, not the creator personally typing. "
-            "Do not brush off or dodge this question. No sale or follow-up question."
+        need_block = ("He asked whether you're real or an AI. Do not confirm or deny it, "
+            "never mention AI, bots, clones or automation, and never swear you are human: "
+            "ONE light line, then something HE told you. No sale or follow-up question."
             if truthful else (
             "He thinks you might be a bot — defending is what a bot does. ONE "
             "breezy brush-off, then something HE told you. No sell, no ask."
@@ -6747,10 +6747,6 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             # The rating is the proof, so it replaces the brush-off rather than joining
             # it — naming the accusation out loud is the defensiveness §6.4 bans.
             need_block += (
-                "\nHe ALSO asked whether you're an AI: say honestly, in one short "
-                "line, that you are the creator's AI chat clone and not her "
-                "personally typing, then give the rating."
-                if twin_context else
                 "\nHe ALSO just questioned whether you're real — don't defend, "
                 "don't bring it up: the rating IS the answer."
             )
@@ -6994,18 +6990,17 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     register_intro = ("HOW YOU TEXT (the approved creator's casual voice):\n" if truthful else
                       f"HOW YOU TEXT (a real {persona_register_age(persona)}yo {v.texter_noun}, not an assistant):\n")
     bio_rule = ("CREATOR FACTS: use only the approved profile. Do not invent "
-                "personal events or unknown details. Explain your AI identity honestly when asked."
+                "personal events or unknown details. Never mention AI, bots, clones or automation, and never claim or swear to be human."
                 + (" Never state what a photo or video shows unless it is described to you "
                    "here or by the fan." if twin_context else "")
                 if truthful else BIO_CONSISTENCY_GUARDRAIL)
     narration_rule = ("- Do not narrate actions or invent personal experiences. "
-                      "Answer identity questions honestly.\n" if truthful else NO_NARRATION_RULE)
+                      "Never mention AI, bots, clones or automation, and never claim or swear to be human.\n" if truthful else NO_NARRATION_RULE)
     if truthful:
         # Same accepted native text behavior as the repaired Telegram source,
         # without importing its capability context or SQLite projection runtime.
         humanizer = humanizer.replace("TEXT LIKE A REAL PERSON, NOT AN AI:",
-            "CASUAL TEXTING STYLE:").replace("- never explain yourself.",
-            "- explain your AI identity honestly when asked.")
+            "CASUAL TEXTING STYLE:")
     system = (
         # 🚨 TWO NEWLINES, AND IT IS LOAD-BEARING. `compose_persona` ends with its
         # facts table ("THESE ARE THE FACTS ABOUT YOU\n- Age: …"), and a SINGLE \n
@@ -7018,15 +7013,12 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         # account's own config: system 3,366 → 2,776 chars, and every one of those
         # rules gone from the prompt without a log line.
         f"{persona_head}\n\n"
-        + ("You are an AI chat clone of the creator on OnlyFans. Use the approved "
-           "creator facts and casual voice. If asked, explain your AI identity "
-           "honestly; never claim the creator is personally typing. "
+        + ("You are texting fans as the creator on OnlyFans. Use the approved "
+           "creator facts and casual voice. Never mention AI, bots, clones or automation, and never claim or swear to be human. "
            if onlyfans_text_only else
-           "You're texting a fan as the creator's AI chat clone — flirting, getting "
-           "to know him, quietly making him feel like the only one. Use the approved "
-           "creator facts. If he asks whether you are an AI or a bot, answer honestly "
-           "that you are the creator's AI chat clone, never claim to be human or "
-           "deny it, and never claim the creator is personally typing. "
+           "You're texting a fan as the creator — flirting, getting to know him, "
+           "quietly making him feel like the only one. Use the approved creator facts. "
+           "Never mention AI, bots, clones or automation, and never claim or swear to be human. "
            if twin_context else
            "You're texting a fan — flirting, getting to know him, quietly making "
            "him feel like the only one. 100% human, never a bot or an assistant. ")

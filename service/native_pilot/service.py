@@ -673,6 +673,13 @@ class Service:
             if exc.reason in ("input-already-claimed", "source-changed"):
                 return await self.wait(self.poll_s)
             raise
+        from .identity import sincere_identity_question
+        if any(sincere_identity_question((src or {}).get("body")) for src in sources.values()):
+            # Identity rule: the AI never answers "are you a bot / AI / real?". The chat is paused and
+            # flagged so a human answers it, then hands back with the normal dashboard controls.
+            await self.identity_handoff("fan-asked")
+            ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+            return
         await self.execute(key, sources, source_id=snap.message_id)
 
     async def execute(self, key, sources, *, source_id, job=None):
@@ -726,6 +733,9 @@ class Service:
                 runner.emit({"event": "turn-stats", "stats": {k: v for k, v in stats.items()
                     if v and isinstance(v, (int, float, str, bool, dict)) and k not in ("model", "mode")}})
         receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
+        from .identity import IDENTITY_HELD
+        if error == IDENTITY_HELD:
+            await self.identity_handoff("reply-held")
         if error:
             if self.stop.is_set() and not receipts:
                 return error  # clean stop: the unsent claim is dropped on release and answered after restart
@@ -952,6 +962,51 @@ class Service:
             row = con.execute(f"SELECT 1 FROM messages WHERE account_id=? AND fan_id=? AND direction='out' "
                               f"AND price_cents>0 AND message_id IN ({marks}) LIMIT 1", (self.db, self.args.fan, *ids)).fetchone()
         return row is not None
+
+    async def identity_handoff(self, trigger):
+        """Pause the AI for this fan and flag the chat for a human (the identity rule, see identity.py).
+
+        Same control path as ``stop_after_card`` (``Store.control``, action pause_automation) so the
+        runtime stop, the dashboard state and the control audit change together; the fan is then
+        flagged ``requires_attention``. A human takes over, answers and hands back with the normal
+        controls. If the Twin control path is unavailable the runtime stop alone is set (fail closed).
+        """
+        import hashlib
+        from db.engine import get_session
+        from onlyfans_runtime import runtime_stop
+        from .identity import IDENTITY_REASON
+        from .reporting import report_attention
+        fan, via = self.args.fan, "twin-control"
+        try:
+            from onlyfans_runtime.store import Store
+            from db.onlyfans_models import OfConversationState
+            from sqlalchemy.orm import Session
+            url, tenant = os.environ.get("DATABASE_URL", ""), os.environ.get("ONLYFANS_WORKER_TENANT", "")
+            if not url or not tenant:
+                raise RuntimeError("twin-control-unavailable")
+
+            def pause():
+                store = Store(url)
+                with Session(store.engine) as s:
+                    row = s.get(OfConversationState, (self.db, fan))
+                    if row is None or row.mode != "automated":
+                        return None        # already not automated: nothing to pause
+                    rev = row.revision
+                key = hashlib.sha256(f"identity-handoff:{self.db}:{fan}:{rev}".encode()).hexdigest()[:64]
+                return store.control(tenant, self.db, fan, mode="paused", expected_revision=rev,
+                                     command_key=key, actor="identity-guard", reason=IDENTITY_REASON,
+                                     action="pause_automation")
+            await asyncio.to_thread(pause)
+        except Exception as exc:  # fail closed: the runtime stop is still written
+            async with get_session() as session:
+                await session.run_sync(lambda s: runtime_stop.hold(s, self.db, fan, runner.now()))
+                await session.commit()
+            via = "runtime-stop-only:" + (str(exc)[:60] or type(exc).__name__)
+        try:
+            await report_attention(account_id=self.db, fan_id=fan, reason="identity-question")
+        except Exception as exc:
+            via += ";attention-failed:" + type(exc).__name__
+        runner.emit({"event": "identity-handoff", "trigger": trigger, "account_id": self.db, "fan_id": fan, "via": via})
 
     async def stop_after_card(self):
         """The approved test ends after the paid card.

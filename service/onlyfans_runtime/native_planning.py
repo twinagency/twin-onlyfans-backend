@@ -121,6 +121,9 @@ async def _draft(context, messages, model, timeout):
     from automations.ai_chatter import _unbacked_talk, _DELIVERY_TALK_RE
     if leak or not text.strip() or _unbacked_talk(text) or _DELIVERY_TALK_RE.search(text):
         raise Refused("unbacked native draft")
+    from native_pilot.identity import discloses_ai
+    if discloses_ai(text):
+        raise Refused("identity disclosure held")
     sale = memory.pop("sale", None)
     if sale is not None:
         from .native_sales import caption

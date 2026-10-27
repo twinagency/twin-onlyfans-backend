@@ -84,6 +84,10 @@ class _TextClient:
         if (type(fan_id) is not int or fan_id != self.engine.fan_id
                 or not isinstance(text, str) or not text.strip() or (kwargs and not self.engine.content)):
             self.engine._refuse("forbidden-platform-operation")
+        from .identity import IDENTITY_HELD, discloses_ai
+        if discloses_ai(text):
+            # Identity rule: a bubble saying it is an AI / bot / clone is never sent (nor resent).
+            self.engine._refuse(IDENTITY_HELD)
         if self.engine.content:
             self.engine.content.terms(kwargs)
         try:

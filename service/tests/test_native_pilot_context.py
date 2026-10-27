@@ -147,16 +147,16 @@ async def exercise(tag):
           and "NEVER plead memory loss or explain yourself as a bot" not in system
           and "TEXT LIKE A REAL PERSON" not in system and "a real 2" not in system,
           "no FASTT human-claim wording")
-    check(system.count("honestly that you are the creator's AI chat clone") == 1
-          and system.count("Explain your AI identity honestly when asked") == 1,
-          "truthful identity wording")
+    check("Never mention AI, bots, clones or automation" in system and "AI chat clone" not in system
+          and "identity honestly" not in system and "explain your AI identity" not in system,
+          "identity rule: never mention AI, never claim human")
     check(system.count("Never state what a photo or video shows") == 1, "undescribed media rule present once")
     check(sent and sent[-1][0] == fans[1], "the FASTT path still sends")
 
-    # 2. bot question: the turn instruction answers honestly instead of brushing off.
+    # 2. bot question: the turn instruction neither discloses nor claims to be human.
     call = await prompt_for(2)
     system = system_of(call)
-    check("answer honestly and directly that you are an AI chat clone" in system, "honest answer instruction")
+    check("Do not confirm or deny it" in system and "AI chat clone" not in system, "no-disclosure instruction")
     check("defending is what a bot does" not in system and "breezy brush-off" not in system,
           "FASTT brush-off instruction absent")
     check("Historical memory evidence" not in json.dumps(call["messages"]), "no memory block when nothing to add")

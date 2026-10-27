@@ -1,0 +1,20 @@
+/workspace/scratch/18747a494545/caption-base/service/tests/test_fastt_requested_caption.py:62: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+Traceback (most recent call last):
+  File "/workspace/scratch/18747a494545/caption-base/service/tests/test_fastt_requested_caption.py", line 263, in <module>
+    main(sys.argv[1])
+  File "/workspace/scratch/18747a494545/caption-base/service/tests/test_fastt_requested_caption.py", line 258, in main
+    asyncio.run(exercise(case, tmp))
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/18747a494545/caption-base/service/tests/test_fastt_requested_caption.py", line 199, in exercise
+    assert delivery.plan.claim.text == basic + ("" if fallback else ", " + PHRASE)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

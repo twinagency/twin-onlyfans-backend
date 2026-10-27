@@ -1,0 +1,66 @@
+name: Requested caption isolated release scripts
+on:
+  push:
+    branches: [codex/onlyfans-requested-caption-evidence-20261027]
+    paths: [.github/workflows/onlyfans-caption-isolated.yml]
+permissions:
+  contents: read
+jobs:
+  isolated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-caption-only
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PYTHON_DOTENV_DISABLED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: service:service/tests
+      ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-caption-only@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 98923531d0531944b8dfe5a28d24f03f2718f170
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-onlyfans-test.txt
+      - name: Run both required isolated scripts on the exact runtime candidate
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          expected = '98923531d0531944b8dfe5a28d24f03f2718f170'
+          actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert actual == expected
+          out = Path('caption-isolated-evidence')
+          out.mkdir()
+          (out / 'backend-sha.txt').write_text(actual + '\n')
+          results = []
+          for path in ('service/tests/test_onlyfans_read.py', 'service/tests/test_onlyfans_migration_pg.py'):
+              argv = [sys.executable, path]
+              run = subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+              (out / (Path(path).stem + '.log')).write_text(run.stdout)
+              passed = bool(re.search(r'all cases passed', run.stdout, re.I))
+              skipped = bool(re.search(r'^\s*SKIP(?:PED)?\b', run.stdout, re.I | re.M))
+              results.append({'path': path, 'argv': argv, 'exitStatus': run.returncode,
+                              'allCasesPassed': passed, 'skipped': skipped})
+              (out / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
+              print(path, results[-1])
+          raise SystemExit(int(any(r['exitStatus'] or r['skipped'] or not r['allCasesPassed'] for r in results)))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: caption-isolated-98923531d0531944b8dfe5a28d24f03f2718f170
+          path: caption-isolated-evidence/
+          if-no-files-found: error

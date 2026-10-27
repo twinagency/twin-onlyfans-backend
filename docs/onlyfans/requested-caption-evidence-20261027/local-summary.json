@@ -1,0 +1,20 @@
+{
+  "backend": "98923531d0531944b8dfe5a28d24f03f2718f170",
+  "dashboard": "444fd1303858e6d87204efe5811278657571f8f6",
+  "focusedCases": 21,
+  "failures": 0,
+  "errors": 0,
+  "skips": 0,
+  "fileSha256": {
+    "service/automations/pack_sender.py": "ec850fbf91a4eea31e1223013df2214ed78cca03263707468ed983700c3964ff",
+    "service/automations/pack_claim.py": "5da9d352b37d3afea28e18565b9f276359399945c74724fa5c3cb74761c9b844",
+    "service/automations/content_resolver.py": "a24e0aaddf5dedcc583f2eb22ab46c04f7d4ce89a01e3d56a09f17a67bd95fbb",
+    "service/automations/content_prompts.py": "1f0ed117254a83840a2cf2ef801423b8d66667ef69cb70c9ade3eab7e9a93906",
+    "service/tests/test_fastt_requested_caption.py": "3ac91c5e5317ad634162730465401135231bf6d0b040d35b6898753b35575c9f",
+    ".github/workflows/onlyfans-preupgrade-backup.yml": "16bba02317643ca96986f6505ecc78a9a16188a747ff1256ad7bbe53afa5f759",
+    "docs/onlyfans/requested-caption-repair.md": "f7b1d17b527b82698274a9a86df4ca0f5e1104d43e9d27d69c529eaf1fa4e07c"
+  },
+  "liveMessages": 0,
+  "realModelCalls": 0,
+  "deployed": false
+}

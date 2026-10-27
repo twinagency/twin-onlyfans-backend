@@ -1,0 +1,40 @@
+{
+  "backend": "98923531d0531944b8dfe5a28d24f03f2718f170",
+  "dashboard": "444fd1303858e6d87204efe5811278657571f8f6",
+  "parentBackend": "12c7fed4d15d902e999a4c8b9e45823c3f07d9ab",
+  "releaseWorkflowRun": 40497360991,
+  "releaseWorkflowConclusion": "failure",
+  "captionAndRecovery": {
+    "tests": 63,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "includesNewCaptionCases": 21
+  },
+  "nativeSQLite": {
+    "commands": 29,
+    "failed": 0,
+    "skips": 0
+  },
+  "nativePostgres": {
+    "commands": 7,
+    "failed": 0,
+    "skips": 0
+  },
+  "retainedRollbackImage": {
+    "tests": 4,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0
+  },
+  "forwardImage": "passed",
+  "sixAcceptanceShards": "blocked before collection: private dashboard source capability missing",
+  "aggregate": "not accepted: required shard evidence missing",
+  "requiredIsolatedScripts": "pending separate exact-runtime run",
+  "liveMessages": 0,
+  "realModelCalls": 0,
+  "productionDeployment": false,
+  "pr33HeadUnchanged": true,
+  "old2260EvidenceReassigned": false,
+  "releaseApproved": false
+}

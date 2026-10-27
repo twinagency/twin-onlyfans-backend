@@ -1,0 +1,282 @@
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_fastt_activation.py
+FASTT activation validation: 16 checks passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-evidence/test_fastt_platform_scope.xml service/tests/test_fastt_platform_scope.py
+........                                                                 [100%]
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/native-fastt-evidence/test_fastt_platform_scope.xml -
+8 passed in 0.71s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-evidence/test_fastt_requested_caption.xml service/tests/test_fastt_requested_caption.py
+.....................                                                    [100%]
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/native-fastt-evidence/test_fastt_requested_caption.xml -
+21 passed in 49.38s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-evidence/test_fastt_scope_db.xml service/tests/test_fastt_scope_db.py
+...................................                                      [100%]
+=============================== warnings summary ===============================
+service/tests/test_fastt_scope_db.py::test_put_validates_strictly_and_carries_value
+service/tests/test_fastt_scope_db.py::test_put_validates_strictly_and_carries_value
+service/tests/test_fastt_scope_db.py::test_put_validates_strictly_and_carries_value
+service/tests/test_fastt_scope_db.py::test_put_validates_strictly_and_carries_value
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/scripts_api.py:926: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/native-fastt-evidence/test_fastt_scope_db.xml -
+35 passed, 4 warnings in 2.45s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-evidence/test_fastt_scope_wide.xml service/tests/test_fastt_scope_wide.py
+......                                                                   [100%]
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/native-fastt-evidence/test_fastt_scope_wide.xml -
+6 passed in 0.71s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_fastt_wire_stop.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:61: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=inbound_age)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:61: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=inbound_age)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:92: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  added_at=datetime.utcnow()))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:144: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:155: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  body="typed in the app", created_at=datetime.utcnow()))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:166: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  body="wait one more thing", created_at=datetime.utcnow()))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:180: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  old = datetime.utcnow() - timedelta(hours=5)
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:199: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(minutes=30)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:201: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  body="hello again", created_at=datetime.utcnow() - timedelta(seconds=20)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:213: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  await _skip_and_rest(ACCOUNT, fan, datetime.utcnow())
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_fastt_wire_stop.py:223: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  await _skip_and_rest(ACCOUNT, fan, datetime.utcnow())
+26 checks; all cases passed (sqlite)
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_caption_vault.py
+ok 27 checks
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_content.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_content.py:149: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=30)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_content.py:166: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  result = {'id': 10000 + len(sent), 'text': text, 'createdAt': datetime.utcnow().isoformat(), 'fromUser': {'id': 900001}}
+{"native_single_card_real_shape": true, "provider_calls": 1, "model_calls": 1}
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_context.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_context.py:66: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+native pilot context: 26 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_engine.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_engine.py:43: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_engine.py:124: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  f.automation_paused_until = datetime.utcnow()-timedelta(seconds=1)
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_engine.py:127: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()+timedelta(seconds=1)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_engine.py:203: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  f.automation_paused_until = datetime.utcnow()-timedelta(seconds=1)
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_engine.py:206: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()+timedelta(seconds=2)))
+77 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_expiry.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_expiry.py:78: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_expiry.py:208: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(minutes=30 - i)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_expiry.py:210: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  body="send me feet pics", created_at=datetime.utcnow() - timedelta(seconds=60)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_expiry.py:216: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  result = {"id": 8000 + len(cards), "text": text, "createdAt": datetime.utcnow().isoformat(),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_expiry.py:216: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  result = {"id": 8000 + len(cards), "text": text, "createdAt": datetime.utcnow().isoformat(),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_expiry.py:208: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(minutes=30 - i)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_expiry.py:210: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  body="send me feet pics", created_at=datetime.utcnow() - timedelta(seconds=60)))
+22 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_followups.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:89: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=30)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:66: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  result = {'id': 50000 + len(sent), 'text': text, 'createdAt': datetime.utcnow().isoformat(), 'fromUser': {'id': 900001}}
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:66: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  result = {'id': 50000 + len(sent), 'text': text, 'createdAt': datetime.utcnow().isoformat(), 'fromUser': {'id': 900001}}
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:89: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=30)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:139: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  delay = datetime.fromisoformat(job[0][4]) - datetime.utcnow()
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:146: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  run_at = datetime.utcnow() + timedelta(minutes=15)
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:199: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(minutes=55 - 3 * n)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:223: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  return {'id': 60000 + len(vsent), 'text': text, 'createdAt': datetime.utcnow().isoformat(), 'fromUser': {'id': 900001}}
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:234: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  automation_kind='pack_send', sent_by_employee_id=1, price_cents=1250, created_at=datetime.utcnow()))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:258: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  delay = datetime.fromisoformat(job[0][3]) - datetime.utcnow()
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_followups.py:272: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  await native.enqueue_job(ACCOUNT, 'ai_chatter', payload={'nudge_fan_ids': [FAN]}, run_at=datetime.utcnow() + timedelta(minutes=15))
+45 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_ledger.py
+native pilot ledger: 300 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_manifest.py
+{"items": 2, "ok": true, "price_range_cents": [300, 1499]}
+{"blockers": [{"catalog_id": 30, "reason": "media-not-in-vault"}], "ok": false}
+native pilot manifest: 23 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_model.py
+test_budget_consumes_failures_and_latches (__main__.ModelTests.test_budget_consumes_failures_and_latches) ... ok
+test_concurrent_calls_reserve_without_overshoot (__main__.ModelTests.test_concurrent_calls_reserve_without_overshoot) ... ok
+test_deadline_bounds_total_request_and_cancellation (__main__.ModelTests.test_deadline_bounds_total_request_and_cancellation) ... ok
+test_invalid_provider_envelopes_and_usage (__main__.ModelTests.test_invalid_provider_envelopes_and_usage) ... ok
+test_json_format_preserved_and_parsed (__main__.ModelTests.test_json_format_preserved_and_parsed) ... ok
+test_pinned_wire_native_prompt_and_real_result (__main__.ModelTests.test_pinned_wire_native_prompt_and_real_result) ... ok
+test_post_response_stop_discards_result (__main__.ModelTests.test_post_response_stop_discards_result) ... ok
+test_reject_bad_json_no_retry (__main__.ModelTests.test_reject_bad_json_no_retry) ... ok
+test_resolver_purposes_get_bounded_larger_output_cap (__main__.ModelTests.test_resolver_purposes_get_bounded_larger_output_cap) ... ok
+test_response_bound (__main__.ModelTests.test_response_bound) ... ok
+test_scope_route_and_inputs_refused_before_request (__main__.ModelTests.test_scope_route_and_inputs_refused_before_request) ... ok
+test_stop_deadline_and_reservation_refusal (__main__.ModelTests.test_stop_deadline_and_reservation_refusal) ... ok
+test_transport_error_does_not_leak (__main__.ModelTests.test_transport_error_does_not_leak) ... ok
+test_unknown_cost_is_not_reported_as_free (__main__.ModelTests.test_unknown_cost_is_not_reported_as_free) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.071s
+
+OK
+all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_offers.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_offers.py:92: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=30)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_offers.py:68: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  result = {'id': 50000 + len(sent), 'text': text, 'createdAt': datetime.utcnow().isoformat(), 'fromUser': {'id': 900001}}
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_offers.py:68: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  result = {'id': 50000 + len(sent), 'text': text, 'createdAt': datetime.utcnow().isoformat(), 'fromUser': {'id': 900001}}
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_offers.py:92: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=30)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_offers.py:155: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_offers.py:190: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  o.status, o.resolved_by, o.resolved_at = 'delivered', 'ppv_ledger', datetime.utcnow()
+24 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_overlap.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_overlap.py:98: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+overlap ledger: recovery, restart, exactly-once and barrier cases passed
+overlap native engine: actual question answered; history and human guards preserved
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_postsale.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale.py:769: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  current = datetime.utcnow().replace(microsecond=0)
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale.py:671: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "createdAt": datetime.utcnow().isoformat() + "Z", "price": body["price"], "media": []}
+339 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_postsale_engine.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:115: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now0 = datetime.utcnow()
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:186: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  body=body, created_at=datetime.utcnow() - timedelta(minutes=minutes_ago), **kw))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:197: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  status='open', offered_at=datetime.utcnow() - timedelta(minutes=minutes_ago))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:139: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  res = {'id': state['next'], 'text': text, 'createdAt': datetime.utcnow().isoformat(),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:186: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  body=body, created_at=datetime.utcnow() - timedelta(minutes=minutes_ago), **kw))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:197: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  status='open', offered_at=datetime.utcnow() - timedelta(minutes=minutes_ago))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:139: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  res = {'id': state['next'], 'text': text, 'createdAt': datetime.utcnow().isoformat(),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:382: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  ('paused', {'offers_paused_until': datetime.utcnow() + timedelta(hours=5)}, 'selling-paused'),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:383: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  ('cooldown', {'cooldown_until': datetime.utcnow() + timedelta(hours=5)}, 'selling-paused'),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:415: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  o.offered_at = datetime.utcnow() - timedelta(minutes=100)
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:440: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  sent_at=datetime.utcnow() - timedelta(days=3)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:452: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  sent_at=datetime.utcnow() - timedelta(days=45)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:462: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  o.status, o.resolved_by, o.resolved_at = 'delivered', 'ppv_ledger', datetime.utcnow()
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:478: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  (datetime.utcnow().isoformat(sep=' '), oid))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:562: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  status=status, resolved_by=resolved_by, offered_at=datetime.utcnow() - timedelta(minutes=minutes_ago + 30),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:563: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  resolved_at=(datetime.utcnow() - timedelta(minutes=minutes_ago)) if status == 'delivered' else None)
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:578: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  return postsale.purchases(con, ACCOUNT, now or datetime.utcnow())
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:601: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  check(postsale.inbound_since(sqlite3.connect(db_path), ACCOUNT, FAN, datetime.utcnow() - timedelta(hours=1)) != [],
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:686: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  run_at = datetime.utcnow() + timedelta(minutes=15)
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:762: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  for label, vals in (('stopped', {'status': upsell.STATUS_STOPPED}), ('offers paused', {'offers_paused_until': datetime.utcnow() + timedelta(hours=2)}),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:763: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  ('companion', {'status': upsell.STATUS_COMPANION}), ('cooldown', {'cooldown_until': datetime.utcnow() + timedelta(hours=2)})):
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:773: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(days=1), purchased_at=datetime.utcnow() - timedelta(days=1)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:785: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  first = queue.add(FAN, 'ai_chatter', {'post_buy': oid}, datetime.utcnow() + timedelta(seconds=120))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:786: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  dup = queue.add(FAN, 'ai_chatter', {'post_buy': oid}, datetime.utcnow() + timedelta(seconds=200))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:788: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  ledger.followup_finish(job_id=first, state='done', reason=None, now=datetime.utcnow())
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:789: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  check(queue.add(FAN, 'ai_chatter', {'post_buy': oid}, datetime.utcnow() + timedelta(seconds=120)) is None,
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:792: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  check(FollowupQueue(ledger2, ACCOUNT, clock).add(FAN, 'ai_chatter', {'post_buy': oid}, datetime.utcnow() + timedelta(seconds=120)) is None,
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:798: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  r = queue.add(FAN, 'ai_chatter', bad, datetime.utcnow() + timedelta(seconds=120))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:847: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  jid = queue.add(FAN, 'ai_chatter', {'post_buy': oid}, datetime.utcnow() - timedelta(seconds=1))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:871: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  f.automation_paused_until = datetime.utcnow() + timedelta(minutes=30)
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_postsale_engine.py:922: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  await native.enqueue_job(ACCOUNT, 'ai_chatter', payload={'nudge_fan_ids': [FAN]}, run_at=datetime.utcnow() + timedelta(minutes=15))
+278 checks passed
+all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-evidence/test_native_pilot_receipt_recovery.xml service/tests/test_native_pilot_receipt_recovery.py
+..............                                                           [100%]
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/native-fastt-evidence/test_native_pilot_receipt_recovery.xml -
+14 passed in 1.06s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-evidence/test_native_pilot_recovery.xml service/tests/test_native_pilot_recovery.py
+.........                                                                [100%]
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/native-fastt-evidence/test_native_pilot_recovery.xml -
+9 passed in 0.26s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_reporting.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_reporting.py:49: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_reporting.py:68: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  return {"id": fid * 100 + len(sent), "text": text_, "createdAt": datetime.utcnow().isoformat()}
+native pilot reporting: 26 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_resolver_seam.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_resolver_seam.py:63: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+{"native_resolver_seam_checks": 21}
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_runner.py
+all cases passed (227 checks)
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_runtime.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_runtime.py:189: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  activated_at=datetime.utcnow(), enabled=False))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_runtime.py:197: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  status=over.get("status", "verified"), verified_at=over.get("verified_at", datetime.utcnow()),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_runtime.py:198: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  last_error=over.get("last_error"), updated_at=datetime.utcnow()))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_runtime.py:229: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  ("connection-scope", dict(revoked_at=datetime.utcnow())),
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_runtime.py:186: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  account_id=ACCOUNT, handle="other", channel="onlyfans", revoked_at=datetime.utcnow()))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_runtime.py:512: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  t0 = datetime.utcnow() - timedelta(minutes=5)
+all cases passed (197 checks)
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_service.py
+ledger level ok 57
+loop level ok 179
+native pilot service: all cases passed (713 checks)
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_supervisor.py
+native pilot supervisor: 96 checks; all cases passed
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_vault.py
+{"native_vault_mode_checks": 56}
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_vision.py
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_vision.py:104: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_vision.py:356: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=60)))
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/service/tests/test_native_pilot_vision.py:367: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  return {"id": 9100 + len(sent), "text": text, "createdAt": datetime.utcnow().isoformat(), "fromUser": {"id": 900001}}
+74 checks; all cases passed

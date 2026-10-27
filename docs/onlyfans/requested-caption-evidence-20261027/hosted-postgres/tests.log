@@ -1,0 +1,134 @@
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-pg-evidence/test_fastt_activation_pg.xml service/tests/test_fastt_activation_pg.py
+...                                                                      [100%]
+=============================== warnings summary ===============================
+../../../../../../opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+service/tests/test_fastt_activation_pg.py: 15 warnings
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/native-fastt-pg-evidence/test_fastt_activation_pg.xml -
+3 passed, 16 warnings in 22.31s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-pg-evidence/test_fastt_controls_pg.xml service/tests/test_fastt_controls_pg.py
+..............                                                           [100%]
+=============================== warnings summary ===============================
+../../../../../../opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+service/tests/test_fastt_controls_pg.py: 72 warnings
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/native-fastt-pg-evidence/test_fastt_controls_pg.xml -
+14 passed, 73 warnings in 28.53s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-pg-evidence/test_fastt_new_conversations_pg.xml service/tests/test_fastt_new_conversations_pg.py
+..............                                                           [100%]
+=============================== warnings summary ===============================
+../../../../../../opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+service/tests/test_fastt_new_conversations_pg.py: 121 warnings
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/native-fastt-pg-evidence/test_fastt_new_conversations_pg.xml -
+14 passed, 122 warnings in 28.19s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pytest -q --junitxml=native-fastt-pg-evidence/test_native_pilot_attribution_pg.xml service/tests/test_native_pilot_attribution_pg.py
+..                                                                       [100%]
+=============================== warnings summary ===============================
+service/tests/test_native_pilot_attribution_pg.py: 17 warnings
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/native-fastt-pg-evidence/test_native_pilot_attribution_pg.xml -
+2 passed, 17 warnings in 11.67s
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_load_pg.py
+[load] tiny: 2 account(s) x 8 fans, 3 sim min at x30
+[load] tiny: replies=41 per-min=13.61 real=6.0s
+native pilot load harness (tiny) on PostgreSQL: all cases passed (17 checks)
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_service_pg.py
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running stamp_revision  -> 0070_onlyfans_read_bindings
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0070_onlyfans_read_bindings -> 0071_onlyfans_foundation, Durable scoped OnlyFans admission; no provider or automation enablement.
+INFO  [alembic.runtime.migration] Running upgrade 0071_onlyfans_foundation -> 0072_onlyfans_text_delivery, Synthetic-only durable text intents and immutable policy-change evidence.
+INFO  [alembic.runtime.migration] Running upgrade 0072_onlyfans_text_delivery -> 0073_one_use_egress, One-use wire marker without activation, replay or evidence reset.
+INFO  [alembic.runtime.migration] Running upgrade 0073_one_use_egress -> 0074_native_text_plans, Restart-safe native text preparation; no model/provider activation.
+INFO  [alembic.runtime.migration] Running upgrade 0074_native_text_plans -> 0075_native_model_budget, Link native plans to the existing cost owner without reopening any allowance.
+INFO  [alembic.runtime.migration] Running upgrade 0075_native_model_budget -> 0076_native_memory_evidence, Record source-backed native corrections without a second memory store.
+INFO  [alembic.runtime.migration] Running upgrade 0076_native_memory_evidence -> 0077_native_media_sales, Carry existing media through the same one-use delivery authority.
+INFO  [alembic.runtime.migration] Running upgrade 0077_native_media_sales -> 0078_operator_controls, Audit explicit operator controls without reopening delivery or model rights.
+INFO  [alembic.runtime.migration] Running upgrade 0078_operator_controls -> 0079_native_configuration, Audit bounded native creator edits without resetting any financial policy.
+INFO  [alembic.runtime.migration] Running upgrade 0079_native_configuration -> 0080_onlyfans_campaigns, Durable campaign audiences and audited controls; no provider activation.
+INFO  [alembic.runtime.migration] Running upgrade 0080_onlyfans_campaigns -> 0081_native_connection, Explicit encrypted account connection and native transport policy.
+INFO  [alembic.runtime.migration] Running upgrade 0081_native_connection -> 0082_content_management, Audited scoped metadata edits on the existing native catalogue.
+INFO  [alembic.runtime.migration] Running upgrade 0082_content_management -> 0083_vault_management, Bounded selected-account vault reads and native catalogue creation evidence.
+INFO  [alembic.runtime.migration] Running upgrade 0083_vault_management -> 0084_native_ledger, Read-only native transaction polling into the existing canonical ledger.
+INFO  [alembic.runtime.migration] Running upgrade 0084_native_ledger -> 0085_shared_creator_facts, Project approved Twin creator facts with explicit platform overrides.
+INFO  [alembic.runtime.migration] Running upgrade 0085_shared_creator_facts -> 0086_vault_edits, Audit native edits to existing vault metadata and internal folders.
+INFO  [alembic.runtime.migration] Running upgrade 0086_vault_edits -> 0087_creator_enrollment, Verify creator sessions before creating canonical account bindings.
+INFO  [alembic.runtime.migration] Running upgrade 0087_creator_enrollment -> 0088_native_vault_media, Durable native upload admission and requested video preparation.
+INFO  [alembic.runtime.migration] Running upgrade 0088_native_vault_media -> 0089_offer_import, Paid-offer import evidence, fixed catalogue pricing and continuous content sync.
+INFO  [alembic.runtime.migration] Running upgrade 0089_offer_import -> 0090_launch, History memory, personality workflow and proactive engagement (all default off).
+INFO  [alembic.runtime.migration] Running upgrade 0090_launch -> 0091_launch_controls, Durable launch commands, source continuation and coordinated provider reads.
+INFO  [alembic.runtime.migration] Running upgrade 0091_launch_controls -> 0092_ledger_history, Independent full-history progress; canonical transactions and evidence are reused.
+INFO  [alembic.runtime.migration] Running upgrade 0092_ledger_history -> 0093_ledger_markers, Durable verified financial continuation and versioned coverage proof.
+INFO  [alembic.runtime.migration] Running upgrade 0093_ledger_markers -> 0094_purchase_reply, Fence supported post-purchase replies at the existing offer receipt.
+INFO  [alembic.runtime.migration] Running upgrade 0094_purchase_reply -> 0095_content_fold_pending, Track changed canonical messages in the existing content-source owner.
+INFO  [alembic.runtime.migration] Running upgrade 0095_content_fold_pending -> 0096_vault_continuation, Preserve bounded-page vault continuation past the first 4,800 items.
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/tests/test_native_pilot_service_pg.py:128: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+ledger level on PostgreSQL ok 57
+supervised loop on PostgreSQL ok 181
+multi-fan supervised loop on PostgreSQL ok 296
+follow-ups (nudge) on PostgreSQL ok 707
+native pilot service on PostgreSQL: all cases passed (732 checks)
+Running: /opt/hostedtoolcache/Python/3.12.15/x64/bin/python service/tests/test_native_pilot_storage_pg.py
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running stamp_revision  -> 0070_onlyfans_read_bindings
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0070_onlyfans_read_bindings -> 0071_onlyfans_foundation, Durable scoped OnlyFans admission; no provider or automation enablement.
+INFO  [alembic.runtime.migration] Running upgrade 0071_onlyfans_foundation -> 0072_onlyfans_text_delivery, Synthetic-only durable text intents and immutable policy-change evidence.
+INFO  [alembic.runtime.migration] Running upgrade 0072_onlyfans_text_delivery -> 0073_one_use_egress, One-use wire marker without activation, replay or evidence reset.
+INFO  [alembic.runtime.migration] Running upgrade 0073_one_use_egress -> 0074_native_text_plans, Restart-safe native text preparation; no model/provider activation.
+INFO  [alembic.runtime.migration] Running upgrade 0074_native_text_plans -> 0075_native_model_budget, Link native plans to the existing cost owner without reopening any allowance.
+INFO  [alembic.runtime.migration] Running upgrade 0075_native_model_budget -> 0076_native_memory_evidence, Record source-backed native corrections without a second memory store.
+INFO  [alembic.runtime.migration] Running upgrade 0076_native_memory_evidence -> 0077_native_media_sales, Carry existing media through the same one-use delivery authority.
+INFO  [alembic.runtime.migration] Running upgrade 0077_native_media_sales -> 0078_operator_controls, Audit explicit operator controls without reopening delivery or model rights.
+INFO  [alembic.runtime.migration] Running upgrade 0078_operator_controls -> 0079_native_configuration, Audit bounded native creator edits without resetting any financial policy.
+INFO  [alembic.runtime.migration] Running upgrade 0079_native_configuration -> 0080_onlyfans_campaigns, Durable campaign audiences and audited controls; no provider activation.
+INFO  [alembic.runtime.migration] Running upgrade 0080_onlyfans_campaigns -> 0081_native_connection, Explicit encrypted account connection and native transport policy.
+INFO  [alembic.runtime.migration] Running upgrade 0081_native_connection -> 0082_content_management, Audited scoped metadata edits on the existing native catalogue.
+INFO  [alembic.runtime.migration] Running upgrade 0082_content_management -> 0083_vault_management, Bounded selected-account vault reads and native catalogue creation evidence.
+INFO  [alembic.runtime.migration] Running upgrade 0083_vault_management -> 0084_native_ledger, Read-only native transaction polling into the existing canonical ledger.
+INFO  [alembic.runtime.migration] Running upgrade 0084_native_ledger -> 0085_shared_creator_facts, Project approved Twin creator facts with explicit platform overrides.
+INFO  [alembic.runtime.migration] Running upgrade 0085_shared_creator_facts -> 0086_vault_edits, Audit native edits to existing vault metadata and internal folders.
+INFO  [alembic.runtime.migration] Running upgrade 0086_vault_edits -> 0087_creator_enrollment, Verify creator sessions before creating canonical account bindings.
+INFO  [alembic.runtime.migration] Running upgrade 0087_creator_enrollment -> 0088_native_vault_media, Durable native upload admission and requested video preparation.
+INFO  [alembic.runtime.migration] Running upgrade 0088_native_vault_media -> 0089_offer_import, Paid-offer import evidence, fixed catalogue pricing and continuous content sync.
+INFO  [alembic.runtime.migration] Running upgrade 0089_offer_import -> 0090_launch, History memory, personality workflow and proactive engagement (all default off).
+INFO  [alembic.runtime.migration] Running upgrade 0090_launch -> 0091_launch_controls, Durable launch commands, source continuation and coordinated provider reads.
+INFO  [alembic.runtime.migration] Running upgrade 0091_launch_controls -> 0092_ledger_history, Independent full-history progress; canonical transactions and evidence are reused.
+INFO  [alembic.runtime.migration] Running upgrade 0092_ledger_history -> 0093_ledger_markers, Durable verified financial continuation and versioned coverage proof.
+INFO  [alembic.runtime.migration] Running upgrade 0093_ledger_markers -> 0094_purchase_reply, Fence supported post-purchase replies at the existing offer receipt.
+INFO  [alembic.runtime.migration] Running upgrade 0094_purchase_reply -> 0095_content_fold_pending, Track changed canonical messages in the existing content-source owner.
+INFO  [alembic.runtime.migration] Running upgrade 0095_content_fold_pending -> 0096_vault_continuation, Preserve bounded-page vault continuation past the first 4,800 items.
+/home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/tests/test_native_pilot_storage_pg.py:239: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+schema ok 12
+ledger suite on PostgreSQL: 300 checks
+ownership/coordination on PostgreSQL ok 41
+runner suite on PostgreSQL: 227 checks
+native pilot storage on PostgreSQL: all cases passed (41 own + suites)

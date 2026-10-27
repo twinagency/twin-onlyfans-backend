@@ -15,7 +15,7 @@ from db.onlyfans_models import OfRuntime,OfScan,OfRecovery,OfIngress
 from db.onlyfans_delivery_models import OfDeliveryPolicy,OfDeliveryPolicyChange
 from db.onlyfans_connection_models import OfProviderConnection,OfConnectionChange
 from onlyfans_read.contract import ID_PATTERN
-from .store import Refused,utcnow
+from .store import NEW_CONVERSATION_AUTOMATION_LOCKED,Refused,utcnow
 from .native_context import canonical
 from .provider_connector import session_from_capture,NativeProviderConnector,NativeAuthenticationError,NativeProtocolError
 
@@ -139,7 +139,7 @@ def get_connection(store,tenant,account,*,include_sync=False,include_runner=Fals
             'outgoingEnabled':bool(row and credentials_valid and row.expires_at>now and row.status=='verified' and runtime.enabled and policy and policy.enabled and policy.transport_kind=='native'),
             'policyRevision':policy.revision if policy else 0,'usedUnits':policy.used_units if policy else 0,
             'limitUnits':policy.limit_units if policy else 0,'mediaEnabled':bool(policy and policy.media_enabled),
-            'automateNewConversations':bool(row and row.automate_new_conversations)}
+            'automateNewConversations':bool(row and row.automate_new_conversations and not NEW_CONVERSATION_AUTOMATION_LOCKED)}
         if include_policy:
             result['throttleSeconds']=policy.throttle_seconds if policy else None
         if include_runner:
@@ -296,6 +296,8 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
         if row is not None and row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
+        if action=='activate' and payload.get('automateNewConversations',False) and NEW_CONVERSATION_AUTOMATION_LOCKED:
+            raise Refused('automatic enabling of new conversations is locked off; enable each fan explicitly')
         prior=s.get(OfConnectionChange,(account,command_key))
         if prior:
             if prior.request_hash!=fingerprint or prior.actor!=actor:raise Refused('connection idempotency conflict')
@@ -316,8 +318,7 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
             after={name:getattr(policy,name) for name in before}
             s.add(OfDeliveryPolicyChange(account_id=account,revision=policy.revision,actor=actor,reason='Explicit dashboard account activation',before_json=canonical(before),after_json=canonical(after),created_at=utcnow()))
             runtime.enabled=True;runtime.recovery_needed=True
-            row.automate_new_conversations=payload.get('automateNewConversations',False)
-            row.automation_starts_at=utcnow() if row.automate_new_conversations else None
+            row.automate_new_conversations=False;row.automation_starts_at=None   # locked off, see store.NEW_CONVERSATION_AUTOMATION_LOCKED
         else:
             runtime.enabled=False
             if policy:policy.enabled=False;policy.revision+=1

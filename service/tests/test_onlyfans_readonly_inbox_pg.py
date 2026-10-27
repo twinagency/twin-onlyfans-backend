@@ -141,7 +141,7 @@ def test_import_queued_before_activation_stays_historical_when_drained_after_it(
     monkeypatch.setattr(NativeProviderConnector, "chats", lambda self, **kw: ChatPage([901], None))
     monkeypatch.setattr(NativeProviderConnector, "messages", lambda self, **kw: MessagePage([incoming()], False))
     read_step(store, TENANT, account, item.reader, connection_revision=1)
-    change(store, account, "activate", 1, "c"*64, dict(LIMITS, automateNewConversations=True))
+    change(store, account, "activate", 1, "c"*64, LIMITS)
     # Even the normal active drain must not convert the queued import into work.
     assert store.drain(TENANT, account) == 1
     with Session(database[1]) as s:

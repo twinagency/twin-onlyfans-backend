@@ -464,7 +464,7 @@ def _readiness(s, runtime, *, credential_reader=None):
         "catalogue": {"usableInspectedItems": usable, "inspectedItems": min(len(items), 200), "hasMore": len(items) > 200},
         "autonomy": {"accountEnabled": runtime.enabled, "deliveryEnabled": bool(policy and policy.enabled),
             "existingAutomatedConversations": automated,
-            "automateNewConversations": bool(connected and connection.automate_new_conversations),
+            "automateNewConversations": False,   # locked off: new fans are never auto-enabled (store.NEW_CONVERSATION_AUTOMATION_LOCKED)
             "engagementEnabled": engagement.enabled, "workerCapabilities": capabilities},
         "limits": ["Conservative English-pattern historical facts and lexical source retrieval.",
             "Provider history totals are unknown; stored processing is a separate measure."]}

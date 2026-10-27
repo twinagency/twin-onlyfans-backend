@@ -1,9 +1,14 @@
 """Account-policy admission for FASTT intake, on disposable PostgreSQL only.
 
+OWNER DECISION: new fans are NEVER auto-enabled (``store.NEW_CONVERSATION_AUTOMATION_LOCKED``). The lock tests
+below run against a connection row that is still armed (as a pre-lock database could be) and must write
+nothing. The older admission tests run with the lock lifted (``unlocked``) so the guard conditions behind
+the lock stay covered and prove the lock tests are not passing for an unrelated reason.
+
 No provider, credentials or production account is used. The shared fixture creates
 and drops a uniquely named scratch database from ONLYFANS_TEST_PG_URL.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select
@@ -15,7 +20,8 @@ from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT
 from db.models import Fan, Message, OfConversationState, OfCreatorBinding, SkipList
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_models import OfControlAudit, OfRuntime
-from onlyfans_runtime.store import utcnow
+from onlyfans_runtime import store as store_module
+from onlyfans_runtime.store import Event, utcnow
 
 NEW_FAN = FAN + 100
 
@@ -43,6 +49,11 @@ def prepared(database):
         store.close()
 
 
+@pytest.fixture
+def unlocked(monkeypatch):
+    monkeypatch.setattr(store_module, "NEW_CONVERSATION_AUTOMATION_LOCKED", False)
+
+
 def evidence(engine):
     with Session(engine) as session:
         state = session.get(OfConversationState, (ACCOUNT, NEW_FAN))
@@ -54,7 +65,49 @@ def evidence(engine):
                              row.previous_revision, row.revision) for row in audits]
 
 
-def test_policy_off_leaves_the_new_fan_unactivated(prepared):
+def test_lock_is_on_and_a_still_armed_connection_never_enables_a_new_fan(prepared):
+    store, engine, _ = prepared
+    assert store_module.NEW_CONVERSATION_AUTOMATION_LOCKED is True
+    with Session(engine) as session:
+        armed = session.get(OfProviderConnection, ACCOUNT)
+        assert armed.automate_new_conversations is True and armed.automation_starts_at is not None
+    assert store.admit_new_conversation(TENANT, ACCOUNT, NEW_FAN) is False      # FASTT path
+    assert evidence(engine) == (None, [])
+    with Session(engine) as session:
+        assert session.scalar(select(func.count()).select_from(Message).where(
+            Message.account_id == ACCOUNT, Message.direction == "out")) == 0
+
+
+def live_inbound(store, fan, mid):
+    store.record(TENANT, ACCOUNT, Event(fan, mid, datetime.now(timezone.utc).isoformat(), "in", "Synthetic live hello"), source="ws")
+    assert store.drain(TENANT, ACCOUNT) == 1
+
+
+def test_worker_intake_never_enables_a_brand_new_fan(prepared):
+    store, engine, _ = prepared
+    brand_new = NEW_FAN + 1
+    live_inbound(store, brand_new, 7101)                                         # worker path (_apply)
+    with Session(engine) as session:
+        state = session.get(OfConversationState, (ACCOUNT, brand_new))
+        assert (state.mode, state.revision, state.requires_attention) == ("paused", 0, True)
+        assert session.scalars(select(OfControlAudit).where(
+            OfControlAudit.account_id == ACCOUNT, OfControlAudit.fan_id == brand_new)).all() == []
+
+
+def test_worker_intake_control_enables_only_when_the_lock_is_lifted(prepared, unlocked):
+    store, engine, _ = prepared
+    brand_new = NEW_FAN + 2
+    live_inbound(store, brand_new, 7201)
+    with Session(engine) as session:
+        assert session.get(OfConversationState, (ACCOUNT, brand_new)).mode == "automated"
+
+
+def test_lifting_the_lock_is_the_only_thing_that_admits_via_fastt(prepared, unlocked):
+    store, engine, _ = prepared
+    assert store.admit_new_conversation(TENANT, ACCOUNT, NEW_FAN) is True
+
+
+def test_policy_off_leaves_the_new_fan_unactivated(prepared, unlocked):
     store, engine, _ = prepared
     with Session(engine) as session, session.begin():
         session.get(OfProviderConnection, ACCOUNT).automate_new_conversations = False
@@ -62,7 +115,7 @@ def test_policy_off_leaves_the_new_fan_unactivated(prepared):
     assert evidence(engine) == (None, [])
 
 
-def test_an_armed_fresh_conversation_is_enabled_once_with_owner_policy_audit(prepared):
+def test_unlocked_admission_enables_once_with_owner_policy_audit(prepared, unlocked):
     store, engine, _ = prepared
     assert store.admit_new_conversation(TENANT, ACCOUNT, NEW_FAN) is True
     assert evidence(engine) == (("automated", "none", 1, False), [
@@ -76,7 +129,7 @@ def test_an_armed_fresh_conversation_is_enabled_once_with_owner_policy_audit(pre
         assert session.get(OfConversationState, (ACCOUNT, FAN)).revision == 0
 
 
-def test_pre_arm_history_cannot_be_treated_as_a_new_conversation(prepared):
+def test_pre_arm_history_cannot_be_treated_as_a_new_conversation(prepared, unlocked):
     store, engine, now = prepared
     with Session(engine) as session, session.begin():
         session.add(Message(account_id=ACCOUNT, fan_id=NEW_FAN, message_id=7000,
@@ -92,7 +145,7 @@ def test_pre_arm_history_cannot_be_treated_as_a_new_conversation(prepared):
     ("no_contact", "none", "manual_restrict"),
     ("paused", "none", "of_restricted"),
 ])
-def test_existing_operator_state_and_stops_are_preserved(prepared, mode, takeover, stop):
+def test_existing_operator_state_and_stops_are_preserved(prepared, mode, takeover, stop, unlocked):
     store, engine, _ = prepared
     with Session(engine) as session, session.begin():
         session.add(OfConversationState(account_id=ACCOUNT, fan_id=NEW_FAN,
@@ -108,7 +161,7 @@ def test_existing_operator_state_and_stops_are_preserved(prepared, mode, takeove
 
 
 @pytest.mark.parametrize("failure", ["expired", "binding", "unverified", "not_armed"])
-def test_connection_fences_refuse_activation(prepared, failure):
+def test_connection_fences_refuse_activation(prepared, failure, unlocked):
     store, engine, now = prepared
     with Session(engine) as session, session.begin():
         connection = session.get(OfProviderConnection, ACCOUNT)
@@ -130,7 +183,7 @@ def test_connection_fences_refuse_activation(prepared, failure):
 
 
 @pytest.mark.parametrize("failure", ["runtime_off", "muted", "no_history"])
-def test_runtime_and_fan_prerequisites_fail_closed(prepared, failure):
+def test_runtime_and_fan_prerequisites_fail_closed(prepared, failure, unlocked):
     store, engine, _ = prepared
     with Session(engine) as session, session.begin():
         if failure == "runtime_off":

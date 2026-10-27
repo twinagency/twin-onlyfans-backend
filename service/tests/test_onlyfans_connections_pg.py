@@ -284,7 +284,7 @@ def test_activation_and_replacement_preserve_used_allowance_unknown_holds_and_th
     store.close()
 
 
-def test_new_conversation_autonomy_requires_explicit_activation_and_preserves_existing_states(database,monkeypatch):
+def test_new_conversation_autonomy_is_locked_off_and_the_toggle_refuses_true(database,monkeypatch):
     store,account,payload=verified(database,monkeypatch)
     assert get_connection(store,TENANT,account)['automateNewConversations'] is False
     change(store,account,'activate',1,'c'*64,LIMITS)
@@ -295,16 +295,22 @@ def test_new_conversation_autonomy_requires_explicit_activation_and_preserves_ex
             session.add(Fan(account_id=account,fan_id=fan));session.flush()
             session.add(OfConversationState(account_id=account,fan_id=fan,mode=mode,revision=7,
                 unresolved_attempt_id='retain-unknown-'+str(fan),takeover_state='none',requires_attention=True))
-    before=utcnow()
-    change(store,account,'activate',2,'d'*64,dict(LIMITS,automateNewConversations=True))
+    # Owner decision: new fans are never auto-enabled, so asking for it is refused with a clear message
+    # (never silently ignored) and nothing changes: no revision bump, no flag, no state touched.
+    with pytest.raises(Refused,match='locked off'):
+        change(store,account,'activate',2,'d'*64,dict(LIMITS,automateNewConversations=True))
     with Session(database[1]) as session:
         row=session.get(OfProviderConnection,account)
-        assert row.automate_new_conversations is True and before<=row.automation_starts_at<=utcnow()
+        assert row.revision==2 and row.automate_new_conversations is False and row.automation_starts_at is None
         for fan,mode in [(101,'paused'),(102,'no_contact'),(103,'human_controlled')]:
             state=session.get(OfConversationState,(account,fan))
             assert (state.mode,state.revision,state.unresolved_attempt_id)==(mode,7,'retain-unknown-'+str(fan))
-    assert get_connection(store,TENANT,account)['automateNewConversations'] is True
-    change(store,account,'activate',3,'e'*64,LIMITS)
+    assert get_connection(store,TENANT,account)['automateNewConversations'] is False
+    # An explicit false is still accepted, and a stale armed row (pre-lock database) is reported and reset to off.
+    with Session(database[1]) as session,session.begin():
+        row=session.get(OfProviderConnection,account);row.automate_new_conversations=True;row.automation_starts_at=utcnow()
+    assert get_connection(store,TENANT,account)['automateNewConversations'] is False
+    change(store,account,'activate',2,'e'*64,dict(LIMITS,automateNewConversations=False))
     with Session(database[1]) as session:
         row=session.get(OfProviderConnection,account)
         assert row.automate_new_conversations is False and row.automation_starts_at is None

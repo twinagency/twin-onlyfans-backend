@@ -415,6 +415,40 @@ with tempfile.TemporaryDirectory() as tmp:
     check(r.state(A) == ('held', 'connection-missing'), 'connection missing holds')
 
 with tempfile.TemporaryDirectory() as tmp:
+    # --- MAX_ACCOUNTS caps ELIGIBLE accounts only: disabled ones keep their real reason and take no slot ---
+    owners = [str(900100 + n) for n in range(5)]
+    r = Rig(tmp, (set(), set(owners)))
+    def reader(db, account):
+        n = int(account[3:])
+        if n in (900100, 900101, 900102):
+            return {'runtime_enabled': 0, 'binding_account': account, 'binding_revoked_at': None,
+                    'binding_channel': 'onlyfans', 'policy_enabled': 1, 'connection_status': 'verified',
+                    'connection_binding': 'b', 'binding_id': 'b', 'verified_at': 'x', 'last_error': None,
+                    'expires_at': '2999-01-01 00:00:00', 'owner_id': n}
+        return {'runtime_enabled': 1, 'binding_account': account, 'binding_revoked_at': None,
+                'binding_channel': 'onlyfans', 'policy_enabled': 1, 'connection_status': 'verified',
+                'connection_binding': 'b', 'binding_id': 'b', 'verified_at': 'x', 'last_error': None,
+                'expires_at': '2999-01-01 00:00:00', 'owner_id': n, 'handle': 'h%d' % n}
+    r.sup.account_reader = reader
+    with patch.object(S, 'MAX_ACCOUNTS', 1), patch.object(S, '_manifest_target', lambda *a: (b'{}', None)):
+        out, unknown = r.sup.targets()
+        check(not unknown, 'no read failed')
+        check(all(isinstance(out['of-' + o], S.Hold) and out['of-' + o].reason == 'runtime-disabled' for o in owners[:3]),
+              'disabled accounts keep their own reason even though they sort first')
+        check(isinstance(out['of-900103'], S.Spec), 'first eligible account takes the only slot')
+        check(out['of-900104'] == S.Hold('too-many-accounts'), 'eligible overflow is held')
+        # A transient read failure keeps its slot (never pushes the fleet over the cap) and is reported unknown.
+        def flaky(db, account):
+            if account == 'of-900103':
+                raise RuntimeError('db down')
+            return reader(db, account)
+        r.sup.account_reader = flaky
+        out, unknown = r.sup.targets()
+        check(unknown == {'of-900103'} and 'of-900103' not in out, 'failed read is unknown, not held')
+        check(out['of-900104'] == S.Hold('too-many-accounts'), 'unknown eligibility keeps the slot')
+    check(S.MAX_ACCOUNTS == 64, 'cap unchanged')
+
+with tempfile.TemporaryDirectory() as tmp:
     # --- run() loop: stop event stops children and exits ---
     r = Rig(tmp, ALL)
     stop = threading.Event()

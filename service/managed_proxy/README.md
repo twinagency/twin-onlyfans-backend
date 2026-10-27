@@ -68,3 +68,40 @@ separation, existing account reservation, expired inventory and quarantine.
 Provider API authentication and stock were verified with read-only requests on
 25 October 2026. Live assignment requires an unused purchased IP. Synthetic
 assignment tests are not evidence of a fresh OnlyFans login or message delivery.
+
+
+## Audited unused-reservation recovery
+
+Provision ONLYFANS_MANAGED_PROXY_MANAGEMENT_TOKEN only to the broker and the
+management operator. It must contain at least 32 characters and differ from
+ONLYFANS_MANAGED_PROXY_TOKEN. Never expose it to browser, creator or ordinary
+agency sessions. With no distinct management token these operations refuse.
+
+Use management-authenticated GET /v1/reservations to obtain the creatorId,
+addressHash and exact reservationId. POST /v1/reclaim accepts exactly those
+three values plus commandKey, actor and reason. commandKey is a stable 64-hex
+idempotency key; actor is the authenticated management session digest in the
+form op-session:<64-hex>; reason is nonempty and at most 500 characters.
+Use the identical body/key when retrying an uncertain acknowledgement.
+A changed body under the same key refuses. Never enumerate and release stock
+as a batch or replace a refused command with a fresh key to bypass a refusal.
+
+The broker retains the audit record and provider credentials. It refuses a
+changed owner/reservation, prior browser use, account binding, enrollment or
+any saved connection including revoked connections. Undecryptable or ambiguous
+saved network evidence refuses the proof. Concurrent enrollment/credential
+writes refuse immediately; assignment and browser admission share the locked
+inventory row. No expiry or cancellation automatically releases stock.
+
+Run the explicit --init-schema command with the corrected image before normal
+startup to install recovery-upgrade.sql. Back up both public and onlyfans_proxy
+schemas first. Ordinary startup checks the schema and restore quarantine fence;
+it never upgrades or clears the fence.
+
+Hosted sign-in must reach the same broker at http://managed-proxy:8791 on the
+private deployment network, using the normal private broker token. Verify that
+network alias before switching the sign-in role. /v1/begin-use marks first use
+before a browser starts; once marked, that reservation cannot be reclaimed.
+Standalone creator first sign-in uses a server-derived pending owner and the
+same preparer as management. Retries retain that network; verified capture binds
+the observed handle. Existing-account reconnect continues on its saved network.

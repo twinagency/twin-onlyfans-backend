@@ -42,7 +42,7 @@ def eligible(s, account_id, fan_id, now, *, own_intent_id=None):
     if policy is None or not policy.media_enabled:
         return False, "media_disabled"
     from .commerce import held
-    if held(s, account_id):
+    if held(s, account_id, fan_id):
         return False, "commerce_evidence_conflict"
     cfg_row = s.scalar(select(AccountAiConfig).where(AccountAiConfig.account_id == account_id).with_for_update(read=True))
     try:

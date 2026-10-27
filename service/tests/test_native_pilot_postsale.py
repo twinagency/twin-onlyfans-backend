@@ -446,6 +446,54 @@ def make_service(L, f, events):
     return svc
 
 
+def test_unlinked_payment_blocks_the_fans_discount(root):
+    """A paid ppv_message with no message link makes that fan's card look unpaid: no discount may be queued for them."""
+    from native_pilot import postsale
+    L, f = build(root, "unlinked")
+    NOW, FAN = L.NOW, L.FAN
+    old = NOW - timedelta(minutes=100)
+    bound = NOW - timedelta(days=2)
+    offer(f, L, 1, fan=FAN, offered=old)
+    offer(f, L, 2, fan=FAN + 1, offered=old)
+    with closing(sqlite3.connect(f.path)) as con:
+        con.row_factory = sqlite3.Row
+        check([c[:2] for c in postsale.unpaid_cards(con, L.ACCT, NOW, 90)] == [(1, FAN), (2, FAN + 1)], "no transactions table: nothing blocked")
+        check(postsale.unlinked_paid_fans(con, L.ACCT) == set(), "no transactions table")
+    f.sql("CREATE TABLE transactions(id INTEGER PRIMARY KEY,account_id TEXT,fan_id INTEGER,kind TEXT,message_id INTEGER,"
+          "occurred_at TEXT,source TEXT,status TEXT)")
+    f.sql("CREATE TABLE of_runtime(account_id TEXT,binding_id TEXT)")
+    f.sql("CREATE TABLE of_creator_bindings(id TEXT,created_at TEXT)")
+    f.sql("INSERT INTO of_runtime VALUES(?,?)", (L.ACCT, "b1"))
+    f.sql("INSERT INTO of_creator_bindings VALUES(?,?)", ("b1", ts(bound)))
+
+    def tx(i, *, fan=FAN, kind="ppv_message", msg=None, at=None, source="ledger", status="cleared", account=None):
+        f.sql("INSERT INTO transactions VALUES(?,?,?,?,?,?,?,?)",
+              (i, account or L.ACCT, fan, kind, msg, ts(at or NOW - timedelta(hours=3)), source, status))
+
+    def cards():
+        with closing(sqlite3.connect(f.path)) as con:
+            con.row_factory = sqlite3.Row
+            return [c[1] for c in postsale.unpaid_cards(con, L.ACCT, NOW, 90)]
+
+    tx(1, fan=FAN + 1, msg=777)                                   # linked
+    tx(2, fan=FAN + 1, status="refunded")                         # not paid
+    tx(3, fan=FAN + 1, at=bound - timedelta(hours=1))             # before the current binding
+    tx(4, fan=FAN + 1, kind="tip")
+    tx(5, fan=FAN + 1, account="other-account")
+    tx(6, fan=FAN + 1, source="ws")
+    check(cards() == [FAN, FAN + 1], "linked, refunded, historical, other-kind, other-account and non-ledger rows block no one")
+    tx(7, fan=FAN, status="pending")
+    check(cards() == [FAN + 1], cards())
+    with closing(sqlite3.connect(f.path)) as con:
+        con.row_factory = sqlite3.Row
+        check(postsale.unlinked_paid_fans(con, L.ACCT) == {FAN}, "only the unlinked paid fan")
+    svc = make_service(L, f, [])
+    config(f, L, {postsale.SETTING_DISCOUNT: True})
+    job = lambda fan: {"kind": "discount", "fan_id": fan, "payload_json": json.dumps({"discount_offer": 1 if fan == FAN else 2})}
+    check(svc.postsale_block(job(FAN)) == "unlinked-payment", "a queued discount is refused at run time too")
+    check(svc.postsale_block(job(FAN + 1)) is None, "another fan's discount still runs")
+
+
 def test_scan(root):
     from native_pilot import postsale, runner
     L, f = build(root, "scan")
@@ -875,6 +923,7 @@ def main():
             test_job_id_collision(root)
             test_purchases_and_cards(root)
             test_scan(root)
+            test_unlinked_payment_blocks_the_fans_discount(root)
             test_block(root)
             test_gateway_unit()
             asyncio.run(test_gateway_send(root))

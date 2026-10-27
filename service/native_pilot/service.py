@@ -785,6 +785,9 @@ class Service:
         if offer is None or int(offer["fan_id"]) != int(job["fan_id"]):
             return "offer-mismatch"
         if kind == DISCOUNT_KIND:
+            with runner.readonly(self.path) as con:
+                if int(job["fan_id"]) in postsale.unlinked_paid_fans(con, self.db):
+                    return "unlinked-payment"
             return None if offer["status"] == "open" else "already-purchased" if offer["status"] == "delivered" else "offer-resolved"
         return None if offer["status"] == "delivered" and offer["resolved_by"] == "ppv_ledger" else "not-purchased"
 

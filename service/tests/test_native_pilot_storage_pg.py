@@ -183,7 +183,7 @@ class PgFixture(ledger_test.Fixture):
 RELEASE_SERVICE = os.environ.get(
     "ONLYFANS_RELEASE_SERVICE_DIR",
     "/tmp/claude-1000/-home-ronan-twin/1f28717a-be90-4d45-ac41-136eed78da59/scratchpad/rel/service")
-LIVE_REVISION = "0097_release_controls"
+LIVE_REVISION = "0098_ledger_exclusion"
 PREVIOUS_RELEASE_REVISION = "0091_launch_controls"
 
 

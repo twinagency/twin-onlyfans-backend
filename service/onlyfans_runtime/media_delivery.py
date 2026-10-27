@@ -95,7 +95,7 @@ def terms_match(session, intent):
 
 def assert_unowned(session, account_id, fan_id, snapshot):
     from .commerce import held
-    if held(session, account_id):
+    if held(session, account_id, fan_id):
         raise Refused("commerce evidence needs review")
     from ownership import owned_media_in_session
     try:

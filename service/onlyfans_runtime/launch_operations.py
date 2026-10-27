@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from db.models import ContentOffer, Fan, Message, OfCreatorBinding, Transaction
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfNativePlan, OfTextIntent
-from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
+from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerExclusion, OfLedgerScan
 from db.onlyfans_models import OfRuntime, OfWork
 from onlyfans_read.agency_scope import actor_allowed
 from .launch_operations_models import OfLaunchCommand, OfLedgerResolution, OfLaunchWorkerHealth
@@ -158,10 +158,17 @@ def _ledger_core(s, runtime, *, now=None):
             OfLedgerResolution.evidence_hash == OfLedgerEvidence.evidence_hash,
             OfLedgerResolution.binding_id == runtime.binding_id).exists())
     conflict_count = s.scalar(select(func.count()).select_from(conflicts.subquery()))
-    unlinked = s.scalar(select(func.count()).select_from(Transaction).where(Transaction.account_id == runtime.account_id,
+    unlinked_all = select(func.count()).select_from(Transaction).where(Transaction.account_id == runtime.account_id,
         Transaction.source == "ledger", Transaction.kind == "ppv_message", Transaction.message_id.is_(None),
         Transaction.ingested_at >= binding.created_at,
-        Transaction.status.in_(("pending", "cleared", "refund_pending"))))
+        Transaction.status.in_(("pending", "cleared", "refund_pending")))
+    # An audited exclusion stops one unlinked purchase from holding the whole account. It stays
+    # visible here, counted separately, and keeps holding its own fan (see commerce.held).
+    is_excluded = select(OfLedgerExclusion.id).where(OfLedgerExclusion.account_id == Transaction.account_id,
+        OfLedgerExclusion.transaction_id == Transaction.id,
+        OfLedgerExclusion.binding_id == runtime.binding_id).exists()
+    unlinked = s.scalar(unlinked_all.where(~is_excluded))
+    excluded = s.scalar(unlinked_all.where(is_excluded))
     from .commerce import held
     value = {"bindingCurrent": current, "status": scan.status if current else "not_started",
         "windowStart": z(scan.window_start) if current else None, "windowEnd": z(scan.window_end) if current else None,
@@ -176,10 +183,10 @@ def _ledger_core(s, runtime, *, now=None):
         "updatedAt": z(scan.updated_at) if current else None,
         "fresh": bool(connection_current and coverage_proven(scan)
             and timedelta(0) <= now - scan.last_complete_at <= timedelta(minutes=15)),
-        "unresolvedTransactions": unlinked, "conflictingEvidence": conflict_count, "commerceHold": bool(held(s, runtime.account_id))}
+        "unresolvedTransactions": unlinked, "excludedTransactions": excluded, "conflictingEvidence": conflict_count, "commerceHold": bool(held(s, runtime.account_id))}
     return {**value, "fingerprint": digest({"binding": runtime.binding_id,
         "scan": fingerprint(runtime, connection, scan if current else None),
-        "conflicts": conflict_count, "unlinked": unlinked})}
+        "conflicts": conflict_count, "unlinked": unlinked, "excluded": excluded})}
 
 
 def ledger_status(store, tenant, account, *, cursor=None, limit=25):
@@ -333,6 +340,58 @@ def resolve_ledger(store, tenant, account, *, evidence_hash, command_key, actor,
                 from .launch_engagement.service import invalidate
                 invalidate(s, runtime, reason="purchase" if tx.status in PAID else "refund", actor=actor,
                     fan_id=fan_id, now=now)
+        return result
+
+
+def exclude_unresolved_ledger(store, tenant, account, *, transaction_id, command_key, actor, reason, expected_fingerprint):
+    """Stop one unlinked paid purchase from holding the whole account; it keeps holding its own fan.
+
+    Only a purchase whose every provider observation lacks a message identity may be excluded. Nothing is
+    linked, guessed, cleared or created: the Transaction is untouched and stays unresolved for its fan.
+    """
+    command_identity(command_key, actor, reason, expected_fingerprint)
+    if type(transaction_id) is not int or not 0 < transaction_id < 2**31:
+        raise Refused("invalid ledger transaction")
+    request_hash = digest([transaction_id, expected_fingerprint, actor, reason])
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        prior = _prior(s, runtime, command_key, "ledger_exclusion", request_hash)
+        if prior is not None:
+            return prior
+        before = _ledger_core(s, runtime)
+        if before["fingerprint"] != expected_fingerprint:
+            raise Refused("ledger state changed")
+        binding = s.get(OfCreatorBinding, runtime.binding_id)
+        tx = s.scalar(select(Transaction).where(Transaction.id == transaction_id,
+            Transaction.account_id == account).with_for_update())
+        if tx is None:
+            raise Refused("ledger transaction unavailable")
+        from .ledger import PAID
+        if (tx.source != "ledger" or tx.kind != "ppv_message" or tx.message_id is not None or tx.fan_id is None
+                or tx.status not in PAID or tx.occurred_at < binding.created_at):
+            raise Refused("transaction is not an unresolved paid purchase of this binding")
+        if s.scalar(select(OfLedgerExclusion.id).where(OfLedgerExclusion.account_id == account,
+                OfLedgerExclusion.transaction_id == tx.id)) is not None:
+            raise Refused("ledger transaction already excluded")
+        evidence = s.scalars(select(OfLedgerEvidence).where(OfLedgerEvidence.account_id == account,
+            OfLedgerEvidence.provider_transaction_id == tx.provider_transaction_id)
+            .order_by(OfLedgerEvidence.evidence_hash)).all()
+        # The same exact test resolve_ledger applies: a retained message identity anywhere means this is not
+        # an identity-missing case and must go through resolution instead.
+        if (tx.provider_transaction_id is None or not evidence
+                or any(json.loads(row.observation_json).get("message_id") is not None for row in evidence)
+                or json.loads(tx.raw_json or "{}").get("message_id") is not None):
+            raise Refused("transaction blocker is not provider_message_identity_missing")
+        blocker, now = "provider_message_identity_missing", utcnow()
+        evidence_hash = digest([account, runtime.binding_id, tx.id, tx.provider_transaction_id,
+            [row.evidence_hash for row in evidence]])
+        result = {"recorded": True, "excluded": True, "transactionId": tx.id, "fanId": tx.fan_id,
+            "blocker": blocker, "evidenceHash": evidence_hash, "commandKey": command_key}
+        _record(s, runtime, command_key, "ledger_exclusion", request_hash, actor, reason, before, result, now)
+        s.add(OfLedgerExclusion(account_id=account, binding_id=runtime.binding_id, fan_id=tx.fan_id,
+            transaction_id=tx.id, blocker=blocker, reason=reason, actor=actor, command_key=command_key,
+            evidence_hash=evidence_hash, created_at=now))
+        s.flush()
         return result
 
 

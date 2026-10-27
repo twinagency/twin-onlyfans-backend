@@ -76,7 +76,7 @@ def read_ledger(s, tenant, account, *, now=None):
         "leaseActive": bool(scan and scan.lease_until is not None and scan.lease_until > now),
         "connectionCurrent": ledger._current(runtime, connection, scan, now),
         "connectionRevision": None if connection is None else connection.revision,
-        "conflictCount": conflicts, "unlinkedPaidCount": unlinked,
+        "conflictCount": conflicts, "unlinkedPaidCount": unlinked, "excludedPaidCount": core["excludedTransactions"],
         "requiresInvestigation": bool(scan and scan.status == "held" and scan.last_error in INVESTIGATE or conflicts or unlinked),
         "commerceHeld": held(s, account), "scanFingerprint": fingerprint(runtime, connection, scan)}
 

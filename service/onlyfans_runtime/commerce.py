@@ -37,13 +37,38 @@ class SyntheticCommerceEvent:
     payout_status: str = "cleared"
 
 
-def held(s, account_id):
+def _unlinked_paid(account_id, fan_id=None, *, excluded=True):
+    """Paid, unlinked ppv_message ledger rows since the current binding; ``excluded=False`` hides audited exclusions."""
+    from db.onlyfans_ledger_models import OfLedgerExclusion
+    from db.onlyfans_models import OfRuntime
+    from .ledger import PAID
+    query = (select(Transaction.id).join(OfRuntime, OfRuntime.account_id == Transaction.account_id)
+        .join(OfCreatorBinding, OfCreatorBinding.id == OfRuntime.binding_id).where(
+        Transaction.account_id == account_id,
+        Transaction.source == "ledger", Transaction.kind == "ppv_message",
+        Transaction.message_id.is_(None), Transaction.status.in_(tuple(PAID)),
+        Transaction.occurred_at >= OfCreatorBinding.created_at))
+    if fan_id is not None:
+        query = query.where(Transaction.fan_id == fan_id)
+    if not excluded:
+        query = query.where(~select(OfLedgerExclusion.id).where(
+            OfLedgerExclusion.account_id == Transaction.account_id,
+            OfLedgerExclusion.transaction_id == Transaction.id,
+            OfLedgerExclusion.binding_id == OfRuntime.binding_id).exists())
+    return query.limit(1)
+
+
+def held(s, account_id, fan_id=None):
+    """Commerce hold. Account-wide unless ``fan_id`` is given, which adds that fan's own unlinked paid purchases.
+
+    An audited exclusion (of_ledger_exclusion) removes one unlinked purchase from the account-wide hold only;
+    it still holds its own fan, so that fan is never sold or discounted into a purchase we cannot link.
+    """
     from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
     from .launch_operations_models import OfLedgerResolution
     from db.onlyfans_models import OfRuntime
-    from db.models import OfCreatorBinding
     from db.onlyfans_delivery_models import OfDeliveryPolicy
-    from .ledger import PAID, coverage_proven
+    from .ledger import coverage_proven
     from .store import utcnow
     policy = s.get(OfDeliveryPolicy, account_id)
     scan = s.get(OfLedgerScan, account_id)
@@ -61,15 +86,10 @@ def held(s, account_id):
                     OfLedgerResolution.binding_id==OfRuntime.binding_id).exists()).limit(1)) is not None
         # Unlinked purchases from before the current binding was created cannot
         # be sales this binding made, so they stay visible but do not hold it.
-        or s.scalar(select(Transaction.id).join(OfRuntime, OfRuntime.account_id == Transaction.account_id)
-            .join(OfCreatorBinding, OfCreatorBinding.id == OfRuntime.binding_id).where(
-            Transaction.account_id == account_id,
-            Transaction.source == "ledger", Transaction.kind == "ppv_message",
-            Transaction.message_id.is_(None), Transaction.status.in_(tuple(PAID)),
-            Transaction.occurred_at >= OfCreatorBinding.created_at).limit(1)) is not None
+        or s.scalar(_unlinked_paid(account_id, excluded=False)) is not None
+        or (fan_id is not None and s.scalar(_unlinked_paid(account_id, fan_id)) is not None)
         or s.scalar(select(OfLedgerScan.account_id).where(OfLedgerScan.account_id == account_id,
             ((OfLedgerScan.status == "held") | (OfLedgerScan.last_complete_at.is_(None)))).limit(1)) is not None)
-
 
 
 class CommerceIntake:

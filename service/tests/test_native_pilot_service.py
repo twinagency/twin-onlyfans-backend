@@ -1419,7 +1419,7 @@ async def multi_level(backend, root):
             def admit_new_conversation(self, tenant, account, fan):
                 calls.append(("admit", fan))
 
-        def fake_dispatch(authority, tenant, account, transport):
+        def fake_dispatch(authority, tenant, account, transport, *, campaign_first, scan_cursors):
             if not grants:
                 return None
             grant = grants.pop(0)
@@ -1443,7 +1443,8 @@ async def multi_level(backend, root):
         with patch.dict(os.environ, env), patch("twin_bridge.coordination._store_target", return_value=f.path), \
                 patch.object(twin_store, "Store", FakeStore), \
                 patch.object(delivery, "TextAuthority", lambda store: store), \
-                patch.object(manual, "dispatch_next_manual", fake_dispatch):
+                patch.object(manual, "dispatch_next_operator", fake_dispatch), \
+                patch("onlyfans_runtime.campaigns.CampaignService.queue_due", return_value=0) as due_campaigns:
             task, patcher = await start(client)
             says(f, FA, "a is chatting")
             grants.extend([Grant(FB, "human hello for B"), Grant(FF, "never sent: not FASTT-owned")])
@@ -1452,6 +1453,7 @@ async def multi_level(backend, root):
             await settle()
             check(not posted(http, FF), "a queued message for a non-owned fan is never sent by this runner")
             check(("reconcile", FA) in calls and ("admit", FA) in calls, "controls run for the fan with activity")
+            due_campaigns.assert_called_with("synthetic-tenant", A)
             says(f, FB, "b answers the human")
             await until(lambda: len(posted(http, FB)) == 2, "B (now with human history) is answered too", events)
             check(("reconcile", FB) in calls)

@@ -53,8 +53,8 @@ that country has no eligible unused stock, another purchased country is used.
 Retries retain the same assigned IP even if the dashboard preference changes.
 
 An assigned IP is retained across retries and is never automatically released or
-recycled. An administrator must investigate expired, replaced or unused
-assignments before any future manual release mechanism is added. Saving a
+recycled. Management can recover a demonstrably unused exact reservation through the
+audited broker operation below. Saving a
 connection starts normal imports but does not activate AI or outgoing messages.
 
 ## Verification

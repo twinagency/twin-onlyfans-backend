@@ -1,5 +1,5 @@
 {
-  "status": "PREPARED LOCALLY; SOURCE UPLOAD BLOCKED PENDING EXPLICIT APPROVAL",
+  "status": "UPLOADED AND VERIFIED",
   "destinationRepository": "twinagency/twin-onlyfans-backend",
   "destinationBranch": "archive/local-work-20261028",
   "files": [
@@ -993,5 +993,7 @@
       "sha256": "8c4cac598f4efd0b7d7dabfca67218e004acfcd769d26985c5506be31ede77b2",
       "untracked": false
     }
-  ]
+  ],
+  "archiveCommit": "d2b5185014b569f0238a8ca217ee8ce19e7ca84f",
+  "archiveUrl": "https://github.com/twinagency/twin-onlyfans-backend/tree/archive/local-work-20261028/docs/handover-local-20261028"
 }

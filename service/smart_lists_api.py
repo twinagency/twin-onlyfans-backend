@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
@@ -84,9 +85,7 @@ def _num_cmp(a: float, op: str, b: float) -> bool:
 
 
 def _eval_rule(rule: dict, fan: dict) -> bool:
-    """Evaluate ONE rule against a normalised fan dict. Unknown field / bad
-    shape → False (never matches), so a malformed rule can only ever SHRINK a
-    segment, never leak fans into it."""
+    """Evaluate ONE rule after resolve() validates the complete definition."""
     field = rule.get("field")
     op = rule.get("op")
     value = rule.get("value")
@@ -131,9 +130,9 @@ def resolve(rules_obj: dict | None, fans: Iterable[dict]) -> list[int]:
     EVERY fan matches (a blank segment is "everyone", not "no one"). `fans` is
     an iterable of dicts shaped by `_normalise_fan`.
     """
-    rules_obj = rules_obj or {}
-    rules = rules_obj.get("rules") or []
-    match = str(rules_obj.get("match") or "all").lower()
+    rules_obj = _validate_rules(rules_obj)
+    rules = rules_obj["rules"]
+    match = rules_obj["match"]
     out: list[int] = []
     for fan in fans:
         fid = fan.get("fan_id")
@@ -159,10 +158,13 @@ def _validate_rules(rules_obj: Any) -> dict:
         return {"match": "all", "rules": []}
     if not isinstance(rules_obj, dict):
         raise HTTPException(422, "rules must be an object")
-    match = str(rules_obj.get("match") or "all").lower()
+    if set(rules_obj) - {"match", "rules"}:
+        raise HTTPException(422, "unsupported smart list rule format")
+    raw_match = rules_obj.get("match", "all")
+    match = raw_match.lower() if isinstance(raw_match, str) else None
     if match not in ("all", "any"):
         raise HTTPException(422, "match must be 'all' or 'any'")
-    raw = rules_obj.get("rules") or []
+    raw = rules_obj.get("rules", [])
     if not isinstance(raw, list):
         raise HTTPException(422, "rules.rules must be a list")
     if len(raw) > _MAX_RULES:
@@ -171,23 +173,31 @@ def _validate_rules(rules_obj: Any) -> dict:
     for r in raw:
         if not isinstance(r, dict):
             raise HTTPException(422, "each rule must be an object")
+        if set(r) - {"field", "op", "value", "days"}:
+            raise HTTPException(422, "unsupported smart list rule fields")
         field = r.get("field")
         op = r.get("op")
-        if field not in _FIELDS:
+        if not isinstance(field, str) or field not in _FIELDS:
             raise HTTPException(422, f"unknown field {field!r}")
+        if not isinstance(op, str):
+            raise HTTPException(422, "rule operator must be a string")
         entry: dict[str, Any] = {"field": field, "op": op}
         if field in _NUMERIC_FIELDS:
             if op not in _NUMERIC_OPS:
                 raise HTTPException(422, f"{field} needs a numeric operator ({', '.join(sorted(_NUMERIC_OPS))})")
             try:
+                if isinstance(r.get("value"), bool):
+                    raise ValueError
                 entry["value"] = float(r.get("value"))
-            except (TypeError, ValueError):
+                if not math.isfinite(entry["value"]):
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError):
                 raise HTTPException(422, f"{field} value must be a number")
             if field == "recent_spend":
                 days = r.get("days", 30)
                 try:
                     entry["days"] = max(1, min(int(days), 3650))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     raise HTTPException(422, "recent_spend days must be an integer")
         elif field in _STRING_FIELDS:
             if op not in _STRING_OPS:
@@ -273,10 +283,18 @@ async def _load_normalised_fans(account_id: str, rules_obj: dict) -> list[dict]:
 # ── Serialisation ─────────────────────────────────────────────────────
 
 def _rules_of(row: SmartList) -> dict:
+    """Refuse corrupt saved definitions; returning an empty rule would mean everyone.
+
+    Block resolution rather than return no members: this list may be an exclusion.
+    Keep the historical empty-column/empty-object representation of a blank list.
+    """
     try:
-        return json.loads(row.rules_json) if row.rules_json else {"match": "all", "rules": []}
-    except Exception:
-        return {"match": "all", "rules": []}
+        rules = json.loads(row.rules_json) if row.rules_json else {}
+        if not isinstance(rules, dict):
+            raise ValueError
+        return _validate_rules(rules)
+    except (ValueError, TypeError, HTTPException):
+        raise HTTPException(409, "saved smart list rules are invalid; repair the definition before resolving") from None
 
 
 def _serialize(row: SmartList) -> dict:

@@ -9,7 +9,7 @@ on:
     inputs:
       suite:
         type: choice
-        options: [combined, commerce, artifacts]
+        options: [combined, commerce, artifacts, image-rollback]
         default: combined
       dashboard_ref:
         description: Exact SHA, matching the committed paired dashboard pin
@@ -47,6 +47,7 @@ on:
         required: false
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: onlyfans-acceptance-${{ inputs.suite || 'combined' }}-${{ github.ref }}
   cancel-in-progress: true
@@ -54,7 +55,7 @@ jobs:
   fastt-sqlite:
     # The paired manifest covers test_onlyfans*.py. FASTT's script-style
     # executor tests need their own interpreters, rather than pytest collection.
-    if: ${{ inputs.suite != 'commerce' && inputs.suite != 'artifacts' }}
+    if: ${{ inputs.suite != 'commerce' && inputs.suite != 'artifacts' && inputs.suite != 'image-rollback' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -117,7 +118,7 @@ jobs:
           path: native-fastt-evidence/
           if-no-files-found: error
   fastt-postgres:
-    if: ${{ inputs.suite != 'commerce' && inputs.suite != 'artifacts' }}
+    if: ${{ inputs.suite != 'commerce' && inputs.suite != 'artifacts' && inputs.suite != 'image-rollback' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
@@ -202,7 +203,7 @@ jobs:
           path: backend/native-fastt-pg-evidence/
           if-no-files-found: error
   acceptance:
-    if: ${{ inputs.suite != 'artifacts' }}
+    if: ${{ inputs.suite != 'artifacts' && inputs.suite != 'image-rollback' }}
     runs-on: ubuntu-24.04
     # Dependency installation consumed 34 minutes on the last hosted runner.
     # Keep every test/assertion; budget setup separately from product timeouts.
@@ -327,7 +328,7 @@ jobs:
           if-no-files-found: error
   aggregate:
     needs: acceptance
-    if: ${{ always() && inputs.suite != 'artifacts' }}
+    if: ${{ always() && inputs.suite != 'artifacts' && inputs.suite != 'image-rollback' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -368,3 +369,7 @@ jobs:
     with:
       forward_dashboard_url: ${{ inputs.dashboard_archive_url }}
       rollback_dashboard_url: ${{ inputs.rollback_dashboard_url }}
+
+  image-rollback:
+    if: ${{ inputs.suite == 'image-rollback' }}
+    uses: ./.github/workflows/onlyfans-rollback-image.yml

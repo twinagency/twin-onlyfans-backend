@@ -82,6 +82,7 @@ def test_pause_account_a_leaves_account_b_able_to_send(two):
     from native_pilot.ledger import Ledger
     from twin_bridge import store as bridge
     url, engine, store, authority = two
+    bridge.ensure_runtime_schema(url)
     ledger = Ledger(url, allowance=True)
     assert ledger.allowance_status(A)["enabled"] and ledger.allowance_status(B)["enabled"]
     authority.configure(TENANT, A, expected_revision=1, enabled=False, limit_units=20, throttle_seconds=1,

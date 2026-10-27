@@ -24,7 +24,7 @@ docker run --rm --network twin-onlyfans_default --workdir /app/service --env-fil
 The backup command now names the isolated immutable recovery-tools image tested in 17 cases, with matching PostgreSQL 16.15 wrappers at /opt/pg16. Its source-revision allowlist still excludes the newly deployed divergent 0093 source, so this command must refuse current production. Do not install packages into a live container or bypass the revision check. Retain backup metadata and SHA256 privately. Restore only into the verified empty isolated destination, with the same key:
 
 ```sh
-PYTHONPATH=service python -m onlyfans_runtime.operations restore /private/backups/twin-before-0093.twinof --url-env ONLYFANS_RESTORE_TEST_URL --pg-bin /opt/pg16
+docker run --rm --network twin-onlyfans_default --workdir /app/service --env-file /secure/final-crm-recovery.env -e PYTHON_DOTENV_DISABLED=1 --mount type=bind,source=/var/lib/twin-release/final-stabilisation-20261028/backups,target=/backup,readonly --entrypoint python sha256:6487b89c9ac5d6081701cd6bf5430ba3b6c5c79a659ce6de0c6234991955c1dc -m onlyfans_runtime.operations restore /backup/twin-before-0093.twinof --url-env ONLYFANS_RESTORE_TEST_URL --pg-bin /opt/pg16
 ```
 
 Require authenticated restoration, public+onlyfans_proxy row preservation, no active Alembic version and the independent quarantine fence; both runtime and broker readiness must refuse the restored destination. Retain separate owner/agency session-store recovery material before applying session SQL.

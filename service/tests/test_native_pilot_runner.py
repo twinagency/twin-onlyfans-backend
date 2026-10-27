@@ -165,7 +165,7 @@ async def suite(root):
     def dashboard(name):
         f, p, g, c, h = make("dashboard-" + name)
         f.sql("CREATE TABLE of_conversation_state(account_id TEXT,fan_id INTEGER,mode TEXT,takeover_state TEXT)")
-        f.sql("INSERT INTO of_conversation_state VALUES(?,?,'automated','none')", (fixtures.ACCT, fixtures.FAN))
+        f.sql("INSERT INTO of_conversation_state(account_id,fan_id,mode,takeover_state) VALUES(?,?,'automated','none')", (fixtures.ACCT, fixtures.FAN))
         g.dashboard_handover = True
         g.hold_check = lambda: fan_hold_reason(f.path, fixtures.ACCT, fixtures.FAN, True)
         return f, p, g, c, h

@@ -1,0 +1,25 @@
+{
+  "runtimeSourceCommit": "1c2030eb5fb1a3af7df166019a771dd8f5528f2a",
+  "rows": 850000,
+  "environment": "AWS isolated disposable PostgreSQL 16 on internal network, synthetic account, no provider/model calls",
+  "populationSeconds": 209.03,
+  "releasePreflight": "ANALYZE canonical messages and source/join tables before migration",
+  "upgradeSeconds": 14.813,
+  "discovery": {
+    "samples": 30,
+    "rows": 2,
+    "p50ms": 1.006,
+    "p95ms": 2.499,
+    "maxMs": 4.947,
+    "postgresExecutionMs": 0.089,
+    "partialIndexUsed": true
+  },
+  "status": "passed",
+  "runtimeAuthorityPreserved": true,
+  "financialRowsCreated": 0,
+  "sendIntentsCreated": 0,
+  "toolImage": "sha256:6487b89c9ac5d6081701cd6bf5430ba3b6c5c79a659ce6de0c6234991955c1dc",
+  "productionMutated": false,
+  "lockTimeoutSeconds": 5,
+  "statementTimeoutSeconds": 30
+}

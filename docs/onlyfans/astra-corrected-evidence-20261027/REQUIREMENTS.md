@@ -1,14 +1,14 @@
 # Corrected candidate requirement disposition
 
-28 October continuation: application fixes are preserved. The final pair is re-pinned in ACCEPTANCE-DASHBOARD-SHA and the final dispatch record. The old results below remain historical evidence for their own commits. Final acceptance, artifacts, production-window and controlled-provider verification are not yet complete. AUTH-02/03 remain jointly deferred.
+28 October continuation: application fixes are preserved. The final pair is re-pinned in ACCEPTANCE-DASHBOARD-SHA and the final dispatch record. The old results below remain historical evidence for their own commits. Final selected-pair acceptance and artifacts are complete; the current production schema drift blocks cutover. Production-window and controlled-provider verification remain incomplete. AUTH-02/03 remain jointly deferred.
 
 Backend 0c4d79aa9f736102aa26bb41e4f7561ab1fff248; dashboard 444fd1303858e6d87204efe5811278657571f8f6.
 Implementation/rehearsal status is not production deployment or real-provider certification. Final hosted aggregate accepted 2,260 cases with zero exemptions, plus both required isolated scripts.
 
 | ID | Disposition | Evidence or qualification |
 | --- | --- | --- |
-| REL-01 | Package prepared | Sender overlays reconciled; exact forward/rollback images and actual-image populated schema 0096 rehearsal passed. Approved-window production config/backup/quiescence record remains required. |
-| REL-02 | Historical verification; final pair pending | Exact pair: six acceptance shards, both native suites, required isolated scripts and hosted aggregate passed. 2,260 cases; zero failures/errors/skips/deselections. Old 2,182 evidence remains attached to old pins. |
+| REL-01 | Selected artifacts prepared; compatibility hold | Sender overlays reconciled; exact forward/rollback images and actual-image populated schema 0096 rehearsal passed. Approved-window production config/backup/quiescence record remains required. |
+| REL-02 | Verified selected pair; production drift separate | Backend 1c2030eb/dashboard 45999997: 2,265 cases, six shards, both native suites, two isolated scripts and aggregate passed; zero failures/errors/skips/deselections. Run 40541003637. Historical 2,260 and 2,182 remain attached to their old pins. New live 0093_conversation_default_off is not in this tested pair. |
 | REL-03 | Implemented | Existing failures repaired; native fixture uses current dispatch interface with original assertions retained. |
 | E-001 | Implemented | Verified-money projection, immutable evidence and replay/conflict/reversal handling retained. |
 | E-002 | Implemented | Shared financial-status contract; failed is non-revenue and unknown status refuses completeness. |

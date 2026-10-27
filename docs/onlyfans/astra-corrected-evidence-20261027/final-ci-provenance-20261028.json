@@ -1,0 +1,575 @@
+{
+  "run": 40541003637,
+  "artifacts": [
+    {
+      "id": 12754552009,
+      "name": "onlyfans-combined-1c2030eb5fb1a3af7df166019a771dd8f5528f2a-aggregate",
+      "archive_sha256": "0538ff73e3dc1fc8403146e3f4849ed70c577570385da4558c98d9580f3cde1f",
+      "files": [
+        "aggregate-summary.json"
+      ]
+    },
+    {
+      "id": 12753937335,
+      "name": "onlyfans-combined-1c2030eb5fb1a3af7df166019a771dd8f5528f2a-shard-1",
+      "archive_sha256": "6f26354a9eb003bf22ab3044ac57dc987a247204bb2890274a51a871693e7dee",
+      "files": [
+        "acceptance.log",
+        "acceptance.xml",
+        "candidate-image-id.txt",
+        "candidate-image.json",
+        "collection.json",
+        "collection.log",
+        "execution.json",
+        "expanded-manifest.json",
+        "paired-source.log",
+        "python-versions.txt",
+        "summary.json"
+      ]
+    },
+    {
+      "id": 12753633481,
+      "name": "onlyfans-combined-1c2030eb5fb1a3af7df166019a771dd8f5528f2a-shard-5",
+      "archive_sha256": "b69ed22213ba4e78395a690edc497d54bd7af4c359fffcf07e7e36fa2f85ecc0",
+      "files": [
+        "acceptance.log",
+        "acceptance.xml",
+        "candidate-image-id.txt",
+        "candidate-image.json",
+        "collection.json",
+        "collection.log",
+        "execution.json",
+        "expanded-manifest.json",
+        "paired-source.log",
+        "python-versions.txt",
+        "summary.json"
+      ]
+    },
+    {
+      "id": 12753481829,
+      "name": "onlyfans-combined-1c2030eb5fb1a3af7df166019a771dd8f5528f2a-shard-4",
+      "archive_sha256": "aca832b62178c23b2f2d275331da6349ec5707803f82f68a7ca3b78d22aca80b",
+      "files": [
+        "acceptance.log",
+        "acceptance.xml",
+        "api.log",
+        "authenticated-inbox.png",
+        "authenticated-onlyfans-overview.png",
+        "campaign-management-mobile.png",
+        "candidate-image-id.txt",
+        "candidate-image.json",
+        "collection.json",
+        "collection.log",
+        "combined-earnings-mobile.png",
+        "configuration-mobile.png",
+        "connection-editor-mobile.png",
+        "content-editor-mobile.png",
+        "execution.json",
+        "expanded-manifest.json",
+        "import-blocked-preview.png",
+        "import-disabled-draft.png",
+        "import-mobile-390.png",
+        "import-scan.png",
+        "import-source-conflict.png",
+        "next.log",
+        "operations-mobile.png",
+        "operator-manual-confirmed.png",
+        "paired-source.log",
+        "python-versions.txt",
+        "summary.json",
+        "sync-conflicting-source-terms.png",
+        "sync-connection-required.png",
+        "sync-mobile-390.png",
+        "sync-queued-upload.png",
+        "sync-synced-media.png",
+        "vault-organization-mobile.png",
+        "vault-preview-mobile.png"
+      ]
+    },
+    {
+      "id": 12752615844,
+      "name": "onlyfans-combined-1c2030eb5fb1a3af7df166019a771dd8f5528f2a-shard-3",
+      "archive_sha256": "1b3429f16da36fe1e671fca194896e03b0605a356ace6d993b283d5be3752675",
+      "files": [
+        "acceptance.log",
+        "acceptance.xml",
+        "candidate-image-id.txt",
+        "candidate-image.json",
+        "collection.json",
+        "collection.log",
+        "execution.json",
+        "expanded-manifest.json",
+        "one-command-demo-of_demo_f68022a9c9de4b50940b16be71a70fc9/api.log",
+        "one-command-demo-of_demo_f68022a9c9de4b50940b16be71a70fc9/authenticated-inbox.png",
+        "one-command-demo-of_demo_f68022a9c9de4b50940b16be71a70fc9/authenticated-onlyfans-overview.png",
+        "one-command-demo-of_demo_f68022a9c9de4b50940b16be71a70fc9/combined-earnings-mobile.png",
+        "one-command-demo-of_demo_f68022a9c9de4b50940b16be71a70fc9/configuration-mobile.png",
+        "one-command-demo-of_demo_f68022a9c9de4b50940b16be71a70fc9/native-automation-real-backend.png",
+        "one-command-demo-of_demo_f68022a9c9de4b50940b16be71a70fc9/native-memory-real-backend.png",
+        "one-command-demo-of_demo_f68022a9c9de4b50940b16be71a70fc9/next.log",
+        "one-command-demo-of_demo_f68022a9c9de4b50940b16be71a70fc9/operations-mobile.png",
+        "paired-source.log",
+        "python-versions.txt",
+        "summary.json"
+      ]
+    },
+    {
+      "id": 12752342271,
+      "name": "fastt-sqlite-1c2030eb5fb1a3af7df166019a771dd8f5528f2a",
+      "archive_sha256": "30b8de71e612325a7985abb1ba9c694b6cc90d1313aa967616e8bbe68bb33581",
+      "files": [
+        "backend-sha.txt",
+        "results.json",
+        "tests.log",
+        "test_fastt_platform_scope.xml",
+        "test_fastt_requested_caption.xml",
+        "test_fastt_scope_db.xml",
+        "test_fastt_scope_wide.xml",
+        "test_native_pilot_receipt_recovery.xml",
+        "test_native_pilot_recovery.xml"
+      ]
+    },
+    {
+      "id": 12751167320,
+      "name": "fastt-postgres-1c2030eb5fb1a3af7df166019a771dd8f5528f2a",
+      "archive_sha256": "187a9d9d2248953a52b48f68cf88d1a8bd8c4c42c9eb181d50c34c31029f66f4",
+      "files": [
+        "backend-sha.txt",
+        "results.json",
+        "tests.log",
+        "test_fastt_activation_pg.xml",
+        "test_fastt_controls_pg.xml",
+        "test_fastt_new_conversations_pg.xml",
+        "test_native_pilot_attribution_pg.xml"
+      ]
+    },
+    {
+      "id": 12751129116,
+      "name": "onlyfans-combined-1c2030eb5fb1a3af7df166019a771dd8f5528f2a-shard-2",
+      "archive_sha256": "33a09d03bbb849b8adf2ced40e4a954b88613717314f4880b193ee0d815a7e94",
+      "files": [
+        "acceptance.log",
+        "acceptance.xml",
+        "candidate-image-id.txt",
+        "candidate-image.json",
+        "collection.json",
+        "collection.log",
+        "execution.json",
+        "expanded-manifest.json",
+        "paired-source.log",
+        "python-versions.txt",
+        "summary.json"
+      ]
+    },
+    {
+      "id": 12750534464,
+      "name": "onlyfans-combined-1c2030eb5fb1a3af7df166019a771dd8f5528f2a-shard-0",
+      "archive_sha256": "7b7c75b4efddfeb6068b532350d722bc83e940b92218fb83b9f26a5a59e690aa",
+      "files": [
+        "acceptance.log",
+        "acceptance.xml",
+        "candidate-image-id.txt",
+        "candidate-image.json",
+        "collection.json",
+        "collection.log",
+        "execution.json",
+        "expanded-manifest.json",
+        "paired-source.log",
+        "python-versions.txt",
+        "script-0.log",
+        "script-1.log",
+        "summary.json"
+      ]
+    }
+  ],
+  "native": {
+    "postgres": {
+      "commands": [
+        {
+          "path": "service/tests/test_fastt_activation_pg.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-pg-evidence/test_fastt_activation_pg.xml",
+            "service/tests/test_fastt_activation_pg.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_fastt_controls_pg.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-pg-evidence/test_fastt_controls_pg.xml",
+            "service/tests/test_fastt_controls_pg.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_fastt_new_conversations_pg.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-pg-evidence/test_fastt_new_conversations_pg.xml",
+            "service/tests/test_fastt_new_conversations_pg.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_attribution_pg.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-pg-evidence/test_native_pilot_attribution_pg.xml",
+            "service/tests/test_native_pilot_attribution_pg.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_load_pg.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_load_pg.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_service_pg.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_service_pg.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_storage_pg.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_storage_pg.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        }
+      ],
+      "logSummaries": [
+        "3 passed, 16 warnings in 19.93s",
+        "14 passed, 73 warnings in 31.60s",
+        "14 passed, 122 warnings in 33.07s",
+        "2 passed, 17 warnings in 13.36s"
+      ]
+    },
+    "sqlite": {
+      "commands": [
+        {
+          "path": "service/tests/test_fastt_activation.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_fastt_activation.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_fastt_platform_scope.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-evidence/test_fastt_platform_scope.xml",
+            "service/tests/test_fastt_platform_scope.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_fastt_requested_caption.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-evidence/test_fastt_requested_caption.xml",
+            "service/tests/test_fastt_requested_caption.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_fastt_scope_db.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-evidence/test_fastt_scope_db.xml",
+            "service/tests/test_fastt_scope_db.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_fastt_scope_wide.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-evidence/test_fastt_scope_wide.xml",
+            "service/tests/test_fastt_scope_wide.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_fastt_wire_stop.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_fastt_wire_stop.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_caption_vault.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_caption_vault.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_content.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_content.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_context.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_context.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_engine.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_engine.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_expiry.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_expiry.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_followups.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_followups.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_ledger.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_ledger.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_manifest.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_manifest.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_model.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_model.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_offers.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_offers.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_overlap.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_overlap.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_postsale.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_postsale.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_postsale_engine.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_postsale_engine.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_receipt_recovery.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-evidence/test_native_pilot_receipt_recovery.xml",
+            "service/tests/test_native_pilot_receipt_recovery.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_recovery.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=native-fastt-evidence/test_native_pilot_recovery.xml",
+            "service/tests/test_native_pilot_recovery.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_reporting.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_reporting.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_resolver_seam.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_resolver_seam.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_runner.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_runner.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_runtime.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_runtime.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_service.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_service.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_supervisor.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_supervisor.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_vault.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_vault.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        },
+        {
+          "path": "service/tests/test_native_pilot_vision.py",
+          "argv": [
+            "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+            "service/tests/test_native_pilot_vision.py"
+          ],
+          "exitStatus": 0,
+          "skipped": 0
+        }
+      ],
+      "logSummaries": [
+        "8 passed in 0.95s",
+        "21 passed in 42.29s",
+        "35 passed, 4 warnings in 1.93s",
+        "6 passed in 0.93s",
+        "Ran 14 tests in 0.083s",
+        "OK",
+        "14 passed in 1.28s",
+        "9 passed in 0.29s"
+      ]
+    }
+  }
+}

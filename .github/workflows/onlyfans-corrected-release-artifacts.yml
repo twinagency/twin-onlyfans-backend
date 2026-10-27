@@ -21,11 +21,11 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-          - {name: backend-forward, backend: 0c4d79aa9f736102aa26bb41e4f7561ab1fff248, source: 0c4d79aa9f736102aa26bb41e4f7561ab1fff248, dockerfile: Dockerfile.onlyfans, kind: backend}
+          - {name: backend-forward, backend: ${{ github.sha }}, source: ${{ github.sha }}, dockerfile: Dockerfile.onlyfans, kind: backend}
           - {name: backend-rollback, backend: d6811b124928f8167e6625ce9db5db81bf227fad, source: d6811b124928f8167e6625ce9db5db81bf227fad, dockerfile: Dockerfile.onlyfans, kind: backend}
-          - {name: signin-forward, backend: 0c4d79aa9f736102aa26bb41e4f7561ab1fff248, source: 0c4d79aa9f736102aa26bb41e4f7561ab1fff248, dockerfile: Dockerfile.sign-in, kind: signin}
+          - {name: signin-forward, backend: ${{ github.sha }}, source: ${{ github.sha }}, dockerfile: Dockerfile.sign-in, kind: signin}
           - {name: signin-rollback, backend: d6811b124928f8167e6625ce9db5db81bf227fad, source: d6811b124928f8167e6625ce9db5db81bf227fad, dockerfile: Dockerfile.sign-in, kind: signin}
-          - {name: dashboard-forward, backend: 0c4d79aa9f736102aa26bb41e4f7561ab1fff248, source: 444fd1303858e6d87204efe5811278657571f8f6, dockerfile: Dockerfile, kind: dashboard, archive: 2f0490c863b76107a6eedccc9ab1d66985b71b55487a2952f373859baaf7f9f9}
+          - {name: dashboard-forward, backend: ${{ github.sha }}, source: 4599999761dbf2ff2b517359642d10262324867a, dockerfile: Dockerfile, kind: dashboard, archive: 1accd652bcca3c274b569ac72ac6ec6910dd20508d477d665527fb6bced31c60}
           - {name: dashboard-rollback, backend: d6811b124928f8167e6625ce9db5db81bf227fad, source: 871b3e8955bf8af357f6f66d56c4446bf98fee8e, dockerfile: Dockerfile, kind: dashboard, archive: e8777331cc074f52234482537b2d6ce55ab430dc17b39454f9f031d6b2f0626a}
     steps:
       - uses: actions/checkout@v4

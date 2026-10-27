@@ -1,12 +1,14 @@
 # Corrected candidate requirement disposition
 
+28 October continuation: application fixes are preserved. The final pair is re-pinned in ACCEPTANCE-DASHBOARD-SHA and the final dispatch record. The old results below remain historical evidence for their own commits. Final acceptance, artifacts, production-window and controlled-provider verification are not yet complete. AUTH-02/03 remain jointly deferred.
+
 Backend 0c4d79aa9f736102aa26bb41e4f7561ab1fff248; dashboard 444fd1303858e6d87204efe5811278657571f8f6.
 Implementation/rehearsal status is not production deployment or real-provider certification. Final hosted aggregate accepted 2,260 cases with zero exemptions, plus both required isolated scripts.
 
 | ID | Disposition | Evidence or qualification |
 | --- | --- | --- |
 | REL-01 | Package prepared | Sender overlays reconciled; exact forward/rollback images and actual-image populated schema 0096 rehearsal passed. Approved-window production config/backup/quiescence record remains required. |
-| REL-02 | Verified | Exact pair: six acceptance shards, both native suites, required isolated scripts and hosted aggregate passed. 2,260 cases; zero failures/errors/skips/deselections. Old 2,182 evidence remains attached to old pins. |
+| REL-02 | Historical verification; final pair pending | Exact pair: six acceptance shards, both native suites, required isolated scripts and hosted aggregate passed. 2,260 cases; zero failures/errors/skips/deselections. Old 2,182 evidence remains attached to old pins. |
 | REL-03 | Implemented | Existing failures repaired; native fixture uses current dispatch interface with original assertions retained. |
 | E-001 | Implemented | Verified-money projection, immutable evidence and replay/conflict/reversal handling retained. |
 | E-002 | Implemented | Shared financial-status contract; failed is non-revenue and unknown status refuses completeness. |
@@ -36,7 +38,7 @@ Implementation/rehearsal status is not production deployment or real-provider ce
 | AI-02 | Implemented | Existing saved sales permission controls catalogue eligibility. |
 | AI-03 | Implemented; inference QA pending | Saved/sealed model constrained to real FASTT route; current model passes offline predicate. |
 | AI-04 | Implemented | Expired-owner recovery only requeues positively eligible work; ambiguous work held. |
-| AI-05 | Implemented; live output QA pending | Reply-first full-caption output guard and caption regression retained. |
+| AI-05 | Corrected; live output QA pending | Complete composed caption is checked for delivery narration and unbacked terms, exempting only structured validated card count/price. 44 affected native/media cases passed with one model call. Restored FASTT caption path stays separate. |
 | AI-06 | Disclosed limitation | Serial engine/global hook remains. 120-second p95/250-creator capacity unproved; no scaling rewrite. |
 | AUTH-01 | Rehearsed; production cutover pending | Default legacy hard cutover, owner-token replay denial, unrelated-session retention and actionable outage passed. Apply additive SQL before dashboard code; communicate re-login. |
 | AUTH-02 | Deferred jointly | Flirt explicit-authorisation repair remains outside bounded scope; do not enable independently. |

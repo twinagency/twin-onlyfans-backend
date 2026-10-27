@@ -1,4 +1,4 @@
-"""Requested-media captions through the real planner and native boundaries.
+"""Restored requested-media captions through the real planner and native boundaries.
 
 Every case has a fresh synthetic SQLite database, blocked sockets and an injected
 model/transport. No credentials, real media, paid calls or production settings.
@@ -171,9 +171,10 @@ async def exercise(case, tmp):
                 assert not result.get("errors"), result
                 cards = [row for row in sent if row[2]]
                 assert len(cards) == 1, (result, sent, [c.get("purpose") for c in calls])
-                assert PHRASE in cards[0][1], cards
+                assert PHRASE not in cards[0][1], cards
+                assert not any(c.get("purpose") == "content_resolver_action" for c in calls)
             elif case == "text_only":
-                assert await content_resolver.action_phrase(ACCOUNT, FAN, SELECTED, conversational=True) == ""
+                assert await content_resolver.action_phrase(ACCOUNT, FAN, SELECTED) == ""
                 assert not calls and not sent
             elif case in ("substitute", "unnamed"):
                 from automations.pack_claim import ask_clause, substitute_clause
@@ -195,8 +196,9 @@ async def exercise(case, tmp):
                 assert delivery.plan.media == SELECTED and delivery.plan.price_cents == 500
                 assert delivery.plan.previews == [] and delivery.plan.claim.n == 4
                 basic = "3 pics + 1 vid of relaxing" if case == "mixed_media" else "4 pics of relaxing"
-                fallback = case in invalid or case in ("no_descriptions", "partial_descriptions", "model_failure", "hook_unchanged")
-                assert delivery.plan.claim.text == basic + ("" if fallback else ", " + PHRASE)
+                # A named matching request never invokes optional caption generation.
+                assert delivery.plan.claim.text == basic
+                assert not calls
                 if case == "removed_before_send":
                     async with get_session() as session:
                         row = await session.get(VaultItem, (ACCOUNT, SELECTED[0]))
@@ -216,23 +218,18 @@ async def exercise(case, tmp):
                         assert len(offers) == 1 and offers[0].fan_id == FAN and offers[0].account_id == ACCOUNT
 
     actions = [c for c in calls if c.get("purpose") == "content_resolver_action"]
-    if case in ("no_descriptions", "partial_descriptions", "text_only", "hook_unchanged"):
-        assert not actions
-    else:
+    if case in ("substitute", "unnamed"):
         assert len(actions) == 1, [c.get("purpose") for c in calls]
-    if case not in ("substitute", "unnamed") and actions:
-        system, user = [m["content"] for m in actions[0]["messages"]]
-        facts, context = user.split("\n\nCONVERSATION (wording context only):\n")
+        system, facts = [m["content"] for m in actions[0]["messages"]]
         assert all(f"SELECTED_{mid}" in facts for mid in SELECTED)
         assert facts.index("SELECTED_7002") < facts.index("SELECTED_7001")
-        assert "bedroom" not in facts and "bedroom" in context
-        assert "HIM: we were talking about a relaxed afternoon" in context
-        assert "SAVED TEXTING STYLE" in context and "<p>" not in context
-        assert "NOT evidence" in system and "do not paste" in system
-        assert "only for tone and context" in system
-        assert all(secret not in user for secret in (
+        assert "CONVERSATION" not in facts and "SAVED TEXTING STYLE" not in facts
+        assert "bedroom" not in facts
+        assert all(secret not in facts for secret in (
             "OTHER_ACCOUNT_SECRET", "OTHER_FAN_SECRET", "UNSENT_SECRET",
             "OTHER_ACCOUNT_MEDIA_SECRET", "POOL_ONLY_BEACH_DESCRIPTION", "REMOVED_MEDIA_SECRET"))
+    else:
+        assert not actions, [c.get("purpose") for c in calls]
     # None of the caption work edits the account's saved model/persona/sales settings.
     async with get_session() as session:
         row = await session.get(AccountAiConfig, ACCOUNT)

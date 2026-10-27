@@ -451,11 +451,12 @@ async def answer_line(account_id: str, fan_id: int, his_words: str,
 
 
 async def action_phrase(account_id: str, fan_id: int,
-                        media_ids: list[int], *, conversational: bool = False) -> str:
-    """A brief phrase based on the selected media's saved descriptions.
+                        media_ids: list[int]) -> str:
+    """"me riding him on the couch" — the half of a substitute caption that SELLS.
 
-    Named asks opt into conversation-aware wording. The legacy subject-free
-    and substitute paths retain their existing media-only prompt and limits.
+    Operator ruling 2026-08-16. The hedge ("not exactly joi but 🙈") is honest and
+    on its own it is a refusal he has been asked to pay for; this is what he IS
+    getting, named from the vault's own describe pass rather than from his ask.
 
     NEVER RAISES and never blocks the send. Every failure — no described rows, a
     capped model, a malformed reply — returns "" and `substitute_clause` falls
@@ -467,27 +468,9 @@ async def action_phrase(account_id: str, fan_id: int,
         described = await _descriptions(str(account_id), list(media_ids or []))
         if not described:
             return ""
-        if conversational and {mid for mid, _ in described} != {int(mid) for mid in media_ids}:
-            return ""  # Do not describe a whole paid bundle from a partial record.
         model = await resolve_model(str(account_id), "content_resolver")
-        if not conversational:
-            return await _action_phrase(str(account_id), int(fan_id),
-                                        described, model)
-        phrase = await _action_phrase(str(account_id), int(fan_id),
-                                      described, model, conversational=True)
-        # This phrase joins the audited claim, not the separately guarded voice
-        # line. Drop unusable output before composition; never replace a priced
-        # claim with a generic deflection or retry the delivery for a caption.
-        from ._common import apply_word_restriction, scan_offplatform
-        from .pack_claim import clean_action, _ACTION_MAX_CHARS
-        if not isinstance(phrase, str):
-            return ""
-        phrase = " ".join(phrase.split())
-        if (len(phrase) > _ACTION_MAX_CHARS or len(phrase.split()) > 8
-                or re.search(r"[.@:/]", phrase)
-                or scan_offplatform(phrase)):
-            return ""
-        return clean_action(apply_word_restriction(phrase))
+        return await _action_phrase(str(account_id), int(fan_id),
+                                    described, model)
     except Exception:  # noqa: BLE001
         log.warning("action_phrase failed account=%s fan=%s", account_id, fan_id,
                     exc_info=True)

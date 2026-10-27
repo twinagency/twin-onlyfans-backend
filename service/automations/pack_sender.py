@@ -571,9 +571,10 @@ class _AskEnding:
     ten of fourteen steps byte-identical; carrying them as one value is why
     there is now a single planner instead of two.
 
-    Both clauses take a description phrase. `_ask_claim` chooses the existing
-    media-only phrasing or a conversational continuation from the subject and
-    substitute state, without adding a separate product or setting.
+    There is deliberately no "may describe the media" field: both clauses take
+    the phrase and `pack_claim.needs_action` decides from the SUBJECT whether
+    one is worth fetching, so a fourth flag here would have been `True` in both
+    endings — a constant wearing the costume of a choice.
     """
     min_items: int
     clause: Callable[[list[str], str | None, str], Claim]
@@ -601,8 +602,7 @@ async def _kind_list(account_id: str, media: list[int]) -> list[str]:
 
 async def _ask_claim(account_id: str, fan_id: int, media: list[int], *,
                      subject: str | None, substitute: bool,
-                     clause: Callable[[list[str], str | None, str], Claim],
-                     conversational: bool = False) -> Claim:
+                     clause: Callable[[list[str], str | None, str], Claim]) -> Claim:
     """The caption for a DECIDED slice — and the one place a model-written
     phrase is allowed into one.
 
@@ -615,16 +615,12 @@ async def _ask_claim(account_id: str, fan_id: int, media: list[int], *,
     ⚠️ The phrase is read off the media being SENT, never the resolved pool: the
     price decides how many of the ranked ids he actually gets, and describing a
     clip that composition dropped is the same lie as an over-stated count, one
-    field across. Named asks also need a short, conversational description;
-    the noun alone used to bypass the media descriptions entirely. Existing
-    subject-free and substitute callers retain their media-only wording.
+    field across. `needs_action` is what keeps this from being an LLM call on
+    every priced send.
     """
     action = ""
     if needs_action(subject, substitute):
         action = await content_resolver.action_phrase(account_id, fan_id, media)
-    elif conversational:
-        action = await content_resolver.action_phrase(
-            account_id, fan_id, media, conversational=True)
     return clause(await _kind_list(account_id, media), subject, action)
 
 
@@ -656,8 +652,7 @@ async def _plan_ask_from(account_id: str, fan_id: int,
 
     claim = await _ask_claim(account_id, fan_id, priced.media,
                              subject=contract.subject,
-                             substitute=ending.substitute, clause=ending.clause,
-                             conversational=item_tag == ASK_ITEM_TAG and not ending.substitute)
+                             substitute=ending.substitute, clause=ending.clause)
     # ⚠️ No previews. `plan_pack` draws them from the `tease` rung, and a
     # vault-wide ask has no rung to draw from. Attaching an arbitrary vault item
     # as a free preview would give away payoff — audit rule 3, in spirit. The

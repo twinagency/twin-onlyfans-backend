@@ -946,7 +946,8 @@ async def _deliver(client, plan: PackPlan, *, voice_line: str | None,
             # the two silently zeroes the walk-down instead of raising.
             sent_by_employee_id=None, automation_kind=PACK_ATTR_KIND,
             body=str(result.get("text") or caption), price_cents=plan.price_cents,
-            created_at=datetime.utcnow(), emit_live=True)),
+            created_at=datetime.utcnow(), emit_live=True,
+            media_ids=list(plan.attached))),
         # The SLICE, never the shelf.
         ("vault_sends", _record_vault_sends(
             str(account_id), int(fan_id), list(plan.media), int(msg_id),

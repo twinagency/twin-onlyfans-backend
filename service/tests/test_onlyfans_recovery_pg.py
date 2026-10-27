@@ -28,7 +28,7 @@ KEY = base64.urlsafe_b64encode(bytes(range(32))).decode()
 def pg_bin():
     value = os.environ.get("ONLYFANS_TEST_PG_BIN")
     if value:
-        assert (Path(value) / "pg_dump").is_file() and (Path(value) / "pg_restore").is_file()
+        assert (Path(value) / ("pg_dump.exe" if os.name == "nt" else "pg_dump")).is_file() and (Path(value) / ("pg_restore.exe" if os.name == "nt" else "pg_restore")).is_file()
         return value
     assert shutil.which("pg_dump") and shutil.which("pg_restore"), "Install matching PostgreSQL clients or set ONLYFANS_TEST_PG_BIN"
     return None

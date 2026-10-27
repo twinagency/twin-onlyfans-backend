@@ -40,6 +40,7 @@ from llm_client import LLMCapExceeded, LLMError
 from of_shapes import giphy_dm_id, still_url
 from jsonsafe import load_dict
 from vision import download_frames, is_refusal, shrink_data_url
+from telegram_runtime.capabilities import active_telegram_capabilities
 
 log = logging.getLogger("of-relay.inbound_describe")
 
@@ -168,7 +169,11 @@ async def _vision_desc(account_id: str, fan_id: int, message_id: int,
     describe path. Escalates 30b→235b once on a refusal/blank.
 
     `message_id` is carried purely so a model failure logs the id you'd grep for."""
-    client = await asyncio.to_thread(ax._make_client, account_id)
+    # Telegram/native-pilot seam (same pattern as ai_chatter._runtime_client/_runtime_chat): with a
+    # capability active the media is fetched through ITS client and the model is the one it names;
+    # with none, the legacy calls below are byte-for-byte what they were.
+    cap = active_telegram_capabilities()
+    client = await asyncio.to_thread(cap.make_client if cap is not None else ax._make_client, account_id)
     images = [shrink_data_url(u, _INBOUND_IMG_MAX_EDGE)
               for u in await download_frames(client, urls)]
     if not images:
@@ -186,9 +191,11 @@ async def _vision_desc(account_id: str, fan_id: int, message_id: int,
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     content += [{"type": "image_url", "image_url": {"url": u}} for u in images]
 
-    for attempt_model in ("qwen3-vl-30b", "qwen3-vl-235b"):
+    attempt_models = (("qwen3-vl-30b", "qwen3-vl-235b") if cap is None
+                      else (await cap.resolve_model(account_id, "describe_inbound_image"),))
+    for attempt_model in attempt_models:
         try:
-            result = await llm_client.chat(
+            result = await (llm_client.chat if cap is None else cap.chat)(
                 model=attempt_model,
                 messages=[{"role": "user", "content": content}],
                 purpose="describe_inbound_image",

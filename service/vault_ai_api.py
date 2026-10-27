@@ -2838,7 +2838,7 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     # across a re-describe. A locked dispute fix outranks model and carried alike.
     prev = load_json(item.ai_fields_json, {}) or {}
     for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
-                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc"):
+                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1"):
         if key in prev:
             data[key] = prev[key]
     for key, val in (load_json(item.operator_overrides_json, {}) or {}).items():
@@ -2871,12 +2871,29 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
         vals["search_text"] = search_text
 
     async with get_session() as s:
+        # A concurrent backfill may have assigned folders while vision ran.
+        # Carry its marker from the current row, not just the earlier snapshot.
+        current_fields = await s.scalar(select(VaultItem.ai_fields_json).where(
+            VaultItem.account_id == account_id, VaultItem.media_id == media_id).with_for_update())
+        current_fields = load_json(current_fields, {}) or {}
+        if isinstance(current_fields, dict) and current_fields.get("_auto_folders_v1") is True:
+            data["_auto_folders_v1"] = True
+            vals["ai_fields_json"] = json.dumps(data, ensure_ascii=False, default=str)
         await s.execute(
             update(VaultItem)
             .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
             .values(**vals)
         )
         await s.commit()
+    # Categorisation reuses saved effective metadata and existing internal
+    # folders. Keep it separate so a folder failure never loses a description.
+    try:
+        from vault_auto_folders import assign as assign_auto_folders
+        async with get_session() as s:
+            await assign_auto_folders(s, account_id, media_id)
+            await s.commit()
+    except Exception:
+        log.exception("automatic folders failed account=%s media=%s", account_id, media_id)
     return {
         "media_id": media_id, "ok": True, "status": "described",
         "description": desc, "tags": tags,

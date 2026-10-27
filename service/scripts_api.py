@@ -95,6 +95,9 @@ _INT_KNOBS = {
     "proven_spend_floor_add_cents": (0, 20_000),
     # How many asks may sit unanswered at once (runtime floors this at 2).
     "max_open_offers": (1, 10),
+    # FASTT runner offer limits (native_pilot.engine.offer_limits); unset = 2 / 2.
+    "fastt_max_open_offers": (2, 10),
+    "fastt_max_offers_per_day": (0, 50),
     # Daily quota (item 21c) — the ceiling above the burst cap. 0 anywhere means
     # "no ceiling from this knob", never "cap at zero".
     "daily_quota_replies": (0, _DAILY_QUOTA_MAX),
@@ -442,6 +445,19 @@ def _validate_cfg(cfg: dict) -> dict:
             out["life_tip_big_extra"] = _x
     if "pivot_on_escalation" in cfg:
         out["pivot_on_escalation"] = bool(cfg["pivot_on_escalation"])
+    # FASTT fan scope: which fans the FASTT runner owns for this account (see
+    # onlyfans_runtime/fastt_scope.py; the deployment env is still the upper bound). Strict, and
+    # `null` clears it. The PUT below carries the stored value over when the key is not sent, so a
+    # tab that does not know this key cannot wipe it by saving.
+    if "fastt_scope" in cfg:
+        if cfg["fastt_scope"] is None:
+            out["fastt_scope"] = None
+        else:
+            from onlyfans_runtime.fastt_scope import normalize as _fastt_scope_normalize
+            try:
+                out["fastt_scope"] = _fastt_scope_normalize(cfg["fastt_scope"])
+            except ValueError as exc:
+                raise HTTPException(422, str(exc))
     if "unsend_expired_offer" in cfg:
         out["unsend_expired_offer"] = bool(cfg["unsend_expired_offer"])
     if "cadence_enabled" in cfg:
@@ -908,6 +924,20 @@ async def put_ai_chatter_config(body: _ConfigBody = Body(...)) -> dict[str, Any]
             except Exception:
                 raise HTTPException(422, f"unknown timezone: {tz!r}")
     now = datetime.utcnow()
+    async with get_session() as s:
+        _stored_row = await s.get(AccountAiConfig, body.account_id)
+        _stored_scope = None
+        if _stored_row is not None and _stored_row.ai_chatter_config_json:
+            try:
+                _stored_scope = (json.loads(_stored_row.ai_chatter_config_json) or {}).get("fastt_scope")
+            except Exception:
+                _stored_scope = None
+        s.expunge_all()
+    if "fastt_scope" not in clean:
+        if _stored_scope is not None:
+            clean["fastt_scope"] = _stored_scope
+    elif clean["fastt_scope"] is None:
+        del clean["fastt_scope"]
     payload = json.dumps(clean)
     async with get_session() as s:
         values: dict[str, Any] = {"ai_chatter_config_json": payload, "updated_at": now}

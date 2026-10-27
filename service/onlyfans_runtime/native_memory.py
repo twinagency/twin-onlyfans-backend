@@ -87,6 +87,9 @@ def apply_memory(session, plan, claim, proposal, now):
     if proposal["profile"] is not None: quotes.append(proposal["profile"]["quote"])
     if source is None or source.is_unsent or source.direction != "in" or any(q not in source.body for q in quotes):
         raise Refused("native memory source changed")
+    # Operator overrides (including cleared fields) suppress automatic writes to the same fields.
+    from .launch_history_memory.memory import respect_overrides
+    proposal = respect_overrides(session, plan.account_id, plan.fan_id, proposal)
     fan = session.get(Fan,(plan.account_id,plan.fan_id))
     profile = session.get(FanProfile,(plan.account_id,plan.fan_id))
     def write(row, target, field, value, quote):

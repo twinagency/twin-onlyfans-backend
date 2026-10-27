@@ -172,6 +172,24 @@ async def get_operations(request: Request, account_id: str) -> JSONResponse:
     return JSONResponse({"schemaVersion": SCHEMA_VERSION, "operations": body}, status_code=200, headers=_PRIVATE_HEADERS)
 
 
+@router.get("/accounts/{account_id}/ledger")
+async def ledger(request: Request, account_id: str) -> JSONResponse:
+    """Ledger reconciliation state for the selected account only (of-ledger.v1); reads no provider."""
+    try:
+        from .errors import Refused
+        principal = await _authenticate(request)
+        account_id = service._require_id(account_id, what="account")
+        body = await _repo().ledger(tenant_id=principal.tenant_id, account_id=account_id)
+        if body is None:
+            raise Refused("unknown_account")
+    except OnlyFansReadError as exc:
+        return _refusal(exc)
+    except Exception:
+        log.exception("onlyfans ledger read failed")
+        return _refusal(Unavailable("ledger_unavailable", "The OnlyFans ledger read did not succeed."))
+    return JSONResponse(body, headers=_PRIVATE_HEADERS)
+
+
 @router.get("/accounts/{account_id}/workspace/{section}")
 async def workspace(request: Request, account_id: str, section: str,
                     cursor: str | None = Query(default=None), limit: int = Query(default=25)):
@@ -194,11 +212,12 @@ async def get_conversation(
     request: Request,
     account_id: str,
     conversation_id: str,
+    cursor: str | None = Query(default=None),
 ) -> JSONResponse:
     try:
         principal = await _authenticate(request)
         body = await service.get_conversation(
-            _repo(), principal, account_id=account_id, conversation_id=conversation_id
+            _repo(), principal, account_id=account_id, conversation_id=conversation_id, cursor=cursor
         )
     except OnlyFansReadError as exc:
         return _refusal(exc)
@@ -213,12 +232,12 @@ async def earnings(request:Request):
     try:
         principal=await _authenticate(request)
         from .errors import BadRequest
-        if set(request.query_params)!={"start","end"} or any(len(request.query_params.getlist(k))!=1 for k in request.query_params):
+        if not {"start","end"}<=set(request.query_params) or set(request.query_params)-{"start","end","includePending","includeHistory"} or request.query_params.get("includePending","false") not in {"true","false"} or request.query_params.get("includeHistory","false") not in {"true","false"} or any(len(request.query_params.getlist(k))!=1 for k in request.query_params):
             raise BadRequest("invalid_earnings_window","Supply one explicit start and end timestamp.")
         from db.engine import get_session
         from .earnings import read_earnings
         async with get_session() as session:
-            value=await read_earnings(session,tenant_id=principal.tenant_id,start=request.query_params["start"],end=request.query_params["end"])
+            value=await read_earnings(session,tenant_id=principal.tenant_id,start=request.query_params["start"],end=request.query_params["end"],include_pending=request.query_params.get("includePending")=="true",include_history=request.query_params.get("includeHistory")=="true")
     except OnlyFansReadError as exc:return _refusal(exc)
     except Exception:return _refusal(Unavailable("earnings_unavailable","Recorded OnlyFans earnings could not be read."))
     return JSONResponse({"schemaVersion":SCHEMA_VERSION,"earnings":value},headers=_PRIVATE_HEADERS)

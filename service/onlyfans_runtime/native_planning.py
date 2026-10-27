@@ -98,6 +98,12 @@ def _native_messages(context):
                                          bot_accused=bot_accused, kind=kind,
                                          v=_voice.blocks(cfg.voice, sell_customs=False),
                                          lang=language)
+    memory = context.get("historicalMemory")
+    # Older source excerpts and operator overrides only; canonical facts already reach the composer above.
+    if memory and (memory["interactions"] or memory["overrides"]
+                   or any(fact["source"] != "canonical" for fact in memory["facts"].values())):
+        from .launch_history_memory.memory import augment_prompt
+        messages = augment_prompt(messages, memory)
     return messages
 
 
@@ -118,7 +124,23 @@ async def _draft(context, messages, model, timeout):
     sale = memory.pop("sale", None)
     if sale is not None:
         from .native_sales import caption
-        text = caption(sale) + "\n\n" + text
+        # The conversational answer leads. The saved description and exact
+        # price are part of the outbound draft and must pass the same floor.
+        text = text + "\n\n" + caption(sale)
+        text, leak = await finalize_draft(text, account_id=context["account_id"],
+            fan_id=context["fan"]["fan_id"], purpose="onlyfans_native_media", block_links=True)
+        # Check all composed content, exempting only the exact structured media
+        # count and price we just derived from the selected, validated sale.
+        # Saved descriptions and all conversational text remain subject to the floor.
+        generated = caption(sale)
+        phrase = generated.split(": ", 1)[0]
+        price_line = generated.rsplit("\n", 1)[-1]
+        boundary = "\n\n" + phrase + ": "
+        if not text.endswith("\n" + price_line) or boundary not in text:
+            raise Refused("unbacked native media caption")
+        floor_text = text[:-len("\n" + price_line)].replace(boundary, "\n\n", 1)
+        if leak or not text.strip() or _unbacked_talk(floor_text) or _DELIVERY_TALK_RE.search(text):
+            raise Refused("unbacked native media caption")
         if len(text.encode()) > 20000:
             raise Refused("native media caption exceeds its byte budget")
     return text, memory, sale

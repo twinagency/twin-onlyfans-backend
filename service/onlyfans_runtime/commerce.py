@@ -39,22 +39,34 @@ class SyntheticCommerceEvent:
 
 def held(s, account_id):
     from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
+    from .launch_operations_models import OfLedgerResolution
+    from db.onlyfans_models import OfRuntime
+    from db.models import OfCreatorBinding
     from db.onlyfans_delivery_models import OfDeliveryPolicy
-    from .ledger import PAID
+    from .ledger import PAID, coverage_proven
     from .store import utcnow
     policy = s.get(OfDeliveryPolicy, account_id)
     scan = s.get(OfLedgerScan, account_id)
     if policy is not None and policy.transport_kind == "native" and policy.media_enabled:
         now = utcnow()
-        if scan is None or scan.last_complete_at is None or not timedelta(0) <= now - scan.last_complete_at <= timedelta(minutes=15):
+        if scan is None or not coverage_proven(scan) or not timedelta(0) <= now - scan.last_complete_at <= timedelta(minutes=15):
             return True
     return (s.scalar(select(OfCommerceEvidence.evidence_hash).where(
         OfCommerceEvidence.account_id == account_id, OfCommerceEvidence.status == "conflict").limit(1)) is not None
         or s.scalar(select(OfLedgerEvidence.evidence_hash).where(OfLedgerEvidence.account_id == account_id,
-            OfLedgerEvidence.outcome == "conflict").limit(1)) is not None
-        or s.scalar(select(Transaction.id).where(Transaction.account_id == account_id,
+            OfLedgerEvidence.outcome == "conflict", ~select(OfLedgerResolution.evidence_hash).join(
+                OfRuntime,OfRuntime.account_id==OfLedgerResolution.account_id).where(
+                    OfLedgerResolution.account_id==OfLedgerEvidence.account_id,
+                    OfLedgerResolution.evidence_hash==OfLedgerEvidence.evidence_hash,
+                    OfLedgerResolution.binding_id==OfRuntime.binding_id).exists()).limit(1)) is not None
+        # Unlinked purchases from before the current binding was created cannot
+        # be sales this binding made, so they stay visible but do not hold it.
+        or s.scalar(select(Transaction.id).join(OfRuntime, OfRuntime.account_id == Transaction.account_id)
+            .join(OfCreatorBinding, OfCreatorBinding.id == OfRuntime.binding_id).where(
+            Transaction.account_id == account_id,
             Transaction.source == "ledger", Transaction.kind == "ppv_message",
-            Transaction.message_id.is_(None), Transaction.status.in_(tuple(PAID))).limit(1)) is not None
+            Transaction.message_id.is_(None), Transaction.status.in_(tuple(PAID)),
+            Transaction.occurred_at >= OfCreatorBinding.created_at).limit(1)) is not None
         or s.scalar(select(OfLedgerScan.account_id).where(OfLedgerScan.account_id == account_id,
             ((OfLedgerScan.status == "held") | (OfLedgerScan.last_complete_at.is_(None)))).limit(1)) is not None)
 
@@ -163,6 +175,9 @@ class CommerceIntake:
                 fan.lifetime_spend_cents = max(0, fan.lifetime_spend_cents + (event.amount_cents if paid else -event.amount_cents))
             settle_media_purchase(s, account_id=account_id, fan_id=event.fan_id,
                 message=message, offer=offer, paid=paid, was_paid=was_paid, stamp=stamp, now=now)
+            s.flush()
+            from .launch_engagement.events import cancel_for_fan
+            cancel_for_fan(s, account_id, event.fan_id, "purchase", now=now)
             # Monetary context moving makes queued drafts obsolete through the
             # same native fact fingerprint. No claim, model or send is created.
             return status

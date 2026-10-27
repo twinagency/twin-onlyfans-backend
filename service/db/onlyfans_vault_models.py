@@ -11,7 +11,7 @@ class OfVaultSyncJob(Base):
     __table_args__ = (
         UniqueConstraint("account_id", "command_key", name="uq_of_vault_sync_command"),
         CheckConstraint("status IN ('pending','running','complete','failed','superseded')", name="status"),
-        CheckConstraint("connection_revision > 0 AND owner_id > 0 AND pages_read >= 0 AND pages_read <= max_pages AND max_pages = 200 AND items_seen >= 0 AND items_seen <= 4800 AND page_offset = items_seen", name="bounds"),
+        CheckConstraint("connection_revision > 0 AND owner_id > 0 AND pages_read >= 0 AND max_pages = 200 AND items_seen >= 0 AND items_seen <= pages_read * 24 AND page_offset = items_seen", name="bounds"),
         CheckConstraint("(status = 'running') = (lease_token IS NOT NULL AND lease_until IS NOT NULL)", name="lease"),
         Index("uq_of_vault_sync_active", "account_id", unique=True,
               postgresql_where=text("status IN ('pending','running')")),

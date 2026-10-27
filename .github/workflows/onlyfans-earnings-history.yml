@@ -1,0 +1,72 @@
+name: OnlyFans ledger and FASTT controls acceptance
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/full-earnings-history-20261026]
+  pull_request:
+    paths:
+      - 'service/onlyfans_runtime/ledger*'
+      - 'service/onlyfans_read/earnings.py'
+      - 'service/db/*ledger*'
+      - '.github/workflows/onlyfans-earnings-history.yml'
+permissions:
+  contents: read
+jobs:
+  earnings:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: disposable_test_only
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      ONLYFANS_TEST_PG_URL: postgresql://postgres:disposable_test_only@127.0.0.1:5432/postgres
+      PYTHONPATH: service:service/tests
+      PYTHON_DOTENV_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - id: test_dependencies
+        run: pip install -r requirements-onlyfans-test.txt
+      # Each suite owns disposable state. Run independent checks after a failure
+      # while retaining that failure as the job result; no checks are exempted.
+      - name: Verify supervised native runtime on SQLite
+        if: ${{ !cancelled() && steps.test_dependencies.outcome == 'success' }}
+        run: python service/tests/test_native_pilot_service.py
+      - name: Verify supervised native runtime on PostgreSQL
+        if: ${{ !cancelled() && steps.test_dependencies.outcome == 'success' }}
+        run: python service/tests/test_native_pilot_service_pg.py
+      - name: Verify native load harness on PostgreSQL
+        if: ${{ !cancelled() && steps.test_dependencies.outcome == 'success' }}
+        run: python service/tests/test_native_pilot_load_pg.py
+      - name: Verify positive receipt reconciliation and consecutive operator messages
+        if: ${{ !cancelled() && steps.test_dependencies.outcome == 'success' }}
+        run: python -m pytest -q service/tests/test_native_pilot_receipt_recovery.py service/tests/test_onlyfans_send_recovery_pg.py service/tests/test_onlyfans_text_delivery_pg.py
+      - name: Verify final paid captions and exact fixed prices
+        if: ${{ !cancelled() && steps.test_dependencies.outcome == 'success' }}
+        run: python -m pytest -q service/tests/test_onlyfans_native_caption_pg.py service/tests/test_onlyfans_fixed_price_pg.py service/tests/test_onlyfans_worker_media_pg.py
+      - name: Verify expired owner recovery against both retained ledgers
+        if: ${{ !cancelled() && steps.test_dependencies.outcome == 'success' }}
+        run: python -m pytest -q service/tests/test_native_pilot_recovery.py service/tests/test_onlyfans_fastt_recovery_pg.py
+      - name: Verify the FASTT manual queue and paid payload boundary
+        if: ${{ !cancelled() && steps.test_dependencies.outcome == 'success' }}
+        run: python -m pytest -q service/tests/test_onlyfans_fastt_operator.py service/tests/test_onlyfans_fastt_operator_pg.py service/tests/test_onlyfans_fastt_takeover_pg.py service/tests/test_onlyfans_fastt_models_pg.py service/tests/test_fastt_controls_pg.py service/tests/test_onlyfans_manual_pg.py
+
+      - name: Verify financial history, permissions and additive upgrades
+        if: ${{ !cancelled() && steps.test_dependencies.outcome == 'success' }}
+        run: python -m pytest -q service/tests/test_onlyfans_ledger_history_pg.py service/tests/test_onlyfans_ledger_pg.py service/tests/test_onlyfans_earnings_pg.py service/tests/test_onlyfans_recorded_earnings_pg.py service/tests/test_onlyfans_worker_entry.py service/tests/test_onlyfans_provider_adapters.py service/tests/test_onlyfans_agency_pg.py service/tests/test_onlyfans_launch_ledger_recovery_pg.py service/tests/test_onlyfans_launch_controls_pg.py service/tests/test_onlyfans_fastt_sales_pg.py service/tests/test_onlyfans_configuration_pg.py service/tests/test_onlyfans_ledger_markers_pg.py service/tests/test_onlyfans_post_buy_receipt_pg.py service/tests/test_onlyfans_foundation_pg.py
+
+      - name: Verify the native reply and vault boundaries
+        if: ${{ !cancelled() && steps.test_dependencies.outcome == 'success' }}
+        run: |
+          python service/tests/test_native_pilot_engine.py
+          python service/tests/test_native_pilot_vault.py

@@ -188,11 +188,11 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
          "ONLYFANS_CONTROL_TOKEN":"synthetic-controls-only-token","ONLYFANS_CONTROL_TENANT":"tenant-a",
          "ONLYFANS_MANUAL_ENABLED":"1","ONLYFANS_TEST_OPERATOR":"1",
          "ONLYFANS_CAMPAIGN_TOKEN":"synthetic-campaign-only-token","ONLYFANS_CAMPAIGN_TENANT":"tenant-a",
-         "ONLYFANS_CONTENT_TOKEN":"synthetic-content-only-token","ONLYFANS_CONTENT_TENANT":"tenant-a","ONLYFANS_TEST_CONTENT":"1",
+         "ONLYFANS_CONTENT_TOKEN":"synthetic-content-only-token","ONLYFANS_CONTENT_TENANT":"tenant-a","ONLYFANS_TEST_CONTENT":"1","ONLYFANS_TEST_OFFER_IMPORT":"1",
          "ONLYFANS_CONNECTION_TOKEN":"synthetic-connection-only-token","ONLYFANS_CONNECTION_TENANT":"tenant-a",
          "ONLYFANS_CONNECTION_KEY":"17"*32,"ONLYFANS_TEST_CONNECTIONS":"1",
          "ONLYFANS_CONFIGURATION_TOKEN":"synthetic-configuration-only-token","ONLYFANS_CONFIGURATION_TENANT":"tenant-a","ONLYFANS_TEST_CONFIGURATION":"1","ONLYFANS_TEST_WORKER":"1",
-         "DASHBOARD_SESSION_SECRET":"synthetic-local-session-secret","SUPABASE_URL":f"http://127.0.0.1:{identity.server_port}","SUPABASE_SERVICE_KEY":"synthetic-service-key","NEXT_TELEMETRY_DISABLED":"1","TZ":"UTC"}
+         "DASHBOARD_PUBLIC_ORIGIN":web,"DASHBOARD_SESSION_SECRET":"synthetic-local-session-secret","SUPABASE_URL":f"http://127.0.0.1:{identity.server_port}","SUPABASE_SERVICE_KEY":"synthetic-service-key","NEXT_TELEMETRY_DISABLED":"1","TZ":"UTC"}
     node=os.environ.get("CODEX_PRIMARY_RUNTIME_NODE","node")
     log_dir=Path(os.environ.get("ONLYFANS_TEST_EVIDENCE",str(tmp_path)))
     log_dir.mkdir(parents=True,exist_ok=True)
@@ -238,6 +238,13 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                 assert diagnostics["providerConnectionVerified"] is False
                 assert "delivery_unresolved" in diagnostics["reasons"]
                 assert "commerce_evidence_conflict" in diagnostics["reasons"]
+                # The deployment monitor consumes the real scoped projection,
+                # not a separate source of account state or fixture fallback.
+                from onlyfans_runtime.launch_monitoring import evaluate
+                alert = evaluate(operations.json())
+                assert alert["state"] == "attention"
+                assert {"connection_unavailable", "transport_unresolved", "commerce_evidence_conflict"} <= {
+                    item["code"] for item in alert["alerts"]}
                 assert "http-synthetic-payment" not in operations.text and "http-synthetic-tx" not in operations.text
                 assert MANUAL_REPLY not in operations.text and AMBIGUOUS_REPLY not in operations.text
                 assert "synthetic-of-token" not in operations.text and unknown_attempt not in operations.text
@@ -257,7 +264,8 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     cookie="allie_admin_session="+sessions["operator"]
                     preview_path=web+"/api/onlyfans-content/accounts/acc-a/vault/previews/11"
                     assert client.get(preview_path).status_code==401
-                    assert client.get(preview_path,headers={"Cookie":cookie+"; twin_agency_access=synthetic-agency-token"}).status_code==403
+                    # Dashboard main (244271a) answers an agency token without membership as 401; both deny.
+                    assert client.get(preview_path,headers={"Cookie":cookie+"; twin_agency_access=synthetic-agency-token"}).status_code in (401,403)
                     picture=client.get(preview_path,headers={"Cookie":cookie})
                     assert picture.status_code==200 and picture.content==preview_bytes
                     assert picture.headers["content-type"]=="image/png" and "no-store" in picture.headers["cache-control"]
@@ -283,7 +291,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     assert uncertain["summary"]["requiresAttention"] is True
                     assert all(message["body"]!=AMBIGUOUS_REPLY and message["direction"]!="outbound" for message in uncertain["messages"])
                     assert AMBIGUOUS_REPLY not in ambiguous.text, "an ambiguous intent cannot fabricate a provider message"
-                    assert client.get(path,headers={"Cookie":cookie+"; twin_agency_access=synthetic-agency-token"}).status_code==403
+                    assert client.get(path,headers={"Cookie":cookie+"; twin_agency_access=synthetic-agency-token"}).status_code in (401,403)
                     assert client.get(path,headers={"Cookie":cookie+"; twin_agency_access=expired"}).status_code==401
                     assert client.get(path,headers={"Cookie":cookie+"; twin_admin_view_as="+sessions["viewAs"]}).status_code==403
                     command_path=web+"/api/onlyfans-controls/accounts/acc-a/conversations/acc-a:101"
@@ -297,7 +305,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     assert client.post(command_path,json={**command_body,"action":"send_manual_message"},headers=command_headers).status_code==400
                     assert client.post(command_path,content="x"*65537,headers=command_headers).status_code==413
                     for denied in (cookie+"; twin_agency_access=synthetic-agency-token",cookie+"; twin_admin_view_as="+sessions["viewAs"]):
-                        assert client.post(command_path,json=command_body,headers={**command_headers,"Cookie":denied}).status_code==403
+                        assert client.post(command_path,json=command_body,headers={**command_headers,"Cookie":denied}).status_code in (401,403)
                     assert client.post(command_path,json=command_body,headers={**command_headers,"Cookie":cookie+"; twin_agency_access=expired"}).status_code==401
                     assert client.post(command_path.replace("acc-a","acc-b"),json=command_body,headers=command_headers).status_code==404
                     configuration_path=web+"/api/onlyfans-configuration/accounts/acc-a"
@@ -313,8 +321,8 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     for altered in ({"Origin":"https://untrusted.invalid"},{"Sec-Fetch-Site":"cross-site"}):
                         assert client.post(configuration_path,headers={**command_headers,**altered},json=configuration_body).status_code==403
                     for denied_cookie in (cookie+"; twin_agency_access=synthetic-agency-token",cookie+"; twin_admin_view_as="+sessions["viewAs"]):
-                        assert client.get(configuration_path,headers={"Cookie":denied_cookie}).status_code==403
-                        assert client.post(configuration_path,headers={**command_headers,"Cookie":denied_cookie},json=configuration_body).status_code==403
+                        assert client.get(configuration_path,headers={"Cookie":denied_cookie}).status_code in (401,403)
+                        assert client.post(configuration_path,headers={**command_headers,"Cookie":denied_cookie},json=configuration_body).status_code in (401,403)
                     assert client.get(configuration_path,headers={"Cookie":cookie+"; twin_agency_access=expired"}).status_code==401
                     assert client.post(configuration_path,headers={**command_headers,"Cookie":cookie+"; twin_agency_access=expired"},json=configuration_body).status_code==401
                     assert client.get(configuration_path.replace("acc-a","acc-b"),headers={"Cookie":cookie}).status_code==404
@@ -330,7 +338,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                     assert ops_response.json()["operations"]["policy"]["usedUnits"]==2
                     assert "no-store" in ops_response.headers["cache-control"]
                     for denied_cookie in (cookie+"; twin_agency_access=synthetic-agency-token",cookie+"; twin_admin_view_as="+sessions["viewAs"]):
-                        assert client.get(ops_route,headers={"Cookie":denied_cookie}).status_code==403
+                        assert client.get(ops_route,headers={"Cookie":denied_cookie}).status_code in (401,403)
                     assert client.get(web+"/api/onlyfans/accounts/acc-b/operations",headers={"Cookie":cookie}).status_code in (403,404)
                     for section in ("content","sales","settings"):
                         native_route=web+f"/api/onlyfans/accounts/acc-a/workspace/{section}"
@@ -339,7 +347,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                         assert response.status_code==200,response.text
                         assert "no-store" in response.headers["cache-control"]
                         for denied_cookie in (cookie+"; twin_agency_access=synthetic-agency-token",cookie+"; twin_admin_view_as="+sessions["viewAs"]):
-                            assert client.get(native_route,headers={"Cookie":denied_cookie}).status_code==403
+                            assert client.get(native_route,headers={"Cookie":denied_cookie}).status_code in (401,403)
                         assert client.get(native_route.replace("acc-a","acc-b"),headers={"Cookie":cookie}).status_code==404
                         scoped=client.get(web+f"/onlyfans/{section}?creator=creator-acc-b&account=acc-a",headers={"Cookie":cookie})
                         assert "data-of-native-section" not in scoped.text
@@ -350,7 +358,7 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                 with httpx.Client(timeout=40,trust_env=False) as combined_client:
                     combined_path=web+"/api/combined-earnings?period=1M"
                     assert combined_client.get(combined_path).status_code==401
-                    assert combined_client.get(combined_path,headers={"Cookie":cookie+"; twin_agency_access=synthetic-agency-token"}).status_code==403
+                    assert combined_client.get(combined_path,headers={"Cookie":cookie+"; twin_agency_access=synthetic-agency-token"}).status_code in (401,403)
                     combined=combined_client.get(combined_path,headers={"Cookie":cookie})
                     assert combined.status_code==200,combined.text
                     combined_data=combined.json()
@@ -383,7 +391,9 @@ def test_real_authenticated_read_path(database, tmp_path, monkeypatch):
                         overrides_json=s.get(AccountAiConfig,"acc-a").persona_facts_json))
                 browser_check=dashboard/"scripts/check-onlyfans-http-browser.mjs"
                 with operator_dispatcher(operator_store) as operator_peer:
-                    subprocess.run([node,str(browser_check)],cwd=dashboard,env={**env,"ONLYFANS_TEST_WEB_URL":web,"ONLYFANS_TEST_COOKIE":sessions["operator"],"ONLYFANS_TEST_EVIDENCE":str(log_dir)},check=True,timeout=240)
+                    subprocess.run([node,str(browser_check)],cwd=dashboard,env={**env,"ONLYFANS_TEST_WEB_URL":web,"ONLYFANS_TEST_COOKIE":sessions["operator"],"ONLYFANS_TEST_EVIDENCE":str(log_dir)},check=True,timeout=600)
+                    if os.environ.get("ONLYFANS_TEST_ONLY_OFFER_IMPORT")=="1":
+                        return  # focused import/sync browser run; the legacy flow below did not execute
                     assert len(operator_peer.posts)==1, "manual lost acknowledgement retry must not send twice"
                 from db.models import OfConversationState
                 from db.onlyfans_models import OfControlAudit

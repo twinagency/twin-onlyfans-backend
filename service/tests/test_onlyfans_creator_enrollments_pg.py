@@ -17,6 +17,110 @@ from onlyfans_runtime import enrollments as module
 from onlyfans_runtime.provider_connector import NativeProviderConnector
 
 CREATOR='creator-session:'+'c'*64
+OPERATOR='op-session:'+'a'*64
+
+
+def admin_submit(store,payload,proxy,key='9'*64,creator='creator-a'):
+    return module.submit_enrollment(store,TENANT,creator_id=creator,creator_name='Verified admin creator',
+        handle='synthetic',payload=payload,command_key=key,actor=OPERATOR,initial_proxy_url=proxy)
+
+
+def test_admin_first_connection_seals_proxy_and_worker_proves_same_network(database,monkeypatch):
+    from onlyfans_runtime.connections import capture_network_fingerprint
+    settings(monkeypatch);store=Store(database[0]);p=session_payload();proxy=data()['proxyUrl']
+    p['networkFingerprint']=capture_network_fingerprint(proxy)
+    first=admin_submit(store,p,proxy);assert counts(database[1])==(0,0)
+    with Session(database[1]) as s:
+        row=s.get(OfConnectionEnrollment,first['id'])
+        assert proxy not in row.sealed_config and module._clear(row)['initialProxyUrl']==proxy
+    assert 'proxy' not in json.dumps(first).lower()
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:None)
+    assert module.process_enrollments(store,TENANT)==1
+    result=module.get_enrollments(store,TENANT,'creator-a')[0]
+    assert result['status']=='accepted' and counts(database[1])==(1,1)
+    with Session(database[1]) as s:
+        clear=_open(s.get(OfProviderConnection,result['accountId']),TENANT)
+        assert clear['proxyUrl']==proxy and clear['model'] is None
+        assert s.get(OfConnectionEnrollment,first['id']).sealed_config is None
+    assert get_connection(store,TENANT,result['accountId'])['outgoingEnabled'] is False
+    store.close()
+
+
+def test_admin_proxy_capture_refuses_wrong_network_and_creator_proxy_override(database,monkeypatch):
+    from onlyfans_runtime.connections import capture_network_fingerprint
+    settings(monkeypatch);store=Store(database[0]);p=session_payload();proxy=data()['proxyUrl']
+    p['networkFingerprint']=capture_network_fingerprint(None)
+    with pytest.raises(Refused):admin_submit(store,p,proxy)
+    p['networkFingerprint']=capture_network_fingerprint(proxy)
+    for actor in [CREATOR,'agency-user:forged','op-session:forged']:
+        with pytest.raises(Refused):module.submit_enrollment(store,TENANT,creator_id='creator-a',creator_name='Synthetic',
+            handle='synthetic',payload=p,command_key='9'*64,actor=actor,initial_proxy_url=proxy)
+    for bad in ['ftp://proxy.example:21','http://proxy.example:8080/private','http://proxy.example:8080?secret=bad']:
+        with pytest.raises(Refused):admin_submit(store,{**p,'networkFingerprint':capture_network_fingerprint(bad)},bad)
+    assert counts(database[1])==(0,0)
+    store.close()
+
+
+def test_admin_first_proxy_is_frozen_after_crash_without_duplicate_account(database,monkeypatch):
+    from onlyfans_runtime.connections import capture_network_fingerprint
+    settings(monkeypatch);store=Store(database[0]);p=session_payload();proxy=data()['proxyUrl']
+    p['networkFingerprint']=capture_network_fingerprint(proxy)
+    first=admin_submit(store,p,proxy)
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:None)
+    real=module.save_connection
+    def crash(*args,**kw):real(*args,**kw);raise SystemExit('fixture worker crash')
+    monkeypatch.setattr(module,'save_connection',crash)
+    with pytest.raises(SystemExit):module.process_enrollments(store,TENANT)
+    with Session(database[1]) as s,s.begin():
+        row=s.get(OfConnectionEnrollment,first['id']);assert row.expected_revision==0
+        row.lease_until=utcnow()-timedelta(seconds=1)
+    monkeypatch.setattr(module,'save_connection',real)
+    assert module.process_enrollments(store,TENANT)==1
+    assert module.get_enrollments(store,TENANT,'creator-a')[0]['status']=='accepted'
+    assert counts(database[1])==(1,1)
+    with Session(database[1]) as s:
+        assert s.scalar(select(func.count()).select_from(OfConnectionChange))==2
+        assert _open(s.get(OfProviderConnection,'of-'+str(OWNER)),TENANT)['proxyUrl']==proxy
+    store.close()
+
+
+def test_admin_browser_capture_keeps_initial_proxy_across_normalization_replay(database,monkeypatch):
+    from test_onlyfans_browser_capture import payload,assets
+    from onlyfans_runtime.connections import capture_network_fingerprint
+    settings(monkeypatch);store=Store(database[0]);calls=assets(monkeypatch);p=payload();proxy=data()['proxyUrl']
+    p['networkFingerprint']=capture_network_fingerprint(proxy)
+    first=admin_submit(store,p,proxy)
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:None)
+    real=module.save_connection
+    def crash(*args,**kw):real(*args,**kw);raise SystemExit('fixture worker crash')
+    monkeypatch.setattr(module,'save_connection',crash)
+    with pytest.raises(SystemExit):module.process_enrollments(store,TENANT)
+    with Session(database[1]) as s,s.begin():
+        row=s.get(OfConnectionEnrollment,first['id']);frozen=module._clear(row)
+        assert 'browser' not in frozen and frozen['initialProxyUrl']==proxy and frozen['networkFingerprint']==p['networkFingerprint']
+        row.lease_until=utcnow()-timedelta(seconds=1)
+    before=len(calls);monkeypatch.setattr(module,'save_connection',real)
+    assert module.process_enrollments(store,TENANT)==1 and len(calls)==before
+    assert module.get_enrollments(store,TENANT,'creator-a')[0]['status']=='accepted'
+    store.close()
+
+
+def test_admin_enrollment_cannot_replace_existing_network_or_foreign_binding(database,monkeypatch):
+    from onlyfans_runtime.connections import capture_network_fingerprint
+    store,account,original=verified(database,monkeypatch,model={'modelId':MODEL,'apiKey':'synthetic-model-key'})
+    before=get_connection(store,TENANT,account);proxy='http://different:fixture@proxy.example:8080'
+    p=session_payload();p['networkFingerprint']=capture_network_fingerprint(proxy)
+    admin_submit(store,p,proxy,creator='creator-new')
+    monkeypatch.setattr(NativeProviderConnector,'verify_identity',lambda self:pytest.fail('Changed proxy reached provider'))
+    assert module.process_enrollments(store,TENANT)==1
+    assert module.get_enrollments(store,TENANT,'creator-new')[0]['status']=='failed'
+    assert get_connection(store,TENANT,account)==before
+    with Session(database[1]) as s:assert _open(s.get(OfProviderConnection,account),TENANT)==original
+    admin_submit(store,{**p,'networkFingerprint':capture_network_fingerprint(original['proxyUrl'])},original['proxyUrl'],key='8'*64,creator='foreign')
+    assert module.process_enrollments(store,TENANT)==1
+    assert module.get_enrollments(store,TENANT,'foreign')[0]['status']=='failed'
+    assert get_connection(store,TENANT,account)==before
+    store.close()
 
 def test_browser_enrollment_normalizes_in_worker_and_freezes_before_replay(database,monkeypatch):
     from test_onlyfans_browser_capture import payload,assets
@@ -225,4 +329,65 @@ def test_enrollment_http_uses_separate_auth_strict_json_and_never_calls_provider
     rows=client.get(path+'?creator=creator-a',headers=headers);assert rows.status_code==200 and len(rows.json()['enrollments'])==1
     assert client.get(path+'?creator=foreign',headers=headers).json()['enrollments']==[]
     assert 'synthetic-session' not in ack.text+rows.text and counts(database[1])==(0,0)
+    store.close()
+
+
+def test_temporary_first_enrollment_retries_durably_without_blocking_other_creators(database,monkeypatch):
+    from onlyfans_runtime.provider_connector import NativeProtocolError
+    settings(monkeypatch);store=Store(database[0]);first=submit(store)
+    calls=[]
+    def unavailable(self):
+        calls.append(self.account_id)
+        raise NativeProtocolError("synthetic maintenance response")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",unavailable)
+    assert module.process_enrollments(store,TENANT)==1
+    with Session(database[1]) as s:
+        row=s.get(OfConnectionEnrollment,first["id"])
+        assert row.status=="pending" and row.sealed_config is not None
+        frozen=(row.sealed_config,row.expires_at)
+        assert row.last_error=="provider_connection_check_retry" and row.lease_until>utcnow()
+    assert module.process_enrollments(store,TENANT)==0 and calls==["of-"+str(OWNER)]
+    assert counts(database[1])==(0,0)
+    other=session_payload();other["ownerId"]=OWNER+1;other["capture"]["headers"]["user_id"]=str(OWNER+1)
+    submit(store,other,key="2"*64,creator="creator-b")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",lambda self:calls.append(self.account_id))
+    assert module.process_enrollments(store,TENANT)==1
+    assert module.get_enrollments(store,TENANT,"creator-b")[0]["status"]=="accepted"
+    assert counts(database[1])==(1,1)
+    with Session(database[1]) as s,s.begin():
+        row=s.get(OfConnectionEnrollment,first["id"])
+        assert (row.sealed_config,row.expires_at)==frozen
+        row.lease_until=utcnow()-timedelta(seconds=1)
+    # A new Store represents a worker restart; retry state is not process-local.
+    store.close();store=Store(database[0])
+    assert module.process_enrollments(store,TENANT)==1
+    result=module.get_enrollments(store,TENANT,"creator-a")[0]
+    assert result["status"]=="accepted" and result["accountId"]=="of-"+str(OWNER)
+    assert counts(database[1])==(2,2)
+    with Session(database[1]) as s:
+        row=s.get(OfConnectionEnrollment,first["id"])
+        assert row.sealed_config is None and row.last_error is None
+        assert not s.get(OfRuntime,result["accountId"]).enabled
+    store.close()
+
+
+@pytest.mark.parametrize("outcome",["authentication","expired","stale"])
+def test_enrollment_retry_keeps_auth_expiry_and_generation_fences(database,monkeypatch,outcome):
+    from onlyfans_runtime.provider_connector import NativeProtocolError,NativeAuthenticationError
+    settings(monkeypatch);store=Store(database[0]);first=submit(store)
+    def failure(self):
+        if outcome in {"expired","stale"}:
+            with Session(database[1]) as s,s.begin():
+                row=s.get(OfConnectionEnrollment,first["id"])
+                if outcome=="expired":row.expires_at=utcnow()-timedelta(seconds=1)
+                else:row.generation+=1
+        if outcome=="authentication":raise NativeAuthenticationError("synthetic rejected identity")
+        raise NativeProtocolError("synthetic temporary failure")
+    monkeypatch.setattr(NativeProviderConnector,"verify_identity",failure)
+    module.process_enrollments(store,TENANT)
+    assert counts(database[1])==(0,0)
+    with Session(database[1]) as s:
+        row=s.get(OfConnectionEnrollment,first["id"])
+        assert row.status=={"authentication":"failed","expired":"expired","stale":"checking"}[outcome]
+        assert (row.sealed_config is None)==(outcome!="stale")
     store.close()

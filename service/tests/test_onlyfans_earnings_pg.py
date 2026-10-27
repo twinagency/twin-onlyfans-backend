@@ -17,6 +17,8 @@ from onlyfans_read.earnings import read_earnings,window
 from onlyfans_read.errors import BadRequest
 
 
+from onlyfans_runtime.ledger import _coverage_receipt
+
 def setup(database,*,account="acc-a",tenant="tenant-a",coverage=True):
     store=seed(*database,account=account,tenant=tenant)
     now=utcnow()
@@ -26,10 +28,14 @@ def setup(database,*,account="acc-a",tenant="tenant-a",coverage=True):
         if coverage:s.add(OfLedgerScan(account_id=account,binding_id="binding-"+account,owner_id=OWNER+(0 if account=="acc-a" else 1),connection_revision=1,
             window_start=now-timedelta(days=90),window_end=now,page_offset=0,status="idle",next_poll_at=now+timedelta(minutes=5),
             last_complete_at=now,last_full_at=now,updated_at=now))
+    if coverage:
+        from onlyfans_runtime.ledger import _coverage_receipt
+        with Session(database[1]) as s,s.begin():
+            scan=s.get(OfLedgerScan,account);scan.coverage_json=_coverage_receipt(scan)
     return store
 
 
-def read(database,*,tenant="tenant-a",start=None,end=None):
+def read(database,*,tenant="tenant-a",start=None,end=None,include_pending=False,include_history=False):
     now=utcnow()
     a=start or (now-timedelta(days=30)).isoformat(timespec="milliseconds")+"Z"
     b=end or now.isoformat(timespec="milliseconds")+"Z"
@@ -40,7 +46,7 @@ def read(database,*,tenant="tenant-a",start=None,end=None):
         sql_event.listen(engine.sync_engine,"before_cursor_execute",no_credentials)
         try:
             async with async_sessionmaker(engine)() as session:
-                async with session.begin():return await read_earnings(session,tenant_id=tenant,start=a,end=b)
+                async with session.begin():return await read_earnings(session,tenant_id=tenant,start=a,end=b,include_pending=include_pending,include_history=include_history)
         finally:await engine.dispose()
     return asyncio.run(run())
 
@@ -69,6 +75,104 @@ def test_native_payments_are_counted_once_with_refunds_pending_and_missing_net_e
     store.close()
 
 
+@pytest.mark.parametrize("failed_only", [False, True])
+def test_failed_payments_are_known_non_revenue_without_hiding_other_payments(database, failed_only):
+    store=setup(database)
+    record(store,"acc-a",parsed(transaction(id="failed",amount="99.00",net="99.00",status="failed")))
+    if not failed_only:
+        record(store,"acc-a",parsed(transaction(id="cleared",net="8.00")))
+        record(store,"acc-a",parsed(transaction(id="pending",amount="6.00",net="4.80",status="loading")))
+        record(store,"acc-a",parsed(transaction(id="reversed",status="undo")))
+    result=read(database,include_pending=True,include_history=True)
+    assert result["status"]=="current" and result["reasons"]==[]
+    assert (result["clearedGrossCents"],result["clearedNetCents"],result["clearedCount"],
+        result["pendingCount"],result["refundedCount"])==((0,0,0,0,0) if failed_only else (1000,800,1,1,1))
+    recorded=result["recorded"]
+    assert (recorded["grossCents"],recorded["netCents"],recorded["paymentCount"],recorded["pendingGrossCents"]
+        )==((0,0,0,0) if failed_only else (1600,1280,2,600))
+    assert sum(row["grossCents"] for row in result["statistics"]["byKind"])==(0 if failed_only else 1600)
+    with Session(database[1]) as s:
+        failed=s.scalar(select(Transaction).where(Transaction.provider_transaction_id=="failed"))
+        assert failed.status=="failed" and failed.amount_cents==9900 and failed.message_id is None
+    store.close()
+
+
+@pytest.mark.parametrize("legacy_evidence", [False, True])
+def test_missing_message_money_is_reported_before_exact_media_recovery(database, legacy_evidence):
+    from db.models import Fan,Message,VaultSend
+    from db.onlyfans_ledger_models import OfLedgerEvidence
+    from onlyfans_runtime.launch_operations import digest,ledger_status,resolve_ledger
+    from onlyfans_runtime.native_context import canonical
+    from ownership import owned_media_in_session
+    store=setup(database)
+    observed=parsed(transaction(messageId=123,net="8.00",fee="2.00",createdAt=utcnow().isoformat()+"Z"))
+    if legacy_evidence:
+        with Session(store.engine) as s,s.begin():
+            s.add(OfLedgerEvidence(account_id="acc-a",evidence_hash=digest(observed),
+                provider_transaction_id=observed["provider_transaction_id"],fan_id=101,
+                outcome="conflict",observation_json=canonical(observed),recorded_at=utcnow()))
+        assert read(database,include_pending=True)["recorded"] is None
+        state=ledger_status(store,"tenant-a","acc-a")
+        args=dict(evidence_hash=digest(observed),command_key="a"*64,actor="op-session:"+"a"*64,
+            reason="Recover retained financial evidence before history arrives",expected_fingerprint=state["fingerprint"])
+        result=resolve_ledger(store,"tenant-a","acc-a",**args)
+        assert result["resolved"] is False and result["financialRecorded"] is True
+        assert resolve_ledger(store,"tenant-a","acc-a",**args)==result
+    else:
+        assert record(store,"acc-a",observed)=="applied"
+    assert record(store,"acc-a",observed)=="duplicate"
+    result=read(database,include_pending=True,include_history=True)
+    assert result["status"]=="current" and result["reasons"]==[]
+    assert (result["clearedGrossCents"],result["clearedNetCents"],result["clearedCount"])==(1000,800,1)
+    assert result["recorded"]["paymentCount"]==1 and result["statistics"]["byKind"][0]["paymentCount"]==1
+    with Session(store.engine) as s,s.begin():
+        assert s.scalar(select(Transaction.message_id)) is None
+        assert s.get(Fan,("acc-a",101)).lifetime_spend_cents==1000
+        assert owned_media_in_session(s,"acc-a",101)==set()
+        assert s.scalar(select(func.count()).select_from(VaultSend))==0
+        s.add(Message(account_id="acc-a",fan_id=101,message_id=123,direction="out",
+            body="Retained bundle",media_ids="[11,12,13]",media_count=3,price_cents=1000,
+            created_at=utcnow()-timedelta(hours=1)))
+    state=ledger_status(store,"tenant-a","acc-a")
+    resolved=resolve_ledger(store,"tenant-a","acc-a",evidence_hash=digest(observed),command_key="b"*64,
+        actor="op-session:"+"a"*64,reason="Match the exact retained message",expected_fingerprint=state["fingerprint"])
+    assert resolved["resolved"] is True
+    result=read(database,include_pending=True)
+    assert result["recorded"]["paymentCount"]==1 and result["recorded"]["grossCents"]==1000
+    with Session(store.engine) as s:
+        assert owned_media_in_session(s,"acc-a",101)=={11,12,13}
+        assert s.get(Fan,("acc-a",101)).lifetime_spend_cents==1000
+        assert s.scalar(select(func.count()).select_from(Transaction))==1
+        assert s.scalar(select(func.count()).select_from(OfLedgerEvidence))==1
+    store.close()
+
+
+def test_conflicting_money_cannot_be_hidden_by_an_earlier_applied_receipt(database):
+    store=setup(database)
+    observed=parsed(transaction(net="8.00"))
+    assert record(store,"acc-a",observed)=="applied"
+    assert read(database)["clearedGrossCents"]==1000
+    assert record(store,"acc-a",{**observed,"amount_cents":1100})=="conflict"
+    result=read(database,include_pending=True)
+    assert result["status"]=="unavailable" and result["reasons"]==["unverified_ledger_rows"]
+    assert result["clearedGrossCents"] is None and result["recorded"] is None
+    with Session(store.engine) as s:
+        assert s.scalar(select(Transaction.amount_cents))==1000
+    store.close()
+
+
+def test_unknown_financial_status_still_refuses_complete_totals(database):
+    store=setup(database)
+    record(store,"acc-a",parsed(transaction(id="failed",status="failed")))
+    with Session(database[1]) as s,s.begin():
+        row=s.scalar(select(Transaction).where(Transaction.provider_transaction_id=="failed"))
+        row.status="unsupported-new-state"
+    result=read(database,include_pending=True)
+    assert result["status"]=="unavailable" and result["reasons"]==["unsupported_status"]
+    assert result["clearedGrossCents"] is None and result["recorded"] is None
+    store.close()
+
+
 def test_scope_and_window_exclude_other_tenants_and_old_transactions(database):
     store=setup(database);other=setup(database,account="acc-b",tenant="tenant-b")
     record(store,"acc-a",parsed(transaction(id="current",amount="3.00")))
@@ -85,10 +189,11 @@ def test_scope_and_window_exclude_other_tenants_and_old_transactions(database):
 def test_stale_held_or_unverified_records_are_never_a_false_complete_total(database):
     store=setup(database)
     assert read(database)["clearedGrossCents"]==0
-    with Session(database[1]) as s,s.begin():s.get(OfLedgerScan,"acc-a").last_complete_at=utcnow()-timedelta(minutes=16)
+    with Session(database[1]) as s,s.begin():
+        scan=s.get(OfLedgerScan,"acc-a");scan.last_complete_at=utcnow()-timedelta(minutes=16);scan.coverage_json=_coverage_receipt(scan)
     result=read(database);assert result["clearedGrossCents"] is None and result["reasons"]==["ledger_stale"]
     with Session(database[1]) as s,s.begin():
-        scan=s.get(OfLedgerScan,"acc-a");scan.last_complete_at=utcnow();scan.status="held"
+        scan=s.get(OfLedgerScan,"acc-a");scan.last_complete_at=utcnow();scan.status="held";scan.coverage_json=_coverage_receipt(scan)
     assert read(database)["reasons"]==["ledger_held"]
     with Session(database[1]) as s,s.begin():
         s.get(OfLedgerScan,"acc-a").status="idle"
@@ -99,5 +204,27 @@ def test_stale_held_or_unverified_records_are_never_a_false_complete_total(datab
 
 def test_bounded_timezone_aware_window_refuses_invalid_ranges():
     for a,b in [("bad","bad"),("2026-10-01","2026-10-02"),("2026-10-02T00:00:00Z","2026-10-01T00:00:00Z"),
-            ("2026-01-01T00:00:00Z","2026-10-01T00:00:00Z")]:
+            ("1969-01-01T00:00:00Z","2026-10-01T00:00:00Z")]:
         with pytest.raises(BadRequest):window(a,b)
+
+
+def test_agency_earnings_empty_and_foreign_creators_are_isolated(database):
+    from onlyfans_read.agency_scope import AgencyScope, current_scope
+    from test_onlyfans_agency_pg import assign, CREATOR, OTHER, STAFF
+    first=setup(database); second=setup(database,account="acc-b",tenant="tenant-b")
+    assign(database[1],"acc-a",CREATOR); assign(database[1],"acc-b",OTHER)
+    record(first,"acc-a",parsed(transaction(id="agency-a",amount="3.00")))
+    with Session(second.engine) as session,session.begin():
+        from onlyfans_runtime.ledger import apply_observation
+        apply_observation(session,"acc-b",parsed(transaction(id="agency-b",amount="100.00")),now=utcnow())
+    assert read(database,tenant=None)["clearedGrossCents"]==10300
+    for creators,expected in [((CREATOR,),300),((OTHER,),10000),((),None)]:
+        token=current_scope.set(AgencyScope(creators,STAFF,True))
+        try:
+            result=read(database,tenant=None,include_pending=True)
+            assert result["clearedGrossCents"]==expected
+            assert result["accountCount"]==(0 if not creators else 1)
+            if not creators: assert result["reasons"]==["no_bound_accounts"] and result["recorded"] is None
+        finally: current_scope.reset(token)
+    assert read(database,tenant=None)["clearedGrossCents"]==10300
+    first.close();second.close()

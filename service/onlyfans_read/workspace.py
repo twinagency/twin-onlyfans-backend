@@ -7,7 +7,7 @@ import base64
 import json
 import re
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 
 from db.models import AccountAiConfig, CatalogItem, CATALOG_IS_SINGLE, ContentOffer, OfCreatorBinding, Transaction
 from db.onlyfans_models import OfRuntime
@@ -157,8 +157,13 @@ async def read_workspace(s,*,tenant_id,account_id,section,cursor=None,limit=25):
         return {**snapshot,"items":items,"nextCursor":cursor_for(account_id,section,rows[limit-1].id) if len(rows)>limit else None}
     if section=="sales":
         query=select(Transaction).where(Transaction.account_id==account_id)
-        if after is not None:query=query.where(Transaction.id<after)
-        rows=(await s.scalars(query.order_by(Transaction.id.desc()).limit(limit+1))).all()
+        if after is not None:
+            # Newest sale first. Id order alone is insertion order, and the ledger
+            # backfill inserts provider pages newest-first, so it would list the
+            # oldest sales as "latest". The cursor stays the last row's id.
+            anchor=select(Transaction.occurred_at).where(Transaction.account_id==account_id,Transaction.id==after).scalar_subquery()
+            query=query.where(tuple_(Transaction.occurred_at,Transaction.id)<tuple_(anchor,after))
+        rows=(await s.scalars(query.order_by(Transaction.occurred_at.desc(),Transaction.id.desc()).limit(limit+1))).all()
         groups=(await s.execute(select(Transaction.currency,Transaction.status,func.count(),func.sum(Transaction.amount_cents))
             .where(Transaction.account_id==account_id).group_by(Transaction.currency,Transaction.status)
             .order_by(Transaction.currency,Transaction.status).limit(65))).all()

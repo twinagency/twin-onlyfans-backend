@@ -97,6 +97,10 @@ def choice(s, account_id, fan_id, item_id, now):
     terms = catalog_terms(s, account_id, item_id)
     assert_unowned(s, account_id, fan_id, terms)
     item = s.get(CatalogItem, item_id)
+    if item.pricing_mode == "fixed":
+        # The saved amount is the offer. Policies may refuse it; nothing here
+        # may reprice it, and no dynamic quote arithmetic applies.
+        return terms
     biggest, latest = native._paid_ppv_facts_in_session(s, account_id, fan_id)
     fan = upsell.FanState(fan_id=fan_id, max_single_paid_cents=biggest,
         last_paid_cents=latest or None, has_ever_paid=bool(biggest))
@@ -193,17 +197,28 @@ def record_quote(s, intent, message_id, now):
     from automations import upsell
     terms = json.loads(intent.catalog_snapshot_json)
     q = terms.get("native_quote")
-    if q is None:
+    # Fixed offers are recorded where the seller would record a quote (its own
+    # automated and engagement sends); manual and campaign sends keep their existing ledger.
+    fixed = terms["item"].get("pricing_mode") == "fixed" and intent.origin in {"automated", "engagement"}
+    if q is None and not fixed:
         return
+    lad = s.get(LadderState, (intent.account_id, intent.fan_id))
+    if fixed:
+        # Accepted fixed offers count as asks/offers and stay payable through
+        # the same quote row, but carry no derived band and never move the
+        # dynamic ladder or enter its price experiments.
+        price = terms["price_cents"]
+        q = {"rung_index": int(lad.rung_index or 0) if lad else 0, "price_cents": price, "base_cents": price,
+             "arm_mult": 1.0, "pre_clamp_cents": price, "clamped_by": None, "band_lo": 0, "band_hi": 0}
     s.add(LadderQuote(account_id=intent.account_id, fan_id=intent.fan_id,
         item_id=intent.catalog_item_id, message_id=message_id, media_key=upsell.media_key(terms["media_ids"]),
-        kind="rung", sent_at=now, paid=False, **q))
-    lad = s.get(LadderState, (intent.account_id, intent.fan_id))
+        kind="fixed" if fixed else "rung", sent_at=now, paid=False, **q))
     if lad is None:
         lad = LadderState(account_id=intent.account_id, fan_id=intent.fan_id)
         s.add(lad)
     lad.last_ask_at, lad.updated_at = now, now
-    lad.rung_index = max(int(lad.rung_index or 0), q["rung_index"] + 1)
+    if not fixed:
+        lad.rung_index = max(int(lad.rung_index or 0), q["rung_index"] + 1)
     # Receipt projection preserves independent human stop/pause/companion state.
     if lad.status in {None, upsell.STATUS_IDLE, upsell.STATUS_HOT, upsell.STATUS_OPEN}:
         lad.status = upsell.STATUS_OPEN

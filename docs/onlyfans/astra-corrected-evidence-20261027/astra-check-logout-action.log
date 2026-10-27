@@ -1,0 +1,1 @@
+Logout action PASS: revoke before clearing cookie, repeat sign-out, visible revocation failure, cookie retained on outage and existing agency guard.

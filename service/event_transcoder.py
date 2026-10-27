@@ -46,6 +46,15 @@ from automations._common import source_self_heal_set
 import relay_cache
 from jsonsafe import dump_capped
 
+# Twin bridge intake (Stage 1C part 1) is OPTIONAL. A guarded import keeps
+# ordinary ingestion working even if the bridge package is absent or broken;
+# once imported, its failures are NOT swallowed (see the call site).
+try:
+    from twin_bridge.intake import enqueue_inbound_if_enabled as _enqueue_bridge_input
+except Exception:  # pragma: no cover - optional component
+    _enqueue_bridge_input = None
+
+
 # Outbound-echo cache-bust debounce (per account). A mass blast echoes one
 # outbound chat_message per recipient; busting list_chats/roster_count on each
 # would keep those caches permanently cold for the blast's duration. One bust
@@ -530,6 +539,31 @@ async def _transcode_chat_message(account_id: str | None, m: dict) -> None:
                 amount_cents=tip_cents,
                 occurred_at=created_at,
                 raw=raw,
+            )
+
+        # ── Twin bridge intake (Stage 1C part 1) ─────────────────
+        # A durable, account-scoped record that this inbound DM exists, written
+        # in THIS transaction, after the message/fan/chat writes above. It never
+        # commits, never launches a task and never calls Twin.
+        #
+        # - Disabled by default: without trusted scope it returns immediately and
+        #   touches nothing, so ordinary ingestion is unchanged.
+        # - A database failure is deliberately NOT caught here. It propagates out
+        #   of this block, the session rolls back, and NEITHER the new message nor
+        #   a partial bridge input survives - no caller can mistake a half-written
+        #   intake for success.
+        # - The ORIGINAL frame is handed over, not just the persisted columns.
+        #   Provider ids are validated before any coercion can lose their type,
+        #   and `lockedText` / `responseType` / `giphyId` / `createdAt` only exist
+        #   here. The reconciliation re-reads the same frame from raw_json, so
+        #   both paths apply one eligibility rule.
+        if _enqueue_bridge_input is not None:
+            await _enqueue_bridge_input(
+                s,
+                account_id=str(account_id),
+                fan_id=int(fan_id),
+                message_id=int(message_id),
+                frame=m,
             )
 
     log.info(

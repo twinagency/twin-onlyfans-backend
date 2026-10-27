@@ -1,0 +1,296 @@
+[
+  {
+    "path": "service/tests/test_fastt_activation.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_fastt_activation.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_fastt_platform_scope.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-evidence/test_fastt_platform_scope.xml",
+      "service/tests/test_fastt_platform_scope.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_fastt_requested_caption.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-evidence/test_fastt_requested_caption.xml",
+      "service/tests/test_fastt_requested_caption.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_fastt_scope_db.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-evidence/test_fastt_scope_db.xml",
+      "service/tests/test_fastt_scope_db.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_fastt_scope_wide.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-evidence/test_fastt_scope_wide.xml",
+      "service/tests/test_fastt_scope_wide.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_fastt_wire_stop.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_fastt_wire_stop.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_caption_vault.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_caption_vault.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_content.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_content.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_context.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_context.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_daily_allowance.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_daily_allowance.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_engine.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_engine.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_expiry.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_expiry.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_followups.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_followups.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_ledger.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_ledger.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_manifest.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_manifest.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_model.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_model.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_offers.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_offers.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_overlap.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_overlap.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_postsale.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_postsale.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_postsale_engine.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_postsale_engine.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_receipt_recovery.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-evidence/test_native_pilot_receipt_recovery.xml",
+      "service/tests/test_native_pilot_receipt_recovery.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_recovery.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-evidence/test_native_pilot_recovery.xml",
+      "service/tests/test_native_pilot_recovery.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_reporting.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_reporting.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_resolver_seam.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_resolver_seam.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_runner.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_runner.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_runtime.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_runtime.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_service.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_service.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_supervisor.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_supervisor.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_vault.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_vault.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_vision.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_vision.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  }
+]

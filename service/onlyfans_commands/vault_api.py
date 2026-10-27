@@ -70,14 +70,17 @@ async def get(request: Request, account_id: str):
         return context
     store, tenant = context
     try:
-        if not set(request.query_params) <= {"afterMediaId", "limit", "q", "kind", "folderId"} or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
+        if not set(request.query_params) <= {"afterMediaId", "limit", "q", "kind", "folderId", "includeSummary"} or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
             raise InvalidVault("That vault page request is invalid.")
+        if request.query_params.get("includeSummary", "0") not in {"0", "1"}:
+            raise InvalidVault("That vault summary option is invalid.")
         raw_limit = request.query_params.get("limit", "24")
         if not raw_limit.isascii() or not raw_limit.isdecimal() or len(raw_limit) > 2:
             raise InvalidVault("That vault page size is invalid.")
         value = await asyncio.to_thread(list_vault, store, tenant, account_id,
             after_media_id=request.query_params.get("afterMediaId"), limit=int(raw_limit),
-            query=request.query_params.get("q", ""), kind=request.query_params.get("kind", "all"),folder_id=request.query_params.get("folderId"))
+            query=request.query_params.get("q", ""), kind=request.query_params.get("kind", "all"),folder_id=request.query_params.get("folderId"),
+            include_summary=request.query_params.get("includeSummary") == "1")
         return response({"ok": True, "accountId": account_id, "vault": value})
     except Exception as exc:
         return failure(exc)
@@ -187,3 +190,23 @@ async def folder_edit(request:Request,account_id:str,folder_id:str=None):
             expected_fingerprint=value["expectedFingerprint"],command_key=value["commandKey"],actor=value["actor"])
         return response({"ok":True,"applied":True,"accountId":account_id,"commandKey":value["commandKey"],**result})
     except Exception as exc:return failure(exc)
+
+
+@router.get("/accounts/{account_id}/message-media/{fan_id}/{message_id}/{media_id}/{variant}")
+async def message_media(request: Request, account_id: str, fan_id: str, message_id: str, media_id: str, variant: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse): return context
+    try:
+        if request.query_params: raise InvalidVault("Message media reads do not accept query parameters.")
+        from onlyfans_runtime.message_media import read_or_queue, reference
+        ref = reference(account_id, fan_id, message_id, media_id, variant)
+        value = await asyncio.to_thread(read_or_queue, *context, ref)
+        if value is None:
+            return JSONResponse({"status": "preparing"}, status_code=202, headers={"Cache-Control": "private, no-store", "Retry-After": "2"})
+        data, mime = value
+        return Response(data, media_type=mime, headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox"})
+    except Refused:
+        return refuse("message_media_unavailable", 404, "That message attachment is unavailable.")
+    except Exception:
+        return refuse("message_media_unavailable", 503, "That message attachment could not be read.")

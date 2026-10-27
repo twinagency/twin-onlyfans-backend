@@ -301,3 +301,22 @@ def conversation_envelope(*, account_id: str, conversation: dict) -> dict:
         "accountId": account_id,
         "conversation": conversation,
     }
+
+def encode_thread_cursor(*, account_id: str, fan_id: int, before_message_id: int) -> str:
+    raw = json.dumps({"v":1,"a":account_id,"f":fan_id,"m":before_message_id},
+                     separators=(",",":"),sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def decode_thread_cursor(value: str, *, account_id: str, fan_id: int) -> int:
+    if not isinstance(value,str) or not value or len(value)>512:
+        raise ValueError("invalid thread cursor")
+    try:
+        body=json.loads(base64.urlsafe_b64decode((value+"="*(-len(value)%4)).encode("ascii")))
+    except Exception as exc:
+        raise ValueError("invalid thread cursor") from exc
+    if (not isinstance(body,dict) or set(body)!={"v","a","f","m"} or body["v"]!=1
+            or body["a"]!=account_id or type(body["f"]) is not int or body["f"]!=fan_id
+            or type(body["m"]) is not int or not 0<body["m"]<2**63):
+        raise ValueError("invalid thread cursor")
+    return body["m"]

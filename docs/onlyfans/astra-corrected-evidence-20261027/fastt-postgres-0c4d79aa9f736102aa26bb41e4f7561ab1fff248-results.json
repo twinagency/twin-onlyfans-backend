@@ -1,0 +1,81 @@
+[
+  {
+    "path": "service/tests/test_fastt_activation_pg.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-pg-evidence/test_fastt_activation_pg.xml",
+      "service/tests/test_fastt_activation_pg.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_fastt_controls_pg.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-pg-evidence/test_fastt_controls_pg.xml",
+      "service/tests/test_fastt_controls_pg.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_fastt_new_conversations_pg.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-pg-evidence/test_fastt_new_conversations_pg.xml",
+      "service/tests/test_fastt_new_conversations_pg.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_attribution_pg.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=native-fastt-pg-evidence/test_native_pilot_attribution_pg.xml",
+      "service/tests/test_native_pilot_attribution_pg.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_load_pg.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_load_pg.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_service_pg.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  },
+  {
+    "path": "service/tests/test_native_pilot_storage_pg.py",
+    "argv": [
+      "/opt/hostedtoolcache/Python/3.12.15/x64/bin/python",
+      "service/tests/test_native_pilot_storage_pg.py"
+    ],
+    "exitStatus": 0,
+    "skipped": 0
+  }
+]

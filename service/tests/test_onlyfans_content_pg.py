@@ -286,16 +286,14 @@ store.close()
 def test_populated_0081_upgrade_preserves_native_catalogue_and_all_prior_evidence(database):
     store, item = setup(database); store.close()
     with database[1].begin() as connection:
-        # Recreate the actual 0081 shape, including removal of every later
-        # revision. Merely changing the version row leaves 0083 tables behind.
-        connection.exec_driver_sql("DROP TABLE of_vault_product_create, of_vault_observation, of_vault_sync_job; "
-            "DROP FUNCTION of_vault_product_immutable(); DROP FUNCTION of_vault_sync_frozen()")
-        connection.exec_driver_sql("DROP TABLE of_content_change; DROP FUNCTION of_content_immutable()")
-        connection.execute(text("UPDATE alembic_version SET version_num=:head"), {"head": "0081_native_connection"})
-        check_schema(connection, expected="0081_native_connection")
-        tables = connection.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename!='alembic_version' ORDER BY tablename")).scalars().all()
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical = historical_schema(connection, "0081_native_connection")
+        tables = [table for table in historical.sorted_tables if table.name != "alembic_version"]
+        assert "of_ledger_scan" not in historical.tables
+        assert "of_offer_observation" not in historical.tables
         def values():
-            return {table: [dict(row) for row in connection.exec_driver_sql(f'SELECT * FROM "{table}"').mappings()] for table in tables}
+            return {table.name: [dict(row) for row in connection.execute(table.select().order_by(*table.primary_key.columns)).mappings()]
+                    for table in tables}
         before = values(); upgrade(connection); upgrade(connection); check_schema(connection)
         assert values() == before
         assert connection.scalar(text("SELECT count(*) FROM of_content_change")) == 0

@@ -1,0 +1,15 @@
+{
+  "image": "sha256:6487b89c9ac5d6081701cd6bf5430ba3b6c5c79a659ce6de0c6234991955c1dc",
+  "source": "1c2030eb5fb1a3af7df166019a771dd8f5528f2a",
+  "parentImage": "sha256:174d20ef97087371f3ace2c4c267ae83ff908218a996bb652c88614c7411fc61",
+  "postgresImage": "sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d",
+  "versions": {
+    "pg_dump": "pg_dump (PostgreSQL) 16.15 (Debian 16.15-1.pgdg13+2)",
+    "pg_restore": "pg_restore (PostgreSQL) 16.15 (Debian 16.15-1.pgdg13+2)",
+    "psql": "psql (PostgreSQL) 16.15 (Debian 16.15-1.pgdg13+2)"
+  },
+  "passedCases": 17,
+  "archiveSha256": "b543ea18bdc4a4518de9a77774a6ddebc1d24f03b0c3ca59f9ff7865e5a41d8a",
+  "productionMutated": false,
+  "recipe": "FROM sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d AS pgtools\nFROM sha256:174d20ef97087371f3ace2c4c267ae83ff908218a996bb652c88614c7411fc61\nLABEL io.twin.release.kind=\"isolated-recovery-tools\"\nCOPY --from=pgtools /usr/lib/postgresql/16/bin /opt/pg16-real\nCOPY --from=pgtools /usr/lib/x86_64-linux-gnu /opt/pg16-libs\nCOPY pg_dump pg_restore psql /opt/pg16/\nRUN chmod 755 /opt/pg16/pg_dump /opt/pg16/pg_restore /opt/pg16/psql\n"
+}

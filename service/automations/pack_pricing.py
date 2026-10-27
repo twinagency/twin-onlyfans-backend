@@ -631,6 +631,11 @@ async def negotiate_pack(account_id: str, fan_id: int, item: CatalogItem,
     # subordinated the rungs to value on purpose. Off by default everywhere.
     if value < px and bool((cfg or {}).get("value_caps_price")):
         px = max(upsell.OF_PRICE_FLOOR_CENTS, value)
+    # Operator override (Twin): a fixed per-account pack price, e.g. a cheap test price.
+    # Bounded to OnlyFans' own limits; unset = the ladder above, unchanged.
+    fixed = (cfg or {}).get("fastt_pack_price_cents")
+    if type(fixed) is int and upsell.OF_PRICE_FLOOR_CENTS <= fixed <= upsell.OF_PRICE_MAX_CENTS:
+        px = fixed
     if value < px:
         log.info("pack priced ABOVE rate card account=%s fan=%s px=%s value=%s "
                  "ratio=%.2f n=%s", account_id, fan_id, px, value,

@@ -1,0 +1,28 @@
+{
+  "pytestFiles": [
+    "service/tests/test_onlyfans_agency_pg.py",
+    "service/tests/test_onlyfans_campaigns_pg.py",
+    "service/tests/test_onlyfans_connection_states_pg.py",
+    "service/tests/test_onlyfans_content_sync_delivery_pg.py",
+    "service/tests/test_onlyfans_dashboard_sessions_pg.py",
+    "service/tests/test_onlyfans_fastt_campaign_controls_pg.py",
+    "service/tests/test_onlyfans_fastt_sales_pg.py",
+    "service/tests/test_onlyfans_http_pg.py",
+    "service/tests/test_onlyfans_launch_engagement_contract.py",
+    "service/tests/test_onlyfans_launch_history_memory_recent_pg.py",
+    "service/tests/test_onlyfans_launch_ledger_contract.py",
+    "service/tests/test_onlyfans_launch_personality_importer.py",
+    "service/tests/test_onlyfans_launch_review.py",
+    "service/tests/test_onlyfans_ledger_pg.py",
+    "service/tests/test_onlyfans_native_budget_pg.py",
+    "service/tests/test_onlyfans_native_memory_pg.py",
+    "service/tests/test_onlyfans_offer_import_pg.py",
+    "service/tests/test_onlyfans_post_detail_adapter.py",
+    "service/tests/test_onlyfans_recent_inbox_pg.py",
+    "service/tests/test_onlyfans_role_boundary.py",
+    "service/tests/test_onlyfans_vault_folder_states.py",
+    "service/tests/test_onlyfans_vault_summary.py",
+    "service/tests/test_onlyfans_workspace_pg.py"
+  ],
+  "separateScripts": []
+}

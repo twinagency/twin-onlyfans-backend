@@ -1,0 +1,375 @@
+name: OnlyFans combined launch acceptance
+on:
+  push:
+    branches: [codex/onlyfans-final-integration-20261023]
+    paths: ['service/**', 'scripts/**', 'docs/onlyfans/ACCEPTANCE-DASHBOARD-SHA', 'Dockerfile.onlyfans', 'requirements*.txt', '.github/workflows/onlyfans-launch-integration.yml']
+  pull_request:
+    paths: ['service/**', 'scripts/**', 'docs/onlyfans/ACCEPTANCE-DASHBOARD-SHA', 'Dockerfile.onlyfans', 'requirements*.txt', '.github/workflows/onlyfans-launch-integration.yml']
+  workflow_dispatch:
+    inputs:
+      suite:
+        type: choice
+        options: [combined, commerce, artifacts, image-rollback]
+        default: combined
+      dashboard_ref:
+        description: Exact SHA, matching the committed paired dashboard pin
+        type: string
+        required: true
+      dashboard_archive_url:
+        description: Optional short-lived HTTPS S3 git-archive source URL; never logged
+        type: string
+      dashboard_archive_sha256:
+        description: Independently recorded SHA256 of the exact git archive
+        type: string
+      rollback_dashboard_url:
+        description: Private source capability for immutable rollback image build
+        type: string
+  workflow_call:
+    inputs:
+      suite:
+        type: string
+        default: combined
+      dashboard_ref:
+        type: string
+        default: ''
+      dashboard_archive_url:
+        type: string
+        default: ''
+      dashboard_archive_sha256:
+        type: string
+        default: ''
+      rollback_dashboard_url:
+        type: string
+        default: ''
+    secrets:
+      ONLYFANS_DASHBOARD_READ_TOKEN:
+        description: Optional explicitly provisioned Contents-read credential for the paired repository
+        required: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: onlyfans-acceptance-${{ inputs.suite || 'combined' }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  fastt-sqlite:
+    # The paired manifest covers test_onlyfans*.py. FASTT's script-style
+    # executor tests need their own interpreters, rather than pytest collection.
+    if: ${{ inputs.suite != 'commerce' && inputs.suite != 'artifacts' && inputs.suite != 'image-rollback' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PYTHON_DOTENV_DISABLED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: service:service/tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the pinned native runtime
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
+          fi
+          python -m pip install -r requirements-onlyfans-test.txt
+      - name: Run every SQLite FASTT boundary suite on this exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p native-fastt-evidence
+          git rev-parse HEAD > native-fastt-evidence/backend-sha.txt
+          python - <<'PY' 2>&1 | tee native-fastt-evidence/tests.log
+          import ast
+          import json
+          from pathlib import Path
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+
+          directory = Path('service/tests')
+          paths = sorted({*directory.glob('test_native_pilot_*.py'), *directory.glob('test_fastt_*.py')})
+          paths = [path for path in paths if not path.name.endswith('_pg.py')]
+          if not paths or not (directory / 'test_fastt_wire_stop.py') in paths:
+              raise SystemExit('Required FASTT boundary suites are missing')
+          results = []
+          for path in paths:
+              tree = ast.parse(path.read_text(), filename=str(path))
+              uses_pytest = any(
+                  isinstance(node, ast.Import) and any(name.name.split('.')[0] == 'pytest' for name in node.names)
+                  or isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] == 'pytest'
+                  for node in ast.walk(tree)
+              )
+              junit = Path('native-fastt-evidence') / (path.stem + '.xml')
+              command = [sys.executable, *(['-m', 'pytest', '-q', '--junitxml=' + str(junit)] if uses_pytest else []), str(path)]
+              print('Running:', ' '.join(command), flush=True)
+              result = subprocess.run(command)
+              skipped = sum(case.find('skipped') is not None for case in ET.parse(junit).getroot().iter('testcase')) if uses_pytest and junit.exists() else 0
+              results.append({'path': str(path), 'argv': command, 'exitStatus': result.returncode, 'skipped': skipped})
+              Path('native-fastt-evidence/results.json').write_text(json.dumps(results, indent=2) + '\n')
+          raise SystemExit(int(any(result['exitStatus'] or result['skipped'] for result in results)))
+          PY
+      - name: Save native FASTT commands and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastt-sqlite-${{ github.sha }}
+          path: native-fastt-evidence/
+          if-no-files-found: error
+  fastt-postgres:
+    if: ${{ inputs.suite != 'commerce' && inputs.suite != 'artifacts' && inputs.suite != 'image-rollback' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-fastt-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHON_DOTENV_DISABLED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: service:service/tests
+      ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-fastt-only@127.0.0.1:5432/postgres
+      ONLYFANS_RELEASE_SERVICE_DIR: ${{ github.workspace }}/released/service
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: backend
+      - name: Check out the original release for the rollback schema proof
+        uses: actions/checkout@v4
+        with:
+          ref: 8a427a3969a1e0b3cc6eed020b3a037e34120b63
+          path: released
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the pinned native runtime
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
+          fi
+          python -m pip install -r requirements-onlyfans-test.txt
+      - name: Run every PostgreSQL FASTT boundary suite on this exact commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p native-fastt-pg-evidence
+          git rev-parse HEAD > native-fastt-pg-evidence/backend-sha.txt
+          python - <<'PY' 2>&1 | tee native-fastt-pg-evidence/tests.log
+          import ast
+          import json
+          from pathlib import Path
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+
+          directory = Path('service/tests')
+          paths = sorted({*directory.glob('test_native_pilot_*_pg.py'), *directory.glob('test_fastt_*_pg.py')})
+          required = {'test_native_pilot_storage_pg.py', 'test_native_pilot_service_pg.py', 'test_fastt_controls_pg.py'}
+          if not required.issubset({path.name for path in paths}):
+              raise SystemExit('Required PostgreSQL FASTT boundary suites are missing')
+          results = []
+          for path in paths:
+              tree = ast.parse(path.read_text(), filename=str(path))
+              uses_pytest = any(
+                  isinstance(node, ast.Import) and any(name.name.split('.')[0] == 'pytest' for name in node.names)
+                  or isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] == 'pytest'
+                  for node in ast.walk(tree)
+              )
+              junit = Path('native-fastt-pg-evidence') / (path.stem + '.xml')
+              command = [sys.executable, *(['-m', 'pytest', '-q', '--junitxml=' + str(junit)] if uses_pytest else []), str(path)]
+              print('Running:', ' '.join(command), flush=True)
+              result = subprocess.run(command)
+              skipped = sum(case.find('skipped') is not None for case in ET.parse(junit).getroot().iter('testcase')) if uses_pytest and junit.exists() else 0
+              results.append({'path': str(path), 'argv': command, 'exitStatus': result.returncode, 'skipped': skipped})
+              Path('native-fastt-pg-evidence/results.json').write_text(json.dumps(results, indent=2) + '\n')
+          raise SystemExit(int(any(result['exitStatus'] or result['skipped'] for result in results)))
+          PY
+      - name: Save PostgreSQL FASTT commands and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastt-postgres-${{ github.sha }}
+          path: backend/native-fastt-pg-evidence/
+          if-no-files-found: error
+  acceptance:
+    if: ${{ inputs.suite != 'artifacts' && inputs.suite != 'image-rollback' }}
+    runs-on: ubuntu-24.04
+    # Dependency installation consumed 34 minutes on the last hosted runner.
+    # Keep every test/assertion; budget setup separately from product timeouts.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-acceptance-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
+      ONLYFANS_PROXY_TEST_PG_URL: postgresql://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
+      ONLYFANS_PERSONALITY_TEST_DATABASE_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/personality_acceptance
+      ONLYFANS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+      NEXT_TELEMETRY_DISABLED: '1'
+      ONLYFANS_COMPATIBLE_ROLLBACK_DIR: ${{ github.workspace }}/compatible-rollback
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: backend
+      - name: Checkout the schema-compatible rollback source
+        uses: actions/checkout@v4
+        with:
+          ref: a550199c42a9873c59c5bd74f9c2d7bd1793d392
+          path: compatible-rollback
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate the exact paired source capability
+        id: pair
+        working-directory: backend
+        shell: bash
+        env:
+          ONLYFANS_DASHBOARD_READ_TOKEN: ${{ secrets.ONLYFANS_DASHBOARD_READ_TOKEN }}
+          REQUESTED_DASHBOARD_REF: ${{ inputs.dashboard_ref }}
+          DASHBOARD_ARCHIVE_SHA256: ${{ inputs.dashboard_archive_sha256 }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/release-evidence"
+          python scripts/prepare-onlyfans-dashboard.py \
+            --dashboard-ref "$REQUESTED_DASHBOARD_REF" \
+            --archive-sha256 "$DASHBOARD_ARCHIVE_SHA256" \
+            --github-output "$GITHUB_OUTPUT" \
+            2>&1 | tee "$GITHUB_WORKSPACE/release-evidence/paired-source.log"
+      - name: Checkout the explicitly authorized paired repository
+        if: steps.pair.outputs.mode == 'git'
+        uses: actions/checkout@v4
+        with:
+          repository: jesse98/twin-dashboard
+          ref: ${{ steps.pair.outputs.dashboard_sha }}
+          path: paired-dashboard
+          token: ${{ secrets.ONLYFANS_DASHBOARD_READ_TOKEN }}
+          persist-credentials: false
+      - name: Verify and unpack the exact paired archive
+        if: steps.pair.outputs.mode == 'archive'
+        working-directory: backend
+        env:
+          REQUESTED_DASHBOARD_REF: ${{ steps.pair.outputs.dashboard_sha }}
+          DASHBOARD_ARCHIVE_SHA256: ${{ inputs.dashboard_archive_sha256 }}
+        run: >-
+          python scripts/prepare-onlyfans-dashboard.py
+          --dashboard-ref "$REQUESTED_DASHBOARD_REF"
+          --archive-sha256 "$DASHBOARD_ARCHIVE_SHA256"
+          --destination "$GITHUB_WORKSPACE/paired-dashboard"
+      - name: Install pinned runtimes and matching PostgreSQL clients
+        working-directory: backend
+        run: |
+          # Hosted-runner images already supply these tools in many runs. Avoid
+          # an unrelated mirror refresh when the exact client is present.
+          if ! test -x /usr/lib/postgresql/16/bin/pg_dump || ! command -v ffmpeg >/dev/null; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends postgresql-client-16 ffmpeg
+          fi
+          /usr/lib/postgresql/16/bin/pg_dump --version | grep -E 'PostgreSQL\) 16\.'
+          command -v ffmpeg
+          python -m pip install -r requirements-onlyfans-test.txt
+          PGPASSWORD=synthetic-acceptance-only createdb -h 127.0.0.1 -U postgres personality_acceptance
+      - name: Install the paired lockfile and browser
+        working-directory: paired-dashboard
+        run: |
+          npm ci
+          node node_modules/playwright/cli.js install --with-deps chromium
+      - name: Build the deployable backend from the tested SHA
+        working-directory: backend
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/release-evidence"
+          docker build --label org.opencontainers.image.revision="$GITHUB_SHA" -f Dockerfile.onlyfans -t launch-candidate .
+          docker image inspect launch-candidate --format '{{.Id}}' > "$GITHUB_WORKSPACE/release-evidence/candidate-image-id.txt"
+          docker image inspect launch-candidate > "$GITHUB_WORKSPACE/release-evidence/candidate-image.json"
+      - name: Run the full declared acceptance with zero exemptions
+        working-directory: backend
+        env:
+          DASHBOARD_SHA: ${{ steps.pair.outputs.dashboard_sha }}
+          ACCEPTANCE_SUITE: ${{ inputs.suite || 'combined' }}
+          ACCEPTANCE_SHARD: ${{ matrix.shard }}
+        run: >-
+          python scripts/onlyfans-release-acceptance.py
+          --suite "$ACCEPTANCE_SUITE"
+          --dashboard-dir "$GITHUB_WORKSPACE/paired-dashboard"
+          --dashboard-sha "$DASHBOARD_SHA"
+          --backend-sha "$GITHUB_SHA"
+          --shard-index "$ACCEPTANCE_SHARD"
+          --shard-count 6
+          --evidence-dir "$GITHUB_WORKSPACE/release-evidence"
+      - name: Save exact commands, node identities and release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}-shard-${{ matrix.shard }}
+          path: release-evidence/
+          if-no-files-found: error
+  aggregate:
+    needs: acceptance
+    if: ${{ always() && inputs.suite != 'artifacts' && inputs.suite != 'image-rollback' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: backend
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download every shard from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}-shard-*
+          path: release-shards
+      - name: Prove complete manifest coverage and zero-exemption outcomes
+        working-directory: backend
+        env:
+          ACCEPTANCE_SUITE: ${{ inputs.suite || 'combined' }}
+        run: >-
+          python scripts/onlyfans-release-acceptance.py
+          --aggregate
+          --suite "$ACCEPTANCE_SUITE"
+          --shard-count 6
+          --backend-sha "$GITHUB_SHA"
+          --dashboard-sha "$(cat docs/onlyfans/ACCEPTANCE-DASHBOARD-SHA)"
+          --evidence-dir "$GITHUB_WORKSPACE/release-shards"
+      - name: Save aggregate acceptance proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onlyfans-${{ inputs.suite || 'combined' }}-${{ github.sha }}-aggregate
+          path: release-shards/aggregate-summary.json
+          if-no-files-found: error
+
+  release-artifacts:
+    if: ${{ inputs.suite == 'artifacts' }}
+    uses: ./.github/workflows/onlyfans-corrected-release-artifacts.yml
+    with:
+      forward_dashboard_url: ${{ inputs.dashboard_archive_url }}
+      rollback_dashboard_url: ${{ inputs.rollback_dashboard_url }}
+
+  image-rollback:
+    if: ${{ inputs.suite == 'image-rollback' }}
+    uses: ./.github/workflows/onlyfans-rollback-image.yml

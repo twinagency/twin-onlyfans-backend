@@ -16,6 +16,7 @@ jobs:
         with: {node-version: 22}
       - run: npm ci --prefix creator-sign-in
       - run: npx --prefix creator-sign-in playwright install --with-deps chromium
+      - run: node creator-sign-in/check-lifecycle.mjs
       - run: node creator-sign-in/check.mjs
   container:
     runs-on: ubuntu-latest

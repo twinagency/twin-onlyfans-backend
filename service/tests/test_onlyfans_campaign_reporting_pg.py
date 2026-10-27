@@ -16,6 +16,8 @@ from onlyfans_runtime.store import utcnow
 from onlyfans_runtime.text_delivery import SyntheticTextTransport
 
 
+from onlyfans_runtime.ledger import _coverage_receipt
+
 def sent(database):
     store, authority, item, service = paid(database)
     campaign = create(service, catalog_item_id=item)
@@ -36,6 +38,7 @@ def fresh(engine, *, account=ACCOUNT):
                 page_offset=0, status="idle", next_poll_at=now+timedelta(minutes=5), updated_at=now)
             s.add(scan)
         scan.last_complete_at = scan.last_full_at = now
+        scan.coverage_json=_coverage_receipt(scan)
 
 
 def details(service, campaign):
@@ -117,7 +120,9 @@ def test_heuristic_legacy_link_is_not_promoted_to_exact_attribution(database):
 def test_unlinked_purchase_evidence_holds_campaign_revenue_instead_of_guessing(database, monkeypatch):
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "worker")
     store, service, campaign = sent(database)
-    assert record(store, ACCOUNT, parsed(transaction())) == "applied"
+    # The unlinked purchase belongs to the current binding; pre-binding
+    # history is retained without blocking this binding's commerce.
+    assert record(store, ACCOUNT, parsed(transaction(createdAt=utcnow().isoformat() + "Z"))) == "applied"
     fresh(database[1])
     result = details(service, campaign)
     assert result["revenueStatus"] == "ledger_held" and result["purchases"] is None

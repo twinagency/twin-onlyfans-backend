@@ -1,0 +1,92 @@
+name: OnlyFans pre-upgrade backup release verification
+on:
+  push:
+    branches: [codex/onlyfans-preupgrade-backup-20261027, codex/onlyfans-requested-caption-20261027]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-preupgrade-only
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PYTHON_DOTENV_DISABLED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONPATH: service:service/tests
+      ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-preupgrade-only@127.0.0.1:5432/postgres
+      ONLYFANS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+      ONLYFANS_COMPATIBLE_ROLLBACK_DIR: ${{ github.workspace }}/compatible-rollback
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: d6811b124928f8167e6625ce9db5db81bf227fad
+          path: compatible-rollback
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated dependencies
+        run: |
+          python -m pip install -r requirements-onlyfans-test.txt
+          if ! test -x /usr/lib/postgresql/16/bin/pg_dump; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client-16
+          fi
+      - name: Rehearse backup before migration, quarantine and recovery refusals
+        run: |
+          set -euo pipefail
+          mkdir -p preupgrade-evidence
+          git rev-parse HEAD > preupgrade-evidence/backend-sha.txt
+          python -m pytest -q --tb=short -rs service/tests/test_onlyfans_release_package_pg.py service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_fastt_requested_caption.py --junitxml=preupgrade-evidence/recovery.xml 2>&1 | tee preupgrade-evidence/tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: preupgrade-backup-boundary-${{ github.sha }}
+          path: preupgrade-evidence/
+          if-no-files-found: error
+  paired:
+    needs: boundary
+    uses: ./.github/workflows/onlyfans-launch-integration.yml
+    with:
+      suite: combined
+      dashboard_ref: 444fd1303858e6d87204efe5811278657571f8f6
+    secrets: inherit
+  rollback:
+    needs: boundary
+    uses: ./.github/workflows/onlyfans-preupgrade-rollback.yml
+  forward-image:
+    needs: boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Retain changed backend forward image
+        run: |
+          set -euo pipefail
+          mkdir -p image-evidence
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -f Dockerfile.onlyfans -t "twin-crm-backend-forward:$GITHUB_SHA" .
+          docker image inspect "twin-crm-backend-forward:$GITHUB_SHA" > image-evidence/image-inspect.json
+          docker image inspect "twin-crm-backend-forward:$GITHUB_SHA" --format '{{.Id}}' > image-evidence/image-id.txt
+          docker run --rm --network none --entrypoint python "twin-crm-backend-forward:$GITHUB_SHA" -m pip freeze > image-evidence/python-dependencies.txt
+          printf '%s\n' "$GITHUB_SHA" > image-evidence/source-sha.txt
+          docker save "twin-crm-backend-forward:$GITHUB_SHA" | gzip -n > "image-evidence/backend-forward-$GITHUB_SHA.docker.tar.gz"
+          cd image-evidence
+          sha256sum *.docker.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crm-backend-forward-${{ github.sha }}
+          path: image-evidence/
+          compression-level: 0
+          retention-days: 90
+          if-no-files-found: error
+

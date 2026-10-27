@@ -327,9 +327,8 @@ def test_populated_0087_upgrade_preserves_connection_and_disabled_runtime(databa
         return {table:[dict(row) for row in connection.execute(text('SELECT * FROM '+table)).mappings()] for table in tables}
     with database[1].begin() as connection:
         before=snapshot(connection)
-        connection.exec_driver_sql('DROP TABLE of_vault_media_job')
-        connection.execute(text('UPDATE alembic_version SET version_num=:revision'),{'revision':ENROLLMENT})
-        check_schema(connection,expected=ENROLLMENT)
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical_schema(connection,ENROLLMENT)
         upgrade(connection);upgrade(connection);check_schema(connection)
         assert snapshot(connection)==before
         assert connection.scalar(text('SELECT count(*) FROM of_vault_media_job'))==0

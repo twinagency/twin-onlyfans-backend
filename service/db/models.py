@@ -31,6 +31,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     case,
     Date,
@@ -531,6 +532,8 @@ class Message(Base):
             "ix_messages_account_provider_id", "account_id", "message_id",
             info={"onlyfans_since": "0072_onlyfans_text_delivery"},
         ),
+        Index("ix_messages_account_ingested", "account_id", "ingested_at",
+              info={"onlyfans_since": "0091_launch_controls"}),
         # Backs the All-Messages tab's wider scan (direction-scoped per
         # account, no fan filter) — see 18_stats_per_fan_csv.md §SQL impact
         # and migration 0017_phase_g_messages_dir_index.
@@ -1867,11 +1870,20 @@ class CatalogItem(Base):
     is_free_teaser: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # dynamic = existing native quote arithmetic may set the offered amount.
+    # fixed = the saved price_cents is the offer (paid-offer import). Only the
+    # backend sets fixed; existing rows migrate as dynamic and are not repriced.
+    pricing_mode: Mapped[str] = mapped_column(
+        String, nullable=False, default="dynamic", server_default=text("'dynamic'"),
+        info={"onlyfans_since": "0089_offer_import"},
+    )
     created_at: Mapped[datetime] = _ts_now()
     updated_at: Mapped[datetime] = _ts_now()
 
     __table_args__ = (
         Index("ix_catalog_items_script", "account_id", "script_id", "position"),
+        CheckConstraint("pricing_mode IN ('dynamic','fixed')", name="pricing_mode",
+                        info={"onlyfans_since": "0089_offer_import"}),
     )
 
 
@@ -1929,6 +1941,7 @@ class ContentOffer(Base):
     status: Mapped[str] = mapped_column(String, nullable=False, default="open")
     resolved_by: Mapped[str | None] = mapped_column(String)  # tip|ppv_ledger|ppv_fastpath|manual
     tips_accum_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    post_buy_started_at: Mapped[datetime | None] = mapped_column(DateTime, info={"onlyfans_since":"0094_purchase_reply"})
     delivery_message_id: Mapped[int | None] = mapped_column(BigInteger)
     offered_at: Mapped[datetime] = _ts_now()
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -2949,7 +2962,7 @@ class LadderQuote(Base):
     price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     pre_clamp_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     clamped_by: Mapped[str | None] = mapped_column(String)  # library|history|cold_ceiling|band|none
-    kind: Mapped[str] = mapped_column(String, nullable=False, default="rung")  # rung|discount
+    kind: Mapped[str] = mapped_column(String, nullable=False, default="rung")  # rung|discount|fixed (native fixed-price offer)
     message_id: Mapped[int | None] = mapped_column(BigInteger)
     sent_at: Mapped[datetime] = _ts_now()
     paid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -3324,8 +3337,8 @@ class OfConversationState(Base):
 
     The scoped read service never writes these rows. Store owns audited control
     changes and canonical input revisions; the text authority owns dispatch
-    holds. The legacy column default remains for schema compatibility, while
-    runtime creation of missing control explicitly starts paused/attention.
+    holds. New conversations start paused in both the ORM and database.
+    Runtime creation of missing control also starts paused/attention.
     """
 
     __tablename__ = "of_conversation_state"
@@ -3334,7 +3347,7 @@ class OfConversationState(Base):
     fan_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     #: automated | human_controlled | paused | no_contact
     mode: Mapped[str] = mapped_column(
-        String, nullable=False, default="automated", server_default=text("'automated'")
+        String, nullable=False, default="paused", server_default=text("'paused'")
     )
     revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")

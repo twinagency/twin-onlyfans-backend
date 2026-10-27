@@ -63,7 +63,8 @@ import tenant_keys
 from db.engine import get_session
 from db.models import AccountAiConfig, GrokCall, GrokDailyCost
 from llm_providers import (
-    LLMProvider, PROVIDERS, fallback_key, house_key)
+    LLMProvider, PROVIDERS, active_telegram_policy, fallback_key, house_key,
+    telegram_credential)
 
 log = logging.getLogger("of-relay.llm_client")
 
@@ -174,6 +175,20 @@ def _resolve(model: str) -> tuple[LLMModel, LLMProvider]:
         raise LLMConfigError(
             f"model {model!r} maps to unknown provider {mdl.provider!r}"
         )
+    # P2-I7: inside the injected Telegram context a model may only route to a
+    # provider the creator's policy allows. A model id that happens to resolve to
+    # a provider outside that set is REFUSED before any credential or HTTP work,
+    # so a misconfigured purpose cannot silently bill another provider/tenant.
+    policy = active_telegram_policy()
+    if policy is not None:
+        problem = policy.config_problem()
+        if problem:
+            raise LLMConfigError(problem)
+        if prov.name not in policy.provider_allowlist:
+            raise LLMConfigError(
+                f"model {model!r} resolves to provider {prov.name!r}, which the "
+                f"Telegram policy does not allow (allowed: {sorted(policy.provider_allowlist)})"
+            )
     return mdl, prov
 
 
@@ -270,6 +285,85 @@ def settle_scoped_synthetic_call(session, *, account_id, call_id, reserved_milli
     row.updated_at = now
     call.status, call.cost_cents = "done", actual_millicents
     return actual_millicents
+
+
+def telegram_model_for(purpose: str) -> str:
+    """The ONE model the active Telegram policy configures for `purpose`.
+
+    P2-I7: this is the SINGLE policy decision the model-selection consumer
+    (`automations/_common.resolve_model`) and the public call boundary
+    (`chat`) share, so the two cannot drift apart. It raises `LLMConfigError`
+    for a malformed policy, an unmapped purpose, an unknown model id or a
+    non-allowlisted provider. It asserts only what the policy can know; the
+    billing-account check belongs to `telegram_call_refusal`.
+    """
+    policy = active_telegram_policy()
+    if policy is None:
+        raise LLMConfigError("no Telegram policy is active")
+    problem = policy.config_problem()
+    if problem:
+        raise LLMConfigError(problem)
+    chosen = policy.purposes.get(purpose)
+    if not chosen:
+        raise LLMConfigError(
+            f"telegram purpose {purpose!r} is not enabled for this creator "
+            f"(enabled: {sorted(policy.purposes)})"
+        )
+    if chosen not in MODELS:
+        raise LLMConfigError(
+            f"telegram purpose {purpose!r} maps to unknown model {chosen!r}"
+        )
+    prov = PROVIDERS.get(MODELS[chosen].provider)
+    if prov is None or prov.name not in policy.provider_allowlist:
+        raise LLMConfigError(
+            f"telegram purpose {purpose!r} model {chosen!r} uses provider "
+            f"{MODELS[chosen].provider!r}, which the policy does not allow"
+        )
+    return chosen
+
+
+def telegram_call_refusal(purpose: str, model: str, account_id: str) -> str:
+    """Reason this exact call is refused by the active Telegram policy, or "".
+
+    P2-I7: evaluated at the PUBLIC `chat` boundary BEFORE the credential lookup,
+    the cap reservation, the audit write and the HTTP request, so a refused call
+    can have zero side effects. The trusted billing identity, the enabled
+    purpose, the configured model and the allowed provider are checked together;
+    outside the Telegram policy this always returns "" and nothing changes.
+    """
+    policy = active_telegram_policy()
+    if policy is None:
+        return ""
+    problem = policy.config_problem()
+    if problem:
+        return problem
+    if not isinstance(account_id, str) or not account_id.strip():
+        return "trusted billing account is missing"
+    if account_id != policy.trusted_account_id:
+        return (
+            f"account {account_id!r} is not this Telegram creator's trusted "
+            f"billing account"
+        )
+    chosen = policy.purposes.get(purpose)
+    if not chosen:
+        return (
+            f"purpose {purpose!r} is not enabled for this Telegram creator "
+            f"(enabled: {sorted(policy.purposes)})"
+        )
+    if model != chosen:
+        return (
+            f"model {model!r} is not the configured model for purpose "
+            f"{purpose!r} (configured: {chosen!r})"
+        )
+    if chosen not in MODELS:
+        return f"configured model {chosen!r} is unknown"
+    prov = PROVIDERS.get(MODELS[chosen].provider)
+    if prov is None or prov.name not in policy.provider_allowlist:
+        return (
+            f"model {chosen!r} uses provider {MODELS[chosen].provider!r}, "
+            f"which the policy does not allow"
+        )
+    return ""
 
 
 def _resolve_effort(mdl: LLMModel, requested: str, stored: str = "") -> str:
@@ -388,6 +482,29 @@ async def _tenant_api_key(account_id: str, prov: LLMProvider,
     who paid. The log line at the fall-through is the only place the two are
     told apart today.
     """
+    # P2-I7: inside the injected Telegram context the credential is resolved
+    # ENTIRELY from the policy — one named env reference, no tenant/owner lookup,
+    # no house key, no `_FALLBACK_KEY_ENVS` hole and no local `.env`/secrets-store
+    # read. A missing credential is a hard stop before any model HTTP call, so the
+    # Telegram worker can never silently bill the host deployment or another
+    # creator's agency.
+    policy = active_telegram_policy()
+    if policy is not None:
+        problem = policy.config_problem()
+        if problem:
+            raise LLMConfigError(problem)
+        if prov.name not in policy.provider_allowlist:
+            raise LLMConfigError(
+                f"provider {prov.name!r} is not allowed by the Telegram policy "
+                f"(allowed: {sorted(policy.provider_allowlist)})"
+            )
+        key = telegram_credential(policy)
+        if not key:
+            raise LLMConfigError(
+                f"{policy.credential_env} is missing/empty — the Telegram context "
+                f"requires its own {prov.name!r} credential before a model call"
+            )
+        return key
     owners = await tenant_keys.owners_of(account_id)
     if len(owners) > 1:
         # Two AGENCIES are linked to this creator (a master's oversight link is
@@ -909,6 +1026,14 @@ async def chat(
     if "ONLYFANS_PROCESS_ROLE" in os.environ:
         raise RuntimeError("Legacy model calls are unavailable in dedicated OnlyFans roles")
     mdl, prov = _resolve(model)
+    # P2-I7: the trusted Telegram policy gate. The full decision - trusted
+    # billing account, enabled purpose, configured model and allowed provider -
+    # is resolved HERE, before the credential lookup, the cap reservation, the
+    # audit row and the HTTP request, so a refused call has no side effects at
+    # all. Outside the policy this is a no-op and the OnlyFans path is unchanged.
+    refusal = telegram_call_refusal(purpose, model, account_id)
+    if refusal:
+        raise LLMConfigError(refusal)
     # Before the cap reservation and the audit row, exactly where the old
     # combined _resolve raised: a call with no usable credential must cost
     # neither a cap slot nor a grok_calls row. Same for an effort string the

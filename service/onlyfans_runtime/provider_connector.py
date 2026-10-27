@@ -12,17 +12,51 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import math
 import re
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urlsplit
 
 from of_signer import sign
+from transaction_contract import transaction_marker
 from onlyfans_read.contract import ID_PATTERN
 from .native_connector import NativeLoopbackConnector
-from .native_protocol import API_PATH, MAX_BYTES, NativeProtocolError, acceptance, request
+from .native_protocol import API_PATH, MAX_BYTES, MAX_VAULT_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, acceptance, request, load
 from .store import Refused, _id
 from .text_delivery import Dispatch, TextAuthority
 
 ORIGIN = "https://onlyfans.com"
 APP_TOKEN = "33d57ade8c02dbc5a333db99ff9ae26a"
+
+
+class NativeAuthenticationError(NativeProtocolError):
+    """The provider rejected authentication or returned another account."""
+
+
+class NativeRateLimitError(NativeProtocolError):
+    """Bounded non-secret pacing hint, shared by every provider read owner."""
+    def __init__(self, retry_after=60):
+        self.retry_after = min(3600, max(1, int(retry_after)))
+        super().__init__('native provider rate limit')
+
+
+class NativeReadTransientError(NativeProtocolError):
+    """A read-only request may retry its same checkpoint after bounded backoff."""
+    def __init__(self, retry_after=5):
+        self.retry_after = min(3600, max(1, int(retry_after)))
+        super().__init__('native provider read temporarily unavailable')
+
+
+def _rate_limit_seconds(value):
+    try:
+        if type(value) is not str or len(value) > 128:
+            return 60
+        if value.isascii() and value.isdecimal():
+            return min(3600, max(1, int(value)))
+        stamp = parsedate_to_datetime(value)
+        if stamp.tzinfo is None:
+            return 60
+        return min(3600, max(1, math.ceil((stamp - datetime.now(timezone.utc)).total_seconds())))
+    except (TypeError, ValueError, OverflowError):
+        return 60
 
 
 def validate_cdn_url(url):
@@ -165,15 +199,18 @@ class NativeProviderConnector(NativeLoopbackConnector):
     the one-use marker before the only POST. Identity checks precede it. Live
     account activation and credential custody belong to the deployment owner.
     """
-    def __init__(self, session, *, timeout_seconds=5, max_response_bytes=MAX_BYTES):
+    def __init__(self, session, *, timeout_seconds=5, max_response_bytes=MAX_BYTES,
+                 max_vault_response_bytes=MAX_VAULT_BYTES):
         if type(session) is not NativeProviderSession:
             raise Refused("an explicit account-bound native session is required")
         if (type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds)
                 or not .05 <= timeout_seconds <= 10
-                or type(max_response_bytes) is not int or not 1 <= max_response_bytes <= MAX_BYTES):
+                or type(max_response_bytes) is not int or not 1 <= max_response_bytes <= MAX_BYTES
+                or type(max_vault_response_bytes) is not int or not 1 <= max_vault_response_bytes <= MAX_VAULT_BYTES):
             raise Refused("invalid native HTTPS resource bound")
         self._handle = session
         self._timeout, self._max_bytes = float(timeout_seconds), max_response_bytes
+        self._vault_max_bytes = max_vault_response_bytes
 
     @property
     def account_id(self):
@@ -206,7 +243,17 @@ class NativeProviderConnector(NativeLoopbackConnector):
         elif (not re.fullmatch(re.escape(API_PATH) + r"/chats/[1-9][0-9]*/messages", target.path)
               or target.query or not body):
             raise Refused("unsupported native HTTPS write")
+        if method == "GET" and target.path == API_PATH + "/vault/media":
+            return self._signed_request(method, path, body, max_response_bytes=self._vault_max_bytes)
+        if method == "GET" and (target.path == API_PATH + "/chats" or re.fullmatch(
+                re.escape(API_PATH) + r"/chats/[1-9][0-9]*/messages", target.path)):
+            return self._signed_request(method, path, body, max_response_bytes=MAX_HISTORY_BYTES)
         return self._signed_request(method, path, body)
+
+    def verify_identity(self):
+        value = load(self._call("GET", API_PATH + "/users/me"))
+        if type(value.get("id")) is not int or value["id"] != self._handle.owner_id:
+            raise NativeAuthenticationError("native provider owner mismatch")
 
     def _signed_request(self, method, path, body=b"", *, max_response_bytes=None,
                         accepted_statuses=(200,), with_status=False):
@@ -247,6 +294,12 @@ class NativeProviderConnector(NativeLoopbackConnector):
                     proxy=self._handle.proxy_url, timeout=self._timeout,
                     allow_redirects=False, verify=True, accept_encoding="identity",
                     content_callback=bounded, discard_cookies=True)
+                if response.status_code in {401, 403}:
+                    raise NativeAuthenticationError("native provider rejected authentication")
+                if response.status_code == 429:
+                    raise NativeRateLimitError(_rate_limit_seconds(response.headers.get('retry-after')))
+                if method == "GET" and response.status_code in {408, 425, 500, 502, 503, 504}:
+                    raise NativeReadTransientError()
                 if response.status_code not in accepted_statuses:
                     raise NativeProtocolError("native HTTPS status is not delivery evidence")
                 if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
@@ -262,14 +315,17 @@ class NativeProviderConnector(NativeLoopbackConnector):
         except Exception:
             # curl errors may contain authenticated proxy URLs or response
             # bodies. Never propagate those to logs/API/worker observations.
+            if method == "GET":
+                raise NativeReadTransientError() from None
             raise NativeProtocolError("native HTTPS request outcome is uncertain") from None
 
     def vault_page(self, *, offset, limit=24):
         """Read one bounded selected-account vault page, without importing it.
 
         The vault job owner validates the full page and persists catalogue
-        metadata. No download URL, media body or provider schema is inferred by
-        this transport, and the fixed native response byte budget still applies.
+        metadata. Vault reads have a separate explicit 1 MiB maximum because signed
+        media URLs make these pages larger than message responses. Message and
+        receipt reads keep their existing 64 KiB budget.
         """
         self._ready()
         if (type(offset) is not int or not 0 <= offset <= 1000000
@@ -280,13 +336,49 @@ class NativeProviderConnector(NativeLoopbackConnector):
             {"limit":limit,"offset":offset,"sort":"desc","field":"recent","list":"all"})
         return self._call("GET", path)
 
-    def still_bytes(self, url):
+    def posts_page(self, *, before_marker=None, limit=10):
+        """One bounded page of this creator's own feed posts, newest first.
+
+        Verified read-only on 23 Oct 2026: the endpoint parses the request body
+        as JSON, so the GET carries "{}" (an empty body is refused with 400).
+        The page returns headMarker/tailMarker; older pages pass the tail marker
+        as beforePublishTime (the web client's convention, not yet re-verified).
+        """
+        self._ready()
+        if (type(limit) is not int or not 1 <= limit <= 10
+                or before_marker is not None and (type(before_marker) is not str
+                    or re.fullmatch(r"[0-9]{1,12}(\.[0-9]{1,6})?", before_marker) is None)):
+            raise Refused("invalid bounded native posts page")
+        self.verify_identity()
+        params = {"limit": limit, "order": "publish_date_desc", "skip_users": "all", "format": "infinite",
+                  "pinned": 0, "counters": 0}
+        if before_marker is not None:
+            params["beforePublishTime"] = before_marker
+        return self._signed_request("GET", API_PATH + f"/users/{self._handle.owner_id}/posts?" + urlencode(params),
+                                    b"{}", max_response_bytes=self._vault_max_bytes)
+
+    def post_by_id(self, post_id):
+        """Bounded read of one known creator-post source, including explicit 404.
+
+        Callers validate the returned identity/owner and hold their account read
+        lease through the resulting domain commit. Missing list rows alone are
+        never treated as proof of deletion.
+        """
+        self._ready()
+        _id(post_id)
+        self.verify_identity()
+        return self._signed_request("GET", API_PATH + f"/posts/{post_id}", b"{}",
+            max_response_bytes=self._vault_max_bytes, accepted_statuses=(200, 404), with_status=True)
+
+    def still_bytes(self, url, *, timeout_seconds=2):
         """One credential-free CDN image GET, through this account's fixed proxy.
 
         URLs come only from a validated vault page, never from an HTTP caller.
         No cookies/signing headers, redirects, decompression or retries. The
         permanent still store owns format detection and its existing byte cap.
         """
+        if type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds) or not .05 <= timeout_seconds <= 10:
+            raise NativeProtocolError("invalid native image timeout")
         self._ready()
         self._handle.current()
         from vault_still_store import MAX_STILL_BYTES, image_type
@@ -305,7 +397,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 response = client.request("GET", url,
                     headers={"Accept": "image/jpeg,image/png,image/webp,image/gif", "Accept-Encoding": "identity",
                              "User-Agent": self._handle.user_agent, "Referer": ORIGIN + "/"},
-                    proxy=self._handle.proxy_url, timeout=min(self._timeout, 2),
+                    proxy=self._handle.proxy_url, timeout=min(self._timeout, timeout_seconds),
                     allow_redirects=False, verify=True, accept_encoding="identity",
                     content_callback=bounded, discard_cookies=True)
                 data = b"".join(chunks)
@@ -320,18 +412,27 @@ class NativeProviderConnector(NativeLoopbackConnector):
         except Exception:
             raise NativeProtocolError("native image read is unavailable") from None
 
-    def transaction_page(self, *, offset, limit=20, start, end):
+    def transaction_page(self, *, offset, limit=20, start, end, history=False, marker=None):
         """Reuse the legacy ledger endpoint with frozen UTC bounds and no retries."""
         self._ready()
-        if (type(offset) is not int or not 0 <= offset <= 10000
+        if (type(offset) is not int or not 0 <= offset <= (1000000000 if history is True else 10000)
                 or type(limit) is not int or not 1 <= limit <= 20
                 or type(start) is not datetime or type(end) is not datetime
                 or start.tzinfo is not None or end.tzinfo is not None
-                or not timedelta(0) <= end - start <= timedelta(days=90)):
+                or type(history) is not bool
+                or start < datetime(1970, 1, 1)
+                or not timedelta(0) <= end - start <= timedelta(days=60000 if history else 90)):
             raise Refused("invalid bounded native ledger page")
+        params = {"limit": limit, "start": start.isoformat() + "Z", "end": end.isoformat() + "Z"}
+        if marker is None:
+            params["offset"] = offset
+        else:
+            try:
+                params["marker"] = transaction_marker(marker)
+            except (ValueError, UnicodeError):
+                raise Refused("invalid bounded native ledger marker") from None
         self.verify_identity()
-        path = API_PATH + "/payouts/transactions?" + urlencode({"limit": limit, "offset": offset,
-            "start": start.isoformat() + "Z", "end": end.isoformat() + "Z"})
+        path = API_PATH + "/payouts/transactions?" + urlencode(params)
         return self._call("GET", path)
 
     def send(self, dispatch, *, authority, tenant_id):

@@ -16,6 +16,8 @@ from onlyfans_read.contract import conversation_id_for
 from onlyfans_runtime.text_delivery import TextAuthority, SyntheticTextTransport
 
 
+from onlyfans_runtime.ledger import _coverage_receipt
+
 def context(database, monkeypatch, *, mode="human_controlled", enabled=True):
     from onlyfans_commands.api import router
     from onlyfans_commands.settings import HEADER, SCHEMA
@@ -141,8 +143,22 @@ def test_paid_manual_api_uses_native_wire_without_model_or_purchase(database, mo
     payload = {**body, "catalogItemId": item}
     calls, requests = fake_requests(database, monkeypatch)
     with TestClient(app) as client:
+        assert client.post(url, headers=headers, json=payload).status_code == 409, "Native media waits for fresh ledger coverage"
+        from datetime import timedelta
+        from db.onlyfans_models import OfRuntime
+        from db.onlyfans_ledger_models import OfLedgerScan
+        from onlyfans_runtime.store import utcnow
+        from test_onlyfans_provider_adapters import OWNER
+        with Session(database[1]) as s, s.begin():
+            now = utcnow()
+            s.add(OfLedgerScan(account_id=ACCOUNT, binding_id=s.get(OfRuntime, ACCOUNT).binding_id,
+                owner_id=OWNER, connection_revision=1, window_start=now-timedelta(days=90),
+                window_end=now, page_offset=0, status="idle", next_poll_at=now+timedelta(minutes=1),
+                last_complete_at=now, last_full_at=now, updated_at=now))
+            s.flush()
+            scan=s.get(OfLedgerScan,ACCOUNT);scan.coverage_json=_coverage_receipt(scan)
         queued = client.post(url, headers=headers, json=payload)
-        assert queued.status_code == 200
+        assert queued.status_code == 200, queued.text
         ack = queued.json()
         assert ack["outcome"] == "queued"
         assert client.post(url, headers=headers, json=payload).json() == ack

@@ -1,0 +1,265 @@
+{
+  "activation-proof.json": {
+    "sha256": "8c0b8d62f62f661d6ad0a4a813ad86d1de932f8179f8820d49b47dfc2b943187",
+    "data": {
+      "at": "2026-10-27T19:45:08.999144+00:00",
+      "backend": "293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+      "dashboard": "4599999761dbf2ff2b517359642d10262324867a",
+      "schema": "0097_release_controls",
+      "roles": [
+        {
+          "name": "twin-onlyfans-api-1",
+          "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+          "container": "74b289309c17f0b29e0467ceaa4c1c4d6500ca6eb0c80c19b3bbda095ccf67e2",
+          "verifiedPythonFiles": 712,
+          "restartCount": 0
+        },
+        {
+          "name": "twin-onlyfans-fastt-supervisor-1",
+          "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+          "container": "72608137f731e3cfb63837a4014100af41f45eb003f16705042ab122a6d6fe76",
+          "verifiedPythonFiles": 712,
+          "restartCount": 0
+        }
+      ],
+      "ready": {
+        "ok": true,
+        "role": "api",
+        "schemaReady": true
+      },
+      "restoredExistingAutomation": true,
+      "releaseMode": "restricted-existing-chats",
+      "accountsResumed": [
+        "of-176774528",
+        "of-99421145"
+      ],
+      "excludedAccount": "of-323358988",
+      "publicLaunchApproved": false,
+      "financialCoverageCertified": false,
+      "manualFanTestsSent": false,
+      "accountControlsChanged": false,
+      "dailyLimit": 2000
+    }
+  },
+  "post-deploy-proof.json": {
+    "sha256": "f2c9c7b0f061b315fa5579ff80e910526f3162d1a56658beb5f7604f0fb65c97",
+    "data": {
+      "at": "2026-10-27T19:45:47.375436+00:00",
+      "since": "2026-10-27T19:45:08.999144+00:00",
+      "roles": [
+        {
+          "name": "twin-onlyfans-api-1",
+          "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+          "restartCount": 0,
+          "tracebacks": 0,
+          "schemaMismatch": 0,
+          "oom": false
+        },
+        {
+          "name": "twin-onlyfans-worker-1",
+          "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+          "restartCount": 0,
+          "tracebacks": 0,
+          "schemaMismatch": 0,
+          "oom": false
+        },
+        {
+          "name": "twin-onlyfans-fastt-supervisor-1",
+          "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+          "restartCount": 0,
+          "tracebacks": 0,
+          "schemaMismatch": 0,
+          "oom": false
+        },
+        {
+          "name": "twin-onlyfans-managed-proxy-1",
+          "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+          "restartCount": 0,
+          "tracebacks": 0,
+          "schemaMismatch": 0,
+          "oom": false
+        },
+        {
+          "name": "twin-onlyfans-creator-sign-in-1",
+          "image": "sha256:b63d926bf03c7b6abe5a52c9bfa77b4d6821d7543d16ec1ab64155c1dc925b6e",
+          "restartCount": 0,
+          "tracebacks": 0,
+          "schemaMismatch": 0,
+          "oom": false
+        },
+        {
+          "name": "next-app",
+          "image": "sha256:fccf205a34fe002c6344062305128f6b302a2e1e0c5d92caf7beac30d2a79c95",
+          "restartCount": 0,
+          "tracebacks": 0,
+          "schemaMismatch": 0,
+          "oom": false
+        }
+      ],
+      "runtime": {
+        "schema": "0097_release_controls",
+        "accounts": [
+          {
+            "account_id": "of-176774528",
+            "enabled": true
+          },
+          {
+            "account_id": "of-323358988",
+            "enabled": true
+          },
+          {
+            "account_id": "of-87030857",
+            "enabled": false
+          },
+          {
+            "account_id": "of-99421145",
+            "enabled": true
+          }
+        ],
+        "sendAttemptStates": [
+          {
+            "state": "delivery_unknown",
+            "count": 1
+          },
+          {
+            "state": "refused",
+            "count": 1
+          },
+          {
+            "state": "sent",
+            "count": 742
+          }
+        ],
+        "recentReceipts": [],
+        "recentInputStates": []
+      },
+      "publicLoginStatus": 200,
+      "manualFanTestsSent": false,
+      "controlledPaidJourneyVerified": false
+    }
+  },
+  "scoped-resumption-decision.json": {
+    "sha256": "fffec11a02643d01544c432e2e2e48768050fa48b615860f67a4d0a78de6b125",
+    "data": {
+      "at": "2026-10-27T19:44:51.934616+00:00",
+      "accounts": [
+        "of-176774528",
+        "of-99421145"
+      ],
+      "existingAutomatedChats": 8,
+      "excludedAccount": "of-323358988",
+      "scopeRestricted": true,
+      "paymentHoldsCleared": false,
+      "financialCoverageCertified": false,
+      "publicLaunchApproved": false
+    }
+  },
+  "existing-automation-scope-proof.json": {
+    "sha256": "635dc135bbd7d5479775b17fd9ead5336f4a0242a23964c7947adc33923e2f6d",
+    "data": {
+      "enabledConversations": [
+        {
+          "account_id": "of-323358988",
+          "count": 610
+        },
+        {
+          "account_id": "of-176774528",
+          "count": 4
+        },
+        {
+          "account_id": "of-99421145",
+          "count": 4
+        }
+      ],
+      "unlinkedInEnabledConversations": [
+        {
+          "account_id": "of-323358988",
+          "count": 3
+        }
+      ],
+      "pendingHumanSends": [],
+      "uncertainStates": [
+        {
+          "mode": "paused",
+          "takeover_state": "none",
+          "requires_attention": true,
+          "count": 19858
+        },
+        {
+          "mode": "human_controlled",
+          "takeover_state": "effective",
+          "requires_attention": true,
+          "count": 6
+        },
+        {
+          "mode": "automated",
+          "takeover_state": "none",
+          "requires_attention": true,
+          "count": 617
+        }
+      ],
+      "at": "2026-10-27T19:42:10.433814+00:00"
+    }
+  },
+  "supervisor-live-proof.json": {
+    "sha256": "dde1c4668b45121912eb48216a00e5601db7a44d5d8d313a850bff2b31659128",
+    "data": {
+      "accounts": {
+        "of-176774528": {
+          "config": "5442090a807b",
+          "fan": "*",
+          "reason": null,
+          "restarts": 0,
+          "state": "running"
+        },
+        "of-99421145": {
+          "config": "2f7fd8995b1a",
+          "fan": "*",
+          "reason": null,
+          "restarts": 0,
+          "state": "running"
+        }
+      },
+      "interval_s": 30,
+      "updated_at": "2026-10-27T19:45:28Z"
+    }
+  },
+  "sender-startup-proof.json": {
+    "sha256": "ca43b721e33a7a5154ac2bbb71ac4eea53fade410065e4c65da46ffe018cd43b",
+    "data": {
+      "at": "2026-10-27T19:47:06.880628+00:00",
+      "handles": {
+        "of-176774528": "niickybabyfree",
+        "of-99421145": "imnaominorth",
+        "of-323358988": "minimai"
+      },
+      "events": [
+        {
+          "event": "supervisor-start"
+        },
+        {
+          "event": "child-start",
+          "account": "of-176774528",
+          "scope": "all-fans"
+        },
+        {
+          "event": "child-start",
+          "account": "of-99421145",
+          "scope": "all-fans"
+        },
+        {
+          "event": "child",
+          "account": "of-176774528"
+        },
+        {
+          "event": "child",
+          "account": "of-99421145"
+        },
+        {
+          "event": "child",
+          "account": "of-99421145"
+        }
+      ]
+    }
+  }
+}

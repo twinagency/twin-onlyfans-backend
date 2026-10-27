@@ -173,6 +173,18 @@ MODELS: dict[str, LLMModel] = {
         input_per_1k_cents=0.044, input_cache_hit_per_1k_cents=0.0014,
         output_per_1k_cents=0.132, reasoning_body=_body(thinking={"type": "disabled"}),
     ),
+    # Pilot parity (twin-bot deploy/telegram-worker/apply_private_model.py):
+    # pinned providers, no fallbacks, reasoning off. Priced at the conservative
+    # full-input bound; no cache saving assumed.
+    "openrouter/deepseek-v4.1-flash": LLMModel(
+        "openrouter/deepseek-v4.1-flash", "openrouter",
+        api_model="deepseek/deepseek-v4.1-flash",
+        input_per_1k_cents=0.044, input_cache_hit_per_1k_cents=0.044,
+        output_per_1k_cents=0.132,
+        reasoning_body=_body(reasoning={"enabled": False},
+                             provider={"allow_fallbacks": False, "only": ["deepinfra/fp8", "together"],
+                                       "order": ["deepinfra/fp8", "together"]}),
+    ),
     "deepseek-v4-pro": LLMModel(
         "deepseek-v4-pro", "deepseek",
         input_per_1k_cents=0.132, input_cache_hit_per_1k_cents=0.0044,
@@ -262,6 +274,37 @@ MODELS: dict[str, LLMModel] = {
         # No `effort_choices`: z.ai accepts the string on this model and ignores
         # it, so offering it would be offering a setting that does nothing.
         reasoning_body=_body(thinking={"type": "disabled"}),
+    ),
+    # ── OpenRouter (P2-I7, Telegram/Twin context) ───────────────────────
+    # The Telegram worker serves its model calls through the deployment's existing
+    # OpenRouter account. `api_model` is the OpenRouter WIRE id (vendor-prefixed);
+    # the internal `id` is what the injected Telegram purpose map names, so a
+    # purpose never has to spell an upstream vendor path.
+    #
+    # ⚠️ PRICE SEEDS ARE UNVERIFIED FOR OPENROUTER. They are copied from the
+    # direct-provider entries above purely so the registry has a value; that is
+    # NOT a conservative cap bound. OpenRouter bills the upstream rate PLUS its
+    # own fee, so the true rate is >= the seed — a cap metered at the seed can
+    # therefore UNDER-count and let a sweep run past a limit that was never real,
+    # which is exactly the failure the seeds in this file exist to prevent.
+    # Verify the live OpenRouter rate for each model (and the provider's
+    # acceptance of the wire id and reasoning body) and replace these seeds
+    # BEFORE any paid activation. Neither entry changes an OnlyFans route unless
+    # an operator explicitly selects it.
+    "openrouter/deepseek-v4-flash": LLMModel(
+        "openrouter/deepseek-v4-flash", "openrouter",
+        api_model="deepseek/deepseek-v4-flash",
+        input_per_1k_cents=0.044, input_cache_hit_per_1k_cents=0.0014,
+        output_per_1k_cents=0.132,
+        reasoning_body=_body(thinking={"type": "disabled"}),
+    ),
+    # Vision + copy role for the P3A media pipeline. Registered here so the native
+    # provider/model resolver can name them, but the Telegram policy keeps their
+    # purposes DISABLED in P2: nothing calls them until P3A enables them.
+    "openrouter/qwen3-vl-30b": LLMModel(
+        "openrouter/qwen3-vl-30b", "openrouter",
+        api_model="qwen/qwen3-vl-30b-a3b-instruct",
+        input_per_1k_cents=0.015, output_per_1k_cents=0.06, vision_ok=True,
     ),
 }
 

@@ -1,5 +1,5 @@
 """Small measured synthetic rehearsal; not a production capacity certification."""
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import multiprocessing
@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import time
 
-from sqlalchemy import create_engine, select, func, text
+from sqlalchemy import create_engine, event as sqlalchemy_event, select, func, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 import pytest
@@ -62,6 +62,67 @@ def report(name, value):
         path = Path(folder)
         path.mkdir(parents=True, exist_ok=True)
         (path / (name + ".json")).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+@pytest.mark.parametrize("account_scope", [None, ("race-first",)])
+def test_claim_rechecks_exhausted_account_without_losing_fairness_or_scope(database, account_scope):
+    """Pause the eligibility snapshot before its runtime lock, then drain it."""
+    url, engine = database
+    waiting = seed(url, engine, "race-first")
+    competitor = seed(url, engine, "race-next")
+    for account in ("race-first", "race-next"):
+        assert waiting.record("tenant-a", account, event()) == "accepted"
+        assert waiting.drain("tenant-a", account) == 1
+    due(engine)
+    barrier_key = 8312347
+    with engine.begin() as c:
+        c.exec_driver_sql("""CREATE FUNCTION claim_snapshot_barrier() RETURNS boolean
+            LANGUAGE plpgsql VOLATILE AS $$ BEGIN
+            PERFORM pg_advisory_xact_lock(8312347); RETURN true; END $$""")
+
+    pause_once = True
+    def pause_selection(connection, cursor, statement, parameters, context, executemany):
+        nonlocal pause_once
+        if pause_once and "FOR UPDATE OF of_runtime SKIP LOCKED" in statement:
+            pause_once = False
+            statement = statement.replace(" ORDER BY ", " AND claim_snapshot_barrier() ORDER BY ", 1)
+        return statement, parameters
+
+    sqlalchemy_event.listen(waiting.engine, "before_cursor_execute", pause_selection, retval=True)
+    try:
+        with engine.connect() as gate, ThreadPoolExecutor(max_workers=1) as pool:
+            gate.execute(text("SELECT pg_advisory_lock(:key)"), {"key": barrier_key})
+            future = pool.submit(waiting.claim, "tenant-a", account_ids=account_scope)
+            try:
+                deadline = time.monotonic() + 10
+                while not gate.scalar(text("""SELECT EXISTS (SELECT FROM pg_locks
+                        WHERE locktype='advisory' AND objid=:key AND NOT granted)"""), {"key": barrier_key}):
+                    assert time.monotonic() < deadline, "claim did not reach its eligibility snapshot barrier"
+                    time.sleep(.01)
+                # This real competing worker changes the work after the waiting
+                # SELECT took its snapshot, before it acquires the runtime lock.
+                first = competitor.claim("tenant-a", account_ids=("race-first",))
+                assert first and first.account_id == "race-first"
+                competitor.complete("tenant-a", first)
+            finally:
+                gate.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": barrier_key})
+            next_claim = future.result(timeout=10)
+        if account_scope is None:
+            assert next_claim and next_claim.account_id == "race-next"
+        else:
+            assert next_claim is None, "an exhausted scoped account must not claim another account"
+            next_claim = competitor.claim("tenant-a")
+            assert next_claim and next_claim.account_id == "race-next"
+        competitor.complete("tenant-a", next_claim)
+        assert waiting.claim("tenant-a") is None
+        with Session(engine) as s:
+            work = s.scalars(select(OfWork).order_by(OfWork.account_id)).all()
+            # One generation for accepted input and one for its sole claim.
+            assert len(work) == 2 and all(row.status == "done" and row.generation == 2 for row in work)
+    finally:
+        sqlalchemy_event.remove(waiting.engine, "before_cursor_execute", pause_selection)
+        waiting.close()
+        competitor.close()
 
 
 def test_measured_account_fairness_competing_processes_and_real_db_outage(database):

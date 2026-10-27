@@ -437,4 +437,14 @@ def status() -> dict:
     return out
 
 
-_adopt_legacy_file()
+# OFFLINE/TEST ISOLATION (P2-I7). This is the LAST import-time file access on the
+# native path: the one-way legacy-store migration below reads the pre-mount
+# `secrets.json` and copies it into the durable directory. An isolated process
+# (TWIN_FASTT_CONFIG_ISOLATED=1, set before the native import) must not touch any
+# secret file at all, so the migration is skipped there. The variable is unset in
+# every deployment, so ordinary OnlyFans startup still adopts the legacy store.
+_LEGACY_ADOPTION_SKIPPED = False
+if os.environ.get("TWIN_FASTT_CONFIG_ISOLATED") == "1":
+    _LEGACY_ADOPTION_SKIPPED = True
+else:
+    _adopt_legacy_file()

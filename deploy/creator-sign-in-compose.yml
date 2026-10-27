@@ -20,6 +20,8 @@ services:
     environment:
       ONLYFANS_SIGNIN_TOKEN: ${ONLYFANS_SIGNIN_TOKEN:?Set a distinct private sign-in token}
       ONLYFANS_SIGNIN_MAX_BROWSERS: 1
+      ONLYFANS_MANAGED_PROXY_BASE_URL: http://managed-proxy:8791
+      ONLYFANS_MANAGED_PROXY_TOKEN: ${ONLYFANS_MANAGED_PROXY_TOKEN:?Set the existing private broker token}
       PORT: 8479
     expose: ['8479']
     healthcheck:

@@ -13,7 +13,8 @@ from test_onlyfans_connections_pg import verified, TENANT
 from test_onlyfans_provider_adapters import OWNER
 from test_onlyfans_media_pg import manual, intent
 from test_onlyfans_text_delivery_pg import ACCOUNT, FAN
-from db.models import Fan, Message, Transaction, VaultSend
+from db.models import Fan, Message, Transaction, VaultSend, OfCreatorBinding
+from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan
 from onlyfans_runtime.commerce import held
@@ -33,7 +34,9 @@ def transaction(**changes):
 
 
 def payload(rows, more=False):
-    return json.dumps({"list": rows, "hasMore": more}).encode()
+    value = {"list": rows, "hasMore": more}
+    if more:value["nextMarker"] = str(rows[-1].get("id", "invalid")) if rows else "empty"
+    return json.dumps(value).encode()
 
 
 def parsed(row):
@@ -67,6 +70,66 @@ def record(store, account, observation):
         return apply_observation(s, account, observation, now=utcnow())
 
 
+@pytest.mark.parametrize("status,spend", [("pending", 1000), ("cleared", 1000),
+    ("failed", 0), ("refunded", 0), ("chargedback", 0)])
+def test_missing_message_retains_verified_money_without_purchase_rights(database, monkeypatch, status, spend):
+    store, account, _ = verified(database, monkeypatch)
+    observation = parsed(transaction(messageId=123, net="8.00", fee="2.00", createdAt=utcnow().isoformat() + "Z"))
+    observation["status"] = status
+    assert record(store, account, observation) == "applied"
+    assert record(store, account, observation) == "duplicate"
+    with Session(database[1]) as s:
+        tx = s.scalar(select(Transaction))
+        assert (tx.provider_transaction_id, tx.amount_cents, tx.currency, tx.status) == ("native-tx-1", 1000, "USD", status)
+        assert (tx.net_cents, tx.fee_cents, tx.message_id) == (800, 200, None)
+        assert json.loads(tx.raw_json)["message_id"] == 123
+        assert s.get(Fan, (account, 101)).lifetime_spend_cents == spend
+        evidence = s.scalar(select(OfLedgerEvidence))
+        assert evidence.outcome == "applied" and evidence.transaction_id == tx.id
+        assert s.scalar(select(func.count()).select_from(OfLedgerEvidence)) == 1
+        assert s.scalar(select(func.count()).select_from(Message)) == 0
+        assert s.scalar(select(func.count()).select_from(VaultSend)) == 0
+        assert held(s, account) is (spend > 0), "current unpaid linkage holds selling without hiding verified money"
+    store.close()
+
+
+@pytest.mark.parametrize("field,value", [("fan_id", 102), ("kind", "tip"),
+    ("amount_cents", 1001), ("currency", "AUD"), ("message_id", 124),
+    ("occurred_at", "2026-01-01T00:00:00")])
+def test_unlinked_receipt_cannot_change_its_immutable_identity(database, monkeypatch, field, value):
+    store, account, _ = verified(database, monkeypatch)
+    observation = parsed(transaction(messageId=123))
+    assert record(store, account, observation) == "applied"
+    assert record(store, account, {**observation, "status": "refunded", field: value}) == "conflict"
+    with Session(database[1]) as s:
+        tx = s.scalar(select(Transaction))
+        assert (tx.fan_id, tx.kind, tx.amount_cents, tx.currency, tx.status) == (101, "ppv_message", 1000, "USD", "cleared")
+        assert tx.occurred_at.isoformat() == observation["occurred_at"] and tx.message_id is None
+        assert json.loads(tx.raw_json)["message_id"] == 123
+        assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1000
+        assert s.scalar(select(func.count()).select_from(Transaction)) == 1
+        assert held(s, account)
+    store.close()
+
+
+def test_unlinked_reversal_keeps_exact_money_and_retained_message_identity(database, monkeypatch):
+    store, account, _ = verified(database, monkeypatch)
+    observation = parsed(transaction(messageId=123, net="8.00", fee="2.00"))
+    assert record(store, account, observation) == "applied"
+    reversal = {**observation, "status": "refunded", "message_id": None, "net_cents": None, "fee_cents": None}
+    assert record(store, account, reversal) == "applied"
+    assert record(store, account, reversal) == "duplicate"
+    assert record(store, account, {**observation, "description": "Payment for message from stale display"}) == "stale"
+    with Session(database[1]) as s:
+        tx = s.scalar(select(Transaction))
+        assert (tx.status, tx.amount_cents, tx.net_cents, tx.fee_cents, tx.message_id) == ("refunded", 1000, 800, 200, None)
+        assert json.loads(tx.raw_json)["message_id"] == 123
+        assert s.get(Fan, (account, 101)).lifetime_spend_cents == 0
+        assert s.scalar(select(func.count()).select_from(Transaction)) == 1
+        assert s.scalar(select(func.count()).select_from(VaultSend)) == 0
+    store.close()
+
+
 def test_duplicate_pending_cleared_refund_and_stale_page_change_money_once(database, monkeypatch):
     store, account, _ = verified(database, monkeypatch)
     row = transaction(); row["status"] = "loading"
@@ -92,7 +155,9 @@ def test_duplicate_pending_cleared_refund_and_stale_page_change_money_once(datab
 
 def test_unlinked_paid_media_holds_sales_and_changed_amount_is_a_conflict(database, monkeypatch):
     store, account, _ = verified(database, monkeypatch)
-    observation = parsed(transaction())
+    # This is a purchase during the current binding, rather than the default
+    # history fixture (one minute before this newly provisioned binding).
+    observation = parsed(transaction(createdAt=utcnow().isoformat() + "Z"))
     assert record(store, account, observation) == "applied"
     with Session(database[1]) as s:
         assert held(s, account)
@@ -102,6 +167,32 @@ def test_unlinked_paid_media_holds_sales_and_changed_amount_is_a_conflict(databa
     with Session(database[1]) as s:
         assert s.scalar(select(Transaction.amount_cents)) == 1000
         assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1000
+        assert held(s, account)
+    store.close()
+
+
+@pytest.mark.parametrize("offset_us,expected_hold", [(-1, False), (0, True), (1, True)])
+def test_unlinked_purchase_hold_starts_at_current_binding_boundary(database, monkeypatch, offset_us, expected_hold):
+    store, account, _ = verified(database, monkeypatch)
+    with Session(database[1]) as s:
+        runtime = s.get(OfRuntime, account)
+        binding_created = s.get(OfCreatorBinding, runtime.binding_id).created_at
+    occurred = binding_created + timedelta(microseconds=offset_us)
+    observation = parsed(transaction(createdAt=occurred.isoformat() + "Z"))
+    assert record(store, account, observation) == "applied"
+    with Session(database[1]) as s:
+        assert held(s, account) is expected_hold
+        assert s.scalar(select(Transaction.message_id)) is None
+        assert s.scalar(select(Transaction.occurred_at)) == occurred
+        # Historical exemption affects the hold, never the retained purchase
+        # evidence or the fan's canonical spending total.
+        assert s.scalar(select(func.count()).select_from(OfLedgerEvidence)) == 1
+        assert s.get(Fan, (account, 101)).lifetime_spend_cents == 1000
+    if not expected_hold:
+        # Conflicting financial evidence still holds even an old purchase.
+        assert record(store, account, {**observation, "amount_cents": 1100}) == "conflict"
+        with Session(database[1]) as s:
+            assert held(s, account)
     store.close()
 
 
@@ -218,6 +309,9 @@ def test_expired_lease_is_recovered_and_old_reader_cannot_commit(database, monke
         assert entered.wait(10)
         with database[1].begin() as c:
             c.exec_driver_sql("UPDATE of_ledger_scan SET lease_until=CURRENT_TIMESTAMP-INTERVAL '1 second'")
+            # A takeover requires expiry of both the domain checkpoint and the
+            # shared account read lease introduced for cross-worker fencing.
+            c.exec_driver_sql("UPDATE of_provider_read_budget SET lease_until=CURRENT_TIMESTAMP-INTERVAL '1 second'")
         assert process_ledger_pages(store, TENANT) == 1
         release.set()
         assert old.result(timeout=15) == 0
@@ -283,10 +377,9 @@ def test_populated_0083_upgrade_preserves_disabled_state_and_adds_checked_eviden
     from db.schema import check_schema, upgrade
     store, account, _ = verified(database, monkeypatch)
     with database[1].begin() as c:
-        # Recreate the published 0083 shape, including removal of newer media admission.
-        c.exec_driver_sql("DROP TABLE of_vault_media_job; DROP FUNCTION of_vault_media_guard()")
-        c.exec_driver_sql("DROP TABLE of_connection_enrollment; DROP TABLE of_vault_edit; DROP FUNCTION of_vault_edit_immutable(); DROP TABLE of_creator_facts_source; DROP TABLE of_ledger_evidence; DROP TABLE of_ledger_scan; DROP FUNCTION of_ledger_immutable()")
-        c.exec_driver_sql("UPDATE alembic_version SET version_num='0083_vault_management'")
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical = historical_schema(c, "0083_vault_management")
+        assert "of_ledger_scan" not in historical.tables and "of_ledger_evidence" not in historical.tables
         upgrade(c)
         check_schema(c)
     from db.onlyfans_models import OfRuntime

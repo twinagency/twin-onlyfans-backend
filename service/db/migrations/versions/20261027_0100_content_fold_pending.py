@@ -1,0 +1,19 @@
+"""Track changed canonical messages in the existing content-source owner."""
+from alembic import op
+revision="0095_content_fold_pending"
+down_revision="0094_purchase_reply"
+branch_labels=None
+depends_on=None
+
+def upgrade():
+    op.get_bind().exec_driver_sql('ALTER TABLE of_content_sync_source ADD COLUMN fold_pending boolean NOT NULL DEFAULT false')
+    op.get_bind().exec_driver_sql('CREATE INDEX ix_of_content_sync_source_fold_pending ON of_content_sync_source(account_id,binding_id,source_kind,source_id) WHERE fold_pending IS TRUE')
+    op.get_bind().exec_driver_sql("CREATE FUNCTION public.of_content_fold_pending() RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER SET search_path='' AS $$BEGIN\n  IF TG_OP = 'UPDATE' AND NEW.direction IS NOT DISTINCT FROM OLD.direction\n    AND NEW.media_ids IS NOT DISTINCT FROM OLD.media_ids\n    AND NEW.price_cents IS NOT DISTINCT FROM OLD.price_cents\n    AND NEW.is_unsent IS NOT DISTINCT FROM OLD.is_unsent\n    AND NEW.ingested_at IS NOT DISTINCT FROM OLD.ingested_at THEN\n    RETURN NEW;\n  END IF;\n  IF NEW.direction <> 'out' THEN RETURN NEW; END IF;\n  INSERT INTO public.of_content_sync_source\n    (account_id,binding_id,source_kind,source_id,fan_id,occurrence,source_unavailable,fold_pending)\n  SELECT NEW.account_id,r.binding_id,'message',NEW.message_id,NEW.fan_id,0,false,true\n    FROM public.of_runtime r WHERE r.account_id=NEW.account_id\n      AND (NEW.price_cents > 0 OR EXISTS (\n        SELECT 1 FROM public.of_content_sync_source s\n        WHERE s.account_id=NEW.account_id AND s.binding_id=r.binding_id\n          AND s.source_kind='message' AND s.source_id=NEW.message_id))\n  ON CONFLICT (account_id,binding_id,source_kind,source_id)\n  DO UPDATE SET fold_pending=true;\n  RETURN NEW;\nEND;$$")
+    op.get_bind().exec_driver_sql('CREATE TRIGGER of_content_fold_pending AFTER INSERT OR UPDATE ON messages FOR EACH ROW EXECUTE FUNCTION public.of_content_fold_pending()')
+    op.get_bind().exec_driver_sql("INSERT INTO of_content_sync_source\n(account_id,binding_id,source_kind,source_id,fan_id,occurrence,source_unavailable,fold_pending)\nSELECT m.account_id,r.binding_id,'message',m.message_id,m.fan_id,0,false,\n (j.status IS NULL OR j.status NOT IN ('pending','running')\n  OR m.message_id>coalesce(a.covered_through_message_id,j.upper_message_id,0)\n  OR m.ingested_at>j.requested_at)\nFROM messages m JOIN of_runtime r ON r.account_id=m.account_id\nLEFT JOIN of_content_sync_account a ON a.account_id=r.account_id AND a.binding_id=r.binding_id\nLEFT JOIN of_offer_import_job j ON j.account_id=a.account_id AND j.job_id=a.initial_job_id\nWHERE m.direction='out' AND m.price_cents>0\nON CONFLICT(account_id,binding_id,source_kind,source_id) DO NOTHING")
+    op.get_bind().exec_driver_sql("UPDATE of_content_sync_source s SET fold_pending=true\nFROM messages m JOIN of_runtime r ON r.account_id=m.account_id\nLEFT JOIN of_content_sync_account a ON a.account_id=r.account_id AND a.binding_id=r.binding_id\nLEFT JOIN of_offer_import_job j ON j.account_id=a.account_id AND j.job_id=a.initial_job_id\nWHERE s.account_id=m.account_id AND s.binding_id=r.binding_id\n AND s.source_kind='message' AND s.source_id=m.message_id AND m.direction='out'\n AND (m.price_cents>0 OR s.folded_at IS NOT NULL OR s.current_observation_id IS NOT NULL)\n AND (s.folded_at IS NULL OR s.folded_message_media_json IS DISTINCT FROM m.media_ids\n  OR s.folded_message_price_cents IS DISTINCT FROM m.price_cents\n  OR s.folded_message_unsent IS DISTINCT FROM m.is_unsent)\n AND (j.status IS NULL OR j.status NOT IN ('pending','running') OR s.folded_at IS NOT NULL\n  OR m.message_id>coalesce(a.covered_through_message_id,j.upper_message_id,0)\n  OR m.ingested_at>j.requested_at\n  OR (s.current_observation_id IS NOT NULL AND (m.is_unsent OR m.price_cents<=0)))")
+
+
+def downgrade():
+    raise RuntimeError("Retain pending source work; roll back with compatible code")
+

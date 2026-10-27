@@ -69,7 +69,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Literal, NamedTuple
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, true, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 import automation_executor as ax  # _make_client / lease / cooldown seams
@@ -82,7 +82,7 @@ from attribution import (
 from automation_registry import LEGACY_KINDS, register
 from db.engine import get_session
 from db.models import (
-    CATALOG_IS_SINGLE, AccountAiConfig, Blacklist, CatalogItem,
+    CATALOG_IS_SINGLE, AccountAiConfig, AutomationRun, Blacklist, CatalogItem,
     ContentOffer, Fan, FanProfile, LadderQuote, LadderState, MassRun, Message,
     PendingOffer, QuotaAudit, RhythmState, ScheduledJob, SkipList, Transaction,
     VaultSend, created_at_text, parse_ts,
@@ -131,6 +131,7 @@ from . import _sell_signal  # the model's own "he asked to buy" line (shadow)
 # second ceiling / a second ownership notion here is deliberate.
 from .ppv_send import price_bounds
 from ._common import (
+    HARD_SKIP_REASONS,
     CONTENT_ASK_RE, ESCALATION_RE, NONNATIVE_OUTPUTS, NONNATIVE_REGISTER,
     BIO_CONSISTENCY_GUARDRAIL,
     nonempty,
@@ -168,6 +169,7 @@ from .tip_reward_config import image_describe_flags
 # unit-tested without a DB, a FakeOF and a patched LLM — and so nothing in it can
 # reach back into this one.
 from . import _history_window
+from telegram_runtime.capabilities import active_telegram_capabilities
 # Deliberate sibling reuse — keeps the texting voice byte-compatible with
 # welcome_chatter_for_info instead of forking 500 lines of tuned style machinery.
 from .welcome_chatter_for_info import (
@@ -184,6 +186,99 @@ from .welcome_chatter_for_info import (
 )
 
 log = logging.getLogger("of-relay.automation.ai_chatter")
+
+
+# Telegram channel seam.  These wrappers are the only channel-aware additions
+# to the native engine: without an active capability snapshot they call the
+# original owners exactly as before.  With one installed, ai_chatter still owns
+# prompts, candidate gates, bubble shaping and attribution; the capability owns
+# only the channel/config/model/timing operations named by the P2 contract.
+async def _runtime_model(account_id: str, purpose: str, requested=None):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.resolve_model(account_id, purpose, requested)
+    return await resolve_model(account_id, purpose, requested)
+
+
+async def _runtime_chat(**kwargs):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.chat(**kwargs)
+    return await llm_client.chat(**kwargs)
+
+
+def _runtime_client(account_id: str):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return cap.make_client(account_id)
+    return ax._make_client(account_id)
+
+
+async def _runtime_enqueue(account_id: str, kind: str, **kwargs):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.enqueue_job(account_id, kind, **kwargs)
+    return await ax.enqueue_job(account_id, kind, **kwargs)
+
+
+async def _runtime_bool(account_id: str, name: str, native_loader):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.bool_setting(account_id, name, native_loader)
+    return await native_loader(account_id)
+
+
+async def _native_typo_enabled(account_id: str) -> bool:
+    return bool((await load_typo_flags(account_id))[_PURPOSE])
+
+
+async def _native_nonnative_enabled(account_id: str) -> bool:
+    return bool((await load_nonnative_flags(account_id))[_PURPOSE])
+
+
+async def _native_spacing_enabled(account_id: str) -> bool:
+    return bool((await load_spacing_flags(account_id))[_PURPOSE])
+
+
+async def _runtime_day(account_id: str, *args, **kwargs):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.load_day(account_id, *args, **kwargs)
+    return await _daylog.load_day(account_id, *args, **kwargs)
+
+
+async def _runtime_teaser(account_id: str, kind: str, native_loader):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.teaser_config(account_id, kind)
+    return await native_loader(account_id)
+
+
+def _runtime_unanswered_replies(account_id: str):
+    """A worker may prove that exact receipts answered an older input, not this one."""
+    cap = active_telegram_capabilities()
+    hook = getattr(cap, "unanswered_replies", None) if cap is not None else None
+    return hook(account_id) if hook is not None else frozenset()
+
+
+async def _runtime_prompt_context(account_id: str, fan_id: int, last_inbound: str):
+    """The ONE prompt hook for Twin's approved persona/creator facts and fan memory.
+
+    Returns the capability's `PromptContext`, or None when no capability (or one
+    without Twin context) is active, in which case the native persona and prompt
+    are used exactly as before."""
+    cap = active_telegram_capabilities()
+    hook = getattr(cap, "prompt_context", None) if cap is not None else None
+    if hook is None:
+        return None
+    return await hook(account_id, fan_id, last_inbound=last_inbound)
+
+
+async def _runtime_hold(account_id: str, fan_id: int, seconds: float, **kwargs):
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.hold(account_id, fan_id, seconds, **kwargs)
+    return await hold_with_typing(account_id, fan_id, seconds, **kwargs)
 
 _PURPOSE = "ai_chatter"          # model_by_purpose key + fan lease + enqueue kind
 # automation_kind on a reply that CARRIES a priced offer. Same engine, same run —
@@ -1138,7 +1233,16 @@ async def _load_config(account_id: str) -> dict:
     error → defaults (disabled)."""
     async with get_session() as s:
         cfg = await s.get(AccountAiConfig, str(account_id))
-    return config_from_row(cfg)
+    merged = config_from_row(cfg)
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        from onlyfans_runtime.configuration import sales_settings, on_request_sales_enabled
+        saved, valid = sales_settings(cfg) if cfg is not None else ({}, False)
+        # Compute from the row already read, before defaults can invent consent.
+        # This is transient capability metadata, never a saved setting.
+        merged["_native_on_request_sales_enabled"] = on_request_sales_enabled(saved, valid=valid)
+        return await cap.load_config(str(account_id), merged)
+    return merged
 
 
 def config_from_row(cfg: AccountAiConfig | None) -> dict:
@@ -2060,6 +2164,7 @@ async def _gather(account_id: str,
     Consecutive rows of HERS within `_BUBBLE_WINDOW` are the same reply; anything
     else (his message, a human's, a gap) closes her turn."""
     out: dict[int, _Cand] = {}
+    unanswered_replies = _runtime_unanswered_replies(account_id)
     gap = timedelta(minutes=session_gap_min) if session_gap_min > 0 else None
     # WHEN each of her replies landed, per fan — the single measurement all three
     # counters are derived from after the scan. The loop's only job is to decide
@@ -2214,13 +2319,14 @@ async def _gather(account_id: str,
         # …and is it a REACTION rather than an answer? `image_reply` / `tip_reward`
         # go out within seconds of HIS action, carry an automation_kind (so they are
         # never `broadcast`) and say nothing — see TURN_NEUTRAL_KINDS.
+        older_input_reply = (fan_id, message_id) in unanswered_replies and not named_chatter
         turn_neutral = direction == "out" and automation_kind in TURN_NEUTRAL_KINDS
         # THE one predicate for "this row took the turn". Every consumer that asks
         # the question reads THIS, never the two flags separately: a row visible to
         # `last_dir` but invisible to `in_run`, or vice versa, is a half-state — the
         # thread then means two different things to two pieces of the same gate, and
         # which one wins depends on evaluation order. One name, one answer.
-        answers_him = not broadcast and not turn_neutral
+        answers_him = not broadcast and not turn_neutral and not older_input_reply
         # Neither a broadcast NOR a reaction takes the turn. Both stay in `messages`
         # — she must know what she just sent him — but neither may move
         # `last_dir`/`last_body`. A ppv_send / funnel blast landing on top of his
@@ -2245,7 +2351,7 @@ async def _gather(account_id: str,
         # and one that silently agreed would hide the drift instead of pricing it
         # at zero. A mass row is excluded here exactly as `mass_run_id.is_(None)`
         # excludes it there.
-        if direction == "out" and mass_run_id is None and (
+        if direction == "out" and not older_input_reply and mass_run_id is None and (
                 automation_kind is not None or named_chatter):
             c.answered_after_in.append((automation_kind, named_chatter))
         if direction == "in":
@@ -3584,7 +3690,7 @@ async def _send_free_bubble(client, account_id: str, fan_id: int, line: str,
     those paths from diverging on attribution/typing/emit_live details."""
     line = apply_word_restriction(line)[:_REPLY_MAX_CHARS]
     if hold:
-        await hold_with_typing(account_id, fan_id,
+        await _runtime_hold(account_id, fan_id,
                                typing_delay_seconds(line, typing_wpm),
                                typing_indicator=typing_indicator)
     try:
@@ -3608,7 +3714,8 @@ async def _send_free_bubble(client, account_id: str, fan_id: int, line: str,
 
 async def _thread_moved_on(account_id: str, fan_id: int,
                            inbound_at: datetime | None,
-                           *, ignore_welcome: bool = False) -> str:
+                           *, ignore_welcome: bool = False,
+                           exclude_ids: tuple[int, ...] = ()) -> str:
     """Between generation and the wire, did this turn stop being ours to answer?
 
     Two ways it can, and they are different failures. HE WROTE AGAIN: the reply we
@@ -3661,6 +3768,8 @@ async def _thread_moved_on(account_id: str, fan_id: int,
     """
     if inbound_at is None:
         return ""
+    unanswered_ids = [mid for fid, mid in _runtime_unanswered_replies(account_id)
+                      if fid == int(fan_id)]
     async with get_session() as s:
         newer_in = (await s.execute(
             select(Message.message_id).where(
@@ -3712,11 +3821,62 @@ async def _thread_moved_on(account_id: str, fan_id: int,
                 Message.is_unsent.is_(False),
                 Message.created_at > inbound_at,
                 Message.mass_run_id.is_(None),
+                # Bubbles of THIS reply that already went out are not "somebody
+                # else answered" (the per-bubble look at the wire passes them).
+                Message.message_id.not_in(list(exclude_ids)) if exclude_ids else true(),
+                or_(Message.message_id.not_in(unanswered_ids), _named_chatter_clause(automation_emp_id))
+                    if unanswered_ids else true(),
                 or_(automation_answered,
                     _named_chatter_clause(automation_emp_id)),
             ).limit(1)
         )).first()
     return "already_answered" if answered is not None else ""
+
+
+async def _stopped_at_wire(account_id: str, fan_id: int,
+                           inbound_at: datetime | None, turn_started: datetime,
+                           own_ids: tuple[int, ...], *, ignore_welcome: bool = False) -> str:
+    """The look immediately before ONE bubble goes out, after its pacing wait.
+
+    `_thread_moved_on` runs once, before the pacing/typing hold, so a pause, a
+    takeover or a human answer that lands during the hold (or between bubbles)
+    was never seen. This runs per bubble, right before `send_message`, and
+    returns "" only if the turn is still ours:
+
+      * a durable operator stop (skip_list manual_restrict / of_restricted /
+        muted_creator / ladder_stop) appeared — Twin's pause, takeover and
+        no-contact all land here (`onlyfans_runtime/runtime_stop.py`);
+      * he wrote again, or a named chatter / another automation answered
+        (`_thread_moved_on`, minus the bubbles of this very reply);
+      * an UNATTRIBUTED outbound (no automation_kind, not a mass send) appeared
+        since this turn began: a person typing in the official app or Twin's
+        manual path, whose employee is not reliably known. It is only trusted as
+        "somebody else is talking" for rows born after `turn_started`, so the
+        selection pass (which never saw them) cannot re-admit the fan in a loop.
+    """
+    async with get_session() as s:
+        stop = (await s.execute(
+            select(SkipList.reason).where(
+                SkipList.account_id == str(account_id),
+                SkipList.fan_id == int(fan_id)))).scalar_one_or_none()
+        if stop in HARD_SKIP_REASONS:
+            return "operator_stop"
+        human = (await s.execute(
+            select(Message.message_id).where(
+                Message.account_id == str(account_id),
+                Message.fan_id == int(fan_id),
+                Message.direction == "out",
+                Message.is_unsent.is_(False),
+                Message.created_at > turn_started,
+                Message.automation_kind.is_(None),
+                Message.mass_run_id.is_(None),
+                Message.message_id.not_in(list(own_ids)) if own_ids else true(),
+            ).limit(1))).first()
+        if human is not None:
+            return "manual_activity"
+    return await _thread_moved_on(account_id, fan_id, inbound_at,
+                                  ignore_welcome=ignore_welcome,
+                                  exclude_ids=own_ids)
 
 
 def _is_404(exc: Exception) -> bool:
@@ -3762,8 +3922,20 @@ def _is_price_error(exc: Exception) -> bool:
     return hit
 
 
+@dataclasses.dataclass
+class _VaultCard:
+    """A vault card as it was SENT (the native runner's own receipt evidence): the media, the free previews and the
+    price the fan actually saw. The vault lane's catalog row carries none of these, so the discounted resend reads
+    them from here. ``why`` is filled with the fixed reason a resend did not happen."""
+    media: list
+    previews: list
+    price_cents: int
+    why: str | None = None
+
+
 async def _maybe_discount_resend(client, account_id: str, cfg: dict,
-                                 offer: ContentOffer, now: datetime) -> bool:
+                                 offer: ContentOffer, now: datetime, *,
+                                 vault: "_VaultCard | None" = None) -> bool:
     """The ONE answer to an unpaid rung: unsend it, re-send it cheaper, ONCE, then
     tap out. Measured on the corpus, after an unpaid rung:
         repeat the same price → 6.8% paid   (the single WORST action measured)
@@ -3774,17 +3946,27 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     to wait for the discount. A 404 = already unsent = success; ANY other unsend
     failure aborts the resend entirely (silence beats a double-live price)."""
     fan_id = int(offer.fan_id)
-    if not offer.offered_at or offer.offered_at > now - timedelta(minutes=upsell.RESEND_AFTER_M):
+
+    def _skip(why: str) -> bool:
+        # Vault (native runner) path only: report WHY nothing was resent; the stock path keeps its silent False.
+        if vault is not None:
+            vault.why = why
         return False
+
+    if not offer.offered_at or offer.offered_at > now - timedelta(minutes=upsell.RESEND_AFTER_M):
+        return _skip("too-early")
     # Only a PPV-carrying offer has a locked message to unsend-and-reprice; a
     # LEGACY tip-only row (mode "tip", pre-2026-08-19 — nothing creates one now)
     # has nothing to pull, and re-asking a fan who ignored a tip ask is begging.
     if offer.mode not in ("ppv", "both") or not offer.offer_message_id:
-        return False
+        return _skip("not-a-card")
     ladders = await _load_ladders(account_id, [fan_id])
     lad = ladders.get(fan_id)
     if lad is None:
-        return False
+        if vault is None:
+            return False
+        # The gate-off native runner writes no ladder row until a fan's first buy or cut: a blank, never-saved one.
+        lad = LadderState(account_id=str(account_id), fan_id=fan_id, status=upsell.STATUS_OPEN)
     # ⚠️ THE BRAKE THE REPLY LOOP HONOURS AND THIS PATH USED TO IGNORE.
     # A SOFT decline ("im broke rn") sets offers_paused_until = +24h and KEEPS TALKING.
     # But this watcher only checked `status`, so 90 minutes after a man told us he had no
@@ -3792,17 +3974,17 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     # thing upsell.py's own docstring says we must never do. Caught by the simulator's
     # broke_guy persona; it is the one violation it found on the first clean run.
     if lad.status in (upsell.STATUS_STOPPED, upsell.STATUS_TAPPED):
-        return False
+        return _skip("selling-stopped")
     if lad.offers_paused_until and lad.offers_paused_until > datetime.utcnow():
-        return False
+        return _skip("selling-paused")
     # A COMPANION/cooldown fan (§6) is not sold to at all — belt-and-suspenders with
     # the offers_paused_until guard above (spend_regret sets BOTH).
     if lad.status == upsell.STATUS_COMPANION:
-        return False
+        return _skip("companion-only")
     if lad.companion_until and lad.companion_until > datetime.utcnow():
-        return False
+        return _skip("companion-only")
     if lad.cooldown_until and lad.cooldown_until > datetime.utcnow():
-        return False
+        return _skip("selling-paused")
     # ── §5 EARNED DISCOUNT. The cut is now CONTINGENT ON A VOICED OBJECTION. The v1
     # behaviour — a bare 90-min timer, no objection check — was exactly the 95.8%-
     # unprompted anti-pattern (unprompted cuts convert 20.7% vs 42.9% for cuts
@@ -3825,7 +4007,7 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     if upsell.classify_decline(last_text):
         log.info("ai_chatter discount resend BLOCKED — he declined account=%s fan=%s",
                  account_id, fan_id)
-        return False
+        return _skip("fan-declined")
     cuts30, asks30 = await _cuts_asks_last_30d(account_id, fan_id, now)
     ok_disc, why_disc = upsell.may_discount(upsell.DiscountCtx(
         last_inbound_text=last_text or "",
@@ -3837,7 +4019,7 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     if not ok_disc:
         log.debug("ai_chatter discount refused account=%s fan=%s why=%s",
                   account_id, fan_id, why_disc)
-        return False                       # strip the cut; a pivot happens on his next turn
+        return _skip(why_disc)             # strip the cut; a pivot happens on his next turn
     # NOT gated on status == OPEN. The discount resend is a WIN-BACK ("hey stranger...
     # where u been? i took it down and put it back cheaper for you") — it is aimed
     # precisely at the fan who went quiet, and his ladder goes IDLE after SESSION_IDLE_M
@@ -3847,36 +4029,45 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     # 1) is the "second chance after a refusal" consent question the operator owns.
     if int(lad.unpaid_rungs or 0) >= int(cfg.get("stop_after_unpaid_rungs")
                                           or upsell.STOP_AFTER_UNPAID_RUNGS):
-        return False                       # already discounted once. No begging.
+        return _skip("already-discounted")  # already discounted once. No begging.
     item = await _get_item(int(offer.item_id))
     if item is None:
-        return False
-    media = _item_media(item)
-    # He may have bought this exact media somewhere else entirely (a mass blast has
-    # no content_offers row at all) — media-keyed, never catalog-keyed. HERO media
-    # only: owning the free tease frames doesn't make the discounted payoff his.
-    hero = (await _hero_media_map(account_id, [item]))[int(item.id)]
+        return _skip("item-missing")
+    if vault is None:
+        media = _item_media(item)
+        # He may have bought this exact media somewhere else entirely (a mass blast has
+        # no content_offers row at all) — media-keyed, never catalog-keyed. HERO media
+        # only: owning the free tease frames doesn't make the discounted payoff his.
+        hero = (await _hero_media_map(account_id, [item]))[int(item.id)]
+    else:
+        # The vault lane's catalog row names no media; the sent card does. Hero = what is locked, not the free previews.
+        media = [int(m) for m in vault.media]
+        free = {int(m) for m in vault.previews}
+        hero = [m for m in media if m not in free] or media
     if (await _owned_or_seen_media(account_id, fan_id)) & set(hero):
         await _resolve_offer(int(offer.id), status="cancelled", resolved_by="owned")
         await _close_ladder(account_id, fan_id, upsell.STATUS_TAPPED)
-        return False
-    seen_cents = int(offer.price_cents or 0)
+        return _skip("already-owned")
+    seen_cents = int((vault.price_cents if vault is not None else 0) or offer.price_cents or 0)
     if seen_cents <= upsell.OF_PRICE_FLOOR_CENTS:
-        return False                       # nothing left to discount into
+        return _skip("price-at-minimum")   # nothing left to discount into
 
     if not await ax.acquire_fan_lease(account_id, fan_id, _PURPOSE):
-        return False                       # someone else owns the fan this cycle
+        return _skip("fan-locked")         # someone else owns the fan this cycle
     try:
-        try:
-            await asyncio.to_thread(client.unsend_message,
-                                    int(offer.offer_message_id), fan_id)
-        except Exception as e:
-            if not _is_404(e):
-                log.warning("ai_chatter discount resend ABORTED — unsend failed "
-                            "account=%s fan=%s msg=%s (original may still be live)",
-                            account_id, fan_id, offer.offer_message_id, exc_info=True)
-                return False
-        await _resolve_offer(int(offer.id), status="cancelled", resolved_by="discounted")
+        if vault is None:
+            try:
+                await asyncio.to_thread(client.unsend_message,
+                                        int(offer.offer_message_id), fan_id)
+            except Exception as e:
+                if not _is_404(e):
+                    log.warning("ai_chatter discount resend ABORTED — unsend failed "
+                                "account=%s fan=%s msg=%s (original may still be live)",
+                                account_id, fan_id, offer.offer_message_id, exc_info=True)
+                    return False
+            await _resolve_offer(int(offer.id), status="cancelled", resolved_by="discounted")
+        # Vault path: the removal is DEFERRED to the wire, inside the replacement's own attempt (below). Nothing is
+        # unsent and nothing is cancelled until the provider has confirmed the original is gone.
 
         rng = random.Random(f"discount:{account_id}:{fan_id}:{offer.id}")
         # Compute off the price he SAW, but never above OF's $200 wire max — a static
@@ -3887,9 +4078,11 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         px = max(upsell.OF_PRICE_FLOOR_CENTS,
                  min(upsell.discount_price(seen_cents, rng, str(account_id)),
                      upsell.OF_PRICE_MAX_CENTS))
+        if vault is not None and px >= seen_cents:
+            return _skip("price-at-minimum")   # a "discount" is strictly lower than what he saw, or it is not sent
         line = _pack_line("discount_resend", cfg, fan_id, price_cents=px)
         if not line:
-            return False
+            return _skip("no-line")
         # BOTH prices go in. He has already seen this piece once at `seen_cents` and
         # said nothing, so the caption's job is not to introduce it — it is to give
         # him a reason to look again. `was_cents` is what lets the line know that,
@@ -3906,13 +4099,24 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         # quoting different numbers is exactly the tell this whole feature exists to
         # remove.
         kwargs: dict = {"price": px / 100, "locked_text": False, "media_files": media}
-        previews = _item_previews(item)
+        previews = _item_previews(item) if vault is None else [int(m) for m in vault.previews]
         if previews:
             kwargs["previews"] = previews
+        orig_msg = int(offer.offer_message_id)
         try:
+            if vault is not None:
+                # Names the ONE card to remove first; the DELETE runs at the wire, then the replacement is posted, all in
+                # one ledger attempt (an uncertain outcome is the ledger's delivery-unknown, never replayed).
+                await asyncio.to_thread(client.unsend_message, orig_msg, fan_id)
             result = await asyncio.to_thread(
                 lambda: client.send_message(fan_id, line, **kwargs))
         except Exception as e:
+            if vault is not None:
+                # Confirmed removal is the only thing that retires the original, whether or not the replacement landed.
+                if client.removed(orig_msg):
+                    await _resolve_offer(int(offer.id), status="cancelled", resolved_by="discounted")
+                    return _skip("replacement-not-sent")
+                return _skip("removal-not-confirmed")
             if _is_price_error(e):
                 # A price-validation 400 is not an undeliverable fan — never quarantine
                 # him for it. Drop the discount; the original was already unsent.
@@ -3924,8 +4128,14 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
                         account_id, fan_id, exc_info=True)
             return False
         msg_id = result.get("id") if isinstance(result, dict) else None
+        if vault is not None and client.removed(orig_msg) and getattr(
+                await _load_offer(int(offer.id)), "status", None) == "open":
+            # Original gone, replacement on the wire: the offer row links to the message that replaced it.
+            # (Only while it is still open: a purchase the ledger settled meanwhile is never overwritten.)
+            await _resolve_offer(int(offer.id), status="cancelled", resolved_by="discounted",
+                                 delivery_message_id=int(msg_id) if msg_id else None)
         if not msg_id:
-            return False
+            return _skip("replacement-not-sent")
         await write_outbound_attribution(
             account_id=account_id, fan_id=fan_id, message_id=int(msg_id),
             sent_by_employee_id=None, automation_kind=_KIND_UPSELL,  # a priced ask
@@ -3951,6 +4161,8 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
                            last_ask_at=now, session_idle_at=now)
         log.info("ai_chatter discount resend account=%s fan=%s %s→%s msg=%s",
                  account_id, fan_id, seen_cents, px, msg_id)
+        if vault is not None:
+            vault.why = None
         return True
     finally:
         await ax.release_fan_lease(account_id, fan_id)
@@ -4080,6 +4292,21 @@ async def _resolve_open_offers(account_id: str, client, cfg: dict,
     HOT (post-purchase re-offer conversion decays 66.7% <5min → 45.0% >24h, so the
     hot window is the whole game), and an UNPAID one gets exactly one unsend-first
     discount resend before the ladder taps out."""
+    cap = active_telegram_capabilities()
+    if cap is not None:
+        return await cap.resolve_open_offers(
+            str(account_id), client, cfg,
+            dry_run=dry_run, only_fan_ids=only_fan_ids,
+        )
+    return await _resolve_open_offers_stock(account_id, client, cfg,
+                                            dry_run=dry_run, only_fan_ids=only_fan_ids)
+
+
+async def _resolve_open_offers_stock(account_id: str, client, cfg: dict,
+                                     *, dry_run: bool,
+                                     only_fan_ids: set[int] | None = None) -> dict:
+    """The stock watcher body, unchanged. Split out only so a capability (the native
+    pilot) can run FASTT's own resolver with its own guarded client."""
     stats = {"unlocked_tip": 0, "unlocked_ppv": 0, "offers_expired": 0,
              "offers_unsent": 0, "deliveries_failed": 0, "would_unlock": 0,
              "discount_resends": 0}
@@ -4207,7 +4434,7 @@ async def _resolve_open_offers(account_id: str, client, cfg: dict,
                 # so this branch runs exactly once for it (idempotent by construction).
                 pb_rng = random.Random(f"postbuy:{account_id}:{fan_id}:{offer.id}")
                 try:
-                    await ax.enqueue_job(
+                    await _runtime_enqueue(
                         account_id, _PURPOSE, payload={"post_buy": int(offer.id)},
                         run_at=paid_at + timedelta(seconds=pb_rng.uniform(90, 240)))
                 except Exception:
@@ -4217,7 +4444,7 @@ async def _resolve_open_offers(account_id: str, client, cfg: dict,
                 # bubble (+ the free gift, if enabled and >=2 paid this session), then
                 # TAPPED. Self-cancels in the handler if he speaks/buys before it fires.
                 try:
-                    await ax.enqueue_job(
+                    await _runtime_enqueue(
                         account_id, _PURPOSE, payload={"aftercare": int(offer.id)},
                         run_at=paid_at + timedelta(minutes=upsell.AFTERCARE_SILENCE_M))
                 except Exception:
@@ -4278,7 +4505,7 @@ async def _maybe_bootstrap_profile(account_id: str, fan_id: int) -> bool:
             )).first()
             if pending is not None:
                 return False
-        await ax.enqueue_job(account_id, "gen_info",
+        await _runtime_enqueue(account_id, "gen_info",
                              payload={"force_ids": [int(fan_id)]})
         return True
     except Exception:
@@ -4313,7 +4540,6 @@ class _Money(NamedTuple):
     indistinguishable on sight, and the previous shape needed a hand-written
     warning not to unpack it short. `.paid` and `.tip` need no warning.
     """
-
     ask: datetime | None = None    # newest unpaid priced outbound, still live
     paid: datetime | None = None   # newest priced outbound he UNLOCKED
     tip: datetime | None = None    # newest INBOUND tip
@@ -4493,14 +4719,14 @@ async def _run_nudge(account_id: str, payload: dict, cfg: dict) -> dict:
         return {"status": "skipped", "reason": "nudge_disabled",
                 "nudged": 0, "nudge_skipped": len(fan_ids)}
     typing_wpm = await load_typing_wpm(account_id)
-    typing_indicator = await load_typing_indicator(account_id)
+    typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
     async with get_session() as s:
         fan_rows = (await s.execute(
             select(Fan).where(Fan.account_id == str(account_id),
                               Fan.fan_id.in_(list(fan_ids)))
         )).scalars().all()
     fans = {int(f.fan_id): f for f in fan_rows}
-    client = await asyncio.to_thread(ax._make_client, account_id)
+    client = await asyncio.to_thread(_runtime_client, account_id)
     _nudge_v = await load_voice_blocks(account_id)
 
     nudged = skipped = 0
@@ -4529,7 +4755,7 @@ async def _run_nudge(account_id: str, payload: dict, cfg: dict) -> dict:
             name = _greetable(f, _nudge_v)
             line = apply_word_restriction(
                 random.choice(_nudge_v.nudge_lines).replace("{name}", name))[:_REPLY_MAX_CHARS]
-            await hold_with_typing(account_id, fan_id,
+            await _runtime_hold(account_id, fan_id,
                                    typing_delay_seconds(line, typing_wpm),
                                    typing_indicator=typing_indicator)
             result = await asyncio.to_thread(
@@ -4583,21 +4809,104 @@ async def _newer_delivered_offer(account_id: str, fan_id: int,
     return row is not None
 
 
+async def _run_discount(account_id: str, payload: dict, cfg: dict) -> dict:
+    """The native runner's discounted resend: FASTT's own ``_maybe_discount_resend`` on one unpaid VAULT card.
+
+    The runner keeps ``qualification_gate_enabled`` off (that switch is the whole ladder), so the stock watcher
+    never reaches the resend; the runner's post-sale scan queues this job instead. Everything the stock function
+    decides is still decided by it: this wrapper only supplies what the gate-off account lacks — the sent card's
+    media/previews/price (the runner's receipt evidence) and the fan's voiced objection (stamped on the ladder
+    the way the reply loop would have). Idempotent per offer: a resolved offer is skipped."""
+    offer_id = payload.get("discount_offer")
+
+    def _skipped(why: str) -> dict:
+        return {"status": "skipped", "reason": why, "discount": True, "discount_skip": why}
+
+    if not cfg.get("enabled") or type(offer_id) is not int:
+        return _skipped("discount_disabled")
+    offer = await _load_offer(offer_id)
+    if offer is None or str(offer.account_id) != str(account_id):
+        return _skipped("no_offer")
+    if offer.status != "open" or not offer.offer_message_id:
+        return _skipped("offer_resolved")
+    fan_id = int(offer.fan_id)
+    now = datetime.utcnow()
+    cap = active_telegram_capabilities()
+    sent_card = getattr(cap, "sent_card", None)
+    card = await asyncio.to_thread(sent_card, int(offer.offer_message_id)) if callable(sent_card) else None
+    if not card or not card.get("media"):
+        return _skipped("card-evidence-missing")
+    vault = _VaultCard(media=list(card["media"]), previews=list(card.get("previews") or []),
+                       price_cents=int(card.get("price_cents") or 0))
+    async with get_session() as s:
+        rows = (await s.execute(
+            select(Message.created_at, Message.body).where(
+                Message.account_id == str(account_id), Message.fan_id == fan_id,
+                Message.direction == "in", Message.created_at > offer.offered_at)
+            .order_by(Message.created_at, Message.message_id))).all()
+    from . import _price_ask
+    objection_at, blocker = _price_ask.objection_state([(r[0], r[1] or "") for r in rows])
+    if blocker:
+        return _skipped(blocker)
+    if objection_at is not None:
+        # What the reply loop stamps when it hears a voiced objection (gate on); here it is read off the thread.
+        lad = (await _load_ladders(account_id, [fan_id])).get(fan_id)
+        if lad is None or lad.objection_at is None or lad.objection_at < objection_at:
+            await _save_ladder(account_id, fan_id, objection_at=objection_at)
+    client = await asyncio.to_thread(_runtime_client, account_id)
+    sent = await _maybe_discount_resend(client, account_id, cfg, offer, now, vault=vault)
+    out = {"status": "ok", "discount": True, "discount_resends": 1 if sent else 0}
+    if not sent:
+        out["discount_skip"] = vault.why or "not-eligible"
+    return out
+
+
+async def _claim_post_buy(account_id: str, offer: ContentOffer, now: datetime) -> bool:
+    """Claim once under the offer lock, preserving deployed attempt receipts.
+
+    An earlier audit attempt may be accepted or ambiguous. Neither a new
+    schema column nor elapsed time permits its acknowledgement to repeat.
+    """
+    async with get_session() as s:
+        current=(await s.execute(select(ContentOffer).where(ContentOffer.id==offer.id,
+            ContentOffer.account_id==str(account_id)).with_for_update())).scalar_one_or_none()
+        if (current is None or current.fan_id!=offer.fan_id or current.status!="delivered"
+                or current.resolved_at!=offer.resolved_at or current.resolved_by!=offer.resolved_by
+                or current.offer_message_id!=offer.offer_message_id or current.post_buy_started_at is not None):
+            return False
+        kind=f"post_buy:{int(offer.id)}"
+        prior=(await s.execute(select(AutomationRun.id).where(
+            AutomationRun.account_id==str(account_id),AutomationRun.kind==kind).limit(1))).scalar()
+        if prior is not None:
+            return False
+        current.post_buy_started_at=now
+        # Retain the deployed reader's receipt too: compatible binaries must
+        # also see this attempt, including when its provider outcome is unknown.
+        s.add(AutomationRun(account_id=str(account_id),kind=kind,status="attempted",
+            started_at=now,completed_at=now,
+            stats_json=json.dumps({"offer_id":int(offer.id),"fan_id":offer.fan_id})))
+        return True
+
+
 async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:
     """§4.4b — fired ~90-240s after a PAID unlock. ALWAYS sends the free post_buy_bridge
     bubble (keeps the scene alive on a conversation, not silence). THEN — only if
     post_buy_rung_enabled AND the §6 brakes pass AND qualify() passes with the PURCHASE
     standing in for fan_spoke_last (an unlock is an event, not a turn — the silent
     buyer was structurally unsellable) — fires ONE next rung after the §3.6 pacing
-    floor. NO revenue claim: this ships as a bug fix, not a +30pp promise. Idempotent:
-    one job per content_offers.id; the offer is 'delivered', so a re-run just re-bridges
-    a fan who hasn't spoken (harmless) and never double-rungs (the ladder open-guard)."""
+    floor. The existing offer receipt fences the first attempted reply durably;
+    direct replay after cooldown cannot repeat an accepted or ambiguous reply."""
     offer_id = payload.get("post_buy")
     if not cfg.get("enabled") or offer_id is None:
         return {"status": "skipped", "reason": "post_buy_disabled", "post_buy": True}
     offer = await _load_offer(int(offer_id))
-    if offer is None:
+    if offer is None or str(offer.account_id)!=str(account_id):
         return {"status": "skipped", "reason": "no_offer", "post_buy": True}
+    if offer.status!="delivered" or offer.resolved_at is None:
+        return {"status":"skipped","reason":"not_purchased","post_buy":True}
+    if cfg.get("fastt_vault_post_buy") and not (offer.status == "delivered" and offer.resolved_by == "ppv_ledger"):
+        # The runner's job: only a purchase the payment ledger settled (never an open card or a claim).
+        return {"status": "skipped", "reason": "not_purchased", "post_buy": True}
     fan_id = int(offer.fan_id)
     now = datetime.utcnow()
     # He replied since he paid → the normal reply loop owns him; a scripted bridge over
@@ -4622,10 +4931,12 @@ async def _run_post_buy(account_id: str, payload: dict, cfg: dict) -> dict:
         return {"status": "skipped", "reason": "locked", "post_buy": True}
 
     typing_wpm = await load_typing_wpm(account_id)
-    typing_indicator = await load_typing_indicator(account_id)
-    client = await asyncio.to_thread(ax._make_client, account_id)
+    typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
+    client = await asyncio.to_thread(_runtime_client, account_id)
     bridged = rung_fired = 0
     try:
+        if not await _claim_post_buy(account_id,offer,now):
+            return {"status":"skipped","reason":"post_buy_already_started","post_buy":True}
         name = _greetable(f, await load_voice_blocks(account_id))
         bridge = _pack_line("post_buy_bridge", cfg, fan_id, name=name)
         if bridge and await _send_free_bubble(client, account_id, fan_id, bridge,
@@ -4668,6 +4979,9 @@ async def _fire_post_buy_rung(client, account_id: str, cfg: dict, fan_id: int,
     fan_spoke_last=True — the PURCHASE substitutes for fan_spoke_last AND NOTHING ELSE.
     Prices off the band via smart pricing when on, else the catalog. Sends ONE priced
     attach after the §3.6 45s+ pacing floor. Returns 1 if a rung went out, else 0."""
+    if cfg.get("fastt_vault_post_buy"):
+        # Nicky-style vault selling: there is no catalogue to pick from, so the follow-up card comes from the vault.
+        return await _fire_post_buy_vault_rung(client, account_id, cfg, fan_id, f, lad, now)
     catalog_items = await _load_catalog(account_id)
     if not catalog_items or not await _offer_caps_ok(
             account_id, fan_id, {**cfg, "min_fan_msgs_between_offers": 0}):
@@ -4734,7 +5048,7 @@ async def _fire_post_buy_rung(client, account_id: str, cfg: dict, fan_id: int,
         kwargs["previews"] = previews
     # §3.6 — the priced attach never lands instantly; hold the 45-115s pacing floor.
     if bool(cfg.get("rhythm_enabled")):
-        await hold_with_typing(account_id, fan_id, rhythm.ppv_drop_delay(
+        await _runtime_hold(account_id, fan_id, rhythm.ppv_drop_delay(
             random.Random(f"pbdrop:{account_id}:{fan_id}:{item.id}"),
             stalled=bool(cfg.get("filming_stall_enabled"))),
             typing_indicator=typing_indicator)
@@ -4767,6 +5081,62 @@ async def _fire_post_buy_rung(client, account_id: str, cfg: dict, fan_id: int,
                        rung_index=rung_index + 1, last_ask_at=now, session_idle_at=now)
     log.info("ai_chatter post_buy rung account=%s fan=%s item=%s msg=%s",
              account_id, fan_id, item.id, msg_id)
+    return 1
+
+
+async def _fire_post_buy_vault_rung(client, account_id: str, cfg: dict, fan_id: int,
+                                    f: Fan | None, lad: LadderState | None, now: datetime) -> int:
+    """`_fire_post_buy_rung` for a vault seller: the same rules, the vault's selector.
+
+    Same offer caps and the same ``upsell.qualify`` (the PURCHASE stands in for ``fan_spoke_last``, nothing else).
+    The card is the vault lane's own: ``content_prompts.read_hook`` reads the thread and what he already bought
+    for a reason to sell one more set (None = nothing suitable: no offer is manufactured), the hook lane plans it
+    from UNOWNED vault media and ``lane.deliver`` puts it on the wire with the read's bridge as her one voice line.
+    At most one card per call; the runner's offer-keyed job makes that one card per purchase. Returns 1 if it sold."""
+    if not await _offer_caps_ok(account_id, fan_id, {**cfg, "min_fan_msgs_between_offers": 0}):
+        return 0
+    ok, _why = upsell.qualify(upsell.GateCtx(
+        fan_id=fan_id, last_inbound_text="unlocked", last_inbound_at=now,
+        fan_spoke_last=True,           # §4.4b purchase_is_turn — the ONLY substitution
+        inbound_qualifies=True,        # the unlock IS the substantive event; "unlocked" would trip the low-information bar
+        status=(lad.status if lad is not None else upsell.STATUS_HOT),
+        offers_paused_until=(lad.offers_paused_until if lad is not None else None),
+        last_ask_at=(lad.last_ask_at if lad is not None else None)), now)
+    if not ok:
+        return 0
+    # The hook lane's shape: per-fan caps zeroed (already checked above), account ceilings and brakes kept.
+    lane = sell_lane.SellLane(
+        account_id, _PURPOSE,
+        {**cfg, "max_offers_per_fan_per_day": 0, "min_fan_msgs_between_offers": 0})
+    voice = (await load_voice_blocks(account_id)).voice
+    cfg_row = await load_cfg_row(account_id)
+    hook: list = []
+
+    async def _read():
+        from . import content_prompts
+        h = await content_prompts.read_hook(
+            account_id, fan_id, voice=voice,
+            saved_effort=(cfg_row.reasoning_effort if cfg_row is not None else None),
+            effort_pick=str(cfg.get("hook_upsell_effort") or "auto"))
+        if h is not None:
+            hook.append(h)
+        return h.contract if h is not None else None
+
+    by = await _gather(account_id, {fan_id})
+    c = by.get(fan_id)
+    turn = sell_lane.Turn(text="unlocked", at=now, our_last_at=(c.last_out_at if c is not None else None),
+                          fan_spoke_last=True, wide_ask="post_buy")
+    plan = await lane.plan(fan_id, turn, fan=f, blocked=False,
+                           counters=sell_lane.AskCounters(asks_today=0, account_hour=0, account_day=0),
+                           contract=_read)
+    if not plan:
+        return 0
+    res = await lane.deliver(client, plan, voice_line=(hook[0].bridge if hook else None))
+    if not res.sold:
+        return 0
+    await _save_ladder(account_id, fan_id, status=upsell.STATUS_OPEN, last_ask_at=now, session_idle_at=now)
+    log.info("ai_chatter post_buy vault rung account=%s fan=%s px=%s msg=%s via=vault",
+             account_id, fan_id, res.price_cents, res.message_id)
     return 1
 
 
@@ -4817,8 +5187,8 @@ async def _run_aftercare(account_id: str, payload: dict, cfg: dict) -> dict:
         return {"status": "skipped", "reason": "locked", "aftercare": True}
 
     typing_wpm = await load_typing_wpm(account_id)
-    typing_indicator = await load_typing_indicator(account_id)
-    client = await asyncio.to_thread(ax._make_client, account_id)
+    typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
+    client = await asyncio.to_thread(_runtime_client, account_id)
     sent = gifted = 0
     try:
         _ac_v = await load_voice_blocks(account_id)
@@ -4841,7 +5211,7 @@ async def _run_aftercare(account_id: str, payload: dict, cfg: dict) -> dict:
                     break
         if gift_media:
             line = apply_word_restriction(line)[:_REPLY_MAX_CHARS]
-            await hold_with_typing(account_id, fan_id,
+            await _runtime_hold(account_id, fan_id,
                                    typing_delay_seconds(line, typing_wpm),
                                    typing_indicator=typing_indicator)
             try:
@@ -5812,7 +6182,7 @@ async def _trigger_make_right_apology(account_id: str, fan_id: int,
                        Message.direction == "in")
                 .order_by(Message.created_at.desc(), Message.message_id.desc())
                 .limit(1))).scalar_one_or_none()
-        await ax.enqueue_job(
+        await _runtime_enqueue(
             account_id, "make_right",
             payload={"hard_decline": {"fan_id": int(fan_id),
                                       "message_id": int(mid) if mid else None,
@@ -6117,6 +6487,11 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     onlyfans_text_only: bool = False,
                     onlyfans_memory: bool = False,
                     onlyfans_sales: list | None = None,
+                    # Twin's approved-context wording on the FASTT path (see
+                    # `_runtime_prompt_context`). It swaps ONLY the lines that claim
+                    # to be human and the self-invention allowance; selling blocks,
+                    # offer contract and pacing are untouched.
+                    twin_context: bool = False,
                     ) -> tuple[list[dict], list[str]]:
     """Compose the (system, user) pair — welcome_chatter_for_info's girly info-gather prompt
     with one structural difference: `sell`. `_NO_SELL` (M2) → the no-offers line
@@ -6131,6 +6506,9 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     `_SellSurface` exists — see its docstring. Adding a way to sell means one
     more construction there, not four more branches here."""
     questions = _questions_still_needed(f, asked)
+    # One flag for "answer identity questions honestly": Twin's scoped text path
+    # and the FASTT path with Twin context share the same identity wording.
+    truthful = onlyfans_text_only or twin_context
     if onlyfans_memory and not onlyfans_text_only:
         raise ValueError("OnlyFans memory requires the scoped text contract")
     if onlyfans_sales is not None and (not onlyfans_text_only or not onlyfans_memory or type(onlyfans_sales) is not list):
@@ -6294,7 +6672,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         need_block = ("He asked about AI identity: answer honestly and directly "
             "that you are an AI chat clone, not the creator personally typing. "
             "Do not brush off or dodge this question. No sale or follow-up question."
-            if onlyfans_text_only else (
+            if truthful else (
             "He thinks you might be a bot — defending is what a bot does. ONE "
             "breezy brush-off, then something HE told you. No sell, no ask."
         ))
@@ -6369,6 +6747,10 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             # The rating is the proof, so it replaces the brush-off rather than joining
             # it — naming the accusation out loud is the defensiveness §6.4 bans.
             need_block += (
+                "\nHe ALSO asked whether you're an AI: say honestly, in one short "
+                "line, that you are the creator's AI chat clone and not her "
+                "personally typing, then give the rating."
+                if twin_context else
                 "\nHe ALSO just questioned whether you're real — don't defend, "
                 "don't bring it up: the rating IS the answer."
             )
@@ -6578,7 +6960,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                 "a mismatch, custom request, exclusion, or identity question. Never "
                 "substitute something adjacent. Do not claim a send or purchase happened. "
                 "Keep reply free of prices, media promises and claims; the delivery "
-                "authority will render the exact approved description and quote.")
+                "authority will place the exact approved description and quote after your reply.")
     sell_section = f"\n\n{sell.block.strip()}\n\n" if has_sell else "\n\n"
     if onlyfans_sales:
         shelf = [{"item_id": x["item"]["id"], "description": x["item"]["description_for_ai"],
@@ -6609,14 +6991,16 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     # silently dropped that account's register line back to the 22yo default.
     persona_head, bio_facts = (
         (persona, "") if canon == "keep" else _prompt_shape.split_facts(persona))
-    register_intro = ("HOW YOU TEXT (the approved creator's casual voice):\n" if onlyfans_text_only else
+    register_intro = ("HOW YOU TEXT (the approved creator's casual voice):\n" if truthful else
                       f"HOW YOU TEXT (a real {persona_register_age(persona)}yo {v.texter_noun}, not an assistant):\n")
     bio_rule = ("CREATOR FACTS: use only the approved profile. Do not invent "
                 "personal events or unknown details. Explain your AI identity honestly when asked."
-                if onlyfans_text_only else BIO_CONSISTENCY_GUARDRAIL)
+                + (" Never state what a photo or video shows unless it is described to you "
+                   "here or by the fan." if twin_context else "")
+                if truthful else BIO_CONSISTENCY_GUARDRAIL)
     narration_rule = ("- Do not narrate actions or invent personal experiences. "
-                      "Answer identity questions honestly.\n" if onlyfans_text_only else NO_NARRATION_RULE)
-    if onlyfans_text_only:
+                      "Answer identity questions honestly.\n" if truthful else NO_NARRATION_RULE)
+    if truthful:
         # Same accepted native text behavior as the repaired Telegram source,
         # without importing its capability context or SQLite projection runtime.
         humanizer = humanizer.replace("TEXT LIKE A REAL PERSON, NOT AN AI:",
@@ -6638,6 +7022,12 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
            "creator facts and casual voice. If asked, explain your AI identity "
            "honestly; never claim the creator is personally typing. "
            if onlyfans_text_only else
+           "You're texting a fan as the creator's AI chat clone — flirting, getting "
+           "to know him, quietly making him feel like the only one. Use the approved "
+           "creator facts. If he asks whether you are an AI or a bot, answer honestly "
+           "that you are the creator's AI chat clone, never claim to be human or "
+           "deny it, and never claim the creator is personally typing. "
+           if twin_context else
            "You're texting a fan — flirting, getting to know him, quietly making "
            "him feel like the only one. 100% human, never a bot or an assistant. ")
         # THE BAN, conditional. "don't share your own info unless he asks" is what
@@ -6722,7 +7112,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     # matters most here: it has NO turn cap, so the 383- and 966-turn threads that
     # produced the contradictions all live in this engine, not welcome_chatter_for_info's
     # (_MAX_TURNS=30 / _MAX_FAN_MESSAGES=10 / $1 spend gate).
-    claims_block = fan_claims_block(f)
+    # Generated earlier creator claims cannot outrank the approved creator facts.
+    claims_block = "" if twin_context else fan_claims_block(f)
     # 🙋 HER CANON, ONLY WHEN HE ASKED. In the USER message, not the system: it is
     # now per-fan text, and per-fan text in the system prompt fragments the shared
     # cached prefix and costs multiples of its own tokens (the rule `_daylog` and
@@ -6926,7 +7317,7 @@ async def _scored_or_re_asked(raw: str, msgs: list[dict], *, model: str,
         return raw, False, False
     log.info("ai_chatter rating had no score account=%s fan=%s — re-asking",
              account_id, fan_id)
-    res = await llm_client.chat(
+    res = await _runtime_chat(
         model=model,
         messages=msgs + [
             {"role": "assistant", "content": raw},
@@ -7343,6 +7734,10 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         return await _run_nudge(account_id, payload, cfg)
     # §4.4b / §7 — the post-buy bridge/rung and the aftercare/gift ride the same
     # ai_chatter job kind (NO new job kinds, per §3.8). Their own gating lives inside.
+    # The native runner's discounted resend rides the same job kind (its own payload key, queued by the runner's
+    # post-sale scan, never by this module): FASTT's `_maybe_discount_resend` on ONE still-unpaid vault card.
+    if payload.get("discount_offer") is not None:
+        return await _run_discount(account_id, payload, cfg)
     if payload.get("post_buy") is not None:
         return await _run_post_buy(account_id, payload, cfg)
     if payload.get("aftercare") is not None:
@@ -7353,7 +7748,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         # one of those must still get his delivery — the unlock watcher runs
         # even when disabled; only conversation + new offers stop.
         if await _open_offers(account_id):
-            client = await asyncio.to_thread(ax._make_client, account_id)
+            client = await asyncio.to_thread(_runtime_client, account_id)
             offer_stats = await _resolve_open_offers(
                 account_id, client, cfg, dry_run=dry_run,
                 only_fan_ids=only_fan_ids or None)
@@ -7366,23 +7761,25 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     resume_h = max(0, int(cfg.get("resume_after_manual_hours") or 0))
     max_replies = int(payload.get("max_replies") or cfg.get("max_fans_per_tick") or 8)
 
-    model = await resolve_model(account_id, _PURPOSE, payload.get("model"))
+    model = await _runtime_model(account_id, _PURPOSE, payload.get("model"))
     typing_wpm = await load_typing_wpm(account_id)
-    typing_indicator = await load_typing_indicator(account_id)
+    typing_indicator = await _runtime_bool(account_id, "typing_indicator", load_typing_indicator)
     # Human typing pacing (pacing.py) — the gaps BETWEEN the bubbles of one reply,
     # and what the "...is typing" bar does during them. Ships OFF: with `enabled`
     # False every delay below is byte-identically what it was, no rng is drawn, and
     # hold_with_typing takes its old single-phase path.
     pace_cfg = pacing.PaceConfig.from_cfg(cfg)
     style_on = (await load_style_flags(account_id))[_PURPOSE]
-    typo_on = (await load_typo_flags(account_id))[_PURPOSE]
+    typo_on = await _runtime_bool(account_id, "deliberate_typos", _native_typo_enabled)
     # PHASE 2 pre-send consistency check — OFF unless explicitly enabled.
     consistency_on = (await load_consistency_flags(account_id))[_PURPOSE]
-    nonnative_on = (await load_nonnative_flags(account_id))[_PURPOSE]
+    nonnative_on = await _runtime_bool(
+        account_id, "deliberate_nonnative_style", _native_nonnative_enabled)
     # Space-before-"?" — its own tri-state key, read independently but only
     # ever APPLIED inside the non-native block below, so it can narrow that
     # register and never widen it.
-    spacing_on = (await load_spacing_flags(account_id))[_PURPOSE]
+    spacing_on = await _runtime_bool(
+        account_id, "deliberate_nonnative_spacing", _native_spacing_enabled)
     # Account-wide emoji strip. ai_chatter ignored this setting entirely until the
     # send chokepoint was extracted and made the omission visible — 7 of 12 live
     # accounts had it ON, so the operator asked for no emojis and the engine that
@@ -7394,7 +7791,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     bio_gate_on = bool(cfg.get("persona_facts_on_ask_only", True))
     prompt_sells = bool(cfg.get("prompt_sell_catalog", False))
     banned_words, banned_words_mode = await load_banned_words(account_id)  # compliance word filter (default: none)
-    stickers_on = await load_cat_stickers_flag(account_id)    # cat reaction gifs (default ON)
+    stickers_on = await _runtime_bool(account_id, "cat_stickers", load_cat_stickers_flag)
     sticker_skip_w, sticker_solo_w, sticker_gap_min = \
         await load_cat_sticker_tuning(account_id)             # per-account rate knobs
     account_lang = await _language.load_account_language(account_id)  # output language + guard gate
@@ -7524,8 +7921,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     # flag so an operator can turn the whole feature off without a deploy; the empty
     # `Day` when off / no tz / cap hit, and it renders "" everywhere (byte-identical
     # prompt). `cfg_row` is already in hand here, so the flag costs no extra query.
-    day = await _daylog.load_day(account_id, cfg_row, model=model,
-                                 purpose=_PURPOSE, clock_tz=clock_tz)
+    day = await _runtime_day(account_id, cfg_row, model=model,
+                             purpose=_PURPOSE, clock_tz=clock_tz)
     sleep_win = (await sleep_window(account_id, tz_off, cfg.get("sleep_window"),
                                     str(cfg.get("rhythm_sleep_source") or "default"))
                  if rhythm_on else rhythm.DEFAULT_SLEEP)
@@ -7562,7 +7959,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         stats=audience_stats, extra_allowed_ids=force_ids))
     by_fan = {fid: c for fid, c in by_fan.items() if fid in _kept}
 
-    client = await asyncio.to_thread(ax._make_client, account_id)
+    client = await asyncio.to_thread(_runtime_client, account_id)
 
     # ── M3 offer layer: resolve unlocks FIRST (a fan doesn't have to speak to
     # buy), then load the catalog + the open-offer map the prompts read.
@@ -7600,10 +7997,10 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     # gate: the images ARE the lead-up, so they warm even an account with no catalog. The
     # spend brakes below still apply (a broke/declined/companion fan never reaches it).
     from automations import teaser_select as _teaser
-    teaser_cfg = await _teaser.hot_teaser_config(account_id)
+    teaser_cfg = await _runtime_teaser(account_id, "hot", _teaser.hot_teaser_config)
     # Conversational teaser ladder — NOT gated on heat; fires during ordinary chat
     # every N of his messages, climbing free → $10 → $50. None ⇒ off.
-    convo_teaser_cfg = await _teaser.convo_teaser_config(account_id)
+    convo_teaser_cfg = await _runtime_teaser(account_id, "conversation", _teaser.convo_teaser_config)
     # Can she actually read a picture he sends? (vision describe at ingest — see
     # webhook_dispatch.on_inbound_image). Gates the "send me one and I'll rate it"
     # bot-accusation dare: promising a rating she can't deliver is worse than not
@@ -7979,6 +8376,11 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # read below this line is per-fan, and a mix of the two names inside one
             # loop body is exactly how a prompt ends up half-narrowed.
             v = _voice.for_fan(voice_blocks, f)
+            # The ONE Twin prompt hook: approved persona + creator facts (replacing
+            # the native `persona` for this fan) and Twin's fan memory. None unless
+            # a capability supplies it; then everything below is unchanged.
+            twin_ctx = await _runtime_prompt_context(account_id, fan_id, c.last_in_text or "")
+            fan_persona = twin_ctx.persona if twin_ctx is not None else persona
 
             # Did he UNLOCK the ask that's sitting in front of him? `is_paid` is stamped
             # at ingest and never re-read, so a PPV he paid for reads as unpaid until the
@@ -8282,7 +8684,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     # Release the lease BEFORE the wait — an inline hold would expire
                     # its 900s TTL and burn one of the executor's 4 GLOBAL run slots.
                     await ax.release_fan_lease(account_id, fan_id)
-                    await ax.enqueue_job(
+                    await _runtime_enqueue(
                         account_id, _PURPOSE,
                         payload={"only_fan_ids": [int(fan_id)], "rhythm_resume": True,
                                  "rhythm_cover": away.cover_line},
@@ -8296,7 +8698,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             try:
                 f = await _extract_and_fill(account_id, fan_id, f, c, model,
                                             _EXTRACT_HISTORY_TAIL, purpose=_PURPOSE,
-                                            persona=persona,
+                                            persona=fan_persona,
                                             claims_only=extract_claims_only)
             except LLMCapExceeded:
                 cap_hit = True
@@ -8307,7 +8709,11 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 log.debug("ai_chatter fact-extract failed account=%s fan=%s",
                           account_id, fan_id, exc_info=True)
             try:
-                await _maybe_push_nickname(client, account_id, fan_id, f)
+                cap = active_telegram_capabilities()
+                if cap is not None:
+                    await cap.push_nickname(client, account_id, fan_id, f)
+                else:
+                    await _maybe_push_nickname(client, account_id, fan_id, f)
             except Exception:
                 log.debug("ai_chatter nick push failed account=%s fan=%s",
                           account_id, fan_id, exc_info=True)
@@ -9115,7 +9521,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                if d == "in")
             canon = ("keep" if not bio_gate_on
                      else "show" if (bio_was_asked or bio_asks_now) else "hide")
-            msgs, presented = _build_messages(persona, f, c, asked, tail,
+            msgs, presented = _build_messages(fan_persona, f, c, asked, tail,
                                               shape=_shape,
                                               canon=canon,
                                               custom_owed=_customs.is_owed(f),
@@ -9149,9 +9555,12 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                               clock=clock_line(clock_tz),
                                               day=day,
                                               sell_signal=signal_on,
-                                              v=v)
+                                              v=v,
+                                              twin_context=twin_ctx is not None)
+            if twin_ctx is not None and twin_ctx.finish is not None:
+                msgs = twin_ctx.finish(msgs)
             try:
-                res = await llm_client.chat(
+                res = await _runtime_chat(
                     model=model,
                     messages=msgs,
                     purpose=_PURPOSE,
@@ -9425,7 +9834,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             raw, _leak = await finalize_draft(
                 raw, account_id=account_id, fan_id=fan_id, purpose=_PURPOSE,
                 consistency=ConsistencyCtx(
-                    fan=f, persona=persona, model=model,
+                    fan=f, persona=fan_persona, model=model,
                     last_inbound=c.last_body or "") if consistency_on else None,
                 strip_emoji=strip_emoji_on, v=v)
             if _leak:
@@ -9915,7 +10324,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                   # month unspent.
                                   "draft_life_tip_big": big}
                         drafts_stored += 1
-                    await ax.enqueue_job(
+                    await _runtime_enqueue(
                         account_id, _PURPOSE,
                         payload={"only_fan_ids": [int(fan_id)], "rhythm_resume": True,
                                  # The cover line is decided WITH the gap it explains;
@@ -9993,6 +10402,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             teaser_msg_id: int | None = None
             send_failed = False
             first_no_id = False
+            wire_stopped = False
+            own_ids: list[int] = []     # bubbles of this reply already on the wire
             for idx, part in enumerate(parts):
                 # The LAST bubble carries the offer attach: free media for a
                 # teaser; locked media + free pitch text (locked_text=False —
@@ -10095,11 +10506,26 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         run_inline_s += float(drop) - float(pace.total_s)
                         pace = pacing.silent_hold(float(drop), typing_s, pace_cfg)
                     ppv_drops += 1
-                await hold_with_typing(account_id, fan_id, pace.total_s,
+                await _runtime_hold(account_id, fan_id, pace.total_s,
                                        typing_indicator=typing_indicator,
                                        quiet_s=pace.quiet_s,
                                        think_at_s=pace.think_at_s,
                                        think_for_s=pace.think_for_s)
+                # LAST LOOK AT THE WIRE, per bubble and AFTER the hold: the
+                # `_thread_moved_on` above ran before any pacing, so a pause, a
+                # takeover or a human answer during the hold or between bubbles
+                # would otherwise still be talked over. Nothing after this line
+                # waits before the POST.
+                _wire = await _stopped_at_wire(
+                    account_id, fan_id, c.last_in_at, now, tuple(own_ids),
+                    ignore_welcome=(fan_id in turn_handoff_ids))
+                if _wire:
+                    stale_drops[_wire] += 1
+                    log.info("ai_chatter stopped at the wire account=%s fan=%s "
+                             "bubble=%d/%d reason=%s", account_id, fan_id,
+                             idx + 1, len(parts), _wire)
+                    wire_stopped = True
+                    break
                 try:
                     result = await asyncio.to_thread(
                         lambda p=part, kw=kwargs: client.send_message(fan_id, p, **kw))
@@ -10135,6 +10561,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         break
                 msg_id = result.get("id") if isinstance(result, dict) else None
                 if msg_id:
+                    own_ids.append(int(msg_id))
                     await write_outbound_attribution(
                         account_id=account_id,
                         fan_id=int(fan_id),
@@ -10165,6 +10592,12 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 elif idx == 0:
                     first_no_id = True
                     break
+            if wire_stopped:
+                # Dropped (nothing sent) or cut short after earlier bubbles. Like
+                # a failed send, the rest of the reply's bookkeeping is skipped;
+                # the thread now ends on our outbound or on theirs, so the turn
+                # gate does not re-admit the fan.
+                continue
             if send_failed:
                 continue
             if first_no_id and not sent_ok:
@@ -10197,7 +10630,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     # A gif is PICKED, not typed, so there is no typing time in this
                     # hold at all — see pacing.silent_hold.
                     s_pace = pacing.silent_hold(s_hold, 0.0, pace_cfg)
-                    await hold_with_typing(account_id, fan_id, s_pace.total_s,
+                    await _runtime_hold(account_id, fan_id, s_pace.total_s,
                                            typing_indicator=typing_indicator,
                                            quiet_s=s_pace.quiet_s)
                     try:
@@ -10432,7 +10865,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     # in _run_nudge if he buys or replies first. Off by default.
                     if nudge_on and nudge_min > 0:
                         try:
-                            await ax.enqueue_job(
+                            await _runtime_enqueue(
                                 account_id, "ai_chatter",
                                 payload={"nudge_fan_ids": [int(fan_id)]},
                                 run_at=now + timedelta(minutes=nudge_min))

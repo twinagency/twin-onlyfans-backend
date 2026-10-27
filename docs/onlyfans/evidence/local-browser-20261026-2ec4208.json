@@ -1,0 +1,17 @@
+{
+  "backend_sha": "32f526304a442caafa0f843048a1ec95a73f1c8f",
+  "dashboard_sha": "2ec4208e3869ef1f9f61c41647d03a8aafcc3d34",
+  "postgres": "16.15",
+  "test": "service/tests/onlyfans_demo.py --dashboard smoke-dashboard-a8e66 --port 13020 --smoke",
+  "result": "passed",
+  "exit_code": 0,
+  "duration_seconds": 174.16,
+  "synthetic_data": true,
+  "live_provider_credentials": false,
+  "external_browser_requests": 0,
+  "native_b_assertions": 40,
+  "native_b_failed": 0,
+  "native_b_skipped": 0,
+  "qualification": "Local integrated browser rehearsal; simulated provider activity. Exact paired CI, release manifest and controlled real-provider acceptance remain outstanding.",
+  "verified_at": "2026-10-26T12:00:13.347Z"
+}

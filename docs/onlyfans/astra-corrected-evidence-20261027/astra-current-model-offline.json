@@ -1,0 +1,5 @@
+{
+  "status": 0,
+  "stdout": "{\"modelId\": \"openrouter/deepseek-v4.1-flash\", \"wireModel\": \"deepseek/deepseek-v4.1-flash\", \"provider\": \"openrouter\", \"supportedByFastt\": true, \"fasttWireModel\": \"deepseek/deepseek-v4.1-flash\", \"fasttEndpoint\": \"https://openrouter.ai/api/v1/chat/completions\", \"networkCalls\": 0}\r\n",
+  "stderr": ""
+}

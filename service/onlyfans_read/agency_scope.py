@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 import json
 import re
+import os
 
 HEADER = "x-onlyfans-agency-scope"
 VERSION_HEADER = "X-OnlyFans-Access-Version"
@@ -53,6 +54,11 @@ def creator_allowed(creator_id):
 
 def actor_allowed(actor):
     scope = current_scope.get()
+    # Internal import tasks are named explicitly, never as fabricated users.
+    # They exist only in the worker and cannot enter an HTTP agency scope.
+    if (scope is None and os.environ.get("ONLYFANS_PROCESS_ROLE") == "worker"
+            and type(actor) is str and re.fullmatch(r"worker-import:[a-f0-9]{64}", actor)):
+        return True
     return (type(actor) is str and re.fullmatch(ACTOR_PATTERN, actor) is not None
             and (scope is None or scope.can_manage and actor == scope.actor))
 
@@ -95,9 +101,15 @@ class AgencyScopeMiddleware:
                 scope = {**scope, "path": path, "raw_path": path.encode()}
             if grant is not None:
                 path = scope["path"]
-                allowed = path == "/onlyfans/api/v1/status" or bool(re.fullmatch(
-                    r"/onlyfans/(?:api|control|content|configuration|campaign)/v1/accounts(?:/[A-Za-z0-9._:-]{1,64}(?:/.*)?)?", path))
-                if not allowed or path.endswith("/operations") or scope["method"] not in {"GET", "HEAD", "POST"} or (scope["method"] == "POST" and not grant.can_manage):
+                allowed = path == "/onlyfans/api/v1/status" or (path == "/onlyfans/api/v1/earnings" and scope["method"] in {"GET", "HEAD"}) or bool(re.fullmatch(
+                    r"/onlyfans/(?:(?:api|control|content|configuration|campaign|offer-import|content-sync)/v1|content/v2)/accounts(?:/[A-Za-z0-9._:-]{1,64}(?:/.*)?)?", path))
+                sync = path.startswith("/onlyfans/content-sync/v1/")
+                # content-sync/v1 lists its own operations; a draft chunk upload is the only PUT.
+                chunk = sync and scope["method"] == "PUT" and bool(re.fullmatch(
+                    r"/onlyfans/content-sync/v1/accounts/[A-Za-z0-9._:-]{1,64}/drafts/[0-9a-f-]{36}/files/[0-9a-f-]{36}/chunks/[0-9]{1,6}", path))
+                if (not allowed
+                        or scope["method"] not in ({"GET", "HEAD", "POST"} | ({"PUT"} if chunk else set()))
+                        or (scope["method"] in {"POST", "PUT"} and not grant.can_manage)):
                     raise ValueError("agency action unavailable")
         except (ValueError, TypeError, RecursionError):
             return await JSONResponse({"ok": False, "code": "agency_scope_denied", "error": "That agency request is not available."},

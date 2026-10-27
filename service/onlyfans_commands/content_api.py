@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from onlyfans_read.contract import ID_PATTERN
-from onlyfans_runtime.content_management import get_content, update_content, item_reference, InvalidContent
+from onlyfans_runtime.content_management import get_content, update_content, item_reference, InvalidContent, VersionRequired
 from onlyfans_runtime.store import Refused
 from .api import unique_keys
 
@@ -40,26 +40,39 @@ def refuse(code, status, message):
     return response({"ok": False, "code": code, "error": message}, status)
 
 
-def authenticate(request, account_id, item_id):
+def authenticate_version(request, account_id, item_id, schema):
+    """Version-neutral content-purpose credential check.
+
+    Returns (store, tenant) or a (code, status, message) refusal for the
+    caller's own contract envelope. item_id=None checks only the account.
+    """
     config = configured()
     if config is None:
-        return refuse("content_unavailable", 503, "Content editing is not configured.")
+        return ("content_unavailable", 503, "Content editing is not configured.")
     token, tenant = config
     auth = request.headers.get("authorization", "").split()
     if len(auth) != 2 or auth[0].lower() != "bearer" or not hmac.compare_digest(auth[1].encode(), token.encode()):
-        return refuse("unauthorized", 401, "The content credential was not accepted.")
-    if request.headers.get(HEADER) != SCHEMA:
-        return refuse("unsupported_schema", 400, "The content contract version is required.")
+        return ("unauthorized", 401, "The content credential was not accepted.")
+    if request.headers.get(HEADER) != schema:
+        return ("unsupported_schema", 400, "The content contract version is required.")
     try:
         if not ID_PATTERN.fullmatch(account_id):
             raise InvalidContent()
-        item_reference(item_id)
+        if item_id is not None:
+            item_reference(item_id)
     except InvalidContent:
-        return refuse("invalid_request", 400, "That content reference is invalid.")
+        return ("invalid_request", 400, "That content reference is invalid.")
     store = getattr(request.app.state, "control_store", None)
     if store is None:
-        return refuse("content_unavailable", 503, "Content editing is unavailable.")
+        return ("content_unavailable", 503, "Content editing is unavailable.")
     return store, tenant
+
+
+def authenticate(request, account_id, item_id):
+    context = authenticate_version(request, account_id, item_id, SCHEMA)
+    if isinstance(context, tuple) and len(context) == 3:
+        return refuse(*context)
+    return context
 
 
 @router.get("/accounts/{account_id}/items/{item_id}")
@@ -101,6 +114,8 @@ async def post(request: Request, account_id: str, item_id: str):
         revision, fingerprint = await asyncio.to_thread(update_content, store, tenant, account_id, item_id,
             patch=body["patch"], expected_revision=body["expectedRevision"], expected_fingerprint=body["expectedFingerprint"],
             command_key=body["commandKey"], actor=body["actor"])
+    except VersionRequired as exc:
+        return refuse("version_required", 409, str(exc))
     except InvalidContent as exc:
         return refuse("invalid_content", 400, str(exc))
     except Refused as exc:

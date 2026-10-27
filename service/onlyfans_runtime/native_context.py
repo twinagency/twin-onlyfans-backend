@@ -37,6 +37,9 @@ def versions(session, account_id, fan_id):
         facts, source = effective(session, row)
         config["persona_facts_json"] = canonical(facts) if facts else None
     snapshot = {"config": config, "fan": fan, "profile": profile, "creatorFactsSource": source}
+    # Source-backed older history and operator corrections join the fenced snapshot (generation, queue and egress).
+    from .launch_history_memory.memory import enrich_snapshot
+    snapshot = enrich_snapshot(session, account_id, fan_id, snapshot)
     return hashlib.sha256(canonical(snapshot).encode()).hexdigest(), snapshot
 
 

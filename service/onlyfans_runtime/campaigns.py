@@ -335,10 +335,10 @@ class CampaignService:
             return dict(campaign=summary, recipients=recipients)
 
     def queue_due(self, tenant_id, account_id):
-        """At most one intent/account/cycle; all sends use TextAuthority later."""
+        """Probe a bounded fair page; enqueue at most one shared-authority intent."""
         from .text_delivery import TextAuthority
         authority = TextAuthority(self.store)
-        selected = None
+        selected = []
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant_id, account_id)
             now = authority._db_now(s)
@@ -353,38 +353,54 @@ class CampaignService:
                     OfCampaign.account_id == account_id, OfCampaign.binding_id == runtime.binding_id,
                     OfCampaign.status.in_(("scheduled", "running")), OfCampaign.scheduled_at <= now,
                     OfCampaignRecipient.status == "pending", OfCampaignRecipient.intent_id.is_(None))
-                .order_by(OfCampaign.scheduled_at, OfCampaign.campaign_id, OfCampaignRecipient.fan_id).limit(32)).all()
+                .order_by(OfCampaign.updated_at, OfCampaignRecipient.updated_at,
+                    OfCampaign.scheduled_at, OfCampaign.campaign_id, OfCampaignRecipient.fan_id).limit(32)).all()
             for campaign, recipient in candidates:
+                # Persist the examination position, including deferrals. On the
+                # next bounded cycle untouched recipients/campaigns come first.
+                # No send, control or audience permission is granted here.
+                campaign.updated_at = recipient.updated_at = now
                 state = s.get(OfConversationState, (account_id, recipient.fan_id))
                 fan = s.get(Fan, (account_id, recipient.fan_id))
                 if state is None or fan is None or fan.is_muted or state.mode != "automated" or state.takeover_state != "none":
-                    recipient.status, recipient.reason, recipient.updated_at = "skipped", "contact_or_owner_unavailable", now
+                    recipient.status, recipient.reason = "skipped", "contact_or_owner_unavailable"
                     continue
                 if not _offer_current(s, campaign):
-                    recipient.reason, recipient.updated_at = "catalogue_snapshot_changed", now
-                    break
+                    recipient.reason = "catalogue_snapshot_changed"
+                    continue
                 if campaign.catalog_item_id is not None:
                     from .media_delivery import assert_unowned
                     try:
                         assert_unowned(s, account_id, recipient.fan_id, json.loads(campaign.catalog_snapshot_json))
                     except Refused as exc:
                         if str(exc) == "catalogue media already owned":
-                            recipient.status, recipient.reason, recipient.updated_at = "skipped", "catalogue_media_already_owned", now
-                            continue
-                        recipient.reason, recipient.updated_at = "ownership_evidence_unavailable", now
-                        break
-                selected = dict(campaign_id=campaign.campaign_id, fan_id=recipient.fan_id,
+                            recipient.status, recipient.reason = "skipped", "catalogue_media_already_owned"
+                        else:
+                            recipient.reason = "ownership_evidence_unavailable"
+                        continue
+                selected.append(dict(campaign_id=campaign.campaign_id, fan_id=recipient.fan_id,
                     expected_revision=state.revision, body=campaign.body, actor=campaign.actor,
-                    catalog_item_id=campaign.catalog_item_id)
-                break
-        if selected is None:
-            return None
-        fan_id = selected.pop("fan_id")
-        try:
-            return authority.prepare(tenant_id, account_id, fan_id,
-                command_key=intent_key(selected["campaign_id"], fan_id),
-                origin="campaign", ttl_seconds=300, **selected)
-        except Refused:
-            # No intent was committed. Re-read current canonical state next
-            # cycle; never create a second command key or infer a wire failure.
-            return None
+                    catalog_item_id=campaign.catalog_item_id))
+        for candidate in selected:
+            fan_id = candidate.pop("fan_id")
+            try:
+                # The existing owner revalidates history, budget, pause/cancel,
+                # no-contact and frozen terms. Campaign origin stays strict.
+                return authority.prepare(tenant_id, account_id, fan_id,
+                    command_key=intent_key(candidate["campaign_id"], fan_id),
+                    origin="campaign", ttl_seconds=300, **candidate)
+            except Refused:
+                # Failed preparation committed no intent. Retain the same
+                # identity and move past this recipient rather than replaying
+                # the first blocked fan forever.
+                with Session(self.engine) as s, s.begin():
+                    self.store._runtime(s, tenant_id, account_id)
+                    campaign = s.get(OfCampaign, (account_id, candidate["campaign_id"]))
+                    recipient = s.get(OfCampaignRecipient,
+                        (account_id, candidate["campaign_id"], fan_id))
+                    if (campaign is not None and campaign.status in {"scheduled", "running"}
+                            and recipient is not None and recipient.status == "pending"
+                            and recipient.intent_id is None):
+                        recipient.reason = "preparation_deferred"
+                        recipient.updated_at = campaign.updated_at = authority._db_now(s)
+        return None

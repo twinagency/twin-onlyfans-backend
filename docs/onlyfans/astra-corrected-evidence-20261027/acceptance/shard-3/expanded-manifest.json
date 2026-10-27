@@ -1,0 +1,28 @@
+{
+  "pytestFiles": [
+    "service/tests/test_onlyfans_acceptance_tools.py",
+    "service/tests/test_onlyfans_campaign_reporting_pg.py",
+    "service/tests/test_onlyfans_connection_renewal_pg.py",
+    "service/tests/test_onlyfans_content_sync_carrier.py",
+    "service/tests/test_onlyfans_creator_facts_pg.py",
+    "service/tests/test_onlyfans_egress_pg.py",
+    "service/tests/test_onlyfans_fastt_recovery_pg.py",
+    "service/tests/test_onlyfans_history_diagnostics.py",
+    "service/tests/test_onlyfans_launch_credential_status_pg.py",
+    "service/tests/test_onlyfans_launch_history_memory_planning_pg.py",
+    "service/tests/test_onlyfans_launch_ledger_boundary.py",
+    "service/tests/test_onlyfans_launch_personality_credentials_pg.py",
+    "service/tests/test_onlyfans_launch_reconciled_scope_pg.py",
+    "service/tests/test_onlyfans_ledger_markers_pg.py",
+    "service/tests/test_onlyfans_message_media.py",
+    "service/tests/test_onlyfans_native_loopback_pg.py",
+    "service/tests/test_onlyfans_offer_import.py",
+    "service/tests/test_onlyfans_post_buy_receipt_pg.py",
+    "service/tests/test_onlyfans_readonly_inbox_pg.py",
+    "service/tests/test_onlyfans_release_rehearsal_pg.py",
+    "service/tests/test_onlyfans_vault_editing_pg.py",
+    "service/tests/test_onlyfans_vault_response_limits.py",
+    "service/tests/test_onlyfans_worker_pg.py"
+  ],
+  "separateScripts": []
+}

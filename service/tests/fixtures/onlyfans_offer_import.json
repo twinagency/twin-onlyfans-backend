@@ -1,0 +1,571 @@
+{
+ "note": "Synthetic rows using the exact top-level key set observed read-only on a real verified creator session on 2026-10-23 (paid outgoing chat messages). Values are invented; no real ids, text or URLs.",
+ "ownerId": 700001,
+ "fanId": 900001,
+ "observedPaidPostContract": null,
+ "paidPostNote": "Paid-post response contract not yet verified; the first read-only posts request returned a non-200 status and further live probing awaits an authorized window.",
+ "cases": [
+  {
+   "name": "one_video_no_preview",
+   "row": {
+    "canBePinned": true,
+    "canPurchase": true,
+    "canPurchaseReason": "",
+    "canReport": false,
+    "cancelSeconds": 0,
+    "changedAt": "2026-09-01T12:00:00+00:00",
+    "chatUserId": 900001,
+    "createdAt": "2026-09-01T12:00:00+00:00",
+    "fromUser": {
+     "id": 700001
+    },
+    "giphyId": null,
+    "id": 5001,
+    "isAddedToBookmarks": false,
+    "isCouplePeopleMedia": false,
+    "isFree": false,
+    "isFromQueue": false,
+    "isLiked": false,
+    "isMarkdownDisabled": false,
+    "isMediaReady": true,
+    "isNew": false,
+    "isOpened": false,
+    "isPinned": false,
+    "isReportedByMe": false,
+    "isTip": false,
+    "lockedText": false,
+    "media": [
+     {
+      "id": 31,
+      "type": "video",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 31,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     }
+    ],
+    "mediaCount": 1,
+    "previews": [],
+    "price": 19.99,
+    "queueId": null,
+    "releaseForms": [],
+    "responseType": "message",
+    "text": "<p>synthetic offer</p>"
+   },
+   "expect": {
+    "mediaIds": [
+     31
+    ],
+    "previewIds": [],
+    "lockedText": false,
+    "priceCents": 1999,
+    "context": "direct",
+    "reasons": []
+   }
+  },
+  {
+   "name": "mixed_bundle_photo_preview",
+   "row": {
+    "canBePinned": true,
+    "canPurchase": true,
+    "canPurchaseReason": "",
+    "canReport": false,
+    "cancelSeconds": 0,
+    "changedAt": "2026-09-01T12:00:00+00:00",
+    "chatUserId": 900001,
+    "createdAt": "2026-09-01T12:00:00+00:00",
+    "fromUser": {
+     "id": 700001
+    },
+    "giphyId": null,
+    "id": 5002,
+    "isAddedToBookmarks": false,
+    "isCouplePeopleMedia": false,
+    "isFree": false,
+    "isFromQueue": false,
+    "isLiked": false,
+    "isMarkdownDisabled": false,
+    "isMediaReady": true,
+    "isNew": false,
+    "isOpened": false,
+    "isPinned": false,
+    "isReportedByMe": false,
+    "isTip": false,
+    "lockedText": false,
+    "media": [
+     {
+      "id": 41,
+      "type": "photo",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 0,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     },
+     {
+      "id": 42,
+      "type": "video",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 31,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     },
+     {
+      "id": 43,
+      "type": "photo",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 0,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     }
+    ],
+    "mediaCount": 3,
+    "previews": [
+     41
+    ],
+    "price": 10.07,
+    "queueId": null,
+    "releaseForms": [],
+    "responseType": "message",
+    "text": "<p>synthetic offer</p>"
+   },
+   "expect": {
+    "mediaIds": [
+     41,
+     42,
+     43
+    ],
+    "previewIds": [
+     41
+    ],
+    "lockedText": false,
+    "priceCents": 1007,
+    "context": "direct",
+    "reasons": []
+   }
+  },
+  {
+   "name": "two_videos_queue",
+   "row": {
+    "canBePinned": true,
+    "canPurchase": true,
+    "canPurchaseReason": "",
+    "canReport": false,
+    "cancelSeconds": 0,
+    "changedAt": "2026-09-01T12:00:00+00:00",
+    "chatUserId": 900001,
+    "createdAt": "2026-09-01T12:00:00+00:00",
+    "fromUser": {
+     "id": 700001
+    },
+    "giphyId": null,
+    "id": 5003,
+    "isAddedToBookmarks": false,
+    "isCouplePeopleMedia": false,
+    "isFree": false,
+    "isFromQueue": true,
+    "isLiked": false,
+    "isMarkdownDisabled": false,
+    "isMediaReady": true,
+    "isNew": false,
+    "isOpened": false,
+    "isPinned": false,
+    "isReportedByMe": false,
+    "isTip": false,
+    "lockedText": false,
+    "media": [
+     {
+      "id": 51,
+      "type": "video",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 31,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     },
+     {
+      "id": 52,
+      "type": "video",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 31,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     }
+    ],
+    "mediaCount": 2,
+    "previews": [],
+    "price": 200.00,
+    "queueId": null,
+    "releaseForms": [],
+    "responseType": "message",
+    "text": "<p>synthetic offer</p>"
+   },
+   "expect": {
+    "mediaIds": [
+     51,
+     52
+    ],
+    "previewIds": [],
+    "lockedText": false,
+    "priceCents": 20000,
+    "context": "queue",
+    "reasons": []
+   }
+  },
+  {
+   "name": "previews_missing",
+   "row": {
+    "canBePinned": true,
+    "canPurchase": true,
+    "canPurchaseReason": "",
+    "canReport": false,
+    "cancelSeconds": 0,
+    "changedAt": "2026-09-01T12:00:00+00:00",
+    "chatUserId": 900001,
+    "createdAt": "2026-09-01T12:00:00+00:00",
+    "fromUser": {
+     "id": 700001
+    },
+    "giphyId": null,
+    "id": 5004,
+    "isAddedToBookmarks": false,
+    "isCouplePeopleMedia": false,
+    "isFree": false,
+    "isFromQueue": false,
+    "isLiked": false,
+    "isMarkdownDisabled": false,
+    "isMediaReady": true,
+    "isNew": false,
+    "isOpened": false,
+    "isPinned": false,
+    "isReportedByMe": false,
+    "isTip": false,
+    "lockedText": false,
+    "media": [
+     {
+      "id": 61,
+      "type": "photo",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 0,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     }
+    ],
+    "mediaCount": 1,
+    "price": 3.00,
+    "queueId": null,
+    "releaseForms": [],
+    "responseType": "message",
+    "text": "<p>synthetic offer</p>"
+   },
+   "expect": {
+    "mediaIds": [
+     61
+    ],
+    "previewIds": null,
+    "lockedText": false,
+    "priceCents": 300,
+    "context": "direct",
+    "reasons": [
+     "previews_unknown"
+    ]
+   }
+  },
+  {
+   "name": "locked_text_true",
+   "row": {
+    "canBePinned": true,
+    "canPurchase": true,
+    "canPurchaseReason": "",
+    "canReport": false,
+    "cancelSeconds": 0,
+    "changedAt": "2026-09-01T12:00:00+00:00",
+    "chatUserId": 900001,
+    "createdAt": "2026-09-01T12:00:00+00:00",
+    "fromUser": {
+     "id": 700001
+    },
+    "giphyId": null,
+    "id": 5005,
+    "isAddedToBookmarks": false,
+    "isCouplePeopleMedia": false,
+    "isFree": false,
+    "isFromQueue": false,
+    "isLiked": false,
+    "isMarkdownDisabled": false,
+    "isMediaReady": true,
+    "isNew": false,
+    "isOpened": false,
+    "isPinned": false,
+    "isReportedByMe": false,
+    "isTip": false,
+    "lockedText": true,
+    "media": [
+     {
+      "id": 71,
+      "type": "photo",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 0,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     }
+    ],
+    "mediaCount": 1,
+    "previews": [],
+    "price": 5.00,
+    "queueId": null,
+    "releaseForms": [],
+    "responseType": "message",
+    "text": "<p>synthetic offer</p>"
+   },
+   "expect": {
+    "mediaIds": [
+     71
+    ],
+    "previewIds": [],
+    "lockedText": true,
+    "priceCents": 500,
+    "context": "direct",
+    "reasons": [
+     "locked_text"
+    ]
+   }
+  },
+  {
+   "name": "locked_text_missing",
+   "row": {
+    "canBePinned": true,
+    "canPurchase": true,
+    "canPurchaseReason": "",
+    "canReport": false,
+    "cancelSeconds": 0,
+    "changedAt": "2026-09-01T12:00:00+00:00",
+    "chatUserId": 900001,
+    "createdAt": "2026-09-01T12:00:00+00:00",
+    "fromUser": {
+     "id": 700001
+    },
+    "giphyId": null,
+    "id": 5006,
+    "isAddedToBookmarks": false,
+    "isCouplePeopleMedia": false,
+    "isFree": false,
+    "isFromQueue": false,
+    "isLiked": false,
+    "isMarkdownDisabled": false,
+    "isMediaReady": true,
+    "isNew": false,
+    "isOpened": false,
+    "isPinned": false,
+    "isReportedByMe": false,
+    "isTip": false,
+    "media": [
+     {
+      "id": 81,
+      "type": "photo",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 0,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     }
+    ],
+    "mediaCount": 1,
+    "previews": [],
+    "price": 5.00,
+    "queueId": null,
+    "releaseForms": [],
+    "responseType": "message",
+    "text": "<p>synthetic offer</p>"
+   },
+   "expect": {
+    "mediaIds": [
+     81
+    ],
+    "previewIds": [],
+    "lockedText": null,
+    "priceCents": 500,
+    "context": "direct",
+    "reasons": [
+     "locked_text_unknown"
+    ]
+   }
+  },
+  {
+   "name": "all_preview_no_paid",
+   "row": {
+    "canBePinned": true,
+    "canPurchase": true,
+    "canPurchaseReason": "",
+    "canReport": false,
+    "cancelSeconds": 0,
+    "changedAt": "2026-09-01T12:00:00+00:00",
+    "chatUserId": 900001,
+    "createdAt": "2026-09-01T12:00:00+00:00",
+    "fromUser": {
+     "id": 700001
+    },
+    "giphyId": null,
+    "id": 5007,
+    "isAddedToBookmarks": false,
+    "isCouplePeopleMedia": false,
+    "isFree": false,
+    "isFromQueue": false,
+    "isLiked": false,
+    "isMarkdownDisabled": false,
+    "isMediaReady": true,
+    "isNew": false,
+    "isOpened": false,
+    "isPinned": false,
+    "isReportedByMe": false,
+    "isTip": false,
+    "lockedText": false,
+    "media": [
+     {
+      "id": 91,
+      "type": "photo",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 0,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     }
+    ],
+    "mediaCount": 1,
+    "previews": [
+     91
+    ],
+    "price": 5.00,
+    "queueId": null,
+    "releaseForms": [],
+    "responseType": "message",
+    "text": "<p>synthetic offer</p>"
+   },
+   "expect": {
+    "mediaIds": [
+     91
+    ],
+    "previewIds": [
+     91
+    ],
+    "lockedText": false,
+    "priceCents": 500,
+    "context": "direct",
+    "reasons": [
+     "no_paid_content"
+    ]
+   }
+  },
+  {
+   "name": "price_out_of_range",
+   "row": {
+    "canBePinned": true,
+    "canPurchase": true,
+    "canPurchaseReason": "",
+    "canReport": false,
+    "cancelSeconds": 0,
+    "changedAt": "2026-09-01T12:00:00+00:00",
+    "chatUserId": 900001,
+    "createdAt": "2026-09-01T12:00:00+00:00",
+    "fromUser": {
+     "id": 700001
+    },
+    "giphyId": null,
+    "id": 5008,
+    "isAddedToBookmarks": false,
+    "isCouplePeopleMedia": false,
+    "isFree": false,
+    "isFromQueue": false,
+    "isLiked": false,
+    "isMarkdownDisabled": false,
+    "isMediaReady": true,
+    "isNew": false,
+    "isOpened": false,
+    "isPinned": false,
+    "isReportedByMe": false,
+    "isTip": false,
+    "lockedText": false,
+    "media": [
+     {
+      "id": 95,
+      "type": "photo",
+      "canView": true,
+      "convertedToVideo": false,
+      "createdAt": "2026-09-01T12:00:00+00:00",
+      "duration": 0,
+      "files": {},
+      "hasCustomPreview": false,
+      "hasError": false,
+      "isReady": true,
+      "videoSources": {}
+     }
+    ],
+    "mediaCount": 1,
+    "previews": [],
+    "price": 250.00,
+    "queueId": null,
+    "releaseForms": [],
+    "responseType": "message",
+    "text": "<p>synthetic offer</p>"
+   },
+   "expect": {
+    "mediaIds": [
+     95
+    ],
+    "previewIds": [],
+    "lockedText": false,
+    "priceCents": 25000,
+    "context": "direct",
+    "reasons": [
+     "price_out_of_range"
+    ]
+   }
+  }
+ ]
+}

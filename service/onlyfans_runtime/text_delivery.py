@@ -132,6 +132,13 @@ class TextAuthority:
         self.store = store
         self.engine = store.engine
 
+    def _engagement(self):
+        # Hooks share this authority's clock and the caller's open transaction.
+        from .launch_engagement.service import EngagementService
+        service = EngagementService(self.store)
+        service.authority = self
+        return service
+
     @staticmethod
     def _db_now(s):
         return s.scalar(select(func.clock_timestamp())).astimezone(timezone.utc).replace(tzinfo=None)
@@ -157,6 +164,26 @@ class TextAuthority:
                 json.loads(row.media_json), json.loads(row.preview_json), row.price_cents)
         except (ValueError, TypeError):
             return None
+
+    def _input_current(self, s, row, state):
+        if row.input_revision == state.input_revision:
+            return True
+        delta=state.input_revision-row.input_revision
+        if row.origin!="manual" or not 0<delta<=MAX_QUEUED:
+            return False
+        # Only this operator's already confirmed outputs may advance a queued
+        # manual message's transcript. New fan input and unrelated edits still
+        # invalidate it; controls and media terms are checked independently.
+        changed=s.execute(select(Message,OfTextIntent).outerjoin(OfTextIntent,
+            (OfTextIntent.account_id==Message.account_id)&(OfTextIntent.fan_id==Message.fan_id)
+            &(OfTextIntent.provider_message_id==Message.message_id)&(OfTextIntent.origin=="manual")
+            &(OfTextIntent.actor==row.actor)&(OfTextIntent.control_revision==row.control_revision)
+            &(OfTextIntent.status=="accepted")&(OfTextIntent.projected_at>=row.created_at))
+            .where(Message.account_id==row.account_id,Message.fan_id==row.fan_id,
+                Message.ingested_at>=row.created_at).limit(delta+1)).all()
+        return len(changed)==delta and all(proof is not None and msg.direction=="out" and not msg.is_unsent
+            and msg.body==proof.body and msg.price_cents==proof.price_cents and msg.media_ids==proof.media_json
+            and proof.payload_hash==self._intent_hash(proof) for msg,proof in changed)
 
     @staticmethod
     def _media_current(s, row, policy, now):
@@ -219,7 +246,7 @@ class TextAuthority:
 
     @staticmethod
     def _retained_hold(s, account_id, fan_id):
-        return s.scalar(select(OfMessageDelivery.message_id).where(
+        return Store._native_unresolved(s, account_id, fan_id) or s.scalar(select(OfMessageDelivery.message_id).where(
             OfMessageDelivery.account_id == account_id, OfMessageDelivery.fan_id == fan_id,
             OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES)).limit(1)) is not None
 
@@ -231,7 +258,13 @@ class TextAuthority:
         if (runtime.recovery_needed or runtime.pending_events or runtime.last_sync_at is None
                 or runtime.last_sync_at < now - timedelta(seconds=MAX_SYNC_AGE_SECONDS)
                 or runtime.last_sync_at > now + timedelta(minutes=5)):
-            return "history_not_current"
+            from .store import fan_history_current
+            from .fastt_manual import fastt_owned
+            # A human message on a fan the FASTT runner owns is not composed from a
+            # transcript, so the account-wide sync gate does not apply to it.
+            human_on_fastt_fan = origin == "manual" and fan is not None and fastt_owned(runtime.account_id, fan.fan_id)
+            if not (fan is not None and fan_history_current(s, runtime.account_id, fan.fan_id)) and not human_on_fastt_fan:
+                return "history_not_current"
         if s.scalar(select(OfIngress.event_key).where(
                 OfIngress.account_id == runtime.account_id, OfIngress.status == "quarantined").limit(1)) is not None:
             return "history_quarantined"
@@ -241,7 +274,7 @@ class TextAuthority:
             return "contact_blocked"
         if state.takeover_state == "requested":
             return "takeover_pending"
-        if origin in {"automated", "campaign"} and (state.mode != "automated" or state.takeover_state != "none"):
+        if origin in {"automated", "campaign", "engagement"} and (state.mode != "automated" or state.takeover_state != "none"):
             return "owner_changed"
         if origin == "manual" and (state.mode != "human_controlled" or state.takeover_state not in {"none", "effective"}):
             return "human_control_required"
@@ -260,18 +293,23 @@ class TextAuthority:
 
     def prepare(self, tenant_id, account_id, fan_id, *, command_key, expected_revision,
                 body, origin, actor, work: Claim | None = None, ttl_seconds=300, native_plan_id=None,
-                catalog_item_id=None, quoted_price_cents=None, campaign_id=None):
+                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None):
         _id(fan_id)
         if (not isinstance(command_key, str) or not 1 <= len(command_key) <= 64
                 or type(expected_revision) is not int or expected_revision < 0
                 or not isinstance(body, str) or not body.strip() or len(body.encode()) > 20000
-                or origin not in {"automated", "manual", "campaign"}
+                or origin not in {"automated", "manual", "campaign", "engagement"}
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 600):
             raise Refused("invalid text intent")
         if (origin == "campaign" and (campaign_id is None or work is not None or native_plan_id is not None)
                 or origin != "campaign" and campaign_id is not None):
             raise Refused("invalid campaign intent")
+        if (origin == "engagement") != (engagement_action_id is not None) or (
+                origin == "engagement" and (type(engagement_action_id) is not str or len(engagement_action_id) != 36
+                    or work is not None or native_plan_id is not None or campaign_id is not None
+                    or quoted_price_cents is not None)):
+            raise Refused("invalid engagement intent")
         if work is not None and (not isinstance(work, Claim) or work.account_id != account_id or work.fan_id != fan_id):
             raise Refused("work scope mismatch")
         if catalog_item_id is not None:
@@ -285,6 +323,8 @@ class TextAuthority:
                        actor=actor, work=asdict(work) if work else None, ttl_seconds=ttl_seconds)
         if campaign_id is not None:
             request["campaign_id"] = campaign_id
+        if engagement_action_id is not None:
+            request["engagement_action_id"] = engagement_action_id
         if native_plan_id is not None:
             if type(native_plan_id) is not str or len(native_plan_id) != 36 or origin != "automated" or work is None:
                 raise Refused("invalid native plan reference")
@@ -322,6 +362,10 @@ class TextAuthority:
                 from .campaigns import validate_prepare
                 recipient = validate_prepare(s, runtime, fan_id=fan_id, body=body, campaign_id=campaign_id,
                     command_key=command_key, actor=actor, now=now, catalog_item_id=catalog_item_id)
+            engagement = None
+            if origin == "engagement":
+                # Same transaction as the intent below: validation and attach commit together.
+                engagement = self._engagement()
             terms = None
             if catalog_item_id is not None:
                 from .media_delivery import catalog_terms, assert_unowned
@@ -359,10 +403,16 @@ class TextAuthority:
                 row.lease_token = row.lease_until = None
             elif work is not None:
                 raise Refused("manual intent cannot consume automated work")
+            action = None
+            if engagement is not None:
+                action = engagement.validate_prepare(s, runtime, action_id=engagement_action_id, fan_id=fan_id,
+                    command_key=command_key, body=body, terms=terms, now=now)
+                if (action.fan_id != fan_id or action.expires_at <= now):
+                    raise Refused("engagement_delivery_changed")
             identity = str(uuid.uuid4())
             if native_plan_id is not None:
                 plan.status, plan.intent_id = "queued", identity
-            s.add(OfTextIntent(account_id=account_id, intent_id=identity, binding_id=runtime.binding_id,
+            intent = OfTextIntent(account_id=account_id, intent_id=identity, binding_id=runtime.binding_id,
                                fan_id=fan_id, command_key=command_key, actor=actor, origin=origin,
                                body=body, command_hash=fingerprint,
                                payload_hash=self._wire_hash(account_id, fan_id, body,
@@ -370,16 +420,22 @@ class TextAuthority:
                                input_revision=state.input_revision, policy_revision=policy.revision,
                                work_generation=work.generation if work else None,
                                work_token=work.token if work else None, status="queued", created_at=now,
-                               updated_at=now, expires_at=min(now + timedelta(seconds=ttl_seconds), plan.expires_at) if native_plan_id is not None else now + timedelta(seconds=ttl_seconds), wire_version=1,
+                               updated_at=now, expires_at=(min(now + timedelta(seconds=ttl_seconds), plan.expires_at) if native_plan_id is not None
+                                   else min(now + timedelta(seconds=ttl_seconds), action.expires_at) if action is not None
+                                   else now + timedelta(seconds=ttl_seconds)), wire_version=1,
                                native_plan_id=native_plan_id, catalog_item_id=catalog_item_id,
                                catalog_snapshot_json=_json(terms) if terms else None,
                                media_json=_json(terms["media_ids"]) if terms else "[]",
                                preview_json=_json(terms["preview_ids"]) if terms else "[]",
-                               price_cents=terms["price_cents"] if terms else 0))
+                               price_cents=terms["price_cents"] if terms else 0)
+            s.add(intent)
             policy.queued_count += 1
             if recipient is not None:
                 from .campaigns import attach
                 attach(s, recipient, identity, now)
+            if action is not None:
+                s.flush()
+                engagement.attach(s, runtime, action, intent, now)
             return identity
 
     @staticmethod
@@ -408,7 +464,7 @@ class TextAuthority:
             obsolete = (intent.wire_version != 1 or intent.expires_at <= now or state is None
                         or intent.binding_id != runtime.binding_id
                         or intent.control_revision != state.revision
-                        or intent.input_revision != state.input_revision
+                        or not self._input_current(s, intent, state)
                         or intent.payload_hash != self._intent_hash(intent)
                         or not self._media_current(s, intent, policy, now)
                         or policy is None or intent.policy_revision != policy.revision
@@ -424,6 +480,8 @@ class TextAuthority:
             if not obsolete and intent.origin == "campaign":
                 from .campaigns import current
                 obsolete = not current(s, intent, runtime, now)
+            if not obsolete and intent.origin == "engagement":
+                obsolete = not self._engagement().current(s, intent, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now)
             if reason:
                 intent.status = "cancelled" if obsolete else "refused"
@@ -431,7 +489,7 @@ class TextAuthority:
                 if policy is not None:
                     policy.queued_count -= 1
                 return intent.status
-            if policy.active_intent_id:
+            if policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True):
                 intent.reason = "account_busy"
                 return "queued"
             if policy.next_dispatch_at is not None and policy.next_dispatch_at > now:
@@ -468,7 +526,7 @@ class TextAuthority:
                   (grant.token, 36), (grant.body, 20000), (grant.payload_hash, 64))
         if (any(type(value) is not str or not 1 <= len(value.encode()) <= limit for value, limit in fields)
                 or len(grant.payload_hash) != 64 or any(c not in "0123456789abcdef" for c in grant.payload_hash)
-                or type(grant.origin) is not str or grant.origin not in {"automated", "manual", "campaign"}
+                or type(grant.origin) is not str or grant.origin not in {"automated", "manual", "campaign", "engagement"}
                 or type(grant.deadline) is not datetime or grant.deadline.tzinfo is not None
                 or type(grant.policy_revision) is not int or grant.policy_revision < 0
                 or type(grant.wire_version) is not int or grant.wire_version not in {0, 1}):
@@ -525,7 +583,8 @@ class TextAuthority:
             binding = s.get(OfCreatorBinding, row.binding_id)
             work = s.get(OfWork, (row.account_id, row.fan_id)) if row.work_generation is not None else None
             obsolete = (binding is None or binding.id != runtime.binding_id or binding.revoked_at is not None
-                        or state is None or state.revision != row.control_revision or state.input_revision != row.input_revision
+                        or state is None or state.revision != row.control_revision
+                        or not self._input_current(s, row, state)
                         or policy is None or policy.revision != row.policy_revision
                         or (transport_generation is not None and transport_generation != row.policy_revision)
                         or row.payload_hash != self._intent_hash(row)
@@ -540,6 +599,8 @@ class TextAuthority:
             if not obsolete and row.origin == "campaign":
                 from .campaigns import current
                 obsolete = not current(s, row, runtime, now)
+            if not obsolete and row.origin == "engagement":
+                obsolete = not self._engagement().current(s, row, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(
                 s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id)
             if reason is None and (policy.active_intent_id != row.intent_id or not row.reservation_held
@@ -576,8 +637,10 @@ class TextAuthority:
         return runtime
 
     def _attempt(self, s, tenant_id, account_id, intent_id, token):
-        self._historical_runtime(s, tenant_id, account_id)
+        runtime = self._historical_runtime(s, tenant_id, account_id)
         row = self._intent(s, account_id, intent_id)
+        if row.binding_id != runtime.binding_id:
+            raise Refused("scope unavailable")
         if not row.dispatch_token or row.dispatch_token != token or not row.attempt_id:
             raise Refused("stale dispatch token")
         return row
@@ -728,12 +791,18 @@ class TextAuthority:
                 return False
             state = s.get(OfConversationState, (account_id, row.fan_id))
             if existing is None:
+                kind = ("onlyfans_campaign" if row.origin == "campaign" else
+                        "onlyfans_engagement" if row.origin == "engagement" else
+                        ("onlyfans_media" if row.catalog_item_id is not None else "onlyfans_text") if row.origin == "automated" else None)
+                # A human send is stamped with the Twin-staff sentinel when an operator has
+                # created it, so FASTT can tell it from the AI; absent, the column stays NULL.
+                from .staff_sentinels import human_employee_id
                 s.add(Message(account_id=account_id, fan_id=row.fan_id, message_id=proof.message_id,
                               direction="out", body=row.body, created_at=stamp, raw_json=row.receipt_json,
                               media_ids=row.media_json, media_count=len(json.loads(row.media_json)),
                               price_cents=row.price_cents, is_paid=False if row.price_cents else None,
-                              automation_kind="onlyfans_campaign" if row.origin == "campaign" else
-                                ("onlyfans_media" if row.catalog_item_id is not None else "onlyfans_text") if row.origin == "automated" else None))
+                              automation_kind=kind,
+                              sent_by_employee_id=human_employee_id(s) if kind is None else None))
                 state.input_revision += 1
                 s.flush()
             from .media_delivery import project
@@ -742,7 +811,7 @@ class TextAuthority:
                 receipt = OfMessageDelivery(account_id=account_id, fan_id=row.fan_id, message_id=proof.message_id)
                 s.add(receipt)
             receipt.outcome, receipt.attempt_id = "sent", row.attempt_id
-            receipt.origin = "ai" if row.origin == "automated" else "human"
+            receipt.origin = "ai" if row.origin in {"automated", "engagement"} else "human"
             receipt.evidence_ref, receipt.recorded_at = row.evidence_ref, stamp
             receipt.detail = "The transport accepted this exact message. This is not a purchase or read receipt."
             chat = s.get(Chat, (account_id, row.fan_id))
@@ -757,8 +826,21 @@ class TextAuthority:
 
     def dispatch(self, tenant_id, account_id, intent_id, transport):
         from .provider_connector import NativeProviderConnector
+        from .fastt_manual import FasttManualTransport, fastt_owned
+        # One sender per owned fan: only the FASTT runner's transport may send a
+        # operator-authored manual/campaign message for it. Campaign origin
+        # retains automated-history and campaign-control validation.
+        with Session(self.engine) as s:
+            queued = s.get(OfTextIntent, (account_id, intent_id))
+            if queued is not None:
+                owned_fan = fastt_owned(account_id, queued.fan_id)
+                is_fastt = type(transport) is FasttManualTransport
+                if (is_fastt and not (owned_fan and queued.origin in {"manual", "campaign"})) or (owned_fan and not is_fastt):
+                    return "queued"
         transport_generation = None
-        if type(transport) is not SyntheticTextTransport:
+        if type(transport) is FasttManualTransport:
+            transport_generation = transport.policy_revision
+        elif type(transport) is not SyntheticTextTransport:
             try:
                 from .loopback_transport import LoopbackTextTransport
                 from .native_connector import NativeLoopbackConnector
@@ -772,7 +854,7 @@ class TextAuthority:
         with Session(self.engine) as s:
             self.store._runtime(s, tenant_id, account_id)
             policy = s.get(OfDeliveryPolicy, account_id)
-            expected = "native" if type(transport) is NativeProviderConnector else "synthetic"
+            expected = "native" if type(transport) in {NativeProviderConnector, FasttManualTransport} else "synthetic"
             if policy is None or policy.transport_kind != expected:
                 raise Refused("transport does not match the account delivery mode")
         grant = self.admit(tenant_id, account_id, intent_id, transport_generation=transport_generation)
@@ -780,7 +862,11 @@ class TextAuthority:
             return grant
         try:
             proof = transport.send(grant, authority=self, tenant_id=tenant_id)
-        except Exception:
+        except Exception as exc:
+            # Type, message and frame locations only; never request bodies or credentials.
+            import sys, traceback
+            frames = ",".join(f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}" for f in traceback.extract_tb(exc.__traceback__)[-6:])
+            print(f"onlyfans_dispatch_failed intent={intent_id} type={type(exc).__name__} msg={str(exc)[:200]!r} at={frames}", file=sys.stderr, flush=True)
             return self.mark_unknown(tenant_id, account_id, intent_id, grant.token)
         if type(proof) is NotAccepted:
             return self.record_not_accepted(tenant_id, account_id, intent_id, grant.token, proof)

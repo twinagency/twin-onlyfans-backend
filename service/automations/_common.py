@@ -34,6 +34,18 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 
+def dialect_insert(session):
+    """The upsert-capable ``insert`` for this session's database.
+
+    Upstream is SQLite-only (``sqlite_insert(...).on_conflict_do_update``). The
+    PostgreSQL ``insert`` has the same ``index_elements`` / ``set_`` / ``where``
+    surface, so the statements stay as written and only the constructor changes."""
+    if session.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        return pg_insert
+    return sqlite_insert
+
+
 # The per-fan state blob lives in its own leaf module — see fan_state.py for why
 # storage does not belong in here. apply_typo_throttle below is a consumer like
 # any other; this is NOT a re-export, so importers go to the leaf directly.
@@ -304,17 +316,23 @@ async def _skip_and_rest(account_id, fan_id, now) -> None:
     that reason would mask the terminal one and ai_chatter would keep selecting
     the fan."""
     async with get_session() as s:
+        _insert = dialect_insert(s)
         await s.execute(
-            sqlite_insert(SkipList)
+            _insert(SkipList)
             .values(account_id=str(account_id), fan_id=int(fan_id),
                     reason="unreachable", added_at=now)
             .on_conflict_do_update(
                 index_elements=["account_id", "fan_id"],
                 set_={"reason": "unreachable", "added_at": now},
+                # An operator's stop (manual_restrict / of_restricted) already
+                # blocks every sender; "upgrading" it to 'unreachable' would let
+                # a later unreachable-clear silently drop the explicit stop.
+                where=(SkipList.reason.is_(None)
+                       | SkipList.reason.not_in(_OPERATOR_STOP_ROWS)),
             )
         )
         await s.execute(
-            sqlite_insert(Fan)
+            _insert(Fan)
             .values(account_id=str(account_id), fan_id=int(fan_id),
                     automation_paused_until=now + _UNDELIVERABLE_RETRY)
             .on_conflict_do_update(
@@ -358,6 +376,10 @@ OF_RESTRICTED_REASON = "of_restricted"
 # (db/engine.py decline-policy block, itself slated for deletion once every box
 # has booted once); a PERMANENT operator stop belongs in manual_restrict.
 LADDER_STOP_REASON = "ladder_stop"
+# Rows an automatic writer (unreachable / muted_creator) must never overwrite: they
+# are explicit operator decisions, and each automatic writer has a matching
+# "clear" that deletes ITS OWN reason, so overwriting would erase the decision.
+_OPERATOR_STOP_ROWS = ("manual_restrict", "of_restricted")
 HARD_SKIP_REASONS = frozenset(
     {MUTED_CREATOR_REASON, MANUAL_RESTRICT_REASON, OF_RESTRICTED_REASON,
      LADDER_STOP_REASON}
@@ -593,14 +615,16 @@ async def mark_muted_creator_skip(account_id, fan_id, *, now=None) -> None:
     now = now or datetime.utcnow()
     async with get_session() as s:
         await s.execute(
-            sqlite_insert(SkipList)
+            dialect_insert(s)(SkipList)
             .values(account_id=str(account_id), fan_id=int(fan_id),
                     reason=MUTED_CREATOR_REASON, added_at=now)
             .on_conflict_do_update(
                 index_elements=["account_id", "fan_id"],
                 set_={"reason": MUTED_CREATOR_REASON, "added_at": now},
+                # Never over an operator stop: the un-mute reconcile deletes
+                # 'muted_creator' rows, which would erase a manual_restrict.
                 where=(SkipList.reason.is_(None)
-                       | (SkipList.reason != OF_RESTRICTED_REASON)),
+                       | SkipList.reason.not_in(_OPERATOR_STOP_ROWS)),
             )
         )
 
@@ -630,7 +654,7 @@ async def set_automation_restrict(account_id, fan_id, restricted: bool, *, now=N
     async with get_session() as s:
         if restricted:
             await s.execute(
-                sqlite_insert(SkipList)
+                dialect_insert(s)(SkipList)
                 .values(account_id=str(account_id), fan_id=int(fan_id),
                         reason=MANUAL_RESTRICT_REASON, added_at=now)
                 .on_conflict_do_update(
@@ -663,7 +687,7 @@ async def set_of_restricted_skip(account_id, fan_id, restricted: bool, *, now=No
     async with get_session() as s:
         if restricted:
             await s.execute(
-                sqlite_insert(SkipList)
+                dialect_insert(s)(SkipList)
                 .values(account_id=str(account_id), fan_id=int(fan_id),
                         reason=OF_RESTRICTED_REASON, added_at=now)
                 .on_conflict_do_update(
@@ -714,7 +738,7 @@ async def _set_status_and_pause(account_id, fan_id, status, until) -> None:
     from the messages table with no Fan row yet — UPDATE would no-op)."""
     async with get_session() as s:
         await s.execute(
-            sqlite_insert(Fan)
+            dialect_insert(s)(Fan)
             .values(account_id=str(account_id), fan_id=int(fan_id),
                     subscription_status=status, automation_paused_until=until)
             .on_conflict_do_update(
@@ -2095,7 +2119,20 @@ async def resolve_model(account_id: str, purpose: str, override: str | None = No
     `purpose` is a MODEL_PURPOSES key when an operator can pin it; any other
     string simply finds no override and falls through, which is what the lanes
     with no dropdown (content_resolver, pins, tip_reward) rely on.
+
+    🚨 THE ONE EXCEPTION (P2-I7): inside the injected Telegram context a
+    `llm_providers.TelegramLLMPolicy` is active. There the purpose MUST have an
+    explicit, valid entry in the policy's map; a missing or invalid entry RAISES
+    `llm_client.LLMConfigError` instead of falling back to the house model. The
+    total-never-raise contract above is correct for a lane that is already
+    running, and wrong for a migration whose whole point is that an unmapped
+    Telegram purpose must stop before a model call rather than quietly inherit a
+    default nobody chose. Outside the policy nothing changes.
     """
+    if llm_client.active_telegram_policy() is not None:
+        # ONE policy decision, owned by llm_client and shared with the public
+        # call boundary, so model selection and call admission cannot disagree.
+        return llm_client.telegram_model_for(purpose)
     if override and override in llm_client.MODELS:
         return override
     try:

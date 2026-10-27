@@ -136,6 +136,14 @@ async def prepare_video(request: Request, account_id: str, media_id: str):
         video = await asyncio.to_thread(videos.request_video, *context, account_id, media_id,
             command_key=value["commandKey"], actor=value["actor"])
         return response({"ok": True, "accountId": account_id, "video": video})
+    except videos.ProtectedVideoUnavailable:
+        # Keep the existing five-field status contract. No preparation job or
+        # download was started, and a refused preparation grants no send rights.
+        try:
+            video = await asyncio.to_thread(videos.video_status, *context, account_id, media_id)
+            return response({"ok": True, "accountId": account_id, "video": video})
+        except Exception as exc:
+            return failure(exc)
     except Exception as exc:
         return failure(exc)
 
@@ -160,3 +168,4 @@ async def stream_video(request: Request, account_id: str, media_id: str):
         return refuse("video_unavailable", 404, "Prepare this video before playing it.")
     except Exception as exc:
         return failure(exc)
+

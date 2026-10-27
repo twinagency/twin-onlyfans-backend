@@ -11,9 +11,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 import uuid
 
-from sqlalchemy import create_engine, or_, select, update
+from sqlalchemy import case, create_engine, func, or_, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
@@ -105,6 +106,31 @@ class ScanClaim:
     cursor: str | None
 
 
+
+def fan_current_override(account_id):
+    """Explicit owner-approved fans that may be served before the account-wide
+    recent recovery finishes: ONLYFANS_FAN_CURRENT_OVERRIDE="acct:fan,acct:fan"."""
+    out = set()
+    for part in os.environ.get("ONLYFANS_FAN_CURRENT_OVERRIDE", "").split(","):
+        account, _, fan = part.strip().partition(":")
+        if account == account_id and fan.isdigit():
+            out.add(int(fan))
+    return out
+
+
+def fan_history_current(s, account_id, fan_id):
+    """An override fan whose own recent recovery is complete and unquarantined."""
+    if fan_id not in fan_current_override(account_id):
+        return False
+    row = s.get(OfRecovery, (account_id, fan_id))
+    quarantined = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account_id,
+        OfIngress.fan_id == fan_id, OfIngress.status == "quarantined").limit(1)) if hasattr(OfIngress, "fan_id") else None
+    # The fan's own ingress must be fully applied (account-wide pending events
+    # from other fans do not block this fan).
+    unapplied = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account_id,
+        OfIngress.fan_id == fan_id, OfIngress.status != "applied").limit(1))
+    return row is not None and row.status == "complete" and quarantined is None and unapplied is None
+
 class Store:
     def __init__(self, url: str):
         parsed = make_url(url)
@@ -141,6 +167,26 @@ class Store:
         if binding is None or not creator_allowed(binding.creator_id):
             raise Refused("scope unavailable")
         return runtime
+
+    @staticmethod
+    def _read_connection(s, runtime, revision):
+        """Fence inactive inbox work to the verified connection we loaded.
+
+        Connection commands lock the same runtime before changing a revision.
+        Recheck at both claim and commit; no DB lock spans a provider request.
+        """
+        if revision is None:
+            return
+        if (os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker"
+                or type(revision) is not int or revision < 1):
+            raise Refused("invalid inbox connection revision")
+        from db.onlyfans_connection_models import OfProviderConnection
+        connection = s.get(OfProviderConnection, runtime.account_id)
+        if (connection is None or connection.binding_id != runtime.binding_id
+                or connection.revision != revision or connection.status != "verified"
+                or connection.last_error is not None
+                or connection.verified_at is None or connection.expires_at <= utcnow()):
+            raise Refused("inbox connection is no longer current")
 
     def register(self, tenant_id, account_id, *, activated_at, enabled=False):
         if activated_at.tzinfo is not None:
@@ -189,15 +235,19 @@ class Store:
         s.flush()
         return "accepted"
 
-    def drain(self, tenant_id, account_id, *, limit=PAGE_LIMIT):
+    def drain(self, tenant_id, account_id, *, limit=PAGE_LIMIT, connection_revision=None):
         if not 1 <= limit <= PAGE_LIMIT:
             raise Refused("invalid batch limit")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
+            self._read_connection(s, runtime, connection_revision)
             events = s.scalars(select(OfIngress).where(OfIngress.account_id == account_id,
                                OfIngress.status == "pending").order_by(OfIngress.received_at, OfIngress.event_key).limit(limit)).all()
             for row in events:
-                self._apply(s, runtime, row)
+                if connection_revision is None:
+                    self._apply(s, runtime, row)
+                else:
+                    self._apply(s, runtime, row, history_only=True)
             self._mark_current(s, runtime)
             return len(events)
 
@@ -212,7 +262,7 @@ class Store:
             s.flush()
         return state
 
-    def _apply(self, s, runtime, row):
+    def _apply(self, s, runtime, row, *, history_only=False):
         event = Event(**json.loads(row.payload)).normalized()
         account = runtime.account_id
         now = utcnow()
@@ -253,7 +303,13 @@ class Store:
             runtime.recovery_needed = True
             runtime.pending_events -= 1
             return
-        state.input_revision += 1
+        historical = history_only or row.source == "import" or stamp < runtime.activated_at
+        # Older imports outside the latest-100 prompt window cannot change a reply; they must not
+        # invalidate a live claim. Anything live, or inside the window, still advances the revision.
+        from .launch_history_memory.recovery import affects_recent_context
+        advances = not historical or affects_recent_context(s, account, event.fan_id, event)
+        if advances:
+            state.input_revision += 1
         s.add(Message(account_id=account, fan_id=event.fan_id, message_id=event.message_id,
                       direction=event.direction, body=event.body, media_ids=json.dumps(event.media_ids),
                       media_count=len(event.media_ids), price_cents=event.price_cents,
@@ -264,7 +320,6 @@ class Store:
             s.add(chat)
         if chat.last_message_at is None or (stamp, event.message_id) > (chat.last_message_at, chat.last_message_id or 0):
             chat.last_message_id, chat.last_message_at, chat.last_message_preview = event.message_id, stamp, event.body[:500]
-        historical = row.source == "import" or stamp < runtime.activated_at
         if new_fan and new_state and event.direction == "in" and not historical and runtime.enabled and not fan.is_muted:
             from db.onlyfans_connection_models import OfProviderConnection
             connection=s.get(OfProviderConnection,account)
@@ -302,6 +357,12 @@ class Store:
             work.control_revision = state.revision
             work.status = "waiting" if eligible else "blocked"
             work.lease_token = work.lease_until = None
+        if event.direction == "in" and advances:
+            # Event notification shares the runtime lock; final dispatch still
+            # revalidates if best-effort cancellation could not be recorded.
+            s.flush()
+            from .launch_engagement.events import cancel_for_fan
+            cancel_for_fan(s, account, event.fan_id, "reply", now=now)
         row.status, row.applied_at = "applied", now
         runtime.pending_events -= 1
         s.flush()
@@ -319,7 +380,7 @@ class Store:
         if not 1 <= len(command_key) <= 64 or not 1 <= len(actor) <= 128 or not 1 <= len(reason) <= 512 or (consent_ref is not None and not 1 <= len(consent_ref) <= 128):
             raise Refused("invalid audit evidence")
         with Session(self.engine) as s, s.begin():
-            self._runtime(s, tenant_id, account_id)
+            runtime = self._runtime(s, tenant_id, account_id)
             prior = s.get(OfControlAudit, (account_id, command_key))
             if prior:
                 if (prior.fan_id, prior.mode, prior.previous_revision, prior.actor, prior.reason, prior.consent_ref, prior.action) != (fan_id, mode, expected_revision, actor, reason, consent_ref, action):
@@ -349,6 +410,13 @@ class Store:
                     raise Refused("explicit hand-back is required")
                 if action == "release_takeover" and state.takeover_state != "effective":
                     raise Refused("takeover is not effective")
+            if mode == "automated" and state.mode != "automated":
+                # Release ONLY the manual stop. A stronger runtime restriction
+                # (of_restricted / ladder_stop) stays in force, and the dashboard
+                # must not claim "automated" while the runtime would stay silent.
+                from . import runtime_stop
+                if runtime_stop.stronger_hold(s, account_id, fan_id) is not None:
+                    raise Refused("a stronger restriction holds")
             if action == "request_takeover":
                 if state.takeover_state != "none":
                     raise Refused("takeover already requested")
@@ -356,6 +424,11 @@ class Store:
             elif action == "release_takeover":
                 state.takeover_state = "none"
             state.mode, state.revision, state.updated_at = mode, state.revision + 1, utcnow()
+            # One transaction: the runtime stop (enforced authority) and the Twin
+            # state (its display projection) commit together or not at all. For a
+            # takeover this happens before any manual-send state can be observed.
+            from . import runtime_stop
+            runtime_stop.project(s, account_id, fan_id, state, utcnow())
             # Never clear an unresolved send or takeover as a side effect of resume.
             work = s.get(OfWork, (account_id, fan_id))
             if work:
@@ -367,7 +440,81 @@ class Store:
                                  reason=reason, consent_ref=consent_ref, action=action,
                                  takeover_from=before_takeover if action is not None else None,
                                  takeover_to=state.takeover_state if action is not None else None, created_at=utcnow()))
+            s.flush()
+            from .launch_engagement.events import cancel_for_fan
+            cancel_for_fan(s, account_id, fan_id, {"human_controlled": "takeover", "paused": "pause",
+                "no_contact": "no_contact"}.get(mode, "operator_cancelled"), now=utcnow())
             return state.revision
+
+    def admit_new_conversation(self, tenant_id, account_id, fan_id):
+        """The account's own ``automate_new_conversations`` policy, for a conversation whose first
+        inbound reached the shared tables without Twin's worker intake (the FASTT runner's socket).
+
+        Same conditions as ``_apply``: a conversation with NO control row yet, whose whole history
+        is newer than the moment the operator armed future conversations, on a verified, unexpired
+        connection bound to the runtime. Anything else (including an existing row, whatever its
+        mode) changes nothing, so a paused / human / stopped fan is never enabled here. Returns
+        True only when it wrote the initial ``automated`` state."""
+        from db.onlyfans_connection_models import OfProviderConnection
+        with Session(self.engine) as s, s.begin():
+            runtime = self._runtime(s, tenant_id, account_id)
+            now = utcnow()
+            if s.get(OfConversationState, (account_id, fan_id)) is not None or not runtime.enabled:
+                return False
+            fan = s.get(Fan, (account_id, fan_id))
+            connection = s.get(OfProviderConnection, account_id)
+            if fan is None or fan.is_muted or connection is None or runtime.binding_id != connection.binding_id \
+                    or connection.status != "verified" or connection.verified_at is None or connection.expires_at <= now \
+                    or not connection.automate_new_conversations or connection.automation_starts_at is None:
+                return False
+            first = s.scalar(select(func.min(Message.created_at)).where(
+                Message.account_id == account_id, Message.fan_id == fan_id))
+            if first is None or first < connection.automation_starts_at:
+                return False
+            state = self._state(s, account_id, fan_id)
+            state.mode, state.revision, state.requires_attention, state.updated_at = "automated", 1, False, now
+            command = hashlib.sha256(f"initial-automation:{runtime.binding_id}:{fan_id}".encode()).hexdigest()
+            s.add(OfControlAudit(account_id=account_id, command_key=command, fan_id=fan_id, mode="automated",
+                previous_revision=0, revision=1, actor=f"account-policy:{connection.revision}",
+                reason="Operator account policy enabled a new inbound conversation.",
+                consent_ref=f"connection:{connection.revision}", action="initial_automation",
+                takeover_from="none", takeover_to="none", created_at=now))
+            return True
+
+    def reconcile_runtime_stop(self, tenant_id, account_id, fan_id):
+        """Repair drift between Twin's state and the runtime stop; fail closed.
+
+        Call before the FASTT runner selects a fan. A wanted stop that is missing
+        is re-written. A stop with no Twin command behind it (FASTT's own restrict
+        route, an of_restricted row) is shown as ``paused``. This never releases
+        a stop: only an explicit resume/release command does."""
+        _id(fan_id)
+        from . import runtime_stop
+        with Session(self.engine) as s, s.begin():
+            self._runtime(s, tenant_id, account_id)
+            if s.get(Fan, (account_id, fan_id)) is None:
+                raise Refused("conversation unavailable")
+            state = self._state(s, account_id, fan_id)
+            now = utcnow()
+            reason = runtime_stop.current(s, account_id, fan_id)
+            if runtime_stop.stop_wanted(state):
+                runtime_stop.project(s, account_id, fan_id, state, now)
+                reason = runtime_stop.current(s, account_id, fan_id)
+            elif reason in {runtime_stop.MANUAL_RESTRICT, *runtime_stop.STRONGER}:
+                previous = state.revision
+                state.mode, state.revision, state.updated_at = "paused", previous + 1, now
+                key = hashlib.sha256(f"runtime-stop:{account_id}:{fan_id}:{previous}".encode()).hexdigest()
+                s.add(OfControlAudit(account_id=account_id, command_key=key, fan_id=fan_id, mode="paused",
+                    previous_revision=previous, revision=state.revision, actor="runtime-stop",
+                    reason="Runtime stop (" + reason + ") has no matching Twin command", action="runtime_stop",
+                    takeover_from=state.takeover_state, takeover_to=state.takeover_state, created_at=now))
+                work = s.get(OfWork, (account_id, fan_id))
+                if work:
+                    work.generation += 1
+                    work.status = "blocked"
+                    work.lease_token = work.lease_until = None
+            return {"mode": state.mode, "takeoverState": state.takeover_state, "revision": state.revision,
+                    "stopped": reason in runtime_stop.HARD, "stopReason": reason}
 
     @staticmethod
     def complete_takeover(s, account_id, fan_id):
@@ -402,13 +549,20 @@ class Store:
                 select(OfWork.account_id).where(OfWork.account_id == OfRuntime.account_id, due, OfWork.due_at <= now).exists(),
             )
             if account_ids is not None:query = query.where(OfRuntime.account_id.in_(account_ids))
-            account = s.scalar(query.order_by(OfRuntime.last_claim_at, OfRuntime.account_id).with_for_update(skip_locked=True, of=OfRuntime).limit(1))
-            if account is None:
-                return None
-            # Recheck binding under the lock so a concurrent revocation is ordered.
-            self._runtime(s, tenant_id, account.account_id)
-            work = s.scalar(select(OfWork).where(OfWork.account_id == account.account_id, due, OfWork.due_at <= now)
-                            .order_by(OfWork.last_claim_at, OfWork.first_input_at, OfWork.fan_id).limit(1))
+            while True:
+                account = s.scalar(query.order_by(OfRuntime.last_claim_at, OfRuntime.account_id).with_for_update(skip_locked=True, of=OfRuntime).limit(1))
+                if account is None:
+                    return None
+                # Recheck binding under the lock so a concurrent revocation is ordered.
+                self._runtime(s, tenant_id, account.account_id)
+                work = s.scalar(select(OfWork).where(OfWork.account_id == account.account_id, due, OfWork.due_at <= now)
+                                .order_by(OfWork.last_claim_at, OfWork.first_input_at, OfWork.fan_id).limit(1))
+                if work is not None:
+                    break
+                # READ COMMITTED can select an account from an earlier snapshot
+                # just as another worker exhausts it. Its runtime lock now keeps
+                # it empty; reselect with a fresh snapshot and the same fairness
+                # ordering/scope instead of dropping other eligible accounts.
             state = self._state(s, account.account_id, work.fan_id)
             fan = s.get(Fan, (account.account_id, work.fan_id))
             account.last_claim_at = work.last_claim_at = now
@@ -435,11 +589,24 @@ class Store:
             return True
 
     @staticmethod
+    def _native_unresolved(s, account_id, fan_id=None, *, dispatching_only=False):
+        """Retained native/bridge admission is authoritative before reporting runs."""
+        from sqlalchemy import text
+        if s.bind.dialect.name != "postgresql" or not s.scalar(text(
+                "SELECT to_regclass('fastt_runtime.twin_bridge_send_attempts') IS NOT NULL")):
+            return False
+        return s.scalar(text("SELECT 1 FROM fastt_runtime.twin_bridge_send_attempts "
+            "WHERE account_id=:account AND " +
+            ("state='dispatching' " if dispatching_only else "state IN ('dispatching','delivery_unknown') ") +
+            ("AND fan_id=:fan " if fan_id is not None else "") + "LIMIT 1"),
+            {"account":account_id,"fan":fan_id}) is not None
+
+    @staticmethod
     def _unresolved(s, account_id, fan_id, state):
         # Retained receipts are evidence even if an older control row never
         # acquired its pointer. Never infer resolution from a missing pointer,
         # or from the receipt falling outside the latest history page.
-        return state.unresolved_attempt_id is not None or s.scalar(
+        return state.unresolved_attempt_id is not None or Store._native_unresolved(s, account_id, fan_id) or s.scalar(
             select(OfMessageDelivery.message_id).where(
                 OfMessageDelivery.account_id == account_id,
                 OfMessageDelivery.fan_id == fan_id,
@@ -480,20 +647,25 @@ class Store:
                 else:
                     scan.repeat_requested = True
 
-    def claim_recovery(self, tenant_id, account_id):
+    def claim_recovery(self, tenant_id, account_id, *, connection_revision=None):
         now = utcnow()
         with Session(self.engine) as s, s.begin():
-            self._runtime(s, tenant_id, account_id)
+            runtime = self._runtime(s, tenant_id, account_id)
+            self._read_connection(s, runtime, connection_revision)
+            # Lowest attempt generation first: an expired failing low-ID history
+            # must yield to untouched histories. Lease/cursor fences stay intact.
             row = s.scalar(select(OfRecovery).where(OfRecovery.account_id == account_id,
                            or_(OfRecovery.status == "needed", (OfRecovery.status == "running") & (OfRecovery.lease_until <= now)))
-                           .order_by(OfRecovery.last_complete_at.asc().nullsfirst(), OfRecovery.fan_id).limit(1))
+                           .order_by(case((OfRecovery.fan_id.in_(fan_current_override(account_id) or {-1}), 0), else_=1),
+                                     OfRecovery.generation.asc(), OfRecovery.last_complete_at.asc().nullsfirst(), OfRecovery.fan_id).limit(1))
             if row is None:
                 return None
             row.status, row.generation, row.lease_token = "running", row.generation + 1, str(uuid.uuid4())
             row.lease_until = now + timedelta(seconds=LEASE_SECONDS)
             return RecoveryClaim(account_id, row.fan_id, row.generation, row.lease_token, row.high_water, row.upper_bound, row.before_id)
 
-    def recovery_page(self, tenant_id, claim: RecoveryClaim, events: list[Event], *, has_more: bool):
+    def recovery_page(self, tenant_id, claim: RecoveryClaim, events: list[Event], *, has_more: bool, connection_revision=None,
+                      observations=(), provider_read_claim=None):
         if type(has_more) is not bool or len(events) > PAGE_LIMIT or (has_more and not events):
             raise Refused("invalid recovery page")
         normalized = [event.normalized() for event in events]
@@ -502,8 +674,19 @@ class Store:
             raise Refused("invalid recovery order or scope")
         if claim.before_id is not None and any(i >= claim.before_id for i in ids):
             raise Refused("recovery cursor did not advance")
+        from .offer_terms import OfferObservation
+        if (type(observations) not in {list, tuple} or len(observations) > len(normalized)
+                or any(type(o) is not OfferObservation for o in observations)):
+            raise Refused("invalid offer observations")
+        offers = [o.normalized() for o in observations]
+        if any(o.source_kind != "message" or o.fan_id != claim.fan_id or o.source_id not in ids for o in offers):
+            raise Refused("offer observation outside this recovery page")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, claim.account_id)
+            self._read_connection(s, runtime, connection_revision)
+            if provider_read_claim is not None:
+                from .provider_read_budget import current
+                current(self,tenant_id,provider_read_claim,session=s)
             row = s.get(OfRecovery, (claim.account_id, claim.fan_id))
             if row is None or row.status != "running" or row.generation != claim.generation or row.lease_token != claim.token or row.lease_until <= utcnow():
                 raise Refused("stale recovery claim")
@@ -511,9 +694,15 @@ class Store:
                 return "backpressure"
             if row.upper_bound is None:
                 row.upper_bound = max(ids, default=row.high_water)
+            # Commercial evidence only: no reply work, revision, takeover,
+            # ownership or high-water change. Duplicates are idempotent.
+            self._observe_offers(s, runtime, offers)
             for event in normalized:
                 if event.message_id > row.high_water:
-                    self._record(s, runtime, event, event.payload(), "catchup", utcnow())
+                    # Imports stay historical even if activation happens before
+                    # their next drain. Reading never consents to an AI reply.
+                    source = "import" if connection_revision is not None else "catchup"
+                    self._record(s, runtime, event, event.payload(), source, utcnow())
             finished = not has_more or any(i <= row.high_water for i in ids)
             if finished:
                 row.high_water = max(row.high_water, row.upper_bound)
@@ -527,6 +716,28 @@ class Store:
             # a separate completeness obligation, not inferred from one page.
             self._mark_current(s, runtime)
             return "complete" if finished else "continue"
+
+    @staticmethod
+    def _observe_offers(s, runtime, offers):
+        if not offers:
+            return
+        from sqlalchemy.dialects.postgresql import insert
+        from db.onlyfans_offer_import_models import OfOfferObservation
+        from .native_context import canonical
+        from .offer_terms import PARSER_VERSION
+        now = utcnow()
+        rows = [dict(account_id=runtime.account_id, observation_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
+            source_kind=o.source_kind, source_id=o.source_id, fan_id=o.fan_id, source_context=o.source_context,
+            source_at=datetime.fromisoformat(o.source_at).replace(tzinfo=None), observed_at=now,
+            media_json=canonical(list(o.media_ids)),
+            preview_json=None if o.preview_ids is None else canonical(list(o.preview_ids)),
+            locked_text=o.locked_text, price_cents=o.price_cents, currency=o.currency,
+            parser_version=PARSER_VERSION, fingerprint=o.fingerprint(), media_key=o.media_key,
+            reasons_json=canonical(list(o.reasons))) for o in offers]
+        s.execute(insert(OfOfferObservation).values(rows).on_conflict_do_nothing(
+            constraint="uq_of_offer_observation_source"))
+        from .content_sync import record_current_observations
+        record_current_observations(s, runtime, offers, now)
 
     @staticmethod
     def _begin_cycle(s, scan):
@@ -555,7 +766,7 @@ class Store:
             else:
                 scan.repeat_requested = True
 
-    def request_poll(self, tenant_id, account_id, *, min_interval_seconds=5):
+    def request_poll(self, tenant_id, account_id, *, min_interval_seconds=5, connection_revision=None):
         """Start a later read cycle only after the previous one completed.
 
         This never activates an account, resets a high-water mark, renews a send
@@ -566,7 +777,8 @@ class Store:
             raise Refused("invalid native polling interval")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
-            if not runtime.enabled:
+            self._read_connection(s, runtime, connection_revision)
+            if not runtime.enabled and connection_revision is None:
                 return False
             scan = s.get(OfScan, account_id)
             if scan is not None and (scan.status != "complete" or runtime.recovery_needed):
@@ -583,9 +795,10 @@ class Store:
             runtime.recovery_needed = True
             return True
 
-    def claim_scan(self, tenant_id, account_id):
+    def claim_scan(self, tenant_id, account_id, *, connection_revision=None):
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
+            self._read_connection(s, runtime, connection_revision)
             scan = s.get(OfScan, account_id)
             if scan is not None and not scan.known_fans_complete:
                 self._seed_known(s, scan)
@@ -609,7 +822,8 @@ class Store:
             scan.known_fan_after = ids[-1]
         scan.known_fans_complete = len(ids) < PAGE_LIMIT
 
-    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None):
+    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None, connection_revision=None,
+                  provider_read_claim=None):
         if len(fan_ids) > PAGE_LIMIT or len(set(fan_ids)) != len(fan_ids):
             raise Refused("invalid discovery page")
         for fan in fan_ids: _id(fan)
@@ -617,6 +831,10 @@ class Store:
             raise Refused("invalid discovery cursor")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, claim.account_id)
+            self._read_connection(s, runtime, connection_revision)
+            if provider_read_claim is not None:
+                from .provider_read_budget import current
+                current(self,tenant_id,provider_read_claim,session=s)
             scan = s.get(OfScan, claim.account_id)
             if scan is None or scan.status != "running" or scan.generation != claim.generation or scan.lease_token != claim.token or scan.lease_until <= utcnow():
                 raise Refused("stale discovery claim")

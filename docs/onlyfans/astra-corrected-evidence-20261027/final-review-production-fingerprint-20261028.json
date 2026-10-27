@@ -1,0 +1,144 @@
+{
+  "senderPythonFiles": 658,
+  "senderChangesSinceCaptionRevert": {
+    "tests/test_native_pilot_daily_allowance.py": {
+      "captionRevert": null,
+      "current": "e7a0bc46499ccb1e354ec11b2f067686c7461093f75ad0e727ad871f33d7c973"
+    },
+    "native_pilot/ledger.py": {
+      "captionRevert": "29894b139fd786ccbf2265cc2398fe570ec025f2d526804b9c2f245fd74f8386",
+      "current": "c9563960fde6d4d04b420802cd3bac1de6476b976811f40ee16df2c3cac5bfa3"
+    },
+    "db/schema.py": {
+      "captionRevert": "d219a1bc5f69f30ca2af01cca5d032bd006db4253941c0a52a4a6c85c5f2e637",
+      "current": "c21107c8b140fb72a4ba56825046084a26d32767f4397bdf77eca9139aea79fc"
+    },
+    "native_pilot/service.py": {
+      "captionRevert": "a877179f5e9c484585f7705bce9f4cacde4323da253894050ba9765d1f63210f",
+      "current": "c4756f9e2b47bf4cb0404f1bd860154686c718c847c00512035f7ceb6bb4a205"
+    },
+    "db/models.py": {
+      "captionRevert": "bc0c830bf658487b6ff02e45a65b616725084a9aeec5199e1e7d1117e3935816",
+      "current": "ff1a7a1e1ef0fa3b4defe1a353c67a248ee25512ec6243e35c7ed85d48834f2a"
+    },
+    "tests/test_native_pilot_service.py": {
+      "captionRevert": "5dec195c676dc1b689b2e1a34e26be3c21b3b6bc3865ae93634f2a247d98d4c1",
+      "current": "96205ca2ab2bcd06052018b144595574cfe5bfa093c646462b9d5564b2179032"
+    },
+    "db/migrations/versions/20261028_0100_conversation_default_off.py": {
+      "captionRevert": null,
+      "current": "adb06fe6a95b7cea48744c300b16171e1782c92073c33c75b3e2a9f48323c713"
+    }
+  },
+  "at": "2026-10-27T17:20:01.380485+00:00",
+  "roles": [
+    {
+      "container": "twin-onlyfans-api-1",
+      "service": "api",
+      "image": "sha256:f46ac38ec5e3821940c880f911d23f2d8a2d0925aca688c17abd86f4b0c89881",
+      "revision": "8a72ec0d52dddb2fcd379113ba03b8c75b7102a9",
+      "environmentSha256": "c620d1b99a6475c2e678331adee8635267f91db83db472f1e8c8a6dd59553333",
+      "mountsSha256": "cf9d71237c46da1e91c02480c925652be0be59522f77448fd2eb1cb1b2f5859b",
+      "running": true
+    },
+    {
+      "container": "twin-onlyfans-fastt-supervisor-1",
+      "service": "fastt-supervisor",
+      "image": "sha256:8bc3de180159ffd94e1318fa376826439389a79cefe2677ba4790b007e18d024",
+      "revision": "3ac035bddf0f7cd29285d7ad5d194b902def1f13",
+      "environmentSha256": "6dedb24cdd2074c81e80784aa0e20c7258408e363202a28bb2db1294257d4d90",
+      "mountsSha256": "82ed1dcf167fa5c18f54a2af10021d3015aa3ba4361577dd029d7ab5dde5ae3c",
+      "running": true,
+      "matchesCaptionRevertImage": false
+    },
+    {
+      "container": "twin-onlyfans-worker-1",
+      "service": "worker",
+      "image": "sha256:f9f72d1ef5ea8605ae4eeb0835dd07046d75e10f3f32be74044211a0a44b49f3",
+      "revision": "9052698eb12b90a8d82f6d5bba190d1c168e334c",
+      "environmentSha256": "74fa47bf02d736733e1d70fd43f99372349c6140e36788d156697149aedbe934",
+      "mountsSha256": "1c759f740964bca552e61c25a3a84bfd39cf64a6a328913e162473567d79862f",
+      "running": true
+    },
+    {
+      "container": "twin-onlyfans-creator-sign-in-1",
+      "service": "creator-sign-in",
+      "image": "sha256:d2410f7779c8e70f4f92176e5c3df551743623074d834e4974fc5d75a948b454",
+      "revision": "4ea6bfacd3afcd9cb11dd3967f13188b4f3fc724",
+      "environmentSha256": "db8a7627283670b5d97e7a7b1fa81f77e7bfb3847b5827434024bfc011851895",
+      "mountsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "running": true
+    },
+    {
+      "container": "twin-onlyfans-managed-proxy-1",
+      "service": "managed-proxy",
+      "image": "sha256:a0b2c927824d89b7ca22e27908cd7fede9cfd652631499136711c820e55088d5",
+      "revision": "5547c4eefc6fbea3dd1353f6966bae2880e646ec",
+      "environmentSha256": "fac56c741d362c9453d5f2e94a800fa4413e30a7b08937268136b5a44642ee4c",
+      "mountsSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "running": true
+    },
+    {
+      "container": "twin-onlyfans-database-1",
+      "service": "database",
+      "image": "sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d",
+      "revision": null,
+      "environmentSha256": "6642178676bbc7e6a6871d9e6b7fbcde01501ca790ba5afc93e4214b93249059",
+      "mountsSha256": "63f248af8c5c501b516e6313ecc574c74f752c1bb41c951266c1a4899754b419",
+      "running": true
+    }
+  ],
+  "database": {
+    "schema": [
+      "0093_conversation_default_off"
+    ],
+    "heldUncertain": 1
+  },
+  "captionRevertProof": {
+    "live": true,
+    "activatedAt": "2026-10-27T16:04:36.575918+00:00",
+    "verifiedAt": "2026-10-27T16:04:59.486749+00:00",
+    "sourceCommit": "3ac035bddf0f7cd29285d7ad5d194b902def1f13",
+    "applicationCommit": "8d89d1ffedc860648424c41707e89908497d3bc5",
+    "image": "sha256:80c488cc3fb9dd974d8c743c36be0cbb627468af6192b289d76723a9c2fd9b7c",
+    "rollbackImage": "sha256:ab3bfc200c0e93a8fe5ebfd1f93790efb5f4e96981af7999cb33b314e8e42207",
+    "byteIdenticalCleanBuilds": true,
+    "schema": "0092_ledger_history",
+    "runtimeFilesChanged": 4,
+    "testFilesChanged": 2,
+    "allOtherPythonFilesUnchanged": true,
+    "environmentCommandMountsUnchanged": true,
+    "existingReceiptAndGrantEvidencePreserved": true,
+    "existingUncertainHoldsPreserved": true,
+    "changedFiles": {
+      "automations/content_prompts.py": "6985fba7c32efe7c00d47800a6cd2e939275380a9d8af93819bbebdf81eb216c",
+      "automations/content_resolver.py": "4de0ee4a2f936989f67dbec81d09403abecb5086dc2330379cd73ef776c1eeab",
+      "automations/pack_claim.py": "121f0fcafe97106d2a819214b7afc596016336767d91760e935e78458236d385",
+      "automations/pack_sender.py": "793645f1a99e73392e70a25dd5af763d3d7961d18f64ae892cc4a41d3fc5a5a4",
+      "tests/test_fastt_requested_caption.py": "54ee542c8c0309154350b01dba32263e03fd8b6cd15fffde29cc03b290c9f34f",
+      "tests/test_native_pilot_runner.py": "fefef638ecab227b39feba0c9876a72962b30ff4d23519d43627ad9cabc3acf2"
+    },
+    "protectedHashes": {
+      "native_pilot/runner.py": "955a6fe241afdeae35a5690dfdf1bd74a8108893d7d0067c77920f117c25d8fe",
+      "native_pilot/service.py": "a877179f5e9c484585f7705bce9f4cacde4323da253894050ba9765d1f63210f",
+      "db/schema.py": "d219a1bc5f69f30ca2af01cca5d032bd006db4253941c0a52a4a6c85c5f2e637",
+      "onlyfans_runtime/native_planning.py": "2d38e6e18974522875c92971f4164b84d38e9bcf0be4dc5fe02d4b462dbbc474",
+      "automations/ai_chatter.py": "8afeebf1c5a456599954bacfab279a8d24868d535ac12da5f32bfa6d45c5293e"
+    },
+    "canonicalComposeUpdated": true,
+    "containerId": "18d65c7586db0b3a9d9aa50e1f10211fa0f92d88178f921ac9a45b7b18bb3d41",
+    "rollbackArtifactVerified": {
+      "manifest": "sha256:a581d420d44379ceb7a9d495c267be5641cc4093e9ce676249a02eaefb93498f",
+      "archiveSha256": "fa9cf3f55ef1a2fe84c765bb899afdf5bed7e508dccdd4f9c4aa317028128132",
+      "baselineSourceMatches": true
+    }
+  },
+  "rollbackArchiveManifestLookup": [
+    {
+      "manifest": "sha256:a581d420d44379ceb7a9d495c267be5641cc4093e9ce676249a02eaefb93498f",
+      "available": true,
+      "loadedId": "sha256:a581d420d44379ceb7a9d495c267be5641cc4093e9ce676249a02eaefb93498f"
+    }
+  ],
+  "productionMutated": false
+}

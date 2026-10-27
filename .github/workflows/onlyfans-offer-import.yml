@@ -1,0 +1,31 @@
+name: OnlyFans offer import and content sync acceptance
+on:
+  push:
+    branches: [codex/onlyfans-offer-import]
+    paths: ['service/**', 'scripts/**', 'Dockerfile.onlyfans', 'requirements*.txt', 'docs/onlyfans/ACCEPTANCE-DASHBOARD-SHA', '.github/workflows/onlyfans-offer-import.yml']
+  pull_request:
+    paths: ['service/onlyfans_runtime/**', 'service/onlyfans_commands/**', 'service/db/**', 'service/tests/**', 'scripts/**', '.github/workflows/onlyfans-offer-import.yml']
+  workflow_dispatch:
+    inputs:
+      dashboard_ref:
+        description: Exact SHA matching the committed paired dashboard pin
+        type: string
+        required: true
+      dashboard_archive_url:
+        description: Optional short-lived HTTPS S3 git archive URL; never logged
+        type: string
+      dashboard_archive_sha256:
+        description: Independently recorded SHA256 of the exact git archive
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  native:
+    uses: ./.github/workflows/onlyfans-launch-integration.yml
+    with:
+      suite: commerce
+      dashboard_ref: ${{ inputs.dashboard_ref || '' }}
+      dashboard_archive_url: ${{ inputs.dashboard_archive_url || '' }}
+      dashboard_archive_sha256: ${{ inputs.dashboard_archive_sha256 || '' }}
+    secrets: inherit

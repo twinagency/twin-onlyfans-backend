@@ -26,12 +26,14 @@ from vault_mirror import MIRROR_REFRESH_FIELDS, row_values
 from vault_ai_effective import effective_value
 from .content_management import digest, editable, validate_patch
 from .native_context import canonical
-from .native_protocol import NativeProtocolError, load
+from .native_protocol import MAX_VAULT_BYTES, NativeProtocolError, load
 from .store import Refused, _id, utcnow
 
 PAGE_SIZE = 24
 MAX_PAGES = 200
 CATALOGUE_BOUND = 2000
+# Folder lists are repeated per media item; response bytes remain independently bounded.
+MAX_FOLDER_STATES = 1000
 
 
 class InvalidVault(ValueError):
@@ -64,7 +66,7 @@ def parse_vault_page(raw, *, owner_id):
     or not at all; no skipped malformed row can silently advance its cursor.
     """
     _id(owner_id)
-    load(raw)  # duplicate keys, UTF-8, nonfinite literals and 64KiB boundary
+    load(raw, max_bytes=MAX_VAULT_BYTES)  # strict JSON with a separate bounded vault-page budget
     try:
         value = json.loads(raw)
         json.dumps(value, allow_nan=False)
@@ -112,7 +114,7 @@ def parse_vault_page(raw, *, owner_id):
                         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
                             raise ValueError()
             folders = row.get("listStates")
-            if folders is not None and (type(folders) is not list or len(folders) > 100 or any(type(f) is not dict for f in folders)):
+            if folders is not None and (type(folders) is not list or len(folders) > MAX_FOLDER_STATES or any(type(f) is not dict for f in folders)):
                 raise ValueError()
         return rows, more
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
@@ -172,11 +174,20 @@ def _provenance(row, observation, job, connection, binding, *, current_revision=
 
 
 def _ready(row, observation, job, connection, binding):
+    """Whether a verified native vault identity may be curated for an offer.
+
+    The native message body contains vault media IDs, never CDN source URLs.
+    Protected videos legitimately have no progressive full-file URL. Playback
+    has its own source/cache checks in vault_video; it grants no offer rights.
+    """
     if row.removed_at is not None:
         return False, "removed"
     if row.kind not in {"photo", "video"}:
         return False, "unsupported_kind"
-    if (not _provenance(row, observation, job, connection, binding)
+    # Same binding and owner, unchanged raw item: a credential-only connection
+    # revision (model key save, activation) does not invalidate vault identity,
+    # matching vault_previews. The connection itself must still be verified.
+    if (not _provenance(row, observation, job, connection, binding, current_revision=False)
         or connection.status != "verified" or connection.expires_at <= utcnow()):
         return False, "unverified_owner"
     try:
@@ -191,13 +202,28 @@ def _ready(row, observation, job, connection, binding):
         return False, "readiness_unknown"
     if raw.get("isReady") is not True or raw.get("isProcessing") is True or raw.get("canView") is False:
         return False, "not_ready"
-    files = raw.get("files")
-    if type(files) is not dict or type(files.get("full")) is not dict or not files["full"].get("url"):
-        return False, "not_ready"
     return True, None
 
 
-def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="", kind="all", folder_id=None):
+def _library_summary(session, account, all_assets, filtered_assets):
+    from db.models import VaultFolder
+    def count(statement):
+        return select(func.count()).select_from(
+            statement.with_only_columns(VaultItem.media_id).subquery()).scalar_subquery()
+    # One SQL snapshot. Neither page cursor nor page size affects library totals.
+    total, photos, videos, matching, folders = session.execute(select(
+        count(all_assets), count(all_assets.where(VaultItem.kind == "photo")),
+        count(all_assets.where(VaultItem.kind == "video")), count(filtered_assets),
+        select(func.count()).select_from(VaultFolder).where(
+            VaultFolder.account_id == account, VaultFolder.deleted_at.is_(None)).scalar_subquery()
+    )).one()
+    return {"total": total, "photos": photos, "videos": videos,
+            "other": total - photos - videos, "matching": matching, "folders": folders}
+
+
+def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="", kind="all", folder_id=None, include_summary=False):
+    if type(include_summary) is not bool:
+        raise InvalidVault("Use an explicit summary option.")
     if type(limit) is not int or not 1 <= limit <= 48:
         raise InvalidVault("Use a vault page size between 1 and 48.")
     if after_media_id is not None:
@@ -212,6 +238,7 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
         if connection is not None and connection.binding_id != runtime.binding_id:
             raise Refused("scope unavailable")
         query = select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id > 0)
+        all_assets = query
         if folder_id is not None:
             from db.models import VaultFolderItem
             from .vault_editing import _folder,folder_reference
@@ -227,6 +254,9 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
             query = query.where(or_(*(func.lower(func.coalesce(field, "")).contains(search, autoescape=True)
                 for field in [VaultItem.search_text, VaultItem.description, VaultItem.video_description,
                               VaultItem.tags, VaultItem.notes, VaultItem.operator_overrides_json])))
+        summary = None
+        if include_summary:
+            summary = _library_summary(s, account, all_assets, query)
         if after_media_id is not None:
             query = query.where(VaultItem.media_id > after_media_id)
         rows = s.scalars(query.order_by(VaultItem.media_id).limit(limit + 1)).all()
@@ -248,7 +278,8 @@ def list_vault(store, tenant, account, *, after_media_id=None, limit=24, query="
         latest = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
             OfVaultSyncJob.binding_id == runtime.binding_id).order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
         return {"items": result, "nextCursor": str(rows[limit - 1].media_id) if len(rows) > limit else None,
-            "sync": job_view(latest) if latest else None, "connectionRevision": connection.revision if connection else None}
+            "sync": job_view(latest) if latest else None, "connectionRevision": connection.revision if connection else None,
+            **({"summary": summary} if include_summary else {})}
 
 
 def media_reference(value):
@@ -295,45 +326,63 @@ def create_product(store, tenant, account, *, product, command_key, actor):
                 raise Refused("vault idempotency conflict")
             return json.loads(prior.acknowledgement_json)
         connection = _connection(s, runtime)
-        assets = []
-        for mid in media:
-            row = s.scalar(select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id == mid).with_for_update(read=True))
-            observation = s.get(OfVaultObservation, (account, mid))
-            job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
-            if row is None or not _ready(row, observation, job, connection, runtime.binding_id)[0]:
-                raise Refused("vault media unavailable")
-            if mid in previews and row.kind != "photo":
-                raise InvalidVault("Only included photos may be free preview assets.")
-            assets.append(row)
-        paid = [row for row in assets if row.media_id not in previews]
-        videos = [row for row in paid if row.kind == "video"]
-        if videos and (len(paid) != 1 or len(videos) != 1):
-            raise InvalidVault("A video product has one paid video and optional included photo previews.")
-        # Existing legacy/native products remain canonical. A new command must
-        # not create a duplicate shelf entry for the same assets, in any order.
-        existing = s.scalars(select(CatalogItem.media_ids).where(CatalogItem.account_id == account,
-            CATALOG_IS_SINGLE).limit(CATALOGUE_BOUND + 1)).all()
-        if len(existing) > CATALOGUE_BOUND:
-            raise Refused("catalogue creation bound exceeded")
-        for raw in existing:
-            try:
-                ids = json.loads(raw)
-            except (ValueError, TypeError):
-                continue
-            if type(ids) is list and all(type(mid) is int for mid in ids) and sorted(ids) == sorted(media):
-                raise Refused("catalogue assets already present")
-        now = utcnow()
-        row = CatalogItem(account_id=account, kind="video" if videos else "image" if len(media) == 1 else "image_set",
-            label=product["label"], description_for_ai=product["description"], media_ids=canonical(media),
-            preview_media_ids=canonical(previews), duration_sec=videos[0].duration_seconds if videos else None,
-            price_cents=product["priceCents"], enabled=product["enabled"], is_free_teaser=False, created_at=now, updated_at=now)
-        s.add(row)
-        s.flush()
+        row = create_catalog_single(s, runtime, connection, media=media, previews=previews,
+            label=product["label"], description=product["description"], price_cents=product["priceCents"],
+            enabled=product["enabled"], pricing_mode="dynamic")
+        now = row.created_at
         acknowledgement = {"itemId": str(row.id), "commandKey": command_key, "item": editable(row, 0)}
         s.add(OfVaultProductCreate(account_id=account, command_key=command_key, item_id=row.id,
             request_hash=fingerprint, media_hash=media_hash, actor=actor, product_json=canonical(product),
             acknowledgement_json=canonical(acknowledgement), created_at=now))
         return acknowledgement
+
+
+def create_catalog_single(s, runtime, connection, *, media, previews, label, description, price_cents,
+                          enabled, pricing_mode):
+    """Transaction-scoped validated creator shared by manual and import paths.
+
+    The caller owns the runtime lock, command evidence and acknowledgement.
+    Bundles may hold several paid photos and/or videos sold for one total;
+    free previews (photo or video, as OnlyFans allows) are included assets and at least one stays paid.
+    """
+    account = runtime.account_id
+    if (pricing_mode not in {"dynamic", "fixed"} or type(price_cents) is not int
+            or not 300 <= price_cents <= 20000 or not 1 <= len(media) <= 20
+            or len(set(media)) != len(media) or not set(previews) < set(media)):
+        raise InvalidVault("Select 1-20 vault assets, leave one paid asset and set a paid price.")
+    assets = []
+    for mid in media:
+        row = s.scalar(select(VaultItem).where(VaultItem.account_id == account, VaultItem.media_id == mid).with_for_update(read=True))
+        observation = s.get(OfVaultObservation, (account, mid))
+        job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
+        if row is None or not _ready(row, observation, job, connection, runtime.binding_id)[0]:
+            raise Refused("vault media unavailable")
+        assets.append(row)
+    paid = [row for row in assets if row.media_id not in previews]
+    videos = [row for row in paid if row.kind == "video"]
+    # Existing legacy/native products remain canonical. A new command must
+    # not create a duplicate shelf entry for the same assets, in any order.
+    existing = s.scalars(select(CatalogItem.media_ids).where(CatalogItem.account_id == account,
+        CATALOG_IS_SINGLE).limit(CATALOGUE_BOUND + 1)).all()
+    if len(existing) > CATALOGUE_BOUND:
+        raise Refused("catalogue creation bound exceeded")
+    for raw in existing:
+        try:
+            ids = json.loads(raw)
+        except (ValueError, TypeError):
+            continue
+        if type(ids) is list and all(type(mid) is int for mid in ids) and sorted(ids) == sorted(media):
+            raise Refused("catalogue assets already present")
+    now = utcnow()
+    # One video keeps its duration; a multi-video bundle has no single duration.
+    row = CatalogItem(account_id=account, kind="video" if videos else "image" if len(media) == 1 else "image_set",
+        label=label, description_for_ai=description, media_ids=canonical(media),
+        preview_media_ids=canonical(previews), duration_sec=videos[0].duration_seconds if len(videos) == 1 else None,
+        price_cents=price_cents, enabled=enabled, is_free_teaser=False, pricing_mode=pricing_mode,
+        created_at=now, updated_at=now)
+    s.add(row)
+    s.flush()
+    return row
 
 
 def _terminal(row, status, error=None):
@@ -346,6 +395,12 @@ def _current(runtime, connection, job):
     return (connection is not None and connection.binding_id == runtime.binding_id == job.binding_id
         and connection.revision == job.connection_revision and connection.owner_id == job.owner_id
         and connection.status == "verified" and connection.expires_at > utcnow())
+
+
+def _vault_job_expired(requested_at, last_progress_at, now):
+    """Expire a stalled import, while preserving a long import that is advancing."""
+    last_activity = max(requested_at, last_progress_at or requested_at)
+    return now - last_activity > timedelta(hours=1)
 
 
 def process_vault_jobs(store, tenant, *, limit=1, stop=None):
@@ -388,8 +443,10 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 _terminal(job, "superseded", "connection_changed")
                 continue
             if utcnow() - job.requested_at > timedelta(hours=1):
-                _terminal(job, "failed", "vault_job_expired")
-                continue
+                last_progress = s.scalar(select(func.max(OfVaultObservation.observed_at)).where(OfVaultObservation.account_id == account, OfVaultObservation.job_id == identity))
+                if _vault_job_expired(job.requested_at, last_progress, utcnow()):
+                    _terminal(job, 'failed', 'vault_job_expired')
+                    continue
             from .connections import _open
             try:
                 clear = _open(connection, tenant)
@@ -400,64 +457,98 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             job.status, job.lease_token = "running", token
             job.lease_until, job.updated_at = utcnow() + timedelta(seconds=60), utcnow()
             offset, owner, expires, binding = job.page_offset, job.owner_id, connection.expires_at, runtime.binding_id
+            connection_revision=connection.revision
         if stop is not None and stop.is_set():
             break
-        error = None
+        error = budget = failure = deferred = None
         try:
-            from .provider_connector import NativeProviderConnector, session_from_capture
+            from .provider_connector import NativeProviderConnector, NativeReadTransientError, NativeAuthenticationError, session_from_capture
             transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
                 policy_revision=1, capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"],
                 expires_at=expires.replace(tzinfo=timezone.utc)))
+            from .worker import _provider_claim
+            budget=_provider_claim(store,tenant,account,transport,connection_revision,'vault')
             raw = transport.vault_page(offset=offset, limit=PAGE_SIZE)
             rows, more = parse_vault_page(raw, owner_id=owner)
             if os.environ.get("ONLYFANS_VAULT_PREVIEWS_ENABLED") == "1":
                 from .vault_previews import warm_page
                 warm_page(transport, rows, binding_id=binding, owner_id=owner, stop=stop)
-        except NativeProtocolError:
-            error = "unsupported_vault_response"
-        except Exception:
-            error = "vault_read_failed"
-        with Session(store.engine) as s, s.begin():
-            runtime = store._runtime(s, tenant, account)
-            job = s.get(OfVaultSyncJob, (account, identity))
-            if job.status != "running" or job.lease_token != token:
-                continue
-            if not _current(runtime, s.get(OfProviderConnection, account), job):
-                _terminal(job, "superseded", "connection_changed")
-                continue
-            if error:
-                _terminal(job, "failed", error)
-                continue
-            page_hash = hashlib.sha256(raw).hexdigest()
-            if more and page_hash == job.last_page_hash:
-                _terminal(job, "failed", "unsupported_vault_pagination")
-                continue
-            for media in rows:
-                values = row_values(account, media)
-                values["created_at"] = _stamp(media["createdAt"]).replace(tzinfo=None)
-                row = s.get(VaultItem, (account, media["id"]))
-                if row is None:
-                    row = VaultItem(**values)
-                    s.add(row)
+        except Exception as problem:
+            from .provider_read_budget import ReadDeferred
+            failure=problem
+            if isinstance(problem,ReadDeferred):deferred=problem.retry_at;error='provider_read_deferred'
+            elif isinstance(problem,NativeAuthenticationError):error='connection_unavailable'
+            elif isinstance(problem,NativeReadTransientError):error='vault_read_failed'
+            elif isinstance(problem,NativeProtocolError):error='provider_rate_limited' if hasattr(problem,'retry_after') else 'unsupported_vault_response'
+            else:error='vault_read_failed'
+        try:
+            with Session(store.engine) as s, s.begin():
+                runtime = store._runtime(s, tenant, account)
+                job = s.get(OfVaultSyncJob, (account, identity))
+                if job.status != "running" or job.lease_token != token:
+                    continue
+                if not _current(runtime, s.get(OfProviderConnection, account), job):
+                    _terminal(job, "superseded", "connection_changed")
+                    continue
+                if budget is not None:
+                    from .provider_read_budget import current
+                    try:current(store,tenant,budget,session=s)
+                    except Refused:
+                        job.status='pending';job.last_error='provider_read_stale'
+                        job.lease_token=job.lease_until=None
+                        continue
+                if deferred:
+                    # Reuse the durable job lease as a bounded retry deadline. No
+                    # provider result or cursor advancement is acknowledged.
+                    job.status='running';job.last_error='provider_read_deferred'
+                    job.lease_until=deferred;job.updated_at=utcnow()
+                    continue
+                if failure is not None and hasattr(failure,'retry_after'):
+                    job.status='running';job.last_error=error
+                    job.lease_until=utcnow()+timedelta(seconds=min(3600,max(1,int(failure.retry_after))))
+                    job.updated_at=utcnow()
+                    continue
+                if error:
+                    _terminal(job, "failed", error)
+                    continue
+                page_hash = hashlib.sha256(raw).hexdigest()
+                if more and page_hash == job.last_page_hash:
+                    _terminal(job, "failed", "unsupported_vault_pagination")
+                    continue
+                for media in rows:
+                    values = row_values(account, media)
+                    values["created_at"] = _stamp(media["createdAt"]).replace(tzinfo=None)
+                    row = s.get(VaultItem, (account, media["id"]))
+                    if row is None:
+                        row = VaultItem(**values)
+                        s.add(row)
+                    else:
+                        for field in MIRROR_REFRESH_FIELDS:
+                            setattr(row, field, values[field])
+                    s.flush()
+                    observation = s.get(OfVaultObservation, (account, media["id"]))
+                    if observation is None:
+                        observation = OfVaultObservation(account_id=account, media_id=media["id"])
+                        s.add(observation)
+                    observation.job_id, observation.raw_hash, observation.observed_at = identity, digest(row.raw_json), utcnow()
+                job.page_offset += len(rows)
+                job.items_seen += len(rows)
+                job.pages_read += 1
+                job.last_page_hash, job.updated_at = page_hash, utcnow()
+                job.lease_token = job.lease_until = None
+                if not more:
+                    _terminal(job, "complete")
                 else:
-                    for field in MIRROR_REFRESH_FIELDS:
-                        setattr(row, field, values[field])
-                s.flush()
-                observation = s.get(OfVaultObservation, (account, media["id"]))
-                if observation is None:
-                    observation = OfVaultObservation(account_id=account, media_id=media["id"])
-                    s.add(observation)
-                observation.job_id, observation.raw_hash, observation.observed_at = identity, digest(row.raw_json), utcnow()
-            job.page_offset += len(rows)
-            job.items_seen += len(rows)
-            job.pages_read += 1
-            job.last_page_hash, job.updated_at = page_hash, utcnow()
-            job.lease_token = job.lease_until = None
-            if not more:
-                _terminal(job, "complete")
-            elif job.pages_read >= job.max_pages:
-                _terminal(job, "failed", "vault_page_limit")
-            else:
-                job.status = "pending"
-            processed += 1
+                    # The cursor is committed after each bounded page. Crossing
+                    # the original 200-page window must not restart at offset 0
+                    # or report an incomplete large vault as a terminal failure.
+                    # Each worker pass still admits one page per account; stale
+                    # connection, inactivity and repeated-page fences remain.
+                    job.status = "pending"
+                    job.last_error = None
+                processed += 1
+        finally:
+            from .worker import _release_provider
+            _release_provider(store,tenant,budget,failure)
     return processed
+

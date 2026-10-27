@@ -1,5 +1,6 @@
 # The immutable current production handover image; no dependency/schema upgrade.
-FROM sha256:ab3bfc200c0e93a8fe5ebfd1f93790efb5f4e96981af7999cb33b314e8e42207
+ARG BASE_IMAGE=twin-fastt-revert-base:ab3bfc200c0e93a8fe5ebfd1f93790efb5f4e96981af7999cb33b314e8e42207
+FROM ${BASE_IMAGE}
 ARG SOURCE_COMMIT
 ARG SOURCE_DATE_EPOCH
 LABEL org.opencontainers.image.revision=$SOURCE_COMMIT
@@ -11,3 +12,4 @@ COPY service/automations/content_resolver.py /app/service/automations/content_re
 COPY service/automations/pack_claim.py /app/service/automations/pack_claim.py
 COPY service/automations/pack_sender.py /app/service/automations/pack_sender.py
 COPY service/tests/test_fastt_requested_caption.py /app/service/tests/test_fastt_requested_caption.py
+COPY service/tests/test_native_pilot_runner.py /app/service/tests/test_native_pilot_runner.py

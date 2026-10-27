@@ -126,6 +126,22 @@ class PgFixture(ledger_test.Fixture):
                               "INSERT INTO twin_bridge_writes(account_id,fan_id,holder,state,expires_at) VALUES(", 1)
         elif sql.startswith("INSERT INTO accounts VALUES(?)"):
             sql = "INSERT INTO accounts(id,is_active_default) VALUES(?,false)"
+        elif sql.startswith("INSERT INTO of_conversation_state("):
+            # Dashboard controls reference real composite fan keys on PostgreSQL.
+            # Seed both foreign-scope cases so isolation is tested with valid rows.
+            from sqlalchemy import create_engine
+            from db.models import Fan
+            rows("INSERT INTO accounts(id,is_active_default) VALUES('foreign',false) ON CONFLICT DO NOTHING")
+            fixture_engine = create_engine(SYNC_URL)
+            try:
+                with fixture_engine.begin() as con:
+                    con.execute(Fan.__table__.insert(), [
+                        {"account_id": args[0], "fan_id": args[1]},
+                        {"account_id": args[0], "fan_id": 999},
+                        {"account_id": "foreign", "fan_id": args[1]},
+                    ])
+            finally:
+                fixture_engine.dispose()
         elif sql.startswith("INSERT INTO scheduled_jobs VALUES(?,?,?)"):
             sql = ("INSERT INTO scheduled_jobs(account_id,status,kind,payload_json,run_at,attempts) "
                    "VALUES(?,?,?,'{}',CURRENT_TIMESTAMP,0)")

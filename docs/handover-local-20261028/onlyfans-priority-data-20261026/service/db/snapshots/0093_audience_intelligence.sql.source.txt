@@ -1,0 +1,20 @@
+CREATE TABLE of_fan_subscription (
+ account_id VARCHAR NOT NULL, fan_id BIGINT NOT NULL, binding_id VARCHAR NOT NULL,
+ status VARCHAR(16) NOT NULL, expires_at TIMESTAMP WITHOUT TIME ZONE,
+ observed_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+ PRIMARY KEY (account_id,fan_id),
+ FOREIGN KEY (account_id,fan_id) REFERENCES fans(account_id,fan_id) ON DELETE RESTRICT,
+ CONSTRAINT ck_of_fan_subscription_status CHECK (status IN ('active','expired','unknown'))
+);
+CREATE TABLE of_campaign_audience (
+ account_id VARCHAR NOT NULL, campaign_id VARCHAR(36) NOT NULL,
+ definition_json TEXT NOT NULL, definition_hash VARCHAR(64) NOT NULL,
+ evaluated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+ PRIMARY KEY (account_id,campaign_id),
+ FOREIGN KEY (account_id,campaign_id) REFERENCES of_campaign(account_id,campaign_id) ON DELETE RESTRICT
+);
+
+CREATE FUNCTION of_campaign_audience_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'campaign audience evidence is append-only'; END; $$;
+CREATE TRIGGER of_campaign_audience_immutable BEFORE UPDATE OR DELETE ON of_campaign_audience
+FOR EACH ROW EXECUTE FUNCTION of_campaign_audience_immutable();

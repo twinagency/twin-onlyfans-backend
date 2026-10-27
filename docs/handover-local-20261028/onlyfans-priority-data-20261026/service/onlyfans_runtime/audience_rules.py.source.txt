@@ -1,0 +1,154 @@
+"""The existing Smart List DSL, shared by legacy and scoped OnlyFans routes.
+
+No storage, provider, model or legacy router import belongs here.
+"""
+import math
+from typing import Any, Iterable
+
+class InvalidRules(ValueError):
+    def __init__(self, status_code, detail):
+        super().__init__(detail)
+        self.status_code, self.detail = status_code, detail
+
+_NUMERIC_FIELDS = {'lifetime_spend', 'recent_spend', 'last_active_days', 'purchase_count'}
+_STRING_FIELDS = {'status'}
+_TAG_FIELDS = {'tag'}
+_FIELDS = _NUMERIC_FIELDS | _STRING_FIELDS | _TAG_FIELDS
+_NUMERIC_OPS = {'>', '>=', '<', '<=', '==', '!='}
+_STRING_OPS = {'==', '!='}
+_TAG_OPS = {'has', 'not_has'}
+_MAX_RULES = 20
+
+def _num_cmp(a: float, op: str, b: float) -> bool:
+    if op == '>':
+        return a > b
+    if op == '>=':
+        return a >= b
+    if op == '<':
+        return a < b
+    if op == '<=':
+        return a <= b
+    if op == '==':
+        return a == b
+    if op == '!=':
+        return a != b
+    return False
+
+def _eval_rule(rule: dict, fan: dict) -> bool:
+    """Evaluate ONE rule after resolve() validates the complete definition."""
+    field = rule.get('field')
+    op = rule.get('op')
+    value = rule.get('value')
+    if field == 'lifetime_spend':
+        return None if fan.get(field) is None else _num_cmp(float(fan[field]), op, float(value))
+    if field in {'recent_spend', 'purchase_count'}:
+        days = int(rule.get('days') or 30)
+        rs = fan.get(field) or {}
+        cents = rs.get(days, rs.get(str(days)))
+        return None if cents is None else _num_cmp(float(cents), op, float(value))
+    if field == 'last_active_days':
+        la = fan.get('last_active_days')
+        if la is None:
+            return None
+        return _num_cmp(float(la), op, float(value))
+    if field == 'status':
+        if fan.get('status') is None:
+            return None
+        cur = fan['status'].lower()
+        want = str(value or '').lower()
+        return cur == want if op == '==' else cur != want if op == '!=' else False
+    if field == 'tag':
+        tags = {str(t).lower() for t in fan.get('tags') or []}
+        present = str(value or '').lower() in tags
+        if op == 'has':
+            return present
+        if op == 'not_has':
+            return not present
+        return False
+    return False
+
+def resolve(rules_obj: dict | None, fans: Iterable[dict]) -> list[int]:
+    """PURE. Return the sorted fan_id list matching `rules_obj` over `fans`.
+
+    `rules_obj` = {"match": "all"|"any", "rules": [...]}. Empty/absent rules →
+    EVERY fan matches (a blank segment is "everyone", not "no one"). `fans` is
+    an iterable of dicts shaped by `_normalise_fan`.
+    """
+    rules_obj = _validate_rules(rules_obj)
+    rules = rules_obj['rules']
+    match = rules_obj['match']
+    out: list[int] = []
+    for fan in fans:
+        fid = fan.get('fan_id')
+        if fid is None:
+            continue
+        if not rules:
+            out.append(int(fid))
+            continue
+        results = [_eval_rule(r, fan) for r in rules]
+        ok = all(x is True for x in results) if match != 'any' else any(x is True for x in results)
+        if ok:
+            out.append(int(fid))
+    return sorted(out)
+
+def _validate_rules(rules_obj: Any) -> dict:
+    """Coerce + bound-check a rules object for storage. Raises 422 on anything
+    the resolver couldn't act on (so a bad rule is rejected at write time, not
+    silently dropped at read)."""
+    if rules_obj is None:
+        return {'match': 'all', 'rules': []}
+    if not isinstance(rules_obj, dict):
+        raise InvalidRules(422, 'rules must be an object')
+    if set(rules_obj) - {'match', 'rules'}:
+        raise InvalidRules(422, 'unsupported smart list rule format')
+    raw_match = rules_obj.get('match', 'all')
+    match = raw_match.lower() if isinstance(raw_match, str) else None
+    if match not in ('all', 'any'):
+        raise InvalidRules(422, "match must be 'all' or 'any'")
+    raw = rules_obj.get('rules', [])
+    if not isinstance(raw, list):
+        raise InvalidRules(422, 'rules.rules must be a list')
+    if len(raw) > _MAX_RULES:
+        raise InvalidRules(422, f'at most {_MAX_RULES} rules')
+    clean: list[dict] = []
+    for r in raw:
+        if not isinstance(r, dict):
+            raise InvalidRules(422, 'each rule must be an object')
+        if set(r) - {'field', 'op', 'value', 'days'}:
+            raise InvalidRules(422, 'unsupported smart list rule fields')
+        field = r.get('field')
+        op = r.get('op')
+        if not isinstance(field, str) or field not in _FIELDS:
+            raise InvalidRules(422, f'unknown field {field!r}')
+        if not isinstance(op, str):
+            raise InvalidRules(422, 'rule operator must be a string')
+        entry: dict[str, Any] = {'field': field, 'op': op}
+        if field in _NUMERIC_FIELDS:
+            if op not in _NUMERIC_OPS:
+                raise InvalidRules(422, f"{field} needs a numeric operator ({', '.join(sorted(_NUMERIC_OPS))})")
+            try:
+                if isinstance(r.get('value'), bool):
+                    raise ValueError
+                entry['value'] = float(r.get('value'))
+                if not math.isfinite(entry['value']):
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError):
+                raise InvalidRules(422, f'{field} value must be a number')
+            if field in {'recent_spend', 'purchase_count'}:
+                days = r.get('days', 30)
+                try:
+                    entry['days'] = max(1, min(int(days), 3650))
+                except (TypeError, ValueError, OverflowError):
+                    raise InvalidRules(422, 'recent_spend days must be an integer')
+        elif field in _STRING_FIELDS:
+            if op not in _STRING_OPS:
+                raise InvalidRules(422, f'{field} needs == or !=')
+            entry['value'] = str(r.get('value') or '')
+        else:
+            if op not in _TAG_OPS:
+                raise InvalidRules(422, "tag needs 'has' or 'not_has'")
+            entry['value'] = str(r.get('value') or '')
+            if not entry['value']:
+                raise InvalidRules(422, 'tag value cannot be blank')
+        clean.append(entry)
+    return {'match': match, 'rules': clean}

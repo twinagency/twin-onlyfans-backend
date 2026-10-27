@@ -1,0 +1,109 @@
+"""Audience and vault intelligence on the existing content-purpose boundary."""
+import asyncio
+import json
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+from onlyfans_runtime.audiences import SCHEMA, list_audiences, save_audience, preview
+from onlyfans_runtime.vault_intelligence import read_vault_intelligence, read_performance
+from onlyfans_runtime.store import Refused
+from .vault_api import authenticate, body, failure
+from .content_api import PREFIX, response
+from .api import unique_keys
+
+router = APIRouter(prefix=PREFIX, tags=["onlyfans-intelligence"])
+
+
+def answer(account, result):
+    return response({"ok": True, "accountId": account, "analyticsVersion": SCHEMA, "data": result})
+
+
+def query(request, allowed):
+    if any(key not in allowed or len(request.query_params.getlist(key)) != 1 for key in request.query_params):
+        raise ValueError("Invalid intelligence query.")
+    return dict(request.query_params)
+
+
+def refused(exc):
+    if isinstance(exc, Refused):
+        return failure(exc)
+    if isinstance(exc, ValueError):
+        return response({"ok": False, "error": "Use a supported audience or vault filter.", "code": "invalid_request"}, 400)
+    return failure(exc)
+
+
+@router.get("/accounts/{account_id}/intelligence/audiences")
+async def audiences_get(request: Request, account_id: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse):
+        return context
+    try:
+        query(request, set())
+        return answer(account_id, await asyncio.to_thread(list_audiences, *context, account_id))
+    except Exception as exc:
+        return refused(exc)
+
+
+@router.post("/accounts/{account_id}/intelligence/audiences")
+async def audiences_post(request: Request, account_id: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse):
+        return context
+    try:
+        query(request, set())
+        value = await body(request, {"actor", "action", "id", "expectedRevision", "name", "rules"})
+        if isinstance(value, JSONResponse):
+            return value
+        result = await asyncio.to_thread(save_audience, *context, account_id, actor=value["actor"],
+            action=value["action"], id=value["id"], expected_revision=value["expectedRevision"],
+            name=value["name"], rules=value["rules"])
+        return answer(account_id, result)
+    except Exception as exc:
+        return refused(exc)
+
+
+@router.get("/accounts/{account_id}/intelligence/preview")
+async def preview_get(request: Request, account_id: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse):
+        return context
+    try:
+        params = query(request, {"rules", "selection"})
+        if len(params) != 1:
+            raise ValueError()
+        key, raw = next(iter(params.items()))
+        if len(raw.encode()) > 16384:
+            raise ValueError()
+        value = json.loads(raw, object_pairs_hook=unique_keys,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        if type(value) is not dict:
+            raise ValueError()
+        return answer(account_id, await asyncio.to_thread(preview, *context, account_id, **{key: value}))
+    except Exception as exc:
+        return refused(exc)
+
+
+@router.get("/accounts/{account_id}/intelligence/vault")
+async def vault_get(request: Request, account_id: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse):
+        return context
+    try:
+        params = query(request, {"fanId", "after", "kind", "state", "q"})
+        result = await asyncio.to_thread(read_vault_intelligence, *context, account_id,
+            fan_id=params.get("fanId"), after=params.get("after"), kind=params.get("kind", "all"),
+            state=params.get("state", "all"), query=params.get("q", ""))
+        return answer(account_id, result)
+    except Exception as exc:
+        return refused(exc)
+
+
+@router.get("/accounts/{account_id}/intelligence/performance")
+async def performance_get(request: Request, account_id: str):
+    context = authenticate(request, account_id)
+    if isinstance(context, JSONResponse):
+        return context
+    try:
+        params = query(request, {"after"})
+        return answer(account_id, await asyncio.to_thread(read_performance, *context, account_id, after=params.get("after")))
+    except Exception as exc:
+        return refused(exc)

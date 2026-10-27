@@ -1,0 +1,708 @@
+"""Telegram event v1 / delivery-action v1 validators.
+
+An exact behavioural mirror of the Node validator in
+bot/src/engines/fastt-contract.ts. The two are held together by the shared
+fixture set (fixtures/telegram-contract.cases.json, pinned by FIXTURES.sha256),
+which BOTH suites run and which asserts the exact rejection code per case.
+
+Offline and side-effect free: no network, no database, no model, no service start.
+
+Provenance: this is NEW code added for the Telegram route. It does not modify or
+derive from any existing Fastt module; the validation approach (string ids, UTF-16
+length limits, unpaired-surrogate rejection, canonical UTC timestamps,
+length-prefixed tuple hashing) was re-read from service/twin_bridge/contract.py -
+which is MIT-licensed, "Copyright (c) 2026 Fastt contributors", under this
+repository's LICENSE - and from twin-sexbot src/channels/types.ts, then
+reimplemented for the Telegram shapes. Nothing is copied verbatim, so no
+additional notice is required; if expression is ever reused verbatim from the MIT
+bridge, its notice must travel with it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from datetime import datetime, timedelta, timezone
+
+TELEGRAM_EVENT_SCHEMA_VERSION = 1
+TELEGRAM_ACTION_SCHEMA_VERSION = 1
+
+TELEGRAM_CHANNEL = "telegram"
+
+TELEGRAM_MODES = ("business", "bot")
+TELEGRAM_ORIGINS = ("fan", "own_account", "system")
+TELEGRAM_EVENT_KINDS = (
+    "message",
+    "edited_message",
+    "deleted_message",
+    "business_connection",
+    "successful_payment",
+    "pre_checkout",
+    "callback_query",
+    "unsupported",
+)
+ATTACHMENT_KINDS = ("photo", "video", "voice", "audio", "document", "sticker", "other")
+ACTION_SOURCE_KINDS = ("turn", "job")
+ACTION_KINDS = ("send_text", "send_media", "send_voice", "typing", "read_ack", "none")
+
+FASTT_LIMITS = {
+    "schemaVersion": 8,
+    "id": 256,
+    "timestamp": 40,
+    "text": 4000,
+    "attachments": 8,
+    "assets": 20,
+    "paidMediaAssets": 10,
+    "totalBytes": 16 * 1024,
+}
+
+TG_INT64_MAX = "9223372036854775807"
+TG_INT32_MAX = "2147483647"
+
+# Integer ranges shared with the Node validator (R5). Enforced BEFORE any
+# identity or digest derivation, so the two languages can never hash different
+# spellings of the same out-of-range number (for example 1e21 vs 10**21, or a
+# JS-rounded 9007199254740992 vs an exact Python 9007199254740993).
+ORDINAL_MAX = 2147483647
+INDEX_MAX = 9007199254740991
+XTR_AMOUNT_MIN = 1
+XTR_AMOUNT_MAX = 25000
+
+FASTT_ERROR_CODES = (
+    "bad-request",
+    "missing-field",
+    "blank-field",
+    "malformed-field",
+    "oversized-field",
+    "unsupported-version",
+    "unsupported-channel",
+    "unsupported-enum",
+    "id-not-integer",
+    "unpaired-surrogate",
+    "timestamp-invalid",
+    "action-id-mismatch",
+    "money-invalid",
+)
+
+
+class FasttContractError(ValueError):
+    """A typed rejection. The Node side throws the same code."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+# Path separators and control characters. ASCII-digit class is used explicitly
+# below because Python's \d matches non-ASCII decimal digits and JavaScript's
+# does not - that difference would silently accept an id Node rejects.
+_ID_FORBIDDEN = re.compile("[/\\\\\u0000-\u001f\u007f]")
+_DECIMAL_INT = re.compile(r"^-?[0-9]+$")
+
+# The ONE shared blank/padding policy (C4), identical to isSharedWhitespace in
+# bot/src/engines/fastt-contract.ts. Python's str.strip and JavaScript's trim trim
+# DIFFERENT Unicode sets; rather than loosen either side, both use this ONE
+# explicitly enumerated Unicode set - the union of what each previously rejected.
+# Used ONLY for blank/padding classification: nonblank text/ids are never rewritten.
+# Set: U+0009..U+000D, U+001C..U+0020, U+0085, U+00A0, U+1680, U+2000..U+200A,
+# U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF.
+_SHARED_WHITESPACE_CODES = (
+    set(range(0x0009, 0x000E))
+    | set(range(0x001C, 0x0021))
+    | {0x0085, 0x00A0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF}
+    | set(range(0x2000, 0x200B))
+)
+
+
+def _is_shared_whitespace(ch: str) -> bool:
+    return ord(ch) in _SHARED_WHITESPACE_CODES
+
+
+def _trim_shared(value: str) -> str:
+    start, end = 0, len(value)
+    while start < end and _is_shared_whitespace(value[start]):
+        start += 1
+    while end > start and _is_shared_whitespace(value[end - 1]):
+        end -= 1
+    return value[start:end]
+
+
+_TIMESTAMP_RE = re.compile(
+    r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})$"
+)
+_DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+
+def utf16_len(value: str) -> int:
+    """Length in UTF-16 code units - what JavaScript's String.length reports.
+
+    A non-BMP character is ONE Python code point but TWO UTF-16 units, so a
+    naive len() would let a Python-built id pass a limit Node rejects.
+    """
+    return sum(2 if ord(ch) > 0xFFFF else 1 for ch in value)
+
+
+def has_unpaired_surrogate(value: str) -> bool:
+    """True for ill-formed Unicode, matching Node's explicit surrogate scan."""
+    i = 0
+    n = len(value)
+    while i < n:
+        c = ord(value[i])
+        if 0xD800 <= c <= 0xDBFF:
+            nxt = ord(value[i + 1]) if i + 1 < n else -1
+            if not (0xDC00 <= nxt <= 0xDFFF):
+                return True
+            i += 2
+            continue
+        if 0xDC00 <= c <= 0xDFFF:
+            return True
+        i += 1
+    return False
+
+
+def _is_leap(year: int) -> bool:
+    return (year % 4 == 0 and year % 100 != 0) or year % 400 == 0
+
+
+def _days_in_month(year: int, month: int) -> int:
+    return 29 if (month == 2 and _is_leap(year)) else _DAYS_IN_MONTH[month - 1]
+
+
+def _is_record(value: object) -> bool:
+    return isinstance(value, dict)
+
+
+def _serialized_bytes(raw: object) -> int:
+    """UTF-8 size of the serialized object - the same quantity Node reports.
+
+    ensure_ascii=False keeps non-ASCII raw so a non-BMP character counts as its
+    real 4 UTF-8 bytes on both sides.
+    """
+    try:
+        text = json.dumps(raw, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        return len(text.encode("utf-8"))
+    except UnicodeEncodeError:
+        # A lone surrogate cannot be UTF-8 encoded. JavaScript's JSON.stringify
+        # escapes it rather than failing, so fall back to the escaped form instead
+        # of rejecting the payload for a reason Node would not.
+        text = json.dumps(raw, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+        return len(text.encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise FasttContractError("bad-request", "payload is not serializable") from exc
+
+
+def _read_schema_version(o: dict, expected: int) -> int:
+    """schemaVersion as the integer 1, never a bool.
+
+    A JSON 1.0 is accepted because JavaScript's Number.isInteger(1.0) is true and
+    the Node validator accepts it; anything else non-integral is malformed.
+    """
+    ver = o.get("schemaVersion")
+    if ver is None:
+        raise FasttContractError("missing-field", "schemaVersion is required")
+    if isinstance(ver, bool):
+        raise FasttContractError("malformed-field", "schemaVersion must be an integer")
+    if isinstance(ver, int):
+        value = ver
+    elif isinstance(ver, float) and ver.is_integer():
+        value = int(ver)
+    else:
+        raise FasttContractError("malformed-field", "schemaVersion must be an integer")
+    if value != expected:
+        raise FasttContractError("unsupported-version", f"schemaVersion {value} is not supported")
+    return value
+
+
+def _read_enum(o: dict, field: str, allowed: tuple) -> str:
+    v = o.get(field)
+    if v is None:
+        raise FasttContractError("missing-field", f"{field} is required")
+    if not isinstance(v, str):
+        raise FasttContractError("malformed-field", f"{field} must be a string")
+    if v not in allowed:
+        raise FasttContractError("unsupported-enum", f"{field} {v!r} is not supported")
+    return v
+
+
+def _read_id(o: dict, field: str) -> str:
+    v = o.get(field)
+    if v is None:
+        raise FasttContractError("missing-field", f"{field} is required")
+    if not isinstance(v, str):
+        raise FasttContractError("malformed-field", f"{field} must be a string; ids are never coerced through Number")
+    if has_unpaired_surrogate(v):
+        raise FasttContractError("unpaired-surrogate", f"{field} contains an unpaired UTF-16 surrogate")
+    if len(_trim_shared(v)) == 0:
+        raise FasttContractError("blank-field", f"{field} is blank")
+    if utf16_len(v) > FASTT_LIMITS["id"]:
+        raise FasttContractError("oversized-field", f"{field} exceeds {FASTT_LIMITS['id']} characters")
+    if v != _trim_shared(v):
+        raise FasttContractError("malformed-field", f"{field} has leading or trailing whitespace")
+    if v in (".", ".."):
+        raise FasttContractError("malformed-field", f"{field} is a traversal value")
+    if _ID_FORBIDDEN.search(v):
+        raise FasttContractError("malformed-field", f"{field} contains a path separator or control character")
+    return v
+
+
+def _read_integer_id(o: dict, field: str) -> str:
+    s = _read_id(o, field)
+    if not _DECIMAL_INT.match(s):
+        raise FasttContractError("id-not-integer", f"{field} must be a decimal integer string")
+    negative = s.startswith("-")
+    digits = s[1:] if negative else s
+    if len(digits) > 1 and digits.startswith("0"):
+        raise FasttContractError("id-not-integer", f"{field} must not have leading zeros")
+    if len(digits) > 19:
+        raise FasttContractError("id-not-integer", f"{field} is outside the signed 64-bit range")
+    if len(digits) == 19 and digits > TG_INT64_MAX:
+        raise FasttContractError("id-not-integer", f"{field} is outside the signed 64-bit range")
+    if negative and digits == "0":
+        raise FasttContractError("id-not-integer", f"{field} is negative zero")
+    return s
+
+
+def _read_optional_id(o: dict, field: str) -> str | None:
+    v = o.get(field)
+    if v is None:
+        return None
+    return _read_id(o, field)
+
+
+def _read_optional_text(o: dict, field: str) -> str | None:
+    v = o.get(field)
+    if v is None:
+        return None
+    if not isinstance(v, str):
+        raise FasttContractError("malformed-field", f"{field} must be a string")
+    if has_unpaired_surrogate(v):
+        raise FasttContractError("unpaired-surrogate", f"{field} contains an unpaired UTF-16 surrogate")
+    if len(_trim_shared(v)) == 0:
+        raise FasttContractError("blank-field", f"{field} is blank")
+    if utf16_len(v) > FASTT_LIMITS["text"]:
+        raise FasttContractError("oversized-field", f"{field} exceeds {FASTT_LIMITS['text']} characters")
+    return v
+
+
+def _parse_timestamp(value: str) -> datetime | None:
+    m = _TIMESTAMP_RE.match(value)
+    if not m:
+        return None
+    year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    hour, minute, second = int(m.group(4)), int(m.group(5)), int(m.group(6))
+    zone = m.group(8)
+    # Year zero is refused as INPUT (not only after offset normalisation), so both
+    # languages reject the same raw value instead of one accepting and normalising.
+    if year < 1 or year > 9999:
+        return None
+    if month < 1 or month > 12:
+        return None
+    if day < 1 or day > _days_in_month(year, month):
+        return None
+    if hour > 23 or minute > 59 or second > 59:
+        return None
+    offset_minutes = 0
+    if zone != "Z":
+        sign = -1 if zone[0] == "-" else 1
+        off_hour, off_minute = int(zone[1:3]), int(zone[4:6])
+        if off_hour > 23 or off_minute > 59:
+            return None
+        offset_minutes = sign * (off_hour * 60 + off_minute)
+    millis = int((m.group(7) + "000")[:3]) if m.group(7) else 0
+    # datetime() refuses year 0, and the offset arithmetic can step outside the
+    # supported range. Node refuses the same instants (see its parseTimestamp),
+    # so both languages agree instead of one accepting and one raising.
+    try:
+        instant = datetime(year, month, day, hour, minute, second, millis * 1000) - timedelta(minutes=offset_minutes)
+    except (ValueError, OverflowError):
+        return None
+    if not (1 <= instant.year <= 9999):
+        return None
+    return instant
+
+
+def _canonical_timestamp(instant: datetime) -> str:
+    """Format exactly as Node's Date.prototype.toISOString(): ...SS.mmmZ, UTC."""
+    utc = instant.replace(tzinfo=timezone.utc) if instant.tzinfo is None else instant.astimezone(timezone.utc)
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
+
+
+def _read_timestamp(o: dict, field: str) -> str:
+    v = o.get(field)
+    if v is None:
+        raise FasttContractError("missing-field", f"{field} is required")
+    if not isinstance(v, str):
+        raise FasttContractError("malformed-field", f"{field} must be a string")
+    if len(_trim_shared(v)) == 0:
+        raise FasttContractError("blank-field", f"{field} is blank")
+    if utf16_len(v) > FASTT_LIMITS["timestamp"]:
+        raise FasttContractError("oversized-field", f"{field} exceeds {FASTT_LIMITS['timestamp']} characters")
+    if v != _trim_shared(v):
+        raise FasttContractError("malformed-field", f"{field} has leading or trailing whitespace")
+    parsed = _parse_timestamp(v)
+    if parsed is None:
+        raise FasttContractError(
+            "timestamp-invalid",
+            f"{field} must be a timezone-qualified ISO-8601 timestamp such as 2026-10-15T04:00:00Z",
+        )
+    return _canonical_timestamp(parsed)
+
+
+def _read_optional_timestamp(o: dict, field: str) -> str | None:
+    v = o.get(field)
+    if v is None:
+        return None
+    return _read_timestamp(o, field)
+
+
+def _read_index(o: dict, field: str, max_value: int) -> int:
+    """A non-negative integer, never a bool.
+
+    A JSON number that is integral is accepted whether it arrived as 4 or 4.0,
+    because JavaScript's Number.isInteger(4.0) is true. Python's json module
+    returns a float for 4.0, so the integral case is normalised here rather than
+    diverging from Node. The value is bounded to `max_value` BEFORE it is ever
+    used, so an out-of-range integer is a typed rejection rather than a value the
+    two languages could hash differently.
+    """
+    v = o.get(field)
+    if v is None:
+        raise FasttContractError("missing-field", f"{field} is required")
+    if isinstance(v, bool):
+        raise FasttContractError("malformed-field", f"{field} must be an integer")
+    if isinstance(v, int):
+        index = v
+    elif isinstance(v, float):
+        if not v.is_integer():
+            raise FasttContractError("malformed-field", f"{field} must be an integer")
+        index = int(v)
+    else:
+        raise FasttContractError("malformed-field", f"{field} must be an integer")
+    if index < 0 or index > max_value:
+        raise FasttContractError("malformed-field", f"{field} must be an integer in 0..{max_value}")
+    return index
+
+
+def _read_attachments(o: dict) -> list:
+    raw = o.get("attachments")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise FasttContractError("malformed-field", "attachments must be an array")
+    if len(raw) > FASTT_LIMITS["attachments"]:
+        raise FasttContractError("oversized-field", f"attachments exceeds {FASTT_LIMITS['attachments']} entries")
+    out = []
+    for i, entry in enumerate(raw):
+        if not _is_record(entry):
+            raise FasttContractError("malformed-field", f"attachments[{i}] must be an object")
+        out.append(
+            {
+                "kind": _read_enum(entry, "kind", ATTACHMENT_KINDS),
+                "fileId": _read_id(entry, "fileId"),
+                "revision": _read_id(entry, "revision"),
+            }
+        )
+    return out
+
+
+def parse_telegram_event(raw: object) -> dict:
+    """Validate and normalise one inbound Telegram event."""
+    if not _is_record(raw):
+        raise FasttContractError("bad-request", "event must be an object")
+    if _serialized_bytes(raw) > FASTT_LIMITS["totalBytes"]:
+        raise FasttContractError("oversized-field", f"request exceeds {FASTT_LIMITS['totalBytes']} bytes")
+
+    ver = _read_schema_version(raw, TELEGRAM_EVENT_SCHEMA_VERSION)
+
+    channel = raw.get("channel")
+    if channel is None:
+        raise FasttContractError("missing-field", "channel is required")
+    if channel != TELEGRAM_CHANNEL:
+        raise FasttContractError("unsupported-channel", f"channel {channel!r} is not supported")
+
+    mode = _read_enum(raw, "mode", TELEGRAM_MODES)
+    origin = _read_enum(raw, "origin", TELEGRAM_ORIGINS)
+    event_kind = _read_enum(raw, "eventKind", TELEGRAM_EVENT_KINDS)
+
+    event_id = _read_id(raw, "eventId")
+    binding_id = _read_id(raw, "bindingId")
+    clone_id = _read_id(raw, "cloneId")
+    bot_id = _read_integer_id(raw, "botId")
+    chat_id = _read_integer_id(raw, "chatId")
+    update_id = _read_integer_id(raw, "updateId")
+    source_revision = _read_id(raw, "sourceRevision")
+
+    user_id = None if raw.get("userId") is None else _read_integer_id(raw, "userId")
+    message_id = None if raw.get("messageId") is None else _read_integer_id(raw, "messageId")
+    business_connection_id = _read_optional_id(raw, "businessConnectionId")
+
+    if mode == "business" and business_connection_id is None:
+        raise FasttContractError("missing-field", "businessConnectionId is required in business mode")
+    if mode == "bot" and business_connection_id is not None:
+        raise FasttContractError("malformed-field", "businessConnectionId must be absent in bot mode")
+
+    occurred_at = _read_timestamp(raw, "occurredAt")
+    received_at = _read_timestamp(raw, "receivedAt")
+
+    attachments = _read_attachments(raw)
+    text = _read_optional_text(raw, "text")
+
+    if event_kind in ("message", "edited_message") and text is None and not attachments:
+        raise FasttContractError("missing-field", f"{event_kind} requires text or at least one attachment")
+
+    return {
+        "schemaVersion": ver,
+        "eventId": event_id,
+        "channel": TELEGRAM_CHANNEL,
+        "bindingId": binding_id,
+        "cloneId": clone_id,
+        "botId": bot_id,
+        "mode": mode,
+        "businessConnectionId": business_connection_id,
+        "chatId": chat_id,
+        "userId": user_id,
+        "updateId": update_id,
+        "messageId": message_id,
+        "occurredAt": occurred_at,
+        "receivedAt": received_at,
+        "origin": origin,
+        "eventKind": event_kind,
+        "text": text,
+        "attachments": attachments,
+        "sourceRevision": source_revision,
+    }
+
+
+def _read_assets(o: dict) -> list:
+    raw = o.get("assets")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise FasttContractError("malformed-field", "assets must be an array")
+    if len(raw) > FASTT_LIMITS["assets"]:
+        raise FasttContractError("oversized-field", f"assets exceeds {FASTT_LIMITS['assets']} entries")
+    out = []
+    for i, entry in enumerate(raw):
+        if not _is_record(entry):
+            raise FasttContractError("malformed-field", f"assets[{i}] must be an object")
+        out.append(
+            {
+                "kind": _read_enum(entry, "kind", ATTACHMENT_KINDS),
+                "assetId": _read_id(entry, "assetId"),
+                "revision": _read_id(entry, "revision"),
+            }
+        )
+    return out
+
+
+def derive_action_id(binding_id: str, source_kind: str, source_id: str, ordinal: int) -> str:
+    """The durable action id: derived from the logical turn/job and ordinal, never a run id."""
+    digest = hashlib.sha256(encode_tuple([binding_id, source_kind, source_id, str(ordinal)]).encode("utf-8")).hexdigest()
+    return f"act_{digest[:32]}"
+
+
+# The action/body compatibility matrix (C4). One definition, mirrored in Node
+# (fastt-contract.ts `assertActionAssets`), so an unrelated or unused asset is
+# refused identically instead of being persisted as an ambiguous action:
+#   - send_text and the control actions (typing, read_ack, none) carry NO assets;
+#   - send_voice carries only voice assets;
+#   - send_media carries only media assets (photo/video).
+_MEDIA_ASSET_KINDS = ("photo", "video")
+_ASSETLESS_ACTIONS = ("send_text", "typing", "read_ack", "none")
+
+
+def _assert_action_assets(action_kind: str, assets: list) -> None:
+    if action_kind in _ASSETLESS_ACTIONS:
+        if assets:
+            raise FasttContractError("malformed-field", f"{action_kind} must not carry assets")
+        return
+    if action_kind == "send_voice":
+        for i, asset in enumerate(assets):
+            if asset["kind"] != "voice":
+                raise FasttContractError("malformed-field", f"send_voice assets[{i}] must be a voice asset")
+        return
+    if action_kind == "send_media":
+        for i, asset in enumerate(assets):
+            if asset["kind"] not in _MEDIA_ASSET_KINDS:
+                raise FasttContractError("malformed-field", f"send_media assets[{i}] must be a photo or video")
+
+
+def _assets_canonical(assets: list) -> str:
+    return "|".join(encode_tuple([a["kind"], a["assetId"], a["revision"]]) for a in assets)
+
+
+def action_payload_digest(action: dict) -> str:
+    """Frozen payload digest over an explicit field list, so both languages agree byte-for-byte."""
+    parts = [
+        str(action["schemaVersion"]),
+        action["actionId"],
+        action["sourceKind"],
+        action["sourceId"],
+        str(action["ordinal"]),
+        action["bindingId"],
+        action["cloneId"],
+        action["conversationKey"],
+        str(action["expectedEpoch"]),
+        str(action["expectedInputRevision"]),
+        action["configVersion"],
+        action["actionKind"],
+        action["text"] or "",
+        _assets_canonical(action["assets"]),
+        action["currency"] or "",
+        "" if action["amount"] is None else str(action["amount"]),
+        action["notBefore"] or "",
+        action["expiresAt"] or "",
+    ]
+    return hashlib.sha256(encode_tuple(parts).encode("utf-8")).hexdigest()
+
+
+def canonical_json(value: object) -> str:
+    """Canonical, key-sorted JSON used to persist a durable body (R1)."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def event_content_digest(event: dict) -> str:
+    """The SEMANTIC source-content digest of one event (R4).
+
+    It covers what Telegram actually delivered - provider ids, kind, text,
+    attachments, provider timestamps and source revision - and NOT the local
+    envelope bookkeeping (eventId, receivedAt) that a receiver restart legitimately
+    regenerates. A retry of the same bot/update with unchanged provider content
+    matches the first record; a changed message text or attachment conflicts.
+    Mirrors eventContentDigest in bot/src/engines/fastt-contract.ts.
+    """
+    attachments = "|".join(
+        encode_tuple([a["kind"], a["fileId"], a["revision"]]) for a in event["attachments"]
+    )
+    parts = [
+        str(event["schemaVersion"]),
+        event["channel"],
+        event["bindingId"],
+        event["cloneId"],
+        event["botId"],
+        event["mode"],
+        event["businessConnectionId"] or "",
+        event["chatId"],
+        event["userId"] or "",
+        event["updateId"],
+        event["messageId"] or "",
+        event["occurredAt"],
+        event["origin"],
+        event["eventKind"],
+        event["text"] or "",
+        attachments,
+        event["sourceRevision"],
+    ]
+    return hashlib.sha256(encode_tuple(parts).encode("utf-8")).hexdigest()
+
+
+def parse_delivery_action(raw: object) -> dict:
+    """Validate and normalise one delivery action."""
+    if not _is_record(raw):
+        raise FasttContractError("bad-request", "action must be an object")
+    if _serialized_bytes(raw) > FASTT_LIMITS["totalBytes"]:
+        raise FasttContractError("oversized-field", f"request exceeds {FASTT_LIMITS['totalBytes']} bytes")
+
+    ver = _read_schema_version(raw, TELEGRAM_ACTION_SCHEMA_VERSION)
+
+    source_kind = _read_enum(raw, "sourceKind", ACTION_SOURCE_KINDS)
+    action_kind = _read_enum(raw, "actionKind", ACTION_KINDS)
+
+    source_id = _read_id(raw, "sourceId")
+    ordinal = _read_index(raw, "ordinal", ORDINAL_MAX)
+    binding_id = _read_id(raw, "bindingId")
+    clone_id = _read_id(raw, "cloneId")
+    conversation_key = _read_id(raw, "conversationKey")
+    config_version = _read_id(raw, "configVersion")
+    expected_epoch = _read_index(raw, "expectedEpoch", INDEX_MAX)
+    expected_input_revision = _read_index(raw, "expectedInputRevision", INDEX_MAX)
+
+    action_id = _read_id(raw, "actionId")
+    if action_id != derive_action_id(binding_id, source_kind, source_id, ordinal):
+        raise FasttContractError(
+            "action-id-mismatch",
+            f"actionId {action_id} does not match the identity of this turn/job and ordinal",
+        )
+
+    currency = raw.get("currency")
+    amount = raw.get("amount")
+    if currency is not None and currency != "XTR":
+        raise FasttContractError("money-invalid", "currency must be XTR; Telegram Stars are not dollars or dollar cents")
+    if currency is None and amount is not None:
+        raise FasttContractError("money-invalid", "amount requires an explicit currency")
+    if currency is not None and amount is None:
+        raise FasttContractError("money-invalid", "currency requires an amount")
+    if amount is not None:
+        # A price is only meaningful on a paid-media action; text, typing, read and
+        # voice never carry money. The range is Telegram's documented XTR range.
+        # Integer arithmetic only: a huge integer must be a typed rejection, never a
+        # float() OverflowError or silent rounding.
+        if action_kind != "send_media":
+            raise FasttContractError("money-invalid", f"only send_media may carry a price, not {action_kind}")
+        if isinstance(amount, bool):
+            raise FasttContractError("money-invalid", "amount must be an integer number of Stars in 1..25000")
+        if isinstance(amount, float):
+            if not amount.is_integer():
+                raise FasttContractError("money-invalid", "amount must be an integer number of Stars in 1..25000")
+            amount = int(amount)
+        if not isinstance(amount, int) or not (XTR_AMOUNT_MIN <= amount <= XTR_AMOUNT_MAX):
+            raise FasttContractError("money-invalid", "amount must be an integer number of Stars in 1..25000")
+
+    assets = _read_assets(raw)
+    text = _read_optional_text(raw, "text")
+    not_before = _read_optional_timestamp(raw, "notBefore")
+    expires_at = _read_optional_timestamp(raw, "expiresAt")
+
+    # Paid media is a Telegram constraint, not just a business one: at most ten
+    # items, and only the supported photo/video shapes.
+    if amount is not None:
+        if len(assets) > FASTT_LIMITS["paidMediaAssets"]:
+            raise FasttContractError(
+                "oversized-field", f"paid media is limited to {FASTT_LIMITS['paidMediaAssets']} assets"
+            )
+        for i, asset in enumerate(assets):
+            if asset["kind"] not in ("photo", "video"):
+                raise FasttContractError("malformed-field", f"paid media assets[{i}] must be a photo or video")
+
+    if action_kind == "send_text" and text is None:
+        raise FasttContractError("missing-field", "send_text requires text")
+    if action_kind in ("send_media", "send_voice") and not assets:
+        raise FasttContractError("missing-field", f"{action_kind} requires at least one asset")
+
+    # The asset that an action carries must belong to that action (C4).
+    _assert_action_assets(action_kind, assets)
+
+    return {
+        "schemaVersion": ver,
+        "actionId": action_id,
+        "sourceKind": source_kind,
+        "sourceId": source_id,
+        "ordinal": ordinal,
+        "bindingId": binding_id,
+        "cloneId": clone_id,
+        "conversationKey": conversation_key,
+        "expectedEpoch": expected_epoch,
+        "expectedInputRevision": expected_input_revision,
+        "configVersion": config_version,
+        "actionKind": action_kind,
+        "text": text,
+        "assets": assets,
+        "currency": currency,
+        "amount": amount,
+        "notBefore": not_before,
+        "expiresAt": expires_at,
+    }
+
+
+def validate_by_kind(kind: str, raw: object) -> dict:
+    if kind == "event":
+        return parse_telegram_event(raw)
+    if kind == "action":
+        return parse_delivery_action(raw)
+    raise FasttContractError("bad-request", f"unknown contract kind {kind!r}")
+
+
+def encode_tuple(parts) -> str:
+    """byteLength:value joined by a pipe, so a delimiter inside a value cannot shift a boundary."""
+    return "|".join(f"{len(p.encode('utf-8'))}:{p}" for p in parts)

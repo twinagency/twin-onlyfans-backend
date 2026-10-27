@@ -1,0 +1,316 @@
+"""Dedicated, single-creator Telegram worker around Fastt's real ai_chatter.
+
+The worker has no Telegram token and starts no OnlyFans application machinery.
+It reads scoped projection events from the Node gateway, applies them to the
+native SQLite database, invokes ``automations.ai_chatter`` through the explicit
+capability boundary, and submits frozen text actions back to Node.  Node remains
+the sole receiver, delivery authority and Telegram sender.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Protocol
+
+from native_pilot.engine import NativeEngine, PilotBoundaryError
+from telegram_contract.contract import derive_action_id, parse_delivery_action
+from telegram_contract.store import TelegramContractStore, TelegramStoreError
+from telegram_runtime.projection import NativeProjectionApplier, reserve_telegram_message_id
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+class TelegramGatewayPort(Protocol):
+    async def read_projection_events(self, *, after: int, limit: int) -> list[dict[str, Any]]: ...
+    async def submit_action(self, action: dict[str, Any]) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class WorkerConfig:
+    worker_id: str
+    account_id: str
+    binding_id: str
+    clone_id: str
+    model_id: str
+    credential_env: str
+    provider_allowlist: frozenset[str]
+    config_version: str
+    batch_size: int = 50
+
+    def problem(self) -> str:
+        for name in ("worker_id", "account_id", "binding_id", "clone_id",
+                     "model_id", "credential_env", "config_version"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+                return f"{name} is required"
+        if not isinstance(self.provider_allowlist, frozenset) or not self.provider_allowlist:
+            return "provider_allowlist is required"
+        if type(self.batch_size) is not int or not 1 <= self.batch_size <= 500:
+            return "batch_size must be 1..500"
+        return ""
+
+
+class TelegramWorker:
+    def __init__(self, *, database_path: str, config: WorkerConfig,
+                 gateway: TelegramGatewayPort,
+                 model_chat: Callable[..., Awaitable[Any]] | None = None) -> None:
+        problem = config.problem()
+        if problem:
+            raise ValueError(problem)
+        self.database_path = str(Path(database_path).resolve())
+        self.config = config
+        self.gateway = gateway
+        # This is the model-provider boundary, not a second conversation
+        # engine. Production leaves it unset and therefore uses Fastt's existing
+        # llm_client (including its retry, budget and usage owners). Offline
+        # acceptance supplies a deterministic provider fake here so no paid
+        # model or host credential can be reached.
+        self._model_chat = model_chat
+        self.store = TelegramContractStore(self.database_path)
+        self.store.initialize()
+        self.applier = NativeProjectionApplier(
+            self.store.conn,
+            account_id=config.account_id,
+            binding_id=config.binding_id,
+            clone_id=config.clone_id,
+        )
+
+    def close(self) -> None:
+        self.store.close()
+
+    def recover_interrupted(self) -> int:
+        """Make a crashed invocation visible and hold it; never regenerate."""
+        now = _now()
+        with self.store._tx():
+            rows = self.store.conn.execute(
+                "SELECT turn_id FROM telegram_runtime_turns WHERE state='running'"
+            ).fetchall()
+            self.store.conn.execute(
+                "UPDATE telegram_runtime_turns SET state='interrupted',updated_at=? WHERE state='running'",
+                (now,),
+            )
+            self.store.conn.execute(
+                "UPDATE worker_invocations SET status='interrupted',completed_at=? WHERE status='started'",
+                (now,),
+            )
+        return len(rows)
+
+    async def project_once(self) -> int:
+        cursor = self.store.get_cursor(self.config.worker_id)
+        events = await self.gateway.read_projection_events(
+            after=cursor, limit=self.config.batch_size,
+        )
+        if not isinstance(events, list):
+            raise TelegramStoreError("gateway projection response must be a list")
+        applied = 0
+        expected = cursor + 1
+        for raw in events:
+            if not isinstance(raw, dict):
+                raise TelegramStoreError("gateway projection item must be an object")
+            sequence = raw.get("sourceSequence")
+            if type(sequence) is not int or sequence != expected:
+                raise TelegramStoreError(
+                    f"gateway projection stream is not contiguous at {expected}"
+                )
+            self.store.import_projection_event(
+                str(raw.get("sourceEventId") or ""),
+                sequence,
+                str(raw.get("eventKind") or ""),
+                raw.get("payload"),
+                recipient_worker=self.config.worker_id,
+                applier=self.applier.descriptor(),
+            )
+            expected += 1
+            applied += 1
+        return applied
+
+    def _claim_turn(self) -> sqlite3.Row | None:
+        with self.store._tx():
+            row = self.store.conn.execute(
+                "SELECT * FROM telegram_runtime_turns WHERE state='pending' "
+                "ORDER BY created_at,turn_id LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return None
+            now = _now()
+            changed = self.store.conn.execute(
+                "UPDATE telegram_runtime_turns SET state='running',updated_at=? "
+                "WHERE turn_id=? AND state='pending'",
+                (now, row["turn_id"]),
+            )
+            if changed.rowcount != 1:
+                return None
+            return row
+
+    async def _run_turn(self, turn: sqlite3.Row) -> dict[str, Any]:
+        import llm_client
+        from llm_providers import (
+            TelegramLLMPolicy, reset_telegram_policy, set_telegram_policy,
+        )
+
+        if str(turn["config_version"]) != self.config.config_version:
+            with self.store._tx():
+                self.store.conn.execute(
+                    "UPDATE telegram_runtime_turns SET state='held',updated_at=? WHERE turn_id=?",
+                    (_now(), turn["turn_id"]),
+                )
+            return {"status": "held", "reason": "config-version-mismatch"}
+
+        loop = asyncio.get_running_loop()
+        model_chat = self._model_chat or llm_client.chat
+        ordinal = 0
+        action_ids: list[str] = []
+
+        async def submit(text: str, current: int) -> dict[str, Any]:
+            action = parse_delivery_action({
+                "schemaVersion": 1,
+                "actionId": derive_action_id(
+                    self.config.binding_id, "turn", str(turn["turn_id"]), current,
+                ),
+                "sourceKind": "turn",
+                "sourceId": str(turn["turn_id"]),
+                "ordinal": current,
+                "bindingId": self.config.binding_id,
+                "cloneId": self.config.clone_id,
+                "conversationKey": str(turn["conversation_key"]),
+                "expectedEpoch": int(turn["ownership_epoch"]),
+                "expectedInputRevision": int(turn["input_revision"]),
+                "configVersion": str(turn["config_version"]),
+                "actionKind": "send_text",
+                "text": text,
+                "assets": [],
+                "currency": None,
+                "amount": None,
+                "notBefore": None,
+                "expiresAt": None,
+            })
+            action_ids.append(action["actionId"])
+            outcome = await self.gateway.submit_action(action)
+            if not isinstance(outcome, dict):
+                raise PilotBoundaryError("gateway-action-response-invalid")
+            if outcome.get("state") != "confirmed":
+                raise PilotBoundaryError(
+                    "delivery-unknown" if outcome.get("state") == "unknown"
+                    else "delivery-refused"
+                )
+            message_id = outcome.get("telegramMessageId")
+            if not isinstance(message_id, str) or not message_id.isascii() or not message_id.isdigit():
+                raise PilotBoundaryError("gateway-receipt-invalid")
+            delivered_at = outcome.get("deliveredAt")
+            if not isinstance(delivered_at, str) or not delivered_at.strip():
+                raise PilotBoundaryError("gateway-receipt-invalid")
+            # Fastt must attribute the confirmed send under the SAME native id
+            # the later Node receipt projection resolves. Returning Telegram's
+            # raw message id here would bypass the canonical mapping and could
+            # append the confirmed message twice after projection catches up.
+            with self.store._tx():
+                native_message_id = reserve_telegram_message_id(
+                    self.store.conn,
+                    bot_id=str(turn["bot_id"]), chat_id=str(turn["chat_id"]),
+                    business_connection_id=(
+                        str(turn["business_connection_id"])
+                        if turn["business_connection_id"] is not None else None
+                    ),
+                    message_id=message_id, now=delivered_at,
+                )
+            return {"id": native_message_id, "text": text,
+                    "createdAt": delivered_at}
+
+        def send(_fan: int, text: str, _kwargs: dict[str, Any]):
+            nonlocal ordinal
+            current = ordinal
+            ordinal += 1
+            return asyncio.run_coroutine_threadsafe(submit(text, current), loop).result()
+
+        invocation_id = f"invocation:{turn['turn_id']}"
+        self.store.record_invocation(invocation_id, str(turn["turn_id"]), "started")
+        run_id = self._begin_native_run()
+        policy = TelegramLLMPolicy(
+            purposes={"ai_chatter": self.config.model_id},
+            trusted_account_id=self.config.account_id,
+            credential_env=self.config.credential_env,
+            provider_allowlist=self.config.provider_allowlist,
+            config_version=self.config.config_version,
+        )
+        token = set_telegram_policy(policy)
+        stats: dict[str, Any] | None = None
+        reason: str | None = None
+        try:
+            with NativeEngine(
+                self.config.account_id,
+                int(turn["native_fan_id"]),
+                chat=model_chat,
+                send=send,
+                model=self.config.model_id,
+            ) as engine:
+                stats = await engine.run(run_id)
+            if not isinstance(stats, dict) or stats.get("errors") or stats.get("cap_hit"):
+                raise PilotBoundaryError("native-turn-failed")
+            with self.store._tx():
+                self.store.conn.execute(
+                    "UPDATE telegram_runtime_turns SET state='completed',updated_at=? "
+                    "WHERE turn_id=? AND state='running'",
+                    (_now(), turn["turn_id"]),
+                )
+                self.store.conn.execute(
+                    "UPDATE worker_invocations SET status='completed',action_manifest=?,completed_at=? "
+                    "WHERE invocation_id=?",
+                    (json.dumps(action_ids, separators=(",", ":")), _now(), invocation_id),
+                )
+            self._finish_native_run(run_id, stats, None)
+            counters = {k: v for k, v in stats.items()
+                        if isinstance(k, str) and type(v) in (int, bool)}
+            return {"status": "completed", "actions": len(action_ids),
+                    "nativeStats": counters}
+        except BaseException as exc:
+            reason = str(exc) if isinstance(exc, PilotBoundaryError) else "native-turn-failed"
+            with self.store._tx():
+                self.store.conn.execute(
+                    "UPDATE telegram_runtime_turns SET state='interrupted',updated_at=? "
+                    "WHERE turn_id=? AND state='running'",
+                    (_now(), turn["turn_id"]),
+                )
+                self.store.conn.execute(
+                    "UPDATE worker_invocations SET status='interrupted',action_manifest=?,completed_at=? "
+                    "WHERE invocation_id=?",
+                    (json.dumps(action_ids, separators=(",", ":")), _now(), invocation_id),
+                )
+            self._finish_native_run(run_id, stats, reason)
+            return {"status": "interrupted", "reason": reason, "actions": len(action_ids)}
+        finally:
+            reset_telegram_policy(token)
+
+    def _begin_native_run(self) -> int:
+        cursor = self.store.conn.execute(
+            "INSERT INTO automation_runs(account_id,kind,started_at,status) "
+            "VALUES(?,'ai_chatter',?,'running')",
+            (self.config.account_id, _now()),
+        )
+        return int(cursor.lastrowid)
+
+    def _finish_native_run(self, run_id: int, stats: dict[str, Any] | None,
+                           reason: str | None) -> None:
+        counters = {k: v for k, v in (stats or {}).items()
+                    if isinstance(k, str) and type(v) in (int, bool)}
+        self.store.conn.execute(
+            "UPDATE automation_runs SET completed_at=?,status=?,stats_json=?,error_text=? WHERE id=?",
+            (_now(), "error" if reason else "done",
+             json.dumps(counters, separators=(",", ":")), reason, run_id),
+        )
+
+    async def run_once(self) -> dict[str, Any]:
+        if not self.store.acquire_lease(
+            f"telegram-worker:{self.config.worker_id}", self.config.worker_id, ttl_seconds=60,
+        ):
+            return {"status": "held", "reason": "worker-lease-held"}
+        projected = await self.project_once()
+        turn = self._claim_turn()
+        if turn is None:
+            return {"status": "idle", "projected": projected}
+        result = await self._run_turn(turn)
+        return {**result, "projected": projected, "turnId": str(turn["turn_id"])}

@@ -1,0 +1,18 @@
+"""Dedicated Telegram runtime seams for Fastt's native engine.
+
+Importing this package starts no worker, scheduler, database or network client.
+"""
+
+from .capabilities import (
+    TelegramNativeCapabilities,
+    active_telegram_capabilities,
+    reset_telegram_capabilities,
+    set_telegram_capabilities,
+)
+
+__all__ = [
+    "TelegramNativeCapabilities",
+    "active_telegram_capabilities",
+    "reset_telegram_capabilities",
+    "set_telegram_capabilities",
+]

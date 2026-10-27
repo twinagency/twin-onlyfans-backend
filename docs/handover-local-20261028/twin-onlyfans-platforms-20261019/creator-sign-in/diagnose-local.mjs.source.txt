@@ -1,0 +1,13 @@
+import {launchSignInBrowser} from './browser.mjs';
+import {allowedRequest} from './service.mjs';
+const blocked=new Set(),failed=new Set();let browser;
+try{
+ browser=await launchSignInBrowser(null,{headless:true,executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe'});
+ const context=await browser.newContext({viewport:{width:432,height:720},deviceScaleFactor:2,acceptDownloads:false,serviceWorkers:'block'});
+ await context.route('**/*',route=>{const r=route.request(),u=new URL(r.url());if(r.method()==='POST'&&u.pathname==='/api2/v2/users/login'){blocked.add('STOPPED_SYNTHETIC_LOGIN_SUBMISSION');return route.abort('blockedbyclient')}if(!allowedRequest(r)){blocked.add(r.method()+' '+u.origin+u.pathname.replace(/[a-zA-Z0-9_-]{60,}/g,'[opaque]'));return route.abort('blockedbyclient')}return route.continue()});
+ const page=await context.newPage();
+ page.on('requestfailed',r=>{const u=new URL(r.url());if(/captcha|challenge|turnstile/.test(u.href))failed.add(u.origin+u.pathname.replace(/[a-zA-Z0-9_-]{60,}/g,'[opaque]')+' '+r.failure()?.errorText)});
+ await page.goto('https://onlyfans.com/my/profile',{waitUntil:'domcontentloaded',timeout:30000});
+ await page.waitForTimeout(3000);await page.locator('input[name="email"]').fill('fixture@example.invalid');await page.locator('input[name="password"]').fill('synthetic-not-a-real-password');await page.locator('input[name="password"]').press('Enter');await page.waitForTimeout(8000);
+ console.log(JSON.stringify({blocked:[...blocked].slice(0,30),verificationFailures:[...failed].slice(0,20),login:await page.evaluate(()=>({scripts:[...document.scripts].map(s=>s.src).filter(s=>/captcha|challenge|turnstile/.test(s)).map(s=>{const u=new URL(s);return u.origin+u.pathname}),inputs:[...document.querySelectorAll('input')].map(i=>({type:i.type,name:i.name,placeholder:i.placeholder})),captchaAPI:!!window.grecaptcha,enterpriseAPI:!!window.grecaptcha?.enterprise,hcaptchaAPI:!!window.hcaptcha,captchaLoadError:document.body.innerText.includes('Unable to load captcha')}))}));
+}finally{await browser?.close()}

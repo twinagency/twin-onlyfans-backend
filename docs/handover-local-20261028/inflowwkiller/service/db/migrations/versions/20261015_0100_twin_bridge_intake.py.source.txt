@@ -1,0 +1,64 @@
+"""twin_bridge_inputs — durable, account-scoped intake for the Twin reply bridge
+
+Stage 1C part 1. An additive table only: nothing existing is altered, so
+`init_db()`'s create_all + index catch-up also materializes it on a box that
+never runs `alembic upgrade`. This revision exists so a DB that IS managed by
+Alembic reports the same schema.
+
+One row per eligible inbound fan DM, keyed on the same identity tuple as the
+canonical `messages` row: (account_id, fan_id, provider_message_id). That tuple
+is the primary key and the concurrency-safe dedupe constraint the ingestion
+hook and the reconciliation share.
+
+`event_json` is an immutable normalized event snapshot; `creator_slug` and
+`activation_cutoff` freeze the trusted scope in force at admission so a later
+configuration change cannot silently reassign existing work.
+
+Revision ID: 0065_twin_bridge_intake
+Revises: 0064_user_llm_keys
+Create Date: 2026-10-15
+"""
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "0065_twin_bridge_intake"
+down_revision: str | Sequence[str] | None = "0064_user_llm_keys"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "twin_bridge_inputs",
+        sa.Column("account_id", sa.String(), nullable=False),
+        sa.Column("fan_id", sa.BigInteger(), nullable=False),
+        sa.Column("provider_message_id", sa.BigInteger(), nullable=False),
+        sa.Column("creator_slug", sa.String(), nullable=False),
+        sa.Column("activation_cutoff", sa.DateTime(), nullable=False),
+        sa.Column("bridge_scope_version", sa.Integer(), nullable=False),
+        sa.Column("event_schema_version", sa.Integer(), nullable=False),
+        sa.Column("conversation_id", sa.String(), nullable=False),
+        sa.Column("normalized_text", sa.Text(), nullable=False),
+        sa.Column("event_json", sa.Text(), nullable=False),
+        sa.Column("occurred_at", sa.DateTime(), nullable=False),
+        sa.Column("received_at", sa.DateTime(), nullable=False),
+        sa.Column("state", sa.String(), nullable=False),
+        sa.Column("admitted_at", sa.DateTime(), nullable=False),
+        sa.PrimaryKeyConstraint("account_id", "fan_id", "provider_message_id"),
+        sa.UniqueConstraint(
+            "account_id", "fan_id", "provider_message_id",
+            name="uq_twin_bridge_inputs_message",
+        ),
+    )
+    op.create_index(
+        "ix_twin_bridge_inputs_account_state_time",
+        "twin_bridge_inputs",
+        ["account_id", "state", "occurred_at", "provider_message_id"],
+    )
+
+
+def downgrade() -> None:
+    op.drop_index("ix_twin_bridge_inputs_account_state_time", table_name="twin_bridge_inputs")
+    op.drop_table("twin_bridge_inputs")

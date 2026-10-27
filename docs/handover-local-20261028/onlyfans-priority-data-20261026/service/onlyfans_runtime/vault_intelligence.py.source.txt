@@ -1,0 +1,182 @@
+"""Sent/purchased unit history and vault performance from existing canonical owners."""
+import re
+from datetime import timedelta
+
+from sqlalchemy import select, func, and_, or_, case, cast, Numeric, true, literal, union
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Session
+from db.models import Fan, Message, MessageMedia, VaultItem, VaultSend, ContentOffer, CatalogItem
+from db.models import Transaction
+from vault_ai_effective import effective_value
+from .audiences import begin
+from .fan_intelligence import read_scope, coverage, stamp, proven_transaction
+from .campaign_reporting import exact_purchase_evidence
+from .store import Refused
+
+
+def reference(value):
+    if type(value) is not str or not re.fullmatch(r"[1-9][0-9]{0,18}", value) or int(value) >= 2**63:
+        raise ValueError("Invalid fan or media reference.")
+    return int(value)
+
+
+def media_json():
+    valid = Message.media_ids.op("~")(r"^\s*\[(\s*[0-9]{1,19}\s*(,\s*[0-9]{1,19}\s*)*)?\]\s*$")
+    return valid, cast(case((valid, Message.media_ids), else_="[]"), JSONB)
+
+
+def sent_media(account, fan=None):
+    scope = [Message.account_id == account, Message.direction == "out", Message.message_id > 0]
+    if fan is not None:
+        scope.append(Message.fan_id == fan)
+    # Canonical messages also cover imported sends which predate VaultSend.
+    # Guard the cast so a malformed legacy JSON value never aborts a history read.
+    valid, raw = media_json()
+    values = func.jsonb_array_elements_text(raw).table_valued("value")
+    mid = cast(values.c.value, Numeric)
+    expanded = select(Message.fan_id, Message.message_id, mid.label("media_id")).select_from(Message).join(values, true()).where(
+        *scope, mid > 0, mid < 2**63)
+    link = and_(Message.account_id == account, Message.fan_id == VaultSend.fan_id, Message.message_id == VaultSend.message_id)
+    recorded = select(VaultSend.fan_id, VaultSend.message_id, VaultSend.media_id).join(Message, link).where(VaultSend.account_id == account, *scope)
+    cached = select(MessageMedia.fan_id, MessageMedia.message_id, MessageMedia.media_id).join(Message,
+        and_(Message.account_id == MessageMedia.account_id, Message.fan_id == MessageMedia.fan_id,
+            Message.message_id == MessageMedia.message_id)).where(MessageMedia.account_id == account, *scope)
+    return union(expanded, recorded, cached).subquery()
+
+
+def history_complete(s, runtime, fan, cov):
+    if not cov["conversationCurrent"]:
+        return False
+    from .launch_history_memory.recovery import OfHistoryCursor
+    archive = s.get(OfHistoryCursor, (runtime.account_id, fan))
+    if not (archive and archive.binding_id == runtime.binding_id and archive.status == "complete" and archive.completed_at):
+        return False
+    valid, raw = media_json()
+    values = func.jsonb_array_elements_text(raw).table_valued("value")
+    bad_id = select(literal(1)).select_from(values).where(or_(cast(values.c.value, Numeric) <= 0,
+        cast(values.c.value, Numeric) >= 2**63)).correlate(Message).exists()
+    incomplete = select(Message.message_id).where(Message.account_id == runtime.account_id,
+        Message.fan_id == fan, Message.direction == "out", or_(
+            and_(Message.media_ids.is_not(None), ~func.coalesce(valid, False)),
+            func.jsonb_array_length(raw) != Message.media_count, bad_id)).limit(1)
+    return s.scalar(incomplete) is None
+
+
+def read_vault_intelligence(store, tenant, account, *, fan_id=None, after=None, kind="all", state="all", query="", limit=24):
+    fan = reference(fan_id) if fan_id is not None else None
+    cursor = reference(after) if after is not None else 0
+    if (kind not in {"all", "photo", "video"} or state not in {"all", "sent", "purchased", "not_sent", "not_purchased"}
+            or type(query) is not str or len(query) > 120 or any(ord(c) < 32 for c in query)
+            or type(limit) is not int or not 1 <= limit <= 48 or fan is None and state != "all"):
+        raise ValueError("Use a supported vault history filter.")
+    with Session(store.engine) as s, s.begin():
+        now = begin(s)
+        runtime = read_scope(s, tenant, account)
+        if fan is not None and s.get(Fan, (account, fan)) is None:
+            raise Refused("scope unavailable")
+        cov = coverage(s, runtime, now)
+        complete = history_complete(s, runtime, fan, cov) if fan is not None else False
+        # Ownership semantics are reused exactly, including tip/manual delivery and hero/filler.
+        from ownership import owned_media_in_session
+        owned = owned_media_in_session(s, account, fan, limit=10000) if fan is not None else set()
+        from .commerce import held
+        purchase_complete = complete and cov["historyComplete"] and not held(s, account)
+        sources = sent_media(account, fan)
+        sends = select(sources.c.media_id, func.count().label("send_count"),
+            func.count(func.distinct(sources.c.fan_id)).label("fans"), func.max(Message.created_at).label("last_sent"))
+        sends = sends.join(Message, and_(Message.account_id == account, Message.fan_id == sources.c.fan_id,
+            Message.message_id == sources.c.message_id)).group_by(sources.c.media_id).subquery()
+        paid_link = and_(Transaction.account_id == account, Transaction.fan_id == sources.c.fan_id,
+            Transaction.message_id == sources.c.message_id, Transaction.kind == "ppv_message", proven_transaction(), exact_purchase_evidence())
+        purchases = select(sources.c.media_id,
+            func.count(func.distinct(case((Transaction.status.in_(("pending", "cleared", "refund_pending")), Transaction.id)))).label("purchase_count"),
+            func.count(func.distinct(case((Transaction.status.in_(("refunded", "chargedback")), Transaction.id)))).label("refund_count"))
+        purchases = purchases.select_from(sources).join(Transaction, paid_link).group_by(sources.c.media_id).subquery()
+        q = select(VaultItem, sends.c.send_count, sends.c.fans, sends.c.last_sent,
+            purchases.c.purchase_count, purchases.c.refund_count).outerjoin(sends, sends.c.media_id == VaultItem.media_id)
+        q = q.outerjoin(purchases, purchases.c.media_id == VaultItem.media_id).where(VaultItem.account_id == account, VaultItem.media_id > cursor)
+        if kind != "all":
+            q = q.where(VaultItem.kind == kind)
+        if query.strip():
+            q = q.where(or_(*(func.lower(func.coalesce(field, "")).contains(query.strip().lower(), autoescape=True)
+                for field in [VaultItem.search_text, VaultItem.description, VaultItem.video_description,
+                    VaultItem.tags, VaultItem.notes, VaultItem.operator_overrides_json])))
+        if state == "sent":
+            q = q.where(sends.c.send_count > 0)
+        elif state == "not_sent":
+            q = q.where(func.coalesce(sends.c.send_count, 0) == 0, literal(complete))
+        elif state == "purchased":
+            q = q.where(VaultItem.media_id.in_(owned))
+        elif state == "not_purchased":
+            q = q.where(VaultItem.media_id.not_in(owned), literal(purchase_complete))
+        rows = s.execute(q.order_by(VaultItem.media_id).limit(limit + 1)).all()
+        page_ids = [row[0].media_id for row in rows[:limit]]
+        last_offers, last_purchases = {}, {}
+        if fan is not None and page_ids:
+            offered = select(sources.c.media_id, Message.price_cents).join(Message,
+                and_(Message.account_id == account, Message.fan_id == sources.c.fan_id,
+                    Message.message_id == sources.c.message_id)).where(sources.c.media_id.in_(page_ids))
+            offered = offered.distinct(sources.c.media_id).order_by(sources.c.media_id,
+                Message.created_at.desc(), Message.message_id.desc())
+            purchased = select(sources.c.media_id, Transaction.amount_cents).select_from(sources).join(Transaction, paid_link)
+            purchased = purchased.where(sources.c.media_id.in_(page_ids),
+                Transaction.status.in_(("pending", "cleared", "refund_pending"))).distinct(sources.c.media_id)
+            purchased = purchased.order_by(sources.c.media_id, Transaction.occurred_at.desc(), Transaction.id.desc())
+            last_offers, last_purchases = dict(s.execute(offered).all()), dict(s.execute(purchased).all())
+        items = []
+        for asset, count, fans, sent_at, buys, refunds in rows[:limit]:
+            last_offer, last_purchase = last_offers.get(asset.media_id), last_purchases.get(asset.media_id)
+            items.append({"mediaId": str(asset.media_id), "kind": asset.kind[:32], "description": str(effective_value(asset, "description") or "")[:500],
+                "sentCount": int(count or 0), "uniqueRecipients": int(fans or 0), "lastSentAt": stamp(sent_at),
+                "purchaseCount": int(buys or 0), "refundCount": int(refunds or 0),
+                "ownership": "purchased" if asset.media_id in owned else "not_purchased" if purchase_complete else "unknown",
+                "sentHistory": "complete" if complete else "partial", "lastOfferedUnitPriceCents": last_offer,
+                "lastPurchasedUnitPriceCents": last_purchase})
+        return {"fanId": fan_id, "asOf": stamp(now), "coverage": cov, "sentHistoryComplete": complete,
+            "purchaseHistoryComplete": purchase_complete, "items": items,
+            "nextCursor": str(rows[limit - 1][0].media_id) if len(rows) > limit else None,
+            "priceMeaning": "message_or_bundle_total"}
+
+
+def read_performance(store, tenant, account, *, after=None, limit=25):
+    cursor = reference(after) if after is not None else 0
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError("Invalid performance page size.")
+    with Session(store.engine) as s, s.begin():
+        now = begin(s)
+        runtime = read_scope(s, tenant, account)
+        cov = coverage(s, runtime, now)
+        # A unit is one fan/message, even if multiple media or duplicate legacy offers exist.
+        units = select(ContentOffer.fan_id, ContentOffer.offer_message_id.label("message_id"),
+            func.min(ContentOffer.item_id).label("item_id")).where(ContentOffer.account_id == account,
+                ContentOffer.mode == "ppv", ContentOffer.offer_message_id.is_not(None)).group_by(
+                    ContentOffer.fan_id, ContentOffer.offer_message_id).having(func.count(func.distinct(ContentOffer.item_id)) == 1).subquery()
+        units = select(units).join(Message, and_(Message.account_id == account, Message.fan_id == units.c.fan_id,
+            Message.message_id == units.c.message_id, Message.direction == "out")).subquery()
+        valid = and_(proven_transaction(), exact_purchase_evidence(), Transaction.kind == "ppv_message")
+        # Aggregate transactions before joining units: tips or repeated provider
+        # observations on a message cannot multiply sends or its conversion rate.
+        paid = select(Transaction.fan_id, Transaction.message_id,
+            func.max(case((Transaction.status.in_(("pending", "cleared", "refund_pending")), 1), else_=0)).label("bought"),
+            func.max(case((Transaction.status.in_(("refunded", "chargedback")), 1), else_=0)).label("refunded"),
+            func.sum(case((Transaction.status == "cleared", Transaction.amount_cents), else_=0)).label("revenue"))
+        paid = paid.where(Transaction.account_id == account, valid).group_by(Transaction.fan_id, Transaction.message_id).subquery()
+        summaries = select(units.c.item_id, func.count().label("sends"),
+            func.count(func.distinct(units.c.fan_id)).label("fans"),
+            func.coalesce(func.sum(paid.c.bought), 0).label("buys"),
+            func.coalesce(func.sum(paid.c.refunded), 0).label("refunds"),
+            func.coalesce(func.sum(paid.c.revenue), 0).label("revenue"))
+        summaries = summaries.outerjoin(paid, and_(paid.c.fan_id == units.c.fan_id,
+            paid.c.message_id == units.c.message_id)).group_by(units.c.item_id).subquery()
+        q = select(CatalogItem.id, CatalogItem.label, summaries.c.sends, summaries.c.fans,
+            summaries.c.buys, summaries.c.refunds, summaries.c.revenue).join(summaries, summaries.c.item_id == CatalogItem.id)
+        q = q.where(CatalogItem.account_id == account)
+        if cursor:
+            anchor = select(summaries.c.revenue).where(summaries.c.item_id == cursor).scalar_subquery()
+            q = q.where(or_(summaries.c.revenue < anchor, and_(summaries.c.revenue == anchor, CatalogItem.id > cursor)))
+        rows = s.execute(q.order_by(summaries.c.revenue.desc(), CatalogItem.id).limit(limit + 1)).all()
+        return {"asOf": stamp(now), "coverage": cov, "revenueMeaning": "cleared_gross_per_catalogue_unit",
+            "items": [{"itemId": str(row[0]), "label": (row[1] or "Unnamed content")[:160], "sentCount": row[2],
+                "uniqueRecipients": row[3], "purchases": row[4], "refunds": row[5], "clearedGrossCents": row[6],
+                "conversion": row[4] / row[2] if row[2] else None} for row in rows[:limit]],
+            "nextCursor": str(rows[limit - 1][0]) if len(rows) > limit else None}

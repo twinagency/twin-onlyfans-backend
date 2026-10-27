@@ -1,0 +1,258 @@
+"""service/llm_providers.py — WHO we call and WHICH credential we call them with.
+
+Provider identity only: the base URL, the env var its key lives in, and how that
+key is resolved. Everything about a CALL — models, pricing, cost accounting, cap
+reservation, the request itself — is `llm_client`, which imports this.
+
+It is its own module because `tenant_keys` needs the same two things (the list of
+providers, and the deployment's own key for one) and `llm_client` imports
+`tenant_keys` on the money path. With the registry in llm_client that was a cycle
+papered over with function-local imports; split along the seam it already had, the
+dependencies run one way: llm_client → llm_providers ← tenant_keys.
+"""
+
+from __future__ import annotations
+
+import contextvars
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping
+
+from dotenv import dotenv_values, load_dotenv
+
+_HERE = Path(__file__).resolve().parent
+_ENV_FILE = _HERE / ".env"
+# Mirror db.engine: load service/.env if it hasn't been loaded yet. override=False
+# means a real value already in the process env (e.g. a host-exported key) wins.
+#
+# OFFLINE/TEST ISOLATION (P2-I7): a test process sets TWIN_FASTT_CONFIG_ISOLATED=1
+# BEFORE importing this module to stop the import-time dotenv read entirely, so an
+# offline check can never pick up a real key from service/.env. The variable is
+# unset in every deployment, so production behaviour is byte-for-byte unchanged;
+# the seams below honour the same flag at call time.
+_CONFIG_ISOLATED = os.environ.get("TWIN_FASTT_CONFIG_ISOLATED") == "1"
+if not _CONFIG_ISOLATED:
+    load_dotenv(_ENV_FILE, override=False)
+
+
+@dataclass(frozen=True)
+class LLMProvider:
+    name: str          # "grok" | "deepseek"
+    base_url: str      # OpenAI-compatible base
+    api_key_env: str   # env var holding the bearer key
+
+
+# Both keys are CONFIRMED present in service/.env (verified 2026-06-04, 19 §4).
+PROVIDERS: dict[str, LLMProvider] = {
+    "grok":     LLMProvider("grok",     "https://api.x.ai/v1",      "GROK_API_KEY"),
+    "deepseek": LLMProvider("deepseek", "https://api.deepseek.com", "DEEPSEEK_API_KEY"),
+    # DeepInfra hosts the Qwen3-VL vision models (OpenAI-compatible, NSFW-permissive).
+    "deepinfra": LLMProvider("deepinfra", "https://api.deepinfra.com/v1/openai", "DEEPINFRA_API_KEY"),
+    # Z.ai (GLM). The base URL is the one the API actually answers on, NOT the
+    # one its OpenAI-compatibility docs give: `https://api.z.ai/api/openai/v1`
+    # returns `{"code":500,"msg":"404 NOT_FOUND"}` — under an HTTP **200**, so a
+    # caller that trusts the status code sees a successful request with no
+    # choices rather than a routing error. Probed 2026-08-27.
+    "zai": LLMProvider("zai", "https://api.z.ai/api/paas/v4", "ZAI_API_KEY"),
+    # OpenRouter (P2-I7). The Telegram/Twin Fastt context serves its model calls
+    # through the deployment's existing OpenRouter account. The key env is the
+    # SAME house env the rest of the deployment uses, but the Telegram context
+    # resolves it through the injected policy below — never through the local
+    # `.env`/secrets-store fallbacks in `_api_key` — so a missing Telegram
+    # credential fails closed instead of silently billing the host key.
+    "openrouter": LLMProvider("openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+}
+
+
+def _api_key(env_name: str) -> str:
+    """Resolve a provider key. A non-empty process-env value wins; if it's
+    missing or blank we fall back to the COPYed service/.env directly.
+
+    Why the file fallback: docker-compose passes the key through as
+    `${GROK_API_KEY:-}`, which injects an EMPTY string into the container when
+    the host shell doesn't export it. load_dotenv(override=False) then refuses
+    to backfill the already-set (empty) var, so the real value sitting in the
+    COPYed service/.env would be ignored. Reading the file here recovers it —
+    the Phase-F clean-build footgun, defused.
+
+    A value pasted into the Setup → Keys UI (secrets.json) wins over both, so a
+    self-hoster can add a key without touching env/.env or restarting."""
+    if not _CONFIG_ISOLATED:
+        try:
+            from secrets_store import stored as _stored
+            s = _stored(env_name)
+            if s:
+                return s
+        except Exception:  # never let the key store crash a provider call
+            pass
+    val = (os.environ.get(env_name) or "").strip()
+    if val:
+        return val
+    if _CONFIG_ISOLATED:
+        # Isolated processes read the process env ONLY. No dotenv file fallback.
+        return ""
+    try:
+        return (dotenv_values(_ENV_FILE).get(env_name) or "").strip()
+    except Exception:  # pragma: no cover — never let key lookup crash the caller
+        return ""
+
+
+# ── Purpose-scoped fallback credentials ───────────────────────────────
+# ONE ROW PER HOLE IN THE FAIL-CLOSED KEY GATE, and today there is one. The key
+# is `(purpose, provider)` and the value is the env id of a credential THIS
+# DEPLOYMENT pays for; `llm_client._tenant_api_key` consults it only after an
+# agency turns out to have no key of its own.
+#
+# Why the hole exists: the gate makes "where do I paste my API key?"
+# unanswerable exactly when it is asked. The in-product help assistant sends no
+# fan anything, so it is the one purpose that may fall back.
+#
+# Why a MAP and not three constants: "which purposes may spend the deployment's
+# money" is policy, and policy belongs in one readable place rather than spread
+# across a caller's `if`. The call site then carries no feature name at all, and
+# adding or removing a hole is a line here — reviewable on its own.
+#
+# 🚨 The env id is DELIBERATELY NOT `DEEPSEEK_API_KEY`. The house key is already
+# reachable on the un-owned-account path for this deployment's own maintenance
+# calls; widening THAT to every keyless agency would bill us for their sending
+# too. A separate id can be set, rotated or emptied on its own, and an empty
+# value simply restores the old fail-closed behaviour.
+_FALLBACK_KEY_ENVS: dict[tuple[str, str], str] = {
+    ("help_assistant", "deepseek"): "HELP_ASSISTANT_DEEPSEEK_KEY",
+}
+
+
+def fallback_key(purpose: str, provider: str) -> str:
+    """The deployment's own credential for this (purpose, provider), or "".
+
+    "" for every pair not in the map above, for an unset value, and for the
+    empty purpose — so a caller that knows nothing about purposes gets exactly
+    the fail-closed behaviour it had before this existed.
+    """
+    env = _FALLBACK_KEY_ENVS.get((purpose, provider))
+    return _api_key(env) if env else ""
+
+
+def house_key(provider: str) -> str:
+    """The DEPLOYMENT's own key for one provider ("" if it has none, including
+    for a name that is not a provider).
+
+    Public so callers ask for a provider's key rather than re-deriving which env
+    var holds it — that mapping is this module's business.
+    """
+    prov = PROVIDERS.get(provider)
+    if prov is None:
+        return ""
+    return _api_key(prov.api_key_env)
+
+
+# ── Injected Telegram (Twin/Fastt) model policy ──────────────────────────────
+# P2-I7. The Telegram worker is NOT the OnlyFans deployment: it must select its
+# model from an explicit per-creator mapping and bill one named credential, and
+# a missing/malformed mapping must STOP before any model HTTP request rather
+# than fall back to a house default or another tenant's key.
+#
+# The policy is a CONTEXTVAR, not a module global, so it is per async context:
+# an OnlyFans path running in the same process keeps its legacy behaviour, a
+# test can install a synthetic policy and reset it without leaking, and two
+# workers cannot observe each other's settings. `None` (the default) means "no
+# Telegram policy" and every existing resolver behaves exactly as before.
+
+
+@dataclass(frozen=True)
+class TelegramLLMPolicy:
+    """One creator worker's injected model policy.
+
+    `purposes` maps an enabled P2 purpose to an INTERNAL `llm_models.MODELS` id.
+    `trusted_account_id` is the ONE creator/billing account this Telegram context
+    may bill; it is carried from the worker's trusted binding and is NEVER
+    inferred from fan input or from whatever `account_id` a caller happens to
+    pass, so a call for another account is a configuration error rather than a
+    cross-billing surprise.
+    `credential_env` names the env var holding the ONE credential this Telegram
+    context may bill — a reference, never a value, so it can be logged and
+    snapshotted without exposing a secret. `provider_allowlist` is the set of
+    provider names this context may call; an unlisted provider is refused even
+    if a model id happens to resolve to it.
+    """
+
+    purposes: Mapping[str, str]
+    trusted_account_id: str
+    credential_env: str
+    provider_allowlist: frozenset[str]
+    config_version: str = "cfg_0000"
+
+    def __post_init__(self) -> None:
+        """Detach the installed policy from every caller-owned mutable object.
+
+        A frozen dataclass does not freeze a dict held by one of its fields. The
+        worker therefore snapshots valid containers here; configuration changes
+        require installing a new versioned policy rather than mutating the object
+        that an in-flight turn is already using. Malformed values remain intact
+        so ``config_problem`` can return the normal typed configuration error.
+        """
+        if isinstance(self.purposes, Mapping):
+            object.__setattr__(self, "purposes", MappingProxyType(dict(self.purposes)))
+        if isinstance(self.provider_allowlist, (set, frozenset)):
+            object.__setattr__(self, "provider_allowlist", frozenset(self.provider_allowlist))
+
+    def config_problem(self) -> str:
+        """Return "" when the policy is well formed, else a refusal reason.
+
+        The policy's OWNER rejects a malformed policy once, here, so both the
+        resolver consumer and the client boundary refuse the same way instead of
+        each re-deriving validity (and drifting apart).
+        """
+        if not isinstance(self.purposes, Mapping) or not self.purposes:
+            return "telegram policy has no enabled purposes"
+        for name, model in self.purposes.items():
+            if not isinstance(name, str) or not name.strip():
+                return "telegram policy has a blank purpose name"
+            if not isinstance(model, str) or not model.strip():
+                return f"telegram purpose {name!r} maps to a blank model"
+        if not isinstance(self.trusted_account_id, str) or not self.trusted_account_id.strip():
+            return "telegram policy has no trusted billing account"
+        if not isinstance(self.credential_env, str) or not self.credential_env.strip():
+            return "telegram policy has no credential reference"
+        if not isinstance(self.config_version, str) or not self.config_version.strip():
+            return "telegram policy has no config version"
+        if not isinstance(self.provider_allowlist, (set, frozenset)) or not self.provider_allowlist:
+            return "telegram policy has no allowed providers"
+        for name in self.provider_allowlist:
+            if not isinstance(name, str) or not name.strip():
+                return "telegram policy allows a blank provider name"
+        return ""
+
+
+_telegram_policy: contextvars.ContextVar[TelegramLLMPolicy | None] = contextvars.ContextVar(
+    "fastt_telegram_llm_policy", default=None
+)
+
+
+def set_telegram_policy(policy: TelegramLLMPolicy | None) -> contextvars.Token:
+    """Install the Telegram policy for the current context. Returns a token for
+    `reset_telegram_policy`."""
+    return _telegram_policy.set(policy)
+
+
+def reset_telegram_policy(token: contextvars.Token) -> None:
+    """Undo a `set_telegram_policy`, restoring the previous value."""
+    _telegram_policy.reset(token)
+
+
+def active_telegram_policy() -> TelegramLLMPolicy | None:
+    """The policy in force for this context, or None outside the Telegram path."""
+    return _telegram_policy.get()
+
+
+def telegram_credential(policy: TelegramLLMPolicy) -> str:
+    """The credential named by the policy, read from the process env ONLY.
+
+    Deliberately bypasses `_api_key`: the Telegram context must never reach into
+    `secrets_store`, a local `.env` file, or the house key, because those are the
+    paths that silently bill the wrong party. "" when unset — the caller decides
+    the fail-closed error.
+    """
+    return (os.environ.get(policy.credential_env) or "").strip()

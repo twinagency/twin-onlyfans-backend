@@ -1,0 +1,217 @@
+"""Smart Lists on canonical OnlyFans facts; definitions update, campaigns freeze."""
+import hashlib
+import json
+import re
+from datetime import datetime
+
+from sqlalchemy import select, func, and_, or_, case, literal, text
+from sqlalchemy.orm import Session
+from db.models import SmartList, Fan
+from onlyfans_read.agency_scope import actor_allowed
+from onlyfans_read.contract import conversation_id_for
+from .audience_rules import _validate_rules, InvalidRules
+from .fan_intelligence import coverage, read_scope, facts_query, predicate, eligible, stamp
+from .native_context import canonical
+from .store import Refused
+
+SCHEMA = "of-intelligence.v1"
+MAX_LISTS = 200
+
+
+def digest(value):
+    return hashlib.sha256(canonical(value).encode()).hexdigest()
+
+
+def scoped_rules(value):
+    """Keep the inherited DSL; expose only facts this scoped adapter can prove."""
+    clean = _validate_rules(value)
+    for rule in clean["rules"]:
+        if rule["field"] == "tag":
+            raise ValueError("Tag projections are not available in scoped audiences.")
+        if rule["field"] == "status":
+            if rule["value"] not in {"active", "expired"}:
+                raise ValueError("Use an observed active or expired subscription status.")
+        elif rule["value"] < 0:
+            raise ValueError("Use a non-negative audience threshold.")
+    if len({r["days"] for r in clean["rules"] if "days" in r}) > 5:
+        raise ValueError("Use at most five spending windows.")
+    return clean
+
+
+def rules_of(row):
+    try:
+        value = json.loads(row.rules_json)
+        if type(value) is not dict:
+            raise ValueError()
+        return scoped_rules(value)
+    except (ValueError, TypeError, RecursionError):
+        raise Refused("audience definition invalid") from None
+
+
+def revision(row):
+    return digest([row.id, row.account_id, row.name, row.rules_json, row.updated_at])
+
+
+def definition(row):
+    try:
+        rules, valid = rules_of(row), True
+    except Refused:
+        rules, valid = None, False
+    return {"id": str(row.id), "name": row.name[:128], "revision": revision(row), "rules": rules,
+        "valid": valid, "updatedAt": stamp(row.updated_at)}
+
+
+def presets():
+    def rules(*values):
+        return {"match": "all", "rules": list(values)}
+    def numeric(field, op, value, **extra):
+        return {"field": field, "op": op, "value": value, **extra}
+    return [
+        {"key": "vips", "name": "VIPs", "description": "Edit the spend threshold and window before saving.",
+            "rules": rules(numeric("recent_spend", ">=", 10000, days=90))},
+        {"key": "recent_buyers", "name": "Recent buyers", "description": "At least one purchase event in 7 days, including later reversals.",
+            "rules": rules(numeric("purchase_count", ">", 0, days=7))},
+        {"key": "expired", "name": "Expired subscribers", "description": "A current subscription observation or explicit expiry date.",
+            "rules": rules(numeric("status", "==", "expired"))},
+        {"key": "inactive_spenders", "name": "Inactive spenders", "description": "Recorded spend in 90 days and no inbound message for 14 days.",
+            "rules": rules(numeric("recent_spend", ">", 0, days=90), numeric("last_active_days", ">=", 14))},
+        {"key": "non_buyers", "name": "Non-buyers", "description": "No purchase events in 30 days; incomplete coverage is excluded.",
+            "rules": rules(numeric("purchase_count", "==", 0, days=30))},
+    ]
+
+
+def begin(s):
+    if s.bind.dialect.name == "postgresql":
+        s.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+        s.execute(text("SET LOCAL statement_timeout='5000ms'"))
+    return s.scalar(select(func.transaction_timestamp())).replace(tzinfo=None)
+
+
+def list_audiences(store, tenant, account):
+    with Session(store.engine) as s, s.begin():
+        now = begin(s)
+        runtime = read_scope(s, tenant, account)
+        rows = s.scalars(select(SmartList).where(SmartList.account_id == account).order_by(SmartList.id).limit(MAX_LISTS + 1)).all()
+        return {"audiences": [definition(row) for row in rows[:MAX_LISTS]], "truncated": len(rows) > MAX_LISTS,
+            "presets": presets(), "coverage": coverage(s, runtime, now), "asOf": stamp(now)}
+
+
+def save_audience(store, tenant, account, *, actor, action, id, expected_revision, name=None, rules=None):
+    if not actor_allowed(actor) or action not in {"save", "remove"}:
+        raise ValueError("Audience management is not permitted.")
+    if id is not None and (type(id) is not str or not re.fullmatch(r"[1-9][0-9]{0,18}", id)):
+        raise ValueError("Invalid audience reference.")
+    if id is None and (action != "save" or expected_revision is not None):
+        raise ValueError("Invalid new audience request.")
+    if id is not None and (type(expected_revision) is not str or not re.fullmatch(r"[a-f0-9]{64}", expected_revision)):
+        raise ValueError("An audience revision is required.")
+    clean = None
+    if action == "save":
+        if type(name) is not str or not name.strip() or len(name) > 128 or any(ord(c) < 32 for c in name):
+            raise ValueError("Use an audience name of 1 to 128 characters.")
+        if type(rules) is not dict:
+            raise ValueError("Use an explicit audience rule definition.")
+        clean = scoped_rules(rules)
+    with Session(store.engine) as s, s.begin():
+        # The existing account lock serializes only writes and prevents name/create races.
+        runtime = store._runtime(s, tenant, account)
+        row = s.get(SmartList, int(id)) if id is not None else s.scalar(select(SmartList).where(
+            SmartList.account_id == account, SmartList.name == name.strip()))
+        if row is not None and row.account_id != account:
+            raise Refused("scope unavailable")
+        same = row is not None and action == "save" and row.name == name.strip() and row.rules_json == canonical(clean)
+        if id is not None and (row is None or revision(row) != expected_revision) and not same:
+            raise Refused("audience revision changed")
+        if action == "remove":
+            s.delete(row)
+            return {"removedId": id, "audience": None}
+        if id is None and row is not None and not same:
+            raise Refused("audience name already exists")
+        if row is None:
+            count = s.scalar(select(func.count()).select_from(SmartList).where(SmartList.account_id == account))
+            if count >= MAX_LISTS:
+                raise ValueError("This account has reached its saved audience limit.")
+            row = SmartList(account_id=account, name=name.strip(), rules_json=canonical(clean))
+            s.add(row)
+        elif not same:
+            duplicate = s.scalar(select(SmartList.id).where(SmartList.account_id == account,
+                SmartList.name == name.strip(), SmartList.id != row.id))
+            if duplicate is not None:
+                raise Refused("audience name already exists")
+            row.name, row.rules_json = name.strip(), canonical(clean)
+            row.updated_at = s.scalar(select(func.transaction_timestamp())).replace(tzinfo=None)
+        s.flush()
+        return {"removedId": None, "audience": definition(row)}
+
+
+def selection_rules(s, account, selection, *, pinned=False):
+    if type(selection) is not dict or set(selection) != {"include", "exclude"}:
+        raise ValueError("Choose include and exclude audiences explicitly.")
+    result = {}
+    for key in ("include", "exclude"):
+        values = selection[key]
+        if type(values) is not list or len(values) > 10 or key == "include" and not values:
+            raise ValueError("Choose 1 to 10 included audiences and at most 10 exclusions.")
+        result[key] = []
+        ids = set()
+        for value in values:
+            if pinned:
+                if type(value) is not dict or set(value) != {"id", "revision", "rules"}:
+                    raise Refused("audience definition invalid")
+                row = {**value, "rules": scoped_rules(value["rules"])}
+            else:
+                if (type(value) is not dict or set(value) != {"id", "revision"} or type(value["id"]) is not str
+                        or not re.fullmatch(r"[1-9][0-9]{0,18}", value["id"])):
+                    raise ValueError("Invalid audience reference.")
+                stored = s.get(SmartList, int(value["id"]))
+                if stored is None or stored.account_id != account:
+                    raise Refused("scope unavailable")
+                if revision(stored) != value["revision"]:
+                    raise Refused("audience revision changed")
+                row = {**value, "rules": rules_of(stored)}
+            if row["id"] in ids:
+                raise ValueError("Audience references must be unique.")
+            ids.add(row["id"])
+            result[key].append(row)
+    return result
+
+
+def selection_query(s, runtime, now, cov, pinned, fan_id=None):
+    definitions = pinned["include"] + pinned["exclude"]
+    all_rules = {"match": "all", "rules": [rule for d in definitions for rule in d["rules"]["rules"]]}
+    facts, _ = facts_query(runtime.account_id, runtime.binding_id, now, cov, all_rules, fan_id=fan_id)
+    included = or_(*(predicate(facts, d["rules"]) for d in pinned["include"]))
+    excluded = or_(*(predicate(facts, d["rules"]) for d in pinned["exclude"])) if pinned["exclude"] else literal(False)
+    return facts, and_(included, ~excluded)
+
+
+def preview_in_session(s, runtime, now, *, rules=None, selection=None, pinned=None, cap=1000):
+    cov = coverage(s, runtime, now)
+    if rules is not None:
+        clean = scoped_rules(rules)
+        facts, _ = facts_query(runtime.account_id, runtime.binding_id, now, cov, clean)
+        matches = predicate(facts, clean)
+    else:
+        pinned = pinned or selection_rules(s, runtime.account_id, selection)
+        facts, matches = selection_query(s, runtime, now, cov, pinned)
+    joined = facts.join(Fan, and_(Fan.account_id == runtime.account_id, Fan.fan_id == facts.c.fan_id))
+    total, matched, unknown, eligible_count = s.execute(select(func.count(),
+        func.count(case((matches.is_(True), 1))), func.count(case((matches.is_(None), 1))),
+        func.count(case((and_(matches.is_(True), eligible(runtime.account_id)), 1)))).select_from(joined)).one()
+    samples = s.execute(select(facts.c.fan_id, facts.c.custom_nickname, facts.c.of_display_name, facts.c.of_username)
+        .select_from(joined).where(matches.is_(True)).order_by(facts.c.fan_id).limit(25)).all()
+    ids = list(s.scalars(select(facts.c.fan_id).select_from(joined).where(matches.is_(True), eligible(runtime.account_id))
+        .order_by(facts.c.fan_id).limit(cap + 1))) if selection is not None or pinned is not None else []
+    snapshot = digest({"binding": runtime.binding_id, "audiences": pinned, "fans": ids}) if pinned and len(ids) <= cap else None
+    return {"total": total, "matched": matched, "unknown": unknown, "eligible": eligible_count,
+        "suppressed": matched - eligible_count, "asOf": stamp(now), "coverage": cov,
+        "sample": [{"fanId": str(row[0]), "name": next((v for v in row[1:] if v), str(row[0]))[:160]} for row in samples],
+        "snapshotHash": snapshot}, ids, pinned
+
+
+def preview(store, tenant, account, *, rules=None, selection=None):
+    with Session(store.engine) as s, s.begin():
+        now = begin(s)
+        runtime = read_scope(s, tenant, account)
+        result, _, _ = preview_in_session(s, runtime, now, rules=rules, selection=selection)
+        return result

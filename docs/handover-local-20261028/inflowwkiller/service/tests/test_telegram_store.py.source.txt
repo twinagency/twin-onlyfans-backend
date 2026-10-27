@@ -1,0 +1,1092 @@
+#!/usr/bin/env python3
+"""Durable Telegram control-record scenarios (P1 + P1-R).
+
+Windows:  .venv\\Scripts\\python.exe service\\tests\\test_telegram_store.py
+
+Exercises REAL SQLite transaction boundaries against isolated temporary files,
+covering the original P1 acceptance list AND the six P1-R repairs:
+  R1 recoverable immutable bodies (file-backed close/reopen)
+  R2 source-sequenced idempotent projection (stable identity, per-stream cursor)
+  R3 conversation-wide arbitration and attempt-bound completion
+  R4 semantic source digest separate from local receipt bookkeeping
+  R5 typed integer/timestamp rules (covered in test_telegram_contract)
+  R6 binding immutability, trusted conversation scope and action-class predicates
+
+Offline: no network, no Supabase, no Telegram, no model call, nothing started.
+"""
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+TESTS_DIR = Path(__file__).resolve().parent
+SERVICE_DIR = TESTS_DIR.parent
+sys.path.insert(0, str(SERVICE_DIR))
+
+from telegram_contract.contract import (  # noqa: E402
+    FasttContractError,
+    derive_action_id,
+)
+from telegram_contract.identity import (  # noqa: E402
+    telegram_conversation_key,
+    telegram_fan_key,
+    telegram_message_key,
+)
+from telegram_contract.store import (  # noqa: E402
+    ActionConflictError,
+    AttemptTokenError,
+    BindingIdentityError,
+    ConversationBindingError,
+    EventConflictError,
+    ProjectionConflictError,
+    StaleEpochError,
+    TelegramContractStore,
+    TelegramStoreError,
+)
+
+CLONE_A = "11111111-1111-4111-8111-111111111111"
+CLONE_B = "22222222-2222-4222-8222-222222222222"
+BINDING = "bnd_telegram_alpha"
+BOT = "7123456789"
+CHAT = "900100200"
+BC = "bc_alpha"
+
+_TMP_ROOT = Path(tempfile.mkdtemp(prefix="tg-contract-store-"))
+
+failures = []
+
+
+def check(label, actual, expected):
+    if actual == expected:
+        print(f"  ok   {label}")
+    else:
+        failures.append(f"{label}: got {actual!r}, expected {expected!r}")
+        print(f"  FAIL {label}: got {actual!r}, expected {expected!r}")
+
+
+def raises(label, fn, expected_exc):
+    try:
+        fn()
+    except expected_exc as exc:
+        print(f"  ok   {label} ({type(exc).__name__})")
+        return exc
+    except BaseException as exc:  # noqa: BLE001 - report the wrong exception type
+        failures.append(f"{label}: raised {type(exc).__name__} instead of {expected_exc.__name__}")
+        print(f"  FAIL {label}: raised {type(exc).__name__}")
+        return None
+    failures.append(f"{label}: did not raise {expected_exc.__name__}")
+    print(f"  FAIL {label}: did not raise")
+    return None
+
+
+def registration_refuses(label, fn, needle):
+    """Assert `fn` raises a TelegramStoreError whose message contains `needle`."""
+    try:
+        fn()
+    except TelegramStoreError as exc:
+        check(label, needle in str(exc), True)
+        return
+    check(label, False, True)
+
+
+def new_store(name: str) -> TelegramContractStore:
+    store = TelegramContractStore(str(_TMP_ROOT / f"{name}.sqlite"))
+    store.initialize()
+    return store
+
+
+# A neutral no-op applier for the scenarios that exercise the projection body and
+# cursor rather than a destination mutation. Consumption now REQUIRES an applier
+# (C1), so a position can never be consumed without an explicit application step.
+NO_OP_APPLIER = {
+    "supportedKinds": ["creator_config", "catalogue", "config"],
+    "apply": lambda _event: None,
+}
+
+
+def open_path(path: Path) -> TelegramContractStore:
+    store = TelegramContractStore(str(path))
+    store.initialize()
+    return store
+
+
+def conv_key(clone_id=CLONE_A, business_connection_id=BC, chat_id=CHAT):
+    return telegram_conversation_key(clone_id, BOT, "business", business_connection_id, chat_id)
+
+
+def ready(store, clone_id=CLONE_A, business_connection_id=BC, chat_id=CHAT, engine="fastt",
+          config_version="cfg_0001", input_revision=1, ai_paused=False, human_takeover=False):
+    """The standard trusted setup: an active Fastt binding, its conversation
+    record, and the control flags. Returns the conversation key."""
+    store.upsert_binding(BINDING, clone_id, BOT, "business", business_connection_id,
+                         effective_engine=engine, config_version=config_version)
+    store.set_binding_controls(BINDING, current_input_revision=input_revision,
+                               ai_paused=ai_paused, human_takeover=human_takeover)
+    # Bind AFTER the controls so the conversation seeds its OWN input revision (C3).
+    key = conv_key(clone_id, business_connection_id, chat_id)
+    store.bind_conversation(key, BINDING, clone_id)
+    return key
+
+
+def base_event(**over):
+    event = {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": BINDING,
+        "cloneId": CLONE_A,
+        "botId": BOT,
+        "mode": "business",
+        "businessConnectionId": BC,
+        "chatId": CHAT,
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001",
+    }
+    event.update(over)
+    return event
+
+
+def action_payload(source_id="turn_0001", ordinal=0, source_kind="turn", clone_id=CLONE_A, conversation_key=None, **over):
+    payload = {
+        "schemaVersion": 1,
+        "actionId": derive_action_id(BINDING, source_kind, source_id, ordinal),
+        "sourceKind": source_kind,
+        "sourceId": source_id,
+        "ordinal": ordinal,
+        "bindingId": BINDING,
+        "cloneId": clone_id,
+        "conversationKey": conversation_key if conversation_key is not None else conv_key(clone_id),
+        "expectedEpoch": 0,
+        "expectedInputRevision": 1,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "first bubble",
+        "assets": [],
+        "currency": None,
+        "amount": None,
+        "notBefore": None,
+        "expiresAt": None,
+    }
+    payload.update(over)
+    return payload
+
+
+def scenario_schema():
+    print("\nscenario 0: every control table is created")
+    store = new_store("schema")
+    tables = {row["name"] for row in store.conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
+    expected = {
+        "engine_bindings", "telegram_events", "native_identity_map", "native_id_sequences",
+        "delivery_actions", "projection_events", "projection_cursors", "bindings_conversations",
+        "paid_obligations", "worker_leases", "engine_commands", "worker_invocations",
+    }
+    check("all control tables exist", sorted(expected - tables), [])
+    store.close()
+
+
+def scenario_duplicate_and_conflicting_intake():
+    print("\nscenario 1: duplicate Telegram updates, restart and conflicting re-delivery")
+    store = new_store("intake")
+    event_id, inserted = store.admit_event(base_event())
+    check("first admission inserts", inserted, True)
+    check("event id returned", event_id, "evt_0001")
+
+    same_id, inserted_again = store.admit_event(base_event())
+    check("a byte-identical re-delivery is a duplicate, not a new row", inserted_again, False)
+    check("duplicate keeps the original event id", same_id, "evt_0001")
+    check("only one event row exists", store.event_count(), 1)
+
+    # R4: a restarted receiver rebuilds the local envelope for the SAME update.
+    restarted_id, restarted_inserted = store.admit_event(
+        base_event(eventId="evt_restart", receivedAt="2026-10-15T05:00:00.000Z")
+    )
+    check("R4 a restart with a new eventId/receivedAt is a duplicate", restarted_inserted, False)
+    check("R4 the first canonical event id is preserved", restarted_id, "evt_0001")
+    check("R4 the first receipt time is preserved", store.event_record("evt_0001")["receivedAt"], "2026-10-15T04:05:07.000Z")
+    check("R4 still only one event row", store.event_count(), 1)
+
+    raises(
+        "R4 changed provider content is still a CONFLICT",
+        lambda: store.admit_event(base_event(text="a different message entirely")),
+        EventConflictError,
+    )
+    check("the conflicting delivery did not create a row", store.event_count(), 1)
+    store.close()
+
+
+def scenario_recoverable_bodies():
+    print("\nscenario 1b (R1): a frozen body survives a file-backed close/reopen")
+    path = _TMP_ROOT / "recovery.sqlite"
+    first = open_path(path)
+    ready(first)
+    admitted_id, _ = first.admit_event(base_event(text="recover me"))
+    frozen = action_payload("turn_recover")
+    first.register_action(frozen, "ai")
+    first.import_projection_event(
+        "src_1", 1, "creator_config", {"configVersion": "cfg_0001", "note": "frozen"}, applier=NO_OP_APPLIER
+    )
+    first.close()
+
+    second = open_path(path)
+    ev = second.event_record(admitted_id)
+    check("R1 event body recovered without the original object", ev["body"]["text"], "recover me")
+    check("R1 recovered event keeps its attachments array", isinstance(ev["body"]["attachments"], list), True)
+    check("R1 recovered event records its schema version", ev["bodySchemaVersion"], 1)
+    ar = second.action_record(frozen["actionId"])
+    check("R1 action text recovered", ar["body"]["text"], "first bubble")
+    check("R1 action timing recovered", ar["body"]["expiresAt"], None)
+    pr = second.projection_record("creator-worker", "src_1")
+    check("R1 projection body recovered", pr["body"]["configVersion"], "cfg_0001")
+    second.close()
+
+
+def scenario_same_user_two_creators():
+    print("\nscenario 2: the same Telegram user across two creators")
+    fan_a = telegram_fan_key(CLONE_A, BOT, "business", "555000111")
+    fan_b = telegram_fan_key(CLONE_B, BOT, "business", "555000111")
+    check("two creators, same user => two distinct scoped fan keys", fan_a != fan_b, True)
+
+    store_a = new_store("creator_a")
+    store_b = new_store("creator_b")
+    native_a = store_a.allocate_native_id("fan", fan_a)
+    native_b = store_b.allocate_native_id("fan", fan_b)
+    check("each creator allocates its own first native fan id", (native_a, native_b), (1, 1))
+    check("re-allocating the same fan returns the same native id", store_a.allocate_native_id("fan", fan_a), native_a)
+    check("the two creators' databases are separate files", store_a.path != store_b.path, True)
+    store_a.close()
+    store_b.close()
+
+
+def scenario_same_message_id_two_chats():
+    print("\nscenario 3: identical Telegram message ids in different chats")
+    key_a = telegram_message_key(BOT, CHAT, BC, "42")
+    key_b = telegram_message_key(BOT, "900100999", BC, "42")
+    check("message 42 in two chats => two distinct keys", key_a != key_b, True)
+
+    store = new_store("messages")
+    native_a = store.allocate_native_id("message", key_a)
+    native_b = store.allocate_native_id("message", key_b)
+    check("the two chats' message 42s get different native ids", native_a != native_b, True)
+    check("re-allocating chat A's message 42 is stable", store.allocate_native_id("message", key_a), native_a)
+    key_c = telegram_message_key("7000000001", CHAT, BC, "42")
+    native_c = store.allocate_native_id("message", key_c)
+    check("same chat+message on another bot is a third native id", native_c not in (native_a, native_b), True)
+    store.close()
+
+
+def scenario_malformed_ids_and_timestamps():
+    print("\nscenario 4: malformed ids and timestamps are refused before storage")
+    store = new_store("malformed")
+    cases = [
+        ("non-numeric bot id", base_event(botId="abc"), "id-not-integer"),
+        ("leading-zero chat id", base_event(chatId="00700100200"), "id-not-integer"),
+        ("float update id", base_event(updateId="1.5"), "id-not-integer"),
+        ("padded message id", base_event(messageId=" 42"), "malformed-field"),
+        ("month 13", base_event(occurredAt="2026-13-01T00:00:00Z"), "timestamp-invalid"),
+        ("february 30", base_event(occurredAt="2026-02-30T00:00:00Z"), "timestamp-invalid"),
+        ("no timezone", base_event(occurredAt="2026-10-15T04:00:00"), "timestamp-invalid"),
+        ("path separator in an id", base_event(eventId="evt/0001"), "malformed-field"),
+        ("unpaired surrogate", base_event(eventId="\ud800"), "unpaired-surrogate"),
+    ]
+    for label, payload, expected_code in cases:
+        exc = raises(f"{label} is refused", lambda p=payload: store.admit_event(p), FasttContractError)
+        if exc is not None:
+            check(f"  {label} code", exc.code, expected_code)
+    check("no malformed event was stored", store.event_count(), 0)
+    store.close()
+
+
+def scenario_stale_ownership_revision():
+    print("\nscenario 5: stale ownership revision cannot claim a dispatch")
+    store = new_store("epoch")
+    ready(store)
+
+    action_old = action_payload("turn_old")
+    store.register_action(action_old, "ai")
+    claim = store.claim_action(action_old["actionId"], "worker-1")
+    check("epoch 0 claim succeeds while the binding is at epoch 0", claim["claimed"], True)
+    store.finish_action(action_old["actionId"], claim["attemptToken"], "confirmed", telegram_message_id="5001")
+
+    new_epoch = store.bump_epoch(BINDING, 0)
+    check("ownership epoch advanced to 1", new_epoch, 1)
+    raises("a stale expectation is refused", lambda: store.bump_epoch(BINDING, 0), StaleEpochError)
+
+    stale = action_payload("turn_stale", expectedEpoch=0)
+    store.register_action(stale, "ai")
+    check("an action frozen at the OLD epoch cannot claim", store.claim_action(stale["actionId"], "worker-2")["claimed"], False)
+
+    fresh = action_payload("turn_fresh", expectedEpoch=1)
+    store.register_action(fresh, "ai")
+    check("an action frozen at the CURRENT epoch can claim", store.claim_action(fresh["actionId"], "worker-2")["claimed"], True)
+    store.close()
+
+
+def scenario_conflicting_action_payloads():
+    print("\nscenario 6: conflicting action payloads under one action id")
+    store = new_store("conflict")
+    ready(store)
+    payload = action_payload("turn_0001")
+
+    created, digest = store.register_action(payload, "ai")
+    check("first registration creates the action", created, True)
+    check("payload digest is returned", len(digest), 64)
+
+    created_again, digest_again = store.register_action(payload, "ai")
+    check("an identical re-registration is idempotent", created_again, False)
+    check("and keeps the same digest", digest_again, digest)
+
+    conflicting = action_payload("turn_0001", text="a different bubble")
+    raises(
+        "a different payload under the same action id is a CONFLICT",
+        lambda: store.register_action(conflicting, "ai"),
+        ActionConflictError,
+    )
+    check("the conflicting payload did not overwrite the row", store.get_action(payload["actionId"])["payload_digest"], digest)
+    check("exactly one action row exists", store.action_count(), 1)
+    store.close()
+
+
+def scenario_transaction_rollback():
+    print("\nscenario 7: transaction rollback leaves no partial state")
+    store = new_store("rollback")
+
+    store.conn.execute("BEGIN IMMEDIATE")
+    store.conn.execute("INSERT INTO native_id_sequences (source_type, next_native_id) VALUES ('fan', 1)")
+    store.conn.execute("ROLLBACK")
+    row = store.conn.execute("SELECT COUNT(*) AS n FROM native_id_sequences").fetchone()
+    check("a rolled-back allocation leaves no sequence row", int(row["n"]), 0)
+    check("the next allocation still starts at 1 (nothing was consumed)", store.allocate_native_id("fan", "fan-key-1"), 1)
+
+    raises(
+        "an interrupted import raises",
+        lambda: store.import_projection_event(
+            "src_rb", 1, "config", {"a": 1}, applier=NO_OP_APPLIER, simulate_interrupt=True
+        ),
+        TelegramStoreError,
+    )
+    check("the interrupted event is not visible", store.projection_event_count(), 0)
+    check("the cursor did not advance", store.get_cursor(), 0)
+
+    store.conn.execute("BEGIN IMMEDIATE")
+    store.conn.execute(
+        "INSERT INTO telegram_events (event_id, bot_id, update_id, binding_id, conversation_key, chat_id, "
+        "event_kind, origin, occurred_at, received_at, body_schema_version, body, payload_digest, receipt_seq, created_at) "
+        "VALUES ('evt_x', '1', '1', 'b', 'c', '1', 'message', 'fan', 't', 't', 1, '{}', 'd', 1, 't')"
+    )
+    store.conn.execute("ROLLBACK")
+    check("a rolled-back admission leaves no event row", store.event_count(), 0)
+    store.close()
+
+
+def scenario_competing_claimants():
+    print("\nscenario 8: two workers competing for the same action")
+    path = _TMP_ROOT / "compete.sqlite"
+    worker_a = open_path(path)
+    worker_b = TelegramContractStore(str(path))
+    ready(worker_a)
+    action_id = derive_action_id(BINDING, "job", "job_compete", 0)
+    worker_a.register_action(action_payload("job_compete", source_kind="job"), "ai")
+
+    won_a = worker_a.claim_action(action_id, "worker-a")["claimed"]
+    won_b = worker_b.claim_action(action_id, "worker-b")["claimed"]
+    check("exactly one claimant wins", (won_a, won_b) in ((True, False), (False, True)), True)
+    check("the action is dispatching exactly once", worker_a.get_action(action_id)["state"], "dispatching")
+    check("the dispatch was attempted exactly once", worker_a.get_action(action_id)["attempt_count"], 1)
+    worker_a.close()
+    worker_b.close()
+
+
+def scenario_projection_sequenced_idempotent():
+    print("\nscenario 9 (R2): source-sequenced idempotent projection")
+    store = new_store("projection")
+    first = store.import_projection_event("src_1", 1, "creator_config", {"configVersion": "cfg_0001"}, applier=NO_OP_APPLIER)
+    check("R2 first event imported", first["inserted"], True)
+    check("R2 cursor advanced to the first event", store.get_cursor(), 1)
+
+    redelivered = store.import_projection_event(
+        "src_1", 1, "creator_config", {"configVersion": "cfg_0001"}, applier=NO_OP_APPLIER
+    )
+    check("R2 identical redelivery is a no-op", redelivered["inserted"], False)
+    check("R2 redelivery did not add a row", store.projection_event_count(), 1)
+    check("R2 redelivery did not move the cursor", store.get_cursor(), 1)
+
+    raises(
+        "R2 changed content under the same source identity conflicts",
+        lambda: store.import_projection_event(
+            "src_1", 1, "creator_config", {"configVersion": "cfg_DIFFERENT"}, applier=NO_OP_APPLIER
+        ),
+        ProjectionConflictError,
+    )
+    check("R2 the conflict left exactly one row", store.projection_event_count(), 1)
+
+    gapped = store.import_projection_event("src_3", 3, "catalogue", {"item": "photo_3"}, applier=NO_OP_APPLIER)
+    check("R2 a gapped position is stored", gapped["inserted"], True)
+    check("R2 but the cursor holds at the gap", store.get_cursor(), 1)
+    store.import_projection_event("src_2", 2, "catalogue", {"item": "photo_2"}, applier=NO_OP_APPLIER)
+    check("R2 the cursor advances over the contiguous prefix once filled", store.get_cursor(), 3)
+
+    other = store.import_projection_event(
+        "src_1", 1, "creator_config", {"configVersion": "cfg_0001"}, recipient_worker="worker-b", applier=NO_OP_APPLIER
+    )
+    check("R2 the same source event can go to another stream", other["inserted"], True)
+    check("R2 the other stream's cursor is independent", store.get_cursor("worker-b"), 1)
+    check("R2 the first stream is unaffected", store.get_cursor(), 3)
+    check("R2 total rows across both streams", store.projection_event_count(), 4)
+    store.close()
+
+
+def scenario_projection_reopen_redelivery():
+    print("\nscenario 9b (R2): redelivery after a committed import and a reopen")
+    path = _TMP_ROOT / "projection_reopen.sqlite"
+    first = open_path(path)
+    first.import_projection_event("src_x", 1, "catalogue", {"item": "photo_x"}, applier=NO_OP_APPLIER)
+    first.close()
+    second = open_path(path)
+    again = second.import_projection_event("src_x", 1, "catalogue", {"item": "photo_x"}, applier=NO_OP_APPLIER)
+    check("R2 redelivery after reopen is a no-op", again["inserted"], False)
+    check("R2 still one row after reopen redelivery", second.projection_event_count(), 1)
+    check("R2 cursor unchanged after reopen redelivery", second.get_cursor(), 1)
+    second.close()
+
+
+def scenario_arbitration_and_attempt_bound_completion():
+    print("\nscenario 10 (R3): conversation-wide arbitration and attempt-bound completion")
+    store = new_store("arbitration")
+    ready(store)
+
+    a = action_payload("turn_a")
+    store.register_action(a, "ai")
+    claim_a = store.claim_action(a["actionId"], "worker-a")
+    check("R3 A claims", claim_a["claimed"], True)
+    store.finish_action(a["actionId"], claim_a["attemptToken"], "unknown", error_category="network")
+
+    b = action_payload("turn_b")
+    store.register_action(b, "ai")
+    claim_b = store.claim_action(b["actionId"], "worker-b")
+    check("R3 an unresolved attempt blocks a DIFFERENT action in the same conversation", claim_b["claimed"], False)
+    check("R3 the refusal names the unresolved hold", "unknown" in (claim_b["reason"] or ""), True)
+
+    conv_other = telegram_conversation_key(CLONE_A, BOT, "business", BC, "900100777")
+    store.bind_conversation(conv_other, BINDING, CLONE_A)
+    c = action_payload("turn_c", conversation_key=conv_other)
+    store.register_action(c, "ai")
+    check("R3 a different conversation still dispatches", store.claim_action(c["actionId"], "worker-c")["claimed"], True)
+
+    raises(
+        "R3 completion with a forged attempt token is rejected",
+        lambda: store.finish_action(c["actionId"], "att_forged", "confirmed", telegram_message_id="1"),
+        AttemptTokenError,
+    )
+    check("R3 the forged completion did not change the state", store.get_action(c["actionId"])["state"], "dispatching")
+    store.close()
+
+
+def scenario_late_receipt():
+    print("\nscenario 11 (R3): a genuine late receipt settles the original attempt")
+    store = new_store("late_receipt")
+    ready(store)
+    a = action_payload("turn_late")
+    store.register_action(a, "ai")
+    claim = store.claim_action(a["actionId"], "worker-a")
+    store.finish_action(a["actionId"], claim["attemptToken"], "unknown", error_category="network")
+
+    check("R3 epoch advances while the attempt is unresolved", store.bump_epoch(BINDING, 0), 1)
+    after = action_payload("turn_after", expectedEpoch=1)
+    store.register_action(after, "ai")
+    check("R3 the hold survives the epoch change", store.claim_action(after["actionId"], "worker-b")["claimed"], False)
+
+    check(
+        "R3 the genuine late receipt settles the original attempt",
+        store.finish_action(a["actionId"], claim["attemptToken"], "confirmed", telegram_message_id="777"),
+        True,
+    )
+    check("R3 the original attempt is now confirmed", store.get_action(a["actionId"])["state"], "confirmed")
+    check(
+        "R3 a terminal row cannot be overwritten",
+        store.finish_action(a["actionId"], claim["attemptToken"], "known_failed", error_category="late"),
+        False,
+    )
+    check("R3 the confirmed evidence is preserved", store.get_action(a["actionId"])["state"], "confirmed")
+    store.close()
+
+
+def scenario_binding_identity_immutable():
+    print("\nscenario 12 (R6): binding identity is immutable")
+    store = new_store("binding_identity")
+    ready(store)
+    raises(
+        "R6 changing the Business connection under the same binding id is refused",
+        lambda: store.upsert_binding(BINDING, CLONE_A, BOT, "business", "bc_DIFFERENT"),
+        BindingIdentityError,
+    )
+    row = store.conn.execute(
+        "SELECT business_connection_id FROM engine_bindings WHERE binding_id = ?", (BINDING,)
+    ).fetchone()
+    check("R6 the binding identity is unchanged", row["business_connection_id"], BC)
+    store.close()
+
+
+def scenario_trusted_conversation_scope():
+    print("\nscenario 13 (R6): trusted conversation scope refuses a forged clone")
+    store = new_store("trusted_scope")
+    ready(store)
+    forged = action_payload("turn_forged", clone_id=CLONE_B, conversation_key=conv_key(CLONE_B))
+    raises(
+        "R6 an action for an unbound/forged clone+conversation is refused at registration",
+        lambda: store.register_action(forged, "ai"),
+        ConversationBindingError,
+    )
+    check("R6 nothing was registered", store.action_count(), 0)
+    store.close()
+
+
+def scenario_class_predicates():
+    print("\nscenario 14 (R6): action-class predicates")
+    store = new_store("class_predicates")
+    ready(store)
+
+    def mk(chat_id, source_id, **over):
+        ck = telegram_conversation_key(CLONE_A, BOT, "business", BC, chat_id)
+        store.bind_conversation(ck, BINDING, CLONE_A)
+        return action_payload(source_id, conversation_key=ck, **over)
+
+    store.upsert_binding(BINDING, CLONE_A, BOT, "business", BC, effective_engine="legacy", config_version="cfg_0001")
+    ai_legacy = mk("900200001", "turn_ai_legacy")
+    store.register_action(ai_legacy, "ai")
+    check("R6 an AI action on a legacy binding cannot claim", store.claim_action(ai_legacy["actionId"], "w")["claimed"], False)
+
+    store.upsert_binding(BINDING, CLONE_A, BOT, "business", BC, effective_engine="fastt", config_version="cfg_0001")
+    store.set_binding_controls(BINDING, ai_paused=True)
+    ai_paused = mk("900200002", "turn_ai_paused")
+    store.register_action(ai_paused, "ai")
+    check("R6 an AI action while AI is paused cannot claim", store.claim_action(ai_paused["actionId"], "w")["claimed"], False)
+    store.set_binding_controls(BINDING, ai_paused=False)
+
+    ai_stale = mk("900200003", "turn_ai_input")
+    store.register_action(ai_stale, "ai")
+    # C3: the gate is the CONVERSATION's own revision, so a new message in THIS
+    # conversation (not a creator-wide bump) is what makes the action stale.
+    store.bump_conversation_input_revision(ai_stale["conversationKey"])
+    check("R6 an AI action frozen against a stale conversation input revision cannot claim", store.claim_action(ai_stale["actionId"], "w")["claimed"], False)
+
+    current_revision = int(store.conn.execute(
+        "SELECT current_input_revision FROM engine_bindings WHERE binding_id = ?", (BINDING,)
+    ).fetchone()["current_input_revision"])
+    ai_fresh = mk("900200004", "turn_ai_fresh", expectedInputRevision=current_revision)
+    store.register_action(ai_fresh, "ai")
+    check("R6 an AI action with current input/config can claim", store.claim_action(ai_fresh["actionId"], "w")["claimed"], True)
+
+    manual = mk("900200005", "turn_manual")
+    store.register_action(manual, "manual")
+    check("R6 a manual action without takeover cannot claim", store.claim_action(manual["actionId"], "op")["claimed"], False)
+    # C3: a creator-wide binding flag is NOT permission for manual work in every
+    # chat. Manual eligibility must come from the action's OWN conversation.
+    store.set_binding_controls(BINDING, human_takeover=True)
+    check("C3 a binding-wide takeover flag alone does not authorize manual work",
+          store.claim_action(manual["actionId"], "op")["claimed"], False)
+    store.set_conversation_controls(manual["conversationKey"], takeover_requested=True)
+    check("C3 the action's own effective conversation takeover does authorize manual work",
+          store.claim_action(manual["actionId"], "op")["claimed"], True)
+    store.set_binding_controls(BINDING, human_takeover=False)
+
+    obligation_conv = telegram_conversation_key(CLONE_A, BOT, "business", BC, "900100888")
+    store.bind_conversation(obligation_conv, BINDING, CLONE_A)
+    store.set_binding_controls(BINDING, ai_paused=True, human_takeover=False)
+    store.bump_input_revision(BINDING)
+    # C3: the obligation freezes the EXACT composition the fulfilment may send.
+    store.record_obligation("obl_1", BINDING, obligation_conv, 250, assets=[{"kind": "photo", "assetId": "a1", "revision": "r1"}])
+    fulfill = action_payload(
+        "turn_fulfill", conversation_key=obligation_conv, actionKind="send_media",
+        assets=[{"kind": "photo", "assetId": "a1", "revision": "r1"}],
+    )
+    store.register_action(fulfill, "fulfillment", obligation_id="obl_1")
+    check("R6 a fulfillment action survives the AI pause and the new input", store.claim_action(fulfill["actionId"], "w")["claimed"], True)
+    store.close()
+
+
+def scenario_projection_application():
+    print("\nscenario 15 (C1): the projection mutation, marker and cursor commit together")
+    store = new_store("c1_projection")
+    store.conn.execute("CREATE TABLE projected_config (config_version TEXT NOT NULL)")
+    applied = []
+
+    def apply(e):
+        applied.append(f"{e['sourceSequence']}:{e['sourceEventId']}")
+        store.conn.execute("INSERT INTO projected_config (config_version) VALUES (?)", (e["payload"]["configVersion"],))
+
+    applier = {"supportedKinds": ["creator_config"], "apply": apply}
+
+    def imp(seq, sid, body):
+        return store.import_projection_event(sid, seq, "creator_config", {"configVersion": body}, applier=applier)
+
+    check("C1 a gapped event is stored but not consumed", imp(3, "src_3", "cfg_3")["cursor"], 0)
+    check("C1 a gapped event is not applied", store.projection_applied_at("creator-worker", "src_3"), None)
+    check("C1 position 1 advances the cursor", imp(1, "src_1", "cfg_1")["cursor"], 1)
+    check("C1 position 1 is applied", store.projection_applied_at("creator-worker", "src_1") is not None, True)
+    check("C1 filling the gap consumes through position 3", imp(2, "src_2", "cfg_2")["cursor"], 3)
+    rows = [r["config_version"] for r in store.conn.execute(
+        "SELECT config_version FROM projected_config ORDER BY rowid").fetchall()]
+    check("C1 the target state applied the prefix in order", ",".join(rows), "cfg_1,cfg_2,cfg_3")
+    check("C1 every consumed position is marked applied", "|".join(applied), "1:src_1|2:src_2|3:src_3")
+
+    replay = imp(1, "src_1", "cfg_1")
+    check("C1 an exact replay returns the stored sequence without re-applying",
+          f"{replay['inserted']}/{replay['sourceSequence']}", "False/1")
+    check("C1 the replay did not re-apply", "|".join(applied), "1:src_1|2:src_2|3:src_3")
+
+    before = store.conn.execute("SELECT COUNT(*) AS n FROM projected_config").fetchone()["n"]
+
+    def failing_apply(e):
+        store.conn.execute("INSERT INTO projected_config (config_version) VALUES (?)", (e["payload"]["configVersion"],))
+        raise TelegramStoreError("boom after mutation")
+
+    failing = {"supportedKinds": ["creator_config"], "apply": failing_apply}
+    raises(
+        "C1 a failure after mutation aborts the import",
+        lambda: store.import_projection_event("src_4", 4, "creator_config", {"configVersion": "cfg_4"}, applier=failing),
+        TelegramStoreError,
+    )
+    after = store.conn.execute("SELECT COUNT(*) AS n FROM projected_config").fetchone()["n"]
+    check("C1 the target mutation rolled back", int(after), int(before))
+    check("C1 no envelope survived", store.projection_record("creator-worker", "src_4"), None)
+    check("C1 the cursor did not advance", store.get_cursor(), 3)
+
+    raises(
+        "C1 an unsupported kind is refused, not consumed",
+        lambda: store.import_projection_event("src_x", 5, "purchase", {"a": 1}, applier=applier),
+        TelegramStoreError,
+    )
+    check("C1 no unsupported row was stored", store.projection_record("creator-worker", "src_x"), None)
+
+    # C1: consumption REQUIRES a synchronous transactional applier. An omitted or
+    # invalid applier is refused BEFORE any write, so a position is never consumed
+    # without being applied.
+    requires = new_store("c1_requires_applier")
+    requires.conn.execute("CREATE TABLE projected_config (config_version TEXT NOT NULL)")
+    raises(
+        "C1 an omitted applier refuses to consume a position",
+        lambda: requires.import_projection_event("src_1", 1, "creator_config", {"configVersion": "cfg_1"}),
+        TelegramStoreError,
+    )
+    raises(
+        "C1 an applier without supportedKinds is refused",
+        lambda: requires.import_projection_event("src_1", 1, "creator_config", {"configVersion": "cfg_1"},
+                                                 applier={"apply": lambda e: None}),
+        TelegramStoreError,
+    )
+    raises(
+        "C1 an applier whose apply is not callable is refused",
+        lambda: requires.import_projection_event("src_1", 1, "creator_config", {"configVersion": "cfg_1"},
+                                                 applier={"supportedKinds": ["creator_config"]}),
+        TelegramStoreError,
+    )
+    check("C1 a refused import consumed nothing", requires.get_cursor(), 0)
+    check("C1 a refused import stored nothing", requires.projection_event_count(), 0)
+    recovered = requires.import_projection_event(
+        "src_1", 1, "creator_config", {"configVersion": "cfg_1"},
+        applier={"supportedKinds": ["creator_config"],
+                 "apply": lambda e: requires.conn.execute(
+                     "INSERT INTO projected_config (config_version) VALUES (?)", (e["payload"]["configVersion"],))},
+    )
+    check("C1 the position is consumable once a valid applier is supplied", recovered["cursor"], 1)
+    requires.close()
+
+    # C1: an awaitable application result is refused; the destination state must
+    # remain unchanged (Python coroutine objects do not run their body until awaited,
+    # so the refusal leaves no write behind). A controlled awaitable avoids a
+    # never-awaited-coroutine warning while proving the guard.
+    class _Awaitable:
+        def __await__(self):
+            raise RuntimeError("this awaitable must never be awaited")
+
+    coroutine_store = new_store("c1_coroutine_applier")
+    coroutine_store.conn.execute("CREATE TABLE coroutine_target (v TEXT NOT NULL)")
+    raises(
+        "C1 an awaitable application result is refused",
+        lambda: coroutine_store.import_projection_event(
+            "src_async", 1, "creator_config", {"configVersion": "cfg_a"},
+            applier={"supportedKinds": ["creator_config"], "apply": lambda e: _Awaitable()},
+        ),
+        TelegramStoreError,
+    )
+    check("C1 a refused awaitable applier wrote nothing",
+          int(coroutine_store.conn.execute("SELECT COUNT(*) AS n FROM coroutine_target").fetchone()["n"]), 0)
+    check("C1 a refused awaitable applier consumed nothing", coroutine_store.get_cursor(), 0)
+    check("C1 a refused awaitable applier stored no envelope",
+          coroutine_store.projection_record("creator-worker", "src_async"), None)
+    coroutine_store.close()
+    store.close()
+
+
+def scenario_outcome_evidence():
+    print("\nscenario 16 (C2): outcome evidence, unknown resolution and reconciliation")
+    store = new_store("c2_evidence")
+    ready(store)
+
+    a = action_payload("turn_c2a")
+    store.register_action(a, "ai")
+    qa = store.claim_action(a["actionId"], "w")
+    check("C2 a confirmed send needs a real receipt",
+          store.finish_action(a["actionId"], qa["attemptToken"], "confirmed"), False)
+    check("C2 a refused confirmation leaves the send unresolved", store.get_action(a["actionId"])["state"], "dispatching")
+    check("C2 a real receipt confirms",
+          store.finish_action(a["actionId"], qa["attemptToken"], "confirmed", telegram_message_id="9001"), True)
+    check("C2 the same evidence is idempotent",
+          store.finish_action(a["actionId"], qa["attemptToken"], "confirmed", telegram_message_id="9001"), True)
+    check("C2 conflicting late evidence is rejected",
+          store.finish_action(a["actionId"], qa["attemptToken"], "known_failed", unsent_proof="network timeout"), False)
+    check("C2 the original outcome is preserved", store.get_action(a["actionId"])["state"], "confirmed")
+    check("C2 the conflict is surfaced for reconciliation", store.reconciliation(a["actionId"])["count"], 1)
+
+    b = action_payload("turn_c2b")
+    store.register_action(b, "ai")
+    qb = store.claim_action(b["actionId"], "w")
+    check("C2 held with no unsent proof is refused", store.finish_action(b["actionId"], qb["attemptToken"], "held"), False)
+    check("C2 held with free-text proof is refused",
+          store.finish_action(b["actionId"], qb["attemptToken"], "held", unsent_proof="network timeout"), False)
+    check("C2 held with a proven-unsent classification is accepted",
+          store.finish_action(b["actionId"], qb["attemptToken"], "held", unsent_proof="never_dispatched"), True)
+
+    c = action_payload("turn_c2c")
+    store.register_action(c, "ai")
+    qc = store.claim_action(c["actionId"], "w")
+    store.finish_action(c["actionId"], qc["attemptToken"], "unknown", error_category="network")
+    check("C2 free-text proof cannot release an uncertain attempt",
+          store.finish_action(c["actionId"], qc["attemptToken"], "known_failed", unsent_proof="network timeout"), False)
+    check("C2 even a proven-unsent classification cannot release an uncertain attempt",
+          store.finish_action(c["actionId"], qc["attemptToken"], "known_failed", unsent_proof="never_dispatched"), False)
+    check("C2 an uncertain attempt stays unknown until independent evidence arrives",
+          store.get_action(c["actionId"])["state"], "unknown")
+    check("C2 an empty resolution is refused",
+          store.finish_action(c["actionId"], qc["attemptToken"], "known_failed"), False)
+    check("C2 a recorded operator decision resolves the unknown",
+          store.finish_action(c["actionId"], qc["attemptToken"], "known_failed",
+                              operator={"actor": "operator-1", "reason": "provider confirmed unsent"}), True)
+
+    # C2: a control action (typing) completes with its acknowledgement, never a
+    # fabricated message id, and a normal reply in the same conversation may then
+    # dispatch again.
+    ck = conv_key(chat_id="900200777")
+    store.bind_conversation(ck, BINDING, CLONE_A)
+    typing = action_payload("turn_c2_typing", conversation_key=ck, actionKind="typing", text=None)
+    store.register_action(typing, "ai")
+    qt = store.claim_action(typing["actionId"], "w")
+    check("C2 a typing action is not confirmed by a message id",
+          store.finish_action(typing["actionId"], qt["attemptToken"], "confirmed", telegram_message_id="4242"), False)
+    check("C2 a typing acknowledgement completes the control action",
+          store.finish_action(typing["actionId"], qt["attemptToken"], "confirmed", telegram_ack=True), True)
+    reply = action_payload("turn_c2_reply", conversation_key=ck)
+    store.register_action(reply, "ai")
+    check("C2 a normal reply dispatches after a completed control action",
+          store.claim_action(reply["actionId"], "w")["claimed"], True)
+
+    # C2: operator evidence must be a dict with ACTUAL nonblank STRING actor and
+    # reason. None/bool/number/container/blank are refused - never coerced with
+    # str() - so an uncertain hold cannot be cleared by them.
+    invalid_operators = [
+        ("null", {"actor": None, "reason": None}),
+        ("boolean", {"actor": False, "reason": False}),
+        ("number", {"actor": 0, "reason": 0}),
+        ("container", {"actor": [], "reason": []}),
+        ("blank", {"actor": "   ", "reason": "\t"}),
+        ("missing", {}),
+        ("not-an-object", "operator"),
+    ]
+    for index, (label, op) in enumerate(invalid_operators):
+        conv = conv_key(chat_id=f"900208{index:02d}")
+        store.bind_conversation(conv, BINDING, CLONE_A)
+        x = action_payload(f"turn_c2_badop_{label}", conversation_key=conv)
+        store.register_action(x, "ai")
+        qx = store.claim_action(x["actionId"], "w")
+        store.finish_action(x["actionId"], qx["attemptToken"], "unknown", error_category="network")
+        check(f"C2 invalid operator ({label}) cannot resolve an unknown attempt",
+              store.finish_action(x["actionId"], qx["attemptToken"], "known_failed", operator=op), False)
+        check(f"C2 invalid operator ({label}) leaves the attempt unknown",
+              store.get_action(x["actionId"])["state"], "unknown")
+        successor = action_payload(f"turn_c2_badop_next_{label}", conversation_key=conv)
+        store.register_action(successor, "ai")
+        check(f"C2 invalid operator ({label}) keeps the successor blocked",
+              store.claim_action(successor["actionId"], "w")["claimed"], False)
+
+    # C2: two DISTINCT operator decisions must not compare equal (the old
+    # `f"{actor}:{reason}"` reference made them identical).
+    collision_conv = conv_key(chat_id="900200778")
+    store.bind_conversation(collision_conv, BINDING, CLONE_A)
+    coll = action_payload("turn_c2_collision", conversation_key=collision_conv)
+    store.register_action(coll, "ai")
+    qcol = store.claim_action(coll["actionId"], "w")
+    store.finish_action(coll["actionId"], qcol["attemptToken"], "unknown", error_category="network")
+    check("C2 the first operator decision resolves the unknown",
+          store.finish_action(coll["actionId"], qcol["attemptToken"], "known_failed",
+                              operator={"actor": "operator:a", "reason": "b"}), True)
+    check("C2 the exact same operator decision is an idempotent replay",
+          store.finish_action(coll["actionId"], qcol["attemptToken"], "known_failed",
+                              operator={"actor": "operator:a", "reason": "b"}), True)
+    check("C2 a colliding-but-different operator decision is not an identical replay",
+          store.finish_action(coll["actionId"], qcol["attemptToken"], "known_failed",
+                              operator={"actor": "operator", "reason": "a:b"}), False)
+    check("C2 the different decision is recorded for reconciliation",
+          store.reconciliation(coll["actionId"])["count"], 1)
+    check("C2 the first terminal outcome is retained", store.get_action(coll["actionId"])["state"], "known_failed")
+    store.close()
+
+
+def scenario_conversation_controls_and_fulfilment():
+    print("\nscenario 17 (C3): conversation-scoped controls and exact fulfilment")
+    store = new_store("c3_controls")
+    ready(store)
+
+    def bind(chat_id):
+        ck = telegram_conversation_key(CLONE_A, BOT, "business", BC, chat_id)
+        store.bind_conversation(ck, BINDING, CLONE_A)
+        return ck
+
+    conv_a = bind("900300001")
+    conv_b = bind("900300002")
+
+    a = action_payload("turn_c3a", conversation_key=conv_a)
+    store.register_action(a, "ai")
+    store.bump_conversation_input_revision(conv_b)
+    check("C3 new input for B leaves A valid", store.claim_action(a["actionId"], "w")["claimed"], True)
+
+    conv_e = bind("900300005")
+    e = action_payload("turn_c3e", conversation_key=conv_e)
+    store.register_action(e, "ai")
+    store.bump_conversation_input_revision(conv_e)
+    check("C3 new input in A's own conversation stales its reply", store.claim_action(e["actionId"], "w")["claimed"], False)
+
+    conv_c = bind("900300003")
+    c = action_payload("turn_c3c", conversation_key=conv_c)
+    store.register_action(c, "ai")
+    store.set_conversation_controls(conv_c, takeover_requested=True)
+    check("C3 takeover makes the conversation's takeover effective",
+          store.conversation_controls(conv_c)["takeoverEffective"], True)
+    check("C3 takeover of C blocks AI in C", store.claim_action(c["actionId"], "w")["claimed"], False)
+    manual_c = action_payload("turn_c3mc", conversation_key=conv_c)
+    store.register_action(manual_c, "manual")
+    check("C3 takeover of C authorizes manual work in C", store.claim_action(manual_c["actionId"], "op")["claimed"], True)
+    manual_other = action_payload("turn_c3ma", conversation_key=conv_e)
+    store.register_action(manual_other, "manual")
+    check("C3 takeover of C does not authorize manual work elsewhere",
+          store.claim_action(manual_other["actionId"], "op")["claimed"], False)
+
+    conv_d = bind("900300004")
+    d = action_payload("turn_c3d", conversation_key=conv_d)
+    store.register_action(d, "ai")
+    qd = store.claim_action(d["actionId"], "w")
+    store.set_conversation_controls(conv_d, takeover_requested=True)
+    check("C3 a pending takeover is not effective while a send is unresolved",
+          store.conversation_controls(conv_d)["takeoverEffective"], False)
+    store.finish_action(d["actionId"], qd["attemptToken"], "confirmed", telegram_message_id="8200")
+    check("C3 takeover becomes effective once the send resolves",
+          store.conversation_controls(conv_d)["takeoverEffective"], True)
+
+    conv_f = bind("900300006")
+    g1 = action_payload("turn_c3_g1", conversation_key=conv_f, actionKind="send_media",
+                        assets=[{"kind": "photo", "assetId": "p1", "revision": "r1"}])
+    store.register_action(g1, "fulfillment")
+    check("C3 an omitted purchase id records no association", store.get_action(g1["actionId"])["obligation_id"], None)
+    check("C3 no obligation => no fulfilment", store.claim_action(g1["actionId"], "w")["claimed"], False)
+
+    conv_g = bind("900300007")
+    store.record_obligation("obl_c3", BINDING, conv_g, 100, assets=[{"kind": "photo", "assetId": "p1", "revision": "r1"}])
+    g2 = action_payload("turn_c3_g2", conversation_key=conv_g, actionKind="send_media",
+                        assets=[{"kind": "photo", "assetId": "p2", "revision": "r1"}])
+    registration_refuses("C3 an explicit id whose frozen composition differs is refused at registration",
+                         lambda: store.register_action(g2, "fulfillment", obligation_id="obl_c3"),
+                         "does not match")
+
+    conv_h = bind("900300008")
+    store.record_obligation("obl_c3h", BINDING, conv_h, 100, assets=[{"kind": "photo", "assetId": "p1", "revision": "r1"}])
+    g3 = action_payload("turn_c3_g3", conversation_key=conv_h, actionKind="send_media",
+                        assets=[{"kind": "photo", "assetId": "p1", "revision": "r1"}])
+    store.register_action(g3, "fulfillment", obligation_id="obl_c3h")
+    qg3 = store.claim_action(g3["actionId"], "w")
+    check("C3 the exact composition authorizes fulfilment", qg3["claimed"], True)
+    store.finish_action(g3["actionId"], qg3["attemptToken"], "confirmed", telegram_message_id="8300")
+    g4 = action_payload("turn_c3_g4", conversation_key=conv_h, actionKind="send_media",
+                        assets=[{"kind": "photo", "assetId": "p1", "revision": "r1"}])
+    registration_refuses("C3 a fulfilled obligation cannot authorize a second fulfilment",
+                         lambda: store.register_action(g4, "fulfillment", obligation_id="obl_c3h"),
+                         "not outstanding")
+
+    # C3: the claim RESERVES the obligation; only verified delivery settles it.
+    conv_i = bind("900300009")
+    store.record_obligation("obl_i", BINDING, conv_i, 100, assets=[{"kind": "photo", "assetId": "pz", "revision": "r1"}])
+
+    def obligation_state(oid):
+        row = store.conn.execute(
+            "SELECT state, action_id FROM paid_obligations WHERE obligation_id = ?", (oid,)
+        ).fetchone()
+        return (row["state"], row["action_id"])
+
+    check("C3 the recorded obligation starts outstanding", obligation_state("obl_i")[0], "outstanding")
+    h1 = action_payload("turn_c3_h1", conversation_key=conv_i, actionKind="send_media",
+                        assets=[{"kind": "photo", "assetId": "pz", "revision": "r1"}])
+    store.register_action(h1, "fulfillment", obligation_id="obl_i")
+    qh1 = store.claim_action(h1["actionId"], "w")
+    check("C3 the exact composition authorizes the claim", qh1["claimed"], True)
+    check("C3 the claim reserves rather than fulfils", obligation_state("obl_i")[0], "reserved")
+    check("C3 the reservation is tied to the claiming action", obligation_state("obl_i")[1], h1["actionId"])
+
+    # An unresolved send holds the conversation, so a duplicate cannot double-claim.
+    dup = action_payload("turn_c3_h1_dup", conversation_key=conv_i, actionKind="send_media",
+                         assets=[{"kind": "photo", "assetId": "pz", "revision": "r1"}])
+    registration_refuses("C3 a reserved purchase cannot be re-bound by a duplicate",
+                         lambda: store.register_action(dup, "fulfillment", obligation_id="obl_i"),
+                         "not outstanding")
+
+    # A proven-unsent result (from a dispatching attempt) releases the reservation
+    # so a separately authorized replacement can still deliver the paid work.
+    check("C3 a proven-unsent result is accepted",
+          store.finish_action(h1["actionId"], qh1["attemptToken"], "known_failed", unsent_proof="never_dispatched"), True)
+    check("C3 proven-unsent returns the obligation to outstanding", obligation_state("obl_i")[0], "outstanding")
+    check("C3 the released obligation is outstanding again for recovery", store.obligation_count(conv_i), 1)
+    replacement = action_payload("turn_c3_h1b", conversation_key=conv_i, actionKind="send_media",
+                                 assets=[{"kind": "photo", "assetId": "pz", "revision": "r1"}])
+    store.register_action(replacement, "fulfillment", obligation_id="obl_i")
+    qrep = store.claim_action(replacement["actionId"], "w")
+    check("C3 the paid work is recoverable by an authorized replacement", qrep["claimed"], True)
+    store.finish_action(replacement["actionId"], qrep["attemptToken"], "confirmed", telegram_message_id="8400")
+    check("C3 a confirmed delivery settles the obligation", obligation_state("obl_i")[0], "fulfilled")
+    check("C3 a duplicate receipt does not settle twice",
+          store.finish_action(replacement["actionId"], qrep["attemptToken"], "confirmed", telegram_message_id="8400"), True)
+    check("C3 the settled obligation is no longer outstanding", store.obligation_count(conv_i), 0)
+    after = action_payload("turn_c3_h1c", conversation_key=conv_i, actionKind="send_media",
+                           assets=[{"kind": "photo", "assetId": "pz", "revision": "r1"}])
+    registration_refuses("C3 a settled obligation cannot authorize a second fulfilment",
+                         lambda: store.register_action(after, "fulfillment", obligation_id="obl_i"),
+                         "not outstanding")
+
+    # C3: an UNCERTAIN outcome keeps the reservation and the conversation hold, so
+    # the obligation is neither lost nor doubled.
+    conv_n = bind("900300012")
+    store.record_obligation("obl_n", BINDING, conv_n, 100, assets=[{"kind": "photo", "assetId": "pn", "revision": "r1"}])
+    hn = action_payload("turn_c3_hn", conversation_key=conv_n, actionKind="send_media",
+                        assets=[{"kind": "photo", "assetId": "pn", "revision": "r1"}])
+    store.register_action(hn, "fulfillment", obligation_id="obl_n")
+    qn = store.claim_action(hn["actionId"], "w")
+    store.finish_action(hn["actionId"], qn["attemptToken"], "unknown", error_category="network")
+    check("C3 an uncertain outcome keeps the reservation", obligation_state("obl_n")[0], "reserved")
+    check("C3 an uncertain outcome is not counted as outstanding work", store.obligation_count(conv_n), 0)
+    dup_n = action_payload("turn_c3_hn_dup", conversation_key=conv_n, actionKind="send_media",
+                           assets=[{"kind": "photo", "assetId": "pn", "revision": "r1"}])
+    registration_refuses("C3 an uncertain reservation cannot be re-bound by a duplicate",
+                         lambda: store.register_action(dup_n, "fulfillment", obligation_id="obl_n"),
+                         "not outstanding")
+
+    # C3: an action registered with no obligation is never awakened by a LATER
+    # purchase of the same asset.
+    conv_j = bind("900300010")
+    unassoc = action_payload("turn_c3_unassoc", conversation_key=conv_j, actionKind="send_media",
+                             assets=[{"kind": "photo", "assetId": "qa", "revision": "r1"}])
+    store.register_action(unassoc, "fulfillment")
+    check("C3 an unassociated fulfilment cannot claim", store.claim_action(unassoc["actionId"], "w")["claimed"], False)
+    store.record_obligation("obl_j", BINDING, conv_j, 100, assets=[{"kind": "photo", "assetId": "qa", "revision": "r1"}])
+    check("C3 a later purchase of the same asset does not awaken an unassociated action",
+          store.claim_action(unassoc["actionId"], "w")["claimed"], False)
+
+    # C3: two existing identical-media purchases. Purchase identity is the trusted
+    # id, never inferred: omitted identity consumes neither; an explicit id reserves
+    # and settles ONLY that purchase.
+    conv_ab = bind("900300013")
+    same = [{"kind": "photo", "assetId": "same", "revision": "r1"}]
+    store.record_obligation("purchase_A", BINDING, conv_ab, 100, assets=same)
+    store.record_obligation("purchase_B", BINDING, conv_ab, 100, assets=same)
+    ambiguous = action_payload("turn_c3_ambig", conversation_key=conv_ab, actionKind="send_media", assets=same)
+    store.register_action(ambiguous, "fulfillment")
+    check("C3 an omitted purchase id is not guessed from identical assets",
+          store.get_action(ambiguous["actionId"])["obligation_id"], None)
+    check("C3 an ambiguous fulfilment cannot claim", store.claim_action(ambiguous["actionId"], "w")["claimed"], False)
+    check("C3 neither identical purchase was consumed", store.obligation_count(conv_ab), 2)
+    explicit_b = action_payload("turn_c3_explicit_b", conversation_key=conv_ab, actionKind="send_media", assets=same)
+    store.register_action(explicit_b, "fulfillment", obligation_id="purchase_B")
+    q_b = store.claim_action(explicit_b["actionId"], "w")
+    check("C3 an explicit purchase id claims that purchase", q_b["claimed"], True)
+    check("C3 only the explicit purchase is reserved", obligation_state("purchase_B")[0], "reserved")
+    check("C3 the other identical purchase stays outstanding", obligation_state("purchase_A")[0], "outstanding")
+    store.finish_action(explicit_b["actionId"], q_b["attemptToken"], "confirmed", telegram_message_id="8500")
+    check("C3 the explicit purchase settles", obligation_state("purchase_B")[0], "fulfilled")
+    check("C3 the other identical purchase is still outstanding", obligation_state("purchase_A")[0], "outstanding")
+    retarget = action_payload("turn_c3_explicit_b", conversation_key=conv_ab, actionKind="send_media", assets=same)
+    store.register_action(retarget, "fulfillment", obligation_id="purchase_A")
+    check("C3 a conflicting association cannot silently retarget an action",
+          store.get_action(retarget["actionId"])["obligation_id"], "purchase_B")
+
+    # C3: a creator-wide binding flag alone must not authorize manual work.
+    conv_k = bind("900300011")
+    manual_k = action_payload("turn_c3_mk", conversation_key=conv_k)
+    store.register_action(manual_k, "manual")
+    store.set_binding_controls(BINDING, human_takeover=True)
+    check("C3 a binding-wide takeover flag alone does not authorize manual work in a conversation",
+          store.claim_action(manual_k["actionId"], "op")["claimed"], False)
+    check("C3 the binding flag does not make that conversation's takeover effective",
+          store.conversation_controls(conv_k)["takeoverEffective"], False)
+    store.set_binding_controls(BINDING, human_takeover=False)
+    store.close()
+
+
+def scenario_lease_and_invocation_journal():
+    print("\nextra: single-writer lease and an interrupted invocation surviving a reopen")
+    path = _TMP_ROOT / "lease.sqlite"
+    first = TelegramContractStore(str(path))
+    first.initialize()
+    check("first worker takes the lease", first.acquire_lease("native-db", "worker-a", ttl_seconds=60), True)
+    check("the lease reports its owner", first.lease_owner("native-db"), "worker-a")
+    first.record_invocation("inv_1", "turn_0001", "started")
+    first.record_invocation("inv_1", "turn_0001", "interrupted")
+    check("an interrupted invocation is recorded as interrupted", first.invocation_status("inv_1"), "interrupted")
+    first.close()
+
+    second = TelegramContractStore(str(path))
+    second.initialize()
+    check("the interrupted invocation survives a reopen", second.invocation_status("inv_1"), "interrupted")
+    check("a second worker is refused the still-live lease", second.acquire_lease("native-db", "worker-b", ttl_seconds=60), False)
+    second.close()
+
+
+def main() -> None:
+    scenario_schema()
+    scenario_duplicate_and_conflicting_intake()
+    scenario_recoverable_bodies()
+    scenario_same_user_two_creators()
+    scenario_same_message_id_two_chats()
+    scenario_malformed_ids_and_timestamps()
+    scenario_stale_ownership_revision()
+    scenario_conflicting_action_payloads()
+    scenario_transaction_rollback()
+    scenario_competing_claimants()
+    scenario_projection_sequenced_idempotent()
+    scenario_projection_reopen_redelivery()
+    scenario_arbitration_and_attempt_bound_completion()
+    scenario_late_receipt()
+    scenario_binding_identity_immutable()
+    scenario_trusted_conversation_scope()
+    scenario_class_predicates()
+    scenario_projection_application()
+    scenario_outcome_evidence()
+    scenario_conversation_controls_and_fulfilment()
+    scenario_lease_and_invocation_journal()
+
+
+try:
+    main()
+finally:
+    shutil.rmtree(_TMP_ROOT, ignore_errors=True)
+
+print()
+if failures:
+    print(f"{len(failures)} FAILED")
+    for f in failures:
+        print(f"   - {f}")
+    sys.exit(1)
+print("all cases passed (telegram store)")

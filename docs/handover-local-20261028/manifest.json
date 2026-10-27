@@ -1,0 +1,992 @@
+[
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/automations/_common.py",
+    "savedPath": "inflowwkiller/service/automations/_common.py.source.txt",
+    "sha256": "30c58d545b862e0e61f699a588a3ad93e29eb804aca6a9892d3a7b8a99d3dde5",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/automations/ai_chatter.py",
+    "savedPath": "inflowwkiller/service/automations/ai_chatter.py.source.txt",
+    "sha256": "9d9860112cb3a98e756111ad93abd20d6ba3df7e0631d62ff6b2a41fb286a2a7",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/db/engine.py",
+    "savedPath": "inflowwkiller/service/db/engine.py.source.txt",
+    "sha256": "9e0b649559cb1207e2ae25cca72afc916bd3320eab6758e9f5ad26b669b48b51",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/db/models.py",
+    "savedPath": "inflowwkiller/service/db/models.py.source.txt",
+    "sha256": "d9f8906c60812c438db02a675ff927376ae7a8c0b2ea4effa8a1cf6a1810f8e7",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/event_transcoder.py",
+    "savedPath": "inflowwkiller/service/event_transcoder.py.source.txt",
+    "sha256": "3586f1137386e57a5b7ec37f5fffb0095b1ae8d98ebbe45dd2b1d5ea9c53d961",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/llm_client.py",
+    "savedPath": "inflowwkiller/service/llm_client.py.source.txt",
+    "sha256": "0094ab4dfb161655d5b855f27949bdef90830d0cfed838a5da1ced8b4a32f00a",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/llm_models.py",
+    "savedPath": "inflowwkiller/service/llm_models.py.source.txt",
+    "sha256": "1d4d8839c2b3f15672c335e6721db8e4cc03d87ac7e0b4581bcc1c0d8e2486ec",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/llm_providers.py",
+    "savedPath": "inflowwkiller/service/llm_providers.py.source.txt",
+    "sha256": "a68492da676342649201326e21e8558a6ce71136a41271a9f898dcff01dea772",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/secrets_store.py",
+    "savedPath": "inflowwkiller/service/secrets_store.py.source.txt",
+    "sha256": "d37a1e5e8a75b8cc734bb1c0606d6581123fe290a505e46b1114d8347d526caa",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/server.py",
+    "savedPath": "inflowwkiller/service/server.py.source.txt",
+    "sha256": "dd297e119719d689b06172fbf37323521fe13ad43f76d02a863d3cffcbcd21be",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "app/AGENTS.md",
+    "savedPath": "inflowwkiller/app/AGENTS.md.source.txt",
+    "sha256": "063098f6cb31bb44c6f8fbea25b3876de7ee1e5f7d00a50dbab506f6415eb7f0",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/db/migrations/versions/20261015_0100_twin_bridge_intake.py",
+    "savedPath": "inflowwkiller/service/db/migrations/versions/20261015_0100_twin_bridge_intake.py.source.txt",
+    "sha256": "fce13fb470671d94f61d9ebded123571eda45924457d9cc1ce4761dd04e1c5f4",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/db/migrations/versions/20261016_0100_twin_bridge_turns.py",
+    "savedPath": "inflowwkiller/service/db/migrations/versions/20261016_0100_twin_bridge_turns.py.source.txt",
+    "sha256": "a8f5efa802ea8f013e2efc9e24214dac6a12e07fc451cc38a973a85f7163449d",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/db/migrations/versions/20261016_0200_twin_bridge_reserved.py",
+    "savedPath": "inflowwkiller/service/db/migrations/versions/20261016_0200_twin_bridge_reserved.py.source.txt",
+    "sha256": "7b14ff494915dda8c4ad11e13fd3f7c0de2fb7438fb92b7adac3b65f6a311d70",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/native_pilot/README.md",
+    "savedPath": "inflowwkiller/service/native_pilot/README.md.source.txt",
+    "sha256": "2ec0405c3c9287b55a025ee67497fdf95109265d9daa527286d3c07d9cc5ccee",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/native_pilot/__init__.py",
+    "savedPath": "inflowwkiller/service/native_pilot/__init__.py.source.txt",
+    "sha256": "01a8759441cc06007978af9999ed5640c3313cd4b6f728194f39f91f971139d5",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/native_pilot/control.py",
+    "savedPath": "inflowwkiller/service/native_pilot/control.py.source.txt",
+    "sha256": "2513144f094ed617fe81a5d52dcbc58ded369ab1dd44a8a748a50959ab88a043",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/native_pilot/engine.py",
+    "savedPath": "inflowwkiller/service/native_pilot/engine.py.source.txt",
+    "sha256": "8bd54481ba1fb13f60c2ebd8fe548dd43a89b15f76140472bceef50fa4bb0838",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/native_pilot/ledger.py",
+    "savedPath": "inflowwkiller/service/native_pilot/ledger.py.source.txt",
+    "sha256": "10373c1968cb397a8312d6ee6a82014e374313082a2ded96d46e283fee5800cd",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/native_pilot/model.py",
+    "savedPath": "inflowwkiller/service/native_pilot/model.py.source.txt",
+    "sha256": "1483320effbf5297b4273820162a8ba63aad44721dc7edb3a0b102cc635c1a3b",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/native_pilot/runner.py",
+    "savedPath": "inflowwkiller/service/native_pilot/runner.py.source.txt",
+    "sha256": "48733449d7cb943cd7d5aa61a6478222d844d100c6b20e2dd0a522edd37ad3e9",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_contract/__init__.py",
+    "savedPath": "inflowwkiller/service/telegram_contract/__init__.py.source.txt",
+    "sha256": "43338c96c88448299d8cc58f0a70ae6510f1a96c8194fa422c1ed7f94aad31e5",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_contract/contract.py",
+    "savedPath": "inflowwkiller/service/telegram_contract/contract.py.source.txt",
+    "sha256": "8959f14b281b3dda58173c53b4e17d53571c72754f4c0d3849cae740d5e9a8cd",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_contract/fixtures/telegram-contract.cases.json",
+    "savedPath": "inflowwkiller/service/telegram_contract/fixtures/telegram-contract.cases.json.source.txt",
+    "sha256": "cf88cca455cb4a15ebaccabd6625663a16f6d2316090b759056c459007f7487b",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_contract/identity.py",
+    "savedPath": "inflowwkiller/service/telegram_contract/identity.py.source.txt",
+    "sha256": "e79f434dbe02535f72d793283f725e8aaeaba4ae961ce96546119567f6971423",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_contract/schema.sql",
+    "savedPath": "inflowwkiller/service/telegram_contract/schema.sql.source.txt",
+    "sha256": "5bc79af3599322d86d62cab47ad19b4408e5c5ca5afa58924cee8dbb185ef5a3",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_contract/store.py",
+    "savedPath": "inflowwkiller/service/telegram_contract/store.py.source.txt",
+    "sha256": "2f496555fbccf3cb85a918c4a3da137c2193a56ba9c58155778e880871f306a4",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_runtime/__init__.py",
+    "savedPath": "inflowwkiller/service/telegram_runtime/__init__.py.source.txt",
+    "sha256": "1304af83e5971699b423f7f757b76ab4884ca378a722fffe855dbca7049d8261",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_runtime/capabilities.py",
+    "savedPath": "inflowwkiller/service/telegram_runtime/capabilities.py.source.txt",
+    "sha256": "15eb50f90fe7d24ffddb05077c2559202cdaac338ba57e8c82b6e43714be6f8c",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_runtime/projection.py",
+    "savedPath": "inflowwkiller/service/telegram_runtime/projection.py.source.txt",
+    "sha256": "298fc88a53583860b93e3ce3d02829b76a5182824ceb3f9556f85194ccf1f66c",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/telegram_runtime/worker.py",
+    "savedPath": "inflowwkiller/service/telegram_runtime/worker.py.source.txt",
+    "sha256": "2a5167f22f11eaa0a0ce74a0f5757972dc08e2d6dc984239d1c1aecb1375fb97",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/helpers/twin_bridge_server.mjs",
+    "savedPath": "inflowwkiller/service/tests/helpers/twin_bridge_server.mjs.source.txt",
+    "sha256": "5de0dcd9630d5a7dc3d92a2da7ca00d0730d324993636f14f61d6e9b0e664ab3",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_native_pilot_engine.py",
+    "savedPath": "inflowwkiller/service/tests/test_native_pilot_engine.py.source.txt",
+    "sha256": "bd3aa9188da71df14bf9cdc28f6bea76b56ecb425f14bb85fe41fa366b70e8c2",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_native_pilot_ledger.py",
+    "savedPath": "inflowwkiller/service/tests/test_native_pilot_ledger.py.source.txt",
+    "sha256": "d2b583ed8c6d3c82aafa2de1315faea117e188dfd06a92cb479ffe18d50f5a07",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_native_pilot_model.py",
+    "savedPath": "inflowwkiller/service/tests/test_native_pilot_model.py.source.txt",
+    "sha256": "78ffe5d3ec4cbb17d4fe47a72e3ecd86a7d11dfa67514760f35da3678ca5c2e3",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_native_pilot_runner.py",
+    "savedPath": "inflowwkiller/service/tests/test_native_pilot_runner.py.source.txt",
+    "sha256": "45e834a8592bc5e5d6ee4a391e28a0712778ba229fd68da32dfcd01e61ee6712",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_telegram_contract.py",
+    "savedPath": "inflowwkiller/service/tests/test_telegram_contract.py.source.txt",
+    "sha256": "8303181acefd6d326327a3b913d5073f6bce8bdbfa3671d9ed158b450db060b7",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_telegram_provider_policy.py",
+    "savedPath": "inflowwkiller/service/tests/test_telegram_provider_policy.py.source.txt",
+    "sha256": "61bb2b39f79d81ef436c7c00ffa151a7501c2113c03aead3f721906c78083cc1",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_telegram_runtime_projection.py",
+    "savedPath": "inflowwkiller/service/tests/test_telegram_runtime_projection.py.source.txt",
+    "sha256": "b902716f719029220c013dd6145980778a2ccc518fc40eb23f305187549711c4",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_telegram_runtime_worker.py",
+    "savedPath": "inflowwkiller/service/tests/test_telegram_runtime_worker.py.source.txt",
+    "sha256": "c5bd33e274b86644a290d6c9442477ac0ad3365134d6f5461859f0b98c930818",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_telegram_store.py",
+    "savedPath": "inflowwkiller/service/tests/test_telegram_store.py.source.txt",
+    "sha256": "c17bd6cd4673e3178f7c9b1bdd101400251ca60d99ea19cfdb79a19c938bdb89",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_delivery.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_delivery.py.source.txt",
+    "sha256": "b2a15f2b3856154f85afedc9b70b5fc59a8522d3568ead51b4e87e7111332c00",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_history.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_history.py.source.txt",
+    "sha256": "4974258b87bf9284b43ae87f03e4734546f737f295b14951b8493e4fedfc258b",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_intake.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_intake.py.source.txt",
+    "sha256": "c1cbd10ceccf5c7b41ac6a522ee159f0fcd894ba5bd27c45bf2916ee7f71c7af",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_ownership.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_ownership.py.source.txt",
+    "sha256": "54d885171f27959ca2d281628ea920379ae64b3c939e7469c8f21f5f780f0c1b",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_pilot.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_pilot.py.source.txt",
+    "sha256": "080cc4032c01180aee9f486eaf066c1e43ec46bfbb560011c67d2920f72c9080",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_repeat.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_repeat.py.source.txt",
+    "sha256": "9f4d9ff0e2cead00b5712810c302fc50b9be5d74e842e03134b8a31f6edd4954",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_repeat_runner.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_repeat_runner.py.source.txt",
+    "sha256": "73ab44eda6a6d82c7532bec558bb8c3046ccf12b26bbe88c65f2598a76ac3948",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_runner.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_runner.py.source.txt",
+    "sha256": "831a2253348126d999a5048e9687bb2f5aeabc0027310a87616e9af82845079d",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_turns.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_turns.py.source.txt",
+    "sha256": "f228c0f7bace06b9c54d0eac07f8e208153e4a4f05a6b829b0dc8a6eac2801e7",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/README.md",
+    "savedPath": "inflowwkiller/service/twin_bridge/README.md.source.txt",
+    "sha256": "d5e6eea319b137d2537bb2bfe7acffd48f5ea1e98a18fdb782eb01e97a25a188",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/__init__.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/__init__.py.source.txt",
+    "sha256": "fc7ccf9fd868cfa8e8e9406f159a0ec5a54c87703a2923edf2fbb965c856cd12",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/cli.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/cli.py.source.txt",
+    "sha256": "df6c030cb8723da742159ebb4a3aa904cae1ea80faaf8aa52e10b57a0b86bd39",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/client.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/client.py.source.txt",
+    "sha256": "184bed65ace443526a9b776b0fd8b61b0f54a09e2087484abe857207bf74ee06",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/contract.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/contract.py.source.txt",
+    "sha256": "4d697f1f53e51f1d635b521829fcc7c09941e9c57382451f4c119144ddff4f2a",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/coordination.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/coordination.py.source.txt",
+    "sha256": "931be87e60d971839c4709509a494c63e2ff1187db842d619bc909da6cbb8975",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/delivery.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/delivery.py.source.txt",
+    "sha256": "1af7450c6bd365345e88cd5c7badbffdfddc131dcc09ba1948a7da4171f1e894",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/errors.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/errors.py.source.txt",
+    "sha256": "2befbcda2a7714342915cc1e689aa41c10738439208672e441c47c79d80ec243",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/intake.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/intake.py.source.txt",
+    "sha256": "0b9e1c81cc88819635787a7c8057d166516a5709d4c3f80caad492abe58254dd",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/normalize.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/normalize.py.source.txt",
+    "sha256": "52ae7006116a1d6efc6d14ab62ead28db513f6a1c4c23e1a469f894ae981bab5",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/pilot.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/pilot.py.source.txt",
+    "sha256": "6ad8fbc9927721c581ae47e2b77e15a34e19164b9c53b241f2f1cd66468dc9d2",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/platform.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/platform.py.source.txt",
+    "sha256": "51be95c87322b70036bafe067b31980faf185039a9ca829b3bf645624abdc00a",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/reconcile.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/reconcile.py.source.txt",
+    "sha256": "f46a574f2143914f36cfe7c79d75bf519a9ad6867dff102174844c630ed5fadb",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/repeat.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/repeat.py.source.txt",
+    "sha256": "87ed0266b420288a5c2d738ddd73d3cf0bd7b7a96a931b0beb71f3c148ca580e",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/repeat_runner.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/repeat_runner.py.source.txt",
+    "sha256": "ebd7917f36272973f448a194b1e65ce18562f4bd98d946a7ee07a18d05259f4f",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/scope.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/scope.py.source.txt",
+    "sha256": "1427ce6d9b5032822c4a907cdb60e8e605d8276d1801d8d86c7ecc9e79b3b90e",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/turns.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/turns.py.source.txt",
+    "sha256": "345e86e6c3815c0e7baabfc577bc6d8626b2b3b9dcc28863bb853aaf9619ed46",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/twin_bridge/worker.py",
+    "savedPath": "inflowwkiller/service/twin_bridge/worker.py.source.txt",
+    "sha256": "2c07f2d253ea1493ae8915a90b67d552df6406fcb583a47609a711c2787b23cf",
+    "untracked": true
+  },
+  {
+    "worktree": "agency-scale-20261025",
+    "base": "4ebd31ec1abaad983f1718580f8b4df3ba37e896",
+    "branch": "refs/heads/codex/agency-scale-20261025",
+    "originalPath": ".github/workflows/agency-scale.yml",
+    "savedPath": "agency-scale-20261025/.github/workflows/agency-scale.yml.source.txt",
+    "sha256": "601e3a57cbead81f25028a8264275f7d7e33592f66861896b63da8dc41a03922",
+    "untracked": false
+  },
+  {
+    "worktree": "agency-scale-20261025",
+    "base": "4ebd31ec1abaad983f1718580f8b4df3ba37e896",
+    "branch": "refs/heads/codex/agency-scale-20261025",
+    "originalPath": ".github/workflows/fleet-capacity.yml",
+    "savedPath": "agency-scale-20261025/.github/workflows/fleet-capacity.yml.source.txt",
+    "sha256": "d171d8ad9c5e028982457fe1b70f60ab69317c2f1a36e11a72b6191f77a15794",
+    "untracked": false
+  },
+  {
+    "worktree": "agency-scale-20261025",
+    "base": "4ebd31ec1abaad983f1718580f8b4df3ba37e896",
+    "branch": "refs/heads/codex/agency-scale-20261025",
+    "originalPath": "service/native_pilot/runner.py",
+    "savedPath": "agency-scale-20261025/service/native_pilot/runner.py.source.txt",
+    "sha256": "6b880d42a15cd0650bf107c9fd12d12ca00cbfcb82c2d834196f03f1df75ab76",
+    "untracked": false
+  },
+  {
+    "worktree": "agency-scale-20261025",
+    "base": "4ebd31ec1abaad983f1718580f8b4df3ba37e896",
+    "branch": "refs/heads/codex/agency-scale-20261025",
+    "originalPath": "service/native_pilot/service.py",
+    "savedPath": "agency-scale-20261025/service/native_pilot/service.py.source.txt",
+    "sha256": "61796a302f51f3eae2ecf2f525f22d0fe45ac17db2fefe1aa1b1aa4c3ccd5107",
+    "untracked": false
+  },
+  {
+    "worktree": "agency-scale-20261025",
+    "base": "4ebd31ec1abaad983f1718580f8b4df3ba37e896",
+    "branch": "refs/heads/codex/agency-scale-20261025",
+    "originalPath": "service/tests/test_native_pilot_account_locks_pg.py",
+    "savedPath": "agency-scale-20261025/service/tests/test_native_pilot_account_locks_pg.py.source.txt",
+    "sha256": "ae2150dd05f08c73f26f7481db7f084176942efe8d9fec4a184dbf3c7ba7f0a3",
+    "untracked": false
+  },
+  {
+    "worktree": "agency-scale-20261025",
+    "base": "4ebd31ec1abaad983f1718580f8b4df3ba37e896",
+    "branch": "refs/heads/codex/agency-scale-20261025",
+    "originalPath": "service/twin_bridge/coordination.py",
+    "savedPath": "agency-scale-20261025/service/twin_bridge/coordination.py.source.txt",
+    "sha256": "3f7db67a5b8c655612350ab8df8c070778b850669ff599ceee5b0722cd691737",
+    "untracked": false
+  },
+  {
+    "worktree": "agency-scale-20261025",
+    "base": "4ebd31ec1abaad983f1718580f8b4df3ba37e896",
+    "branch": "refs/heads/codex/agency-scale-20261025",
+    "originalPath": "service/twin_bridge/store.py",
+    "savedPath": "agency-scale-20261025/service/twin_bridge/store.py.source.txt",
+    "sha256": "61211a470c64941df6f47dcd63920d9ac2deece7b3bfe0d5b87454ef7c1feb02",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/db/schema.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/db/schema.py.source.txt",
+    "sha256": "7177a03113c248e49c65b23d0b0520b6582a516e12c4fb31ca32395df3abf18a",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/native_pilot/service.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/native_pilot/service.py.source.txt",
+    "sha256": "da76d2d3efdd497843a6d7f0bf043e3011ac91e71f3290ebe226c98b45fb990b",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_app.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_app.py.source.txt",
+    "sha256": "cbb2e8c2fe96908ab7f0476313718cb6ab0a4fdea338412a1fadfbaa9ef73044",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/campaign_reporting.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/campaign_reporting.py.source.txt",
+    "sha256": "6ddc5f4b2854e418d4f1e810992bd1c2fbf816206d6ef4d054a275d62a5146a5",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/campaigns.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/campaigns.py.source.txt",
+    "sha256": "dd80cc73b6072eba0d90595060fd45ab1ac42bd5ae0fdb1be25f27b68809e241",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/fastt_manual.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/fastt_manual.py.source.txt",
+    "sha256": "5f76cd94ab1aa1c8ece87ca545a20f5bacae1d2d45f2bebfc2301de6001aa73c",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/native_connector.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/native_connector.py.source.txt",
+    "sha256": "8837cb75cbf243a531278fb22759081e782f0fc9d25d1ebaaaa18dbc502b51b1",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/native_worker.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/native_worker.py.source.txt",
+    "sha256": "2a24d67fcbfeb4ba1d0c518b77f01b223543abf3ef9f53e393480a90c9cf6ad7",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/store.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/store.py.source.txt",
+    "sha256": "0e0bb676c973a8d26ab4de7c7981c7552f7e939941792dcfad4a6bea8e032fb4",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/text_delivery.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/text_delivery.py.source.txt",
+    "sha256": "df52d10317f278d5f9b80b86244aa822baad0ae45e02638c7bac626db7d651f5",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/vault_management.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/vault_management.py.source.txt",
+    "sha256": "adaa800f1d15eb88a976f7c29acc2a70d106c36851082195bc8adfac437c923c",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/worker.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/worker.py.source.txt",
+    "sha256": "589cd287ce470fe22bd9f956cbbec1a0900cdc37b6902a0d2cf43895b0c8c907",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_worker.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_worker.py.source.txt",
+    "sha256": "b00d6cb5d856628fdac6f8e2e7a7e7e8a1050605ca6eb38d4701d7b5d45fdab1",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/smart_lists_api.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/smart_lists_api.py.source.txt",
+    "sha256": "17f79d609b1c9609ad99cb6fa4b3a1a5538f7123bc50a27ee8db2331bf8e690c",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/tests/test_onlyfans_worker_entry.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/tests/test_onlyfans_worker_entry.py.source.txt",
+    "sha256": "5b0cb9a4bcbb61ae8e35a3a97924a3bfdd3ca1349b43649729870e482362523f",
+    "untracked": false
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/db/migrations/versions/20261026_0800_audience_intelligence.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/db/migrations/versions/20261026_0800_audience_intelligence.py.source.txt",
+    "sha256": "c06cdc7a3cba540afb478254e72180c89e2c5de111547534e2895ad168c0d16f",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/db/onlyfans_audience_models.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/db/onlyfans_audience_models.py.source.txt",
+    "sha256": "3ebd3aa8d897d2993cbf46f3bf35179e06f1db15e42535966026e421f2208f51",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/db/snapshots/0093_audience_intelligence.sql",
+    "savedPath": "onlyfans-priority-data-20261026/service/db/snapshots/0093_audience_intelligence.sql.source.txt",
+    "sha256": "268392985f87c4dacb840d58a69fa3af38e3d1d5e8779f260b02a2c62b397fc0",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_commands/intelligence_api.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_commands/intelligence_api.py.source.txt",
+    "sha256": "1fd1fa32f1013fdadf3787183f1ab1a7cc91a16f42a1ee70cb793deac12311f9",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/audience_rules.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/audience_rules.py.source.txt",
+    "sha256": "bd8a4ef7ac725e9b7ccdbde68c41986b2800e9c139530c17004da58b0ce450b4",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/audiences.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/audiences.py.source.txt",
+    "sha256": "a21f53c5852c74003c149502a1193a49fd636d4511e7c7e21e5edd03c2cec23b",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/fan_intelligence.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/fan_intelligence.py.source.txt",
+    "sha256": "f2bdb2923991a58255d8b5f9d51b2e632143673af8ed8c0b1822c98ee0f8ae48",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/subscription_observations.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/subscription_observations.py.source.txt",
+    "sha256": "0a01890706133b707cb554fe340445a46607d8893f2dd64d3ecd8e43c8ef1aad",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/vault_intelligence.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/vault_intelligence.py.source.txt",
+    "sha256": "fbb4e6480b2afb58e6badfa079f610959d858749823a783e8b79509f4d918796",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/tests/test_onlyfans_campaign_fastt_pg.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/tests/test_onlyfans_campaign_fastt_pg.py.source.txt",
+    "sha256": "d35e2a9d876ef90f924536b156e421c7f3cf46b47d4e40753ff4b4428cc30dea",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/tests/test_onlyfans_intelligence_pg.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/tests/test_onlyfans_intelligence_pg.py.source.txt",
+    "sha256": "4afffd8d46809af45731f449eccdcfa39f2eb1a4a9965405e74369b7c2373045",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/tests/test_vault_sync_resilience.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/tests/test_vault_sync_resilience.py.source.txt",
+    "sha256": "c81d4a6e58408b384a78ac2e1b7b77949f15bf94ef9dd998611bfb469bbb91c5",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/tests/test_vault_sync_resilience_pg.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/tests/test_vault_sync_resilience_pg.py.source.txt",
+    "sha256": "2df87d03ab69f86a45c12baca5c7c5f0edeaadc85aa0919c1a46ebd587b73599",
+    "untracked": true
+  },
+  {
+    "worktree": "twin-onlyfans-platforms-20261019",
+    "base": "1aee00e056492653a2a8963366949ae7c48fce6a",
+    "branch": "refs/heads/codex/creator-selfhosted-connect-20261020",
+    "originalPath": "creator-sign-in/diagnose-assets-local.mjs",
+    "savedPath": "twin-onlyfans-platforms-20261019/creator-sign-in/diagnose-assets-local.mjs.source.txt",
+    "sha256": "df81acc79757b171877d7bcbeb336ba37015bbd9b652ead2cd20393bff788c07",
+    "untracked": true
+  },
+  {
+    "worktree": "twin-onlyfans-platforms-20261019",
+    "base": "1aee00e056492653a2a8963366949ae7c48fce6a",
+    "branch": "refs/heads/codex/creator-selfhosted-connect-20261020",
+    "originalPath": "creator-sign-in/diagnose-local.mjs",
+    "savedPath": "twin-onlyfans-platforms-20261019/creator-sign-in/diagnose-local.mjs.source.txt",
+    "sha256": "ac8437c708f08327a29a191701d1dab1827bca03bdfe9306b2e0d5d706a4659a",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/of_client.py",
+    "savedPath": "inflowwkiller/service/of_client.py.source.txt",
+    "sha256": "03a68deaa0021f1bc93d30f0cded74ebf1cc4d3042c9ed3b646e0b8d4fa79132",
+    "untracked": false
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_client.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_client.py.source.txt",
+    "sha256": "ab07afd997ea862b723686068148e9417d6ea3331f8021e9bb92d4f74470f7da",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_contract.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_contract.py.source.txt",
+    "sha256": "77dd592f378de154a3727fc08533080c05be84950929900ded4cd5650f1fae36",
+    "untracked": true
+  },
+  {
+    "worktree": "inflowwkiller",
+    "base": "e72316fd9c34092f767bc6e425ca9faea340da27",
+    "branch": "refs/heads/codex/onlyfans-integration",
+    "originalPath": "service/tests/test_twin_bridge_roundtrip.py",
+    "savedPath": "inflowwkiller/service/tests/test_twin_bridge_roundtrip.py.source.txt",
+    "sha256": "4fd66960f66eae312b6840e7828c31f87ee89b8949c64891192811df06237aaa",
+    "untracked": true
+  },
+  {
+    "worktree": "onlyfans-priority-data-20261026",
+    "base": "0c45a887982a210f889a1399fe0e00cc6ba85553",
+    "branch": "refs/heads/codex/onlyfans-priority-data-20261026",
+    "originalPath": "service/onlyfans_runtime/provider_connector.py",
+    "savedPath": "onlyfans-priority-data-20261026/service/onlyfans_runtime/provider_connector.py.source.txt",
+    "sha256": "8c4cac598f4efd0b7d7dabfca67218e004acfcd769d26985c5506be31ede77b2",
+    "untracked": false
+  }
+]

@@ -1,0 +1,78 @@
+"""Campaigns use the current FASTT owner's one-use delivery boundary."""
+from datetime import timedelta
+import json
+from sqlalchemy import select, func
+from sqlalchemy.orm import Session
+import pytest
+from test_fastt_controls_pg import database
+from test_onlyfans_campaign_media_pg import paid
+from test_onlyfans_campaigns_pg import create
+from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT
+from db.models import Message, ContentOffer, VaultSend
+from db.onlyfans_campaign_models import OfCampaignRecipient
+from db.onlyfans_delivery_models import OfTextIntent
+from onlyfans_runtime.store import utcnow
+from onlyfans_runtime.text_delivery import SyntheticTextTransport
+from onlyfans_runtime.fastt_manual import FasttManualTransport, dispatch_next_manual, post_operator_once
+from onlyfans_runtime import fastt_scope
+
+
+def fixture(database,monkeypatch,*,receipt="valid"):
+    store,authority,item,service=paid(database)
+    authority.configure(TENANT,ACCOUNT,expected_revision=2,enabled=True,media_enabled=True,
+        limit_units=20,throttle_seconds=1,actor="synthetic-operator",reason="Synthetic native campaign",transport_kind="native")
+    monkeypatch.setattr(fastt_scope,"serve_scope",lambda:({(ACCOUNT,FAN)},set()))
+    monkeypatch.setattr(fastt_scope,"owned_scope",lambda:({(ACCOUNT,FAN)},set()))
+    campaign=create(service,catalog_item_id=item)
+    calls=[]
+    class Client:
+        def post_json(self,path,**kwargs):
+            calls.append((path,kwargs))
+            if receipt == "timeout":raise TimeoutError("synthetic lost receipt")
+            payload=kwargs["json_body"]
+            return {"id":9001,"fromUser":{"id":7001},"toUser":{"id":FAN},"createdAt":utcnow().isoformat()+"Z",
+                "text":payload["text"],"media":[{"id":m} for m in payload["mediaFiles"]],"mediaCount":len(payload["mediaFiles"]),
+                "price":0 if receipt == "wrong_price" else payload["price"],"previews":payload["previews"],"lockedText":False,"responseType":"message"}
+        def send_text_once_body(self,*args):raise AssertionError("Paid media must never be downgraded to free text")
+    transport=FasttManualTransport(ACCOUNT,lambda g:post_operator_once(Client(),g,owner_id=7001),policy_revision=3)
+    return store,authority,service,campaign,transport,calls
+
+
+def test_runner_admits_and_sends_paid_campaign_once_without_legacy_sender(database,monkeypatch):
+    store,authority,service,campaign,transport,calls=fixture(database,monkeypatch)
+    # The real runner entry admits the snapshot and uses the frozen paid payload.
+    assert dispatch_next_manual(authority,TENANT,ACCOUNT,transport,fan_id=FAN) == "accepted"
+    assert len(calls) == 1 and calls[0][1]["proxy_tries"] == 1 and calls[0][1]["allow_redirects"] is False
+    assert calls[0][1]["json_body"]["mediaFiles"] == [11,12,13]
+    assert calls[0][1]["json_body"]["previews"] == [11] and calls[0][1]["json_body"]["price"] == 10
+    assert dispatch_next_manual(authority,TENANT,ACCOUNT,transport) is None and len(calls) == 1
+    with Session(database[1]) as s:
+        assert s.get(Message,(ACCOUNT,FAN,9001)).price_cents == 1000
+        assert s.scalar(select(func.count()).select_from(ContentOffer)) == 1
+        assert s.scalar(select(func.count()).select_from(VaultSend)) == 3
+        assert s.scalar(select(OfTextIntent.origin)) == "campaign"
+
+
+@pytest.mark.parametrize("receipt",["timeout","wrong_price"])
+def test_unknown_or_mismatched_receipt_never_grants_phantom_sale_or_retries(database,monkeypatch,receipt):
+    store,authority,service,campaign,transport,calls=fixture(database,monkeypatch,receipt=receipt)
+    assert dispatch_next_manual(authority,TENANT,ACCOUNT,transport) == "unknown"
+    assert dispatch_next_manual(authority,TENANT,ACCOUNT,transport) is None and len(calls) == 1
+    with Session(database[1]) as s:
+        assert s.get(Message,(ACCOUNT,FAN,9001)) is None
+        assert s.scalar(select(func.count()).select_from(ContentOffer)) == 0
+        assert s.scalar(select(func.count()).select_from(VaultSend)) == 0
+
+
+def test_pause_between_admission_and_wire_prevents_provider_call(database,monkeypatch):
+    store,authority,service,campaign,transport,calls=fixture(database,monkeypatch)
+    identity=service.queue_due(TENANT,ACCOUNT,fan_ids=[FAN])
+    service.action(TENANT,ACCOUNT,campaign["campaignId"],command_key="pause-fixture",actor="synthetic-operator",expected_revision=1,action="pause")
+    assert authority.dispatch(TENANT,ACCOUNT,identity,transport) == "cancelled" and not calls
+
+
+def test_runner_selection_cannot_admit_another_fans_campaign(database,monkeypatch):
+    store,authority,service,campaign,transport,calls=fixture(database,monkeypatch)
+    assert dispatch_next_manual(authority,TENANT,ACCOUNT,transport,fan_id=FAN+1) is None and not calls
+    with Session(database[1]) as s:
+        assert s.scalar(select(OfCampaignRecipient.status)) == "pending"

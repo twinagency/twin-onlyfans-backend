@@ -1,0 +1,390 @@
+#!/usr/bin/env python3
+"""Injected Telegram model/credential policy (P2-I7).
+
+Windows:  output\\telegram-p2-python313\\venv\\Scripts\\python.exe ^
+              service\\tests\\test_telegram_provider_policy.py
+
+Proves the native provider/model/credential owners do the right thing when the
+injected Telegram policy is active, and that NOTHING changes when it is not:
+
+  * OpenRouter is a real registered provider with the expected wire base URL;
+  * inside the Telegram policy a model may only route to an allowed provider;
+  * the credential comes from the policy's named env reference ONLY - never the
+    house key, the tenant/owner database, a local `.env` or the secrets store;
+  * a missing purpose mapping or credential STOPS before any model call;
+  * `_common.resolve_model` never falls back to the house default inside the
+    policy, and still does outside it (OnlyFans behaviour preserved);
+  * the offline process reads no real configuration: the isolation flag stops
+    the import-time dotenv load in both `llm_providers` and `db.engine`.
+
+Offline: no network, no model call, no Telegram, no live database.
+"""
+
+import asyncio
+import os
+import pathlib
+import sys
+import tempfile
+from pathlib import Path
+
+TESTS_DIR = Path(__file__).resolve().parent
+SERVICE_DIR = TESTS_DIR.parent
+
+# ── Configuration isolation MUST precede every service import ────────────────
+# A real deployment leaves this unset; an offline check sets it so no import can
+# read service/.env. A temp DATABASE_URL keeps SQLAlchemy off the live file, and
+# no provider key other than the synthetic one below exists in the environment.
+_TMP = Path(tempfile.mkdtemp(prefix="fastt-p2-policy-"))
+os.environ["TWIN_FASTT_CONFIG_ISOLATED"] = "1"
+os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{(_TMP / 'isolated.db').as_posix()}"
+for _k in ("GROK_API_KEY", "DEEPSEEK_API_KEY", "DEEPINFRA_API_KEY", "ZAI_API_KEY",
+           "OPENROUTER_API_KEY", "TWIN_TELEGRAM_TEST_KEY"):
+    os.environ.pop(_k, None)
+_CRED_ENV = "TWIN_TELEGRAM_TEST_KEY"
+_CRED_VALUE = "synthetic-telegram-openrouter-key-000000000000"
+os.environ[_CRED_ENV] = _CRED_VALUE
+os.environ["OPENROUTER_API_KEY"] = "house-key-must-not-be-used"
+
+# ── Protected-file guard installed BEFORE any native import (P2-I7 / I7-B) ───
+# The import path reaches secrets_store, whose import-time legacy adoption reads
+# a real `secrets.json`. With the isolation flag set that path must never be
+# touched, so this guard fails loudly if ANY code probes or reads a protected
+# secret file - even where production code catches the exception.
+_protected_accesses: list[str] = []
+_real_read_text = pathlib.Path.read_text
+_real_exists = pathlib.Path.exists
+_real_is_file = pathlib.Path.is_file
+
+
+def _is_protected(p) -> bool:
+    return "secrets" in str(p).lower() and str(p).lower().endswith(".json")
+
+
+def _guarded_read_text(self, *a, **k):
+    if _is_protected(self):
+        _protected_accesses.append(f"read {self}")
+        raise PermissionError(f"protected secret read blocked: {self}")
+    return _real_read_text(self, *a, **k)
+
+
+def _guarded_exists(self, *a, **k):
+    if _is_protected(self):
+        _protected_accesses.append(f"exists {self}")
+    return _real_exists(self, *a, **k)
+
+
+def _guarded_is_file(self, *a, **k):
+    if _is_protected(self):
+        _protected_accesses.append(f"is_file {self}")
+    return _real_is_file(self, *a, **k)
+
+
+pathlib.Path.read_text = _guarded_read_text
+pathlib.Path.exists = _guarded_exists
+pathlib.Path.is_file = _guarded_is_file
+
+sys.path.insert(0, str(SERVICE_DIR))
+
+import llm_client  # noqa: E402
+import llm_models  # noqa: E402
+import llm_providers  # noqa: E402
+import httpx  # noqa: E402
+import secrets_store  # noqa: E402
+from automations import _common  # noqa: E402
+import db.models  # noqa: E402,F401 - registers the tables on SQLModel.metadata
+from db.engine import engine as _engine, get_session  # noqa: E402
+from db.models import GrokCall, metadata as _db_metadata  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
+
+TRUSTED = "acct_telegram_creator"
+
+
+async def _create_isolated_schema():
+    """Create the tables in the ISOLATED temp database so the legacy fallback
+    path is exercised as "no configured row", not as a missing-schema error."""
+    async with _engine.begin() as conn:
+        await conn.run_sync(_db_metadata.create_all)
+
+
+asyncio.run(_create_isolated_schema())
+
+failures = 0
+
+
+def check(label, actual, expected):
+    global failures
+    if actual == expected:
+        print(f"  ok   {label}")
+    else:
+        failures += 1
+        print(f"  FAIL {label}: got {actual!r}, expected {expected!r}")
+
+
+def section(name):
+    print(f"\n-- {name} {'-' * max(0, 92 - len(name))}")
+
+
+def expect_config_error(label, run):
+    global failures
+    try:
+        result = run()
+    except llm_client.LLMConfigError as exc:
+        print(f"  ok   {label} -> {exc}")
+        return
+    except Exception as exc:  # noqa: BLE001 - a different error is a real failure
+        failures += 1
+        print(f"  FAIL {label}: raised {type(exc).__name__}: {exc}")
+        return
+    failures += 1
+    print(f"  FAIL {label}: returned {result!r} instead of raising LLMConfigError")
+
+
+def policy(**over):
+    base = dict(
+        purposes={"ai_chatter": "openrouter/deepseek-v4-flash"},
+        trusted_account_id=TRUSTED,
+        credential_env=_CRED_ENV,
+        provider_allowlist=frozenset({"openrouter"}),
+    )
+    base.update(over)
+    return llm_providers.TelegramLLMPolicy(**base)
+
+
+async def _grok_call_count() -> int:
+    async with get_session() as s:
+        return int((await s.execute(select(func.count()).select_from(GrokCall))).scalar() or 0)
+
+
+class _HttpxShim:
+    """Stands in for the `httpx` module inside llm_client so every model request
+    goes to a MockTransport that counts the real HTTP attempts."""
+
+    URL = httpx.URL
+    HTTPStatusError = httpx.HTTPStatusError
+    RequestError = httpx.RequestError
+    TimeoutException = httpx.TimeoutException
+
+    def __init__(self) -> None:
+        self.attempts: list[str] = []
+
+    def AsyncClient(self, *a, **k):
+        shim = self
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            shim.attempts.append(str(request.url))
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                    "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+                },
+                request=request,
+            )
+
+        k["transport"] = httpx.MockTransport(handler)
+        return httpx.AsyncClient(*a, **k)
+
+
+def main() -> int:
+    section("offline configuration isolation actually isolated the process")
+    check("llm_providers reports the isolated process", llm_providers._CONFIG_ISOLATED, True)
+    # DEEPSEEK_API_KEY is present in service/.env per the provider registry. With
+    # the isolation flag set, `_api_key` must NOT read that file, so it resolves "".
+    check("no dotenv fallback inside an isolated process", llm_providers._api_key("DEEPSEEK_API_KEY"), "")
+    check("the real .env was not consulted for the secret store path", llm_providers._api_key("GROK_API_KEY"), "")
+
+    section("OpenRouter is registered and resolves to its wire model")
+    prov = llm_providers.PROVIDERS.get("openrouter")
+    check("openrouter provider exists", prov is not None, True)
+    check("openrouter base url", prov.base_url, "https://openrouter.ai/api/v1")
+    check("openrouter key env", prov.api_key_env, "OPENROUTER_API_KEY")
+    mdl, rprov = llm_client._resolve("openrouter/deepseek-v4-flash")
+    check("the internal id maps to the openrouter provider", rprov.name, "openrouter")
+    check("the wire model is the OpenRouter vendor path", mdl.wire_model(), "deepseek/deepseek-v4-flash")
+    check("reasoning is stated explicitly (thinking disabled)", mdl.reasoning_keys(), {"thinking": {"type": "disabled"}})
+    vmdl, vprov = llm_client._resolve("openrouter/qwen3-vl-30b")
+    check("the vision model is registered on openrouter", vprov.name, "openrouter")
+    check("the vision wire id is the vendor path", vmdl.wire_model(), "qwen/qwen3-vl-30b-a3b-instruct")
+    check("the vision model is marked vision-capable", vmdl.vision_ok, True)
+
+    section("a policy restricts routing to its allowlisted providers")
+    token = llm_providers.set_telegram_policy(policy())
+    try:
+        choice, allowed = llm_client._resolve("openrouter/deepseek-v4-flash")
+        check("an allowlisted provider resolves inside the policy", allowed.name, "openrouter")
+        expect_config_error(
+            "a model on a NON-allowlisted provider is refused",
+            lambda: llm_client._resolve("deepseek-v4-flash"),
+        )
+        expect_config_error(
+            "an unknown model id is still refused",
+            lambda: llm_client._resolve("openrouter/does-not-exist"),
+        )
+
+        section("the credential comes only from the policy reference")
+        key = asyncio.run(llm_client._tenant_api_key(TRUSTED, allowed, "ai_chatter"))
+        check("the injected credential is returned", key, _CRED_VALUE)
+        check("the house OPENROUTER key was NOT used", key != os.environ["OPENROUTER_API_KEY"], True)
+
+        os.environ.pop(_CRED_ENV, None)
+        expect_config_error(
+            "a missing Telegram credential stops before any model call",
+            lambda: asyncio.run(llm_client._tenant_api_key(TRUSTED, allowed, "ai_chatter")),
+        )
+        # The house key is still set in the environment; prove it is ignored.
+        check("the house key remains present yet unused", os.environ["OPENROUTER_API_KEY"], "house-key-must-not-be-used")
+        os.environ[_CRED_ENV] = _CRED_VALUE
+
+        section("resolve_model requires an explicit, valid purpose mapping")
+        chosen = asyncio.run(_common.resolve_model(TRUSTED, "ai_chatter"))
+        check("a mapped purpose resolves to its model", chosen, "openrouter/deepseek-v4-flash")
+        expect_config_error(
+            "an unmapped purpose raises instead of defaulting",
+            lambda: asyncio.run(_common.resolve_model(TRUSTED, "welcome")),
+        )
+
+        bad_token = llm_providers.set_telegram_policy(
+            policy(purposes={"ai_chatter": "not-a-real-model"})
+        )
+        try:
+            expect_config_error(
+                "a purpose mapped to an unknown model raises",
+                lambda: asyncio.run(_common.resolve_model(TRUSTED, "ai_chatter")),
+            )
+        finally:
+            llm_providers.reset_telegram_policy(bad_token)
+    finally:
+        llm_providers.reset_telegram_policy(token)
+
+    section("the installed policy is a stable versioned snapshot")
+    mutable_purposes = {"ai_chatter": "openrouter/deepseek-v4-flash"}
+    mutable_providers = {"openrouter"}
+    snapshot = policy(
+        purposes=mutable_purposes,
+        provider_allowlist=mutable_providers,
+        config_version="cfg_snapshot_1",
+    )
+    mutable_purposes["media_vision"] = "openrouter/qwen3-vl-30b"
+    mutable_providers.add("deepinfra")
+    check("source purpose mutation cannot change the snapshot", "media_vision" in snapshot.purposes, False)
+    check("source provider mutation cannot change the snapshot", "deepinfra" in snapshot.provider_allowlist, False)
+    check("the explicit policy version is preserved", snapshot.config_version, "cfg_snapshot_1")
+
+    section("outside the policy every legacy behaviour is preserved")
+    check("no policy is active after reset", llm_client.active_telegram_policy(), None)
+    check("the house default model is unchanged", _common.DEFAULT_MODEL, "deepseek-v4-flash")
+    check(
+        "the only purpose pin is still the help assistant",
+        _common.PURPOSE_DEFAULT_MODELS,
+        {"help_assistant": "deepseek-v4-flash"},
+    )
+    # An unmapped purpose outside the policy still falls through to the house model
+    # exactly as before, even though the isolated database has no config table.
+    legacy = asyncio.run(_common.resolve_model("acct_synthetic", "welcome"))
+    check("an unmapped purpose falls back to the house model outside the policy", legacy, "deepseek-v4-flash")
+
+    section("isolation: the native import path touches no protected secret file")
+    check("no protected secret access was attempted during import", _protected_accesses, [])
+    check("the legacy adoption was skipped under isolation", secrets_store._LEGACY_ADOPTION_SKIPPED, True)
+
+    section("the legacy store still migrates when isolation is OFF")
+    _store_dir = Path(tempfile.mkdtemp(prefix="fastt-legacy-store-"))
+    _legacy = _store_dir / "legacy.json"
+    _durable_dir = _store_dir / "durable"
+    _durable = _durable_dir / "store.json"
+    _legacy.write_text('{"ADMIN_PASSWORD":"synthetic-only"}', encoding="utf-8")
+    _saved = (secrets_store._PATH, secrets_store._LEGACY_PATH, secrets_store._DIR)
+    try:
+        secrets_store._PATH = _durable
+        secrets_store._LEGACY_PATH = _legacy
+        secrets_store._DIR = _durable_dir
+        secrets_store._adopt_legacy_file()
+        check(
+            "a present legacy store is adopted into the durable directory",
+            _durable.read_text(encoding="utf-8"),
+            '{"ADMIN_PASSWORD":"synthetic-only"}',
+        )
+        _durable.write_text("already-migrated", encoding="utf-8")
+        secrets_store._adopt_legacy_file()
+        check("adoption never overwrites an existing durable store", _durable.read_text(encoding="utf-8"), "already-migrated")
+    finally:
+        secrets_store._PATH, secrets_store._LEGACY_PATH, secrets_store._DIR = _saved
+
+    section("the public chat boundary enforces the whole policy before any side effect")
+    _chat_token = llm_providers.set_telegram_policy(policy())
+    _real_httpx = llm_client.httpx
+    try:
+        _baseline = asyncio.run(_grok_call_count())
+        _ok_shim = _HttpxShim()
+        llm_client.httpx = _ok_shim
+        _result = asyncio.run(
+            llm_client.chat(
+                model="openrouter/deepseek-v4-flash",
+                messages=[{"role": "user", "content": "synthetic"}],
+                purpose="ai_chatter",
+                account_id=TRUSTED,
+            )
+        )
+        check("the valid control call succeeds", _result.content, "ok")
+        check("the valid control makes exactly one HTTP attempt", len(_ok_shim.attempts), 1)
+        check("the valid control writes exactly one audit row", asyncio.run(_grok_call_count()), _baseline + 1)
+
+        _refusals = [
+            ("an unmapped purpose", dict(model="openrouter/deepseek-v4-flash", purpose="welcome", account_id=TRUSTED)),
+            ("a disabled media purpose", dict(model="openrouter/qwen3-vl-30b", purpose="media_vision", account_id=TRUSTED)),
+            ("the wrong model for the purpose", dict(model="openrouter/qwen3-vl-30b", purpose="ai_chatter", account_id=TRUSTED)),
+            ("an empty billing account", dict(model="openrouter/deepseek-v4-flash", purpose="ai_chatter", account_id="")),
+            ("another creator's account", dict(model="openrouter/deepseek-v4-flash", purpose="ai_chatter", account_id="acct_other")),
+        ]
+        for _label, _kwargs in _refusals:
+            _before = asyncio.run(_grok_call_count())
+            _shim = _HttpxShim()
+            llm_client.httpx = _shim
+            expect_config_error(
+                f"{_label} is refused",
+                lambda kw=_kwargs: asyncio.run(
+                    llm_client.chat(messages=[{"role": "user", "content": "synthetic"}], **kw)
+                ),
+            )
+            check(f"{_label} makes zero HTTP attempts", len(_shim.attempts), 0)
+            check(f"{_label} writes no audit row", asyncio.run(_grok_call_count()), _before)
+
+        section("a malformed policy is refused at the public boundary")
+        for _label, _bad in [
+            ("a blank trusted account", policy(trusted_account_id=" ")),
+            ("no enabled purposes", policy(purposes={})),
+            ("a blank purpose model", policy(purposes={"ai_chatter": "  "})),
+            ("a malformed provider allowlist", policy(provider_allowlist=None)),
+            ("a blank config version", policy(config_version=" ")),
+        ]:
+            _bad_token = llm_providers.set_telegram_policy(_bad)
+            try:
+                _shim = _HttpxShim()
+                llm_client.httpx = _shim
+                expect_config_error(
+                    f"{_label} is refused",
+                    lambda: asyncio.run(
+                        llm_client.chat(
+                            model="openrouter/deepseek-v4-flash",
+                            messages=[{"role": "user", "content": "synthetic"}],
+                            purpose="ai_chatter",
+                            account_id=TRUSTED,
+                        )
+                    ),
+                )
+                check(f"{_label} makes zero HTTP attempts", len(_shim.attempts), 0)
+            finally:
+                llm_providers.reset_telegram_policy(_bad_token)
+    finally:
+        llm_client.httpx = _real_httpx
+        llm_providers.reset_telegram_policy(_chat_token)
+
+    if failures:
+        print(f"\ntest_telegram_provider_policy: {failures} failure(s)")
+        return 1
+    print("\ntest_telegram_provider_policy: all cases passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

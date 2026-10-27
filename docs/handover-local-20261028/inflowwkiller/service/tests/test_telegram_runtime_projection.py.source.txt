@@ -1,0 +1,160 @@
+"""Native projection acceptance: actual Fastt rows + cursor are atomic."""
+from __future__ import annotations
+
+import asyncio
+import os
+from pathlib import Path
+import sqlite3
+import sys
+import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+COUNT = 0
+
+
+def check(value, label):
+    global COUNT
+    assert value, label
+    COUNT += 1
+
+
+def event(*, update: str, message: str, user: str, text: str,
+          origin: str = "fan", occurred: str = "2026-10-18T04:00:00.000Z"):
+    return {
+        "schemaVersion": 1,
+        "eventId": f"event-{update}",
+        "channel": "telegram",
+        "bindingId": "binding-projection",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc-projection",
+        "chatId": user,
+        "userId": user,
+        "updateId": update,
+        "messageId": message,
+        "occurredAt": occurred,
+        "receivedAt": occurred,
+        "origin": origin,
+        "eventKind": "message",
+        "text": text,
+        "attachments": [],
+        "sourceRevision": f"message:{message}:1",
+    }
+
+
+async def create_native_schema():
+    from db.engine import engine
+    from db.models import Base
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+
+
+def exercise(path: str):
+    from telegram_contract.store import TelegramContractStore, TelegramStoreError
+    from telegram_runtime.projection import NativeProjectionApplier
+
+    store = TelegramContractStore(path)
+    try:
+        store.initialize()
+        applier = NativeProjectionApplier(
+            store.conn,
+            account_id="acct-projection",
+            binding_id="binding-projection",
+            clone_id="11111111-1111-4111-8111-111111111111",
+        )
+        first = event(update="501", message="71", user="9001", text="hello")
+        body = {"event": first, "conversationKey": "conv-1", "inputRevision": 1,
+                "ownershipEpoch": 3, "configVersion": "cfg-1",
+                "projectedAt": "2026-10-18T04:00:01.000Z"}
+        result = store.import_projection_event(
+            "source-1", 1, "telegram_inbound_v1", body,
+            recipient_worker="worker-projection", applier=applier.descriptor(),
+        )
+        check(result["cursor"] == 1, "cursor advances with target rows")
+        check(store.conn.execute("select count(*) from fans").fetchone()[0] == 1,
+              "native fan row created")
+        check(store.conn.execute("select body from messages").fetchone()[0] == "hello",
+              "native message row created")
+
+        replay = store.import_projection_event(
+            "source-1", 1, "telegram_inbound_v1", body,
+            recipient_worker="worker-projection", applier=applier.descriptor(),
+        )
+        check(not replay["inserted"], "projection replay is idempotent")
+        check(store.conn.execute("select count(*) from messages").fetchone()[0] == 1,
+              "projection replay creates no duplicate message")
+
+        cfg = {
+            "bindingId": "binding-projection", "cloneId": first["cloneId"],
+            "accountId": "acct-projection", "configVersion": "cfg-1",
+            "creatorName": "Synthetic creator", "persona": "Warm and concise.",
+            "personaFacts": {"home_city": "Brisbane"}, "language": "en",
+            "timezone": "Australia/Brisbane", "location": "Brisbane",
+            "projectedAt": "2026-10-18T04:00:02.000Z",
+        }
+        store.import_projection_event(
+            "source-2", 2, "telegram_config_v1", cfg,
+            recipient_worker="worker-projection", applier=applier.descriptor(),
+        )
+        row = store.conn.execute(
+            "select persona,timezone from account_ai_config where account_id='acct-projection'"
+        ).fetchone()
+        check(tuple(row) == ("Warm and concise.", "Australia/Brisbane"),
+              "creator config reaches native owner")
+
+        second = event(update="502", message="72", user="9002", text="other fan")
+        history = {
+            "bindingId": "binding-projection", "cloneId": first["cloneId"],
+            "accountId": "acct-projection", "events": [second],
+            "projectedAt": "2026-10-18T04:00:03.000Z",
+        }
+        store.import_projection_event(
+            "source-3", 3, "telegram_history_v1", history,
+            recipient_worker="worker-projection", applier=applier.descriptor(),
+        )
+        check(store.conn.execute("select count(*) from fans").fetchone()[0] == 2,
+              "second projected fan remains isolated")
+        check(store.conn.execute("select count(*) from messages").fetchone()[0] == 2,
+              "history adds only its source message")
+
+        interrupted = event(update="503", message="73", user="9001", text="rollback me")
+        interrupted_body = {
+            "event": interrupted, "conversationKey": "conv-1", "inputRevision": 2,
+            "ownershipEpoch": 3, "configVersion": "cfg-1",
+            "projectedAt": "2026-10-18T04:00:04.000Z",
+        }
+        try:
+            store.import_projection_event(
+                "source-4", 4, "telegram_inbound_v1", interrupted_body,
+                recipient_worker="worker-projection", applier=applier.descriptor(),
+                simulate_interrupt=True,
+            )
+        except TelegramStoreError:
+            pass
+        else:
+            raise AssertionError("simulated interruption committed")
+        check(store.get_cursor("worker-projection") == 3,
+              "interruption rolls back cursor")
+        check(store.conn.execute("select count(*) from messages").fetchone()[0] == 2,
+              "interruption rolls back actual native row")
+        check(store.projection_record("worker-projection", "source-4") is None,
+              "interruption rolls back imported envelope")
+    finally:
+        store.close()
+
+
+def main():
+    with tempfile.TemporaryDirectory(prefix="telegram-runtime-projection-") as tmp:
+        path = str(Path(tmp) / "native.db")
+        os.environ["TWIN_FASTT_CONFIG_ISOLATED"] = "1"
+        os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + Path(path).as_posix()
+        asyncio.run(create_native_schema())
+        exercise(path)
+    print(f"{COUNT} checks; all cases passed (telegram runtime projection)")
+
+
+if __name__ == "__main__":
+    main()

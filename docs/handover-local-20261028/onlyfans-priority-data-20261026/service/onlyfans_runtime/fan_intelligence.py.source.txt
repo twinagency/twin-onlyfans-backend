@@ -1,0 +1,146 @@
+"""Canonical, scoped fan facts for audiences and vault sales reads. No I/O to providers."""
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+
+from sqlalchemy import select, func, case, literal, and_, or_, null, cast, Numeric
+from db.models import Fan, Transaction, OfCreatorBinding, OfConversationState
+from db.onlyfans_models import OfRuntime
+from db.onlyfans_connection_models import OfProviderConnection
+from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerScan, OfLedgerHistory
+from db.onlyfans_audience_models import OfFanSubscription
+from onlyfans_read.agency_scope import creator_allowed
+from .store import Refused
+
+PURCHASE_STATUSES = ("pending", "cleared", "refund_pending", "refunded", "chargedback")
+RETAINED_STATUSES = ("pending", "cleared")
+
+
+def stamp(value):
+    return value.isoformat(timespec="milliseconds") + "Z" if value is not None else None
+
+
+def read_scope(s, tenant, account):
+    # Read/share locks do not acquire the sender's exclusive runtime admission lock.
+    runtime = s.scalar(select(OfRuntime).where(OfRuntime.account_id == account).with_for_update(read=True))
+    if runtime is None:
+        raise Refused("scope unavailable")
+    binding = s.scalar(select(OfCreatorBinding).where(OfCreatorBinding.id == runtime.binding_id,
+        OfCreatorBinding.account_id == account, OfCreatorBinding.tenant_id == tenant,
+        OfCreatorBinding.channel == "onlyfans", OfCreatorBinding.revoked_at.is_(None)).with_for_update(read=True))
+    if binding is None or not creator_allowed(binding.creator_id):
+        raise Refused("scope unavailable")
+    return runtime
+
+
+def coverage(s, runtime, now):
+    # Select metadata only: fan analytics must never load sealed credentials.
+    row = s.execute(select(OfProviderConnection.binding_id, OfProviderConnection.owner_id,
+        OfProviderConnection.revision, OfProviderConnection.status, OfProviderConnection.expires_at,
+        OfProviderConnection.verified_at).where(OfProviderConnection.account_id == runtime.account_id)).first()
+    connection = SimpleNamespace(**row._mapping) if row is not None else None
+    scan = s.get(OfLedgerScan, runtime.account_id)
+    history = s.get(OfLedgerHistory, runtime.account_id)
+    valid = bool(connection and scan and connection.status == "verified" and connection.verified_at
+        and connection.expires_at > now and scan.binding_id == runtime.binding_id == connection.binding_id
+        and (scan.owner_id, scan.connection_revision) == (connection.owner_id, connection.revision))
+    fresh = bool(valid and scan.status != "held" and scan.last_complete_at and scan.last_full_at
+        and timedelta(0) <= now - scan.last_complete_at <= timedelta(minutes=15)
+        and timedelta(0) <= now - scan.last_full_at <= timedelta(hours=26))
+    full = bool(fresh and history and history.binding_id == runtime.binding_id
+        and (history.owner_id, history.connection_revision) == (connection.owner_id, connection.revision)
+        and history.status != "held" and history.window_start == datetime(1970, 1, 1)
+        and history.last_full_at and history.last_complete_at
+        and timedelta(0) <= now - history.last_full_at <= timedelta(hours=26)
+        and history.last_full_at <= history.last_complete_at <= now)
+    floor = datetime(1970, 1, 1) if full else scan.last_full_at - timedelta(days=90) if fresh else None
+    if fresh and s.scalar(select(Transaction.id).where(Transaction.account_id == runtime.account_id,
+            Transaction.occurred_at >= floor, Transaction.occurred_at <= now,
+            or_(proven_transaction().is_not(True), Transaction.status.is_(None), Transaction.status.not_in(PURCHASE_STATUSES))).limit(1)) is not None:
+        # Imported legacy amounts without canonical evidence cannot prove zero.
+        fresh = full = False
+        floor = None
+    return {"status": "current" if fresh else "unavailable" if not valid else "stale",
+        "completeSince": stamp(floor), "ledgerAsOf": stamp(scan.last_complete_at) if valid else None,
+        "historyComplete": full, "historyLimited": bool(valid and history and history.last_error == "unsupported_ledger_pagination"),
+        "conversationAsOf": stamp(runtime.last_sync_at),
+        "conversationCurrent": bool(not runtime.recovery_needed and runtime.last_sync_at
+            and timedelta(0) <= now - runtime.last_sync_at <= timedelta(minutes=15))}
+
+
+def proven_transaction():
+    return and_(Transaction.source == "ledger", Transaction.currency == "USD",
+        Transaction.provider_transaction_id.is_not(None),
+        select(OfLedgerEvidence.evidence_hash).where(
+            OfLedgerEvidence.account_id == Transaction.account_id,
+            OfLedgerEvidence.transaction_id == Transaction.id,
+            OfLedgerEvidence.provider_transaction_id == Transaction.provider_transaction_id,
+            OfLedgerEvidence.outcome == "applied").correlate(Transaction).exists())
+
+
+def covered(cov, begin):
+    return cov["status"] == "current" and cov["completeSince"] is not None and begin >= datetime.fromisoformat(cov["completeSince"].rstrip("Z"))
+
+
+def facts_query(account, binding, now, cov, rules, fan_id=None):
+    windows = sorted({int(r.get("days", 30)) for r in rules["rules"] if r["field"] in {"recent_spend", "purchase_count"}})
+    if len(windows) > 5:
+        raise ValueError("At most five spending windows may be evaluated together.")
+    columns = [Transaction.fan_id.label("fan_id"),
+        func.sum(case((Transaction.status.in_(RETAINED_STATUSES), Transaction.amount_cents), else_=0)).label("lifetime_spend")]
+    for days in windows:
+        within = Transaction.occurred_at >= now - timedelta(days=days)
+        columns.extend([
+            func.sum(case((and_(within, Transaction.status.in_(RETAINED_STATUSES)), Transaction.amount_cents), else_=0)).label(f"recent_spend_{days}"),
+            func.sum(case((and_(within, Transaction.status.in_(PURCHASE_STATUSES)), 1), else_=0)).label(f"purchase_count_{days}")])
+    aggregate = select(*columns).where(Transaction.account_id == account,
+        Transaction.fan_id.is_not(None), Transaction.occurred_at <= now, proven_transaction(),
+        *([Transaction.fan_id == fan_id] if fan_id is not None else [])).group_by(Transaction.fan_id).subquery()
+    def amount(name, complete):
+        return func.coalesce(aggregate.c[name], 0) if complete else cast(null(), Numeric)
+    lifetime = amount("lifetime_spend", covered(cov, datetime(1970, 1, 1)))
+    facts = {"lifetime_spend": lifetime}
+    for days in windows:
+        for key in ("recent_spend", "purchase_count"):
+            facts[f"{key}_{days}"] = amount(f"{key}_{days}", covered(cov, now - timedelta(days=days)))
+    last_active = (case((Fan.last_message_received_at <= now, func.extract("epoch", literal(now) - Fan.last_message_received_at) / 86400))
+        if cov["conversationCurrent"] else cast(null(), Numeric))
+    status = case(
+        (and_(OfFanSubscription.expires_at.is_not(None), OfFanSubscription.expires_at <= now), "expired"),
+        else_=OfFanSubscription.status)
+    status = case((and_(OfFanSubscription.binding_id == binding,
+        OfFanSubscription.observed_at >= now - timedelta(hours=24), OfFanSubscription.observed_at <= now,
+        OfFanSubscription.status != "unknown"), status), else_=null())
+    # SQL NULL is intentional. In particular NULL != active cannot prove expiry.
+    facts.update(last_active_days=last_active, status=status)
+    query = select(Fan.fan_id, Fan.of_display_name, Fan.of_username, Fan.custom_nickname,
+        Fan.tags, *[value.label(key) for key, value in facts.items()]).outerjoin(aggregate, aggregate.c.fan_id == Fan.fan_id)
+    query = query.outerjoin(OfFanSubscription, and_(OfFanSubscription.account_id == Fan.account_id,
+        OfFanSubscription.fan_id == Fan.fan_id)).where(Fan.account_id == account)
+    if fan_id is not None:
+        query = query.where(Fan.fan_id == fan_id)
+    return query.subquery(), facts
+
+
+def predicate(facts, rules):
+    terms = []
+    for rule in rules["rules"]:
+        field, op, value = rule["field"], rule["op"], rule["value"]
+        key = f"{field}_{int(rule.get('days', 30))}" if field in {"recent_spend", "purchase_count"} else field
+        if field == "tag":
+            # JSON parsing must not turn corrupt tag data into an empty set for not_has.
+            # Tag rules remain supported by the legacy evaluator; scoped SQL refuses
+            # until the caller has a validated tag projection.
+            raise ValueError("Tag audiences require a validated tag projection.")
+        column = facts.c[key]
+        if field == "status":
+            column, value = func.lower(column), str(value).lower()
+        terms.append({">": column > value, ">=": column >= value, "<": column < value,
+            "<=": column <= value, "==": column == value, "!=": column != value}[op])
+    return (and_(*terms) if rules["match"] == "all" else or_(*terms)) if terms else literal(True)
+
+
+def eligible(account):
+    return and_(Fan.account_id == account, Fan.is_muted.is_(False),
+        select(OfConversationState.fan_id).where(OfConversationState.account_id == account,
+            OfConversationState.fan_id == Fan.fan_id, OfConversationState.mode == "automated",
+            OfConversationState.takeover_state == "none", OfConversationState.unresolved_attempt_id.is_(None)).exists())

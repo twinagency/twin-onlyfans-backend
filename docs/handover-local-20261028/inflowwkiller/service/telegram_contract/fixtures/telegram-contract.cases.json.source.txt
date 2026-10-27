@@ -1,0 +1,2304 @@
+{
+  "fixtureVersion": 1,
+  "contractVersion": 1,
+  "description": "Shared cross-language Telegram event v1 / delivery-action v1 conformance cases. Both the Node validator (bot/src/engines/fastt-contract.ts) and the Python validator (inflowwkiller/service/telegram_contract/contract.py) must produce the declared outcome for every case, including the exact rejection code.",
+  "notes": [
+    "Every payload is a complete wire object; unknown extra keys are ignored for field reading but ARE counted toward the 16 KiB total-bytes bound.",
+    "The exactly-at-limit text boundary (4000 UTF-16 units accepted) and the total-bytes bound are exercised by a generated case in each language suite, because literal >16 KiB fixtures would bloat this shared file. See CONTRACT.md section 6.",
+    "The oversized-field cases here use over-length attachment/asset arrays, which are compact and unambiguous.",
+    "Key-derivation equalities (same message id in different chats, same fan across two creators, same update id on two bots) are asserted by each language's own test because they are not validation outcomes."
+  ],
+  "cases": [
+    {
+      "name": "valid_business_text_message",
+      "kind": "event",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "valid_bot_mode_without_business_connection",
+      "kind": "event",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0002",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_beta",
+        "cloneId": "22222222-2222-4222-8222-222222222222",
+        "botId": "7000000001",
+        "mode": "bot",
+        "businessConnectionId": null,
+        "chatId": "900100300",
+        "userId": "555000222",
+        "updateId": "2002",
+        "messageId": "7",
+        "occurredAt": "2026-10-15T04:06:00Z",
+        "receivedAt": "2026-10-15T04:06:01Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hello",
+        "attachments": [],
+        "sourceRevision": "rev_0002"
+      }
+    },
+    {
+      "name": "valid_photo_attachment_with_null_text",
+      "kind": "event",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0003",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1003",
+        "messageId": "44",
+        "occurredAt": "2026-10-15T04:07:00Z",
+        "receivedAt": "2026-10-15T04:07:01Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": null,
+        "attachments": [
+          {
+            "kind": "photo",
+            "fileId": "AgACAgQAAxkBAAI",
+            "revision": "rev_1"
+          }
+        ],
+        "sourceRevision": "rev_0003"
+      }
+    },
+    {
+      "name": "valid_deleted_message_without_body",
+      "kind": "event",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0004",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1004",
+        "messageId": "45",
+        "occurredAt": "2026-10-15T04:08:00Z",
+        "receivedAt": "2026-10-15T04:08:01Z",
+        "origin": "fan",
+        "eventKind": "deleted_message",
+        "text": null,
+        "attachments": [],
+        "sourceRevision": "rev_0004"
+      }
+    },
+    {
+      "name": "valid_large_and_negative_ids",
+      "kind": "event",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0005",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "9999999999",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "-1001234567890123",
+        "userId": null,
+        "updateId": "2147483647",
+        "messageId": "2147483647",
+        "occurredAt": "2026-10-15T04:09:00Z",
+        "receivedAt": "2026-10-15T04:09:01Z",
+        "origin": "system",
+        "eventKind": "callback_query",
+        "text": null,
+        "attachments": [],
+        "sourceRevision": "rev_0005"
+      }
+    },
+    {
+      "name": "valid_non_bmp_text_counts_as_two_units",
+      "kind": "event",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0006",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1006",
+        "messageId": "46",
+        "occurredAt": "2026-10-15T04:10:00Z",
+        "receivedAt": "2026-10-15T04:10:01Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hi 😀 there",
+        "attachments": [],
+        "sourceRevision": "rev_0006"
+      }
+    },
+    {
+      "name": "valid_offset_timestamp_normalises_to_utc",
+      "kind": "event",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0007",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1007",
+        "messageId": "47",
+        "occurredAt": "2026-10-15T14:05:06+10:00",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "brisbane time",
+        "attachments": [],
+        "sourceRevision": "rev_0007"
+      }
+    },
+    {
+      "name": "invalid_event_schema_version_boolean",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": true,
+        "eventId": "evt_0100",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1100",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0100"
+      }
+    },
+    {
+      "name": "invalid_event_schema_version_two",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "unsupported-version",
+      "payload": {
+        "schemaVersion": 2,
+        "eventId": "evt_0101",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1101",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0101"
+      }
+    },
+    {
+      "name": "invalid_event_channel_onlyfans",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "unsupported-channel",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0102",
+        "channel": "onlyfans",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1102",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0102"
+      }
+    },
+    {
+      "name": "invalid_event_mode_group",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "unsupported-enum",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0103",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "group",
+        "businessConnectionId": null,
+        "chatId": "900100200",
+        "updateId": "1103",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0103"
+      }
+    },
+    {
+      "name": "invalid_event_business_mode_without_connection",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "missing-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0104",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": null,
+        "chatId": "900100200",
+        "updateId": "1104",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0104"
+      }
+    },
+    {
+      "name": "invalid_event_bot_mode_with_connection",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0105",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "bot",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1105",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0105"
+      }
+    },
+    {
+      "name": "invalid_event_bot_id_not_numeric",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "id-not-integer",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0106",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "abc",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1106",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0106"
+      }
+    },
+    {
+      "name": "invalid_event_chat_id_leading_zero",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "id-not-integer",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0107",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "00700100200",
+        "updateId": "1107",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0107"
+      }
+    },
+    {
+      "name": "invalid_event_update_id_float",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "id-not-integer",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0108",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1.5",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0108"
+      }
+    },
+    {
+      "name": "invalid_event_message_id_whitespace_padded",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0109",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1109",
+        "messageId": " 42",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0109"
+      }
+    },
+    {
+      "name": "invalid_event_occurred_month_thirteen",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "timestamp-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0110",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1110",
+        "occurredAt": "2026-13-01T00:00:00Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0110"
+      }
+    },
+    {
+      "name": "invalid_event_occurred_february_thirty",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "timestamp-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0111",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1111",
+        "occurredAt": "2026-02-30T00:00:00Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0111"
+      }
+    },
+    {
+      "name": "invalid_event_occurred_missing_timezone",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "timestamp-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0112",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1112",
+        "occurredAt": "2026-10-15T04:00:00",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0112"
+      }
+    },
+    {
+      "name": "invalid_event_missing_event_id",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "missing-field",
+      "payload": {
+        "schemaVersion": 1,
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1113",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0113"
+      }
+    },
+    {
+      "name": "invalid_event_event_id_path_separator",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt/0101",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1114",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0114"
+      }
+    },
+    {
+      "name": "invalid_event_event_id_unpaired_surrogate",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "unpaired-surrogate",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "\ud800",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1115",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": "rev_0115"
+      }
+    },
+    {
+      "name": "invalid_event_message_without_text_or_attachment",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "missing-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0116",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1116",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": null,
+        "attachments": [],
+        "sourceRevision": "rev_0116"
+      }
+    },
+    {
+      "name": "invalid_event_attachments_not_array",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0117",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1117",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "attachments": "nope",
+        "sourceRevision": "rev_0117"
+      }
+    },
+    {
+      "name": "invalid_event_attachment_kind_unknown",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "unsupported-enum",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0118",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1118",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": null,
+        "attachments": [
+          {
+            "kind": "hologram",
+            "fileId": "AgACAgQAAxkBAAI",
+            "revision": "rev_1"
+          }
+        ],
+        "sourceRevision": "rev_0118"
+      }
+    },
+    {
+      "name": "invalid_event_source_revision_traversal",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0119",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1119",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "sourceRevision": ".."
+      }
+    },
+    {
+      "name": "invalid_event_too_many_attachments",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "oversized-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0120",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "updateId": "1120",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": null,
+        "attachments": [
+          {
+            "kind": "photo",
+            "fileId": "f1",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "fileId": "f2",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "fileId": "f3",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "fileId": "f4",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "fileId": "f5",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "fileId": "f6",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "fileId": "f7",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "fileId": "f8",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "fileId": "f9",
+            "revision": "r1"
+          }
+        ],
+        "sourceRevision": "rev_0120"
+      }
+    },
+    {
+      "name": "valid_action_send_text_turn",
+      "kind": "action",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "first bubble",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": "2026-10-15T04:10:00Z"
+      }
+    },
+    {
+      "name": "valid_action_send_media_job_with_xtr_price",
+      "kind": "action",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_9001",
+            "revision": "rev_7"
+          },
+          {
+            "kind": "photo",
+            "assetId": "asset_9002",
+            "revision": "rev_2"
+          }
+        ],
+        "currency": "XTR",
+        "amount": 250,
+        "notBefore": "2026-10-15T04:06:00Z",
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_schema_version_two",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "unsupported-version",
+      "payload": {
+        "schemaVersion": 2,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_id_does_not_match_identity",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "action-id-mismatch",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_93fc849cf25934cd97dedc8f3dad4961",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_kind_unknown",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "unsupported-enum",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_money",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_currency_usd",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "money-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_9001",
+            "revision": "rev_7"
+          }
+        ],
+        "currency": "USD",
+        "amount": 250,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_amount_zero",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "money-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_9001",
+            "revision": "rev_7"
+          }
+        ],
+        "currency": "XTR",
+        "amount": 0,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_amount_without_currency",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "money-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_9001",
+            "revision": "rev_7"
+          }
+        ],
+        "currency": null,
+        "amount": 250,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_currency_without_amount",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "money-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_9001",
+            "revision": "rev_7"
+          }
+        ],
+        "currency": "XTR",
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_send_text_blank",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "   ",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_send_media_without_assets",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "missing-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [],
+        "currency": "XTR",
+        "amount": 250,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_ordinal_negative",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": -1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_expected_epoch_boolean",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": true,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_too_many_assets",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "oversized-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "a01",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a02",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a03",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a04",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a05",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a06",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a07",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a08",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a09",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a10",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a11",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a12",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a13",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a14",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a15",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a16",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a17",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a18",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a19",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a20",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a21",
+            "revision": "r1"
+          }
+        ],
+        "currency": "XTR",
+        "amount": 250,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "valid_action_amount_lower_bound",
+      "kind": "action",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_9001",
+            "revision": "rev_7"
+          }
+        ],
+        "currency": "XTR",
+        "amount": 1,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "valid_action_amount_upper_bound",
+      "kind": "action",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_9001",
+            "revision": "rev_7"
+          },
+          {
+            "kind": "video",
+            "assetId": "asset_9002",
+            "revision": "rev_2"
+          }
+        ],
+        "currency": "XTR",
+        "amount": 25000,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "valid_action_expected_epoch_max_safe",
+      "kind": "action",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 9007199254740991,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "valid_action_ordinal_int32_max",
+      "kind": "action",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_de9c4744024482afb76ec8fd1c422155",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 2147483647,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 0,
+        "expectedInputRevision": 0,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_ordinal_above_int32",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_00000000000000000000000000000000",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 2147483648,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 0,
+        "expectedInputRevision": 0,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_ordinal_exponent_huge",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_00000000000000000000000000000000",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 1e+21,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 0,
+        "expectedInputRevision": 0,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_ordinal_boolean",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_00000000000000000000000000000000",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": true,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 0,
+        "expectedInputRevision": 0,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_expected_epoch_above_safe",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 9007199254740992,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_expected_epoch_exponent_huge",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 1e+21,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_amount_above_max",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "money-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_9001",
+            "revision": "rev_7"
+          }
+        ],
+        "currency": "XTR",
+        "amount": 25001,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_money_on_text",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "money-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 0,
+        "expectedInputRevision": 0,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "hi",
+        "assets": [],
+        "currency": "XTR",
+        "amount": 5,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_money_on_typing",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "money-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 0,
+        "expectedInputRevision": 0,
+        "configVersion": "cfg_0001",
+        "actionKind": "typing",
+        "text": null,
+        "assets": [],
+        "currency": "XTR",
+        "amount": 5,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_paid_media_over_ten",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "oversized-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "a01",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a02",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a03",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a04",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a05",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a06",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a07",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a08",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a09",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a10",
+            "revision": "r1"
+          },
+          {
+            "kind": "photo",
+            "assetId": "a11",
+            "revision": "r1"
+          }
+        ],
+        "currency": "XTR",
+        "amount": 250,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_action_paid_media_wrong_kind",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_9bc5fb3539e497e268faa6847868ccae",
+        "sourceKind": "job",
+        "sourceId": "job_welcome_tease",
+        "ordinal": 1,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 5,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_media",
+        "text": null,
+        "assets": [
+          {
+            "kind": "document",
+            "assetId": "doc_1",
+            "revision": "r1"
+          }
+        ],
+        "currency": "XTR",
+        "amount": 250,
+        "notBefore": null,
+        "expiresAt": null
+      }
+    },
+    {
+      "name": "invalid_event_year_zero",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "timestamp-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "0000-12-31T23:59:59-00:01",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_offset_out_of_range",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "timestamp-invalid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:00:00+24:00",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_action_photo_on_send_text",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_text",
+        "text": "first bubble",
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_probe",
+            "revision": "r1"
+          }
+        ],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": "2026-10-15T04:10:00Z"
+      }
+    },
+    {
+      "name": "invalid_action_photo_on_typing",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "typing",
+        "text": "first bubble",
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_probe",
+            "revision": "r1"
+          }
+        ],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": "2026-10-15T04:10:00Z"
+      }
+    },
+    {
+      "name": "invalid_action_photo_on_read_ack",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "read_ack",
+        "text": "first bubble",
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_probe",
+            "revision": "r1"
+          }
+        ],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": "2026-10-15T04:10:00Z"
+      }
+    },
+    {
+      "name": "invalid_action_photo_on_none",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "none",
+        "text": "first bubble",
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_probe",
+            "revision": "r1"
+          }
+        ],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": "2026-10-15T04:10:00Z"
+      }
+    },
+    {
+      "name": "invalid_action_photo_on_send_voice",
+      "kind": "action",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_voice",
+        "text": "first bubble",
+        "assets": [
+          {
+            "kind": "photo",
+            "assetId": "asset_probe",
+            "revision": "r1"
+          }
+        ],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": "2026-10-15T04:10:00Z"
+      }
+    },
+    {
+      "name": "valid_action_send_voice_with_voice_asset",
+      "kind": "action",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "actionId": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+        "sourceKind": "turn",
+        "sourceId": "turn_0001",
+        "ordinal": 0,
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "conversationKey": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+        "expectedEpoch": 4,
+        "expectedInputRevision": 2,
+        "configVersion": "cfg_0001",
+        "actionKind": "send_voice",
+        "text": null,
+        "assets": [
+          {
+            "kind": "voice",
+            "assetId": "voice_1",
+            "revision": "r1"
+          }
+        ],
+        "currency": null,
+        "amount": null,
+        "notBefore": null,
+        "expiresAt": "2026-10-15T04:10:00Z"
+      }
+    },
+    {
+      "name": "invalid_event_binding_id_only_nel",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_binding_id_only_bom",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "﻿",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_text_only_nel",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_text_only_bom",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "﻿",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "valid_event_ordinary_unicode_text",
+      "kind": "event",
+      "expect": "valid",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "héllo — ünïcode ✅",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_binding_id_only_ascii_space",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": " ",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_binding_id_only_nbsp",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "\u00a0",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_binding_id_only_em_space",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "\u2003",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_text_only_ascii_space",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "   ",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_text_only_nbsp",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "\u00a0",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_text_only_em_space",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "blank-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "\u2003",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_binding_id_padded_nbsp",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "\u00a0bnd_telegram_alpha\u00a0",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    },
+    {
+      "name": "invalid_event_binding_id_padded_tab",
+      "kind": "event",
+      "expect": "invalid",
+      "code": "malformed-field",
+      "payload": {
+        "schemaVersion": 1,
+        "eventId": "evt_0001",
+        "channel": "telegram",
+        "bindingId": "\tevt",
+        "cloneId": "11111111-1111-4111-8111-111111111111",
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "1001",
+        "messageId": "42",
+        "occurredAt": "2026-10-15T04:05:06.789Z",
+        "receivedAt": "2026-10-15T04:05:07.000Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "hey there",
+        "attachments": [],
+        "sourceRevision": "rev_0001"
+      }
+    }
+  ]
+}

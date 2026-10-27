@@ -1,0 +1,213 @@
+-- Additive Telegram control records for one creator's isolated Fastt worker
+-- database (SQLite). P1 foundation only: no production data is touched and no
+-- live Supabase schema is changed. The Postgres mirror of these records is
+-- bot/db/migrations/144_telegram_fastt_contracts.sql.
+--
+-- Additive by construction: every statement is CREATE ... IF NOT EXISTS, so
+-- applying this over an existing database adds tables and never rewrites one.
+-- Each creator gets its OWN database file; these tables are never shared across
+-- creators, which is what keeps one creator's native state out of another's.
+
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+-- Engine assignment and ownership. One row per (clone, bot) binding.
+-- requested_engine / effective_engine are the requested and effective mode;
+-- effective stays 'legacy' until an operator activates Fastt for this binding.
+-- ownership_epoch is monotonic: it only ever increases, and a stale worker that
+-- returns after a lease loss cannot regain authority with an older value.
+CREATE TABLE IF NOT EXISTS engine_bindings (
+  binding_id              TEXT PRIMARY KEY,
+  clone_id                TEXT NOT NULL,
+  bot_id                  TEXT NOT NULL,
+  mode                    TEXT NOT NULL CHECK (mode IN ('business','bot')),
+  business_connection_id  TEXT,
+  requested_engine        TEXT NOT NULL DEFAULT 'legacy' CHECK (requested_engine IN ('legacy','fastt')),
+  effective_engine        TEXT NOT NULL DEFAULT 'legacy' CHECK (effective_engine IN ('legacy','fastt')),
+  ownership_epoch         INTEGER NOT NULL DEFAULT 0 CHECK (ownership_epoch >= 0),
+  config_version          TEXT NOT NULL DEFAULT 'cfg_0000',
+  activation_cutoff       TEXT,
+  current_input_revision  INTEGER NOT NULL DEFAULT 0 CHECK (current_input_revision >= 0),
+  ai_paused               INTEGER NOT NULL DEFAULT 0 CHECK (ai_paused IN (0,1)),
+  human_takeover          INTEGER NOT NULL DEFAULT 0 CHECK (human_takeover IN (0,1)),
+  updated_at              TEXT NOT NULL,
+  UNIQUE (clone_id, bot_id, mode)
+);
+
+-- Received Telegram events. Uniqueness is (bot_id, update_id): update ids are
+-- per bot, so the same number on two bots is two distinct events. payload_digest
+-- makes a contradictory re-delivery of the same update detectable instead of an
+-- overwrite.
+CREATE TABLE IF NOT EXISTS telegram_events (
+  event_id           TEXT PRIMARY KEY,
+  bot_id             TEXT NOT NULL,
+  update_id          TEXT NOT NULL,
+  binding_id         TEXT NOT NULL,
+  conversation_key   TEXT NOT NULL,
+  chat_id            TEXT NOT NULL,
+  user_id            TEXT,
+  message_id         TEXT,
+  business_connection_id TEXT,
+  event_kind         TEXT NOT NULL,
+  origin             TEXT NOT NULL,
+  occurred_at        TEXT NOT NULL,
+  received_at        TEXT NOT NULL,
+  body_schema_version INTEGER NOT NULL,
+  body               TEXT NOT NULL,
+  payload_digest     TEXT NOT NULL,
+  receipt_seq        INTEGER NOT NULL,
+  created_at         TEXT NOT NULL,
+  UNIQUE (bot_id, update_id)
+);
+CREATE INDEX IF NOT EXISTS telegram_events_conversation ON telegram_events (conversation_key, receipt_seq);
+
+-- Durable bijective native identity allocation. A raw provider id is never
+-- copied into a numeric native column; instead each scoped source key gets one
+-- stable native id, and the same source key always returns the same id.
+CREATE TABLE IF NOT EXISTS native_identity_map (
+  source_type  TEXT NOT NULL,
+  source_key   TEXT NOT NULL,
+  native_id    INTEGER NOT NULL,
+  created_at   TEXT NOT NULL,
+  PRIMARY KEY (source_type, source_key),
+  UNIQUE (source_type, native_id)
+);
+
+-- One row per native id counter, so allocation is durable and never reuses an id.
+CREATE TABLE IF NOT EXISTS native_id_sequences (
+  source_type  TEXT PRIMARY KEY,
+  next_native_id INTEGER NOT NULL DEFAULT 1
+);
+
+-- Delivery actions. action_id is derived from the logical turn/job and ordinal,
+-- so a restart re-emits the SAME id; payload_digest then makes a conflicting
+-- payload under that id an error rather than an overwrite. State progression is
+-- prepared -> dispatching -> confirmed | known_failed | unknown, plus held and
+-- cancelled which never cross the send boundary.
+CREATE TABLE IF NOT EXISTS delivery_actions (
+  action_id              TEXT PRIMARY KEY,
+  source_kind            TEXT NOT NULL CHECK (source_kind IN ('turn','job')),
+  source_id              TEXT NOT NULL,
+  ordinal                INTEGER NOT NULL CHECK (ordinal >= 0),
+  binding_id             TEXT NOT NULL,
+  conversation_key       TEXT NOT NULL,
+  payload_digest         TEXT NOT NULL,
+  expected_epoch         INTEGER NOT NULL CHECK (expected_epoch >= 0),
+  expected_input_revision INTEGER NOT NULL CHECK (expected_input_revision >= 0),
+  config_version         TEXT NOT NULL,
+  action_kind            TEXT NOT NULL,
+  action_class           TEXT NOT NULL CHECK (action_class IN ('ai','manual','fulfillment')),
+  obligation_id          TEXT,
+  state                  TEXT NOT NULL DEFAULT 'prepared'
+                           CHECK (state IN ('prepared','dispatching','confirmed','known_failed','unknown','held','cancelled')),
+  body_schema_version    INTEGER NOT NULL,
+  body                   TEXT NOT NULL,
+  not_before             TEXT,
+  expires_at             TEXT,
+  claim_owner            TEXT,
+  claim_epoch            INTEGER,
+  attempt_token          TEXT,
+  attempt_count          INTEGER NOT NULL DEFAULT 0,
+  telegram_message_id    TEXT,
+  error_category         TEXT,
+  evidence_kind          TEXT,
+  evidence_ref           TEXT,
+  evidence_actor         TEXT,
+  evidence_reason        TEXT,
+  reconciliation_count   INTEGER NOT NULL DEFAULT 0,
+  reconciliation_note    TEXT,
+  created_at             TEXT NOT NULL,
+  updated_at             TEXT NOT NULL,
+  UNIQUE (binding_id, source_kind, source_id, ordinal)
+);
+CREATE INDEX IF NOT EXISTS delivery_actions_pending ON delivery_actions (conversation_key, state, ordinal);
+
+-- Ordered projection events and the consumed cursor. A cursor may only advance
+-- inside the same transaction that inserted the event, and only over the
+-- CONTIGUOUS prefix of source positions. The SOURCE supplies the stable event id
+-- and stream position; destination autoincrement is never source progress.
+CREATE TABLE IF NOT EXISTS projection_events (
+  recipient_worker    TEXT NOT NULL,
+  source_event_id     TEXT NOT NULL,
+  source_sequence     INTEGER NOT NULL CHECK (source_sequence >= 0),
+  event_kind          TEXT NOT NULL,
+  body_schema_version INTEGER NOT NULL,
+  body                TEXT NOT NULL,
+  payload_digest      TEXT NOT NULL,
+  imported_at         TEXT NOT NULL,
+  applied_at          TEXT,
+  PRIMARY KEY (recipient_worker, source_event_id),
+  UNIQUE (recipient_worker, source_sequence)
+);
+
+CREATE TABLE IF NOT EXISTS projection_cursors (
+  cursor_name   TEXT PRIMARY KEY,
+  last_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_sequence >= 0),
+  updated_at    TEXT NOT NULL
+);
+
+-- The trusted conversation-to-binding relationship (R6). An action may only be
+-- registered or claimed when its conversation resolves here to the same binding
+-- and clone.
+CREATE TABLE IF NOT EXISTS bindings_conversations (
+  conversation_key TEXT PRIMARY KEY,
+  binding_id       TEXT NOT NULL,
+  clone_id         TEXT NOT NULL,
+  input_revision   INTEGER NOT NULL DEFAULT 0 CHECK (input_revision >= 0),
+  takeover_requested INTEGER NOT NULL DEFAULT 0 CHECK (takeover_requested IN (0,1)),
+  created_at       TEXT NOT NULL
+);
+
+-- Canonical paid obligations (R6). A fulfillment action requires a valid
+-- obligation, so a conversational pause cannot cancel money already taken.
+CREATE TABLE IF NOT EXISTS paid_obligations (
+  obligation_id    TEXT PRIMARY KEY,
+  binding_id       TEXT NOT NULL,
+  conversation_key TEXT NOT NULL,
+  currency         TEXT NOT NULL CHECK (currency = 'XTR'),
+  amount           INTEGER NOT NULL CHECK (amount >= 1),
+  assets           TEXT NOT NULL DEFAULT '[]',
+  state            TEXT NOT NULL DEFAULT 'outstanding' CHECK (state IN ('outstanding','reserved','fulfilled','cancelled')),
+  action_id        TEXT,
+  reserved_at      TEXT,
+  fulfilled_at     TEXT,
+  created_at       TEXT NOT NULL
+);
+
+-- One durable worker lease per native database. A second worker cannot take the
+-- lease while a live one holds it.
+CREATE TABLE IF NOT EXISTS worker_leases (
+  lease_name   TEXT PRIMARY KEY,
+  owner_id     TEXT NOT NULL,
+  epoch        INTEGER NOT NULL,
+  fencing_token TEXT NOT NULL,
+  acquired_at  TEXT NOT NULL,
+  expires_at   TEXT NOT NULL
+);
+
+-- Authenticated operator/engine commands with an expected revision, so a command
+-- written against a stale revision is visible as such rather than silently applied.
+CREATE TABLE IF NOT EXISTS engine_commands (
+  command_id        TEXT PRIMARY KEY,
+  binding_id        TEXT NOT NULL,
+  kind              TEXT NOT NULL,
+  actor             TEXT NOT NULL,
+  expected_revision INTEGER NOT NULL,
+  requested_outcome TEXT NOT NULL,
+  effective_outcome TEXT,
+  reason            TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+
+-- Native invocation journal. An interrupted invocation stays visible as
+-- interrupted after a process restart, so it is never silently converted into a
+-- generic failure and retried.
+CREATE TABLE IF NOT EXISTS worker_invocations (
+  invocation_id   TEXT PRIMARY KEY,
+  turn_id         TEXT NOT NULL,
+  status          TEXT NOT NULL CHECK (status IN ('started','completed','interrupted')),
+  action_manifest TEXT NOT NULL DEFAULT '[]',
+  started_at      TEXT NOT NULL,
+  completed_at    TEXT
+);

@@ -1,0 +1,43 @@
+"""Reuse subscription flags already present in native chat discovery; no extra reads."""
+from db.models import Fan
+from db.onlyfans_audience_models import OfFanSubscription
+from .store import Refused
+
+
+def profiles_from_chats(rows):
+    result = []
+    for row in rows:
+        user = row.get("withUser") if type(row) is dict else None
+        if type(user) is not dict or type(user.get("id")) is not int:
+            continue
+        # Same subscribedOn relation used by the existing fan/creator eligibility
+        # owner, but absence is unknown rather than a false expired observation.
+        subscribed = user.get("subscribedOn")
+        if type(subscribed) is bool:
+            result.append({"fan_id": user["id"], "status": "active" if subscribed else "expired"})
+    return result
+
+
+def apply_profiles(s, runtime, profiles, fan_ids, now):
+    if type(profiles) not in {list, tuple} or len(profiles) > len(fan_ids):
+        raise Refused("invalid discovery profile observations")
+    seen = set()
+    for profile in profiles:
+        if (type(profile) is not dict or set(profile) != {"fan_id", "status"}
+                or type(profile["fan_id"]) is not int or profile["fan_id"] not in fan_ids
+                or profile["fan_id"] in seen or profile["status"] not in {"active", "expired"}):
+            raise Refused("invalid discovery profile observation")
+        seen.add(profile["fan_id"])
+        fan = s.get(Fan, (runtime.account_id, profile["fan_id"]))
+        if fan is None:
+            fan = Fan(account_id=runtime.account_id, fan_id=profile["fan_id"])
+            s.add(fan)
+            s.flush()
+        row = s.get(OfFanSubscription, (runtime.account_id, profile["fan_id"]))
+        if row is None:
+            row = OfFanSubscription(account_id=runtime.account_id, fan_id=profile["fan_id"])
+            s.add(row)
+        row.binding_id, row.status, row.observed_at = runtime.binding_id, profile["status"], now
+        # No expiry is invented from a boolean flag, and no persona/fan facts
+        # used by the model are rewritten by this CRM observation.
+        row.expires_at = None

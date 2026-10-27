@@ -1,0 +1,1262 @@
+"""Durable Telegram control records for one creator's isolated Fastt worker DB.
+
+P1 foundation. SQLite-only by design: the native worker state is a per-creator
+file, so these records are the worker's own durable memory and are never shared
+across creators. Nothing here starts a service, sends anything, or touches
+Supabase.
+
+Every mutation that must not interleave with another writer runs inside an
+explicit BEGIN IMMEDIATE transaction. That is what makes the competing-claimant,
+stale-epoch and projection-cursor cases testable with real database semantics
+rather than in-process locks.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import inspect
+import json
+import os
+import re
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+
+from .contract import (
+    INDEX_MAX,
+    action_payload_digest,
+    canonical_json,
+    encode_tuple,
+    event_content_digest,
+    parse_delivery_action,
+    parse_telegram_event,
+)
+from .identity import telegram_conversation_key
+
+SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
+DEFAULT_RECIPIENT = "creator-worker"
+DEFAULT_CURSOR = DEFAULT_RECIPIENT
+PROJECTION_BODY_SCHEMA_VERSION = 1
+
+
+class TelegramStoreError(Exception):
+    """Base for store-level rejections."""
+
+
+class EventConflictError(TelegramStoreError):
+    """The same (bot id, update id) arrived with a different payload."""
+
+
+class ActionConflictError(TelegramStoreError):
+    """The same action id arrived with a different frozen payload."""
+
+
+class StaleEpochError(TelegramStoreError):
+    """An ownership bump was attempted from a stale expected epoch."""
+
+
+class BindingIdentityError(TelegramStoreError):
+    """clone/bot/mode/Business connection are immutable under a binding id."""
+
+
+class ConversationBindingError(TelegramStoreError):
+    """A conversation/action scope does not match the trusted binding record."""
+
+
+class AttemptTokenError(TelegramStoreError):
+    """A completion did not present the attempt token issued by the claim."""
+
+
+class ProjectionConflictError(TelegramStoreError):
+    """A source event identity re-arrived with different content."""
+
+
+def _utc_now() -> str:
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+
+
+def _digest(obj: object) -> str:
+    """Stable digest of an arbitrary JSON value, for duplicate-vs-conflict detection."""
+    return hashlib.sha256(
+        json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+_RECEIPT_RE = re.compile(r"^[0-9]{1,19}$")
+
+
+# The trusted transport classifications that may prove a request NEVER crossed the
+# send boundary (C2). A closed vocabulary, not free text: an arbitrary error string
+# such as "network timeout" is diagnostic data and is not proof. Mirrors
+# PROVEN_UNSENT_CLASSES in bot/src/services/telegram-control-store.ts.
+PROVEN_UNSENT_CLASSES = (
+    "never_dispatched",
+    "connect_refused",
+    "dns_failure",
+    "tls_failure",
+    "provider_rejected_before_send",
+)
+
+
+def _valid_operator(value: object) -> dict | None:
+    """The ONE validated operator-decision shape (C2): a dict carrying ACTUAL
+    nonblank STRING actor and reason. Null/boolean/number/list/blank values are
+    refused, never coerced with str(), so an uncertain hold can never be cleared by
+    ``{"actor": None, "reason": None}``. The exact supplied strings are preserved
+    as provenance. Mirrors validatedOperator in the Node store."""
+    if not isinstance(value, dict):
+        return None
+    actor = value.get("actor")
+    reason = value.get("reason")
+    if not isinstance(actor, str) or not isinstance(reason, str):
+        return None
+    if not actor.strip() or not reason.strip():
+        return None
+    return {"actor": actor, "reason": reason}
+
+
+def _operator_ref(operator: dict) -> str:
+    """The UNambiguous canonical reference for an operator decision (C2): a JSON
+    array of the two components. The old ``f"{actor}:{reason}"`` form collided
+    (``"operator:a"+"b"`` == ``"operator"+"a:b"``). Mirrors operatorRef in Node."""
+    return json.dumps([operator["actor"], operator["reason"]], separators=(",", ":"), ensure_ascii=False)
+
+
+def _outcome_evidence(
+    action_kind: str,
+    current_state: str,
+    state: str,
+    telegram_message_id: str | None,
+    error_category: str | None,
+    telegram_ack: bool | None,
+    unsent_proof: str | None,
+    operator: dict | None,
+) -> dict | None:
+    """The discriminated outcome evidence required for a completion (C2).
+
+    Returns None when the supplied options do not prove the requested outcome for
+    this action kind and CURRENT state. `unsent_proof` is a CLASSIFICATION from
+    PROVEN_UNSENT_CLASSES, never prose. The returned dict carries separate
+    ``actor``/``reason`` fields for an operator decision so two different decisions
+    can never compare equal. Mirrors outcomeEvidence in the Node store.
+    """
+    operator = _valid_operator(operator)
+    if state == "unknown":
+        category = (error_category or "").strip()
+        return {"kind": "unknown-error", "ref": category, "actor": None, "reason": None} if category else None
+    if state == "confirmed":
+        if action_kind in ("typing", "read_ack", "none"):
+            return {"kind": "ack", "ref": None, "actor": None, "reason": None} if telegram_ack is True else None
+        message_id = (telegram_message_id or "").strip()
+        return (
+            {"kind": "receipt", "ref": message_id, "actor": None, "reason": None}
+            if _RECEIPT_RE.match(message_id)
+            else None
+        )
+    # known_failed / held / cancelled.
+    if state == "known_failed" and current_state == "unknown":
+        # An uncertain attempt may only be closed as failed by an authorized
+        # operator decision recorded with actor and reason.
+        return (
+            {"kind": "operator-decision", "ref": _operator_ref(operator), "actor": operator["actor"], "reason": operator["reason"]}
+            if operator
+            else None
+        )
+    classification = (unsent_proof or "").strip()
+    if classification in PROVEN_UNSENT_CLASSES:
+        return {"kind": "proven-unsent", "ref": classification, "actor": None, "reason": None}
+    if operator:
+        return {"kind": "operator-decision", "ref": _operator_ref(operator), "actor": operator["actor"], "reason": operator["reason"]}
+    return None
+
+
+class TelegramContractStore:
+    """Durable store over one per-creator SQLite file."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        # isolation_level=None puts us in manual-transaction mode: nothing is
+        # committed until commit() is called, which is what the crash tests rely on.
+        self.conn = sqlite3.connect(path, timeout=30.0, isolation_level=None)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys = ON")
+
+    # ── lifecycle ──────────────────────────────────────────────────────────
+
+    def initialize(self) -> None:
+        with open(SCHEMA_PATH, "r", encoding="utf-8") as fh:
+            self.conn.executescript(fh.read())
+
+    def close(self) -> None:
+        self.conn.close()
+
+    @contextmanager
+    def _tx(self):
+        """BEGIN IMMEDIATE ... COMMIT, rolling back on any exception."""
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
+        else:
+            self.conn.execute("COMMIT")
+
+    # ── engine bindings and ownership epoch ────────────────────────────────
+
+    def upsert_binding(
+        self,
+        binding_id: str,
+        clone_id: str,
+        bot_id: str,
+        mode: str,
+        business_connection_id: str | None = None,
+        requested_engine: str = "legacy",
+        effective_engine: str = "legacy",
+        config_version: str = "cfg_0000",
+        activation_cutoff: str | None = None,
+        now: str | None = None,
+    ) -> None:
+        now = now or _utc_now()
+        with self._tx():
+            existing = self.conn.execute(
+                "SELECT clone_id, bot_id, mode, business_connection_id FROM engine_bindings WHERE binding_id = ?",
+                (binding_id,),
+            ).fetchone()
+            if existing is not None:
+                # R6: clone/bot/mode/Business connection are the binding's IDENTITY
+                # and are immutable under a binding id. Replacing them needs a fenced
+                # replacement, never a silent swap that carries the old epoch's
+                # authority to a new recipient.
+                same_identity = (
+                    existing["clone_id"] == clone_id
+                    and existing["bot_id"] == bot_id
+                    and existing["mode"] == mode
+                    and (existing["business_connection_id"] or None) == (business_connection_id or None)
+                )
+                if not same_identity:
+                    raise BindingIdentityError(
+                        f"binding {binding_id} identity is immutable: clone/bot/mode/Business connection cannot change"
+                    )
+                self.conn.execute(
+                    "UPDATE engine_bindings SET requested_engine = ?, effective_engine = ?, config_version = ?, "
+                    "activation_cutoff = ?, updated_at = ? WHERE binding_id = ?",
+                    (requested_engine, effective_engine, config_version, activation_cutoff, now, binding_id),
+                )
+                return
+            self.conn.execute(
+                """
+                INSERT INTO engine_bindings
+                    (binding_id, clone_id, bot_id, mode, business_connection_id,
+                     requested_engine, effective_engine, ownership_epoch, config_version,
+                     activation_cutoff, current_input_revision, ai_paused, human_takeover, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, 0, 0, ?)
+                """,
+                (
+                    binding_id,
+                    clone_id,
+                    bot_id,
+                    mode,
+                    business_connection_id,
+                    requested_engine,
+                    effective_engine,
+                    config_version,
+                    activation_cutoff,
+                    now,
+                ),
+            )
+
+    def set_binding_controls(
+        self,
+        binding_id: str,
+        current_input_revision: int | None = None,
+        ai_paused: bool | None = None,
+        human_takeover: bool | None = None,
+        now: str | None = None,
+    ) -> None:
+        now = now or _utc_now()
+        sets = []
+        args: list = []
+        if current_input_revision is not None:
+            sets.append("current_input_revision = ?")
+            args.append(current_input_revision)
+        if ai_paused is not None:
+            sets.append("ai_paused = ?")
+            args.append(1 if ai_paused else 0)
+        if human_takeover is not None:
+            sets.append("human_takeover = ?")
+            args.append(1 if human_takeover else 0)
+        if not sets:
+            return
+        sets.append("updated_at = ?")
+        args.extend([now, binding_id])
+        with self._tx():
+            cur = self.conn.execute(f"UPDATE engine_bindings SET {', '.join(sets)} WHERE binding_id = ?", tuple(args))
+            if cur.rowcount != 1:
+                raise TelegramStoreError(f"no binding {binding_id}")
+
+    def bump_input_revision(self, binding_id: str, now: str | None = None) -> int:
+        now = now or _utc_now()
+        with self._tx():
+            cur = self.conn.execute(
+                "UPDATE engine_bindings SET current_input_revision = current_input_revision + 1, updated_at = ? "
+                "WHERE binding_id = ?",
+                (now, binding_id),
+            )
+            if cur.rowcount != 1:
+                raise TelegramStoreError(f"no binding {binding_id}")
+            row = self.conn.execute(
+                "SELECT current_input_revision FROM engine_bindings WHERE binding_id = ?", (binding_id,)
+            ).fetchone()
+            return int(row["current_input_revision"])
+
+    def bind_conversation(
+        self, conversation_key: str, binding_id: str, clone_id: str, now: str | None = None
+    ) -> None:
+        """Record the TRUSTED conversation-to-binding relationship (R6).
+
+        The conversation also gets its OWN input revision (C3), seeded from the
+        binding's creator-wide value at bind time, so new input for one fan no
+        longer invalidates another fan's prepared answer.
+        """
+        now = now or _utc_now()
+        with self._tx():
+            binding = self.conn.execute(
+                "SELECT clone_id, current_input_revision FROM engine_bindings WHERE binding_id = ?", (binding_id,)
+            ).fetchone()
+            if binding is None:
+                raise ConversationBindingError(f"no binding {binding_id}")
+            if binding["clone_id"] != clone_id:
+                raise ConversationBindingError(
+                    f"binding {binding_id} belongs to clone {binding['clone_id']}, not {clone_id}"
+                )
+            existing = self.conn.execute(
+                "SELECT binding_id, clone_id FROM bindings_conversations WHERE conversation_key = ?",
+                (conversation_key,),
+            ).fetchone()
+            if existing is not None:
+                if existing["binding_id"] != binding_id or existing["clone_id"] != clone_id:
+                    raise ConversationBindingError(
+                        f"conversation {conversation_key} is already bound to another binding"
+                    )
+                return
+            self.conn.execute(
+                "INSERT INTO bindings_conversations "
+                "(conversation_key, binding_id, clone_id, input_revision, takeover_requested, created_at) "
+                "VALUES (?, ?, ?, ?, 0, ?)",
+                (conversation_key, binding_id, clone_id, int(binding["current_input_revision"]), now),
+            )
+
+    def conversation_binding(self, conversation_key: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT binding_id, clone_id FROM bindings_conversations WHERE conversation_key = ?",
+            (conversation_key,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def conversation_controls(self, conversation_key: str) -> dict | None:
+        """The per-conversation control facts (C3): its own input revision and the
+        takeover fact that authorizes manual work here (false while unresolved)."""
+        row = self.conn.execute(
+            "SELECT input_revision, takeover_requested FROM bindings_conversations WHERE conversation_key = ?",
+            (conversation_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "inputRevision": int(row["input_revision"]),
+            "takeoverRequested": int(row["takeover_requested"]) == 1,
+            "takeoverEffective": self._conversation_takeover_effective(conversation_key),
+        }
+
+    def bump_conversation_input_revision(self, conversation_key: str) -> int:
+        """Increment ONE conversation's own input revision (C3)."""
+        with self._tx():
+            cur = self.conn.execute(
+                "UPDATE bindings_conversations SET input_revision = input_revision + 1 WHERE conversation_key = ?",
+                (conversation_key,),
+            )
+            if cur.rowcount != 1:
+                raise ConversationBindingError(f"no conversation {conversation_key}")
+            row = self.conn.execute(
+                "SELECT input_revision FROM bindings_conversations WHERE conversation_key = ?",
+                (conversation_key,),
+            ).fetchone()
+            return int(row["input_revision"])
+
+    def set_conversation_controls(
+        self, conversation_key: str, takeover_requested: bool | None = None
+    ) -> None:
+        """Request/clear human takeover for ONE conversation (C3)."""
+        if takeover_requested is None:
+            return
+        with self._tx():
+            cur = self.conn.execute(
+                "UPDATE bindings_conversations SET takeover_requested = ? WHERE conversation_key = ?",
+                (1 if takeover_requested else 0, conversation_key),
+            )
+            if cur.rowcount != 1:
+                raise ConversationBindingError(f"no conversation {conversation_key}")
+
+    def _conversation_takeover_effective(self, conversation_key: str) -> bool:
+        """Effective only once no unresolved (dispatching/unknown) send remains."""
+        row = self.conn.execute(
+            "SELECT takeover_requested FROM bindings_conversations WHERE conversation_key = ?",
+            (conversation_key,),
+        ).fetchone()
+        if row is None or int(row["takeover_requested"]) != 1:
+            return False
+        unresolved = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM delivery_actions WHERE conversation_key = ? "
+            "AND state IN ('dispatching','unknown')",
+            (conversation_key,),
+        ).fetchone()
+        return int(unresolved["n"]) == 0
+
+    def record_obligation(
+        self,
+        obligation_id: str,
+        binding_id: str,
+        conversation_key: str,
+        amount: int,
+        assets: list | None = None,
+        now: str | None = None,
+    ) -> None:
+        """Record a canonical paid obligation (R6/C3) with its FROZEN asset
+        composition, so only the exact fulfilment can claim against it."""
+        now = now or _utc_now()
+        with self._tx():
+            self.conn.execute(
+                "INSERT INTO paid_obligations "
+                "(obligation_id, binding_id, conversation_key, currency, amount, assets, state, created_at) "
+                "VALUES (?, ?, ?, 'XTR', ?, ?, 'outstanding', ?)",
+                (obligation_id, binding_id, conversation_key, amount, canonical_json(assets or []), now),
+            )
+
+    def obligation_count(self, conversation_key: str) -> int:
+        """Count only OUTSTANDING obligations: a fulfilled one no longer authorizes work."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM paid_obligations WHERE conversation_key = ? AND state = 'outstanding'",
+            (conversation_key,),
+        ).fetchone()
+        return int(row["n"])
+
+    def _obligation(self, obligation_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT obligation_id, binding_id, conversation_key, assets, state, action_id "
+            "FROM paid_obligations WHERE obligation_id = ?",
+            (obligation_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def _require_fulfillment_obligation(
+        self, obligation_id: str, binding_id: str, conversation_key: str, assets: list
+    ) -> None:
+        """Validate that `obligation_id` is the exact, still-outstanding, correctly
+        scoped obligation for this action. Raises (aborting the enclosing
+        transaction) when it is not. Used at REGISTRATION (C3)."""
+        row = self._obligation(obligation_id)
+        if row is None:
+            raise TelegramStoreError(f"obligation {obligation_id} does not exist")
+        if row["binding_id"] != binding_id or row["conversation_key"] != conversation_key:
+            raise TelegramStoreError(f"obligation {obligation_id} is not scoped to this binding and conversation")
+        if row["state"] != "outstanding":
+            raise TelegramStoreError(f"obligation {obligation_id} is {row['state']}, not outstanding")
+        if row["assets"] != canonical_json(assets):
+            raise TelegramStoreError(f"obligation {obligation_id} composition does not match the action")
+
+    def _reserve_obligation(self, obligation_id: str, action_id: str, now: str) -> None:
+        """Reserve (outstanding -> reserved, tied to the claiming action) (C3)."""
+        cur = self.conn.execute(
+            "UPDATE paid_obligations SET state = 'reserved', action_id = ?, reserved_at = ? "
+            "WHERE obligation_id = ? AND state = 'outstanding'",
+            (action_id, now, obligation_id),
+        )
+        if cur.rowcount != 1:
+            raise TelegramStoreError(f"obligation {obligation_id} is no longer outstanding")
+
+    def _settle_obligation(self, obligation_id: str, action_id: str, now: str) -> None:
+        """Settle a reservation (reserved by THIS action -> fulfilled) on confirmed
+        delivery (C3)."""
+        cur = self.conn.execute(
+            "UPDATE paid_obligations SET state = 'fulfilled', fulfilled_at = ? "
+            "WHERE obligation_id = ? AND state = 'reserved' AND action_id = ?",
+            (now, obligation_id, action_id),
+        )
+        if cur.rowcount != 1:
+            raise TelegramStoreError(f"obligation {obligation_id} is not reserved by this action")
+
+    def _release_obligation(self, obligation_id: str, action_id: str) -> None:
+        """Release a reservation (reserved by THIS action -> outstanding) on a
+        proven-unsent completion (C3)."""
+        cur = self.conn.execute(
+            "UPDATE paid_obligations SET state = 'outstanding', action_id = NULL, reserved_at = NULL "
+            "WHERE obligation_id = ? AND state = 'reserved' AND action_id = ?",
+            (obligation_id, action_id),
+        )
+        if cur.rowcount != 1:
+            raise TelegramStoreError(f"obligation {obligation_id} is not reserved by this action")
+
+    def current_epoch(self, binding_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT ownership_epoch FROM engine_bindings WHERE binding_id = ?", (binding_id,)
+        ).fetchone()
+        if row is None:
+            raise TelegramStoreError(f"no binding {binding_id}")
+        return int(row["ownership_epoch"])
+
+    def effective_engine(self, binding_id: str) -> str:
+        row = self.conn.execute(
+            "SELECT effective_engine FROM engine_bindings WHERE binding_id = ?", (binding_id,)
+        ).fetchone()
+        if row is None:
+            raise TelegramStoreError(f"no binding {binding_id}")
+        return str(row["effective_engine"])
+
+    def bump_epoch(self, binding_id: str, expected_current: int, now: str | None = None) -> int:
+        """Monotonically advance the ownership epoch, refusing a stale expectation."""
+        now = now or _utc_now()
+        with self._tx():
+            cur = self.conn.execute(
+                "UPDATE engine_bindings SET ownership_epoch = ownership_epoch + 1, updated_at = ? "
+                "WHERE binding_id = ? AND ownership_epoch = ?",
+                (now, binding_id, expected_current),
+            )
+            if cur.rowcount != 1:
+                raise StaleEpochError(
+                    f"binding {binding_id} is not at expected epoch {expected_current}"
+                )
+            row = self.conn.execute(
+                "SELECT ownership_epoch FROM engine_bindings WHERE binding_id = ?", (binding_id,)
+            ).fetchone()
+            return int(row["ownership_epoch"])
+
+    # ── inbound events ─────────────────────────────────────────────────────
+
+    def admit_event(self, event: dict, now: str | None = None) -> tuple[str, bool]:
+        """Admit one validated Telegram event.
+
+        Returns (event_id, inserted). A byte-identical re-delivery is a duplicate
+        (inserted=False); the same (bot id, update id) with a DIFFERENT payload
+        raises EventConflictError instead of overwriting.
+        """
+        parsed = parse_telegram_event(event)
+        now = now or _utc_now()
+        # R4: the duplicate/conflict boundary is the SEMANTIC source content, not
+        # the local envelope. A receiver restart that regenerates eventId/receivedAt
+        # for the same provider update must return the first canonical record.
+        digest = event_content_digest(parsed)
+        body = canonical_json(parsed)
+        conversation_key = telegram_conversation_key(
+            parsed["cloneId"],
+            parsed["botId"],
+            parsed["mode"],
+            parsed["businessConnectionId"],
+            parsed["chatId"],
+        )
+        with self._tx():
+            existing = self.conn.execute(
+                "SELECT event_id, payload_digest FROM telegram_events WHERE bot_id = ? AND update_id = ?",
+                (parsed["botId"], parsed["updateId"]),
+            ).fetchone()
+            if existing is not None:
+                if existing["payload_digest"] != digest:
+                    raise EventConflictError(
+                        f"update {parsed['updateId']} on bot {parsed['botId']} arrived with a different payload"
+                    )
+                return str(existing["event_id"]), False
+
+            seq_row = self.conn.execute(
+                "SELECT COALESCE(MAX(receipt_seq), 0) + 1 AS seq FROM telegram_events"
+            ).fetchone()
+            self.conn.execute(
+                """
+                INSERT INTO telegram_events
+                    (event_id, bot_id, update_id, binding_id, conversation_key, chat_id, user_id,
+                     message_id, business_connection_id, event_kind, origin, occurred_at, received_at,
+                     body_schema_version, body, payload_digest, receipt_seq, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    parsed["eventId"],
+                    parsed["botId"],
+                    parsed["updateId"],
+                    parsed["bindingId"],
+                    conversation_key,
+                    parsed["chatId"],
+                    parsed["userId"],
+                    parsed["messageId"],
+                    parsed["businessConnectionId"],
+                    parsed["eventKind"],
+                    parsed["origin"],
+                    parsed["occurredAt"],
+                    parsed["receivedAt"],
+                    parsed["schemaVersion"],
+                    body,
+                    digest,
+                    int(seq_row["seq"]),
+                    now,
+                ),
+            )
+            return parsed["eventId"], True
+
+    def event_count(self) -> int:
+        return int(self.conn.execute("SELECT COUNT(*) AS n FROM telegram_events").fetchone()["n"])
+
+    def event_record(self, event_id: str) -> dict | None:
+        """Typed readback of a durable event body (R1)."""
+        row = self.conn.execute(
+            "SELECT event_id, bot_id, update_id, payload_digest, received_at, body_schema_version, body "
+            "FROM telegram_events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "eventId": str(row["event_id"]),
+            "botId": str(row["bot_id"]),
+            "updateId": str(row["update_id"]),
+            "contentDigest": str(row["payload_digest"]),
+            "receivedAt": str(row["received_at"]),
+            "bodySchemaVersion": int(row["body_schema_version"]),
+            "body": json.loads(row["body"]),
+        }
+
+    # ── native identity allocation ─────────────────────────────────────────
+
+    def allocate_native_id(self, source_type: str, source_key: str, now: str | None = None) -> int:
+        """Return the durable bijective native id for one scoped source key."""
+        now = now or _utc_now()
+        key = encode_tuple([source_type, source_key])
+        with self._tx():
+            row = self.conn.execute(
+                "SELECT native_id FROM native_identity_map WHERE source_type = ? AND source_key = ?",
+                (source_type, key),
+            ).fetchone()
+            if row is not None:
+                return int(row["native_id"])
+            seq = self.conn.execute(
+                "SELECT next_native_id FROM native_id_sequences WHERE source_type = ?", (source_type,)
+            ).fetchone()
+            if seq is None:
+                self.conn.execute(
+                    "INSERT INTO native_id_sequences (source_type, next_native_id) VALUES (?, 1)",
+                    (source_type,),
+                )
+                native_id = 1
+            else:
+                native_id = int(seq["next_native_id"])
+            # R5: a native id must stay an exactly-representable integer, so it
+            # fails before precision exhaustion rather than silently rounding.
+            if native_id > INDEX_MAX:
+                raise TelegramStoreError(f"native id space for {source_type} is exhausted")
+            self.conn.execute(
+                "UPDATE native_id_sequences SET next_native_id = ? WHERE source_type = ?",
+                (native_id + 1, source_type),
+            )
+            self.conn.execute(
+                "INSERT INTO native_identity_map (source_type, source_key, native_id, created_at) VALUES (?, ?, ?, ?)",
+                (source_type, key, native_id, now),
+            )
+            return native_id
+
+    # ── delivery actions ───────────────────────────────────────────────────
+
+    def _assert_trusted_scope(self, conversation_key: str, binding_id: str, clone_id: str) -> None:
+        """The TRUSTED scope check (R6): the conversation must resolve to this
+        binding and clone, so a forged clone/conversation never reaches a claim."""
+        conv = self.conversation_binding(conversation_key)
+        if conv is None:
+            raise ConversationBindingError(f"conversation {conversation_key} is not bound to any binding")
+        if conv["binding_id"] != binding_id:
+            raise ConversationBindingError(
+                f"conversation {conversation_key} is bound to {conv['binding_id']}, not {binding_id}"
+            )
+        if conv["clone_id"] != clone_id:
+            raise ConversationBindingError(
+                f"conversation {conversation_key} belongs to clone {conv['clone_id']}, not {clone_id}"
+            )
+
+    def register_action(
+        self, action: dict, action_class: str, obligation_id: str | None = None, now: str | None = None
+    ) -> tuple[bool, str]:
+        """Register one validated action. Returns (created, payload_digest).
+
+        `action_class` is the TRUSTED authority class (R6) derived by the gateway
+        from turn/command/obligation context; it is never read from the wire
+        payload, so a worker cannot grant itself manual or financial privileges.
+        Re-registering the SAME id with the SAME frozen payload is a no-op; a
+        different payload under that id raises ActionConflictError.
+
+        A TRUSTED fulfilment registration also BINDS a specific canonical obligation
+        (C3): an explicit `obligation_id` is validated, otherwise the oldest exact
+        outstanding obligation is bound, or the action stays unassociated and
+        unclaimable. A purchase created LATER can never wake an unassociated action.
+        """
+        parsed = parse_delivery_action(action)
+        now = now or _utc_now()
+        # The CONTRACT digest, not a local object hash: the Node gateway and this
+        # worker must agree on the frozen identity of one action.
+        digest = action_payload_digest(parsed)
+        body = canonical_json(parsed)
+        with self._tx():
+            self._assert_trusted_scope(parsed["conversationKey"], parsed["bindingId"], parsed["cloneId"])
+            existing = self.conn.execute(
+                "SELECT payload_digest FROM delivery_actions WHERE action_id = ?",
+                (parsed["actionId"],),
+            ).fetchone()
+            if existing is not None:
+                if existing["payload_digest"] != digest:
+                    raise ActionConflictError(
+                        f"action {parsed['actionId']} re-arrived with a different frozen payload"
+                    )
+                # A duplicate re-registration never changes the recorded obligation
+                # association (C3).
+                return False, str(existing["payload_digest"])
+            # Trusted fulfilment registration binds to a SPECIFIC canonical
+            # obligation by its trusted ID (C3). Purchase identity is NEVER inferred
+            # from matching assets: with no explicit ID the action stays
+            # UNASSOCIATED and unclaimable, so a later purchase can never wake it.
+            bound_obligation: str | None = None
+            if action_class == "fulfillment" and obligation_id:
+                self._require_fulfillment_obligation(
+                    obligation_id, parsed["bindingId"], parsed["conversationKey"], parsed["assets"]
+                )
+                bound_obligation = obligation_id
+            self.conn.execute(
+                """
+                INSERT INTO delivery_actions
+                    (action_id, source_kind, source_id, ordinal, binding_id, conversation_key,
+                     payload_digest, expected_epoch, expected_input_revision, config_version,
+                     action_kind, action_class, obligation_id, state, body_schema_version, body, not_before, expires_at,
+                     attempt_count, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    parsed["actionId"],
+                    parsed["sourceKind"],
+                    parsed["sourceId"],
+                    parsed["ordinal"],
+                    parsed["bindingId"],
+                    parsed["conversationKey"],
+                    digest,
+                    parsed["expectedEpoch"],
+                    parsed["expectedInputRevision"],
+                    parsed["configVersion"],
+                    parsed["actionKind"],
+                    action_class,
+                    bound_obligation,
+                    parsed["schemaVersion"],
+                    body,
+                    parsed["notBefore"],
+                    parsed["expiresAt"],
+                    now,
+                    now,
+                ),
+            )
+            return True, digest
+
+    def action_record(self, action_id: str) -> dict | None:
+        """Typed readback of a frozen action body (R1)."""
+        row = self.conn.execute("SELECT * FROM delivery_actions WHERE action_id = ?", (action_id,)).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        return {"row": record, "body": json.loads(record["body"])}
+
+    def get_action(self, action_id: str) -> dict | None:
+        row = self.conn.execute("SELECT * FROM delivery_actions WHERE action_id = ?", (action_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def _authorize_class(self, action: dict, binding: dict) -> tuple[str | None, str | None]:
+        """The action-class authority predicate (R6/C3): (reason, obligation_id).
+
+        The AI input-revision gate and the takeover fact are the CONVERSATION's
+        own, combined with the creator-wide pause/config. A fulfilment action is
+        bound to one exact outstanding obligation (its frozen composition).
+        """
+        controls = self.conversation_controls(action["conversation_key"])
+        # The binding-wide flag still blocks AI (a creator-wide hold), but it is NOT
+        # permission for manual work in every chat (C3): manual needs the action's
+        # OWN conversation to report effective takeover.
+        conversation_takeover = bool(controls and controls["takeoverEffective"])
+        binding_takeover = int(binding["human_takeover"]) == 1
+
+        if action["action_class"] == "manual":
+            if conversation_takeover:
+                return None, None
+            return "manual action requires effective human takeover for this conversation", None
+        if action["action_class"] == "fulfillment":
+            # The action must ALREADY be bound to a specific obligation (C3).
+            if not action["obligation_id"]:
+                return "fulfillment action is not bound to a specific obligation", None
+            assets = json.loads(action["body"])["assets"]
+            obligation = self._obligation(action["obligation_id"])
+            if obligation is None:
+                return "the bound obligation no longer exists", None
+            if obligation["binding_id"] != action["binding_id"] or obligation["conversation_key"] != action["conversation_key"]:
+                return "the bound obligation is not scoped to this binding and conversation", None
+            if obligation["state"] != "outstanding":
+                return f"the bound obligation is {obligation['state']}, not outstanding", None
+            if obligation["assets"] != canonical_json(assets):
+                return "the bound obligation composition does not match the action", None
+            return None, action["obligation_id"]
+        # ai
+        if conversation_takeover or binding_takeover:
+            return "human takeover is effective in this conversation", None
+        if binding["effective_engine"] != "fastt":
+            return "binding is not assigned to the Fastt engine", None
+        if int(binding["ai_paused"]) == 1:
+            return "AI generation is paused", None
+        if controls is not None and int(action["expected_input_revision"]) != controls["inputRevision"]:
+            return "action was frozen against a stale conversation input revision", None
+        if action["config_version"] != binding["config_version"]:
+            return "action was frozen against a stale config revision", None
+        return None, None
+
+    def claim_action(self, action_id: str, owner: str, now: str | None = None) -> dict:
+        """Conditionally claim a prepared action (R3/R6).
+
+        Refused, changing nothing, when the action is not prepared, the binding's
+        CURRENT epoch is not the expected epoch, the trusted conversation scope
+        no longer matches, the action is not due or has expired, the class predicate
+        is unsatisfied, or ANY other action in the SAME conversation holds an
+        unresolved (dispatching/unknown) attempt. A successful claim records an
+        immutable attempt token required to complete the attempt.
+        """
+        now = now or _utc_now()
+
+        def refuse(reason: str) -> dict:
+            return {"claimed": False, "attemptToken": None, "reason": reason}
+
+        with self._tx():
+            action = self.conn.execute(
+                "SELECT binding_id, conversation_key, expected_epoch, expected_input_revision, config_version, "
+                "action_class, state, not_before, expires_at, body, obligation_id FROM delivery_actions WHERE action_id = ?",
+                (action_id,),
+            ).fetchone()
+            if action is None:
+                return refuse("no such action")
+            if action["state"] != "prepared":
+                return refuse(f"action is {action['state']}, not prepared")
+            binding = self.conn.execute(
+                "SELECT * FROM engine_bindings WHERE binding_id = ?", (action["binding_id"],)
+            ).fetchone()
+            if binding is None:
+                return refuse("binding is missing")
+            if int(binding["ownership_epoch"]) != int(action["expected_epoch"]):
+                return refuse("stale ownership epoch")
+            conv = self.conversation_binding(action["conversation_key"])
+            if conv is None or conv["binding_id"] != action["binding_id"]:
+                return refuse("conversation is not bound to this binding")
+            if action["not_before"] is not None and now < action["not_before"]:
+                return refuse("action is not due yet")
+            if action["expires_at"] is not None and now >= action["expires_at"]:
+                return refuse("action has expired")
+            blocking = self.conn.execute(
+                "SELECT action_id, state FROM delivery_actions WHERE conversation_key = ? AND action_id != ? "
+                "AND state IN ('dispatching','unknown') LIMIT 1",
+                (action["conversation_key"], action_id),
+            ).fetchone()
+            if blocking is not None:
+                return refuse(f"conversation is held by a {blocking['state']} attempt ({blocking['action_id']})")
+            class_reason, obligation_id = self._authorize_class(action, binding)
+            if class_reason:
+                return refuse(class_reason)
+            token = "att_" + hashlib.sha256(encode_tuple([action_id, owner, now]).encode("utf-8")).hexdigest()[:32]
+            cur = self.conn.execute(
+                "UPDATE delivery_actions SET state = 'dispatching', claim_owner = ?, claim_epoch = ?, attempt_token = ?, "
+                "attempt_count = attempt_count + 1, updated_at = ? WHERE action_id = ? AND state = 'prepared'",
+                (owner, int(binding["ownership_epoch"]), token, now, action_id),
+            )
+            if cur.rowcount != 1:
+                return refuse("lost the claim race")
+            # Reserve only AFTER the claim is won, in the same transaction, so a
+            # lost race or a rollback releases it and a second claim cannot fulfil
+            # the same obligation twice.
+            if obligation_id is not None:
+                self._reserve_obligation(obligation_id, action_id, now)
+            return {"claimed": True, "attemptToken": token, "reason": "claimed"}
+
+    def finish_action(
+        self,
+        action_id: str,
+        attempt_token: str,
+        state: str,
+        telegram_message_id: str | None = None,
+        error_category: str | None = None,
+        telegram_ack: bool | None = None,
+        unsent_proof: str | None = None,
+        operator: dict | None = None,
+        now: str | None = None,
+    ) -> bool:
+        """Complete a dispatched attempt (R3/C2). The caller MUST present the attempt
+        token issued by claim_action. A completion needs EVIDENCE for the requested
+        outcome: a send needs a real receipt, a control action its acknowledgement,
+        and a held/cancelled/known_failed a proof of unsent or an operator decision.
+        A terminal row is never overwritten; identical evidence is idempotent and
+        contradictory late evidence is recorded for reconciliation."""
+        if state not in ("confirmed", "known_failed", "unknown", "held", "cancelled"):
+            raise TelegramStoreError(f"illegal terminal state {state}")
+        now = now or _utc_now()
+        with self._tx():
+            row = self.conn.execute(
+                "SELECT state, attempt_token, action_kind, evidence_kind, evidence_ref, evidence_actor, evidence_reason, obligation_id "
+                "FROM delivery_actions WHERE action_id = ?",
+                (action_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if not row["attempt_token"] or row["attempt_token"] != attempt_token:
+                raise AttemptTokenError(f"attempt token does not match the dispatch attempt for {action_id}")
+
+            evidence = _outcome_evidence(
+                row["action_kind"], row["state"], state, telegram_message_id, error_category,
+                telegram_ack, unsent_proof, operator,
+            )
+            if row["state"] in ("confirmed", "known_failed", "held", "cancelled"):
+                # The comparison is on the STRUCTURED fields (kind, ref, actor,
+                # reason), so two different operator decisions can never be mistaken
+                # for one replay.
+                same = (
+                    row["state"] == state
+                    and evidence is not None
+                    and row["evidence_kind"] == evidence["kind"]
+                    and (row["evidence_ref"] or "") == (evidence["ref"] or "")
+                    and (row["evidence_actor"] or "") == (evidence["actor"] or "")
+                    and (row["evidence_reason"] or "") == (evidence["reason"] or "")
+                )
+                if same:
+                    return True
+                self._record_reconciliation(action_id, row["state"], state, evidence, now)
+                return False
+            if row["state"] == "dispatching":
+                allowed = ("confirmed", "known_failed", "unknown", "held", "cancelled")
+            elif row["state"] == "unknown":
+                allowed = ("confirmed", "known_failed")
+            else:
+                allowed = ()
+            if state not in allowed:
+                return False
+            if evidence is None:
+                return False
+            cur = self.conn.execute(
+                "UPDATE delivery_actions SET state = ?, telegram_message_id = ?, error_category = ?, "
+                "evidence_kind = ?, evidence_ref = ?, evidence_actor = ?, evidence_reason = ?, updated_at = ? "
+                "WHERE action_id = ? AND state = ? AND attempt_token = ?",
+                (
+                    state,
+                    telegram_message_id,
+                    error_category,
+                    evidence["kind"],
+                    evidence["ref"],
+                    evidence["actor"],
+                    evidence["reason"],
+                    now,
+                    action_id,
+                    row["state"],
+                    attempt_token,
+                ),
+            )
+            if cur.rowcount != 1:
+                return False
+            # The paid obligation lifecycle (C3): a confirmed delivery SETTLES the
+            # specific reservation; a proven-unsent outcome RELEASES it back to
+            # outstanding so a separately authorized replacement can fulfil it; an
+            # unknown outcome keeps the reservation and the conversation hold. All
+            # of this commits atomically with the action's new state.
+            if row["obligation_id"]:
+                if state == "confirmed":
+                    self._settle_obligation(row["obligation_id"], action_id, now)
+                elif state in ("known_failed", "held", "cancelled"):
+                    self._release_obligation(row["obligation_id"], action_id)
+            return True
+
+    def _record_reconciliation(
+        self, action_id: str, existing_state: str, requested_state: str, evidence: dict | None, now: str
+    ) -> None:
+        row = self.conn.execute(
+            "SELECT reconciliation_note FROM delivery_actions WHERE action_id = ?", (action_id,)
+        ).fetchone()
+        note: list = []
+        if row is not None and row["reconciliation_note"]:
+            try:
+                parsed = json.loads(row["reconciliation_note"])
+                if isinstance(parsed, list):
+                    note = parsed
+            except ValueError:
+                note = []
+        note.append(
+            {
+                "at": now,
+                "existingState": existing_state,
+                "requestedState": requested_state,
+                "kind": evidence["kind"] if evidence else None,
+                "ref": evidence["ref"] if evidence else None,
+                "actor": evidence["actor"] if evidence else None,
+                "reason": evidence["reason"] if evidence else None,
+            }
+        )
+        self.conn.execute(
+            "UPDATE delivery_actions SET reconciliation_count = reconciliation_count + 1, reconciliation_note = ? "
+            "WHERE action_id = ?",
+            (json.dumps(note, separators=(",", ":")), action_id),
+        )
+
+    def reconciliation(self, action_id: str) -> dict:
+        """Readback of the reconciliation record for an action (C2)."""
+        row = self.conn.execute(
+            "SELECT reconciliation_count, reconciliation_note FROM delivery_actions WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+        if row is None:
+            return {"count": 0, "note": []}
+        note: list = []
+        if row["reconciliation_note"]:
+            try:
+                parsed = json.loads(row["reconciliation_note"])
+                if isinstance(parsed, list):
+                    note = parsed
+            except ValueError:
+                note = []
+        return {"count": int(row["reconciliation_count"]), "note": note}
+
+    def action_count(self, state: str | None = None) -> int:
+        if state is None:
+            return int(self.conn.execute("SELECT COUNT(*) AS n FROM delivery_actions").fetchone()["n"])
+        return int(
+            self.conn.execute("SELECT COUNT(*) AS n FROM delivery_actions WHERE state = ?", (state,)).fetchone()["n"]
+        )
+
+    # ── projection events and cursor ───────────────────────────────────────
+
+    def import_projection_event(
+        self,
+        source_event_id: str,
+        source_sequence: int,
+        event_kind: str,
+        payload: object,
+        recipient_worker: str = DEFAULT_RECIPIENT,
+        applier=None,
+        now: str | None = None,
+        simulate_interrupt: bool = False,
+    ) -> dict:
+        """Import one source event and advance that stream's cursor in ONE
+        transaction (R2).
+
+        The SOURCE supplies the stable identity and stream position. A re-import of
+        the same identity with the same body is a no-op (a lost acknowledgement is
+        not a duplicate); a changed body OR changed immutable metadata (sequence,
+        kind, schema version) conflicts. The cursor advances only over the
+        CONTIGUOUS prefix, so a gap holds later events. When `applier` is supplied,
+        each newly contiguous event is applied to the destination state and marked
+        applied in the same transaction (C1); an unsupported kind is refused.
+        """
+        now = now or _utc_now()
+        # A synchronous transactional applier is REQUIRED: consuming a position
+        # without applying it is exactly the defect C1 removes. Refuse before any
+        # write.
+        self._assert_projection_applier(applier)
+        if not isinstance(source_sequence, int) or isinstance(source_sequence, bool) or not (1 <= source_sequence <= INDEX_MAX):
+            raise TelegramStoreError(f"sourceSequence must be a positive integer <= {INDEX_MAX}")
+        if not isinstance(event_kind, str) or not event_kind.strip() or len(event_kind) > 256:
+            raise TelegramStoreError("eventKind must be a bounded non-blank string")
+        if event_kind not in applier["supportedKinds"]:
+            raise TelegramStoreError(f"projection kind {event_kind} is not supported by this applier")
+        digest = _digest(payload)
+        body = canonical_json(payload)
+        with self._tx():
+            existing = self.conn.execute(
+                "SELECT payload_digest, event_kind, source_sequence, body_schema_version "
+                "FROM projection_events WHERE recipient_worker = ? AND source_event_id = ?",
+                (recipient_worker, source_event_id),
+            ).fetchone()
+            if existing is not None:
+                same = (
+                    existing["payload_digest"] == digest
+                    and existing["event_kind"] == event_kind
+                    and int(existing["source_sequence"]) == source_sequence
+                    and int(existing["body_schema_version"]) == PROJECTION_BODY_SCHEMA_VERSION
+                )
+                if not same:
+                    raise ProjectionConflictError(
+                        f"projection event {source_event_id} re-arrived with different immutable metadata on stream {recipient_worker}"
+                    )
+                return {
+                    "sourceSequence": int(existing["source_sequence"]),
+                    "inserted": False,
+                    "cursor": self.get_cursor(recipient_worker),
+                }
+            at_position = self.conn.execute(
+                "SELECT source_event_id FROM projection_events WHERE recipient_worker = ? AND source_sequence = ?",
+                (recipient_worker, source_sequence),
+            ).fetchone()
+            if at_position is not None:
+                raise ProjectionConflictError(
+                    f"stream position {source_sequence} on {recipient_worker} is already used by {at_position['source_event_id']}"
+                )
+            self.conn.execute(
+                "INSERT INTO projection_events "
+                "(recipient_worker, source_event_id, source_sequence, event_kind, body_schema_version, body, payload_digest, imported_at, applied_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                (recipient_worker, source_event_id, source_sequence, event_kind, PROJECTION_BODY_SCHEMA_VERSION, body, digest, now),
+            )
+            cursor = self._apply_prefix(recipient_worker, applier, now)
+            if simulate_interrupt:
+                raise TelegramStoreError("simulated interruption before commit")
+            return {"sourceSequence": source_sequence, "inserted": True, "cursor": cursor}
+
+    def _apply_prefix(self, recipient: str, applier, now: str) -> int:
+        """Apply the contiguous prefix and advance the cursor in ONE transaction (C1).
+
+        A missing position stops the walk, so a gapped event does not let the
+        cursor skip unseen events; a stored event that only now becomes contiguous
+        IS applied here, in order. With an applier, target state, applied marker
+        and cursor roll back together and an unsupported kind is refused.
+        """
+        row = self.conn.execute(
+            "SELECT last_sequence FROM projection_cursors WHERE cursor_name = ?", (recipient,)
+        ).fetchone()
+        start = int(row["last_sequence"]) if row is not None else 0
+        current = start
+        while True:
+            nxt = self.conn.execute(
+                "SELECT source_sequence FROM projection_events WHERE recipient_worker = ? AND source_sequence = ?",
+                (recipient, current + 1),
+            ).fetchone()
+            if nxt is None:
+                break
+            current += 1
+        for position in range(start + 1, current + 1):
+            event = self.conn.execute(
+                "SELECT source_event_id, event_kind, body, applied_at FROM projection_events "
+                "WHERE recipient_worker = ? AND source_sequence = ?",
+                (recipient, position),
+            ).fetchone()
+            if event is None or event["applied_at"] is not None:
+                continue
+            if event["event_kind"] not in applier["supportedKinds"]:
+                raise TelegramStoreError(
+                    f"projection kind {event['event_kind']} is not supported by this applier"
+                )
+            result = applier["apply"](
+                {
+                    "sourceEventId": event["source_event_id"],
+                    "sourceSequence": position,
+                    "eventKind": event["event_kind"],
+                    "payload": json.loads(event["body"]),
+                }
+            )
+            # An asynchronous callback is not a completed mutation.
+            if inspect.isawaitable(result):
+                raise TelegramStoreError("the projection applier must be synchronous")
+            self.conn.execute(
+                "UPDATE projection_events SET applied_at = ? WHERE recipient_worker = ? AND source_event_id = ?",
+                (now, recipient, event["source_event_id"]),
+            )
+        if row is None:
+            self.conn.execute(
+                "INSERT INTO projection_cursors (cursor_name, last_sequence, updated_at) VALUES (?, ?, ?)",
+                (recipient, current, now),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE projection_cursors SET last_sequence = ?, updated_at = ? WHERE cursor_name = ?",
+                (current, now, recipient),
+            )
+        return current
+
+    @staticmethod
+    def _assert_projection_applier(applier) -> None:
+        """Validate the required synchronous transactional applier (C1) BEFORE any
+        write: it must expose a list `supportedKinds` and a callable `apply`."""
+        if not isinstance(applier, dict):
+            raise TelegramStoreError(
+                "a synchronous transactional applier is required to consume a projection position"
+            )
+        kinds = applier.get("supportedKinds")
+        if not isinstance(kinds, list) or not all(isinstance(k, str) for k in kinds):
+            raise TelegramStoreError("projection applier.supportedKinds must be a list of strings")
+        if not callable(applier.get("apply")):
+            raise TelegramStoreError("projection applier.apply must be callable")
+
+    def projection_applied_at(self, recipient: str, source_event_id: str) -> str | None:
+        """The marker proving a projected position was applied (C1)."""
+        row = self.conn.execute(
+            "SELECT applied_at FROM projection_events WHERE recipient_worker = ? AND source_event_id = ?",
+            (recipient, source_event_id),
+        ).fetchone()
+        return str(row["applied_at"]) if row is not None and row["applied_at"] is not None else None
+
+    def projection_record(self, recipient: str, source_event_id: str) -> dict | None:
+        """Typed readback of one projected source event (R1)."""
+        row = self.conn.execute(
+            "SELECT body, source_sequence FROM projection_events WHERE recipient_worker = ? AND source_event_id = ?",
+            (recipient, source_event_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"body": json.loads(row["body"]), "sourceSequence": int(row["source_sequence"])}
+
+    def get_cursor(self, cursor_name: str = DEFAULT_CURSOR) -> int:
+        row = self.conn.execute(
+            "SELECT last_sequence FROM projection_cursors WHERE cursor_name = ?", (cursor_name,)
+        ).fetchone()
+        return int(row["last_sequence"]) if row is not None else 0
+
+    def projection_event_count(self) -> int:
+        return int(self.conn.execute("SELECT COUNT(*) AS n FROM projection_events").fetchone()["n"])
+
+    # ── worker leases ──────────────────────────────────────────────────────
+
+    def acquire_lease(self, lease_name: str, owner_id: str, ttl_seconds: int = 60, now: str | None = None) -> bool:
+        """Take the durable worker lease if it is free, expired, or already ours."""
+        now_dt = datetime.now(timezone.utc) if now is None else datetime.strptime(now, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+        now = now or _utc_now()
+        expires = (now_dt + timedelta(seconds=ttl_seconds)).strftime("%Y-%m-%dT%H:%M:%S.") + f"{now_dt.microsecond // 1000:03d}Z"
+        with self._tx():
+            row = self.conn.execute("SELECT owner_id, expires_at FROM worker_leases WHERE lease_name = ?", (lease_name,)).fetchone()
+            if row is not None and row["owner_id"] != owner_id and str(row["expires_at"]) > now:
+                return False
+            fencing = hashlib.sha256(encode_tuple([lease_name, owner_id, now]).encode("utf-8")).hexdigest()
+            self.conn.execute(
+                """
+                INSERT INTO worker_leases (lease_name, owner_id, epoch, fencing_token, acquired_at, expires_at)
+                VALUES (?, ?, 1, ?, ?, ?)
+                ON CONFLICT(lease_name) DO UPDATE SET
+                    owner_id = excluded.owner_id,
+                    epoch = worker_leases.epoch + 1,
+                    fencing_token = excluded.fencing_token,
+                    acquired_at = excluded.acquired_at,
+                    expires_at = excluded.expires_at
+                """,
+                (lease_name, owner_id, fencing, now, expires),
+            )
+            return True
+
+    def lease_owner(self, lease_name: str) -> str | None:
+        row = self.conn.execute("SELECT owner_id FROM worker_leases WHERE lease_name = ?", (lease_name,)).fetchone()
+        return str(row["owner_id"]) if row is not None else None
+
+    # ── native invocation journal ──────────────────────────────────────────
+
+    def record_invocation(self, invocation_id: str, turn_id: str, status: str, now: str | None = None) -> None:
+        now = now or _utc_now()
+        with self._tx():
+            self.conn.execute(
+                """
+                INSERT INTO worker_invocations (invocation_id, turn_id, status, action_manifest, started_at, completed_at)
+                VALUES (?, ?, ?, '[]', ?, ?)
+                ON CONFLICT(invocation_id) DO UPDATE SET
+                    status = excluded.status,
+                    completed_at = excluded.completed_at
+                """,
+                (invocation_id, turn_id, status, now, now if status in ("completed", "interrupted") else None),
+            )
+
+    def invocation_status(self, invocation_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT status FROM worker_invocations WHERE invocation_id = ?", (invocation_id,)
+        ).fetchone()
+        return str(row["status"]) if row is not None else None

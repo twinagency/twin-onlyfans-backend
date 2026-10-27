@@ -1,0 +1,61 @@
+"""Scoped Telegram identity keys for the Fastt worker.
+
+An exact mirror of the Node derivations in bot/src/engines/fastt-contract.ts:
+channel + clone + bot + mode + Business connection + chat for a conversation,
+and a separate scoped fan key so the same Telegram user talking to two creators
+is two relationships, never one.
+
+Keys are opaque length-prefixed tuple hashes, so no external id is ever
+interpolated into a filesystem path and no id can alias another tuple by
+carrying the join delimiter.
+
+Scope: these are Telegram-scoped LOOKUP keys for native-id allocation, NOT the
+canonical business fan identity. The canonical fan stays the existing Supabase
+`users` row; Fastt's own `Fan` row stays its native account. The pre-existing
+Telegram-vault design in this repository (telegram-vault-spec.md) derives its
+fan id from signed Mini App initData and joins it to the OnlyFans id; that and
+this key must resolve to the SAME canonical fan rather than creating a second
+fan record. Unifying them is a P2 decision that needs the real deployed backend.
+"""
+
+from __future__ import annotations
+
+import hashlib
+
+from .contract import TELEGRAM_CHANNEL, encode_tuple
+
+
+def _hash_tuple(prefix: str, parts) -> str:
+    return prefix + hashlib.sha256(encode_tuple(parts).encode("utf-8")).hexdigest()
+
+
+def telegram_conversation_key(
+    clone_id: str,
+    bot_id: str,
+    mode: str,
+    business_connection_id: str | None,
+    chat_id: str,
+) -> str:
+    """Conversation identity. Fan identity is deliberately not part of it."""
+    return _hash_tuple(
+        "tg_",
+        [TELEGRAM_CHANNEL, clone_id, bot_id, mode, business_connection_id or "", chat_id],
+    )
+
+
+def telegram_fan_key(clone_id: str, bot_id: str, mode: str, user_id: str | None) -> str:
+    """Scoped fan identity: the same user across two creators yields two keys."""
+    return _hash_tuple("tgf_", [TELEGRAM_CHANNEL, clone_id, bot_id, mode, user_id or ""])
+
+
+def telegram_message_key(bot_id: str, chat_id: str, business_connection_id: str | None, message_id: str) -> str:
+    """Scoped message identity: message 42 in two chats yields two keys."""
+    return _hash_tuple(
+        "tgm_",
+        [TELEGRAM_CHANNEL, bot_id, chat_id, business_connection_id or "", message_id],
+    )
+
+
+def telegram_update_key(bot_id: str, update_id: str) -> str:
+    """The natural key of one inbound update: (bot id, update id)."""
+    return _hash_tuple("tgu_", [TELEGRAM_CHANNEL, bot_id, update_id])

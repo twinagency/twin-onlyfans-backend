@@ -1,0 +1,145 @@
+"""twin_bridge_turns / turn_members / conversations / send_attempts
+
+Stage 1C part 2. Four additive tables - nothing existing is altered, so
+`init_db()`'s create_all + index catch-up materializes them on a box that never
+runs `alembic upgrade`; this revision exists so a DB that IS managed by Alembic
+reports the same schema.
+
+  • twin_bridge_turns        - one frozen burst (exact membership + event bytes)
+  • twin_bridge_turn_members - source input -> turn, unique per source input
+  • twin_bridge_conversations- durable ownership / pause / send budget / revision
+  • twin_bridge_send_attempts- one checked provider send attempt, recorded
+                               BEFORE the POST
+
+Revision ID: 0066_twin_bridge_turns
+Revises: 0065_twin_bridge_intake
+Create Date: 2026-10-16
+"""
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "0066_twin_bridge_turns"
+down_revision: str | Sequence[str] | None = "0065_twin_bridge_intake"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "twin_bridge_turns",
+        sa.Column("account_id", sa.String(), nullable=False),
+        sa.Column("fan_id", sa.BigInteger(), nullable=False),
+        sa.Column("turn_id", sa.String(), nullable=False),
+        sa.Column("creator_slug", sa.String(), nullable=False),
+        sa.Column("conversation_id", sa.String(), nullable=False),
+        sa.Column("scope_fingerprint", sa.String(), nullable=False),
+        sa.Column("member_ids_json", sa.Text(), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("event_json", sa.Text(), nullable=False),
+        sa.Column("occurred_at", sa.DateTime(), nullable=False),
+        sa.Column("received_at", sa.DateTime(), nullable=False),
+        sa.Column("state", sa.String(), nullable=False),
+        sa.Column("reason", sa.String(), nullable=True),
+        sa.Column("owner_token", sa.String(), nullable=True),
+        sa.Column("owner_expires_at", sa.DateTime(), nullable=True),
+        sa.Column("revision", sa.Integer(), nullable=False),
+        sa.Column("request_id", sa.String(), nullable=True),
+        sa.Column("draft_text", sa.Text(), nullable=True),
+        sa.Column("epoch", sa.Integer(), nullable=True),
+        sa.Column("dispatch_revision", sa.Integer(), nullable=True),
+        sa.Column("generation_attempts", sa.Integer(), nullable=False),
+        sa.Column("status_polls", sa.Integer(), nullable=False),
+        sa.Column("ack_attempts", sa.Integer(), nullable=False),
+        sa.Column("cancel_attempts", sa.Integer(), nullable=False),
+        sa.Column("next_action_at", sa.DateTime(), nullable=True),
+        sa.Column("provider_message_id", sa.String(), nullable=True),
+        sa.Column("delivered_at", sa.DateTime(), nullable=True),
+        sa.Column("committed_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.PrimaryKeyConstraint("account_id", "fan_id", "turn_id"),
+    )
+    op.create_index(
+        "ix_twin_bridge_turns_state_next",
+        "twin_bridge_turns", ["account_id", "state", "next_action_at"],
+    )
+    op.create_index(
+        "ix_twin_bridge_turns_conversation",
+        "twin_bridge_turns", ["account_id", "fan_id", "created_at"],
+    )
+
+    op.create_table(
+        "twin_bridge_turn_members",
+        sa.Column("account_id", sa.String(), nullable=False),
+        sa.Column("fan_id", sa.BigInteger(), nullable=False),
+        sa.Column("provider_message_id", sa.BigInteger(), nullable=False),
+        sa.Column("turn_id", sa.String(), nullable=False),
+        sa.Column("position", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.PrimaryKeyConstraint("account_id", "fan_id", "provider_message_id"),
+    )
+    op.create_index(
+        "ix_twin_bridge_turn_members_turn",
+        "twin_bridge_turn_members", ["account_id", "fan_id", "turn_id", "position"],
+    )
+
+    op.create_table(
+        "twin_bridge_conversations",
+        sa.Column("account_id", sa.String(), nullable=False),
+        sa.Column("fan_id", sa.BigInteger(), nullable=False),
+        sa.Column("creator_slug", sa.String(), nullable=False),
+        sa.Column("conversation_id", sa.String(), nullable=False),
+        sa.Column("scope_fingerprint", sa.String(), nullable=False),
+        sa.Column("state", sa.String(), nullable=False),
+        sa.Column("reason", sa.String(), nullable=True),
+        sa.Column("revision", sa.Integer(), nullable=False),
+        sa.Column("owner_token", sa.String(), nullable=True),
+        sa.Column("owner_expires_at", sa.DateTime(), nullable=True),
+        sa.Column("takeover_at", sa.DateTime(), nullable=True),
+        sa.Column("reset_at", sa.DateTime(), nullable=True),
+        sa.Column("cancelled_at", sa.DateTime(), nullable=True),
+        sa.Column("send_budget_limit", sa.Integer(), nullable=False),
+        sa.Column("send_budget_used", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.PrimaryKeyConstraint("account_id", "fan_id"),
+    )
+
+    op.create_table(
+        "twin_bridge_send_attempts",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("account_id", sa.String(), nullable=False),
+        sa.Column("fan_id", sa.BigInteger(), nullable=False),
+        sa.Column("turn_id", sa.String(), nullable=False),
+        sa.Column("attempt_no", sa.Integer(), nullable=False),
+        sa.Column("state", sa.String(), nullable=False),
+        sa.Column("reason", sa.String(), nullable=True),
+        sa.Column("owner_token", sa.String(), nullable=False),
+        sa.Column("revision", sa.Integer(), nullable=False),
+        sa.Column("provider_message_id", sa.String(), nullable=True),
+        sa.Column("evidence_json", sa.Text(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "account_id", "fan_id", "turn_id", "attempt_no",
+            name="uq_twin_bridge_send_attempt",
+        ),
+    )
+    op.create_index(
+        "ix_twin_bridge_send_attempts_state",
+        "twin_bridge_send_attempts", ["account_id", "state", "created_at"],
+    )
+
+
+def downgrade() -> None:
+    op.drop_index("ix_twin_bridge_send_attempts_state", table_name="twin_bridge_send_attempts")
+    op.drop_table("twin_bridge_send_attempts")
+    op.drop_table("twin_bridge_conversations")
+    op.drop_index("ix_twin_bridge_turn_members_turn", table_name="twin_bridge_turn_members")
+    op.drop_table("twin_bridge_turn_members")
+    op.drop_index("ix_twin_bridge_turns_conversation", table_name="twin_bridge_turns")
+    op.drop_index("ix_twin_bridge_turns_state_next", table_name="twin_bridge_turns")
+    op.drop_table("twin_bridge_turns")

@@ -1,0 +1,341 @@
+"""Audience and vault workflows on disposable PostgreSQL; no provider/model calls."""
+from datetime import timedelta
+from types import SimpleNamespace
+import json
+
+import pytest
+from sqlalchemy import select, func, event, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm import Session
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from test_onlyfans_foundation_pg import database
+from test_onlyfans_earnings_pg import setup
+from test_onlyfans_ledger_pg import parsed, transaction, record
+from test_onlyfans_campaigns_pg import create
+from test_onlyfans_connections_pg import ACTOR
+from db.models import Fan, OfConversationState, SmartList, VaultItem, VaultSend, Message, MessageMedia, CatalogItem, ContentOffer
+from db.onlyfans_models import OfRuntime
+from db.onlyfans_ledger_models import OfLedgerScan
+from db.onlyfans_audience_models import OfFanSubscription, OfCampaignAudience
+from onlyfans_runtime.store import utcnow, Refused
+from onlyfans_runtime.audiences import presets, save_audience, list_audiences, preview
+from onlyfans_runtime.campaigns import CampaignService
+from onlyfans_runtime.vault_intelligence import read_vault_intelligence, read_performance
+from onlyfans_runtime.subscription_observations import profiles_from_chats, apply_profiles
+from onlyfans_read.agency_scope import current_scope, AgencyScope
+
+
+def rule(field, op, value, **extra):
+    return {"match": "all", "rules": [{"field": field, "op": op, "value": value, **extra}]}
+
+
+def save(store, name="Synthetic audience", rules=None, **extra):
+    return save_audience(store, "tenant-a", "acc-a", actor=ACTOR, action="save", id=None,
+        expected_revision=None, name=name, rules=rules or rule("purchase_count", "==", 0, days=30), **extra)["audience"]
+
+
+def current(database):
+    with Session(database[1]) as s, s.begin():
+        runtime = s.get(OfRuntime, "acc-a")
+        runtime.last_sync_at, runtime.recovery_needed = utcnow(), False
+
+
+def test_five_presets_and_verified_zero_are_distinct_from_incomplete_history(database):
+    store = setup(database)
+    assert len(presets()) == 5
+    nonbuyer = rule("purchase_count", "==", 0, days=30)
+    result = preview(store, "tenant-a", "acc-a", rules=nonbuyer)
+    assert (result["matched"], result["unknown"]) == (1, 0)
+    lifetime = preview(store, "tenant-a", "acc-a", rules=rule("lifetime_spend", "==", 0))
+    assert (lifetime["matched"], lifetime["unknown"]) == (0, 1)
+    with Session(database[1]) as s, s.begin():
+        s.get(OfLedgerScan, "acc-a").last_complete_at = utcnow() - timedelta(hours=1)
+    result = preview(store, "tenant-a", "acc-a", rules=nonbuyer)
+    assert (result["matched"], result["unknown"]) == (0, 1)
+
+
+def test_purchase_and_refund_update_spend_without_inventing_nonbuyer(database):
+    store = setup(database)
+    paid = parsed(transaction())
+    assert record(store, "acc-a", paid) == "applied"
+    assert record(store, "acc-a", paid) == "duplicate"
+    assert preview(store, "tenant-a", "acc-a", rules=rule("recent_spend", ">=", 1000, days=30))["matched"] == 1
+    assert record(store, "acc-a", {**paid, "status": "refunded"}) == "applied"
+    assert preview(store, "tenant-a", "acc-a", rules=rule("recent_spend", ">", 0, days=30))["matched"] == 0
+    assert preview(store, "tenant-a", "acc-a", rules=rule("purchase_count", "==", 0, days=30))["matched"] == 0
+
+
+def test_scoped_lists_edit_conflicts_clone_retry_and_deleted_definition(database):
+    store = setup(database)
+    first = save(store)
+    assert save(store)["id"] == first["id"]
+    assert list_audiences(store, "tenant-a", "acc-a")["audiences"] == [first]
+    newer = save_audience(store, "tenant-a", "acc-a", actor=ACTOR, action="save", id=first["id"],
+        expected_revision=first["revision"], name="Edited audience", rules=rule("recent_spend", ">=", 1000, days=30))["audience"]
+    with pytest.raises(Refused):
+        save_audience(store, "tenant-a", "acc-a", actor=ACTOR, action="save", id=first["id"],
+            expected_revision=first["revision"], name="Competing edit", rules=rule("status", "==", "active"))
+    with pytest.raises(Refused):
+        list_audiences(store, "another-tenant", "acc-a")
+    token = current_scope.set(AgencyScope(("creator-acc-a",), "agency-user:00000000-0000-0000-0000-000000000001:00000000-0000-0000-0000-000000000002", False))
+    try:
+        assert list_audiences(store, "tenant-a", "acc-a")["audiences"][0]["id"] == first["id"]
+        with pytest.raises(ValueError):
+            save(store)
+    finally:
+        current_scope.reset(token)
+    save_audience(store, "tenant-a", "acc-a", actor=ACTOR, action="remove", id=newer["id"], expected_revision=newer["revision"])
+    assert list_audiences(store, "tenant-a", "acc-a")["audiences"] == []
+
+
+def test_invalid_saved_lists_are_visible_for_repair_but_cannot_preview(database):
+    store = setup(database)
+    with Session(database[1]) as s, s.begin():
+        s.add(SmartList(account_id="acc-a", name="Broken", rules_json="{bad"))
+    row = list_audiences(store, "tenant-a", "acc-a")["audiences"][0]
+    assert not row["valid"] and row["rules"] is None
+    with pytest.raises(Refused):
+        preview(store, "tenant-a", "acc-a", selection={"include":[{"id":row["id"], "revision":row["revision"]}], "exclude":[]})
+
+
+def test_subscription_observation_is_scoped_fresh_and_uses_existing_page(database):
+    store = setup(database)
+    values = profiles_from_chats([{"withUser":{"id":101,"subscribedOn":False}}, {"withUser":{"id":102}}, {"withUser":{"id":103,"subscribedOn":"false"}}])
+    assert values == [{"fan_id":101, "status":"expired"}]
+    with Session(database[1]) as s, s.begin():
+        apply_profiles(s, s.get(OfRuntime, "acc-a"), values, [101], utcnow())
+    assert preview(store, "tenant-a", "acc-a", rules=rule("status", "==", "expired"))["matched"] == 1
+    with Session(database[1]) as s, s.begin():
+        s.get(OfFanSubscription, ("acc-a",101)).observed_at = utcnow() - timedelta(days=2)
+    assert preview(store, "tenant-a", "acc-a", rules=rule("status", "!=", "active"))["unknown"] == 1
+
+
+def test_segment_campaign_freezes_recipients_and_rechecks_late_purchase(database):
+    store = setup(database)
+    current(database)
+    audience = save(store)
+    selection = {"include":[{"id":audience["id"],"revision":audience["revision"]}],"exclude":[]}
+    checked = preview(store, "tenant-a", "acc-a", selection=selection)
+    assert checked["eligible"] == 1 and checked["snapshotHash"]
+    service = CampaignService(store)
+    created = create(service, audience={"kind":"segment", "selection":selection, "snapshotHash":checked["snapshotHash"]})
+    with Session(database[1]) as s:
+        assert s.get(OfCampaignAudience, ("acc-a",created["campaignId"])) is not None
+    # Changing the saved list cannot alter this run's pinned definition.
+    save_audience(store, "tenant-a", "acc-a", actor=ACTOR, action="save", id=audience["id"], expected_revision=audience["revision"], name="Changed", rules=rule("status", "==", "active"))
+    record(store, "acc-a", parsed(transaction()))
+    from onlyfans_runtime.campaigns import audience_allowed
+    from db.onlyfans_campaign_models import OfCampaign
+    with Session(database[1]) as s:
+        assert not audience_allowed(s, s.get(OfRuntime, "acc-a"), s.get(OfCampaign,("acc-a",created["campaignId"])), 101, utcnow())
+
+
+def test_unknown_exclusions_and_changed_previews_cannot_expand_campaign(database):
+    store = setup(database)
+    current(database)
+    include = save(store)
+    unknown = save(store, name="Lifetime unknown", rules=rule("lifetime_spend", "==", 0))
+    select_refs = lambda values:[{"id":x["id"],"revision":x["revision"]} for x in values]
+    result = preview(store, "tenant-a", "acc-a", selection={"include":select_refs([include]),"exclude":select_refs([unknown])})
+    assert result["eligible"] == 0 and result["unknown"] == 1
+    selection = {"include":select_refs([include]),"exclude":[]}
+    checked = preview(store, "tenant-a", "acc-a", selection=selection)
+    record(store, "acc-a", parsed(transaction()))
+    with pytest.raises(Refused):
+        create(CampaignService(store), audience={"kind":"segment","selection":selection,"snapshotHash":checked["snapshotHash"]})
+
+
+def vault_seed(database):
+    store = setup(database)
+    now = utcnow()
+    with Session(database[1]) as s, s.begin():
+        s.add_all([VaultItem(account_id="acc-a",media_id=11,kind="photo",created_at=now), VaultItem(account_id="acc-a",media_id=12,kind="video",created_at=now)])
+        s.add(Message(account_id="acc-a",fan_id=101,message_id=9001,direction="out",body="Synthetic bundle",media_ids="[11,12]",media_count=2,price_cents=1000,created_at=now-timedelta(minutes=2)))
+        s.flush()
+        s.add_all([VaultSend(account_id="acc-a",fan_id=101,message_id=9001,media_id=11,price_cents=1000,sent_at=now),
+            VaultSend(account_id="acc-a",fan_id=101,message_id=9001,media_id=11,price_cents=1000,sent_at=now),
+            MessageMedia(account_id="acc-a",fan_id=101,message_id=9001,media_id=11)])
+    return store
+
+
+def test_vault_sent_history_deduplicates_and_incomplete_negatives_remain_unknown(database):
+    store = vault_seed(database)
+    read = read_vault_intelligence(store,"tenant-a","acc-a",fan_id="101")
+    assert len(read["items"]) == 2
+    assert all(x["sentCount"] == 1 and x["ownership"] == "unknown" for x in read["items"])
+    assert all(x["lastOfferedUnitPriceCents"] == 1000 for x in read["items"])
+    assert read_vault_intelligence(store,"tenant-a","acc-a",fan_id="101",state="not_purchased")["items"] == []
+    assert [x["mediaId"] for x in read_vault_intelligence(store,"tenant-a","acc-a",fan_id="101",kind="video")["items"]] == ["12"]
+    with pytest.raises(Refused):
+        read_vault_intelligence(store,"tenant-b","acc-a",fan_id="101")
+
+
+def test_bundle_purchase_and_refund_are_attributed_once_per_unit(database):
+    store = vault_seed(database)
+    with Session(database[1]) as s, s.begin():
+        item = CatalogItem(account_id="acc-a",label="Synthetic two-media bundle",kind="photo",media_ids="[11,12]",preview_media_ids="[]",price_cents=1000)
+        s.add(item);s.flush()
+        for _ in range(1):
+            s.add(ContentOffer(account_id="acc-a",fan_id=101,item_id=item.id,mode="ppv",price_cents=1000,offer_message_id=9001,status="open"))
+    paid = parsed(transaction(messageId=9001))
+    assert record(store,"acc-a",paid) == "applied"
+    with Session(database[1]) as s, s.begin():
+        original = s.scalar(select(ContentOffer))
+        s.add(ContentOffer(account_id="acc-a",fan_id=101,item_id=original.item_id,mode="ppv",price_cents=1000,offer_message_id=9001,status="open"))
+    report = read_performance(store,"tenant-a","acc-a")
+    assert len(report["items"]) == 1
+    row = report["items"][0]
+    assert (row["sentCount"],row["purchases"],row["clearedGrossCents"]) == (1,1,1000)
+    history = read_vault_intelligence(store,"tenant-a","acc-a",fan_id="101")
+    assert all(x["purchaseCount"] == 1 and x["lastPurchasedUnitPriceCents"] == 1000 for x in history["items"])
+    # The reporting reader tolerates duplicate old offers; ledger admission
+    # still refuses ambiguous ownership, so retain its existing contract.
+    with Session(database[1]) as s, s.begin():
+        duplicate = s.scalars(select(ContentOffer).order_by(ContentOffer.id.desc())).first()
+        s.delete(duplicate)
+    assert record(store,"acc-a",{**paid,"status":"refunded"}) == "applied"
+    row = read_performance(store,"tenant-a","acc-a")["items"][0]
+    assert (row["purchases"],row["refunds"],row["clearedGrossCents"]) == (0,1,0)
+
+
+def test_large_preview_refuses_truncation_and_respects_contact_suppression(database):
+    store = setup(database)
+    current(database)
+    now = utcnow()
+    with Session(database[1]) as s, s.begin():
+        s.add_all([Fan(account_id="acc-a",fan_id=i,is_muted=i == 1301) for i in range(102,1302)])
+        s.flush()
+        s.add_all([OfConversationState(account_id="acc-a",fan_id=i,mode="automated",takeover_state="none",
+            updated_at=now) for i in range(102,1302)])
+    saved = save(store)
+    selection = {"include":[{"id":saved["id"],"revision":saved["revision"]}],"exclude":[]}
+    statements = []
+    def count(conn,cursor,statement,params,ctx,many):
+        statements.append(statement)
+    event.listen(store.engine,"before_cursor_execute",count)
+    try:
+        result = preview(store,"tenant-a","acc-a",selection=selection)
+    finally:
+        event.remove(store.engine,"before_cursor_execute",count)
+    assert (result["total"],result["eligible"],result["suppressed"]) == (1201,1200,1)
+    assert result["snapshotHash"] is None and len(result["sample"]) == 25
+    assert len(statements) < 25, "Audience queries must not become per-fan reads"
+    with pytest.raises((ValueError,Refused)):
+        create(CampaignService(store),audience={"kind":"segment","selection":selection,"snapshotHash":"a"*64})
+
+
+def test_pinned_campaign_evidence_is_append_only_and_scope_changes_stop_reads(database):
+    store = setup(database); current(database)
+    saved = save(store)
+    selection = {"include":[{"id":saved["id"],"revision":saved["revision"]}],"exclude":[]}
+    checked = preview(store,"tenant-a","acc-a",selection=selection)
+    create(CampaignService(store),audience={"kind":"segment","selection":selection,"snapshotHash":checked["snapshotHash"]})
+    for sql in ["UPDATE of_campaign_audience SET definition_json='{}'", "DELETE FROM of_campaign_audience"]:
+        with pytest.raises(DBAPIError), database[1].begin() as c:
+            c.exec_driver_sql(sql)
+    from db.models import OfCreatorBinding
+    with Session(database[1]) as s, s.begin():
+        s.get(OfCreatorBinding,s.get(OfRuntime,"acc-a").binding_id).revoked_at=utcnow()
+    with pytest.raises(Refused):
+        list_audiences(store,"tenant-a","acc-a")
+
+
+def test_api_strict_purpose_scope_queries_and_write_permissions(database,monkeypatch):
+    store = setup(database)
+    monkeypatch.setenv("ONLYFANS_PROCESS_ROLE","api")
+    monkeypatch.setenv("ONLYFANS_CONTENT_TOKEN","synthetic-content-only")
+    monkeypatch.setenv("ONLYFANS_CONTENT_TENANT","tenant-a")
+    from onlyfans_commands.intelligence_api import router
+    from onlyfans_commands.content_api import HEADER, SCHEMA
+    from onlyfans_read.agency_scope import AgencyScopeMiddleware
+    app = FastAPI(); app.state.control_store=store; app.include_router(router); app.add_middleware(AgencyScopeMiddleware)
+    client = TestClient(app)
+    base="/onlyfans/content/v1/accounts/acc-a/intelligence"
+    headers={"authorization":"Bearer synthetic-content-only",HEADER:SCHEMA}
+    assert client.get(base+"/audiences").status_code == 401
+    assert client.get(base+"/audiences",headers={**headers,HEADER:"wrong"}).status_code == 400
+    response=client.get(base+"/audiences",headers=headers)
+    assert response.status_code == 200 and response.json()["analyticsVersion"] == "of-intelligence.v1"
+    for query in [{}, {"rules":"null"}, {"rules":'{"rules":[],"rules":[]}'}, {"rules":"NaN"}]:
+        assert client.get(base+"/preview",params=query,headers=headers).status_code == 400
+    assert client.get(base+"/preview?rules={}&rules={}",headers=headers).status_code == 400
+    assert client.get(base.replace("acc-a","acc-b")+"/audiences",headers=headers).status_code == 404
+    command={"actor":ACTOR,"action":"save","id":None,"expectedRevision":None,"name":"API audience","rules":rule("purchase_count","==",0,days=30)}
+    saved=client.post(base+"/audiences",headers=headers,json=command)
+    assert saved.status_code == 200 and saved.json()["data"]["audience"]["name"] == "API audience"
+    assert client.post(base+"/audiences",headers={**headers,"content-type":"application/json"},content='{"actor":1,"actor":2}').status_code == 400
+    assert client.post(base+"/audiences",headers=headers,json={**command,"actor":"viewer"}).status_code == 400
+    assert client.get(base+"/vault?fanId=00101",headers=headers).status_code == 400
+    assert client.get(base+"/performance?unexpected=1",headers=headers).status_code == 400
+    from db.models import OfCreatorBinding
+    creator="00000000-0000-0000-0000-000000000001"
+    with Session(database[1]) as s, s.begin():
+        s.get(OfCreatorBinding,s.get(OfRuntime,"acc-a").binding_id).creator_id=creator
+    grant={"creatorIds":[creator],"actor":"agency-user:"+creator+":"+creator,"canManage":False}
+    scoped={**headers,"x-onlyfans-agency-scope":json.dumps(grant)}
+    assert client.get(base+"/audiences",headers=scoped).status_code == 200
+    assert client.post(base+"/audiences",headers=scoped,json=command).status_code == 403
+    assert client.get(base+"/audiences",headers={**scoped,"x-onlyfans-agency-scope":json.dumps({**grant,"creatorIds":[]})}).status_code == 404
+
+
+def test_populated_upgrade_preserves_rows_and_requires_compatible_rollback(database):
+    store=setup(database)
+    saved=save(store)
+    from test_onlyfans_offer_import_upgrade_pg import historical_schema
+    from db.schema import LEDGER_HISTORY,check_schema,upgrade,SchemaMismatch,_config
+    from alembic import command
+    with database[1].begin() as c:
+        historical=historical_schema(c,LEDGER_HISTORY)
+        before={t.name:[dict(r) for r in c.execute(t.select()).mappings()] for t in historical.sorted_tables if t.name != "alembic_version"}
+        upgrade(c); upgrade(c); check_schema(c)
+        for name,rows in before.items():
+            assert [dict(r) for r in c.execute(historical.tables[name].select()).mappings()] == rows,name
+        with pytest.raises(SchemaMismatch,match="not supported"):
+            check_schema(c,expected=LEDGER_HISTORY)
+        with pytest.raises(RuntimeError,match="compatible forward release"):
+            command.downgrade(_config(c),LEDGER_HISTORY)
+        check_schema(c)
+    assert list_audiences(store,"tenant-a","acc-a")["audiences"][0]["id"] == saved["id"]
+
+
+def test_unverified_legacy_money_is_unknown_not_a_nonbuyer(database):
+    store=setup(database)
+    from db.models import Transaction
+    with Session(database[1]) as s,s.begin():
+        s.add(Transaction(account_id="acc-a",fan_id=101,kind="tip",amount_cents=1000,status="cleared",currency="USD",occurred_at=utcnow()-timedelta(minutes=1)))
+    result=preview(store,"tenant-a","acc-a",rules=rule("purchase_count","==",0,days=30))
+    assert (result["matched"],result["unknown"]) == (0,1)
+
+
+def test_unknown_evidence_holds_pending_segment_instead_of_permanently_skipping(database):
+    store=setup(database);current(database)
+    from db.onlyfans_campaign_models import OfCampaignRecipient
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    with Session(database[1]) as s,s.begin():
+        s.get(OfRuntime,"acc-a").enabled=True
+        s.add(OfDeliveryPolicy(account_id="acc-a",enabled=True,
+            revision=1,limit_units=100,used_units=0,queued_count=0))
+    saved=save(store)
+    selection={"include":[{"id":saved["id"],"revision":saved["revision"]}],"exclude":[]}
+    checked=preview(store,"tenant-a","acc-a",selection=selection)
+    service=CampaignService(store)
+    campaign=create(service,audience={"kind":"segment","selection":selection,"snapshotHash":checked["snapshotHash"]})
+    with Session(database[1]) as s,s.begin():
+        s.get(OfLedgerScan,"acc-a").last_complete_at=utcnow()-timedelta(hours=1)
+    assert service.queue_due("tenant-a","acc-a") is None
+    with Session(database[1]) as s:
+        recipient=s.get(OfCampaignRecipient,("acc-a",campaign["campaignId"],101))
+        assert (recipient.status,recipient.reason) == ("pending","audience_evidence_unavailable")
+
+
+@pytest.mark.parametrize("raw", ["{bad", "[0]", "[9999999999999999999]", "[]"])
+def test_malformed_or_incomplete_sent_links_cannot_prove_not_sent(database,raw):
+    store=vault_seed(database);current(database)
+    from onlyfans_runtime.launch_history_memory.recovery import OfHistoryCursor
+    with Session(database[1]) as s,s.begin():
+        s.add(OfHistoryCursor(account_id="acc-a",fan_id=101,binding_id="binding-acc-a",status="complete",completed_at=utcnow(),updated_at=utcnow()))
+        s.get(Message,("acc-a",101,9001)).media_ids=raw
+    result=read_vault_intelligence(store,"tenant-a","acc-a",fan_id="101",state="not_sent")
+    assert result["sentHistoryComplete"] is False and result["items"] == []

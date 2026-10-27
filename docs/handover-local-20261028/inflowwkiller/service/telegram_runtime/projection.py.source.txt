@@ -1,0 +1,399 @@
+"""Transactional Telegram -> native Fastt projection.
+
+``TelegramStore.import_projection_event`` owns the SQLite transaction and calls
+this synchronous applier before advancing its cursor.  The applier writes the
+actual native ``accounts``, ``fans``, ``messages`` and ``account_ai_config``
+tables that ``automations.ai_chatter`` reads.  It has no network surface and it
+never generates or sends a reply while importing/backfilling history.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import sqlite3
+from datetime import datetime, timezone
+from typing import Any
+
+from telegram_contract.contract import canonical_json, encode_tuple, parse_telegram_event
+from telegram_contract.identity import telegram_fan_key, telegram_message_key
+from telegram_contract.store import TelegramStoreError
+
+
+SUPPORTED_KINDS = [
+    "telegram_inbound_v1",
+    "telegram_history_v1",
+    "telegram_config_v1",
+    "telegram_receipt_v1",
+]
+
+
+def _record(value: Any, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise TelegramStoreError(f"{name} must be an object")
+    return value
+
+
+def _text(value: Any, name: str, *, nullable: bool = False) -> str | None:
+    if value is None and nullable:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise TelegramStoreError(f"{name} must be a non-blank string")
+    return value
+
+
+def _native_timestamp(value: str) -> str:
+    """Canonical wire UTC -> Fastt SQLite DateTime representation.
+
+    Fastt compares DateTime columns through SQLAlchemy, whose SQLite parameters
+    use ``YYYY-MM-DD HH:MM:SS.ffffff``. Persisting wire ``T...Z`` text in those
+    columns makes lexical SQL comparisons treat the same inbound as newer than
+    itself. Keep canonical time in raw_json and normalize only this DB boundary.
+    """
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise TelegramStoreError("projected timestamp is invalid") from exc
+    if parsed.tzinfo is None:
+        raise TelegramStoreError("projected timestamp requires a timezone")
+    return parsed.astimezone(timezone.utc).replace(tzinfo=None).strftime(
+        "%Y-%m-%d %H:%M:%S.%f"
+    )
+
+
+def _allocate(conn: sqlite3.Connection, source_type: str, source_key: str, now: str) -> int:
+    key = encode_tuple([source_type, source_key])
+    row = conn.execute(
+        "SELECT native_id FROM native_identity_map WHERE source_type=? AND source_key=?",
+        (source_type, key),
+    ).fetchone()
+    if row is not None:
+        return int(row[0])
+    seq = conn.execute(
+        "SELECT next_native_id FROM native_id_sequences WHERE source_type=?", (source_type,)
+    ).fetchone()
+    native_id = int(seq[0]) if seq is not None else 1
+    if native_id > 9007199254740991:
+        raise TelegramStoreError(f"native id space for {source_type} is exhausted")
+    if seq is None:
+        conn.execute(
+            "INSERT INTO native_id_sequences(source_type,next_native_id) VALUES(?,?)",
+            (source_type, native_id + 1),
+        )
+    else:
+        conn.execute(
+            "UPDATE native_id_sequences SET next_native_id=? WHERE source_type=?",
+            (native_id + 1, source_type),
+        )
+    conn.execute(
+        "INSERT INTO native_identity_map(source_type,source_key,native_id,created_at) VALUES(?,?,?,?)",
+        (source_type, key, native_id, now),
+    )
+    return native_id
+
+
+def reserve_telegram_message_id(conn: sqlite3.Connection, *, bot_id: str,
+                                chat_id: str,
+                                business_connection_id: str | None,
+                                message_id: str, now: str) -> int:
+    """Return the one native id for a canonical Telegram message receipt.
+
+    The worker calls this immediately after Node confirms the provider receipt,
+    before returning the result to ``ai_chatter`` for attribution.  The later
+    receipt projection therefore resolves to the same row instead of appending
+    a duplicate history message.
+    """
+    return _allocate(
+        conn,
+        "telegram_message",
+        telegram_message_key(bot_id, chat_id, business_connection_id, message_id),
+        now,
+    )
+
+
+class NativeProjectionApplier:
+    """One creator worker's strict synchronous target-state applier."""
+
+    supportedKinds = SUPPORTED_KINDS
+
+    def __init__(self, conn: sqlite3.Connection, *, account_id: str,
+                 binding_id: str, clone_id: str) -> None:
+        if not isinstance(account_id, str) or not account_id.strip():
+            raise ValueError("account_id is required")
+        if not isinstance(binding_id, str) or not binding_id.strip():
+            raise ValueError("binding_id is required")
+        if not isinstance(clone_id, str) or not clone_id.strip():
+            raise ValueError("clone_id is required")
+        self.conn = conn
+        self.account_id = account_id
+        self.binding_id = binding_id
+        self.clone_id = clone_id
+        self._ensure_runtime_tables()
+
+    def descriptor(self) -> dict[str, Any]:
+        return {"supportedKinds": list(self.supportedKinds), "apply": self.apply}
+
+    def _ensure_runtime_tables(self) -> None:
+        self.conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS telegram_runtime_config (
+              account_id TEXT PRIMARY KEY,
+              config_version TEXT NOT NULL,
+              payload_digest TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS telegram_runtime_turns (
+              turn_id TEXT PRIMARY KEY,
+              source_event_id TEXT NOT NULL UNIQUE,
+              conversation_key TEXT NOT NULL,
+              bot_id TEXT NOT NULL,
+              chat_id TEXT NOT NULL,
+              business_connection_id TEXT,
+              native_fan_id INTEGER NOT NULL,
+              input_revision INTEGER NOT NULL,
+              ownership_epoch INTEGER NOT NULL,
+              config_version TEXT NOT NULL,
+              state TEXT NOT NULL CHECK(state IN ('pending','running','completed','interrupted','held')),
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            """
+        )
+        # Additive catch-up for a database created by the earlier P2 draft.
+        columns = {str(row[1]) for row in self.conn.execute(
+            "PRAGMA table_info(telegram_runtime_turns)"
+        ).fetchall()}
+        for name, definition in (
+            ("bot_id", "TEXT"),
+            ("chat_id", "TEXT"),
+            ("business_connection_id", "TEXT"),
+        ):
+            if name not in columns:
+                self.conn.execute(
+                    f"ALTER TABLE telegram_runtime_turns ADD COLUMN {name} {definition}"
+                )
+
+    def _scope(self, payload: dict[str, Any]) -> None:
+        if payload.get("bindingId") != self.binding_id:
+            raise TelegramStoreError("projection binding does not match this worker")
+        if payload.get("cloneId") != self.clone_id:
+            raise TelegramStoreError("projection clone does not match this worker")
+        supplied = payload.get("accountId")
+        if supplied is not None and supplied != self.account_id:
+            raise TelegramStoreError("projection account does not match this worker")
+
+    def _account(self, now: str, nickname: str | None = None) -> None:
+        native_now = _native_timestamp(now)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO accounts(id,nickname,is_active_default,created_at) VALUES(?,?,0,?)",
+            (self.account_id, nickname or "Telegram creator", native_now),
+        )
+
+    def _fan(self, event: dict[str, Any], now: str) -> int:
+        native_now = _native_timestamp(now)
+        occurred_at = _native_timestamp(event["occurredAt"])
+        native_id = _allocate(
+            self.conn,
+            "telegram_fan",
+            telegram_fan_key(event["cloneId"], event["botId"], event["mode"], event["userId"]),
+            now,
+        )
+        self.conn.execute(
+            """INSERT OR IGNORE INTO fans(
+                 account_id,fan_id,is_name_real,recent_events,likes_boobs,likes_ass,
+                 family_names,pets,communication_style,tags,custom_fields,
+                 lifetime_spend_cents,is_bot,turn_counter,is_followed,is_muted,
+                 deep_convo_state,deep_convo_skip_level,deep_convo_skip_remaining,
+                 source,created_at,updated_at,last_message_received_at)
+               VALUES(?,?,1,'[]',0,0,'{}','[]','{}','[]','{}',0,0,0,0,0,
+                      'missing',0,0,'telegram',?,?,?)""",
+            (self.account_id, native_id, native_now, native_now, occurred_at),
+        )
+        self.conn.execute(
+            "UPDATE fans SET last_message_received_at=max(coalesce(last_message_received_at,''),?), updated_at=? "
+            "WHERE account_id=? AND fan_id=?",
+            (occurred_at, native_now, self.account_id, native_id),
+        )
+        return native_id
+
+    def _message(self, event: dict[str, Any], now: str, *, direction: str) -> tuple[int, int]:
+        if event["messageId"] is None:
+            raise TelegramStoreError("a projected conversational message requires messageId")
+        fan_id = self._fan(event, now)
+        native_message_id = reserve_telegram_message_id(
+            self.conn,
+            bot_id=event["botId"], chat_id=event["chatId"],
+            business_connection_id=event["businessConnectionId"],
+            message_id=event["messageId"], now=now,
+        )
+        body = event["text"] or ""
+        occurred_at = _native_timestamp(event["occurredAt"])
+        native_now = _native_timestamp(now)
+        raw = canonical_json({
+            "channel": "telegram",
+            "botId": event["botId"],
+            "chatId": event["chatId"],
+            "messageId": event["messageId"],
+            "sourceRevision": event["sourceRevision"],
+        })
+        existing = self.conn.execute(
+            "SELECT direction,body,created_at,raw_json FROM messages "
+            "WHERE account_id=? AND fan_id=? AND message_id=?",
+            (self.account_id, fan_id, native_message_id),
+        ).fetchone()
+        if existing is not None:
+            # A confirmed outbound is first attributed by ai_chatter using the
+            # reserved native id, then observed again through Node's canonical
+            # receipt projection. SQLite/SQLAlchemy may render the same instant
+            # differently (space/+00:00 versus T/Z), so canonical identity plus
+            # exact direction/body is the idempotency boundary for that receipt.
+            expected = (direction, body) if direction == "out" else (
+                direction, body, occurred_at
+            )
+            actual = tuple(existing)[:len(expected)]
+            if actual != expected:
+                raise TelegramStoreError("projected message identity has conflicting content")
+            return fan_id, native_message_id
+        self.conn.execute(
+            """INSERT INTO messages(
+                 account_id,fan_id,message_id,direction,sender_name,body,media_ids,
+                 media_count,price_cents,is_paid,is_tip,is_unsent,is_promise,
+                 automation_kind,raw_json,created_at,ingested_at)
+               VALUES(?,?,?,?,'',?,'[]',0,0,NULL,0,0,0,NULL,?,?,?)""",
+            (self.account_id, fan_id, native_message_id, direction, body, raw,
+             occurred_at, native_now),
+        )
+        return fan_id, native_message_id
+
+    def _inbound(self, payload: dict[str, Any], now: str) -> None:
+        event = parse_telegram_event(payload.get("event"))
+        self._scope(event)
+        if event["origin"] != "fan" or event["eventKind"] != "message":
+            raise TelegramStoreError("telegram_inbound_v1 only accepts fan messages")
+        conversation_key = _text(payload.get("conversationKey"), "conversationKey")
+        input_revision = payload.get("inputRevision")
+        ownership_epoch = payload.get("ownershipEpoch")
+        config_version = _text(payload.get("configVersion"), "configVersion")
+        if (type(input_revision) is not int or input_revision < 1
+                or type(ownership_epoch) is not int or ownership_epoch < 0):
+            raise TelegramStoreError("inbound authority revisions must be non-negative integers")
+        self._account(now)
+        fan_id, _ = self._message(event, now, direction="in")
+        self.conn.execute(
+            """INSERT OR IGNORE INTO telegram_runtime_turns(
+                 turn_id,source_event_id,conversation_key,bot_id,chat_id,
+                 business_connection_id,native_fan_id,
+                 input_revision,ownership_epoch,config_version,state,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?,?)""",
+            (event["eventId"], event["eventId"], conversation_key,
+             event["botId"], event["chatId"], event["businessConnectionId"], fan_id,
+             input_revision, ownership_epoch, config_version, now, now),
+        )
+
+    def _config(self, payload: dict[str, Any], now: str) -> None:
+        self._scope(payload)
+        version = _text(payload.get("configVersion"), "configVersion")
+        persona = payload.get("persona")
+        if persona is not None and not isinstance(persona, str):
+            raise TelegramStoreError("persona must be a string or null")
+        facts = payload.get("personaFacts", {})
+        if not isinstance(facts, dict):
+            raise TelegramStoreError("personaFacts must be an object")
+        language = payload.get("language")
+        timezone = payload.get("timezone")
+        location = payload.get("location")
+        for name, value in (("language", language), ("timezone", timezone), ("location", location)):
+            if value is not None and not isinstance(value, str):
+                raise TelegramStoreError(f"{name} must be a string or null")
+        digest = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+        native_now = _native_timestamp(now)
+        current = self.conn.execute(
+            "SELECT config_version,payload_digest FROM telegram_runtime_config WHERE account_id=?",
+            (self.account_id,),
+        ).fetchone()
+        if current is not None and current[0] == version:
+            if current[1] != digest:
+                raise TelegramStoreError("config version arrived with conflicting content")
+            return
+        self._account(now, payload.get("creatorName"))
+        self.conn.execute(
+            """INSERT INTO account_ai_config(
+                 account_id,persona,utc_offset,timezone,location,persona_facts_json,
+                 language,daily_cost_cap_cents,updated_at)
+               VALUES(?,?,0,?,?,?,?,100,?)
+               ON CONFLICT(account_id) DO UPDATE SET
+                 persona=excluded.persona,timezone=excluded.timezone,
+                 location=excluded.location,persona_facts_json=excluded.persona_facts_json,
+                 language=excluded.language,updated_at=excluded.updated_at""",
+            (self.account_id, persona, timezone, location,
+             canonical_json(facts), language, native_now),
+        )
+        self.conn.execute(
+            """INSERT INTO telegram_runtime_config(account_id,config_version,payload_digest,updated_at)
+               VALUES(?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET
+               config_version=excluded.config_version,payload_digest=excluded.payload_digest,
+               updated_at=excluded.updated_at""",
+            (self.account_id, version, digest, now),
+        )
+
+    def _history(self, payload: dict[str, Any], now: str) -> None:
+        self._scope(payload)
+        rows = payload.get("events")
+        if not isinstance(rows, list) or len(rows) > 1000:
+            raise TelegramStoreError("history events must be a bounded list")
+        self._account(now)
+        for raw in rows:
+            event = parse_telegram_event(raw)
+            self._scope(event)
+            direction = "in" if event["origin"] == "fan" else "out"
+            self._message(event, now, direction=direction)
+
+    def _receipt(self, payload: dict[str, Any], now: str) -> None:
+        self._scope(payload)
+        receipt = _record(payload.get("receipt"), "receipt")
+        self._scope(receipt)
+        if receipt.get("schemaVersion") != 1 or type(receipt.get("schemaVersion")) is not int:
+            raise TelegramStoreError("receipt schemaVersion must be the integer 1")
+        mode = _text(receipt.get("mode"), "receipt.mode")
+        if mode not in ("business", "bot"):
+            raise TelegramStoreError("receipt.mode must be business or bot")
+        business = receipt.get("businessConnectionId")
+        if business is not None and not isinstance(business, str):
+            raise TelegramStoreError("receipt.businessConnectionId must be a string or null")
+        if mode == "business" and not business:
+            raise TelegramStoreError("a business receipt requires businessConnectionId")
+        if mode == "bot" and business is not None:
+            raise TelegramStoreError("a bot receipt must not carry businessConnectionId")
+        for name in ("botId", "chatId", "userId", "messageId"):
+            value = _text(receipt.get(name), f"receipt.{name}")
+            if not re.fullmatch(r"[1-9][0-9]*", value):
+                raise TelegramStoreError(f"receipt.{name} must be a positive integer string")
+        text = _text(receipt.get("text"), "receipt.text")
+        delivered_at = _text(receipt.get("deliveredAt"), "receipt.deliveredAt")
+        _native_timestamp(delivered_at)
+        _text(receipt.get("sourceActionId"), "receipt.sourceActionId")
+        event = {
+            "cloneId": receipt["cloneId"], "botId": receipt["botId"],
+            "mode": mode, "businessConnectionId": business,
+            "chatId": receipt["chatId"], "userId": receipt["userId"],
+            "messageId": receipt["messageId"], "occurredAt": delivered_at,
+            "sourceRevision": f"action:{receipt['sourceActionId']}", "text": text,
+        }
+        self._account(now)
+        self._message(event, now, direction="out")
+
+    def apply(self, envelope: dict[str, Any]) -> None:
+        envelope = _record(envelope, "projection envelope")
+        kind = envelope.get("eventKind")
+        payload = _record(envelope.get("payload"), "projection payload")
+        now = _text(payload.get("projectedAt"), "projectedAt", nullable=True) or "1970-01-01T00:00:00.000Z"
+        if kind == "telegram_inbound_v1":
+            self._inbound(payload, now)
+        elif kind == "telegram_config_v1":
+            self._config(payload, now)
+        elif kind == "telegram_history_v1":
+            self._history(payload, now)
+        elif kind == "telegram_receipt_v1":
+            self._receipt(payload, now)
+        else:
+            raise TelegramStoreError(f"unsupported native projection kind {kind!r}")

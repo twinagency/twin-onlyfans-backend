@@ -1,0 +1,67 @@
+"""Telegram event v1 / delivery-action v1 contract for the Fastt worker.
+
+P1 deliverable. Offline, stdlib-only, import-safe: importing this package starts
+nothing and touches no network, no database and no model. It mirrors the Node
+validator in bot/src/engines/fastt-contract.ts so a Fastt-built event or action
+is byte-compatible with what the Node gateway accepts.
+
+The OnlyFans bridge (service/twin_bridge) already established the validation
+lessons this reuses: string ids, UTF-16 length semantics, unpaired-surrogate
+rejection, timezone-qualified timestamps normalised to canonical UTC, and
+length-prefixed tuple hashing for identity keys. The OnlyFans wire contract
+itself is NOT copied - the Telegram shapes differ.
+"""
+
+from .contract import (
+    ACTION_KINDS,
+    ACTION_SOURCE_KINDS,
+    ATTACHMENT_KINDS,
+    FASTT_ERROR_CODES,
+    FASTT_LIMITS,
+    TELEGRAM_ACTION_SCHEMA_VERSION,
+    TELEGRAM_CHANNEL,
+    TELEGRAM_EVENT_KINDS,
+    TELEGRAM_EVENT_SCHEMA_VERSION,
+    TELEGRAM_MODES,
+    TELEGRAM_ORIGINS,
+    FasttContractError,
+    action_payload_digest,
+    derive_action_id,
+    encode_tuple,
+    parse_delivery_action,
+    parse_telegram_event,
+    validate_by_kind,
+)
+from .identity import (
+    telegram_conversation_key,
+    telegram_fan_key,
+    telegram_message_key,
+    telegram_update_key,
+)
+from .store import TelegramContractStore
+
+__all__ = [
+    "ACTION_KINDS",
+    "ACTION_SOURCE_KINDS",
+    "ATTACHMENT_KINDS",
+    "FASTT_ERROR_CODES",
+    "FASTT_LIMITS",
+    "FasttContractError",
+    "TELEGRAM_ACTION_SCHEMA_VERSION",
+    "TELEGRAM_CHANNEL",
+    "TELEGRAM_EVENT_KINDS",
+    "TELEGRAM_EVENT_SCHEMA_VERSION",
+    "TELEGRAM_MODES",
+    "TELEGRAM_ORIGINS",
+    "action_payload_digest",
+    "derive_action_id",
+    "encode_tuple",
+    "parse_delivery_action",
+    "parse_telegram_event",
+    "validate_by_kind",
+    "telegram_conversation_key",
+    "telegram_fan_key",
+    "telegram_message_key",
+    "telegram_update_key",
+    "TelegramContractStore",
+]

@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""Cross-language Telegram contract conformance (P1).
+
+Windows:  .venv\\Scripts\\python.exe service\\tests\\test_telegram_contract.py
+
+Runs the SHARED fixture set through the Python validator and asserts the declared
+outcome and rejection code for every case. It then asserts the values the fixture
+format cannot express - identity key derivations, the action-id derivation, the
+payload digest and the canonical timestamp - AGAINST CONSTANTS COMPUTED BY THE
+NODE VALIDATOR, which is what actually proves the two languages agree.
+
+Offline: no network, no database, no Telegram, no model call, nothing started.
+"""
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+TESTS_DIR = Path(__file__).resolve().parent
+SERVICE_DIR = TESTS_DIR.parent
+sys.path.insert(0, str(SERVICE_DIR))
+
+from telegram_contract.contract import (  # noqa: E402
+    INDEX_MAX,
+    ORDINAL_MAX,
+    FasttContractError,
+    action_payload_digest,
+    derive_action_id,
+    event_content_digest,
+    parse_delivery_action,
+    parse_telegram_event,
+    validate_by_kind,
+)
+from telegram_contract.identity import (  # noqa: E402
+    telegram_conversation_key,
+    telegram_fan_key,
+    telegram_message_key,
+    telegram_update_key,
+)
+
+FIXTURES_DIR = SERVICE_DIR / "telegram_contract" / "fixtures"
+FIXTURE_PATH = FIXTURES_DIR / "telegram-contract.cases.json"
+HASH_PATH = FIXTURES_DIR / "FIXTURES.sha256"
+
+CLONE_A = "11111111-1111-4111-8111-111111111111"
+CLONE_B = "22222222-2222-4222-8222-222222222222"
+
+# Values produced by the NODE validator in bot/src/engines/fastt-contract.ts.
+# They are the cross-language contract: if either implementation drifts, this
+# suite fails, which is the whole point of pinning them here.
+NODE_EXPECTED = {
+    "action_id_turn_0": "act_7dec4b2d5153bd1c609b8695b9d8d1cf",
+    "action_id_turn_1": "act_93fc849cf25934cd97dedc8f3dad4961",
+    "action_id_job_1": "act_9bc5fb3539e497e268faa6847868ccae",
+    "conversation_clone_a": "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51",
+    "conversation_clone_b": "tg_23142990f58b30e2470dff5b1897f4fb1f2159569b56bcb52679cf02d6cd9fb3",
+    "fan_clone_a": "tgf_570b0a926e2942e67b370762c80f16842230ce3bfad7866016a6965cdab33af1",
+    "fan_clone_b": "tgf_e77ae9b57845c31c4da6501ae54a798170f26a659491d08c9e7bc866940c097a",
+    "message_chat_a": "tgm_9819ec6c0707f1aaf3e168638d012c6622075d6d0af81c341c4e602b5e766825",
+    "message_chat_b": "tgm_9574fe7d32f5ef40b07b36c66eb0b1c47daab2af31abbf7fd65cd7a8f914d273",
+    "update_key": "tgu_eb8cb2989b5da19c4ed07ca8179991e32f140c3a1510b4ef09a5b7d48c363fe1",
+    "text_action_digest": "32a063cd57b358a92c7e8869349da06feb7bee5ed8a55e8fb5f2e0a1c7f4993c",
+    "media_action_digest": "1b8981215ff38919311caba0a0818ae19173ccd20881caf4323645c5f536c2d5",
+    "event_received_at": "2026-10-15T04:05:07.000Z",
+    "event_occurred_at": "2026-10-15T04:05:06.789Z",
+    "offset_occurred_at": "2026-10-15T04:05:06.000Z",
+    # R4 semantic source-content digests (from the NODE validator).
+    "event_content_digest_business": "a628acfe01fe07f3a502fb4305d6f3bb6c4b9b104f359c93c9fc162e9b66e83a",
+    "event_content_digest_offset": "d9d45e737aa5d7a3b2850bce17089ccaf66e1551ae698a2a887e650a3f73784c",
+    "event_content_digest_photo": "ca2f2ef2f3568b21a8a8cb29e191338afbb28d539adab85dd9b512a4da46f689",
+    "action_id_ordinal_int32max": "act_de9c4744024482afb76ec8fd1c422155",
+}
+
+failures = []
+
+
+def check(label, actual, expected):
+    if actual == expected:
+        print(f"  ok   {label}")
+    else:
+        failures.append(f"{label}: got {actual!r}, expected {expected!r}")
+        print(f"  FAIL {label}: got {actual!r}, expected {expected!r}")
+
+
+def base_event(**over):
+    event = {
+        "schemaVersion": 1,
+        "eventId": "evt_boundary",
+        "channel": "telegram",
+        "bindingId": "bnd_telegram_alpha",
+        "cloneId": CLONE_A,
+        "botId": "7123456789",
+        "mode": "business",
+        "businessConnectionId": "bc_alpha",
+        "chatId": "900100200",
+        "userId": "555000111",
+        "updateId": "5001",
+        "messageId": "99",
+        "occurredAt": "2026-10-15T04:05:06Z",
+        "receivedAt": "2026-10-15T04:05:07Z",
+        "origin": "fan",
+        "eventKind": "message",
+        "text": "x",
+        "attachments": [],
+        "sourceRevision": "rev_b",
+    }
+    event.update(over)
+    return event
+
+
+def main() -> None:
+    raw = FIXTURE_PATH.read_text(encoding="utf-8")
+    recorded = HASH_PATH.read_text(encoding="utf-8").strip()
+    check("fixture copy matches FIXTURES.sha256", hashlib.sha256(raw.encode("utf-8")).hexdigest(), recorded)
+
+    fixture = json.loads(raw)
+    check("fixtureVersion", fixture["fixtureVersion"], 1)
+
+    valid = invalid = 0
+    for case in fixture["cases"]:
+        try:
+            validate_by_kind(case["kind"], case["payload"])
+            raised = None
+        except FasttContractError as exc:
+            raised = exc
+        if case["expect"] == "valid":
+            valid += 1
+            if raised is not None:
+                failures.append(f"{case['name']}: expected valid but rejected with {raised.code}")
+                print(f"  FAIL {case['name']}: rejected with {raised.code}")
+        else:
+            invalid += 1
+            if raised is None:
+                failures.append(f"{case['name']}: expected {case['code']} but was ACCEPTED")
+                print(f"  FAIL {case['name']}: accepted, expected {case['code']}")
+            elif raised.code != case["code"]:
+                failures.append(f"{case['name']}: expected {case['code']} got {raised.code}")
+                print(f"  FAIL {case['name']}: expected {case['code']} got {raised.code}")
+    print(f"  ok   {len(fixture['cases'])} shared cases ran ({valid} valid, {invalid} invalid)")
+
+    parse_telegram_event(base_event(text="a" * 4000))
+    print("  ok   text at exactly 4000 UTF-16 units is accepted (limit boundary)")
+    try:
+        parse_telegram_event(base_event(text="a" * 4001))
+        failures.append("4001-unit text should be rejected")
+        print("  FAIL 4001-unit text accepted")
+    except FasttContractError as exc:
+        check("4001-unit text rejected with oversized-field", exc.code, "oversized-field")
+    try:
+        parse_telegram_event(base_event(pad="x" * 20000))
+        failures.append("over-16KiB payload should be rejected")
+        print("  FAIL over-16KiB payload accepted")
+    except FasttContractError as exc:
+        check("over-16KiB payload rejected with oversized-field", exc.code, "oversized-field")
+
+    check(
+        "conversation key clone A",
+        telegram_conversation_key(CLONE_A, "7123456789", "business", "bc_alpha", "900100200"),
+        NODE_EXPECTED["conversation_clone_a"],
+    )
+    check(
+        "conversation key clone B",
+        telegram_conversation_key(CLONE_B, "7123456789", "business", "bc_alpha", "900100200"),
+        NODE_EXPECTED["conversation_clone_b"],
+    )
+    check("fan key clone A", telegram_fan_key(CLONE_A, "7123456789", "business", "555000111"), NODE_EXPECTED["fan_clone_a"])
+    check("fan key clone B", telegram_fan_key(CLONE_B, "7123456789", "business", "555000111"), NODE_EXPECTED["fan_clone_b"])
+    check("message key chat A", telegram_message_key("7123456789", "900100200", "bc_alpha", "42"), NODE_EXPECTED["message_chat_a"])
+    check("message key chat B", telegram_message_key("7123456789", "900100999", "bc_alpha", "42"), NODE_EXPECTED["message_chat_b"])
+    check("update key", telegram_update_key("7123456789", "1001"), NODE_EXPECTED["update_key"])
+
+    check(
+        "two chats, same message id => two distinct keys",
+        telegram_message_key("7123456789", "900100200", "bc_alpha", "42")
+        != telegram_message_key("7123456789", "900100999", "bc_alpha", "42"),
+        True,
+    )
+    check(
+        "two creators, same user => two distinct fan keys",
+        telegram_fan_key(CLONE_A, "7123456789", "business", "555000111")
+        != telegram_fan_key(CLONE_B, "7123456789", "business", "555000111"),
+        True,
+    )
+    check(
+        "two bots, same update id => two distinct update keys",
+        telegram_update_key("7123456789", "1001") != telegram_update_key("7000000001", "1001"),
+        True,
+    )
+    check(
+        "delimiter inside a value cannot shift a tuple boundary",
+        telegram_update_key("1|2", "3") != telegram_update_key("1", "2|3"),
+        True,
+    )
+
+    check("action id turn ordinal 0", derive_action_id("bnd_telegram_alpha", "turn", "turn_0001", 0), NODE_EXPECTED["action_id_turn_0"])
+    check("action id turn ordinal 1", derive_action_id("bnd_telegram_alpha", "turn", "turn_0001", 1), NODE_EXPECTED["action_id_turn_1"])
+    check("action id job ordinal 1", derive_action_id("bnd_telegram_alpha", "job", "job_welcome_tease", 1), NODE_EXPECTED["action_id_job_1"])
+
+    text_case = next(c for c in fixture["cases"] if c["name"] == "valid_action_send_text_turn")
+    media_case = next(c for c in fixture["cases"] if c["name"] == "valid_action_send_media_job_with_xtr_price")
+    text_action = parse_delivery_action(text_case["payload"])
+    media_action = parse_delivery_action(media_case["payload"])
+    check("text action payload digest", action_payload_digest(text_action), NODE_EXPECTED["text_action_digest"])
+    check("media action payload digest", action_payload_digest(media_action), NODE_EXPECTED["media_action_digest"])
+    check(
+        "distinct actions produce distinct digests",
+        action_payload_digest(text_action) != action_payload_digest(media_action),
+        True,
+    )
+    reworded = dict(text_action, text="a completely different bubble")
+    check(
+        "a reworded payload under the same action id changes the digest",
+        action_payload_digest(text_action) != action_payload_digest(reworded),
+        True,
+    )
+
+    business_event = parse_telegram_event(
+        next(c for c in fixture["cases"] if c["name"] == "valid_business_text_message")["payload"]
+    )
+    check("receivedAt normalised", business_event["receivedAt"], NODE_EXPECTED["event_received_at"])
+    check("occurredAt normalised", business_event["occurredAt"], NODE_EXPECTED["event_occurred_at"])
+    offset_event = parse_telegram_event(
+        next(c for c in fixture["cases"] if c["name"] == "valid_offset_timestamp_normalises_to_utc")["payload"]
+    )
+    check("offset timestamp normalised to UTC", offset_event["occurredAt"], NODE_EXPECTED["offset_occurred_at"])
+
+    # R4: the semantic source-content digest is the SAME in both languages.
+    for name, key in (
+        ("valid_business_text_message", "event_content_digest_business"),
+        ("valid_offset_timestamp_normalises_to_utc", "event_content_digest_offset"),
+        ("valid_photo_attachment_with_null_text", "event_content_digest_photo"),
+    ):
+        payload = next(c for c in fixture["cases"] if c["name"] == name)["payload"]
+        check(f"R4 semantic content digest ({name})", event_content_digest(parse_telegram_event(payload)), NODE_EXPECTED[key])
+
+    # R5: typed integer / timestamp / money rules. Generated where a literal
+    # cannot be represented portably (e.g. 10**400).
+    conv = "tg_396a714ee703be8adfedfd0b43fa973ee78018e1c0d0ddb082e5536621f20d51"
+
+    def mk_action(over=None, source_id="turn_0001", ordinal=0):
+        payload = {
+            "schemaVersion": 1,
+            "actionId": derive_action_id("bnd_telegram_alpha", "turn", source_id, ordinal),
+            "sourceKind": "turn",
+            "sourceId": source_id,
+            "ordinal": ordinal,
+            "bindingId": "bnd_telegram_alpha",
+            "cloneId": CLONE_A,
+            "conversationKey": conv,
+            "expectedEpoch": 0,
+            "expectedInputRevision": 0,
+            "configVersion": "cfg_0001",
+            "actionKind": "send_text",
+            "text": "hi",
+            "assets": [],
+            "currency": None,
+            "amount": None,
+            "notBefore": None,
+            "expiresAt": None,
+        }
+        payload.update(over or {})
+        return payload
+
+    photo = {"kind": "photo", "assetId": "a1", "revision": "r1"}
+
+    check(
+        "R5 ordinal int32 max action id",
+        derive_action_id("bnd_telegram_alpha", "turn", "turn_0001", ORDINAL_MAX),
+        NODE_EXPECTED["action_id_ordinal_int32max"],
+    )
+    try:
+        parse_delivery_action(mk_action({"actionId": NODE_EXPECTED["action_id_ordinal_int32max"]}, "turn_0001", ORDINAL_MAX))
+        print("  ok   R5 ordinal at the int32 maximum is accepted")
+    except FasttContractError as exc:
+        failures.append(f"R5 ordinal int32 max should be accepted, got {exc.code}")
+        print(f"  FAIL R5 ordinal int32 max rejected with {exc.code}")
+    try:
+        parse_delivery_action(mk_action({"expectedEpoch": INDEX_MAX}, "turn_ep_max"))
+        print("  ok   R5 expectedEpoch at Number.MAX_SAFE_INTEGER is accepted")
+    except FasttContractError as exc:
+        failures.append(f"R5 expectedEpoch at MAX_SAFE should be accepted, got {exc.code}")
+        print(f"  FAIL R5 expectedEpoch at MAX_SAFE rejected with {exc.code}")
+    for amount in (1, 25000):
+        try:
+            parse_delivery_action(mk_action({"actionKind": "send_media", "assets": [photo], "currency": "XTR", "amount": amount}, f"turn_amt_{amount}"))
+            print(f"  ok   R5 XTR amount {amount} is accepted")
+        except FasttContractError as exc:
+            failures.append(f"R5 XTR amount {amount} should be accepted, got {exc.code}")
+            print(f"  FAIL R5 XTR amount {amount} rejected with {exc.code}")
+
+    def rejects(label, kind, payload, code):
+        try:
+            validate_by_kind(kind, payload)
+            failures.append(f"R5 {label}: expected {code} but was ACCEPTED")
+            print(f"  FAIL R5 {label}: accepted, expected {code}")
+        except FasttContractError as exc:
+            check(f"R5 {label} rejected with {code}", exc.code, code)
+
+    rejects("ordinal above int32", "action", mk_action({"ordinal": ORDINAL_MAX + 1}), "malformed-field")
+    rejects("ordinal 1e21", "action", mk_action({"ordinal": 1e21}), "malformed-field")
+    rejects("ordinal boolean", "action", mk_action({"ordinal": True}), "malformed-field")
+    rejects("expectedEpoch above MAX_SAFE", "action", mk_action({"expectedEpoch": 9007199254740993}, "turn_ep_over"), "malformed-field")
+    rejects("amount 10**400", "action", mk_action({"actionKind": "send_media", "assets": [photo], "currency": "XTR", "amount": 10 ** 400}, "turn_amt_huge"), "money-invalid")
+    rejects("amount above max", "action", mk_action({"actionKind": "send_media", "assets": [photo], "currency": "XTR", "amount": 25001}, "turn_amt_over"), "money-invalid")
+    rejects("money on a text action", "action", mk_action({"currency": "XTR", "amount": 5}, "turn_money_text"), "money-invalid")
+    rejects("money on a typing action", "action", mk_action({"actionKind": "typing", "text": None, "currency": "XTR", "amount": 5}, "turn_money_typing"), "money-invalid")
+    rejects(
+        "paid media over ten items",
+        "action",
+        mk_action({"actionKind": "send_media", "assets": [{"kind": "photo", "assetId": f"a{i}", "revision": "r1"} for i in range(11)], "currency": "XTR", "amount": 250}, "turn_media_11"),
+        "oversized-field",
+    )
+    rejects(
+        "paid media of a wrong kind",
+        "action",
+        mk_action({"actionKind": "send_media", "assets": [{"kind": "document", "assetId": "d1", "revision": "r1"}], "currency": "XTR", "amount": 250}, "turn_media_doc"),
+        "malformed-field",
+    )
+    rejects("year-zero timestamp", "event", base_event(occurredAt="0000-12-31T23:59:59-00:01"), "timestamp-invalid")
+    rejects("out-of-range offset", "event", base_event(occurredAt="2026-10-15T04:00:00+24:00"), "timestamp-invalid")
+
+
+main()
+
+print()
+if failures:
+    print(f"{len(failures)} FAILED")
+    for f in failures:
+        print(f"   - {f}")
+    sys.exit(1)
+print("all cases passed (telegram contract)")

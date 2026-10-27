@@ -1,0 +1,33 @@
+"""Scoped subscription observations and frozen campaign segment provenance."""
+from sqlalchemy import Column, String, BigInteger, DateTime, Text, ForeignKeyConstraint, CheckConstraint
+from .models import Base
+
+INFO = {"onlyfans_since": "0093_audience_intelligence"}
+
+
+class OfFanSubscription(Base):
+    __tablename__ = "of_fan_subscription"
+    __table_args__ = (
+        ForeignKeyConstraint(["account_id", "fan_id"], ["fans.account_id", "fans.fan_id"], ondelete="RESTRICT"),
+        CheckConstraint("status IN ('active','expired','unknown')", name="status"),
+        {"info": INFO},
+    )
+    account_id = Column(String, primary_key=True)
+    fan_id = Column(BigInteger, primary_key=True)
+    binding_id = Column(String, nullable=False)
+    status = Column(String(16), nullable=False)
+    expires_at = Column(DateTime)
+    observed_at = Column(DateTime, nullable=False)
+
+
+class OfCampaignAudience(Base):
+    __tablename__ = "of_campaign_audience"
+    __table_args__ = (
+        ForeignKeyConstraint(["account_id", "campaign_id"], ["of_campaign.account_id", "of_campaign.campaign_id"], ondelete="RESTRICT"),
+        {"info": INFO},
+    )
+    account_id = Column(String, primary_key=True)
+    campaign_id = Column(String(36), primary_key=True)
+    definition_json = Column(Text, nullable=False)
+    definition_hash = Column(String(64), nullable=False)
+    evaluated_at = Column(DateTime, nullable=False)

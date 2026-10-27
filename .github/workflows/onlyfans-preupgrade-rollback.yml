@@ -1,0 +1,80 @@
+name: Immutable rollback image rehearsal
+on:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  rehearse:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-rollback-image-only
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orchestration
+          ref: 345deb97603557ec8af3b25d99e94ed6a84b706f
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: d6811b124928f8167e6625ce9db5db81bf227fad
+          path: compatible-rollback
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '12719432791'
+          run-id: '40473190809'
+          github-token: ${{ github.token }}
+          path: rollback-artifact
+          merge-multiple: true
+      - name: Verify and load the exact immutable rollback package
+        working-directory: rollback-artifact
+        run: |
+          set -euo pipefail
+          echo '93b600278dfece0c6ebb67ceeecd5d0a27f3b78aac12321823e79fa858779935  backend-rollback-d6811b124928f8167e6625ce9db5db81bf227fad.docker.tar.gz' | sha256sum -c -
+          gzip -dc backend-rollback-d6811b124928f8167e6625ce9db5db81bf227fad.docker.tar.gz | docker load
+          test "$(docker image inspect sha256:49e446b89c828a38212c673d9710b011506fe722724a2955bedf4424ddbb5d3a --format '{{.Id}}')" = sha256:49e446b89c828a38212c673d9710b011506fe722724a2955bedf4424ddbb5d3a
+      - name: Install the candidate's isolated verification dependencies
+        working-directory: candidate
+        run: |
+          python -m pip install -r requirements-onlyfans-test.txt
+          if ! test -x /usr/lib/postgresql/16/bin/pg_dump; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client-16
+          fi
+      - name: Rehearse the executable image on populated schema 0096
+        working-directory: candidate
+        env:
+          PYTHON_DOTENV_DISABLED: '1'
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: ${{ github.workspace }}/orchestration/scripts:service:service/tests
+          ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-rollback-image-only@127.0.0.1:5432/postgres
+          ONLYFANS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+          ONLYFANS_COMPATIBLE_ROLLBACK_DIR: ${{ github.workspace }}/compatible-rollback
+          ONLYFANS_ROLLBACK_IMAGE: sha256:49e446b89c828a38212c673d9710b011506fe722724a2955bedf4424ddbb5d3a
+        run: |
+          set -euo pipefail
+          mkdir -p image-rehearsal-evidence
+          cp ../rollback-artifact/{image-id.txt,source-sha.txt,SHA256SUMS} image-rehearsal-evidence/
+          python -m pytest -q -p onlyfans_rollback_image_adapter --tb=short service/tests/test_onlyfans_release_package_pg.py --junitxml=image-rehearsal-evidence/rollback-image.xml 2>&1 | tee image-rehearsal-evidence/tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: populated-immutable-rollback-image-0096
+          path: candidate/image-rehearsal-evidence/
+          if-no-files-found: error
+

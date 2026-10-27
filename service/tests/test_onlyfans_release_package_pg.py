@@ -120,3 +120,103 @@ def test_schema_compatible_rollback_preserves_evidence_with_commands_closed(data
         assert rows(engine)==before and proxy_rows(engine)==proxy_before
     finally:
         broker.close();store.close();other.close()
+
+
+
+from contextlib import contextmanager
+import base64
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from alembic import command as alembic_command
+from db.models import Account, Fan, Message
+from db.schema import BASELINE, HEAD, LEDGER_HISTORY, SchemaMismatch, _config, check_schema, upgrade
+
+
+@contextmanager
+def populated_preupgrade_database():
+    # Start empty, install the frozen baseline and replay only through 0092.
+    # Never stamp a current database backwards or apply broker recovery-upgrade.sql.
+    with empty_database() as (url, engine):
+        with engine.begin() as c:
+            c.exec_driver_sql((Path(__file__).resolve().parents[1]/"db/snapshots/0070_postgresql.sql").read_text())
+            alembic_command.stamp(_config(c), BASELINE)
+            alembic_command.upgrade(_config(c), LEDGER_HISTORY)
+            check_schema(c, expected=LEDGER_HISTORY)
+            c.exec_driver_sql((Path(__file__).resolve().parents[1]/"managed_proxy/schema.sql").read_text())
+        with Session(engine) as s, s.begin():
+            s.add(Account(id="preupgrade", nickname="Retained synthetic account")); s.flush()
+            s.add(Fan(account_id="preupgrade", fan_id=1)); s.flush()
+            s.add(Message(account_id="preupgrade", fan_id=1, message_id=9, direction="out", body="PREUPGRADE PRIVATE HISTORY", created_at=utcnow())); s.flush()
+            s.execute(text("INSERT INTO of_conversation_state (account_id,fan_id,mode,revision,unresolved_attempt_id) VALUES ('preupgrade',1,'no_contact',4,'unknown-preupgrade')"))
+            s.execute(text("INSERT INTO of_message_delivery (account_id,fan_id,message_id,outcome,attempt_id,evidence_ref) VALUES ('preupgrade',1,9,'unknown','unknown-preupgrade','retained-evidence')"))
+        nonce=bytes(range(12)); address="7"*64
+        sealed=base64.b64encode(nonce+AESGCM(bytes.fromhex("42"*32)).encrypt(nonce,b"http://synthetic:never-real@8.8.4.4:12323",("twin-managed-proxy.v1:"+address).encode())).decode()
+        with engine.begin() as c:
+            c.execute(text("""INSERT INTO onlyfans_proxy.inventory
+                (address_hash,country,order_id,expires_at,sealed_url,state,owner_key,tenant_id,creator_id,handle,account_id,assigned_at,observed_at)
+                VALUES (:address,'US',123,CURRENT_TIMESTAMP+INTERVAL '10 days',:sealed,'assigned',:owner,'tenant-a','synthetic-used','synthetic_used','preupgrade',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"""),{"address":address,"sealed":sealed,"owner":"8"*64})
+            c.execute(text("INSERT INTO onlyfans_proxy.audit(address_hash,tenant_id,creator_id,handle,actor,action) VALUES (:address,'tenant-a','synthetic-used','synthetic_used',:actor,'assign')"),{"address":address,"actor":"op-session:"+"a"*64})
+        yield url, engine
+
+
+def test_preupgrade_0092_encrypted_full_scope_restore_then_migrate(tmp_path,pg_bin):
+    with populated_preupgrade_database() as (url,engine):
+        before,proxy_before=rows(engine),proxy_rows(engine)
+        assert before["alembic_version"]==[{"version_num":LEDGER_HISTORY}]
+        assert "used_at" not in {v["name"] for v in inspect(engine).get_columns("inventory",schema="onlyfans_proxy")}
+        archive=tmp_path/"before-migration.twinof"
+        with pytest.raises(SchemaMismatch):operations.backup(url,archive,key=KEY,pg_bin=pg_bin,include_proxy=True)
+        assert not archive.exists()
+        metadata=operations.backup(url,archive,key=KEY,pg_bin=pg_bin,include_proxy=True,source_revision=LEDGER_HISTORY)
+        assert metadata["schema"]==LEDGER_HISTORY and metadata["scope"]=="public+onlyfans_proxy"
+        encrypted=archive.read_bytes()
+        assert b"PREUPGRADE PRIVATE HISTORY" not in encrypted and b"never-real" not in encrypted
+        assert rows(engine)==before and proxy_rows(engine)==proxy_before
+        with empty_database() as (target,restored):
+            result=operations.restore(target,archive,key=KEY,pg_bin=pg_bin)
+            assert result["schema"]==LEDGER_HISTORY and result["quarantined"] and not result["releasePermitted"]
+            expected=dict(before);expected.pop("alembic_version")
+            after=rows(restored);after.pop("alembic_version")
+            assert after==expected and proxy_rows(restored)==proxy_before
+            with restored.connect() as c:
+                assert c.scalar(text("SELECT status FROM onlyfans_restore.fence"))=="quarantined"
+                assert c.scalar(text("SELECT version_num FROM alembic_version"))==operations.QUARANTINE_REVISION
+                with pytest.raises(SchemaMismatch,match="quarantined"):check_schema(c,expected=LEDGER_HISTORY)
+                with pytest.raises(SchemaMismatch,match="quarantined"):check_schema(c)
+            broker=ProxyStore(target.replace("postgresql+psycopg2:","postgresql:"),"42"*32)
+            try:
+                with pytest.raises(ProxyError,match="restore_quarantined"):broker.check()
+            finally:broker.close()
+            with pytest.raises(operations.RecoveryRefused,match="empty"):operations.restore(target,archive,key=KEY,pg_bin=pg_bin)
+        # Only after the encrypted backup and isolated restore have succeeded,
+        # rehearse the documented preflight/upgrade on this disposable source copy.
+        with engine.begin() as c:
+            c.exec_driver_sql("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='30s'")
+            for table in ("messages","of_content_sync_source","of_runtime","of_content_sync_account","of_offer_import_job"):
+                c.exec_driver_sql("ANALYZE public."+table)
+        with engine.begin() as c:
+            c.exec_driver_sql("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='30s'")
+            upgrade(c);check_schema(c)
+            assert c.scalar(text("SELECT version_num FROM alembic_version"))==HEAD
+            assert c.scalar(text("SELECT count(*) FROM pg_trigger WHERE tgname='of_content_fold_pending' AND NOT tgisinternal"))==1
+            assert c.scalar(text("SELECT to_regclass('ix_of_content_sync_source_fold_pending')"))
+        assert rows(engine)["messages"]==before["messages"] and proxy_rows(engine)==proxy_before
+        assert rows(engine)["of_message_delivery"]==before["of_message_delivery"]
+
+
+def test_preupgrade_backup_refuses_unsupported_and_incompatible_sources(tmp_path,pg_bin,monkeypatch):
+    with populated_preupgrade_database() as (url,engine):
+        before,proxy_before=rows(engine),proxy_rows(engine)
+        for source in ("0091_launch_controls","0093_ledger_markers","restore_quarantine_0096"):
+            with pytest.raises(operations.RecoveryRefused,match="Unsupported backup source"):
+                operations.backup(url,tmp_path/(source+".twinof"),key=KEY,pg_bin=pg_bin,include_proxy=True,source_revision=source)
+        # Partial migration / falsified source identity must not get to pg_dump.
+        with engine.begin() as c:c.exec_driver_sql("ALTER TABLE content_offers ADD COLUMN post_buy_started_at timestamp")
+        with pytest.raises(operations.RecoveryRefused,match="structure differs"):
+            operations.backup(url,tmp_path/"partial.twinof",key=KEY,pg_bin=pg_bin,include_proxy=True,source_revision=LEDGER_HISTORY)
+        with engine.begin() as c:c.exec_driver_sql("ALTER TABLE content_offers DROP COLUMN post_buy_started_at")
+        with engine.begin() as c:c.exec_driver_sql("ALTER TABLE messages RENAME COLUMN body TO broken_body")
+        with pytest.raises(SchemaMismatch,match="messages.body"):
+            operations.backup(url,tmp_path/"broken.twinof",key=KEY,pg_bin=pg_bin,include_proxy=True,source_revision=LEDGER_HISTORY)
+        with engine.begin() as c:c.exec_driver_sql("ALTER TABLE messages RENAME COLUMN broken_body TO body")
+        assert rows(engine)==before and proxy_rows(engine)==proxy_before
+        assert not list(tmp_path.glob("*.twinof"))

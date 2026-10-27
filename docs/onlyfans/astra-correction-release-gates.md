@@ -51,7 +51,7 @@ with image-label comparison alone. Recheck final runtime hashes before release.
    Fence or drain existing grants without deleting uncertain attempts. Confirm no
    late browser/enrollment completion can write during the window.
 3. Back up the CRM plus onlyfans_proxy in one encrypted snapshot using the corrected
-   recovery command with --include-proxy. Retain the existing encryption keys through
+   recovery command with --include-proxy --source-revision 0092_ledger_history. Retain the existing encryption keys through
    the approved secret store. Separately retain dashboard owner/agency session-store
    recovery material. Record actual snapshot IDs, timestamps and isolated restore
    destination. Never restore stale evidence over newer accepted sends.
@@ -127,3 +127,53 @@ owner/agency scopes and repeatable additive upgrade.
 Serial NativeEngine/global-hook capacity limits remain. Neither 120-second p95 nor
 250-creator capacity is proved. AUTH-02/03 Flirt changes remain paired and deferred.
 This repair does not enable them or rewrite scaling.
+
+
+## Pre-migration backup correction, Astra follow-up
+
+The historical 2,260-case evidence remains attached to backend
+0c4d79aa9f736102aa26bb41e4f7561ab1fff248 and dashboard
+444fd1303858e6d87204efe5811278657571f8f6. This recovery-code change needs new
+exact-pair acceptance and a changed backend forward image before release.
+The preupgrade workflow records the new commit and isolated proof; pending
+results must not be described as passing.
+
+With every writer stopped in the approved window, verify the actual source is
+0092_ledger_history. Retain the 32-byte base64 backup key and existing proxy
+credential-encryption key through the existing secret owner, never argv/logs.
+Set ONLYFANS_RECOVERY_URL privately to the verified CRM database and
+ONLYFANS_BACKUP_KEY to the retained encryption key. Use the corrected candidate:
+
+```sh
+PYTHONPATH=service python -m onlyfans_runtime.operations backup /secure/backups/twin-before-0093.twinof --include-proxy --source-revision 0092_ledger_history --pg-bin /usr/lib/postgresql/16/bin
+```
+
+The command checks the genuine 0092 structure and refuses known later migration
+columns or an unsupported revision. Ordinary backup still defaults to 0096.
+Authenticated metadata records schema 0092 and public+onlyfans_proxy scope;
+pg_dump excludes active Alembic version data and archive bytes are encrypted
+before being saved. Record archive SHA256, backup ID and timestamp privately.
+
+Set ONLYFANS_RESTORE_TEST_URL privately to a new, empty isolated database.
+Keep the same backup key and execute:
+
+```sh
+PYTHONPATH=service python -m onlyfans_runtime.operations restore /secure/backups/twin-before-0093.twinof --url-env ONLYFANS_RESTORE_TEST_URL --pg-bin /usr/lib/postgresql/16/bin
+```
+
+Require successful authentication, all CRM/proxy rows preserved, no active
+Alembic revision and the independent onlyfans_restore fence marked quarantined.
+Verify both runtime schema checks and broker readiness refuse this destination.
+Do not clear the fence, stamp it ready or start sending. Compare source revision
+and row evidence before/after backup; backup must not migrate or mutate it.
+Retain dashboard session-store recovery material separately.
+
+Only after backup and isolated restoration pass: run the bounded five-table
+statistics transaction, then explicit 0092 to 0093 to 0094 to 0095 to 0096
+upgrade/check on the verified source. The isolated boundary test constructs
+0092 from the frozen 0070 snapshot and historical migration chain, populates
+history/unknown-attempt evidence and the pre-recovery broker schema, backs up
+and restores first, then rehearses statistics and upgrade on the disposable
+source copy. Existing 0096, tamper, crash and nonempty-target refusal cases
+remain required. No production execution is implied by this preparation.
+

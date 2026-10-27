@@ -1,0 +1,22 @@
+{
+  "CommandId": "bb644d12-6e4e-459f-a3bd-91dc9aa11130",
+  "InstanceId": "i-09a9dd3bd749643a5",
+  "Comment": "",
+  "DocumentName": "AWS-RunShellScript",
+  "DocumentVersion": "$DEFAULT",
+  "PluginName": "aws:runShellScript",
+  "ResponseCode": 0,
+  "ExecutionStartDateTime": "2026-10-27T08:08:59.147Z",
+  "ExecutionElapsedTime": "PT2.784S",
+  "ExecutionEndDateTime": "2026-10-27T08:09:01.147Z",
+  "Status": "Success",
+  "StatusDetails": "Success",
+  "StandardOutputContent": "{\"currencyColumns\": [[\"transactions\", \"currency\"], [\"of_offer_observation\", \"currency\"], [\"of_content_sync_draft\", \"currency\"]]}\n\n{\"name\": \"twin-onlyfans-creator-sign-in-1\", \"networks\": {\"twin-onlyfans_default\": {\"aliases\": [\"twin-onlyfans-creator-sign-in-1\", \"creator-sign-in\"]}}}\n{\"name\": \"twin-onlyfans-managed-proxy-1\", \"networks\": {\"twin-onlyfans_default\": {\"aliases\": [\"twin-onlyfans-managed-proxy-1\", \"managed-proxy\"]}}}\n",
+  "StandardOutputUrl": "",
+  "StandardErrorContent": "",
+  "StandardErrorUrl": "",
+  "CloudWatchOutputConfig": {
+    "CloudWatchLogGroupName": "",
+    "CloudWatchOutputEnabled": false
+  }
+}

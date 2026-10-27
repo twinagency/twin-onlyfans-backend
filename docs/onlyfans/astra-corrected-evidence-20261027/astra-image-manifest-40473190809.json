@@ -1,0 +1,177 @@
+{
+  "run": 40473190809,
+  "artifacts": [
+    {
+      "id": 12720170965,
+      "name": "crm-dashboard-rollback-871b3e8955bf8af357f6f66d56c4446bf98fee8e",
+      "digest": "sha256:698cc8a2447bc37021fa59a43243127d47cdb19265c7efc74bfbbdfefe96c9b4",
+      "bytes": 154787229,
+      "expiresAt": "2027-01-25T08:23:45Z",
+      "evidence": {
+        "image-id.txt": "sha256:959107b653d83a2b30d41fc49ab5c40130f3cd696a1b4b274cb1f4a05c32e3d9\n",
+        "source-sha.txt": "871b3e8955bf8af357f6f66d56c4446bf98fee8e\n",
+        "SHA256SUMS": "19adccd48aabea8e93ac2f5fe0bc943457d8f9515001ed168b895e1737553a4d  dashboard-rollback-871b3e8955bf8af357f6f66d56c4446bf98fee8e.docker.tar.gz\n",
+        "node-version.txt": "v22.23.4\n",
+        "imageConfiguration": {
+          "Entrypoint": [
+            "docker-entrypoint.sh"
+          ],
+          "Cmd": [
+            "node",
+            "server.js"
+          ],
+          "WorkingDir": "/app",
+          "User": "nextjs",
+          "Labels": {
+            "org.opencontainers.image.revision": "871b3e8955bf8af357f6f66d56c4446bf98fee8e"
+          }
+        }
+      }
+    },
+    {
+      "id": 12720121378,
+      "name": "crm-dashboard-forward-444fd1303858e6d87204efe5811278657571f8f6",
+      "digest": "sha256:8e159a005863221362b9d70a22398ba01992324683ab6f7ad990d2e1dd5c6766",
+      "bytes": 154778539,
+      "expiresAt": "2027-01-25T08:23:45Z",
+      "evidence": {
+        "image-id.txt": "sha256:67dfc6bb2414722192b3885561a00fa11de188edcf68118764677c0713680632\n",
+        "source-sha.txt": "444fd1303858e6d87204efe5811278657571f8f6\n",
+        "SHA256SUMS": "7783bdacd0a4675f4c419210b5c52b449592f777c6478468d9265526573ba21a  dashboard-forward-444fd1303858e6d87204efe5811278657571f8f6.docker.tar.gz\n",
+        "node-version.txt": "v22.23.4\n",
+        "imageConfiguration": {
+          "Entrypoint": [
+            "docker-entrypoint.sh"
+          ],
+          "Cmd": [
+            "node",
+            "server.js"
+          ],
+          "WorkingDir": "/app",
+          "User": "nextjs",
+          "Labels": {
+            "org.opencontainers.image.revision": "444fd1303858e6d87204efe5811278657571f8f6"
+          }
+        }
+      }
+    },
+    {
+      "id": 12719687046,
+      "name": "crm-backend-forward-0c4d79aa9f736102aa26bb41e4f7561ab1fff248",
+      "digest": "sha256:10a532f8cfae89dc94b2e4e3096b763f2b9470ab29e07af3e68cff7ed834c39f",
+      "bytes": 336303506,
+      "expiresAt": "2027-01-25T08:23:45Z",
+      "evidence": {
+        "image-id.txt": "sha256:50e1b83498c4cbe03bd8c7268dcbaedbd9ae2be15442201a2671d47f86201fc4\n",
+        "source-sha.txt": "0c4d79aa9f736102aa26bb41e4f7561ab1fff248\n",
+        "SHA256SUMS": "b1af05e61ffd6b126eb54a13f9a451f038b0842d323956bb4413f1d888b44b62  backend-forward-0c4d79aa9f736102aa26bb41e4f7561ab1fff248.docker.tar.gz\n",
+        "python-dependencies.txt": "aiosqlite==0.20.0\nalembic==1.13.3\nannotated-doc==0.0.5\nannotated-types==0.8.0\nanyio==4.15.1\nasyncpg==0.30.0\ncertifi==2026.10.23\ncffi==2.1.1\ncharset-normalizer==3.5.2\nclick==8.5.0\ncryptography==50.0.2\ncurl_cffi==0.15.0\nfastapi==0.136.1\ngoogle-api-core==2.43.0\ngoogle-api-python-client==2.197.0\ngoogle-auth==2.53.0\ngoogle-auth-httplib2==0.4.0\ngoogle-auth-oauthlib==1.4.0\ngoogleapis-common-protos==1.76.0\ngreenlet==3.5.6\nh11==0.16.0\nhttpcore==1.0.9\nhttplib2==0.32.0\nhttptools==0.9.0\nhttpx==0.28.1\nidna==3.20\nMako==1.4.3\nmarkdown-it-py==4.2.0\nMarkupSafe==3.0.4\nmdurl==0.1.2\noauthlib==4.0.0\nopentelemetry-api==1.45.1\npillow==12.2.0\nplaywright==1.64.1\nplaywright-stealth==2.0.3\nproto-plus==1.29.0\nprotobuf==7.36.2\npsycopg2-binary==2.9.10\npyasn1==0.6.5\npyasn1_modules==0.4.2\npycparser==3.12\npydantic==2.13.4\npydantic_core==2.46.4\npyee==14.0.0\nPygments==2.21.0\npyparsing==3.3.3\npython-dotenv==1.0.1\npython-multipart==0.0.29\npython-socks==2.5.1\nPyYAML==6.0.3\nrequests==2.34.2\nrequests-oauthlib==2.0.0\nrich==15.0.0\nSQLAlchemy==2.0.35\nsqlmodel==0.0.22\nstarlette==1.10.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\nuritemplate==4.2.0\nurllib3==2.8.0\nuvicorn==0.47.0\nuvloop==0.23.0\nwatchfiles==1.3.0\nwebsockets==16.0\n",
+        "imageConfiguration": {
+          "Entrypoint": null,
+          "Cmd": [
+            "uvicorn",
+            "service.onlyfans_app:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8787",
+            "--workers",
+            "1"
+          ],
+          "WorkingDir": "/app",
+          "User": "",
+          "Labels": {
+            "org.opencontainers.image.revision": "0c4d79aa9f736102aa26bb41e4f7561ab1fff248"
+          }
+        }
+      }
+    },
+    {
+      "id": 12719432791,
+      "name": "crm-backend-rollback-d6811b124928f8167e6625ce9db5db81bf227fad",
+      "digest": "sha256:380defb5bcf1f7e7739bce2e2020fe846d36a7290d621e881be528f255dfbc06",
+      "bytes": 336306123,
+      "expiresAt": "2027-01-25T08:23:45Z",
+      "evidence": {
+        "image-id.txt": "sha256:49e446b89c828a38212c673d9710b011506fe722724a2955bedf4424ddbb5d3a\n",
+        "source-sha.txt": "d6811b124928f8167e6625ce9db5db81bf227fad\n",
+        "SHA256SUMS": "93b600278dfece0c6ebb67ceeecd5d0a27f3b78aac12321823e79fa858779935  backend-rollback-d6811b124928f8167e6625ce9db5db81bf227fad.docker.tar.gz\n",
+        "python-dependencies.txt": "aiosqlite==0.20.0\nalembic==1.13.3\nannotated-doc==0.0.5\nannotated-types==0.8.0\nanyio==4.15.1\nasyncpg==0.30.0\ncertifi==2026.10.23\ncffi==2.1.1\ncharset-normalizer==3.5.2\nclick==8.5.0\ncryptography==50.0.2\ncurl_cffi==0.15.0\nfastapi==0.136.1\ngoogle-api-core==2.43.0\ngoogle-api-python-client==2.197.0\ngoogle-auth==2.53.0\ngoogle-auth-httplib2==0.4.0\ngoogle-auth-oauthlib==1.4.0\ngoogleapis-common-protos==1.76.0\ngreenlet==3.5.6\nh11==0.16.0\nhttpcore==1.0.9\nhttplib2==0.32.0\nhttptools==0.9.0\nhttpx==0.28.1\nidna==3.20\nMako==1.4.3\nmarkdown-it-py==4.2.0\nMarkupSafe==3.0.4\nmdurl==0.1.2\noauthlib==4.0.0\nopentelemetry-api==1.45.1\npillow==12.2.0\nplaywright==1.64.1\nplaywright-stealth==2.0.3\nproto-plus==1.29.0\nprotobuf==7.36.2\npsycopg2-binary==2.9.10\npyasn1==0.6.5\npyasn1_modules==0.4.2\npycparser==3.12\npydantic==2.13.4\npydantic_core==2.46.4\npyee==14.0.0\nPygments==2.21.0\npyparsing==3.3.3\npython-dotenv==1.0.1\npython-multipart==0.0.29\npython-socks==2.5.1\nPyYAML==6.0.3\nrequests==2.34.2\nrequests-oauthlib==2.0.0\nrich==15.0.0\nSQLAlchemy==2.0.35\nsqlmodel==0.0.22\nstarlette==1.10.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\nuritemplate==4.2.0\nurllib3==2.8.0\nuvicorn==0.47.0\nuvloop==0.23.0\nwatchfiles==1.3.0\nwebsockets==16.0\n",
+        "imageConfiguration": {
+          "Entrypoint": null,
+          "Cmd": [
+            "uvicorn",
+            "service.onlyfans_app:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8787",
+            "--workers",
+            "1"
+          ],
+          "WorkingDir": "/app",
+          "User": "",
+          "Labels": {
+            "org.opencontainers.image.revision": "d6811b124928f8167e6625ce9db5db81bf227fad"
+          }
+        }
+      }
+    },
+    {
+      "id": 12719258524,
+      "name": "crm-signin-forward-0c4d79aa9f736102aa26bb41e4f7561ab1fff248",
+      "digest": "sha256:749a0bc9eec77ba5625286f79d1840a38c21d40bacb5a207609520a0bea9d02b",
+      "bytes": 915541596,
+      "expiresAt": "2027-01-25T08:23:45Z",
+      "evidence": {
+        "image-id.txt": "sha256:db610cc6de464b06ffddbfee11dc71fd2d8ff8d74006830525471fd43a81d518\n",
+        "source-sha.txt": "0c4d79aa9f736102aa26bb41e4f7561ab1fff248\n",
+        "SHA256SUMS": "117a574dd22f3a0e68ed65acee5dcdd5f760bb389f9a638044bf7b2dc20bca8c  signin-forward-0c4d79aa9f736102aa26bb41e4f7561ab1fff248.docker.tar.gz\n",
+        "node-version.txt": "v24.17.0\n",
+        "imageConfiguration": {
+          "Entrypoint": null,
+          "Cmd": [
+            "xvfb-run",
+            "-a",
+            "node",
+            "creator-sign-in/server.mjs"
+          ],
+          "WorkingDir": "/app",
+          "User": "pwuser",
+          "Labels": {
+            "org.opencontainers.image.revision": "0c4d79aa9f736102aa26bb41e4f7561ab1fff248",
+            "org.opencontainers.image.version": "24.04"
+          }
+        }
+      }
+    },
+    {
+      "id": 12718978352,
+      "name": "crm-signin-rollback-d6811b124928f8167e6625ce9db5db81bf227fad",
+      "digest": "sha256:7cb07b6a67a4062446bdf76fda2a1dcec9364870a19a9a3cf4428a6860e55324",
+      "bytes": 915540427,
+      "expiresAt": "2027-01-25T08:23:45Z",
+      "evidence": {
+        "image-id.txt": "sha256:520f627c7bed82752df78814340366ec7d7e9bc2539566b7c8845c024a6acd51\n",
+        "source-sha.txt": "d6811b124928f8167e6625ce9db5db81bf227fad\n",
+        "SHA256SUMS": "71f06d8746cdd891f0f8d7e7c81d5a28eda854de8346634a1bda3610121574c6  signin-rollback-d6811b124928f8167e6625ce9db5db81bf227fad.docker.tar.gz\n",
+        "node-version.txt": "v24.17.0\n",
+        "imageConfiguration": {
+          "Entrypoint": null,
+          "Cmd": [
+            "xvfb-run",
+            "-a",
+            "node",
+            "creator-sign-in/server.mjs"
+          ],
+          "WorkingDir": "/app",
+          "User": "pwuser",
+          "Labels": {
+            "org.opencontainers.image.revision": "d6811b124928f8167e6625ce9db5db81bf227fad",
+            "org.opencontainers.image.version": "24.04"
+          }
+        }
+      }
+    }
+  ]
+}

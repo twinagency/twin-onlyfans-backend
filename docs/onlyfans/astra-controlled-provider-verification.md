@@ -89,10 +89,17 @@ The two existing manual command shapes are:
 Prepare and hash these bodies locally for the approved window. Any new revision
 or actor requires refreshing the review record before admission. Do not post them
 during preparation: on a live connected sender, queueing is an outbound action.
-After explicit approval, submit one reviewed body exactly once through the
-existing management gateway. On lost acknowledgement, read its recorded intent
-and canonical conversation before any identical-key retry. Never create a new key
-to get around an ambiguous send.
+Before approved manual admission, quiesce every sender for this private account
+and retain all unresolved ownership/grant fences. After explicit approval, submit
+one reviewed body exactly once through the existing management gateway. With
+sending still stopped, inspect the frozen canonical intent: tenant, account,
+recipient, manual origin, text, ordered media, previews and exact 300-cent USD
+paid price must match this packet. A mismatch stops the test before any wire call.
+Then permit only the existing canonical authority's one dispatch grant for that
+reviewed intent. Do not release unrelated queued work or clear an uncertain hold.
+On lost acknowledgement, read its recorded intent and canonical conversation
+before any identical-key retry. Never create a new key to get around an ambiguous
+send. Stop and retain the existing attempt evidence after any uncertain outcome.
 
 The private API readback path is
 GET /onlyfans/api/v1/accounts/of-176774528/conversations/of-176774528:318022380,

@@ -1,0 +1,10 @@
+{
+  "capturedAt": "2026-10-27T08:44:31.510687+00:00",
+  "database": {
+    "schema": "0092_ledger_history"
+  },
+  "differences": [],
+  "readOnly": true,
+  "baseline": "astra-repair-sender-refresh.json",
+  "current": "astra-final-sender-runtime.json"
+}

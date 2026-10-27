@@ -1,0 +1,53 @@
+{
+  "run": 40473190809,
+  "images": [
+    {
+      "name": "crm-dashboard-rollback-871b3e8955bf8af357f6f66d56c4446bf98fee8e",
+      "id": 12720170965,
+      "imageId": "sha256:959107b653d83a2b30d41fc49ab5c40130f3cd696a1b4b274cb1f4a05c32e3d9",
+      "archiveSha256": "19adccd48aabea8e93ac2f5fe0bc943457d8f9515001ed168b895e1737553a4d",
+      "artifactDigest": "sha256:698cc8a2447bc37021fa59a43243127d47cdb19265c7efc74bfbbdfefe96c9b4",
+      "expiresAt": "2027-01-25T08:23:45Z"
+    },
+    {
+      "name": "crm-dashboard-forward-444fd1303858e6d87204efe5811278657571f8f6",
+      "id": 12720121378,
+      "imageId": "sha256:67dfc6bb2414722192b3885561a00fa11de188edcf68118764677c0713680632",
+      "archiveSha256": "7783bdacd0a4675f4c419210b5c52b449592f777c6478468d9265526573ba21a",
+      "artifactDigest": "sha256:8e159a005863221362b9d70a22398ba01992324683ab6f7ad990d2e1dd5c6766",
+      "expiresAt": "2027-01-25T08:23:45Z"
+    },
+    {
+      "name": "crm-backend-forward-0c4d79aa9f736102aa26bb41e4f7561ab1fff248",
+      "id": 12719687046,
+      "imageId": "sha256:50e1b83498c4cbe03bd8c7268dcbaedbd9ae2be15442201a2671d47f86201fc4",
+      "archiveSha256": "b1af05e61ffd6b126eb54a13f9a451f038b0842d323956bb4413f1d888b44b62",
+      "artifactDigest": "sha256:10a532f8cfae89dc94b2e4e3096b763f2b9470ab29e07af3e68cff7ed834c39f",
+      "expiresAt": "2027-01-25T08:23:45Z"
+    },
+    {
+      "name": "crm-backend-rollback-d6811b124928f8167e6625ce9db5db81bf227fad",
+      "id": 12719432791,
+      "imageId": "sha256:49e446b89c828a38212c673d9710b011506fe722724a2955bedf4424ddbb5d3a",
+      "archiveSha256": "93b600278dfece0c6ebb67ceeecd5d0a27f3b78aac12321823e79fa858779935",
+      "artifactDigest": "sha256:380defb5bcf1f7e7739bce2e2020fe846d36a7290d621e881be528f255dfbc06",
+      "expiresAt": "2027-01-25T08:23:45Z"
+    },
+    {
+      "name": "crm-signin-forward-0c4d79aa9f736102aa26bb41e4f7561ab1fff248",
+      "id": 12719258524,
+      "imageId": "sha256:db610cc6de464b06ffddbfee11dc71fd2d8ff8d74006830525471fd43a81d518",
+      "archiveSha256": "117a574dd22f3a0e68ed65acee5dcdd5f760bb389f9a638044bf7b2dc20bca8c",
+      "artifactDigest": "sha256:749a0bc9eec77ba5625286f79d1840a38c21d40bacb5a207609520a0bea9d02b",
+      "expiresAt": "2027-01-25T08:23:45Z"
+    },
+    {
+      "name": "crm-signin-rollback-d6811b124928f8167e6625ce9db5db81bf227fad",
+      "id": 12718978352,
+      "imageId": "sha256:520f627c7bed82752df78814340366ec7d7e9bc2539566b7c8845c024a6acd51",
+      "archiveSha256": "71f06d8746cdd891f0f8d7e7c81d5a28eda854de8346634a1bda3610121574c6",
+      "artifactDigest": "sha256:7cb07b6a67a4062446bdf76fda2a1dcec9364870a19a9a3cf4428a6860e55324",
+      "expiresAt": "2027-01-25T08:23:45Z"
+    }
+  ]
+}

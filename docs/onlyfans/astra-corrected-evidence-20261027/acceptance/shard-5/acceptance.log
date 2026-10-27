@@ -1,0 +1,73 @@
+........................................................................ [ 15%]
+........................................................................ [ 30%]
+........................................................................ [ 46%]
+........................................................................ [ 61%]
+........................................................................ [ 77%]
+........................................................................ [ 92%]
+.................................                                        [100%]
+=============================== warnings summary ===============================
+../../../../../../opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+service/tests/test_onlyfans_ai_filter.py: 225 warnings
+service/tests/test_onlyfans_capacity_pg.py: 2657 warnings
+service/tests/test_onlyfans_connections_pg.py: 137 warnings
+service/tests/test_onlyfans_content_sync_findings_pg.py: 203 warnings
+service/tests/test_onlyfans_fastt_campaign_dispatch_pg.py: 216 warnings
+service/tests/test_onlyfans_fastt_takeover_pg.py: 41 warnings
+service/tests/test_onlyfans_inbox_batch_pg.py: 102 warnings
+service/tests/test_onlyfans_launch_engagement_events_pg.py: 269 warnings
+service/tests/test_onlyfans_launch_history_memory_recovery_pg.py: 279 warnings
+service/tests/test_onlyfans_launch_ledger_diagnostics.py: 64 warnings
+service/tests/test_onlyfans_launch_schema_upgrade_pg.py: 7 warnings
+service/tests/test_onlyfans_loopback_transport_pg.py: 195 warnings
+service/tests/test_onlyfans_native_caption_pg.py: 31 warnings
+service/tests/test_onlyfans_native_planning_pg.py: 144 warnings
+service/tests/test_onlyfans_offer_import_upgrade_pg.py: 31 warnings
+service/tests/test_onlyfans_protected_vault_pg.py: 3 warnings
+service/tests/test_onlyfans_recorded_earnings_pg.py: 14 warnings
+service/tests/test_onlyfans_send_recovery_pg.py: 45 warnings
+service/tests/test_onlyfans_vault_media_pg.py: 37 warnings
+service/tests/test_vault_auto_folders.py: 237 warnings
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+service/tests/test_onlyfans_content_sync_findings_pg.py: 118 warnings
+service/tests/test_onlyfans_offer_import_upgrade_pg.py: 12 warnings
+service/tests/test_onlyfans_protected_vault_pg.py: 1 warning
+service/tests/test_onlyfans_vault_media_pg.py: 4 warnings
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/vault_mirror.py:105: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+service/tests/test_onlyfans_fastt_campaign_dispatch_pg.py: 24 warnings
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/tests/test_onlyfans_fastt_operator.py:23: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    "createdAt":datetime.utcnow().isoformat()+"Z", "text":body["text"],
+
+service/tests/test_onlyfans_send_recovery_pg.py::test_native_recovery_settles_takeover_without_replay_or_budget_reset
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/attribution.py:465: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    ingested_at=datetime.utcnow(),
+
+service/tests/test_vault_auto_folders.py: 16 warnings
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/tests/test_vault_auto_folders.py:55: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    s.add_all([VaultItem(account_id=account, media_id=1, kind="photo", created_at=datetime.utcnow(),
+
+service/tests/test_vault_auto_folders.py::MembershipTests::test_archived_auto_folder_not_recreated_for_new_item
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/tests/test_vault_auto_folders.py:109: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    folder.deleted_at = datetime.utcnow()
+
+service/tests/test_vault_auto_folders.py::MembershipTests::test_archived_auto_folder_not_recreated_for_new_item
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/tests/test_vault_auto_folders.py:110: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    s.add(VaultItem(account_id="a", media_id=2, kind="video", created_at=datetime.utcnow(), tags='["selfie"]'))
+
+service/tests/test_vault_auto_folders.py::MembershipTests::test_manual_removal_rename_archive_are_preserved
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/tests/test_vault_auto_folders.py:87: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    rows[1].deleted_at = datetime.utcnow()
+
+service/tests/test_vault_auto_folders.py::MembershipTests::test_missing_removed_and_pending_metadata_are_skipped
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/backend/service/tests/test_vault_auto_folders.py:123: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    row = await s.get(VaultItem, ("a", 1)); row.removed_at = datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/release-evidence/acceptance.xml -
+465 passed, 5118 warnings in 1238.56s (0:20:38)

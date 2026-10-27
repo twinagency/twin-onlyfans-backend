@@ -1,0 +1,8 @@
+{
+  "sha": "0c4d79aa9f736102aa26bb41e4f7561ab1fff248",
+  "branch": "codex/twin-crm-astra-runtime-20261027",
+  "runtimeEqualTo": "f0ecf4f8a21e1f25b84351e1513eafc1fc53ee1a",
+  "runtimeDiff": "",
+  "localNativeExit": 15,
+  "localNativePassed": false
+}

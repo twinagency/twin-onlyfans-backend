@@ -106,23 +106,34 @@ Leave DASHBOARD_ALLOW_LEGACY_ADMIN_SESSIONS unset in production. Legacy HMAC mas
 cookies must reauthenticate. New master logins use revocable owner_ sessions.
 Notify operators of this re-login requirement before release.
 
-The real signer produced a valid legacy cookie for the rehearsal; production's
-default rejected it. Server-backed login/revocation and actual logout-action checks
+The real signer produced a valid legacy cookie in the isolated rehearsal; the
+default production policy rejected it there. Server-backed login/revocation and actual logout-action checks
 deny copied-token replay, preserve another session and retain the cookie with an
 actionable retry if revocation is unavailable. SQL rehearsal verifies existing
 owner/agency scopes and repeatable additive upgrade.
 
-## Explicit remaining gates
+## Completed preparation and remaining gates
 
-- Corrected immutable source pair and final exact-pair six acceptance shards,
-  both native suites, isolated scripts and aggregate.
-- Built immutable forward/rollback image digests, not merely source/archive hashes.
-- Actual production backup/session recovery IDs at the approved release window.
-- Controlled provider packet with verified test account, recipient, saved fixed
-  network fingerprint, current model/key pairing, media ID, price and exact commands.
-  Historical test account/fan references alone are not new outbound authorization.
-- GitHub runner billing block: job 121741404579 did not start because of account
-  payment/spending-limit restrictions. Do not report hosted CI green.
+- Corrected runtime/source pair: backend
+  0c4d79aa9f736102aa26bb41e4f7561ab1fff248 and dashboard
+  444fd1303858e6d87204efe5811278657571f8f6. Final six-shard/native/isolated-script
+  and aggregate status is recorded in astra-corrected-evidence-20261027/README.md.
+- Immutable forward/rollback images are built: run 40473190809. Exact image IDs,
+  archive hashes and immutable artifact IDs/digests are retained in
+  astra-immutable-image-manifest.json. Actual rollback-image populated-database
+  rehearsal passed in run 40474649744: 2 cases, zero failures/errors/skips.
+  Retain the named packages before their 25 January 2027 expiry.
+- The final sender refresh at 08:44:31 UTC matched all 19 reconciled source hashes,
+  image and config; production database remains 0092. This bounded read-only check
+  must be refreshed at the approved release window.
+- Actual production backup/session recovery IDs and the quiescence record remain
+  approved-window gates; the isolated rehearsals do not substitute for them.
+- Exact controlled test preparation is in astra-controlled-provider-verification.md.
+  Current verified connection, actor/revisions, recipient control and explicit
+  bounded model/outbound authorization remain required before execution.
+- Astra final review and explicit release approval remain required. The historical
+  billing-blocked job 121741404579 and old 2,182-case evidence remain historical.
+  Current hosted run status must be reported from its own evidence.
 
 Serial NativeEngine/global-hook capacity limits remain. Neither 120-second p95 nor
 250-creator capacity is proved. AUTH-02/03 Flirt changes remain paired and deferred.

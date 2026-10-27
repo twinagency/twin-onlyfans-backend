@@ -1,0 +1,28 @@
+{
+  "pytestFiles": [
+    "service/tests/test_onlyfans_ai_filter.py",
+    "service/tests/test_onlyfans_capacity_pg.py",
+    "service/tests/test_onlyfans_connections_pg.py",
+    "service/tests/test_onlyfans_content_sync_findings_pg.py",
+    "service/tests/test_onlyfans_demo_assets.py",
+    "service/tests/test_onlyfans_fastt_campaign_dispatch_pg.py",
+    "service/tests/test_onlyfans_fastt_takeover_pg.py",
+    "service/tests/test_onlyfans_inbox_batch_pg.py",
+    "service/tests/test_onlyfans_launch_engagement_events_pg.py",
+    "service/tests/test_onlyfans_launch_history_memory_recovery_pg.py",
+    "service/tests/test_onlyfans_launch_ledger_diagnostics.py",
+    "service/tests/test_onlyfans_launch_personality_policy.py",
+    "service/tests/test_onlyfans_launch_schema_upgrade_pg.py",
+    "service/tests/test_onlyfans_loopback_transport_pg.py",
+    "service/tests/test_onlyfans_native_caption_pg.py",
+    "service/tests/test_onlyfans_native_planning_pg.py",
+    "service/tests/test_onlyfans_offer_import_upgrade_pg.py",
+    "service/tests/test_onlyfans_protected_vault_pg.py",
+    "service/tests/test_onlyfans_recorded_earnings_pg.py",
+    "service/tests/test_onlyfans_send_recovery_pg.py",
+    "service/tests/test_onlyfans_vault_media_pg.py",
+    "service/tests/test_onlyfans_worker_entry.py",
+    "service/tests/test_vault_auto_folders.py"
+  ],
+  "separateScripts": []
+}

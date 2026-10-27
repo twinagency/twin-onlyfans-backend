@@ -1,0 +1,9 @@
+..                                                                       [100%]
+=============================== warnings summary ===============================
+service/tests/test_onlyfans_release_package_pg.py: 180 warnings
+  /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/candidate/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/runner/work/twin-onlyfans-backend/twin-onlyfans-backend/candidate/image-rehearsal-evidence/rollback-image.xml -
+2 passed, 180 warnings in 31.05s

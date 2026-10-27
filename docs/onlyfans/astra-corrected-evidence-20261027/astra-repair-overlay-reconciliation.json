@@ -1,0 +1,57 @@
+{
+  "automations/ai_chatter.py": {
+    "liveOverlayNodes": [
+      {
+        "node": "_runtime_unanswered_replies",
+        "candidateMatches": true,
+        "source": null
+      },
+      {
+        "node": "_gather",
+        "candidateMatches": true,
+        "source": null
+      },
+      {
+        "node": "_thread_moved_on",
+        "candidateMatches": true,
+        "source": null
+      }
+    ],
+    "candidateEqualsLabel": false
+  },
+  "native_pilot/engine.py": {
+    "liveOverlayNodes": [
+      {
+        "node": "NativeEngine.__init__",
+        "candidateMatches": true,
+        "source": null
+      },
+      {
+        "node": "NativeEngine.unanswered_replies",
+        "candidateMatches": true,
+        "source": null
+      }
+    ],
+    "candidateEqualsLabel": false
+  },
+  "db/schema.py": {
+    "liveOverlayNodes": [
+      {
+        "node": "@1a2e4aae399b817c724149ab9d60df382d448b78e1a47a2e505a483737073340",
+        "candidateMatches": true,
+        "source": null
+      },
+      {
+        "node": "@cd81ee2a06b217861f19f10a3846debf414d204dc33510b334bcd7db61b2b094",
+        "candidateMatches": false,
+        "source": "HEAD = \"0092_ledger_history\""
+      },
+      {
+        "node": "@df3fa7b1dd82d8584f6ed69ad3654bbc6d185319fdd5bccafe12891b00cb729e",
+        "candidateMatches": false,
+        "source": "REVISION_RANK = {\"0064_user_llm_keys\": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, HEAD:92}"
+      }
+    ],
+    "candidateEqualsLabel": false
+  }
+}

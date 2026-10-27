@@ -1,0 +1,18 @@
+{
+  "dashboard": "444fd1303858e6d87204efe5811278657571f8f6",
+  "network": "synthetic fetch only",
+  "results": [
+    {
+      "script": "check-session-revocation.ts",
+      "exit": 0,
+      "stdout": "Session revocation PASS: distinct server sessions, copied-token replay refused, other session preserved, repeated logout, valid legacy HMAC hard cutover and visible outage.\n",
+      "stderr": ""
+    },
+    {
+      "script": "check-logout-action.ts",
+      "exit": 0,
+      "stdout": "Logout action PASS: revoke before clearing cookie, repeat sign-out, visible revocation failure, cookie retained on outage and existing agency guard.\n",
+      "stderr": ""
+    }
+  ]
+}

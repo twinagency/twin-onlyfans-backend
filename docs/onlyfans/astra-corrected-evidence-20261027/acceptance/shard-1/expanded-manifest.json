@@ -1,0 +1,28 @@
+{
+  "pytestFiles": [
+    "managed_proxy_tests/test_managed_proxy_api.py",
+    "service/tests/test_onlyfans_browser_capture.py",
+    "service/tests/test_onlyfans_configuration_pg.py",
+    "service/tests/test_onlyfans_content_pg.py",
+    "service/tests/test_onlyfans_controls_pg.py",
+    "service/tests/test_onlyfans_earnings_pg.py",
+    "service/tests/test_onlyfans_fastt_operator.py",
+    "service/tests/test_onlyfans_fold_pending_pg.py",
+    "service/tests/test_onlyfans_launch_budget_configuration_pg.py",
+    "service/tests/test_onlyfans_launch_history_memory.py",
+    "service/tests/test_onlyfans_launch_integration_pg.py",
+    "service/tests/test_onlyfans_launch_monitoring.py",
+    "service/tests/test_onlyfans_launch_provider_budget_pg.py",
+    "service/tests/test_onlyfans_launch_worker_health_pg.py",
+    "service/tests/test_onlyfans_media_pg.py",
+    "service/tests/test_onlyfans_native_history.py",
+    "service/tests/test_onlyfans_native_upgrade_pg.py",
+    "service/tests/test_onlyfans_operations_timezone_pg.py",
+    "service/tests/test_onlyfans_provider_pg.py",
+    "service/tests/test_onlyfans_recovery_pg.py",
+    "service/tests/test_onlyfans_thread_paging_pg.py",
+    "service/tests/test_onlyfans_vault_pg.py",
+    "service/tests/test_onlyfans_worker_maintenance.py"
+  ],
+  "separateScripts": []
+}

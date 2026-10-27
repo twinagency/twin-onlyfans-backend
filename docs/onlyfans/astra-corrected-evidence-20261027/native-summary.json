@@ -1,0 +1,15 @@
+{
+  "backend": "0c4d79aa9f736102aa26bb41e4f7561ab1fff248",
+  "suites": [
+    {
+      "suite": "fastt-postgres-0c4d79aa9f736102aa26bb41e4f7561ab1fff248",
+      "commands": 7,
+      "allPassed": true
+    },
+    {
+      "suite": "fastt-sqlite-0c4d79aa9f736102aa26bb41e4f7561ab1fff248",
+      "commands": 28,
+      "allPassed": true
+    }
+  ]
+}

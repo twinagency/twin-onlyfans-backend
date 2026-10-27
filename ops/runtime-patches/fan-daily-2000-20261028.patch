@@ -1,0 +1,272 @@
+--- a/service/native_pilot/ledger.py
++++ b/service/native_pilot/ledger.py
+@@ -26,6 +26,7 @@
+ from __future__ import annotations
+ 
+ import hashlib
++import os
+ import json
+ import re
+ from contextlib import contextmanager
+@@ -165,6 +166,9 @@
+         # one unit of the account's EXISTING of_delivery_policy, in the same
+         # transaction as the durable attempt. The bounded pilot never sets it.
+         self.allowance = allowance
++        self.fan_daily_limit = int(os.environ.get("FASTT_FAN_DAILY_REPLY_LIMIT", "2000")) if allowance else 0
++        if not 0 <= self.fan_daily_limit <= 2000:
++            raise ValueError("invalid-fan-daily-reply-limit")
+         # Persistent service only, when fan photos are described (FASTT's inbound_describe): how
+         # long a caption-less photo may wait for its description before it is skipped as before.
+         # 0 = descriptions are not used here at all (the bounded pilot, every older fixture).
+@@ -442,7 +446,7 @@
+             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND bubble_no=?", (input_key, bubble_no)).fetchone():
+                 raise Refused("attempt-already-exists")
+             if self.allowance:
+-                self._consume_allowance(con, p["account_id"], now_s)
++                self._consume_allowance(con, p["account_id"], now_s, fan_id=p["fan_id"], daily_limit=self.fan_daily_limit)
+             tid = "native-pilot-" + _hash([pilot_id, input_key, bubble_no])
+             aid = store.insert_id(con, "INSERT INTO twin_bridge_send_attempts(account_id,fan_id,turn_id,attempt_no,state,"
+                                   "owner_token,revision,created_at,updated_at) VALUES(?,?,?,1,'dispatching',?,?,?,?)",
+@@ -459,7 +463,7 @@
+                            "FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()
+ 
+     @classmethod
+-    def _consume_allowance(cls, con, account: str, now_s: str) -> None:
++    def _consume_allowance(cls, con, account: str, now_s: str, *, fan_id: int | None = None, daily_limit: int = 0) -> None:
+         """Spend ONE unit of the account's delivery allowance, or refuse.
+ 
+         Never resets, lowers or raises ``used_units`` except by this single
+@@ -473,28 +477,46 @@
+             raise Refused("allowance-missing")
+         if not row["enabled"]:
+             raise Refused("allowance-disabled")
+-        if row["used_units"] >= row["limit_units"]:
++        daily = bool(daily_limit and fan_id is not None)
++        used = cls._fan_daily_used(con, account, fan_id, now_s) if daily else row["used_units"]
++        if used >= (daily_limit if daily else row["limit_units"]):
+             raise Refused("allowance-exhausted")
+         if row["active_intent_id"]:
+             raise Refused("allowance-busy")
+         if row["next_dispatch_at"] is not None and _dt(row["next_dispatch_at"]) > now_s:
+             raise Refused("allowance-throttled")
+         due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=row["throttle_seconds"]))
+-        cur = con.execute("UPDATE of_delivery_policy SET used_units=used_units+1,next_dispatch_at=? "
+-                          "WHERE account_id=? AND enabled AND used_units=? AND used_units<limit_units "
++        charge = "used_units," if daily else "used_units+1,"
++        ceiling = "" if daily else "AND used_units<limit_units "
++        cur = con.execute("UPDATE of_delivery_policy SET used_units=" + charge + "next_dispatch_at=? "
++                          "WHERE account_id=? AND enabled AND used_units=? " + ceiling +
+                           "AND active_intent_id IS NULL",
+                           (due, account, row["used_units"]))
+         if cur.rowcount != 1:
+             raise Refused("allowance-changed")
+ 
+-    def allowance_status(self, account: str) -> dict | None:
++    @staticmethod
++    def _fan_daily_used(con, account: str, fan_id: int, now_s: str) -> int:
++        # Called inside admission's serialized transaction; dispatching and unknown
++        # outcomes remain charged. Definitely unsent attempts give their place back.
++        cutoff = _dt(datetime.fromisoformat(now_s) - timedelta(hours=24))
++        return con.execute(
++            "SELECT count(*) FROM native_pilot_receipts r "
++            "JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
++            "WHERE a.account_id=? AND a.fan_id=? AND r.created_at>? AND r.created_at<=? "
++            "AND r.state IN ('dispatching','sent','delivery_unknown')",
++            (account, fan_id, cutoff, now_s)).fetchone()[0]
++
++    def allowance_status(self, account: str, fan_id: int | None = None, *, now=None) -> dict | None:
+         """Read-only copy of the account's delivery policy numbers (None when absent)."""
+         with store.readonly(self.path) as con:
+             row = self._policy_row(con, account)
++            daily = bool(self.fan_daily_limit and fan_id is not None)
++            used = self._fan_daily_used(con, account, fan_id, _dt(now or datetime.utcnow())) if row is not None and daily else None
+         if row is None:
+             return None
+         due = row["next_dispatch_at"]
+-        return {"enabled": bool(row["enabled"]), "limit": row["limit_units"], "used": row["used_units"],
++        return {"enabled": bool(row["enabled"]), "limit": self.fan_daily_limit if daily else row["limit_units"], "used": used if daily else row["used_units"],
+                 "throttle_seconds": row["throttle_seconds"], "busy": bool(row["active_intent_id"]),
+                 "next_dispatch_at": None if due is None else _dt(due)}
+ 
+@@ -661,7 +683,7 @@
+             con.execute("UPDATE twin_bridge_conversations SET send_budget_used=send_budget_used-1,updated_at=? "
+                         "WHERE account_id=? AND fan_id=? AND owner_token=? AND revision=? AND send_budget_used>?",
+                         (now_s, p["account_id"], p["fan_id"], owner_token, p["revision"], p["baseline_used"]))
+-            if self.allowance:
++            if self.allowance and not self.fan_daily_limit:
+                 con.execute("UPDATE of_delivery_policy SET used_units=used_units-1 WHERE account_id=? AND used_units>0",
+                             (p["account_id"],))
+             return True
+@@ -915,6 +937,9 @@
+                 if existing["state"] == "active" and (lease_live or _dt(existing["deadline"]) > now_s):
+                     raise Refused("owner-live")
+                 end = existing["end_limit"]
++                if self.fan_daily_limit:
++                    end = max(end, c["send_budget_used"] + 2000000000)
++                    con.execute("UPDATE native_pilots SET end_limit=? WHERE pilot_id=?", (end, pilot_id))
+                 if c["send_budget_used"] >= end:
+                     raise Refused("budget-exhausted")
+                 revision = max(c["revision"], existing["revision"]) + 1
+@@ -928,7 +953,7 @@
+                 used, old_limit = c["send_budget_used"], c["send_budget_limit"]
+                 if used < 0 or old_limit != used:
+                     raise Refused("prior-budget-not-exhausted")
+-                revision, end = c["revision"] + 1, used + SERVICE_BUDGET_CEILING
++                revision, end = c["revision"] + 1, used + (2000000000 if self.fan_daily_limit else SERVICE_BUDGET_CEILING)
+                 con.execute("INSERT INTO native_pilots(pilot_id,account_id,fan_id,owner_token,cutoff,deadline,"
+                             "grant_limit,baseline_used,end_limit,revision,state,created_at,updated_at) "
+                             "VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?)",
+--- a/service/native_pilot/service.py
++++ b/service/native_pilot/service.py
+@@ -156,7 +156,7 @@
+         return bool(self.stopped_reason)
+ 
+     def limit_label(self):
+-        policy = self.ledger.allowance_status(self.pilot.account_id)
++        policy = self.ledger.allowance_status(self.pilot.account_id, self.pilot.fan_id)
+         return None if policy is None else policy["limit"] - policy["used"]
+ 
+     async def pace(self):
+@@ -170,7 +170,7 @@
+                 held = await asyncio.to_thread(self.hold_check)
+                 if held:
+                     raise Refused(held)
+-            policy = self.ledger.allowance_status(self.pilot.account_id)
++            policy = self.ledger.allowance_status(self.pilot.account_id, self.pilot.fan_id)
+             if policy is None:
+                 raise Refused("allowance-missing")
+             if not policy["enabled"]:
+@@ -594,7 +594,7 @@
+ 
+     async def tick(self):
+         await self.ensure_session()
+-        policy = self.ledger.allowance_status(self.db)
++        policy = self.ledger.allowance_status(self.db, self.args.fan)
+         if policy and policy["next_dispatch_at"]:
+             wait = (datetime.fromisoformat(policy["next_dispatch_at"]) - runner.now()).total_seconds()
+             if wait > 0:
+@@ -635,7 +635,7 @@
+         held = await asyncio.to_thread(fan_hold_reason, self.path, self.db, self.args.fan, *self.strict_arg)
+         if held:
+             raise Refused(held)
+-        policy = self.ledger.allowance_status(self.db)
++        policy = self.ledger.allowance_status(self.db, self.args.fan)
+         if policy is None or not policy["enabled"] or policy["used"] >= policy["limit"]:
+             raise Refused("allowance-disabled" if policy is not None and not policy["enabled"]
+                           else "allowance-exhausted" if policy else "allowance-missing")
+--- a/service/tests/test_native_pilot_service.py
++++ b/service/tests/test_native_pilot_service.py
+@@ -40,6 +40,9 @@
+ SERVICE = Path(__file__).resolve().parents[1]
+ sys.path.insert(0, str(SERVICE))
+ sys.path.insert(0, str(Path(__file__).resolve().parent))
++
++# The existing suite explicitly exercises compatibility with the legacy shared cap.
++os.environ.setdefault("FASTT_FAN_DAILY_REPLY_LIMIT", "0")
+ 
+ CHECKS = 0
+ PID_SUFFIX = "svc-synthetic"
+--- /dev/null
++++ b/service/tests/test_native_pilot_daily_allowance.py
+@@ -0,0 +1,61 @@
++import os,sys,tempfile,sqlite3
++from pathlib import Path
++from datetime import timedelta
++from concurrent.futures import ThreadPoolExecutor
++sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
++sys.path.insert(0,str(Path(__file__).resolve().parent))
++import test_native_pilot_ledger as L
++from native_pilot.ledger import Ledger,Refused
++from twin_bridge import store
++os.environ['FASTT_FAN_DAILY_REPLY_LIMIT']='2000'
++def setup(root,name):
++ f=L.Fixture(root,name);f.activate()
++ f.sql("CREATE TABLE of_delivery_policy(account_id TEXT PRIMARY KEY,enabled INTEGER,limit_units INTEGER,used_units INTEGER,throttle_seconds INTEGER,next_dispatch_at TEXT,active_intent_id TEXT)")
++ f.sql("INSERT INTO of_delivery_policy VALUES(?,1,500,500,0,NULL,NULL)",(L.ACCT,))
++ return f,Ledger(f.path,allowance=True)
++def seed(f,account,fan,n,when,state='sent',start=1000):
++ with sqlite3.connect(f.path) as c:
++  for i in range(n):
++   aid=start+i
++   c.execute("INSERT INTO twin_bridge_send_attempts(id,account_id,fan_id,turn_id,attempt_no,state,owner_token,revision,created_at) VALUES(?,?,?,?,1,?,'seed',1,?)",(aid,account,fan,str(aid),state,when))
++   c.execute("INSERT INTO native_pilot_receipts(attempt_id,pilot_id,input_key,bubble_no,state,created_at,updated_at) VALUES(?,'seed',?,1,?,?,?)",(aid,str(aid),state,when,when))
++def admission(ledger,fan,when,aid):
++ try:
++  with ledger._tx() as c:
++   ledger._consume_allowance(c,L.ACCT,when,fan_id=fan,daily_limit=ledger.fan_daily_limit)
++   c.execute("INSERT INTO twin_bridge_send_attempts(id,account_id,fan_id,turn_id,attempt_no,state,owner_token,revision,created_at) VALUES(?,?,?,?,1,'dispatching','test',1,?)",(aid,L.ACCT,fan,str(aid),when))
++   c.execute("INSERT INTO native_pilot_receipts(attempt_id,pilot_id,input_key,bubble_no,state,created_at,updated_at) VALUES(?,'test',?,1,'dispatching',?,?)",(aid,str(aid),when,when))
++  return 'admitted'
++ except Refused as e:return e.reason
++with tempfile.TemporaryDirectory() as d:
++ root=Path(d);f,ledger=setup(root,'daily')
++ now=L.NOW.isoformat(sep=' ',timespec='microseconds')
++ seed(f,L.ACCT,L.FAN,1999,now)
++ assert ledger.allowance_status(L.ACCT,L.FAN,now=L.NOW)['used']==1999
++ assert ledger.allowance_status(L.ACCT,L.FAN+1,now=L.NOW)['used']==0
++ seed(f,'another-creator',L.FAN,1,now,start=5000)
++ with ThreadPoolExecutor(2) as pool:
++  results=list(pool.map(lambda aid:admission(ledger,L.FAN,now,aid),[7000,7001]))
++ assert sorted(results)==['admitted','allowance-exhausted'],results
++ assert ledger.allowance_status(L.ACCT,L.FAN,now=L.NOW)['used']==2000
++ assert Ledger(f.path,allowance=True).allowance_status(L.ACCT,L.FAN,now=L.NOW)['used']==2000
++ assert ledger.allowance_status(L.ACCT,L.FAN,now=L.NOW+timedelta(hours=24,microseconds=-1))['used']==2000
++ assert ledger.allowance_status(L.ACCT,L.FAN,now=L.NOW+timedelta(hours=24))['used']==0
++ assert admission(ledger,L.FAN+1,now,8000)=='admitted'
++ # Only certain non-delivery gives the allowance back; unknown outcomes count.
++ f.sql("UPDATE native_pilot_receipts SET state='not_sent' WHERE attempt_id=1000")
++ f.sql("UPDATE native_pilot_receipts SET state='delivery_unknown' WHERE attempt_id=1001")
++ assert ledger.allowance_status(L.ACCT,L.FAN,now=L.NOW)['used']==1999
++ assert f.sql("SELECT used_units FROM of_delivery_policy")[0][0]==500
++ f.sql("UPDATE of_delivery_policy SET enabled=0")
++ assert admission(ledger,L.FAN,now,9000)=='allowance-disabled'
++with tempfile.TemporaryDirectory() as d:
++ f,ledger=setup(Path(d),'adoption')
++ f.sql("UPDATE native_pilots SET state='stopped'")
++ f.sql("UPDATE twin_bridge_conversations SET owner_token=NULL,owner_expires_at=NULL,send_budget_used=10000,send_budget_limit=10000")
++ p=ledger.activate_service(pilot_id='svc-daily-test',account_id=L.ACCT,fan_id=L.FAN,owner_token='daily-owner-0000001',now=L.NOW,ttl_s=120)
++ assert p.end_limit==2000010000 and p.baseline_used==10000
++ assert f.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0]==10000
++ p2=ledger.activate_service(pilot_id='svc-daily-test',account_id=L.ACCT,fan_id=L.FAN,owner_token='daily-owner-0000002',now=L.NOW+timedelta(minutes=3),ttl_s=120)
++ assert p2.end_limit==p.end_limit and p2.baseline_used==10000
++print('PASS daily quota: 2000 boundary, concurrent admission, independent fan/creator, restart persistence, exact 24h expiry, refused/unknown accounting, legacy counters and disable')
+--- /dev/null
++++ b/service/tests/test_native_pilot_daily_allowance_pg.py
+@@ -0,0 +1,37 @@
++import os,json,psycopg2
++from concurrent.futures import ThreadPoolExecutor
++from datetime import datetime,timedelta
++from native_pilot.ledger import Ledger,Refused
++from twin_bridge import store
++dsn='postgresql://postgres:synthetic-quota-test@quota-pg/postgres'
++con=psycopg2.connect(dsn);con.autocommit=True;c=con.cursor()
++c.execute('CREATE SCHEMA fastt_runtime')
++c.execute("CREATE TABLE fastt_runtime.native_pilot_receipts(attempt_id bigint primary key,state text,created_at text)")
++c.execute("CREATE TABLE fastt_runtime.twin_bridge_send_attempts(id bigint primary key,account_id text,fan_id bigint)")
++c.execute("CREATE TABLE public.of_delivery_policy(account_id text primary key,enabled boolean,limit_units int,used_units int,throttle_seconds int,next_dispatch_at timestamp,active_intent_id text)")
++c.execute("INSERT INTO public.of_delivery_policy VALUES('of-test',true,500,500,0,NULL,NULL)")
++now=datetime.utcnow();ns=now.isoformat(sep=' ',timespec='microseconds')
++c.execute("INSERT INTO fastt_runtime.twin_bridge_send_attempts SELECT i,'of-test',42 FROM generate_series(1,1999)i")
++c.execute("INSERT INTO fastt_runtime.native_pilot_receipts SELECT i,'sent',%s FROM generate_series(1,1999)i",(ns,))
++ledger=Ledger(dsn,allowance=True)
++assert ledger.fan_daily_limit==2000
++def admit(i):
++ try:
++  with ledger._tx() as tx:
++   ledger._consume_allowance(tx,'of-test',ns,fan_id=42,daily_limit=2000)
++   tx.execute("INSERT INTO twin_bridge_send_attempts VALUES(?,'of-test',42)",(i,))
++   tx.execute("INSERT INTO native_pilot_receipts VALUES(?,'dispatching',?)",(i,ns))
++  return 'admitted'
++ except Refused as e:return e.reason
++with ThreadPoolExecutor(2) as pool:r=list(pool.map(admit,[2000,2001]))
++assert sorted(r)==['admitted','allowance-exhausted'],r
++assert ledger.allowance_status('of-test',42,now=now)['used']==2000
++assert ledger.allowance_status('of-test',43,now=now)['used']==0
++assert Ledger(dsn,allowance=True).allowance_status('of-test',42,now=now)['used']==2000
++assert ledger.allowance_status('of-test',42,now=now+timedelta(hours=24))['used']==0
++c.execute("UPDATE fastt_runtime.native_pilot_receipts SET state='not_sent' where attempt_id=1")
++c.execute("UPDATE fastt_runtime.native_pilot_receipts SET state='delivery_unknown' where attempt_id=2")
++assert ledger.allowance_status('of-test',42,now=now)['used']==1999
++assert ledger.allowance_status('of-test')['used']==500
++print('PASS isolated PostgreSQL: concurrent 2000 cap; fan isolation; restart; exact 24h expiry; not-sent refund; unknown charged; cumulative history preserved')
++con.close()

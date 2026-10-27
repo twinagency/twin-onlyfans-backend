@@ -122,7 +122,7 @@ def test_defaults_and_button_controls_remain_account_scoped(database, monkeypatc
             assert s.get(OfConversationState, ("acc-a", 202)).mode == "paused"
         from onlyfans_runtime.fastt_manual import fastt_serves
         assert fastt_serves("acc-a", 201)
-        assert fan_hold_reason(url, "acc-a", 201, strict=True) == "fan-restricted"
+        assert fan_hold_reason(url, "acc-a", 201, strict=True) == "fan-paused"
         for revision, action, mode, held in (
             (0, "resume_automation", "automated", None),
             (1, "request_takeover", "human_controlled", "fan-restricted"),

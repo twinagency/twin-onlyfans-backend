@@ -153,18 +153,13 @@ def _his_noun(subject: str | None) -> str:
 
 
 def needs_action(subject: str | None, substitute: bool) -> bool:
-    """Does this caption need the describe-derived "what she is doing in it"?
+    """Does this caption use the legacy media-only description phrase?
 
-    The rule lives HERE because it is a fact about the words, not about the
-    planner: a caption needs the phrase exactly when it would otherwise say
-    nothing about the media.
+    Subject-free and substitute captions already use that phrase. Named asks
+    now opt into a conversational continuation in `_ask_claim` instead.
 
       • a SUBSTITUTE always needs it — its whole subject clause is a hedge;
-      • a FIT needs it only when his ask named no noun. "7 pics of ass" already
-        says what it is, and paying a model to re-say it is how a caption that
-        has shipped for weeks starts drifting.
-
-    🚨 It gates an LLM CALL, so a False here is money as well as words.
+      • a FIT uses the legacy phrase only when his ask named no noun.
     """
     return bool(substitute or not _his_noun(subject))
 
@@ -183,14 +178,16 @@ def ask_clause(kinds: list[str], subject: str | None,
     captioned "3 vids" and nothing else (blake, 2026-08-16; he bought it
     anyway). Operator ruling that day: when his ask named nothing, SAY WHAT IS
     IN IT, shortly. `action` is that phrase, from the vault's own describe pass
-    via `content_resolver.action_phrase`, and it is used ONLY in the no-noun
-    case — a caption that already names his subject is left byte-identical.
+    via `content_resolver.action_phrase`. Named asks may also carry a short
+    contextual phrase, while the
+    application still owns the count, media type and named subject. An absent
+    or rejected phrase preserves the original caption exactly.
     """
     body, n = _media_phrase(kinds)
     noun = _his_noun(subject)
-    if noun:
-        return Claim(f"{body} of {noun}", n)
     act = clean_action(action)
+    if noun:
+        return Claim(f"{body} of {noun}" + (f", {act}" if act else ""), n)
     return Claim(f"{body}, {act}" if act else body, n)
 
 

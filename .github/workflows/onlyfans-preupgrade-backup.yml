@@ -1,7 +1,7 @@
 name: OnlyFans pre-upgrade backup release verification
 on:
   push:
-    branches: [codex/onlyfans-preupgrade-backup-20261027]
+    branches: [codex/onlyfans-preupgrade-backup-20261027, codex/onlyfans-requested-caption-20261027]
 permissions:
   contents: read
   actions: read
@@ -45,7 +45,7 @@ jobs:
           set -euo pipefail
           mkdir -p preupgrade-evidence
           git rev-parse HEAD > preupgrade-evidence/backend-sha.txt
-          python -m pytest -q --tb=short -rs service/tests/test_onlyfans_release_package_pg.py service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_foundation_pg.py --junitxml=preupgrade-evidence/recovery.xml 2>&1 | tee preupgrade-evidence/tests.log
+          python -m pytest -q --tb=short -rs service/tests/test_onlyfans_release_package_pg.py service/tests/test_onlyfans_recovery_pg.py service/tests/test_onlyfans_foundation_pg.py service/tests/test_fastt_requested_caption.py --junitxml=preupgrade-evidence/recovery.xml 2>&1 | tee preupgrade-evidence/tests.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -89,3 +89,4 @@ jobs:
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
+

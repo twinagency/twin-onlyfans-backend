@@ -40,6 +40,8 @@ def observed(body,when):
 
 
 def test_native_recovery_settles_takeover_without_replay_or_budget_reset(database,monkeypatch):
+    # This assertion covers the legacy account allowance; daily quota has its own suite.
+    monkeypatch.setenv("FASTT_FAN_DAILY_REPLY_LIMIT", "0")
     store,authority,ledger,pilot,args=prepared(database,service=True)
     try:
         attempt=ledger.begin_attempt(**args)

@@ -1,7 +1,13 @@
-import pathlib,json,subprocess,datetime,hashlib
+import pathlib,json,subprocess,datetime,hashlib,urllib.request
 R=pathlib.Path('/var/lib/twin-release/astra-compatible-20261028')
 activation=json.loads((R/'activation-proof.json').read_text());since=activation['at']
-def run(a,timeout=60):return subprocess.check_output(a,text=True,stderr=subprocess.PIPE,timeout=timeout).strip()
+def run(a,timeout=60,input=None):
+ p=subprocess.run(a,text=True,input=input,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
+ if p.returncode:
+  (R/'astra-post-deploy-check.py.error.private.log').write_text(p.stdout+'\n'+p.stderr)
+  print(json.dumps({'operation':'astra-post-deploy-check.py','exit':p.returncode,'error':p.stderr[-1500:]}),flush=True)
+  raise RuntimeError('Release operation failed')
+ return p.stdout.strip()
 expected={'twin-onlyfans-api-1':'sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec','twin-onlyfans-worker-1':'sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec','twin-onlyfans-fastt-supervisor-1':'sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec','twin-onlyfans-managed-proxy-1':'sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec','twin-onlyfans-creator-sign-in-1':'sha256:b63d926bf03c7b6abe5a52c9bfa77b4d6821d7543d16ec1ab64155c1dc925b6e','next-app':'sha256:fccf205a34fe002c6344062305128f6b302a2e1e0c5d92caf7beac30d2a79c95'}
 roles=[]
 for name,img in expected.items():
@@ -26,5 +32,7 @@ with e.connect()as c:
 '''.replace('START',repr(since))
 data=json.loads(run(['docker','exec','twin-onlyfans-worker-1','python','-c',sqlcode]))
 assert data['schema']=='0097_release_controls'
-proof={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'since':since,'roles':roles,'runtime':data,'manualFanTestsSent':False,'controlledPaidJourneyVerified':False}
+with urllib.request.urlopen('https://dashboard.tgaiclone.xyz/login',timeout=20)as response:
+ assert response.status==200;public_status=response.status
+proof={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'since':since,'roles':roles,'runtime':data,'publicLoginStatus':public_status,'manualFanTestsSent':False,'controlledPaidJourneyVerified':False}
 (R/'post-deploy-proof.json').write_text(json.dumps(proof,indent=2));print(json.dumps(proof))

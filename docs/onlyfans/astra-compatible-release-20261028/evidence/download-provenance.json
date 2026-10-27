@@ -1,0 +1,71 @@
+{
+  "sha": "293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+  "proofs": {
+    "0": {
+      "run": 40560725239,
+      "id": 12761963688,
+      "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-0",
+      "digest": "sha256:5af2ccf10901cce7442ed9ff624e904bf408ec816ee41d9b589210f7d797ed4e",
+      "localSha256": "5af2ccf10901cce7442ed9ff624e904bf408ec816ee41d9b589210f7d797ed4e",
+      "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-0"
+    },
+    "1": {
+      "run": 40553797469,
+      "id": 12761203088,
+      "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-1",
+      "digest": "sha256:f05a1998e2e62d1fc82f094665886625f524d0db3acab3779056683581543013",
+      "localSha256": "f05a1998e2e62d1fc82f094665886625f524d0db3acab3779056683581543013",
+      "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-1"
+    },
+    "2": {
+      "run": 40553797469,
+      "id": 12757172828,
+      "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-2",
+      "digest": "sha256:17970b8f635fb652bd3017035e607622e8b83dbeb930c25190276004acd0d01a",
+      "localSha256": "17970b8f635fb652bd3017035e607622e8b83dbeb930c25190276004acd0d01a",
+      "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-2"
+    },
+    "3": {
+      "run": 40553797469,
+      "id": 12757302524,
+      "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-3",
+      "digest": "sha256:08843be09ec4cf0d39920981fabb1a4cb920008680cf735252a998a23a730540",
+      "localSha256": "08843be09ec4cf0d39920981fabb1a4cb920008680cf735252a998a23a730540",
+      "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-3"
+    },
+    "4": {
+      "run": 40553797469,
+      "id": 12756908504,
+      "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-4",
+      "digest": "sha256:cd5aea9f0f22eaf45b440634b975c1e9f943d5c66ebd61895c1bcafe16f5615d",
+      "localSha256": "cd5aea9f0f22eaf45b440634b975c1e9f943d5c66ebd61895c1bcafe16f5615d",
+      "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-4"
+    },
+    "5": {
+      "run": 40553797469,
+      "id": 12758717217,
+      "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-5",
+      "digest": "sha256:da9d062f1753474220e46102f9748ad7a52e18034e3018237b2a44f23ae64ff2",
+      "localSha256": "da9d062f1753474220e46102f9748ad7a52e18034e3018237b2a44f23ae64ff2",
+      "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-5"
+    }
+  },
+  "natives": {
+    "fastt-sqlite": {
+      "run": 40553797469,
+      "id": 12757305094,
+      "name": "fastt-sqlite-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+      "digest": "sha256:a24923ebf3572a979482e15f3c6c5e6f3ef0ce8cd345f9931c63c91cb4ae119f",
+      "localSha256": "a24923ebf3572a979482e15f3c6c5e6f3ef0ce8cd345f9931c63c91cb4ae119f",
+      "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/fastt-sqlite"
+    },
+    "fastt-postgres": {
+      "run": 40553797469,
+      "id": 12755514838,
+      "name": "fastt-postgres-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+      "digest": "sha256:bba3b88c1570adbce51ce8874d80e57254619f6149365c70b7b84eccf5ad0d02",
+      "localSha256": "bba3b88c1570adbce51ce8874d80e57254619f6149365c70b7b84eccf5ad0d02",
+      "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/fastt-postgres"
+    }
+  }
+}

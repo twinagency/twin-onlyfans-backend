@@ -1,0 +1,114 @@
+{
+  "unlinked": [
+    {
+      "account_id": "of-176774528",
+      "binding_created_at": "2026-10-20 04:25:35.186550",
+      "current_binding_unlinked": 0,
+      "historical_unlinked": 391
+    },
+    {
+      "account_id": "of-323358988",
+      "binding_created_at": "2026-10-25 21:06:44.402466",
+      "current_binding_unlinked": 4,
+      "historical_unlinked": 519
+    },
+    {
+      "account_id": "of-87030857",
+      "binding_created_at": "2026-10-25 20:49:35.790496",
+      "current_binding_unlinked": 4,
+      "historical_unlinked": 413
+    },
+    {
+      "account_id": "of-99421145",
+      "binding_created_at": "2026-10-25 04:08:22.803683",
+      "current_binding_unlinked": 0,
+      "historical_unlinked": 408
+    }
+  ],
+  "gates": [
+    {
+      "account": "of-176774528",
+      "enabled": true,
+      "bindingCurrent": true,
+      "status": "running",
+      "windowStart": "2026-10-20T18:53:26.744426Z",
+      "windowEnd": "2026-10-27T18:53:26.744426Z",
+      "pageOffset": 300,
+      "lastCompleteAt": null,
+      "lastFullAt": null,
+      "leaseUntil": null,
+      "activeLease": false,
+      "nextPollAt": "2026-10-27T19:34:11.228616Z",
+      "lastError": "provider_read_deferred",
+      "updatedAt": "2026-10-27T19:33:27.883310Z",
+      "fresh": false,
+      "unresolvedTransactions": 391,
+      "conflictingEvidence": 0,
+      "commerceHold": true,
+      "fingerprint": "39ff8230e96d8a14006cc91e452d79491ec6599ae76848f659ab1c3c8dac36b5"
+    },
+    {
+      "account": "of-323358988",
+      "enabled": true,
+      "bindingCurrent": true,
+      "status": "running",
+      "windowStart": "2026-10-20T18:49:37.372512Z",
+      "windowEnd": "2026-10-27T18:49:37.372512Z",
+      "pageOffset": 640,
+      "lastCompleteAt": null,
+      "lastFullAt": null,
+      "leaseUntil": null,
+      "activeLease": false,
+      "nextPollAt": "2026-10-27T19:33:59.134059Z",
+      "lastError": null,
+      "updatedAt": "2026-10-27T19:33:58.134059Z",
+      "fresh": false,
+      "unresolvedTransactions": 523,
+      "conflictingEvidence": 0,
+      "commerceHold": true,
+      "fingerprint": "a8bf5a11e689ec2393d8a2e6d717256e789442a545302a6de510739bb010130f"
+    },
+    {
+      "account": "of-87030857",
+      "enabled": false,
+      "bindingCurrent": true,
+      "status": "running",
+      "windowStart": "2026-10-20T18:51:56.123890Z",
+      "windowEnd": "2026-10-27T18:51:56.123890Z",
+      "pageOffset": 300,
+      "lastCompleteAt": null,
+      "lastFullAt": null,
+      "leaseUntil": null,
+      "activeLease": false,
+      "nextPollAt": "2026-10-27T19:34:22.397813Z",
+      "lastError": "provider_read_deferred",
+      "updatedAt": "2026-10-27T19:33:38.760383Z",
+      "fresh": false,
+      "unresolvedTransactions": 417,
+      "conflictingEvidence": 0,
+      "commerceHold": true,
+      "fingerprint": "519f765f5066d456d8c6d27941fbb368d9969bcf04ae0e04a30ad402969cf710"
+    },
+    {
+      "account": "of-99421145",
+      "enabled": true,
+      "bindingCurrent": true,
+      "status": "running",
+      "windowStart": "2026-10-20T18:53:18.636604Z",
+      "windowEnd": "2026-10-27T18:53:18.636604Z",
+      "pageOffset": 280,
+      "lastCompleteAt": null,
+      "lastFullAt": null,
+      "leaseUntil": null,
+      "activeLease": false,
+      "nextPollAt": "2026-10-27T19:33:50.071276Z",
+      "lastError": null,
+      "updatedAt": "2026-10-27T19:33:49.071276Z",
+      "fresh": false,
+      "unresolvedTransactions": 408,
+      "conflictingEvidence": 0,
+      "commerceHold": true,
+      "fingerprint": "780ece7dc70268bf9eb406d9c6a5858a08c7e3dd1af6cf683e169361a6ff4f99"
+    }
+  ]
+}

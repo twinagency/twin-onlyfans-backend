@@ -1,6 +1,12 @@
 import pathlib,json,subprocess,hashlib,os,time,datetime,fcntl
 R=pathlib.Path('/var/lib/twin-release/astra-compatible-20261028');P=R/'cutover-private';B=R/'production-backup'
-def run(a,timeout=180,input=None):return subprocess.check_output(a,text=True,input=input,stderr=subprocess.PIPE,timeout=timeout).strip()
+def run(a,timeout=180,input=None):
+ p=subprocess.run(a,text=True,input=input,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
+ if p.returncode:
+  (R/'astra-start-read-roles.py.error.private.log').write_text(p.stdout+'\n'+p.stderr)
+  print(json.dumps({'operation':'astra-start-read-roles.py','exit':p.returncode,'error':p.stderr[-1500:]}),flush=True)
+  raise RuntimeError('Release operation failed')
+ return p.stdout.strip()
 def save(p,x):p.write_text(json.dumps(x,indent=2));os.chmod(p,0o600)
 lock=(R/'cutover.lock').open('w');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 assert json.loads((B/'migration-proof.json').read_text())['schema']=='0097_release_controls'

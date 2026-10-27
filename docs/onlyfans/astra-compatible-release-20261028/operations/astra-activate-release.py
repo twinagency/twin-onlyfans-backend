@@ -1,7 +1,13 @@
 import pathlib,json,subprocess,os,hashlib,datetime,fcntl,urllib.request,time
 R=pathlib.Path('/var/lib/twin-release/astra-compatible-20261028');P=R/'cutover-private'
 IMAGE='sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec'
-def run(a,timeout=120):return subprocess.check_output(a,text=True,stderr=subprocess.PIPE,timeout=timeout).strip()
+def run(a,timeout=120,input=None):
+ p=subprocess.run(a,text=True,input=input,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
+ if p.returncode:
+  (R/'astra-activate-release.py.error.private.log').write_text(p.stdout+'\n'+p.stderr)
+  print(json.dumps({'operation':'astra-activate-release.py','exit':p.returncode,'error':p.stderr[-1500:]}),flush=True)
+  raise RuntimeError('Release operation failed')
+ return p.stdout.strip()
 lock=(R/'cutover.lock').open('w');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 assert not(R/'activation-proof.json').exists(),'Activation already recorded'
 assert json.loads((R/'approved-validation.json').read_text())['aggregateAccepted'] is True

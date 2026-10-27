@@ -1,0 +1,527 @@
+{
+  "collectedAt": "2026-10-27T19:31:21.260364+00:00",
+  "hostEvidenceRoot": "/var/lib/twin-release/astra-compatible-20261028",
+  "files": {
+    "approved-validation.json": {
+      "sha256": "3810667f2b65fce4a281c3d79fd36bd650044d2fd06175df420a9d18a0dc2caa",
+      "data": {
+        "head": "293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+        "dashboard": "4599999761dbf2ff2b517359642d10262324867a",
+        "aggregateAccepted": true,
+        "pytest": {
+          "reported": 2271,
+          "passed": 2271,
+          "failed": 0,
+          "errored": 0,
+          "skipped": 0,
+          "collected": 2271,
+          "deselected": 0
+        },
+        "backendProof": {
+          "method": "git",
+          "sha": "293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+          "tree": "29d653194474199c5bd5a2eb164eabaa88651831"
+        },
+        "dashboardProof": {
+          "method": "verified-git-archive",
+          "sha": "4599999761dbf2ff2b517359642d10262324867a",
+          "archiveSha256": "1accd652bcca3c274b569ac72ac6ec6910dd20508d477d665527fb6bced31c60",
+          "verifiedFiles": 1615
+        },
+        "proofs": {
+          "0": {
+            "run": 40560725239,
+            "id": 12761963688,
+            "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-0",
+            "digest": "sha256:5af2ccf10901cce7442ed9ff624e904bf408ec816ee41d9b589210f7d797ed4e",
+            "localSha256": "5af2ccf10901cce7442ed9ff624e904bf408ec816ee41d9b589210f7d797ed4e",
+            "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-0"
+          },
+          "1": {
+            "run": 40553797469,
+            "id": 12761203088,
+            "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-1",
+            "digest": "sha256:f05a1998e2e62d1fc82f094665886625f524d0db3acab3779056683581543013",
+            "localSha256": "f05a1998e2e62d1fc82f094665886625f524d0db3acab3779056683581543013",
+            "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-1"
+          },
+          "2": {
+            "run": 40553797469,
+            "id": 12757172828,
+            "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-2",
+            "digest": "sha256:17970b8f635fb652bd3017035e607622e8b83dbeb930c25190276004acd0d01a",
+            "localSha256": "17970b8f635fb652bd3017035e607622e8b83dbeb930c25190276004acd0d01a",
+            "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-2"
+          },
+          "3": {
+            "run": 40553797469,
+            "id": 12757302524,
+            "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-3",
+            "digest": "sha256:08843be09ec4cf0d39920981fabb1a4cb920008680cf735252a998a23a730540",
+            "localSha256": "08843be09ec4cf0d39920981fabb1a4cb920008680cf735252a998a23a730540",
+            "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-3"
+          },
+          "4": {
+            "run": 40553797469,
+            "id": 12756908504,
+            "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-4",
+            "digest": "sha256:cd5aea9f0f22eaf45b440634b975c1e9f943d5c66ebd61895c1bcafe16f5615d",
+            "localSha256": "cd5aea9f0f22eaf45b440634b975c1e9f943d5c66ebd61895c1bcafe16f5615d",
+            "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-4"
+          },
+          "5": {
+            "run": 40553797469,
+            "id": 12758717217,
+            "name": "onlyfans-combined-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06-shard-5",
+            "digest": "sha256:da9d062f1753474220e46102f9748ad7a52e18034e3018237b2a44f23ae64ff2",
+            "localSha256": "da9d062f1753474220e46102f9748ad7a52e18034e3018237b2a44f23ae64ff2",
+            "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/accepted-shards/shard-5"
+          }
+        },
+        "natives": {
+          "fastt-sqlite": {
+            "run": 40553797469,
+            "id": 12757305094,
+            "name": "fastt-sqlite-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+            "digest": "sha256:a24923ebf3572a979482e15f3c6c5e6f3ef0ce8cd345f9931c63c91cb4ae119f",
+            "localSha256": "a24923ebf3572a979482e15f3c6c5e6f3ef0ce8cd345f9931c63c91cb4ae119f",
+            "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/fastt-sqlite"
+          },
+          "fastt-postgres": {
+            "run": 40553797469,
+            "id": 12755514838,
+            "name": "fastt-postgres-293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+            "digest": "sha256:bba3b88c1570adbce51ce8874d80e57254619f6149365c70b7b84eccf5ad0d02",
+            "localSha256": "bba3b88c1570adbce51ce8874d80e57254619f6149365c70b7b84eccf5ad0d02",
+            "directory": "C:/Users/conta/codex-work/astra-final-validation-20261028/fastt-postgres"
+          }
+        },
+        "at": "2026-10-27T18:53:39.272Z",
+        "originalRun": 40553797469,
+        "legacyAllowanceRerun": 40560725239,
+        "orchestrationCommit": "cf1c1c3521c6527a9b63e8eae9d4b5d57e91bf33",
+        "environmentDisposition": "Shard 0 explicitly sets FASTT_FAN_DAILY_REPLY_LIMIT=0 for existing legacy counter fixture; daily mode remains independently covered by pinned native suites and actual-image focused tests. Original failed shard preserved separately. No product or test assertions changed."
+      }
+    },
+    "prepared-cutover.json": {
+      "sha256": "dc72e84697dba2d11ad42e0e94999f96b302a972e480fcd0be772b9d8ee60c66",
+      "data": {
+        "source": "293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+        "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+        "backupKeySource": "/etc/twin-onlyfans/backup-key-0088-20261023T122645Z-9739cd",
+        "legacyAdminCompatibility": false,
+        "signinBrokerNetwork": "http://managed-proxy:8791",
+        "configurationChanges": [
+          "runtime images",
+          "sign-in broker server credentials",
+          "distinct broker management credential",
+          "dashboard source identity and legacy compatibility off",
+          "broker SIGINT shutdown"
+        ],
+        "files": {
+          "main.forward": "c61bc01a89a67f3b883456cc63e71ef08e2a4417facef6612c63ec096e91eebb",
+          "broker.forward": "a4637cc09d80c5fbb44a4e4afe9cd36d6ca28917a20cacfb1d748e2c9f5ad0a3",
+          "signin.forward": "0b905e98d1f306202ee871c328f97a910d4147e53346d665ecf18e033ad2e847",
+          "dashboard.forward": "644b42c7c13e384efcad7c2632f2ff1cab0da2b206dd46bfbe213689c6472f71"
+        }
+      }
+    },
+    "activation-hold-proof.json": {
+      "sha256": "bb69c71937a048b3753f0cbfd518c3e6586b954912be36c920f8b5082eb2c44a",
+      "data": {
+        "at": "2026-10-27T19:30:09.996355+00:00",
+        "status": "READ_SERVICES_DEPLOYED_SENDER_ACTIVATION_HELD",
+        "backend": "293b23dbdf8dd5e97f27d6c0bef8ef4710415c06",
+        "dashboard": "4599999761dbf2ff2b517359642d10262324867a",
+        "schema": "0097_release_controls",
+        "publicLoginStatus": 200,
+        "roles": [
+          {
+            "name": "twin-onlyfans-api-1",
+            "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+            "running": true,
+            "restartCount": 0,
+            "oom": false
+          },
+          {
+            "name": "twin-onlyfans-worker-1",
+            "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+            "running": true,
+            "restartCount": 0,
+            "oom": false
+          },
+          {
+            "name": "twin-onlyfans-managed-proxy-1",
+            "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+            "running": true,
+            "restartCount": 0,
+            "oom": false
+          },
+          {
+            "name": "twin-onlyfans-creator-sign-in-1",
+            "image": "sha256:b63d926bf03c7b6abe5a52c9bfa77b4d6821d7543d16ec1ab64155c1dc925b6e",
+            "running": true,
+            "restartCount": 0,
+            "oom": false
+          },
+          {
+            "name": "next-app",
+            "image": "sha256:fccf205a34fe002c6344062305128f6b302a2e1e0c5d92caf7beac30d2a79c95",
+            "running": true,
+            "restartCount": 0,
+            "oom": false
+          },
+          {
+            "name": "twin-onlyfans-fastt-supervisor-1",
+            "image": "sha256:8bc3de180159ffd94e1318fa376826439389a79cefe2677ba4790b007e18d024",
+            "running": false,
+            "restartCount": 0,
+            "oom": false
+          }
+        ],
+        "senderActivated": false,
+        "apiCommandsClosed": true,
+        "accountSettingsChanged": false,
+        "manualMessagesSent": false,
+        "reasons": [
+          "Provider ledger coverage has not completed; account of-176774528 reported provider_rate_limited and retains its backoff.",
+          "Four unlinked purchases occurred after the current binding for enabled account of-323358988; their provider observations contain no message ID.",
+          "Historical unlinked purchases are informational, not grounds to clear or create holds. Disabled account of-87030857 remains disabled."
+        ],
+        "nextActions": [
+          "Allow the existing bounded reader to reconcile without bypassing provider backoff.",
+          "Obtain exact provider evidence for the four current-binding purchases and use the existing audited ledger resolution; do not infer links from amount/time alone.",
+          "Refresh financial readiness, then run the prepared activation and post-deploy scripts only if the required gates pass.",
+          "Controlled paid-provider/model journey and scale validation remain unproved."
+        ],
+        "offhostBackupCopy": "Not completed. Automatic approval review requires explicit permission for encrypted backup payload and existing S3 destination."
+      }
+    },
+    "maintenance-db-resources.json": {
+      "sha256": "61144b4001edb0750c1f45cf32088b8c87f4001a532357caa3e09608bf248025",
+      "data": {
+        "startedAt": "2026-10-27T19:21:20.660344+00:00",
+        "originalCpu": 500000000,
+        "originalMemory": 268435456,
+        "temporaryCpu": 1500000000,
+        "temporaryMemory": 1073741824,
+        "restoredAt": "2026-10-27T19:22:25.936082+00:00",
+        "restored": true
+      }
+    },
+    "production-session-smoke.json": {
+      "sha256": "28c090deba39e264f62cf8d27d63a769b229a07a1dc1e4c23a3bfb8ca150a5e7",
+      "data": {
+        "adminLogin": true,
+        "logoutAction": true,
+        "logoutStatus": 303,
+        "replayStatus": 307,
+        "otherSessionPreserved": true,
+        "legacyCompatibility": false,
+        "testSessionsRemoved": true,
+        "source": "4599999761dbf2ff2b517359642d10262324867a",
+        "at": "2026-10-27T19:26:44.465981+00:00"
+      }
+    },
+    "session-upgrade-proof.json": {
+      "sha256": "8ddbc553cdc852ac4c4274668884a0713d6e2557888b8b787253bcf01f1a3d58",
+      "data": {
+        "ready": true,
+        "existingRowsUnchanged": true,
+        "counts": {
+          "dashboard_owner_accounts": 2,
+          "dashboard_owner_sessions": 9
+        },
+        "rpcVisibilityVerified": true,
+        "at": "2026-10-27T19:12:46.063915+00:00",
+        "project": "aouaenqayfltoqrmpitg"
+      }
+    },
+    "session-upgrade-sql-proof.json": {
+      "sha256": "17cbc6d655b8605cb4ae3dc858a65581c5c284437bcc5672ae68f087fb96bd96",
+      "data": {
+        "privilegesVerified": true,
+        "project": "aouaenqayfltoqrmpitg",
+        "at": "2026-10-27T19:11:40.393541+00:00",
+        "functions": [
+          "dashboard_admin_session_create",
+          "dashboard_owner_session_verify",
+          "dashboard_owner_session_revoke"
+        ],
+        "securityInvoker": true,
+        "emptySearchPath": true,
+        "anonExecute": false,
+        "authenticatedExecute": false,
+        "serviceRoleExecute": true,
+        "identityColumnsNullable": true,
+        "identityPairConstraint": true,
+        "rlsEnabled": true,
+        "anonSelect": false,
+        "authenticatedSelect": false
+      }
+    },
+    "broker-upgrade-proof.json": {
+      "sha256": "a135abd471cb906a7355a2e1eecfd83c073d324f8d91af8273109b13c18da472",
+      "data": {
+        "ready": true,
+        "at": "2026-10-27T19:22:26.772441+00:00"
+      }
+    },
+    "broker-drain-proof.json": {
+      "sha256": "7bfcadf80ff0c71bfaa3131206ea11c9a4c42a0d67e9fb63143a60f12245a573",
+      "data": {
+        "at": "2026-10-27T18:58:19.185491+00:00",
+        "legacyBrokerForcedStop": true,
+        "senderDrainedCleanly": true,
+        "futureStopSignal": "SIGINT",
+        "databaseQuiescenceRequiredBeforeBackup": true
+      }
+    },
+    "production-backup/completed.json": {
+      "sha256": "0562adeed83745e3b5510df54cded62288be17ef9678384c32dbca2c7047479b",
+      "data": {
+        "at": "2026-10-27T19:03:03.660279+00:00",
+        "source": "0093_conversation_default_off",
+        "files": {
+          "session-store.aesgcm": {
+            "sha256": "e679f7b20cfba83406bca7e95adbf3e9efd2fbd68910f58d05e657918841804c",
+            "bytes": 3595
+          },
+          "runtime-config.aesgcm": {
+            "sha256": "92db5be3bca04d1505fe5f7ac4238241f99a60863c6303dae7c1b21b1265789a",
+            "bytes": 18798
+          },
+          "before.json": {
+            "sha256": "70bafc175cf65ec54e7ceb43335d8dfb5ba2942fbc81536453715247efb30413",
+            "bytes": 41177
+          },
+          "stopped.json": {
+            "sha256": "25d41eefd330ee1de546de9515c65605fb7a322f0be7e064b20d7298d678a534",
+            "bytes": 914
+          },
+          "crm.twinof": {
+            "sha256": "cd9cb338e0ae73468257e89354b83d46699f9f452aaed6293ef2a6ea314aded6",
+            "bytes": 255084130
+          },
+          "started.json": {
+            "sha256": "a0a1722bef842d67962968431a54188587e8d95afbeb523e227803a6575754c8",
+            "bytes": 4923
+          },
+          "session-proof.json": {
+            "sha256": "bad48b92174f7c72c2263859623b096eb59277f1b3b16867aa391d4a28e4e7bd",
+            "bytes": 401
+          }
+        }
+      }
+    },
+    "production-backup/restore-proof.json": {
+      "sha256": "954017da30654256cf2bd1945bf64b6012e3734d5699c7e1a6afa66f1631249e",
+      "data": {
+        "matchedTables": 161,
+        "messages": 829342,
+        "quarantined": true,
+        "releasePermitted": false
+      }
+    },
+    "production-backup/migration-proof.json": {
+      "sha256": "4d1b5ab04ae1f5161db574a64f49fdb757a863df79f5f0b668a297f0e14ab96a",
+      "data": {
+        "schema": "0097_release_controls",
+        "seconds": 77.41316763998475,
+        "at": "2026-10-27T19:22:24.956281+00:00",
+        "expectedMigrationTables": {
+          "public.alembic_version": {
+            "before": 1,
+            "after": 1
+          },
+          "public.of_content_sync_source": {
+            "before": 699580,
+            "after": 699588
+          },
+          "public.of_ledger_history": {
+            "before": 4,
+            "after": 4
+          },
+          "public.of_ledger_scan": {
+            "before": 4,
+            "after": 4
+          }
+        },
+        "unchangedTableCount": 158
+      }
+    },
+    "production-backup/session-proof.json": {
+      "sha256": "bad48b92174f7c72c2263859623b096eb59277f1b3b16867aa391d4a28e4e7bd",
+      "data": {
+        "archiveSha256": "e679f7b20cfba83406bca7e95adbf3e9efd2fbd68910f58d05e657918841804c",
+        "authenticatedReadback": true,
+        "project": "aouaenqayfltoqrmpitg",
+        "tables": {
+          "dashboard_owner_accounts": {
+            "rows": 2,
+            "sha256": "ae18ad2242ea256c7e6408b114d2d780d29266daf23c800c52644ff0a3e0619b"
+          },
+          "dashboard_owner_sessions": {
+            "rows": 9,
+            "sha256": "2f25d1574af7829e69c3762e6095c5e77c4f12143c72bd4a6fd672efcd692f34"
+          }
+        }
+      }
+    },
+    "read-roles-proof.json": {
+      "sha256": "51f2967320459c4d2108f6ca27ffc6a1c65b8e7442ab1676ab825bc340dc1097",
+      "data": {
+        "at": "2026-10-27T19:30:57.479859+00:00",
+        "roles": [
+          {
+            "name": "twin-onlyfans-api-1",
+            "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+            "pythonFilesVerified": 712,
+            "restartCount": 0
+          },
+          {
+            "name": "twin-onlyfans-worker-1",
+            "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+            "pythonFilesVerified": 712,
+            "restartCount": 0
+          },
+          {
+            "name": "twin-onlyfans-managed-proxy-1",
+            "image": "sha256:b4c3ec13342111c1eadc75ad224ab314b659ff60494d78513b37dbdeb67e33ec",
+            "pythonFilesVerified": 712,
+            "restartCount": 0
+          }
+        ],
+        "checks": [
+          {
+            "path": "8788/healthz",
+            "status": 200,
+            "body": {
+              "ok": true,
+              "role": "api"
+            }
+          },
+          {
+            "path": "8788/onlyfans/api/v1/ready",
+            "status": 200,
+            "body": {
+              "ok": true,
+              "role": "api",
+              "schemaReady": true
+            }
+          },
+          {
+            "path": "8791/health",
+            "status": 200,
+            "body": {
+              "ok": true,
+              "inventoryReady": true
+            }
+          }
+        ],
+        "signin": {
+          "sourceSha256": "2678c63ef05abaea2d4471e70ae24b04dcebaafbc624ffd89d0801339b77452f",
+          "health": [
+            {
+              "ok": true
+            },
+            {
+              "ok": true,
+              "inventoryReady": true
+            }
+          ]
+        },
+        "ledger": [
+          {
+            "account": "of-176774528",
+            "enabled": true,
+            "bindingCurrent": true,
+            "status": "held",
+            "windowStart": "2026-10-20T18:53:26.744426Z",
+            "windowEnd": "2026-10-27T18:53:26.744426Z",
+            "pageOffset": 100,
+            "lastCompleteAt": null,
+            "lastFullAt": null,
+            "leaseUntil": null,
+            "activeLease": false,
+            "nextPollAt": "2026-10-27T19:30:49.368559Z",
+            "lastError": "provider_rate_limited",
+            "updatedAt": "2026-10-27T19:25:49.368559Z",
+            "fresh": false,
+            "unresolvedTransactions": 391,
+            "conflictingEvidence": 0,
+            "commerceHold": true,
+            "currentBindingUnlinkedTransactions": 0
+          },
+          {
+            "account": "of-323358988",
+            "enabled": true,
+            "bindingCurrent": true,
+            "status": "running",
+            "windowStart": "2026-10-20T18:49:37.372512Z",
+            "windowEnd": "2026-10-27T18:49:37.372512Z",
+            "pageOffset": 560,
+            "lastCompleteAt": null,
+            "lastFullAt": null,
+            "leaseUntil": null,
+            "activeLease": false,
+            "nextPollAt": "2026-10-27T19:30:51.526918Z",
+            "lastError": null,
+            "updatedAt": "2026-10-27T19:30:50.526918Z",
+            "fresh": false,
+            "unresolvedTransactions": 449,
+            "conflictingEvidence": 0,
+            "commerceHold": true,
+            "currentBindingUnlinkedTransactions": 4
+          },
+          {
+            "account": "of-87030857",
+            "enabled": false,
+            "bindingCurrent": true,
+            "status": "running",
+            "windowStart": "2026-10-20T18:51:56.123890Z",
+            "windowEnd": "2026-10-27T18:51:56.123890Z",
+            "pageOffset": 260,
+            "lastCompleteAt": null,
+            "lastFullAt": null,
+            "leaseUntil": null,
+            "activeLease": false,
+            "nextPollAt": "2026-10-27T19:31:04.825236Z",
+            "lastError": "provider_read_deferred",
+            "updatedAt": "2026-10-27T19:30:22.841170Z",
+            "fresh": false,
+            "unresolvedTransactions": 417,
+            "conflictingEvidence": 0,
+            "commerceHold": true,
+            "currentBindingUnlinkedTransactions": 4
+          },
+          {
+            "account": "of-99421145",
+            "enabled": true,
+            "bindingCurrent": true,
+            "status": "running",
+            "windowStart": "2026-10-20T18:53:18.636604Z",
+            "windowEnd": "2026-10-27T18:53:18.636604Z",
+            "pageOffset": 160,
+            "lastCompleteAt": null,
+            "lastFullAt": null,
+            "leaseUntil": null,
+            "activeLease": false,
+            "nextPollAt": "2026-10-27T19:30:52.582412Z",
+            "lastError": "provider_read_deferred",
+            "updatedAt": "2026-10-27T19:30:08.427984Z",
+            "fresh": false,
+            "unresolvedTransactions": 408,
+            "conflictingEvidence": 0,
+            "commerceHold": true,
+            "currentBindingUnlinkedTransactions": 0
+          }
+        ],
+        "paidReady": false,
+        "sourceFileCount": 712,
+        "sourceManifestSha256": "06ea1098bea1c09a441158d83a7f888cb4b02976ba9a7f2644411416015aec2b"
+      }
+    }
+  },
+  "offhostBackupCopy": "blocked: automatic approval review requires explicit permission for S3 payload and destination"
+}

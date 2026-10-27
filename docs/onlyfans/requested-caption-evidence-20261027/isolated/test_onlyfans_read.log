@@ -1,0 +1,301 @@
+/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+
+1. The contract: identity, cursors and bounds
+  ok   the schema version is the dashboard's own
+  ok   and this service claims to support it
+  ok   the namespace avoids the cookie-gated /api/of prefix
+  ok   the namespace is exempted exactly, never by a stem
+  ok   a conversation id carries its account
+  ok   inside the id class the dashboard already accepts
+  ok   it resolves back to the fan
+  ok   an id from another account does not resolve
+  ok   nor does a fabricated one
+  ok   two accounts never mint the same conversation id
+  ok   a cursor decodes for the account it was minted for
+  ok   a cursor from another account is refused
+  ok   a cursor that is not base64 is refused
+  ok   an empty cursor is refused
+  ok   a cursor minted for another account is refused, not followed
+  ok   a decoded cursor timestamp is naive UTC, like the columns
+  ok   and it round-trips to the instant it named
+  ok   a cursor with an unreadable timestamp is refused
+  ok   an absent limit takes the default
+  ok   a bigger ask is bounded
+  ok   and a nonsense one is still a page
+  ok   a projection exactly at the freshness window is not stale
+  ok   one second past it is
+  ok   and the window it publishes is the one it uses
+
+2. The service credential: bearer only, and it fails closed
+  ok   with no token configured the service refuses everything
+  ok   and it says so as an unavailable state, not a denial
+  ok   a missing header is refused
+  ok   a wrong scheme is refused
+  ok   a bare token with no scheme is refused
+  ok   a wrong token is refused
+  ok   a cookie-shaped value is not a credential
+  ok   the right token is not enough on its own — no tenant is refused
+  ok   and it is unavailable rather than denied
+  ok   its code names the decision that is missing, not a record
+  ok   a blank tenant is the same refusal
+  ok   and so is a whitespace-only tenant
+  ok   the deployment reports no usable scope while it is undecided
+  ok   a wrong token is still a denial, not a configuration answer
+  ok   the deployment scope requires the word 'deployment'
+  ok   and the match is exact — a near-miss stays a tenant id
+  ok   as does a word that merely contains it
+  ok   an id narrows to that id
+  ok   a blank tenant is refused by the rule itself
+  ok   and so is an absent one
+  ok   so nothing can resolve blank to the deployment scope
+  ok   a tenant-scoped token narrows to that tenant
+  ok   and is not the deployment scope
+  ok   the literal 'deployment' means the deployment scope
+  ok   and is admitted by name
+  ok   the auth module cannot read a cookie
+  ok   nor a query parameter
+  ok   and it compares in constant time
+  ok   a request with no schema version is refused
+  ok   an empty schema version is refused
+  ok   an unimplemented schema version is refused
+  ok   the implemented one is accepted
+
+3. Valid reads answer with the documented envelope
+  ok   the envelope is versioned
+  ok   and carries the requested scope
+  ok   agency-a sees exactly its two accounts
+  ok   an account names its binding, creator and handle
+  ok   the channel is OnlyFans, never a persona field
+  ok   an unverified account does not claim connected
+  ok   and explains the missing connection evidence
+  ok   the view capability is the one this service implements
+  ok   the recorded sales view is available
+  ok   and every mutation is not_configured rather than available
+  ok   freshness is anchored on the newest observed activity
+  ok   and a recently active account is not stale
+  ok   a dead session reads as expired_session
+  ok   with the relay's own reason attached
+  ok   and an account with no observed activity is stale, not fresh
+  ok   the list envelope is versioned
+  ok   and scoped to the account asked for
+  ok   newest activity first
+  ok   a summary carries the fan
+  ok   and the priority the relay recorded
+  ok   and the control row's revision
+  ok   and its mode and takeover state
+  ok   the last message's unsettled outcome reaches the row
+  ok   a fan with no name is named, not blank
+  ok   an account with one page has no cursor
+  ok   a held conversation is flagged for attention
+  ok   the detail carries the summary the list showed
+  ok   messages are in the order they happened
+  ok   each message carries its own conversation
+  ok   a fan message is inbound and from the fan
+  ok   an inbound message has no send receipt
+  ok   an automation send is attributed to the ai
+  ok   a recorded unknown outcome is not smoothed into sent
+  ok   and it carries no evidence it does not have
+  ok   facts are labelled with their provenance
+  ok   money is minor units with an explicit currency
+  ok   an unresolved send offers the resolution path
+  ok   a mass placeholder is dispatching, not sent
+  ok   a human send is attributed to a human
+  ok   a confirmed outbound row is sent
+  ok   and a settled conversation has no incident
+  ok   a recorded human origin survives an accepted text receipt
+  ok   a recorded ai origin survives an accepted text receipt
+  ok   a missing receipt origin preserves legacy automation inference
+  ok   an unsupported receipt origin does not replace legacy human attribution
+  ok   a receipt cannot relabel an inbound fan message as local authorship
+
+4. Another tenant's data is refused, and an unknown account with it
+  ok   an account bound to another tenant is refused
+  ok   so is asking for it by scope
+  ok   and so is its creator
+  ok   a completely unknown account is refused, not empty
+  ok   a conversation id from another account is refused
+  ok   an unknown conversation on a bound account is refused
+  ok   a malformed account id is a bad request, not a miss
+  ok   every cause of refusal answers with the same sentence
+  ok   the refusal body never names the record it refused
+  ok   a bound account with no conversations is a legitimate empty page
+  ok   which is a success envelope, not a refusal
+  ok   the deployment scope sees every bound account
+  ok   so the tenant narrowing is what refuses, not the absence of a record
+
+5. Paging keeps its cursor, its order and its account
+  ok   the page honours the limit
+  ok   and tells the client there is more
+  ok   the next page resumes after the last row shown
+  ok   and stops advertising more
+  ok   no row is repeated across the two pages
+  ok   a cursor from another account is refused
+  ok   a corrupt cursor is refused
+  ok   an over-large ask is clamped to the maximum
+
+6. Unreadable storage is unavailable, and there is no fallback
+  ok   a repository failure surfaces as unavailable, not as empty
+  ok   the SQL repository fails closed on a schema-less database
+  ok   and calls it storage, not a missing record
+  ok   and never reports it as an empty account list
+  ok   the package contains no fixture data
+  ok   the package never imports the provider client
+  ok   and never imports an automation or send path
+  ok   nothing in the package writes (no inserts, updates or deletes)
+  ok   the router exposes GET and HEAD and nothing else
+  ok   it registers scoped reads, native workspace and the smoke check
+  ok   the relay registers the router
+  ok   and exempts its namespace from the browser share gate
+  ok   using the package's own prefix constant, not a copied string
+
+7. Over HTTP the refusals are distinguishable, and never cached
+  ok   a correctly credentialled smoke check is 200
+  ok   and states the version it speaks
+  ok   and its scope, without naming an account
+  ok   private answers are never cached
+  ok   the version is repeated where a client can check it
+  ok   no credential is a 401
+  ok   a wrong credential is the same 401
+  ok   no schema version is a 400
+  ok   and it names the missing header
+  ok   an unimplemented schema version is a 400
+  ok   the accounts read is 200 for an authorized caller
+  ok   and versioned in the body
+  ok   an unknown account is a 404, never an empty 200
+  ok   with a refusal state
+  ok   and no accounts array to misread
+  ok   another tenant's account is indistinguishable from an unknown one
+  ok   and its body does not echo the id that was refused
+  ok   a bound account with an empty inbox is 200
+  ok   and says so with an empty page
+  ok   a conversation read is 200
+  ok   and carries the conversation2026-10-27 11:49:04,600 INFO onlyfans.read: onlyfans read refused: service_token_not_configured (This relay has no OnlyFans service token configured, so no OnlyFans data can be read from it. Nothing is served in its place.)
+2026-10-27 11:49:04,601 INFO httpx: HTTP Request: GET http://testserver/onlyfans/api/v1/accounts "HTTP/1.1 503 Service Unavailable"
+2026-10-27 11:49:04,605 INFO onlyfans.read: onlyfans read refused: tenant_not_configured (This relay has an OnlyFans service token but no ONLYFANS_API_TENANT, so it does not know which tenant that credential may read for. Nothing is served until that is decided.)
+2026-10-27 11:49:04,606 INFO httpx: HTTP Request: GET http://testserver/onlyfans/api/v1/accounts "HTTP/1.1 503 Service Unavailable"
+2026-10-27 11:49:04,611 INFO onlyfans.read: onlyfans read refused: tenant_not_configured (This relay has an OnlyFans service token but no ONLYFANS_API_TENANT, so it does not know which tenant that credential may read for. Nothing is served until that is decided.)
+2026-10-27 11:49:04,612 INFO httpx: HTTP Request: GET http://testserver/onlyfans/api/v1/accounts?account=9001 "HTTP/1.1 503 Service Unavailable"
+2026-10-27 11:49:04,624 INFO httpx: HTTP Request: GET http://testserver/onlyfans/api/v1/accounts "HTTP/1.1 200 OK"
+2026-10-27 11:49:04,632 INFO onlyfans.read: onlyfans read refused: unknown_account (That record is not available to this service credential.)
+2026-10-27 11:49:04,633 INFO httpx: HTTP Request: GET http://testserver/onlyfans/api/v1/accounts?account=9002 "HTTP/1.1 404 Not Found"
+2026-10-27 11:49:04,640 INFO onlyfans.read: onlyfans read refused: unknown_account (That record is not available to this service credential.)
+2026-10-27 11:49:04,642 INFO httpx: HTTP Request: GET http://testserver/onlyfans/api/v1/accounts?account=9003 "HTTP/1.1 404 Not Found"
+2026-10-27 11:49:04,649 INFO onlyfans.read: onlyfans read refused: unknown_account (That record is not available to this service credential.)
+2026-10-27 11:49:04,650 INFO httpx: HTTP Request: GET http://testserver/onlyfans/api/v1/accounts?account=9001 "HTTP/1.1 404 Not Found"
+2026-10-27 11:49:04,658 INFO httpx: HTTP Request: GET http://testserver/onlyfans/api/v1/accounts "HTTP/1.1 200 OK"
+
+  ok   a conversation id from another account is a 404
+  ok   with no token configured the whole service is unavailable
+  ok   it is unavailable rather than denied
+  ok   and certainly not an empty list of accounts
+  ok   a refusal is never cached either
+
+8. The migration is in the graph, unique, and creates only what is read
+  ok   every revision id in the tree is unique
+  ok   the OF-B1 migration is in the graph
+  ok   it descends from the committed head this branch was cut from
+  ok   0070 is now an ancestor of the foundation head
+  ok   and nothing else descends from the committed head it was cut from
+  ok   the tree has exactly one head
+  ok   its parent is a revision that exists
+  ok   the alembic config sets no version_locations (the split-on-space trap)
+  ok   it still resolves the script location relative to itself
+  ok   and records that re-adding the key needs a separator too
+  ok   alembic discovers every revision in the tree
+  ok   including this one
+  ok   and reports it as the single head
+  ok   with 0001_initial still the single base
+  ok   and the down_revision Alembic resolves is the committed head
+  ok   it creates of_creator_bindings
+  ok   it creates of_conversation_state
+  ok   it creates of_message_delivery
+  ok   it creates exactly those three tables
+  ok   it seeds nothing — no insert of any kind
+  ok   it can be backed out
+  ok   and its downgrade drops only its own tables
+  ok   the ORM carries an index named for the ACTIVE binding
+  ok   it is unique
+  ok   it is on the account alone
+  ok   PostgreSQL gets a PARTIAL unique index, not a global one
+  ok   and the dialect the relay runs on renders the same predicate
+  ok   the ORM declares no global unique constraint on the account
+  ok   the migration no longer declares a global UNIQUE(account_id)
+  ok   nor the composite scope constraint that blocked re-binding
+  ok   it creates the same partial unique index
+  ok   flagged unique
+  ok   with the predicate spelled for PostgreSQL
+  ok   and for the dialect the relay actually runs on
+  ok   a boolean default is no longer written as an integer literal
+  ok   but as the dialect's own false
+  ok   the upgrade is guarded against the table already existing
+  ok   the boolean default compiles to PostgreSQL's own false
+  ok   and never to the integer PostgreSQL rejects on a boolean column
+  ok   SQLite renders that same default as its own false
+  ok   while an integer column keeps its integer default, as it should
+  ok   and no other table in this package has a boolean to get wrong
+  ok   nothing applies it automatically at startup — init_db calls no upgrade
+  ok   so a deployment that has not migrated fails closed rather than serving empty
+
+9. One ACTIVE binding per account, and history that survives rebinding
+  ok   a live binding is what the real repository returns
+  ok   and it resolves the creator that binding names
+  ok   a second ACTIVE binding in the same scope is refused
+  ok   a second ACTIVE binding for a different creator is refused
+  ok   a second ACTIVE binding from another tenant is refused too
+  ok   so the account still has exactly one live binding
+  ok   after a revocation the same scope can be bound again
+  ok   and a different creator can take it over after that
+  ok   reads resolve the ACTIVE binding and only that one
+  ok   so the superseded creator no longer answers for the account
+  ok   every revoked binding is still present
+  ok   with its revocation recorded
+  ok   and its original owner intact
+  ok   while the live set is still exactly one row
+  ok   an account whose only binding was revoked reads as unbound
+  ok   exactly as an account that was never bound does
+  ok   and it is absent from the account list
+  ok   a tenant with no bindings is a legitimate empty list, not a refusal
+  ok   a durable old receipt does not expand the visible thread
+  ok   an unresolved receipt outside that thread remains visible as an incident
+  ok   an old unresolved receipt flags its conversation for attention
+  ok   historic paid attachments are recovered without crossing fan or account scope
+  ok   accepted send status and purchase status remain separate
+  ok   an unknown purchase never becomes a confirmed non-purchase
+  ok   malformed media never fabricates attachment identities: not-json
+  ok   malformed media never fabricates attachment identities: [true]
+  ok   malformed media never fabricates attachment identities: [0]
+  ok   malformed media never fabricates attachment identities: [1,1]
+  ok   malformed media never fabricates attachment identities: [1.5]
+  ok   malformed media never fabricates attachment identities: {}
+  ok   SQL reads the accepted manual receipt's authorship and evidence
+  ok   SQL reads the accepted automated receipt's authorship and evidence
+  ok   an unsettled receipt with no control row derives a paused attention state
+  ok   an explicit authority pointer is preserved over a different receipt
+  ok   a receipt from another fan cannot derive a hold for this fan
+  ok   a receipt from another account cannot derive a hold for this account
+  ok   the derived old hold never writes a missing control pointer
+  ok   the derived paused state never creates a missing control row
+
+10. The relay constructs, mounts the router read-only, and fails closed
+  ok   the OnlyFans router is mounted on the real application
+  ok   with exactly the routes the package declares
+  ok   every one of them is a read
+  ok   no write method exists anywhere in the namespace
+  ok   and the rest of the application exposes no OnlyFans write route either
+  ok   the namespace is a prefix of its own and not of a neighbour
+  ok   with no token the real application is unavailable
+  ok   and it answers with no accounts array at all
+  ok   a token without a tenant is unavailable through the real application
+  ok   and it names the decision that is missing, not a record
+  ok   nor is there an account list to misread
+  ok   the same is true of a list read for a specific account
+  ok   with a decided tenant the real repository is read
+  ok   and the live binding is what comes back
+  ok   so the gate was the only thing withholding it
+  ok   an account whose only binding was revoked is refused, not listed
+  ok   and it is indistinguishable from one that was never bound
+  ok   another tenant's live account is refused for this one
+  ok   a tenant with no bindings gets a legitimate EMPTY list, not a refusal
+
+all cases passed — OnlyFans read service (OF-B1)

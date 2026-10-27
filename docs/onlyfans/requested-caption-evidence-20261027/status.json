@@ -30,11 +30,20 @@
   "forwardImage": "passed",
   "sixAcceptanceShards": "blocked before collection: private dashboard source capability missing",
   "aggregate": "not accepted: required shard evidence missing",
-  "requiredIsolatedScripts": "pending separate exact-runtime run",
+  "requiredIsolatedScripts": {
+    "commands": 2,
+    "failed": 0,
+    "skipped": 0,
+    "workflowRun": 40498889651,
+    "artifact": 12731847456,
+    "runtimeRef": "98923531d0531944b8dfe5a28d24f03f2718f170"
+  },
   "liveMessages": 0,
   "realModelCalls": 0,
   "productionDeployment": false,
   "pr33HeadUnchanged": true,
   "old2260EvidenceReassigned": false,
-  "releaseApproved": false
+  "releaseApproved": false,
+  "captionImplementationComplete": true,
+  "releaseReady": false
 }

@@ -16,6 +16,7 @@ This is an evidence branch, not the runtime deployment source.
 | Full native SQLite suite | 29 commands, every exit status zero, zero skips |
 | Full native PostgreSQL suite | 7 commands, every exit status zero, zero skips |
 | Retained immutable rollback image rehearsal | 4 passed, zero failures/errors/skips |
+| Required isolated read/migration scripts | 2 commands, all cases passed, zero skips |
 | New immutable backend forward image | Built and retained; exact identifiers in `forward-image/metadata.json` |
 
 These are separate checks with overlapping coverage, not a combined test total.
@@ -42,9 +43,11 @@ provisioned cross-repository Contents-read token. The aggregate checker ran and
 rejected the missing shard evidence. The overall workflow is therefore RED.
 Do not describe this candidate as having passed full paired acceptance.
 
-The two required isolated scripts are being run separately against the exact
-runtime commit. Their results will be recorded here without crediting them as
-successful shards or weakening the aggregate gate.
+Both required isolated scripts passed separately against the exact runtime
+commit in [run 40498889651](https://github.com/twinagency/twin-onlyfans-backend/actions/runs/40498889651):
+`service/tests/test_onlyfans_read.py` and `service/tests/test_onlyfans_migration_pg.py`.
+Their commands and full logs are in `isolated/`. They are not credited as
+successful paired shards and do not replace or weaken the aggregate gate.
 
 The previously authorised private AWS source handoff can be reused when its
 authenticated execution route is available. No source-proof checks were removed.

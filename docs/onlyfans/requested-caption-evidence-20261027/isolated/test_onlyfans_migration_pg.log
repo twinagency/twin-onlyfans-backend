@@ -1,0 +1,78 @@
+[alembic env] using DB URL: postgresql+psycopg2://postgres:***@127.0.0.1:5432/of_b1_migration_be385cdd  (source: CHATTERLY_DB_URL env)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running stamp_revision  -> 0064_user_llm_keys
+[alembic env] using DB URL: postgresql+psycopg2://postgres:***@127.0.0.1:5432/of_b1_migration_be385cdd  (source: CHATTERLY_DB_URL env)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0064_user_llm_keys -> 0070_onlyfans_read_bindings, onlyfans read bindings — the Twin dashboard's read authority and projections
+[alembic env] using DB URL: postgresql+psycopg2://postgres:***@127.0.0.1:5432/of_b1_migration_be385cdd  (source: CHATTERLY_DB_URL env)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running downgrade 0070_onlyfans_read_bindings -> 0064_user_llm_keys, onlyfans read bindings — the Twin dashboard's read authority and projections
+[alembic env] using DB URL: postgresql+psycopg2://postgres:***@127.0.0.1:5432/of_b1_migration_be385cdd  (source: CHATTERLY_DB_URL env)
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0064_user_llm_keys -> 0070_onlyfans_read_bindings, onlyfans read bindings — the Twin dashboard's read authority and projections
+  scratch database: of_b1_migration_be385cdd
+  ok   all Boolean defaults are fixed at source
+
+1. Alembic discovers the revision through its real configuration
+  ok   the config resolves a non-empty revision graph
+  ok   the OF-B1 revision is discovered
+  ok   the supported runtime revision is the single head
+  ok   its down_revision is the committed head it was cut from
+  ok   0001_initial is still the single base
+  ok   the scratch database starts empty
+
+2. The parent schema (deployment boot path), stamped at 0064
+  ok   the three new tables are the only ones this package adds
+  ok   the parent schema is real - the relay's own tables were built
+  ok   and it does NOT contain this package's tables yet
+  ok   alembic is stamped at the parent revision
+
+3. A clean `upgrade 0070_onlyfans_read_bindings` from the parent revision
+  ok   alembic stamped the 0070 target it just built
+  ok   all three tables exist after the clean upgrade
+  ok   and are empty - the migration seeds nothing
+  ok   and their columns are the migration's own declaration
+
+4. `downgrade 0064_user_llm_keys`
+  ok   alembic stamped the parent revision
+  ok   every OF-B1 table is gone
+  ok   and the relay's own tables were left alone
+
+5. A second clean `upgrade 0070_onlyfans_read_bindings` after the rollback
+  ok   it stamps the 0070 target again
+  ok   all three tables exist again
+
+6. Keys, foreign keys and indexes, as PostgreSQL recorded them
+  ok   of_creator_bindings has a primary key
+  ok   of_conversation_state has a primary key
+  ok   of_message_delivery has a primary key
+  ok   each foreign key points where the models say, ON DELETE CASCADE
+  ok   every index the migration declares exists
+  ok   the active-binding index is UNIQUE
+  ok   and PARTIAL - its WHERE clause is part of the index
+  ok   on the account column alone
+  ok   the global UNIQUE(account_id) is not in PostgreSQL either
+  ok   the boolean column's default is PostgreSQL's own false, not 0
+  ok   while the integer revision keeps its integer default
+
+7. One ACTIVE binding per account, and rebinding after a revocation
+  ok   a live binding is accepted
+  ok   a second ACTIVE binding for the same account is refused
+  ok   from another creator, too
+  ok   and from another tenant entirely
+  ok   so exactly one binding is live
+  ok   after a revocation the SAME tenant and creator can be bound again
+  ok   and a DIFFERENT creator can take the account over once it is free
+  ok   history is intact: every revoked row is still there, with its owner
+  ok   and the live row is the newest, with its new owner
+  ok   history is unbounded - three rows now exist for one account
+  ok   a binding inserted ALREADY revoked is accepted
+  ok   and a revoked-only account has no live binding
+
+8. The scratch database is dropped
+
+all cases passed - OnlyFans migration rehearsal (OF-B1, PostgreSQL)

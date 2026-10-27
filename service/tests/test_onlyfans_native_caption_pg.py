@@ -33,6 +33,9 @@ def test_reply_precedes_exact_description_and_price_on_the_wire(database,monkeyp
 
 @pytest.mark.parametrize("description",[
     "Visit https://example.com to get the saved photographs.",
+    "I just sent it. Check your inbox.",
+    "A saved set with 99 videos.",
+    "A saved set. Pay $99 for everything.",
     "Contact me on telegram @synthetic_creator for the photographs.",
 ])
 def test_unsafe_saved_description_is_refused_before_queue_or_send(database,monkeypatch,description):

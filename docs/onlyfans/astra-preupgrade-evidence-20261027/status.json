@@ -1,0 +1,121 @@
+{
+  "backend": "12c7fed4d15d902e999a4c8b9e45823c3f07d9ab",
+  "dashboard": "444fd1303858e6d87204efe5811278657571f8f6",
+  "run": 40490735091,
+  "applicationAcceptanceComplete": false,
+  "blocker": "Paired dashboard source unavailable to CI: no scoped Contents-read credential or private archive capability. Six shards refused before collection; aggregate consequently not accepted.",
+  "jobs": [
+    {
+      "id": 122143728142,
+      "name": "boundary",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 122146326621,
+      "name": "rollback / rehearse",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 122146326644,
+      "name": "forward-image",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 122146326927,
+      "name": "paired / acceptance (1)",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "id": 122146326966,
+      "name": "paired / acceptance (5)",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "id": 122146326981,
+      "name": "paired / acceptance (3)",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "id": 122146326996,
+      "name": "paired / acceptance (4)",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "id": 122146327001,
+      "name": "paired / fastt-sqlite",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 122146327014,
+      "name": "paired / fastt-postgres",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "id": 122146327078,
+      "name": "paired / acceptance (0)",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "id": 122146327096,
+      "name": "paired / acceptance (2)",
+      "status": "completed",
+      "conclusion": "failure"
+    },
+    {
+      "id": 122146328865,
+      "name": "paired / release-artifacts",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "id": 122146586166,
+      "name": "paired / aggregate",
+      "status": "completed",
+      "conclusion": "failure"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 12728798080,
+      "name": "fastt-sqlite-12c7fed4d15d902e999a4c8b9e45823c3f07d9ab",
+      "digest": "sha256:bade9edf4ae5792498cb5ff0a2f776ab4167273291e18470d410e5236e1addb4",
+      "expiresAt": "2027-01-25T10:43:54Z"
+    },
+    {
+      "id": 12728588725,
+      "name": "fastt-postgres-12c7fed4d15d902e999a4c8b9e45823c3f07d9ab",
+      "digest": "sha256:f011cbb091d6e4bdc7741c7b09812208bb83d272ab0fbac1b38957bf46eee9ef",
+      "expiresAt": "2027-01-25T10:43:54Z"
+    },
+    {
+      "id": 12727858691,
+      "name": "populated-immutable-rollback-image-0096",
+      "digest": "sha256:2ff6524b26638b5d93578d06a78a3a42479be55ea2b421131dc527ba879fedb5",
+      "expiresAt": "2027-01-25T10:43:54Z"
+    },
+    {
+      "id": 12727818280,
+      "name": "crm-backend-forward-12c7fed4d15d902e999a4c8b9e45823c3f07d9ab",
+      "digest": "sha256:b4f07d2bb1871b6d91150d64c21c6b09462dfe339b05842b77ff247d50718bfc",
+      "expiresAt": "2027-01-25T10:43:54Z"
+    },
+    {
+      "id": 12727728054,
+      "name": "preupgrade-backup-boundary-12c7fed4d15d902e999a4c8b9e45823c3f07d9ab",
+      "digest": "sha256:c53169bd0c8eed6f5006237e03ad61c8dd03680f1098c394bac4a804836869c8",
+      "expiresAt": "2027-01-25T10:43:54Z"
+    }
+  ],
+  "forwardImageId": "sha256:ce39bd43c437a3693b27c7c9074119eecf2675143afaa6e3a0b90af58459ad7f",
+  "old2260Evidence": "345deb97603557ec8af3b25d99e94ed6a84b706f"
+}

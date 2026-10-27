@@ -158,6 +158,98 @@ async def suite(root):
         coordination.register_owner(fixtures.ACCT, fixtures.FAN, p.owner_token, current + timedelta(minutes=29))
         return f, p, gateway, client, http
 
+    # Dashboard ownership is explicit, including same-timestamp creator history.
+    from native_pilot.service import fan_hold_reason, ServiceGateway
+    from types import SimpleNamespace
+
+    def dashboard(name):
+        f, p, g, c, h = make("dashboard-" + name)
+        f.sql("CREATE TABLE of_conversation_state(account_id TEXT,fan_id INTEGER,mode TEXT,takeover_state TEXT)")
+        f.sql("INSERT INTO of_conversation_state VALUES(?,?,'automated','none')", (fixtures.ACCT, fixtures.FAN))
+        g.dashboard_handover = True
+        g.hold_check = lambda: fan_hold_reason(f.path, fixtures.ACCT, fixtures.FAN, True)
+        return f, p, g, c, h
+
+    for stamp_kind in ("same-second", "newer"):
+        f, p, g, c, h = dashboard(stamp_kind)
+        outgoing = dict(h.history[0], id=900, isFromMe=True, fromUser={"id": int(fixtures.ACCT)})
+        if stamp_kind == "newer":
+            outgoing["createdAt"] = current.isoformat() + "Z"
+        h.history.insert(0, outgoing)
+        await g._send("neutral reply")
+        check(len(h.posts) == 1, "creator history cannot take over a dashboard-managed chat")
+        check(f.ledger.status(p.pilot_id)["attempts"] == {"sent": 1})
+
+    for mode, takeover, reason in (("human", "none", "fan-human"), ("paused", "none", "fan-paused"),
+                                   ("automated", "requested", "fan-takeover")):
+        f, p, g, c, h = dashboard(mode + takeover)
+        f.sql("UPDATE of_conversation_state SET mode=?,takeover_state=?", (mode, takeover))
+        await async_refuses(reason, lambda: g._send("must not send"))
+        check(h.posts == [] and not f.ledger.status(p.pilot_id)["attempts"])
+
+    f, p, g, c, h = dashboard("takeover-race")
+    original_begin = f.ledger.begin_attempt
+    def take_over_after_admission(**kwargs):
+        attempt = original_begin(**kwargs)
+        f.sql("UPDATE of_conversation_state SET mode='human'")
+        return attempt
+    with patch.object(f.ledger, "begin_attempt", take_over_after_admission):
+        await async_refuses("fan-held-before-post", lambda: g._send("prepared before takeover"))
+    check(h.posts == [] and f.ledger.status(p.pilot_id)["attempts"] == {"not_sent": 1})
+
+    f, p, g, c, h = dashboard("resume")
+    f.sql("UPDATE of_conversation_state SET mode='human'")
+    check(g.hold_check() == "fan-human")
+    f.sql("UPDATE of_conversation_state SET mode='automated',takeover_state='none'")
+    await g._send("reply after resume")
+    check(len(h.posts) == 1)
+
+    for case in ("missing-state", "other-account", "other-fan"):
+        f, p, g, c, h = dashboard(case)
+        if case == "missing-state":
+            f.sql("DELETE FROM of_conversation_state")
+        elif case == "other-account":
+            f.sql("UPDATE of_conversation_state SET account_id='foreign'")
+        else:
+            f.sql("UPDATE of_conversation_state SET fan_id=999")
+        await async_refuses("fan-not-enabled", lambda: g._send("must not send"))
+        check(h.posts == [])
+
+    for case, mutation, reason in (
+        ("new-input", lambda h: h.insert(0, dict(h[0], id=999)), "new-message-during-generation"),
+        ("foreign-author", lambda h: h[0].update(fromUser={"id": 999}), "send-check-failed"),
+        ("foreign-recipient", lambda h: h[0].update(withUser={"id": 999}), "history-recipient-mismatch"),
+        ("changed-direction", lambda h: h[0].update(isFromMe=True, fromUser={"id": int(fixtures.ACCT)}), "source-direction-changed"),
+    ):
+        f, p, g, c, h = dashboard(case)
+        mutation(h.history)
+        await async_refuses(reason, lambda: g._send("must not send"))
+        check(h.posts == [])
+
+    f, p, g, c, h = dashboard("unknown-outcome")
+    from curl_cffi.requests.exceptions import ProxyError
+    h.fail = ProxyError("synthetic transport failure")
+    await async_refuses("delivery-unknown", lambda: g._send("neutral reply"))
+    await async_refuses("delivery-unknown", lambda: g._send("must not retry"))
+    check(len(h.posts) == 1 and f.ledger.status(p.pilot_id)["attempts"] == {"delivery_unknown": 1})
+
+    f, p, g, c, h = dashboard("wiring")
+    svc = SimpleNamespace(ledger=f.ledger, client=c, path=f.path, db=fixtures.ACCT,
+                          args=SimpleNamespace(fan=fixtures.FAN), strict_arg=(True,))
+    check(ServiceGateway(svc, p).dashboard_handover is True)
+    svc.strict_arg = ()
+    check(ServiceGateway(svc, p).dashboard_handover is False, "bounded service keeps conservative history policy")
+
+    anchor = dict(h.history[0], id=800, isFromMe=True, fromUser={"id": int(fixtures.ACCT)})
+    anchors = {800: {"created_at": next(iter(g.sources.values()))["created_at"]}}
+    later = dict(anchor, id=801)
+    runner.check_followup_history([later, anchor], anchors, set(), account=fixtures.ACCT, fan=fixtures.FAN,
+                                  dashboard_handover=True)
+    refuses("new-message-during-generation", lambda: runner.check_followup_history(
+        [h.history[0], anchor], anchors, set(), account=fixtures.ACCT, fan=fixtures.FAN, dashboard_handover=True))
+    refuses("external-outbound", lambda: runner.check_followup_history(
+        [later, anchor], anchors, set(), account=fixtures.ACCT, fan=fixtures.FAN))
+
     f, p, gateway, client, http = make("cap", count=2)
     check(runner.check_local(f.path, fixtures.ACCT, fixtures.FAN)["creator_profile"] == "native-default")
     for i in range(10):
@@ -543,3 +635,4 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="native-pilot-runner-") as temporary:
         asyncio.run(suite(Path(temporary)))
     print(f"all cases passed ({CHECKS} checks)")
+

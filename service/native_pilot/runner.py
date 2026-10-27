@@ -128,8 +128,8 @@ def read_sources(path, account, fan, ids):
     return sources
 
 
-def check_provider_history(history, sources, confirmed_ids, *, account, fan):
-    """Refuse changed inputs, new inputs, and unproved external outbound activity."""
+def check_provider_history(history, sources, confirmed_ids, *, account, fan, dashboard_handover=False):
+    """Validate inputs; dashboard-managed chats use explicit control for handover."""
     from twin_bridge.contract import parse_canonical_timestamp
     from twin_bridge.delivery import external_outbound_ids
     from twin_bridge.normalize import html_to_text
@@ -140,7 +140,8 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan):
     # Compare at that same precision, never discard a same-millisecond source.
     since = min(datetime.fromisoformat(r["created_at"]) for r in sources.values())
     since = since.replace(microsecond=since.microsecond // 1000 * 1000)
-    if external_outbound_ids(history, set(confirmed_ids), creator_id=account, fan_id=fan, since=since):
+    outbound = set(external_outbound_ids(history, set(confirmed_ids), creator_id=account, fan_id=fan, since=since))
+    if outbound and not dashboard_handover:
         raise Refused("external-outbound")
     seen = set()
     for item in history:
@@ -155,6 +156,10 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan):
                 if not isinstance(bound, dict) or isinstance(bound.get("id"), bool) or str(bound.get("id")) != str(fan):
                     raise Refused("history-recipient-mismatch")
         if stamp < since:
+            continue
+        if dashboard_handover and mid in outbound:
+            if mid in sources:
+                raise Refused("source-direction-changed")
             continue
         if mid in confirmed_ids:
             continue
@@ -184,10 +189,10 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan):
         raise Refused("source-missing")
 
 
-def check_followup_history(history, anchors, confirmed_ids, *, account, fan):
+def check_followup_history(history, anchors, confirmed_ids, *, account, fan, dashboard_handover=False):
     """The follow-up twin of check_provider_history: the only message at or after the anchor (our own last
-    outbound) may be that anchor and what this input already sent. A fan reply, a human/external send or
-    anything unreadable refuses."""
+    outbound) may be that anchor and what this input already sent. Dashboard-managed chats use explicit
+    control for handover; a fan reply or anything unreadable still refuses."""
     from twin_bridge.contract import parse_canonical_timestamp
     from twin_bridge.delivery import external_outbound_ids
 
@@ -195,7 +200,8 @@ def check_followup_history(history, anchors, confirmed_ids, *, account, fan):
         raise Refused("source-missing")
     since = min(datetime.fromisoformat(r["created_at"]) for r in anchors.values())
     since = since.replace(microsecond=since.microsecond // 1000 * 1000)
-    if external_outbound_ids(history, set(confirmed_ids) | set(anchors), creator_id=account, fan_id=fan, since=since):
+    outbound = set(external_outbound_ids(history, set(confirmed_ids) | set(anchors), creator_id=account, fan_id=fan, since=since))
+    if outbound and not dashboard_handover:
         raise Refused("external-outbound")
     seen = set()
     for item in history:
@@ -210,6 +216,8 @@ def check_followup_history(history, anchors, confirmed_ids, *, account, fan):
                 if not isinstance(bound, dict) or isinstance(bound.get("id"), bool) or str(bound.get("id")) != str(fan):
                     raise Refused("history-recipient-mismatch")
         if stamp < since or mid in confirmed_ids:
+            continue
+        if dashboard_handover and mid in outbound:
             continue
         if mid not in anchors:
             raise Refused("new-message-during-generation")
@@ -259,6 +267,10 @@ def _refusal(exc):
 
 
 class Gateway:
+    # Bounded pilots retain their history veto. The dashboard service opts in
+    # only when its durable conversation mode is required at the send boundary.
+    dashboard_handover = False
+
     def __init__(self, ledger, pilot, client, loop, content=None, scope=None):
         self.ledger, self.pilot, self.client, self.loop = ledger, pilot, client, loop
         self.content = content
@@ -357,7 +369,8 @@ class Gateway:
             receipts = self.ledger.receipts(pilot_id=self.pilot.pilot_id, input_key=self.input_key)
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
             (check_followup_history if self.followup else check_provider_history)(
-                history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id)
+                history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id,
+                dashboard_handover=self.dashboard_handover)
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
                             approved_item=self.content.catalog_ids if self.content else None)
             if self.hold_check is not None:

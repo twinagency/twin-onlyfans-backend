@@ -131,6 +131,7 @@ class ServiceGateway(runner.Gateway):
         super().__init__(service.ledger, pilot, service.client, asyncio.get_running_loop(), **kwargs)
         self.service = service
         self.hold_check = lambda: fan_hold_reason(service.path, service.db, service.args.fan, *service.strict_arg)
+        self.dashboard_handover = bool(service.strict_arg)
 
     @property
     def deadline(self):  # type: ignore[override]

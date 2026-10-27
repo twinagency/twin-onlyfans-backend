@@ -1,0 +1,119 @@
+--- a/service/db/models.py
++++ b/service/db/models.py
+@@ -3336,8 +3336,8 @@
+ 
+     The scoped read service never writes these rows. Store owns audited control
+     changes and canonical input revisions; the text authority owns dispatch
+-    holds. The legacy column default remains for schema compatibility, while
+-    runtime creation of missing control explicitly starts paused/attention.
++    holds. New conversations start paused in both the ORM and database.
++    Runtime creation of missing control also starts paused/attention.
+     """
+ 
+     __tablename__ = "of_conversation_state"
+@@ -3346,7 +3346,7 @@
+     fan_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+     #: automated | human_controlled | paused | no_contact
+     mode: Mapped[str] = mapped_column(
+-        String, nullable=False, default="automated", server_default=text("'automated'")
++        String, nullable=False, default="paused", server_default=text("'paused'")
+     )
+     revision: Mapped[int] = mapped_column(
+         Integer, nullable=False, default=0, server_default=text("0")
+--- a/service/db/schema.py
++++ b/service/db/schema.py
+@@ -38,8 +38,9 @@
+ OFFER_IMPORT = "0089_offer_import"
+ LAUNCH = "0090_launch"
+ LAUNCH_CONTROLS = "0091_launch_controls"
+-HEAD = "0092_ledger_history"
+-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, HEAD:92}
++LEDGER_HISTORY = "0092_ledger_history"
++HEAD = "0093_conversation_default_off"
++REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, HEAD:93}
+ HERE = Path(__file__).resolve().parent
+ 
+ 
+--- /dev/null
++++ b/service/db/migrations/versions/20261028_0100_conversation_default_off.py
+@@ -0,0 +1,13 @@
++"""New fan controls start off; existing operator decisions are preserved."""
++from pathlib import Path
++from alembic import op
++revision = "0093_conversation_default_off"
++down_revision = "0092_ledger_history"
++branch_labels = None
++depends_on = None
++
++def upgrade():
++    op.get_bind().exec_driver_sql((Path(__file__).resolve().parents[2] / "snapshots/0093_conversation_default_off.sql").read_text())
++
++def downgrade():
++    raise RuntimeError("Keep the safe off default; use a compatible forward fix")
+--- /dev/null
++++ b/service/db/snapshots/0093_conversation_default_off.sql
+@@ -0,0 +1,2 @@
++-- Default only: existing conversation states and audit evidence are preserved.
++ALTER TABLE of_conversation_state ALTER COLUMN mode SET DEFAULT 'paused';
+--- /dev/null
++++ b/service/tests/test_fan_controls_default_off_pg.py
+@@ -0,0 +1,59 @@
++
++"""Default-off controls and schema upgrade on disposable PostgreSQL only."""
++from sqlalchemy import text, select
++from sqlalchemy.orm import Session
++from test_fastt_controls_pg import database, template, STAFF
++from test_onlyfans_foundation_pg import seed
++from db.models import Fan, OfConversationState
++from db.schema import upgrade, HEAD
++from onlyfans_runtime import fastt_scope
++from native_pilot.service import fan_hold_reason
++
++def test_orm_and_sql_defaults_are_off_and_existing_choices_survive_upgrade(database):
++    url, engine = database
++    store = seed(url, engine)
++    with engine.begin() as con:
++        con.exec_driver_sql("ALTER TABLE of_conversation_state ALTER COLUMN mode SET DEFAULT 'automated'")
++        con.exec_driver_sql("UPDATE alembic_version SET version_num='0092_ledger_history'")
++        upgrade(con)
++        upgrade(con)
++        assert con.scalar(text("SELECT version_num FROM alembic_version")) == HEAD
++    with Session(engine) as s, s.begin():
++        s.add_all([Fan(account_id="acc-a",fan_id=201),Fan(account_id="acc-a",fan_id=202)])
++        s.flush()
++        s.add(OfConversationState(account_id="acc-a",fan_id=201))
++        s.flush()
++        s.execute(text("INSERT INTO of_conversation_state(account_id,fan_id) VALUES ('acc-a',202)"))
++    with Session(engine) as s:
++        assert s.get(OfConversationState,("acc-a",201)).mode == "paused"
++        assert s.get(OfConversationState,("acc-a",202)).mode == "paused"
++        assert s.get(OfConversationState,("acc-a",101)).mode == "automated"
++    store.close()
++
++def test_any_new_fan_can_be_enabled_stopped_and_handed_back_without_selection(database,monkeypatch):
++    url,engine=database
++    store=seed(url,engine)
++    monkeypatch.setenv("DATABASE_URL",url)
++    monkeypatch.setenv("ONLYFANS_FASTT_SCOPE","db:*")
++    fastt_scope.reset_cache()
++    with Session(engine) as s,s.begin():
++        s.add(Fan(account_id="acc-a",fan_id=777))
++    assert fastt_scope.platform_scope_enabled()
++    from onlyfans_runtime.fastt_manual import fastt_serves
++    assert fastt_serves("acc-a",777)
++    assert fan_hold_reason(url,"acc-a",777,strict=True) == "fan-not-enabled"
++    def command(action,mode,rev):
++        return store.control("tenant-a","acc-a",777,mode=mode,action=action,
++          expected_revision=rev,command_key="new-fan-"+action+str(rev),actor=STAFF,reason="Synthetic button test")
++    assert command("resume_automation","automated",0)==1
++    assert fan_hold_reason(url,"acc-a",777,strict=True) is None
++    assert command("request_takeover","human_controlled",1)==2
++    assert fan_hold_reason(url,"acc-a",777,strict=True) == "fan-restricted"
++    assert command("release_takeover","automated",2)==3
++    assert fan_hold_reason(url,"acc-a",777,strict=True) is None
++    assert command("pause_automation","paused",3)==4
++    assert fan_hold_reason(url,"acc-a",777,strict=True) == "fan-restricted"
++    with Session(engine) as s:
++        assert s.get(OfConversationState,("acc-a",101)).mode=="automated"
++    store.close()
++    fastt_scope.reset_cache()

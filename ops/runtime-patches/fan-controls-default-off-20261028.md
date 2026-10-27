@@ -1,0 +1,11 @@
+# Universal fan controls, AI off by default
+
+Deployed 2026-10-27T17:13:32.534846+00:00. All registered creators use ONLYFANS_FASTT_SCOPE=db:*; all four existing creators now have fastt_scope all. New registered creators are discovered automatically, so no developer allowlist edit is needed. Per-fan controls remain authoritative. Missing controls hold automation; Resume enables a fan; Take over or Pause blocks further AI sends; Hand back resumes it. An already submitted provider request cannot be recalled.
+
+New conversations start paused in both ORM and PostgreSQL defaults. Existing automatic-new-conversation policy was disabled for Maile; all four current creators now have it off. All 20,355 existing fan control rows were preserved exactly at deployment. Existing manual choices remain unchanged. Creators still require connection, model credential and account activation before sending. Alva has no saved AI model/credential and remains inactive.
+
+The adjacent patch contains the tested model default, forward schema migration 0093_conversation_default_off, schema-head update and PostgreSQL regression tests. The adjacent apply script records scope and connection-policy changes through existing audited authorities. It requires the authorized API environment; do not run against another deployment without checking its state.
+
+Validation: 71 tests passed in isolated PostgreSQL and offline control/scope suites, covering raw SQL and ORM defaults, migration preservation, new-fan enable/takeover/hand-back/pause, HTTP controls, stop-during-generation and scope handling. Live API, worker and three configured sender children restarted without schema/startup errors. The previously deployed 2,000-per-fan rolling 24-hour quota code and setting were verified unchanged.
+
+These are exact runtime changes. Live service sources differ from their recorded Git revision. Integrate these small changes with the current CRM source rather than overwriting whole files. Update API, worker and sender images together for schema 0093, including compose migrate and fastt-runner image references. The running compose and protected rollback copies are retained on the host. No source-main merge is implied by this archive commit.

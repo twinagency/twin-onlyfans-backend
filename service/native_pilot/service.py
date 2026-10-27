@@ -710,6 +710,7 @@ class Service:
                               **({"unanswered_reply_ids": unanswered} if unanswered else {}),
                               **({"own_offers_only": True} if self.strict else {}),
                               arm_unsend=gateway.arm_unsend, unsent=lambda: gateway.unsent_ids,
+                              unlinked_paid=lambda: self.fan_has_unlinked_payment(args.fan),
                               card_of=lambda mid: ledger.card_evidence(account_id=self.db, fan_id=args.fan, provider_message_id=str(mid)),
                               **({"followups": self.followups} if self.followups is not None else {})) as native:
                 stats = await native.run(run_id=run_id, **({"payload": job_payload(job)} if job is not None else {}))
@@ -775,6 +776,11 @@ class Service:
                               "WHERE id=? AND account_id=?", (offer_id, self.db)).fetchone()
         return dict(zip(("id", "fan_id", "status", "resolved_by", "offer_message_id", "price_cents"), row)) if row else None
 
+    def fan_has_unlinked_payment(self, fan):
+        """True when ``fan`` has a paid ppv_message since the current binding that no message explains (excluded or not)."""
+        with runner.readonly(self.path) as con:
+            return int(fan) in postsale.unlinked_paid_fans(con, self.db)
+
     def postsale_block(self, job):
         """Why a discount / post-buy job must not run now (a fixed reason), or None."""
         from .followups import job_payload, offer_of
@@ -784,10 +790,9 @@ class Service:
         offer = self.offer_row(offer_of(kind, job_payload(job)))
         if offer is None or int(offer["fan_id"]) != int(job["fan_id"]):
             return "offer-mismatch"
+        if self.fan_has_unlinked_payment(job["fan_id"]):
+            return "unlinked-payment"      # discount and post-buy both put a priced card on the wire
         if kind == DISCOUNT_KIND:
-            with runner.readonly(self.path) as con:
-                if int(job["fan_id"]) in postsale.unlinked_paid_fans(con, self.db):
-                    return "unlinked-payment"
             return None if offer["status"] == "open" else "already-purchased" if offer["status"] == "delivered" else "offer-resolved"
         return None if offer["status"] == "delivered" and offer["resolved_by"] == "ppv_ledger" else "not-purchased"
 

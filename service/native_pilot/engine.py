@@ -139,6 +139,10 @@ NO_OFFER_NOTE = ("No offer, price or unlock is possible this turn. Reply natural
 
 
 REPEAT_REASONS = ("item-already-pending", "media-already-pending")
+# A card for a fan with an unlinked paid purchase is never sent, whatever the model wrote: the marker is stripped
+# and the fan still gets the ordinary chat reply (same handling as a repeat).
+UNLINKED_PAYMENT = "unlinked-payment"
+STRIP_REASONS = REPEAT_REASONS + (UNLINKED_PAYMENT,)
 
 
 def _with_content(result, content):
@@ -172,7 +176,7 @@ class NativeEngine:
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
-                 unanswered_reply_ids=()):
+                 unanswered_reply_ids=(), unlinked_paid=None):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
@@ -196,6 +200,9 @@ class NativeEngine:
         self._send = send
         # Discounted resend only: the gateway's guarded removal (see _TextClient.unsend_message) and the ids it confirmed gone.
         self._arm_unsend, self._unsent = arm_unsend, unsent
+        # Runner-owned read: True when THIS fan has a paid ppv_message no message explains (postsale.unlinked_paid_fans).
+        # None = no such source (tests, other callers): nothing is withheld, exactly as before.
+        self._unlinked_paid = unlinked_paid
         self._card_of = card_of    # message id -> the vault card as sent (media / previews / price) from the runner's receipts
         self._job = None           # the follow-up kind this run serves (nudge / discount / post_buy), None for a fan turn
         self._emit = emit or (lambda event: None)
@@ -266,6 +273,15 @@ class NativeEngine:
                           pack_send_enabled=allowed, pack_on_ask_enabled=allowed)
         elif self._job == DISCOUNT_KIND:
             result["enabled"] = native.get("fastt_discount_resend") is True
+        if await self._fan_unlinked_paid():
+            # Every priced-card writer (model >>OFFER, vault ask lane, post-buy rung, discounted resend) is
+            # switched off for this fan only; plain chat is untouched.
+            result.update(pack_send_enabled=False, pack_on_ask_enabled=False, prompt_sell_catalog=False,
+                          post_buy_rung_enabled=False, fastt_vault_post_buy=False)
+            if self._job in (POST_BUY_KIND, DISCOUNT_KIND):
+                result["enabled"] = False
+            self._emit({"event": "sales-withheld", "reason": UNLINKED_PAYMENT,
+                        "account_id": self.account_id, "fan_id": self.fan_id})
         if self.context:
             # Approved creator facts ride the system prompt on every turn, not
             # only when the fan asks about her (FASTT's token-saving default).
@@ -361,7 +377,7 @@ class NativeEngine:
         # things still need the wrapper: a card for a piece that is already pending (FASTT would
         # send it again) and a reply that is nothing but price talk (FASTT would drop it).
         survivors = [line for line in clean.splitlines() if line.strip() and not self.native._unbacked_talk(line)]
-        if not survivors or reason in REPEAT_REASONS:
+        if not survivors or reason in STRIP_REASONS:
             if survivors:
                 result = _with_content(result, clean)
             else:
@@ -382,6 +398,8 @@ class NativeEngine:
         target = by_id.get(offer_id)
         if target is None:
             return None          # not on the shelf: FASTT rejects the id itself
+        if await self._fan_unlinked_paid():
+            return UNLINKED_PAYMENT
         open_offers = await native._open_offers(account, fan)
         if any(int(o.item_id) == offer_id for o in open_offers):
             return "item-already-pending"
@@ -403,6 +421,16 @@ class NativeEngine:
         if open_count and not await native._offer_caps_ok(account, fan, {**cfg, "min_fan_msgs_between_offers": 1}):
             return "offer-pacing"
         return None
+
+    async def _fan_unlinked_paid(self):
+        """True when this fan must not be sold a card: a paid purchase of theirs is not linked to any message, so
+        their cards can look unpaid. Per fan only (never an account-wide hold). A failed read withholds."""
+        if self._unlinked_paid is None:
+            return False
+        try:
+            return bool(await asyncio.to_thread(self._unlinked_paid))
+        except Exception:
+            return True
 
     def make_client(self, account_id):
         self._account(account_id)

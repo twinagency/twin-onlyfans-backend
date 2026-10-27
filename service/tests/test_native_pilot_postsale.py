@@ -492,6 +492,14 @@ def test_unlinked_payment_blocks_the_fans_discount(root):
     job = lambda fan: {"kind": "discount", "fan_id": fan, "payload_json": json.dumps({"discount_offer": 1 if fan == FAN else 2})}
     check(svc.postsale_block(job(FAN)) == "unlinked-payment", "a queued discount is refused at run time too")
     check(svc.postsale_block(job(FAN + 1)) is None, "another fan's discount still runs")
+    # The post-purchase upsell also puts a priced card on the wire: same guard.
+    offer(f, L, 3, fan=FAN, status="delivered", by="ppv_ledger", resolved=NOW)
+    offer(f, L, 4, fan=FAN + 1, status="delivered", by="ppv_ledger", resolved=NOW)
+    config(f, L, {postsale.SETTING_POST_BUY: True})
+    buy = lambda fan: {"kind": "post_buy", "fan_id": fan, "payload_json": json.dumps({"post_buy": 3 if fan == FAN else 4})}
+    check(svc.postsale_block(buy(FAN)) == "unlinked-payment", "post-buy upsell is refused for the unlinked fan")
+    check(svc.postsale_block(buy(FAN + 1)) is None, "post-buy upsell still runs for another fan")
+    check(svc.fan_has_unlinked_payment(FAN) is True and svc.fan_has_unlinked_payment(FAN + 1) is False, "per-fan read")
 
 
 def test_scan(root):

@@ -52,7 +52,7 @@ async def exercise(tmp):
         s.add(Employee(id=1, display_name='Automation', is_active=True))
         s.add(Fan(account_id=ACCOUNT, fan_id=FAN))
         s.add_all([item(n, m) for n, m in ITEMS.items()])
-    state = {'script': [], 'mid': 100, 'calls': []}
+    state = {'script': [], 'mid': 100, 'calls': [], 'unlinked': set()}
     sent, events = [], []
 
     async def chat(**kw):
@@ -91,7 +91,8 @@ async def exercise(tmp):
             s.add(Message(account_id=ACCOUNT, fan_id=FAN, message_id=state['mid'], direction='in', body='yes please',
                           created_at=datetime.utcnow() - timedelta(seconds=30)))
         before, ev = len(sent), len(events)
-        with NativeEngine(ACCOUNT, FAN, chat=chat, send=send, emit=events.append, content=plan) as native:
+        with NativeEngine(ACCOUNT, FAN, chat=chat, send=send, emit=events.append, content=plan,
+                          unlinked_paid=lambda: FAN in state['unlinked']) as native:
             stats = await native.run(state['mid'])
         assert not stats.get('errors'), stats
         return stats, sent[before:], [e for e in events[ev:] if e['event'] == 'offer-declined']
@@ -193,6 +194,37 @@ async def exercise(tmp):
     stats, out, declined = await turn(card(2))
     check(len(cards(out)) == 1 and not declined and stats['offers_made'] == 1, 'a different item is still offered')
     check(await offers() == [(1, 'delivered'), (2, 'open')], 'purchased row kept, only the new card is open')
+
+    # 5. A fan with a paid purchase no message explains (excluded from the account hold or not) is never sold a card,
+    # but is still answered; the same account's other fans are untouched. Per fan only.
+    await reset({'min_fan_msgs_between_offers': 0})
+    state['unlinked'] = {FAN}
+    stats, out, declined = await turn(card(3, lead='haha you are funny'))
+    check(stats['replies_sent'] == 1 and [t for t, _ in out] == ['haha you are funny'] and not cards(out),
+          'unlinked payment: no card, the chat reply still goes out')
+    check(len(declined) == 1 and declined[0]['reason'] == 'unlinked-payment' and declined[0]['item_id'] == 3,
+          'unlinked payment: visible reason on the runner event')
+    check(await offers() == [], 'unlinked payment: no offer row recorded')
+    stats, out, declined = await turn(card(3, lead='$3 to unlock'), 'wow that is wild lol')
+    check(stats['replies_sent'] == 1 and [t for t, _ in out] == ['wow that is wild lol'] and not cards(out)
+          and declined[0]['regenerated'] is True, 'unlinked payment: a price-only reply is regenerated as plain chat')
+    state['unlinked'] = {FAN + 1}          # somebody else on the account has one; this fan does not
+    stats, out, declined = await turn(card(3))
+    check(len(cards(out)) == 1 and not declined and await offers() == [(3, 'open')], 'another fan is still sold the card')
+    state['unlinked'] = {FAN}
+    await reset({'min_fan_msgs_between_offers': 0})
+    # The failed-read case withholds rather than sells.
+    boom = []
+    def broken():
+        boom.append(1)
+        raise RuntimeError('db unavailable')
+    state['unlinked'] = set()
+    async with get_session() as s:
+        f = await s.get(Fan, (ACCOUNT, FAN)); f.automation_paused_until = None
+    probe = NativeEngine(ACCOUNT, FAN, chat=chat, send=send, emit=events.append, content=plan, unlinked_paid=broken)
+    check(await probe._fan_unlinked_paid() is True and boom, 'unlinked payment: an unreadable ledger withholds the card')
+    check(await NativeEngine(ACCOUNT, FAN, chat=chat, send=send, content=plan)._fan_unlinked_paid() is False,
+          'no source wired: behaviour unchanged')
     await engine.dispose()
 
 

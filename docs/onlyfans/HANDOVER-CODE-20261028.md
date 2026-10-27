@@ -68,12 +68,20 @@ Creator sign-in source is committed under `creator-sign-in/`, with `Dockerfile.s
 - Required Python operation scripts parsed successfully and the SSM helper passed Node syntax validation.
 - Existing broader release acceptance evidence remains attributed to its original exact source pair. No new full production acceptance or capacity claim is made.
 
-## Remaining local preservation
+## Local preservation completed
 
-A broader source-only archive was prepared locally: 110 backend files and 73 dashboard files, with original paths, base commits and SHA256 manifests. Two additional older dashboard branches were found without a published matching commit:
-- `codex/hybrid-crm-foundation`: `797a6ece874728effc14daabca3ae5940624bc6a`.
-- `codex/tether-creator-parity`: `e38004c88f8190ed828fb9bd89ef6b1a73e2e349`.
+The approved source archive is pushed and verified on GitHub:
+- Dashboard: 73 snapshots at [archive/local-work-20261028](https://github.com/twinagency/twin-dashboard/tree/archive/local-work-20261028/docs/handover-local-20261028), commit `d27a0fce51ad25dc740d30c0be633405e4dde5f4`.
+- Backend: 110 snapshots at [archive/local-work-20261028](https://github.com/twinagency/twin-onlyfans-backend/tree/archive/local-work-20261028/docs/handover-local-20261028), commit `d2b5185014b569f0238a8ca217ee8ce19e7ca84f`.
+- Older dashboard hybrid CRM branch: [archive/local-hybrid-crm-foundation-20261028](https://github.com/twinagency/twin-dashboard/tree/archive/local-hybrid-crm-foundation-20261028), commit `797a6ece874728effc14daabca3ae5940624bc6a`.
+- Older dashboard creator parity branch: [archive/local-tether-creator-parity-20261028](https://github.com/twinagency/twin-dashboard/tree/archive/local-tether-creator-parity-20261028), commit `e38004c88f8190ed828fb9bd89ef6b1a73e2e349`.
 
-The bulk archive upload was blocked by automatic approval review pending explicit authorization for the exact snapshots and private-repository destinations. It has not been pushed. Existing user worktrees remain intact. This record therefore does not claim that every local file or every repository used by previous sessions is fully consolidated.
+All 183 snapshot blobs passed SHA256 comparison against the prepared manifests before commit. GitHub branch refs match the published commit hashes, and the remote manifests contain the expected 73 and 110 entries. Archive worktrees were clean after publishing. Original user worktrees remain intact. Snapshots use a `.source.txt` suffix to preserve original bytes without activating unfinished code. Review before applying anything from these archives to a release branch.
+
+## Repository ownership and access
+
+Both handover repositories are private and owned by the `twinagency` organization. GitHub confirms `ronan-com` has admin permission on both. Open the links while signed into that account; the supplied 404 screenshot showed GitHub signed out.
+
+This handover consolidates the two repositories named above. It does not claim every historical repository or every local file from prior sessions has been consolidated.
 
 Full activation, unresolved purchase handling, model budgets, provider reconnection and the live paid journey remain separate handover decisions.

@@ -80,7 +80,14 @@ All 183 snapshot blobs passed SHA256 comparison against the prepared manifests b
 
 ## Repository ownership and access
 
-Both handover repositories are private and owned by the `twinagency` organization. GitHub confirms `ronan-com` has admin permission on both. Open the links while signed into that account; the supplied 404 screenshot showed GitHub signed out.
+All five repositories identified in this handover are private and owned by the `twinagency` organization. GitHub confirms `ronan-com` has admin permission on each:
+- [twin-dashboard](https://github.com/twinagency/twin-dashboard)
+- [twin-onlyfans-backend](https://github.com/twinagency/twin-onlyfans-backend)
+- [twin-bot](https://github.com/twinagency/twin-bot)
+- [twin-sexbot](https://github.com/twinagency/twin-sexbot)
+- [twin-userbot](https://github.com/twinagency/twin-userbot)
+
+Ownership and permissions for the older three were verified through the laptop's authenticated GitHub CLI because the connected GitHub app exposed only the first two. No access changes were necessary. Open the links while signed into `ronan-com`; the supplied 404 screenshot showed GitHub signed out.
 
 This handover consolidates the two repositories named above. It does not claim every historical repository or every local file from prior sessions has been consolidated.
 

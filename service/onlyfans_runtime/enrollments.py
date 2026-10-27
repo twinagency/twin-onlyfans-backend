@@ -47,7 +47,7 @@ def submit_enrollment(store,tenant,*,creator_id,creator_name,handle,payload,comm
     # Only an authenticated operator can choose the first connection's network.
     # Keep it sealed with the captured proof; creator refreshes cannot set it.
     if initial_proxy_url is not _NO_INITIAL_PROXY:
-        if not actor.startswith('op-session:'):raise Refused('invalid connection enrollment')
+        if not actor.startswith(('op-session:','creator-session:')):raise Refused('invalid connection enrollment')
         if initial_proxy_url is not None:
             from urllib.parse import urlsplit
             try:
@@ -66,6 +66,11 @@ def submit_enrollment(store,tenant,*,creator_id,creator_name,handle,payload,comm
         if prior:
             if prior.creator_id!=creator_id or prior.actor!=actor or prior.request_hash!=fingerprint:raise Refused('connection idempotency conflict')
             return _public(prior)
+        if initial_proxy_url is not _NO_INITIAL_PROXY:
+            from managed_proxy.reservation import reserve_network
+            from managed_proxy.provider import ProxyError
+            try:reserve_network(s,tenant,creator_id,initial_proxy_url,encryption_key(),actor,required=actor.startswith('creator-session:'),captured_handle=handle)
+            except ProxyError:raise Refused('managed network reservation changed') from None
         recent=s.scalar(select(func.count()).select_from(OfConnectionEnrollment).where(OfConnectionEnrollment.tenant_id==tenant,
             OfConnectionEnrollment.creator_id==creator_id,OfConnectionEnrollment.created_at>utcnow()-timedelta(hours=1)))
         if recent>=6:raise Refused('connection enrollment limit')

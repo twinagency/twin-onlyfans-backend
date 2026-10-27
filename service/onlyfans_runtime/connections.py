@@ -253,6 +253,11 @@ def save_connection(store,tenant,account,*,payload,expected_revision,command_key
                 from .provider_model import NativeProviderModel
                 NativeProviderModel(account_id=account,model_id=model['modelId'],api_key=model['apiKey'],expires_at=expires)
         except Exception:raise Refused('invalid connection configuration') from None
+        from managed_proxy.reservation import reserve_network
+        from managed_proxy.provider import ProxyError
+        binding=s.get(OfCreatorBinding,runtime.binding_id)
+        try:reserve_network(s,tenant,binding.creator_id,payload['proxyUrl'],encryption_key(),actor,captured_handle=binding.handle)
+        except ProxyError:raise Refused('managed network reservation changed') from None
         owner_lock=int.from_bytes(hashlib.sha256(('of-'+str(payload['ownerId'])).encode()).digest()[:8],'big',signed=True)
         s.execute(text('SELECT pg_advisory_xact_lock(:key)'),{'key':owner_lock})
         duplicate=s.scalar(select(OfProviderConnection.account_id).where(

@@ -215,13 +215,21 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
+      ONLYFANS_PROXY_TEST_PG_URL: postgresql://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
       ONLYFANS_PERSONALITY_TEST_DATABASE_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/personality_acceptance
       ONLYFANS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
       NEXT_TELEMETRY_DISABLED: '1'
+      ONLYFANS_COMPATIBLE_ROLLBACK_DIR: ${{ github.workspace }}/compatible-rollback
     steps:
       - uses: actions/checkout@v4
         with:
           path: backend
+      - name: Checkout the schema-compatible rollback source
+        uses: actions/checkout@v4
+        with:
+          ref: d6811b124928f8167e6625ce9db5db81bf227fad
+          path: compatible-rollback
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

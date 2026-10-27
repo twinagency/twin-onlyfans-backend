@@ -33,7 +33,7 @@ export function allowedRequest(request){
   return true;
 }
 
-export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000,idleTtl=5*60_000,launchTimeout=60_000,maxActive=2,interceptor=readFileSync(new URL('../loginExtension/interceptor.js',import.meta.url),'utf8')}={}){
+export function createSignInService({launch,beforeLaunch=async()=>{},transport,now=Date.now,ttl=15*60_000,idleTtl=5*60_000,launchTimeout=60_000,maxActive=2,interceptor=readFileSync(new URL('../loginExtension/interceptor.js',import.meta.url),'utf8')}={}){
   if(typeof launch!=='function')throw Error('A private browser launcher is required');
   if(!Number.isInteger(maxActive)||maxActive<1||maxActive>4||!Number.isFinite(ttl)||ttl<60_000||ttl>15*60_000)throw Error('Invalid sign-in capacity or lifetime');
   // An abandoned page (closed tab, lost phone) must not hold a browser for the whole lifetime.
@@ -88,6 +88,8 @@ export function createSignInService({launch,transport,now=Date.now,ttl=15*60_000
   }
   async function boot(j){
     try{
+      await beforeLaunch(j.network,{creatorId:j.creatorId,actor:j.actor});
+      if(j.closed||j.deadline<=now())return;
       const launching=launch(j.network.proxyUrl);let late=false,timer;
       launching.then(b=>{if(late)void b.close().catch(()=>{});},()=>{});
       const browser=await Promise.race([launching,new Promise((_,reject)=>{timer=setTimeout(()=>{late=true;reject(Error('launch_timeout'));},launchTimeout);})]).finally(()=>clearTimeout(timer));

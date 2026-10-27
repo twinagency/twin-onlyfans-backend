@@ -5,7 +5,17 @@ import {launchSignInBrowser} from './browser.mjs';
 
 const token=process.env.ONLYFANS_SIGNIN_TOKEN??'';
 if(token.length<32)throw Error('A separate private sign-in credential is required');
-const service=createSignInService({maxActive:Number(process.env.ONLYFANS_SIGNIN_MAX_BROWSERS??2),idleTtl:Number(process.env.ONLYFANS_SIGNIN_IDLE_SECONDS??300)*1000,launch:launchSignInBrowser});
+async function beforeLaunch(network,scope){
+  if(network.accountId!==null)return;
+  const root=process.env.ONLYFANS_MANAGED_PROXY_BASE_URL,credential=process.env.ONLYFANS_MANAGED_PROXY_TOKEN;
+  if(!root||!credential||credential.length<32)throw Error('network_guard_unavailable');
+  const response=await fetch(root.replace(/\/+$/,'')+'/v1/begin-use',{
+    method:'POST',headers:{Authorization:'Bearer '+credential,'Content-Type':'application/json'},
+    body:JSON.stringify({...scope,proxyUrl:network.proxyUrl}),signal:AbortSignal.timeout(8000)});
+  const result=await response.json();
+  if(!response.ok||result.ok!==true)throw Error('network_reservation_changed');
+}
+const service=createSignInService({beforeLaunch,maxActive:Number(process.env.ONLYFANS_SIGNIN_MAX_BROWSERS??2),idleTtl:Number(process.env.ONLYFANS_SIGNIN_IDLE_SECONDS??300)*1000,launch:launchSignInBrowser});
 const authorized=req=>{const supplied=Buffer.from(req.headers.authorization??''),expected=Buffer.from('Bearer '+token);return supplied.length===expected.length&&timingSafeEqual(supplied,expected);};
 async function body(req){let value='';for await(const part of req){value+=part;if(Buffer.byteLength(value)>16384)throw new SignInError('request_too_large',413);}try{return JSON.parse(value);}catch{throw new SignInError('invalid_request',400);}}
 const server=createServer(async(req,res)=>{

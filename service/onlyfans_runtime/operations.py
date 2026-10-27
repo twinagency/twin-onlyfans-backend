@@ -75,7 +75,7 @@ def _pg_env(raw):
     # Do not inherit service credentials, provider cookies, PGPASSFILE or
     # arbitrary PGOPTIONS. Connection secrets never appear in argv/logs.
     env = {k: v for k, v in os.environ.items() if k in {
-        "PATH", "SystemRoot", "WINDIR", "LD_LIBRARY_PATH", "TMPDIR", "TEMP", "TMP",
+        "PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "LD_LIBRARY_PATH", "TMPDIR", "TEMP", "TMP",
     }}
     env.update(PGHOST=url.host, PGPORT=str(url.port or 5432), PGDATABASE=url.database,
                PGUSER=url.username, PGPASSWORD=url.password or "",
@@ -88,7 +88,7 @@ def _pg_env(raw):
 def _client(binary, args, url, *, pg_bin, timeout, stdin=False):
     if type(timeout) not in {int, float} or not 0 < timeout <= MAX_OPERATION_SECONDS:
         raise RecoveryRefused("Invalid operation deadline")
-    executable = str(Path(pg_bin) / binary) if pg_bin is not None else binary
+    executable = str(Path(pg_bin) / (binary + (".exe" if os.name == "nt" else ""))) if pg_bin is not None else binary
     process = subprocess.Popen([executable, *args], shell=False, env=_pg_env(url),
                                stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
                                stdout=subprocess.DEVNULL if stdin else subprocess.PIPE,
@@ -125,8 +125,10 @@ def _client(binary, args, url, *, pg_bin, timeout, stdin=False):
             process.stdin.close()
 
 
-def backup(url, destination, *, key, pg_bin=None, timeout=MAX_OPERATION_SECONDS):
+def backup(url, destination, *, key, pg_bin=None, timeout=MAX_OPERATION_SECONDS, include_proxy=False):
     """One consistent pg_dump snapshot; encrypted before any archive byte is saved."""
+    if type(include_proxy) is not bool:
+        raise RecoveryRefused("Invalid backup scope")
     secret = _key(key)
     target = Path(destination)
     if target.exists() or target.is_symlink():
@@ -135,8 +137,10 @@ def backup(url, destination, *, key, pg_bin=None, timeout=MAX_OPERATION_SECONDS)
     try:
         with engine.connect() as c:
             check_schema(c)
+            if include_proxy and not c.scalar(text("SELECT to_regnamespace('onlyfans_proxy')")):
+                raise RecoveryRefused("Managed proxy backup scope is unavailable")
             stamp = c.scalar(text("SELECT clock_timestamp()"))
-        metadata = dict(format="twin-onlyfans-backup.v1", schema=HEAD, scope="public",
+        metadata = dict(format="twin-onlyfans-backup.v1", schema=HEAD, scope="public+onlyfans_proxy" if include_proxy else "public",
                         backupId=uuid.uuid4().hex, capturedAt=stamp.isoformat(), releaseVersionOmitted=True)
         raw = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode()
         nonce = os.urandom(12)
@@ -152,7 +156,7 @@ def backup(url, destination, *, key, pg_bin=None, timeout=MAX_OPERATION_SECONDS)
                 size = 0
                 # An old binary also refuses the restored DB: never restore a
                 # ready Alembic row, even in the interval before final sealing.
-                with _client("pg_dump", ["--format=custom", "--schema=public", "--exclude-table-data=public.alembic_version", "--no-owner", "--no-privileges"],
+                with _client("pg_dump", ["--format=custom", "--schema=public", *(["--schema=onlyfans_proxy"] if include_proxy else []), "--exclude-table-data=public.alembic_version", "--no-owner", "--no-privileges"],
                              url, pg_bin=pg_bin, timeout=timeout) as process:
                     while chunk := process.stdout.read(CHUNK):
                         size += len(chunk)
@@ -195,7 +199,7 @@ def _header(file):
     if (type(metadata) is not dict or set(metadata) != {"format", "schema", "scope", "backupId", "capturedAt", "releaseVersionOmitted"}
             or metadata.get("format") != "twin-onlyfans-backup.v1" or metadata.get("schema") != HEAD
             or metadata.get("releaseVersionOmitted") is not True
-            or metadata.get("scope") != "public" or type(metadata.get("backupId")) is not str
+            or metadata.get("scope") not in {"public", "public+onlyfans_proxy"} or type(metadata.get("backupId")) is not str
             or len(metadata["backupId"]) != 32 or any(v not in "0123456789abcdef" for v in metadata["backupId"])):
         raise RecoveryRefused("Backup does not match this release")
     try:
@@ -297,11 +301,13 @@ def main():
     parser.add_argument("--url-env", default="ONLYFANS_RECOVERY_URL")
     parser.add_argument("--key-env", default="ONLYFANS_BACKUP_KEY")
     parser.add_argument("--pg-bin", type=Path)
+    parser.add_argument("--include-proxy", action="store_true", help="Include the existing managed-proxy schema in the encrypted backup")
     args = parser.parse_args()
     try:
         result = (backup if args.action == "backup" else restore)(
             os.environ.get(args.url_env, ""), args.file,
-            key=os.environ.get(args.key_env, ""), pg_bin=args.pg_bin)
+            key=os.environ.get(args.key_env, ""), pg_bin=args.pg_bin,
+            **({"include_proxy":args.include_proxy} if args.action=="backup" else {}))
     except Exception:
         parser.exit(1, "Recovery operation refused or failed. No sender was started; a restore target may remain quarantined.\n")
     print(json.dumps(result, sort_keys=True))

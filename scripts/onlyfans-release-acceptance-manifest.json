@@ -1,8 +1,15 @@
 {
   "schemaVersion": "of-release-acceptance.v1",
   "combined": {
-    "patterns": ["service/tests/test_onlyfans*.py", "service/tests/test_vault_auto_folders*.py"],
-    "separateScripts": ["service/tests/test_onlyfans_read.py", "service/tests/test_onlyfans_migration_pg.py"]
+    "patterns": [
+      "service/tests/test_onlyfans*.py",
+      "service/tests/test_vault_auto_folders*.py",
+      "managed_proxy_tests/test_*.py"
+    ],
+    "separateScripts": [
+      "service/tests/test_onlyfans_read.py",
+      "service/tests/test_onlyfans_migration_pg.py"
+    ]
   },
   "commerce": {
     "patterns": [
@@ -29,6 +36,9 @@
       "service/tests/test_onlyfans_release_rehearsal_pg.py",
       "service/tests/test_vault_auto_folders*.py"
     ],
-    "separateScripts": ["service/tests/test_onlyfans_read.py", "service/tests/test_onlyfans_migration_pg.py"]
+    "separateScripts": [
+      "service/tests/test_onlyfans_read.py",
+      "service/tests/test_onlyfans_migration_pg.py"
+    ]
   }
 }

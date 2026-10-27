@@ -828,13 +828,14 @@ class TextAuthority:
         from .provider_connector import NativeProviderConnector
         from .fastt_manual import FasttManualTransport, fastt_owned
         # One sender per owned fan: only the FASTT runner's transport may send a
-        # human message for it, and that transport sends nothing else.
+        # operator-authored manual/campaign message for it. Campaign origin
+        # retains automated-history and campaign-control validation.
         with Session(self.engine) as s:
             queued = s.get(OfTextIntent, (account_id, intent_id))
             if queued is not None:
                 owned_fan = fastt_owned(account_id, queued.fan_id)
                 is_fastt = type(transport) is FasttManualTransport
-                if (is_fastt and not (owned_fan and queued.origin == "manual")) or (owned_fan and not is_fastt):
+                if (is_fastt and not (owned_fan and queued.origin in {"manual", "campaign"})) or (owned_fan and not is_fastt):
                     return "queued"
         transport_generation = None
         if type(transport) is FasttManualTransport:

@@ -84,7 +84,7 @@ def test_contradictory_text_receipt_is_not_delivery(field,value):
     assert len(client.calls)==1
 
 
-@pytest.mark.parametrize("change",[{"price_cents":1000},{"preview_ids":(11,)},{"origin":"campaign"}])
+@pytest.mark.parametrize("change",[{"price_cents":1000},{"preview_ids":(11,)},{"origin":"automated"}])
 def test_unsupported_payload_is_refused_before_any_provider_call(change):
     client=Client()
     with pytest.raises(NotSent):

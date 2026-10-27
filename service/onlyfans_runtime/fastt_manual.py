@@ -5,7 +5,8 @@ an account-wide entry ``<account>:*``, or ``db:<account>`` (the operator selects
 fans per account in the settings), cut by the per-account selection; see
 ``fastt_scope``. Removing a fan from the selection stops FASTT serving it but never
 hands it back to the legacy worker automatically. Ownership only decides WHO sends;
-whether the AI replies stays Twin's per-fan state.
+whether the AI replies stays Twin's per-fan state. Campaign intents retain their
+automated-history checks and origin while using this same runner-owned boundary.
 (account in Twin form ``of-176774528`` or FASTT form ``176774528``). It is read
 only; nothing here enables a fan.
 
@@ -33,7 +34,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from . import fastt_scope
@@ -88,9 +89,9 @@ class FasttManualTransport:
     def send(self, dispatch, *, authority, tenant_id):
         from .text_delivery import Accepted, Dispatch, NotAccepted, TextAuthority
         if (type(authority) is not TextAuthority or type(dispatch) is not Dispatch
-                or dispatch.account_id != self.account_id or dispatch.origin != "manual"
+                or dispatch.account_id != self.account_id or dispatch.origin not in {"manual", "campaign"}
                 or not fastt_owned(dispatch.account_id, dispatch.fan_id)):
-            raise Refused("not a FASTT-owned manual send")
+            raise Refused("not a FASTT-owned operator send")
         # Final recheck of control, input, takeover ownership and allowance.
         grant = authority.consume_dispatch(tenant_id, dispatch, transport_generation=self.policy_revision)
         if grant is None:
@@ -137,7 +138,7 @@ def post_operator_once(client, grant, *, owner_id):
     from twin_bridge.platform import escape_plain_text, validate_created_message
     from .native_protocol import API_PATH, acceptance, message, request
     from .text_delivery import Dispatch
-    if type(grant) is not Dispatch or grant.origin != "manual":
+    if type(grant) is not Dispatch or grant.origin not in {"manual", "campaign"}:
         raise NotSent()
     if grant.media_ids:
         try:
@@ -162,3 +163,31 @@ def post_operator_once(client, grant, *, owner_id):
             raise Refused("provider response differs from the frozen manual text")
     validate_created_message(raw, chat_id=grant.fan_id, creator_id=owner_id)
     return raw
+
+
+def dispatch_next_operator(authority, tenant_id, account_id, transport, *, campaign_first=False, scan_cursors=None):
+    """One canonical operator send. Manual priority, with a bounded campaign turn."""
+    from db.onlyfans_delivery_models import OfTextIntent
+    origins = ("campaign", "manual") if campaign_first else ("manual", "campaign")
+    cursors = scan_cursors if scan_cursors is not None else {}
+    for origin in origins:
+        with Session(authority.store.engine) as s, s.begin():
+            authority.store._runtime(s, tenant_id, account_id)
+            key=(tenant_id, account_id, origin)
+            query=select(OfTextIntent.intent_id, OfTextIntent.fan_id, OfTextIntent.created_at).where(
+                OfTextIntent.account_id == account_id, OfTextIntent.status == "queued",
+                OfTextIntent.origin == origin)
+            after=cursors.get(key)
+            page=query.where(tuple_(OfTextIntent.created_at,OfTextIntent.intent_id)>after) if after else query
+            rows=s.execute(page.order_by(OfTextIntent.created_at,OfTextIntent.intent_id).limit(50)).all()
+            if not rows and after:
+                cursors.pop(key,None)
+                rows=s.execute(query.order_by(OfTextIntent.created_at,OfTextIntent.intent_id).limit(50)).all()
+        for identity, fan, created_at in rows:
+            cursors[key]=(created_at,identity)
+            if not fastt_serves(account_id, fan):
+                continue
+            outcome = authority.dispatch(tenant_id, account_id, identity, transport)
+            if outcome != "queued":
+                return outcome
+    return None

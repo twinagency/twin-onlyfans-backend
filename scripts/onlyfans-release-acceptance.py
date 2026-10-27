@@ -88,7 +88,7 @@ def expanded_manifest(suite: str) -> tuple[list[str], list[str]]:
         matches = list(ROOT.glob(pattern))
         if not matches:
             raise ValueError(f"Required acceptance pattern matched no tests: {pattern}")
-        files.update(str(path.relative_to(ROOT)) for path in matches)
+        files.update(path.relative_to(ROOT).as_posix() for path in matches)
     files.difference_update(separate)
     if any(not (ROOT / name).is_file() for name in separate):
         raise ValueError("A required isolated script is missing")
@@ -223,7 +223,7 @@ def main() -> int:
         if not configured_pg_bin:
             raise ValueError("ONLYFANS_TEST_PG_BIN must name the matching PostgreSQL client directory for restore proof")
         pg_bin = Path(configured_pg_bin)
-        if not pg_bin.is_absolute() or any(not (pg_bin / name).is_file() or not os.access(pg_bin / name, os.X_OK)
+        if not pg_bin.is_absolute() or any(not (pg_bin / (name + (".exe" if os.name == "nt" else ""))).is_file() or not os.access(pg_bin / name, os.X_OK)
                                             for name in ("pg_dump", "pg_restore")):
             raise ValueError("ONLYFANS_TEST_PG_BIN must be an absolute directory containing executable pg_dump and pg_restore")
         pg_bin = pg_bin.resolve()
@@ -237,8 +237,8 @@ def main() -> int:
         report["backend"] = source_proof(ROOT, args.backend_sha)
         report["dashboard"] = source_proof(dashboard, args.dashboard_sha)
         versions = {"python": sys.version, "executable": sys.executable}
-        for name, command in {"node": ["node", "--version"], "npm": ["npm", "--version"],
-                              "pg_dump": [str(pg_bin / "pg_dump"), "--version"], "pg_restore": [str(pg_bin / "pg_restore"), "--version"]}.items():
+        for name, command in {"node": ["node", "--version"], "npm": ["npm.cmd" if os.name == "nt" else "npm", "--version"],
+                              "pg_dump": [str(pg_bin / ("pg_dump.exe" if os.name == "nt" else "pg_dump")), "--version"], "pg_restore": [str(pg_bin / ("pg_restore.exe" if os.name == "nt" else "pg_restore")), "--version"]}.items():
             versions[name] = subprocess.check_output(command, text=True, stderr=subprocess.STDOUT).strip()
         versions["postgresClientDirectory"] = str(pg_bin)
         report["environment"] = versions

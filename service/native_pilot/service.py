@@ -392,7 +392,7 @@ class Service:
         url, tenant = os.environ.get("DATABASE_URL", ""), os.environ.get("ONLYFANS_WORKER_TENANT", "")
         if not url.startswith("postgresql") or not tenant:
             return None
-        from onlyfans_runtime.fastt_manual import FasttManualTransport, NotSent, dispatch_next_manual, post_operator_once
+        from onlyfans_runtime.fastt_manual import FasttManualTransport, NotSent, dispatch_next_operator, post_operator_once
         from onlyfans_runtime.store import Refused as TwinRefused, Store
         from onlyfans_runtime.text_delivery import TextAuthority
         from sqlalchemy import text as sql
@@ -417,14 +417,27 @@ class Service:
         if rev is None or self.client is None:
             return None
         def post_once(grant):
-            if (not self._owned(grant.fan_id)) if self.all_fans else grant.fan_id != self.args.fan:
+            if not self._owned(grant.fan_id) or (not self.all_fans and grant.fan_id != self.args.fan):
                 raise NotSent()
             return post_operator_once(self.client, grant, owner_id=int(self.scope.provider_id))
 
+        from onlyfans_runtime.campaigns import CampaignService
+        if getattr(self, "_twin_campaigns", None) is None:
+            self._twin_campaigns = CampaignService(store)
+        try:
+            self._twin_campaigns.queue_due(tenant, self.db)
+        except TwinRefused:
+            # Ineligible campaign preparation must not block the human queue.
+            pass
+        if not hasattr(self, "_operator_scan"):
+            self._operator_scan = {}
         outcome = None
         for _ in range(HUMAN_SENDS_PER_TICK if self.all_fans else 1):
-            done = dispatch_next_manual(TextAuthority(store), tenant, self.db,
-                                        FasttManualTransport(self.db, post_once, policy_revision=int(rev)))
+            turn = getattr(self, "_operator_turn", 0)
+            self._operator_turn = (turn + 1) % 4
+            done = dispatch_next_operator(TextAuthority(store), tenant, self.db,
+                                        FasttManualTransport(self.db, post_once, policy_revision=int(rev)),
+                                        campaign_first=turn == 3, scan_cursors=self._operator_scan)
             if done is None:
                 break
             outcome = done

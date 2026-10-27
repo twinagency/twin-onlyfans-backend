@@ -1,5 +1,9 @@
 # Twin release state: 28 October 2026
 
+**Latest: Nicky and Naomi resumed under an eight-chat deployment restriction. Maile remains excluded; full public launch is not approved.** See [scoped activation](SCOPED-ACTIVATION-20261028.md).
+
+The earlier full-launch hold record below is preserved as historical evidence.
+
 **Decision: read services deployed; sender activation held. This is not a completed public launch.**
 
 The API, background reader, proxy broker, creator sign-in and dashboard are running. Public login returns HTTP 200. The existing FASTT sender remains stopped and the API command credentials remain fenced. No account activation, allowance reset, manual fan message or uncertain-attempt resend was performed.

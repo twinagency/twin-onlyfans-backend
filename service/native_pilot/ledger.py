@@ -26,6 +26,7 @@ This cannot fence the official app or provider-scheduled/other-machine writes.
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import re
 from contextlib import contextmanager
@@ -165,6 +166,9 @@ class Ledger:
         # one unit of the account's EXISTING of_delivery_policy, in the same
         # transaction as the durable attempt. The bounded pilot never sets it.
         self.allowance = allowance
+        self.fan_daily_limit = int(os.environ.get("FASTT_FAN_DAILY_REPLY_LIMIT", "2000")) if allowance else 0
+        if not 0 <= self.fan_daily_limit <= 2000:
+            raise ValueError("invalid-fan-daily-reply-limit")
         # Persistent service only, when fan photos are described (FASTT's inbound_describe): how
         # long a caption-less photo may wait for its description before it is skipped as before.
         # 0 = descriptions are not used here at all (the bounded pilot, every older fixture).
@@ -181,6 +185,8 @@ class Ledger:
     def _tx(self, *, initialize: bool = False) -> Iterator[object]:
         self._check_target()
         with store.transaction(self.path) as con:
+            if self.pg and con.execute("SELECT to_regnamespace('onlyfans_restore')").fetchone()[0]:
+                raise Refused("restore-quarantined")
             # PostgreSQL: fastt_runtime tables are created by store.ensure_runtime_schema (runner/control), not here.
             if initialize and not self.pg:
                 for statement in _SCHEMA:
@@ -417,6 +423,8 @@ class Ledger:
         never acquire it: both sides serialize on the existing account runtime row.
         Standalone fixtures/pilots without a canonical account retain their contract.
         """
+        if self.pg and con.execute("SELECT to_regnamespace('onlyfans_restore')").fetchone()[0]:
+            raise Refused("restore-quarantined")
         if not self.pg or not store.has_table(con, "public.of_runtime"):
             return False
         runtime = con.execute("SELECT enabled,binding_id FROM public.of_runtime WHERE account_id=?" +
@@ -484,7 +492,7 @@ class Ledger:
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND bubble_no=?", (input_key, bubble_no)).fetchone():
                 raise Refused("attempt-already-exists")
             if self.allowance:
-                self._consume_allowance(con, p["account_id"], now_s)
+                self._consume_allowance(con, p["account_id"], now_s, fan_id=p["fan_id"], daily_limit=self.fan_daily_limit)
             tid = "native-pilot-" + _hash([pilot_id, input_key, bubble_no])
             aid = store.insert_id(con, "INSERT INTO twin_bridge_send_attempts(account_id,fan_id,turn_id,attempt_no,state,"
                                   "owner_token,revision,created_at,updated_at) VALUES(?,?,?,1,'dispatching',?,?,?,?)",
@@ -505,21 +513,22 @@ class Ledger:
                            "FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()
 
     @classmethod
-    def _consume_allowance(cls, con, account: str, now_s: str) -> None:
-        """Spend ONE unit of the account's delivery allowance, or refuse.
+    def _consume_allowance(cls, con, account: str, now_s: str, *, fan_id: int | None = None, daily_limit: int = 0) -> None:
+        """Admit one send under the daily fan quota or legacy account allowance.
 
-        Never resets, lowers or raises ``used_units`` except by this single
-        increment, and the increment is conditional on the row still reading as
-        checked, so it cannot pass ``limit_units`` even against Twin's own worker.
-        The unit is never refunded for an unknown outcome (it stays spent). Only
-        ``record_not_sent`` gives one back, for an attempt that certainly never reached the wire.
+        Admission and receipt creation share a serialized transaction. Daily
+        mode preserves historical account counters; unknown outcomes stay charged.
+        Account throttle, active intents and in-flight FASTT attempts still fence
+        both modes. Only definite non-delivery releases a quota place.
         """
         row = cls._policy_row(con, account)
         if row is None:
             raise Refused("allowance-missing")
         if not row["enabled"]:
             raise Refused("allowance-disabled")
-        if row["used_units"] >= row["limit_units"]:
+        daily = bool(daily_limit and fan_id is not None)
+        used = cls._fan_daily_used(con, account, fan_id, now_s) if daily else row["used_units"]
+        if used >= (daily_limit if daily else row["limit_units"]):
             raise Refused("allowance-exhausted")
         if row["active_intent_id"] or con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? "
                 "AND state='dispatching' LIMIT 1", (account,)).fetchone():
@@ -527,21 +536,36 @@ class Ledger:
         if row["next_dispatch_at"] is not None and _dt(row["next_dispatch_at"]) > now_s:
             raise Refused("allowance-throttled")
         due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=row["throttle_seconds"]))
-        cur = con.execute("UPDATE of_delivery_policy SET used_units=used_units+1,next_dispatch_at=? "
-                          "WHERE account_id=? AND enabled AND used_units=? AND used_units<limit_units "
+        charge = "used_units," if daily else "used_units+1,"
+        ceiling = "" if daily else "AND used_units<limit_units "
+        cur = con.execute("UPDATE of_delivery_policy SET used_units=" + charge + "next_dispatch_at=? "
+                          "WHERE account_id=? AND enabled AND used_units=? " + ceiling +
                           "AND active_intent_id IS NULL",
                           (due, account, row["used_units"]))
         if cur.rowcount != 1:
             raise Refused("allowance-changed")
 
-    def allowance_status(self, account: str) -> dict | None:
+    @staticmethod
+    def _fan_daily_used(con, account: str, fan_id: int, now_s: str) -> int:
+        # Dispatching and unknown outcomes remain charged. No counters are reset.
+        cutoff = _dt(datetime.fromisoformat(now_s) - timedelta(hours=24))
+        return con.execute(
+            "SELECT count(*) FROM native_pilot_receipts r "
+            "JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
+            "WHERE a.account_id=? AND a.fan_id=? AND r.created_at>? AND r.created_at<=? "
+            "AND r.state IN ('dispatching','sent','delivery_unknown')",
+            (account, fan_id, cutoff, now_s)).fetchone()[0]
+
+    def allowance_status(self, account: str, fan_id: int | None = None, *, now=None) -> dict | None:
         """Read-only copy of the account's delivery policy numbers (None when absent)."""
         with store.readonly(self.path) as con:
             row = self._policy_row(con, account)
+            daily = bool(self.fan_daily_limit and fan_id is not None)
+            used = self._fan_daily_used(con, account, fan_id, _dt(now or datetime.utcnow())) if row is not None and daily else None
         if row is None:
             return None
         due = row["next_dispatch_at"]
-        return {"enabled": bool(row["enabled"]), "limit": row["limit_units"], "used": row["used_units"],
+        return {"enabled": bool(row["enabled"]), "limit": self.fan_daily_limit if daily else row["limit_units"], "used": used if daily else row["used_units"],
                 "throttle_seconds": row["throttle_seconds"], "busy": bool(row["active_intent_id"]),
                 "next_dispatch_at": None if due is None else _dt(due)}
 
@@ -709,7 +733,7 @@ class Ledger:
             con.execute("UPDATE twin_bridge_conversations SET send_budget_used=send_budget_used-1,updated_at=? "
                         "WHERE account_id=? AND fan_id=? AND owner_token=? AND revision=? AND send_budget_used>?",
                         (now_s, p["account_id"], p["fan_id"], owner_token, p["revision"], p["baseline_used"]))
-            if self.allowance:
+            if self.allowance and not self.fan_daily_limit:
                 con.execute("UPDATE of_delivery_policy SET used_units=used_units-1 WHERE account_id=? AND used_units>0",
                             (p["account_id"],))
             return True
@@ -1000,6 +1024,9 @@ class Ledger:
                 if existing["state"] == "active" and (lease_live or _dt(existing["deadline"]) > now_s):
                     raise Refused("owner-live")
                 end = existing["end_limit"]
+                if self.fan_daily_limit:
+                    end = max(end, c["send_budget_used"] + 2000000000)
+                    con.execute("UPDATE native_pilots SET end_limit=? WHERE pilot_id=?", (end, pilot_id))
                 if c["send_budget_used"] >= end:
                     raise Refused("budget-exhausted")
                 recovered = self._recover_abandoned_inputs(con, existing, now_s)
@@ -1017,7 +1044,7 @@ class Ledger:
                 used, old_limit = c["send_budget_used"], c["send_budget_limit"]
                 if used < 0 or old_limit != used:
                     raise Refused("prior-budget-not-exhausted")
-                revision, end = c["revision"] + 1, used + SERVICE_BUDGET_CEILING
+                revision, end = c["revision"] + 1, used + (2000000000 if self.fan_daily_limit else SERVICE_BUDGET_CEILING)
                 con.execute("INSERT INTO native_pilots(pilot_id,account_id,fan_id,owner_token,cutoff,deadline,"
                             "grant_limit,baseline_used,end_limit,revision,state,created_at,updated_at) "
                             "VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?)",

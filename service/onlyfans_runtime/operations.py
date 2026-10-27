@@ -27,8 +27,9 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
-from db.schema import HEAD, LEDGER_HISTORY, check_schema
+from db.schema import HEAD, LEDGER_HISTORY, VAULT_CONTINUATION, CONVERSATION_DEFAULT_OFF, check_schema
 
+BACKUP_REVISIONS = (HEAD, LEDGER_HISTORY, VAULT_CONTINUATION, CONVERSATION_DEFAULT_OFF)
 MAGIC = b"TWINOF-BACKUP\x01"
 CHUNK = 65536
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
@@ -129,7 +130,7 @@ def backup(url, destination, *, key, pg_bin=None, timeout=MAX_OPERATION_SECONDS,
     """One consistent pg_dump snapshot; encrypted before any archive byte is saved."""
     if type(include_proxy) is not bool:
         raise RecoveryRefused("Invalid backup scope")
-    if source_revision not in (HEAD, LEDGER_HISTORY):
+    if source_revision not in BACKUP_REVISIONS:
         raise RecoveryRefused("Unsupported backup source revision")
     secret = _key(key)
     target = Path(destination)
@@ -139,8 +140,8 @@ def backup(url, destination, *, key, pg_bin=None, timeout=MAX_OPERATION_SECONDS,
     try:
         with engine.connect() as c:
             check_schema(c, expected=source_revision)
-            if source_revision == LEDGER_HISTORY:
-                # Refuse a newer/partially migrated database merely stamped 0092.
+            if source_revision in (LEDGER_HISTORY, CONVERSATION_DEFAULT_OFF):
+                # Refuse later reliability columns under either pre-upgrade source identity.
                 inspector = inspect(c)
                 for table, newer in {
                     "of_ledger_scan": {"continuation_json", "coverage_json"},
@@ -149,11 +150,12 @@ def backup(url, destination, *, key, pg_bin=None, timeout=MAX_OPERATION_SECONDS,
                     "of_content_sync_source": {"fold_pending"},
                 }.items():
                     if newer.intersection(v["name"] for v in inspector.get_columns(table)):
-                        raise RecoveryRefused("Backup source structure differs from 0092")
+                        raise RecoveryRefused("Backup source structure differs from " + source_revision)
             if include_proxy and not c.scalar(text("SELECT to_regnamespace('onlyfans_proxy')")):
                 raise RecoveryRefused("Managed proxy backup scope is unavailable")
+            include_runtime = bool(c.scalar(text("SELECT to_regnamespace('fastt_runtime')")))
             stamp = c.scalar(text("SELECT clock_timestamp()"))
-        metadata = dict(format="twin-onlyfans-backup.v1", schema=source_revision, scope="public+onlyfans_proxy" if include_proxy else "public",
+        metadata = dict(format="twin-onlyfans-backup.v1", schema=source_revision, scope="public" + ("+onlyfans_proxy" if include_proxy else "") + ("+fastt_runtime" if include_runtime else ""),
                         backupId=uuid.uuid4().hex, capturedAt=stamp.isoformat(), releaseVersionOmitted=True)
         raw = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode()
         nonce = os.urandom(12)
@@ -169,7 +171,7 @@ def backup(url, destination, *, key, pg_bin=None, timeout=MAX_OPERATION_SECONDS,
                 size = 0
                 # An old binary also refuses the restored DB: never restore a
                 # ready Alembic row, even in the interval before final sealing.
-                with _client("pg_dump", ["--format=custom", "--schema=public", *(["--schema=onlyfans_proxy"] if include_proxy else []), "--exclude-table-data=public.alembic_version", "--no-owner", "--no-privileges"],
+                with _client("pg_dump", ["--format=custom", "--schema=public", *(["--schema=onlyfans_proxy"] if include_proxy else []), *(["--schema=fastt_runtime"] if include_runtime else []), "--exclude-table-data=public.alembic_version", "--no-owner", "--no-privileges"],
                              url, pg_bin=pg_bin, timeout=timeout) as process:
                     while chunk := process.stdout.read(CHUNK):
                         size += len(chunk)
@@ -210,9 +212,9 @@ def _header(file):
     except (UnicodeError, ValueError) as exc:
         raise RecoveryRefused("Invalid backup metadata") from exc
     if (type(metadata) is not dict or set(metadata) != {"format", "schema", "scope", "backupId", "capturedAt", "releaseVersionOmitted"}
-            or metadata.get("format") != "twin-onlyfans-backup.v1" or metadata.get("schema") not in (HEAD, LEDGER_HISTORY)
+            or metadata.get("format") != "twin-onlyfans-backup.v1" or metadata.get("schema") not in BACKUP_REVISIONS
             or metadata.get("releaseVersionOmitted") is not True
-            or metadata.get("scope") not in {"public", "public+onlyfans_proxy"} or type(metadata.get("backupId")) is not str
+            or metadata.get("scope") not in {"public", "public+onlyfans_proxy", "public+fastt_runtime", "public+onlyfans_proxy+fastt_runtime"} or type(metadata.get("backupId")) is not str
             or len(metadata["backupId"]) != 32 or any(v not in "0123456789abcdef" for v in metadata["backupId"])):
         raise RecoveryRefused("Backup does not match this release")
     try:
@@ -315,8 +317,8 @@ def main():
     parser.add_argument("--key-env", default="ONLYFANS_BACKUP_KEY")
     parser.add_argument("--pg-bin", type=Path)
     parser.add_argument("--include-proxy", action="store_true", help="Include the existing managed-proxy schema in the encrypted backup")
-    parser.add_argument("--source-revision", choices=(HEAD, LEDGER_HISTORY), default=HEAD,
-                        help="Backup source only: explicitly select 0092 before migration; default is current HEAD")
+    parser.add_argument("--source-revision", choices=BACKUP_REVISIONS, default=HEAD,
+                        help="Backup source only: select the verified source revision before migration; default is current HEAD")
     args = parser.parse_args()
     if args.action == "restore" and (args.include_proxy or args.source_revision != HEAD):
         parser.error("Restore scope/revision come only from authenticated archive metadata")

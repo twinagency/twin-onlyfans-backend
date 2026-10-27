@@ -156,7 +156,7 @@ class ServiceGateway(runner.Gateway):
         return bool(self.stopped_reason)
 
     def limit_label(self):
-        policy = self.ledger.allowance_status(self.pilot.account_id)
+        policy = self.ledger.allowance_status(self.pilot.account_id, self.pilot.fan_id)
         return None if policy is None else policy["limit"] - policy["used"]
 
     async def pace(self):
@@ -170,7 +170,7 @@ class ServiceGateway(runner.Gateway):
                 held = await asyncio.to_thread(self.hold_check)
                 if held:
                     raise Refused(held)
-            policy = self.ledger.allowance_status(self.pilot.account_id)
+            policy = self.ledger.allowance_status(self.pilot.account_id, self.pilot.fan_id)
             if policy is None:
                 raise Refused("allowance-missing")
             if not policy["enabled"]:
@@ -605,7 +605,7 @@ class Service:
 
     async def tick(self):
         await self.ensure_session()
-        policy = self.ledger.allowance_status(self.db)
+        policy = self.ledger.allowance_status(self.db, self.args.fan)
         if policy and policy["next_dispatch_at"]:
             wait = (datetime.fromisoformat(policy["next_dispatch_at"]) - runner.now()).total_seconds()
             if wait > 0:
@@ -646,7 +646,7 @@ class Service:
         held = await asyncio.to_thread(fan_hold_reason, self.path, self.db, self.args.fan, *self.strict_arg)
         if held:
             raise Refused(held)
-        policy = self.ledger.allowance_status(self.db)
+        policy = self.ledger.allowance_status(self.db, self.args.fan)
         if policy is None or not policy["enabled"] or policy["used"] >= policy["limit"]:
             raise Refused("allowance-disabled" if policy is not None and not policy["enabled"]
                           else "allowance-exhausted" if policy else "allowance-missing")

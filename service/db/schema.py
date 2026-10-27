@@ -42,8 +42,10 @@ LEDGER_HISTORY = "0092_ledger_history"
 LEDGER_MARKERS = "0093_ledger_markers"
 PURCHASE_REPLY = "0094_purchase_reply"
 CONTENT_FOLD_PENDING = "0095_content_fold_pending"
-HEAD = "0096_vault_continuation"
-REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, HEAD:96}
+VAULT_CONTINUATION = "0096_vault_continuation"
+CONVERSATION_DEFAULT_OFF = "0093_conversation_default_off"
+HEAD = "0097_release_controls"
+REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, HEAD:97}
 HERE = Path(__file__).resolve().parent
 
 
@@ -233,6 +235,10 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 or guard[0][2] != "of_engagement_action_guard"
                 or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "fec38663e2d7b442e4f29bd56d1f22d4a521bda9eb1a80f4eaeb1e97b9693850"):
             failures.append("missing frozen-identity protection of_engagement_action")
+    if expected == CONVERSATION_DEFAULT_OFF or expected_rank >= 97:
+        mode = next((c for c in inspector.get_columns("of_conversation_state") if c["name"] == "mode"), None)
+        if mode is None or mode.get("default") not in {"'paused'::character varying", "'paused'::text", "'paused'"}:
+            failures.append("conversation default must be paused")
     if "per_employee_revenue_with_attribution" not in inspector.get_view_names():
         failures.append("missing revenue view")
     if failures:

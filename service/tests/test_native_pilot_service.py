@@ -41,6 +41,9 @@ SERVICE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# The existing suite explicitly exercises compatibility with the legacy shared cap.
+os.environ.setdefault("FASTT_FAN_DAILY_REPLY_LIMIT", "0")
+
 CHECKS = 0
 PID_SUFFIX = "svc-synthetic"
 

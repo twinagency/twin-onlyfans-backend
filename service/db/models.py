@@ -3337,8 +3337,8 @@ class OfConversationState(Base):
 
     The scoped read service never writes these rows. Store owns audited control
     changes and canonical input revisions; the text authority owns dispatch
-    holds. The legacy column default remains for schema compatibility, while
-    runtime creation of missing control explicitly starts paused/attention.
+    holds. New conversations start paused in both the ORM and database.
+    Runtime creation of missing control also starts paused/attention.
     """
 
     __tablename__ = "of_conversation_state"
@@ -3347,7 +3347,7 @@ class OfConversationState(Base):
     fan_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     #: automated | human_controlled | paused | no_contact
     mode: Mapped[str] = mapped_column(
-        String, nullable=False, default="automated", server_default=text("'automated'")
+        String, nullable=False, default="paused", server_default=text("'paused'")
     )
     revision: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")

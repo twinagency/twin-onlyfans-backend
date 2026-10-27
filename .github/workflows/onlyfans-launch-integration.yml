@@ -66,15 +66,15 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-      # The existing account-counter recovery fixture exercises legacy allowance mode.
-      # Daily quota concurrency/uncertain accounting runs in the separate pinned native suite.
-      FASTT_FAN_DAILY_REPLY_LIMIT: '0'
           POSTGRES_PASSWORD: synthetic-acceptance-only
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
+      # The existing account-counter recovery fixture exercises legacy allowance mode.
+      # Daily quota concurrency/uncertain accounting runs in the separate pinned native suite.
+      FASTT_FAN_DAILY_REPLY_LIMIT: '0'
       ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
       ONLYFANS_PROXY_TEST_PG_URL: postgresql://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
       ONLYFANS_PERSONALITY_TEST_DATABASE_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/personality_acceptance

@@ -80,7 +80,7 @@ async def control(request: Request, account_id: str, conversation_id: str):
         action, revision, key, actor = (body[k] for k in ("action", "expectedRevision", "commandKey", "actor"))
         if (type(action) is not str or action not in {*ACTIONS, "manual_message"} or type(revision) is not int or
                 not 0 <= revision < 2**31-1 or type(key) is not str or not re.fullmatch(r"[a-f0-9]{64}", key) or
-                not actor_allowed(actor)):
+                not actor_allowed(actor, capability="chat" if action in {"manual_message", "request_takeover", "release_takeover"} else "manage")):
             raise ValueError()
         if manual and (type(body["body"]) is not str or not body["body"].strip() or "\x00" in body["body"]
                 or len(body["body"].encode()) > 4000):

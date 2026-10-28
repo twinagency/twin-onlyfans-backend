@@ -160,7 +160,7 @@ def _ledger_core(s, runtime, *, now=None):
     conflict_count = s.scalar(select(func.count()).select_from(conflicts.subquery()))
     unlinked_all = select(func.count()).select_from(Transaction).where(Transaction.account_id == runtime.account_id,
         Transaction.source == "ledger", Transaction.kind == "ppv_message", Transaction.message_id.is_(None),
-        Transaction.ingested_at >= binding.created_at,
+        Transaction.occurred_at >= binding.created_at,
         Transaction.status.in_(("pending", "cleared", "refund_pending")))
     # An audited exclusion stops one unlinked purchase from holding the whole account. It stays
     # visible here, counted separately, and keeps holding its own fan (see commerce.held).

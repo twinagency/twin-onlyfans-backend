@@ -375,6 +375,9 @@ class Store:
         s.flush()
 
     def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None):
+        from onlyfans_read.agency_scope import current_scope, actor_allowed
+        if current_scope.get() is not None and not actor_allowed(actor, capability="chat" if action in {"request_takeover", "release_takeover"} else "manage"):
+            raise Refused("management permission required")
         _id(fan_id)
         if mode not in {"automated", "human_controlled", "paused", "no_contact"}:
             raise Refused("invalid control mode")

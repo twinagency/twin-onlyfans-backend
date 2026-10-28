@@ -29,11 +29,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator, Callable
 
 import websockets
 
-from of_client import OFClient
+if TYPE_CHECKING:  # imported lazily: of_client is unavailable in dedicated OnlyFans roles
+    from of_client import OFClient
 
 log = logging.getLogger("of-ws")
 
@@ -50,8 +51,11 @@ RECONNECT_MAX_S = 30
 class OFWebSocket:
     """Long-lived WS connection that yields parsed events."""
 
-    def __init__(self, client: OFClient):
+    def __init__(self, client: "OFClient", on_state: Callable[[str], None] | None = None):
         self.client = client
+        # Optional observer called with "connected" / "disconnected" from the
+        # event loop thread. It must not block; exceptions are swallowed.
+        self._on_state = on_state
         self._ws_url: str | None = None
         self._token: str | None = None
         self._stop = asyncio.Event()
@@ -79,7 +83,17 @@ class OFWebSocket:
 
     @classmethod
     def from_latest_session(cls) -> "OFWebSocket":
+        from of_client import OFClient
         return cls(OFClient.from_latest_session())
+
+    def _notify(self, state: str) -> None:
+        cb = self._on_state
+        if cb is None:
+            return
+        try:
+            cb(state)
+        except Exception:
+            log.debug("on_state observer failed", exc_info=True)
 
     def _refresh_auth(self) -> None:
         """Fetch a fresh wsUrl + wsAuthToken from /users/me."""
@@ -131,6 +145,7 @@ class OFWebSocket:
                     # Expose the open socket so send_typing()/other tasks can
                     # push outbound frames on it. Cleared in finally below.
                     self._live_ws = ws
+                    self._notify("connected")
                     # Background pinger for NAT keepalive
                     pinger = asyncio.create_task(_pinger(ws, self._stop))
                     stop_waiter = asyncio.create_task(self._stop.wait())
@@ -162,11 +177,13 @@ class OFWebSocket:
                         pinger.cancel()
                         if not stop_waiter.done():
                             stop_waiter.cancel()
+                        self._notify("disconnected")
                 # Clean disconnect — reset backoff
                 backoff = RECONNECT_MIN_S
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                self._notify("disconnected")
                 log.warning("ws error %s — reconnecting in %ds", e, backoff)
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=backoff)

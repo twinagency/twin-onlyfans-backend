@@ -245,7 +245,8 @@ def main(argv=None):
             media_worker.start()
         # Launch features stay off unless explicitly enabled; engagement additionally needs saved per-account settings.
         worker_options = {name: True for name, flag in (("history_recovery", "ONLYFANS_HISTORY_RECOVERY_ENABLED"),
-            ("history_memory", "ONLYFANS_HISTORY_MEMORY_ENABLED"), ("engagement", "ONLYFANS_ENGAGEMENT_ENABLED"))
+            ("history_memory", "ONLYFANS_HISTORY_MEMORY_ENABLED"), ("engagement", "ONLYFANS_ENGAGEMENT_ENABLED"),
+            ("live_intake", "ONLYFANS_LIVE_INTAKE_ENABLED"))
             if os.environ.get(flag) == "1"}
         return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,facts_reader=facts_reader,
                         vault_jobs=_process_vault_jobs, enrollment_jobs=_process_connection_enrollments,
@@ -255,6 +256,9 @@ def main(argv=None):
                         worker_options=worker_options)
     finally:
         stop.set()
+        if os.environ.get("ONLYFANS_LIVE_INTAKE_ENABLED") == "1":
+            from onlyfans_runtime.live_intake import LiveIntake
+            LiveIntake.shutdown_all()
         if media_worker is not None:
             media_worker.join()
         try:

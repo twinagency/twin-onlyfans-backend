@@ -50,7 +50,7 @@ class CycleReport:
 class NativeWorker:
     """One serial lane per instance; separate processes compete through PG."""
     def __init__(self,store,tenant_id,accounts,*,accounts_per_cycle=4,model_timeout_seconds=10,facts_reader=None,
-                 history_recovery=False,history_memory=False,engagement=False):
+                 history_recovery=False,history_memory=False,engagement=False,live_intake=False):
         if os.environ.get("ONLYFANS_PROCESS_ROLE")!="worker" or type(store) is not Store:
             raise Refused("native worker requires an explicit worker Store")
         from .native_planning import NativeTextPlanner,SyntheticNativeModel
@@ -104,6 +104,10 @@ class NativeWorker:
         for flag in (history_recovery,history_memory,engagement):
             if type(flag) is not bool:raise Refused("invalid worker feature flag")
         self.history_recovery,self.history_memory=history_recovery,history_memory
+        # Live WebSocket intake is off unless the deployment flag is set (shared per process, see live_intake).
+        from .live_intake import LiveIntake
+        if type(live_intake) is not bool and type(live_intake) is not LiveIntake:raise Refused("invalid worker feature flag")
+        self.live_intake=LiveIntake.shared(store,tenant_id) if live_intake is True else (live_intake or None)
         self.engagement_service=None
         if engagement:
             from .launch_engagement.service import EngagementService
@@ -217,6 +221,7 @@ class NativeWorker:
             for account in selected:
                 if stop.is_set():break
                 account_errors=report.errors
+                mark=(report.ingress,report.claims,report.queued,report.accepted,report.not_accepted,report.unknown,report.repaired)
                 try:
                     if account.read_connection_revision is not None:
                         from .worker import read_step
@@ -239,12 +244,20 @@ class NativeWorker:
                         report.ingress+=self.store.drain(self.tenant_id,account.account_id)
                     else:
                         from .worker import read_step
-                        progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,
-                            recent_cutover=self.history_recovery)
+                        if self.live_intake is None:
+                            progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,
+                                recent_cutover=self.history_recovery)
+                        else:
+                            # Live events and required fan reconciliation first: socket sync, guarded recent
+                            # read, bounded targeted poll. A failing chat cannot abort the account's cycle.
+                            self.live_intake.sync(account)
+                            progress=self.live_intake.read_step(self.store,self.tenant_id,account.account_id,account.reader,
+                                recent_cutover=self.history_recovery)
+                            report.ingress+=self.live_intake.poll(self.store,self.tenant_id,account.account_id,account.reader)
                         report.ingress+=progress.applied
                     if stop.is_set():break
                     # After recent intake and before a new reply claim; yields to any claimed live work.
-                    if self.history_memory:
+                    if self.history_memory and self.live_intake is None:
                         self._history_turn(account,report,archive=False)
                         if stop.is_set():break
                     queued,retired=self.planner.recover(self.tenant_id,account.account_id,limit=4)
@@ -252,7 +265,7 @@ class NativeWorker:
                     if stop.is_set():break
                     self._deliver(account,report)
                     if stop.is_set():break
-                    if self.history_recovery:
+                    if self.history_recovery and self.live_intake is None:
                         self._history_turn(account,report,memory=False)
                         if stop.is_set():break
                     if not self._can_dispatch_campaign(account):continue
@@ -312,6 +325,12 @@ class NativeWorker:
                     # of public health. Durable leases/markers handle recovery.
                     report.errors+=1
                 finally:
+                    if (self.live_intake is not None and not stop.is_set() and report.errors==account_errors
+                            and account.read_connection_revision is None):
+                        # Archive/inventory/memory batches use only what live work leaves, but never starve.
+                        demand=mark!=(report.ingress,report.claims,report.queued,report.accepted,report.not_accepted,report.unknown,report.repaired)
+                        if self.live_intake.allow_background(account.account_id,demand):
+                            self._history_turn(account,report)
                     try:self._heartbeat(account,failed=report.errors>account_errors)
                     except (Refused,SQLAlchemyError):pass
             return report

@@ -61,6 +61,43 @@ def _read(account, binding, owner, media_id):
         return None
 
 
+def _request_path(account, media_id):
+    path, _ = _paths(account, media_id)
+    return path.with_suffix(".preview-request")
+
+
+def request_preview(account, binding, owner, media_id):
+    """A canonical cache miss requests worker priority, without provider I/O."""
+    return images.write(_request_path(account, media_id), canonical(_scope(account, binding, owner, media_id)).encode())
+
+
+def requested_ids(account, binding, owner):
+    path, _ = _paths(account, 1)
+    result=[]
+    for marker in path.parent.glob("*.preview-request"):
+        try:
+            value=marker.name.split(".",1)[0]
+            if not value.isascii() or not value.isdecimal() or value.startswith("0") or len(value)>19:
+                continue
+            mid=_id(int(value))
+            if marker.is_symlink() or marker.stat().st_size>2048:
+                continue
+            if json.loads(marker.read_bytes()) == _scope(account,binding,owner,mid):
+                result.append((marker.stat().st_mtime,mid))
+        except (OSError,ValueError,TypeError,Refused):
+            continue
+    return [mid for _,mid in sorted(result)[:24]]
+
+
+def clear_request(account, binding, owner, media_id):
+    marker=_request_path(account,media_id)
+    try:
+        if not marker.is_symlink() and marker.stat().st_size<=2048 and json.loads(marker.read_bytes())==_scope(account,binding,owner,media_id):
+            marker.unlink(missing_ok=True)
+    except (OSError,ValueError,TypeError):
+        pass
+
+
 def promote_cached(account, binding, owner, media_id):
     """Pin an already ownership-verified still before a legacy collector runs."""
     if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
@@ -72,7 +109,10 @@ def promote_cached(account, binding, owner, media_id):
     owned = path.with_suffix(".owned.jpg")
     if owned.is_symlink():
         return False
-    return owned.exists() or images.write(owned, data)
+    okay = owned.exists() or images.write(owned, data)
+    if okay:
+        clear_request(account,binding,owner,media_id)
+    return okay
 
 
 def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
@@ -137,6 +177,8 @@ def read_preview(store, tenant, account, media_id):
         # Cached bytes remain readable after pause/expiry, never becoming sellable.
         mid = row.media_id
         data = _read(account, runtime.binding_id, connection.owner_id, mid)
-        if data is None: raise Refused("vault preview unavailable")
+        if data is None:
+            request_preview(account,runtime.binding_id,connection.owner_id,mid)
+            raise Refused("vault preview unavailable")
         return data, images.image_type(data)
 

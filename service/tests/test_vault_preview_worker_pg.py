@@ -27,7 +27,9 @@ def test_worker_repairs_oldest_missing_stills_without_description_changes(databa
     monkeypatch.setattr(NativeProviderConnector,"vault_media_by_id",lambda self,mid: calls.append(mid) or media(mid,files={"preview":{"url":URL}}))
     monkeypatch.setattr(NativeProviderConnector,"still_bytes",lambda self,url,**kw: PNG)
     worker=VaultPreviewWorker(store,TENANT,threading.Event())
-    worker.warm(account)
+    # A requested gallery page takes priority even after the background cursor.
+    worker.cursors[account]=999
+    worker.warm(account,requested_only=True)
     assert calls==[11] and read_preview(store,TENANT,account,"11")== (PNG,"image/png")
     worker.cursors.clear();worker.warm(account);assert calls==[11]
     with Session(store.engine) as s:

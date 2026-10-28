@@ -33,6 +33,7 @@ class VaultPreviewWorker:
         self.thread.start()
 
     def run(self):
+        background_index = 0
         while not self.stop.is_set():
             try:
                 scoped_accounts = accounts(self.store, self.tenant)
@@ -43,13 +44,20 @@ class VaultPreviewWorker:
                 if self.stop.is_set():
                     break
                 try:
-                    self.warm(account)
+                    self.warm(account, requested_only=True)
                 except Exception:
                     # Errors can contain authenticated URLs. Emit only fixed status.
                     self.observe({"schemaVersion": "of-vault-preview.v1", "state": "retry_pending"})
-            self.stop.wait(5)
+            if scoped_accounts and not self.stop.is_set():
+                account=scoped_accounts[background_index % len(scoped_accounts)]
+                background_index+=1
+                try:
+                    self.warm(account)
+                except Exception:
+                    pass
+            self.stop.wait(2)
 
-    def warm(self, account):
+    def warm(self, account, *, requested_only=False):
         from .provider_connector import NativeProviderConnector, session_from_capture
         from .vault_management import parse_vault_page
         from .provider_read_budget import acquire, current, release
@@ -62,14 +70,18 @@ class VaultPreviewWorker:
             snapshot = session_from_capture(account_id=account, owner_id=owner, policy_revision=1,
                 expires_at=connection.expires_at.replace(tzinfo=timezone.utc),
                 capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"])
-            ids = list(session.scalars(select(VaultItem.media_id).where(
+            requested = vault_previews.requested_ids(account,binding,owner)
+            background = [] if requested_only else list(session.scalars(select(VaultItem.media_id).where(
                 VaultItem.account_id == account, VaultItem.removed_at.is_(None),
                 VaultItem.kind.in_(("photo", "video", "gif")),
                 VaultItem.media_id > self.cursors.get(account, 0))
                 .order_by(VaultItem.media_id).limit(96)))
+            ids = requested + [mid for mid in background if mid not in requested]
         if not ids:
-            self.cursors[account] = 0
+            if not requested_only:self.cursors[account] = 0
             return
+        def checkpoint(mid):
+            if mid not in requested:self.cursors[account]=mid
         client = None
         attempted = 0
         try:
@@ -77,7 +89,7 @@ class VaultPreviewWorker:
                 if self.stop.is_set():
                     return
                 if vault_previews.promote_cached(account, binding, owner, mid):
-                    self.cursors[account] = mid
+                    checkpoint(mid)
                     continue
                 if attempted >= 4:
                     return
@@ -87,7 +99,8 @@ class VaultPreviewWorker:
                     with Session(self.store.engine) as session, session.begin():
                         vault_previews.asset_scope(session, self.store, self.tenant, account, str(mid))
                 except Refused:
-                    self.cursors[account] = mid
+                    vault_previews.clear_request(account,binding,owner,mid)
+                    checkpoint(mid)
                     continue
                 if client is None:
                     client = NativeProviderConnector(snapshot, timeout_seconds=8)
@@ -109,7 +122,7 @@ class VaultPreviewWorker:
                     or media.get("isDeleted") is True or media.get("isHidden") is True
                     or media.get("canView") is False
                     or "userId" in media and media["userId"] != owner):
-                    self.cursors[account] = mid
+                    checkpoint(mid)
                     continue
                 parse_vault_page(json.dumps({"list": [media], "hasMore": False}).encode(), owner_id=owner)
                 url = still_url(media)
@@ -125,8 +138,9 @@ class VaultPreviewWorker:
                             or row.kind != media["type"]):
                             raise Refused("preview scope changed")
                         transport = SimpleNamespace(account_id=account, still_bytes=lambda ignored: data)
-                        vault_previews.warm_page(transport, [media], binding_id=binding, owner_id=owner)
-                self.cursors[account] = mid
+                        if vault_previews.warm_page(transport, [media], binding_id=binding, owner_id=owner):
+                            vault_previews.clear_request(account,binding,owner,mid)
+                checkpoint(mid)
                 self.stop.wait(1)
         finally:
             # Connector owns one bounded HTTPS session per request.

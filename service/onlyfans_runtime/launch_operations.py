@@ -194,6 +194,10 @@ def ledger_status(store, tenant, account, *, cursor=None, limit=25):
     if type(limit) is not int or not 1 <= limit <= 100:
         raise Refused("invalid ledger page limit")
     with Session(store.engine) as s, s.begin():
+        if s.bind.dialect.name == "postgresql":
+            # Scope and evidence share one snapshot across concurrent rebinding.
+            # Mutation and admission paths retain their existing runtime locks.
+            s.connection(execution_options={"isolation_level": "REPEATABLE READ"}).exec_driver_sql("SET TRANSACTION READ ONLY")
         runtime = read_scope(store, s, tenant, account)
         position = decode(cursor, "ledger-evidence", account, runtime.binding_id)
         binding = s.get(OfCreatorBinding, runtime.binding_id)
@@ -567,5 +571,9 @@ def _readiness(s, runtime, *, credential_reader=None):
 
 def launch_readiness(store, tenant, account, *, credential_reader=None):
     with Session(store.engine) as s, s.begin():
+        if s.bind.dialect.name == "postgresql":
+            # Scope and evidence share one snapshot across concurrent rebinding.
+            # Mutation and admission paths retain their existing runtime locks.
+            s.connection(execution_options={"isolation_level": "REPEATABLE READ"}).exec_driver_sql("SET TRANSACTION READ ONLY")
         runtime = read_scope(store, s, tenant, account)
         return _readiness(s, runtime, credential_reader=credential_reader)

@@ -235,7 +235,7 @@ jobs:
       - name: Checkout the schema-compatible rollback source
         uses: actions/checkout@v4
         with:
-          ref: a550199c42a9873c59c5bd74f9c2d7bd1793d392
+          ref: 7f4eaf0bcb0b461300a0301330acd773f2b3d8f0
           path: compatible-rollback
           persist-credentials: false
       - uses: actions/setup-python@v5

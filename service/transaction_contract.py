@@ -13,6 +13,7 @@ KIND_CATALOG = (
     ("Post from ", "ppv_post"),
     ("Post purchase by ", "ppv_post"),
     ("Stream from ", "ppv_stream"),
+    ("Stream purchase by ", "ppv_stream"),
     ("Custom request from ", "custom"),
     ("Custom from ", "custom"),
 )

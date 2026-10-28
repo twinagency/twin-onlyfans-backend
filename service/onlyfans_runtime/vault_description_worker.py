@@ -56,6 +56,9 @@ def accounts(store, tenant, after=None):
             OfVaultSyncJob.owner_id == OfProviderConnection.owner_id, pending(now)))
     if after:
         query = query.where(OfRuntime.account_id > after)
+    included = {value.strip() for value in os.environ.get("ONLYFANS_VAULT_DESCRIPTION_INCLUDE_ACCOUNTS", "").split(",") if value.strip()}
+    if included:
+        query = query.where(OfRuntime.account_id.in_(included))
     excluded = {value.strip() for value in os.environ.get("ONLYFANS_VAULT_DESCRIPTION_EXCLUDE_ACCOUNTS", "").split(",")}
     with Session(store.engine) as session:
         result = []
@@ -131,3 +134,30 @@ class VaultDescriptionWorker:
                     pass
         if self.thread is not None:
             self.thread.join(timeout=310)
+
+
+def main():
+    """Run the same import phase as a dedicated service during rollout."""
+    import signal
+    from .store import Store
+    if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
+        raise RuntimeError("worker role required")
+    if os.environ.get("ONLYFANS_AUTOMATIC_IMPORTS_ENABLED") != "1":
+        raise RuntimeError("automatic imports required")
+    stop = threading.Event()
+    for event in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(event, lambda *_: stop.set())
+    store = Store(os.environ["DATABASE_URL"])
+    worker = VaultDescriptionWorker(store, os.environ["ONLYFANS_WORKER_TENANT"], stop,
+        observe=lambda value: print(json.dumps(value), flush=True))
+    try:
+        worker.start()
+        stop.wait()
+    finally:
+        stop.set()
+        worker.join()
+        store.close()
+
+
+if __name__ == "__main__":
+    main()

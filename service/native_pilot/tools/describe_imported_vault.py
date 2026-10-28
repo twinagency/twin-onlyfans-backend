@@ -103,6 +103,7 @@ async def run(args):
                 caption_vault.install_client_adapter(client, args.account)
                 caption_vault.install_llm_adapter()  # isolated child only; parent keeps its worker role
                 import vault_ai_api as api
+                api._VISION_PROVIDER = "openrouter"
                 import llm_client
                 legacy_chat = llm_client.chat
                 os.environ["ONLYFANS_PROCESS_ROLE"] = "worker"
@@ -150,6 +151,40 @@ async def run(args):
                 # Pace each API fetch, not ffmpeg/vision processing. Long video
                 # processing must not expire an otherwise successful read lease.
                 client._http_call = bounded_read
+                # Legacy re-signing rewrites raw_json without the canonical
+                # observation hash. Keep fresh URLs in memory instead, and warm
+                # native stills with the existing binding/owner receipt writer.
+                import vault_stills
+                from onlyfans_runtime import vault_previews
+
+                async def fresh_media(account_id, media_id, passed_client, *, mark_gone=True):
+                    if account_id != args.account or passed_client is not client:
+                        raise Refused("caption media scope unavailable")
+                    async with get_session() as session:
+                        await guard(session, media_id)
+                        item = await session.get(VaultItem, (args.account, media_id))
+                        kind = item.kind
+                    fresh = await asyncio.to_thread(vault_stills._resolve_fresh_sync, client, media_id)
+                    media = fresh.media
+                    if (not isinstance(media, dict) or media.get("id") != media_id
+                        or media.get("type") != kind or media.get("isDeleted") is True
+                        or media.get("isHidden") is True or media.get("canView") is False):
+                        return vault_stills.Fresh(None, "fetch_failed")
+                    return vault_stills.Fresh(media, "ok")
+
+                vault_stills.resolve_fresh = fresh_media
+
+                async def warm_preview(media_id):
+                    if vault_previews._read(args.account, args.binding, int(scope.provider_id), media_id) is not None:
+                        return True
+                    fresh = await fresh_media(args.account, media_id, client)
+                    if fresh.media is not None:
+                        transport = SimpleNamespace(account_id=args.account,
+                            still_bytes=lambda url: vault_stills.fetch_bytes_sync(client, url))
+                        await asyncio.to_thread(vault_previews.warm_page, transport, [fresh.media],
+                            binding_id=args.binding, owner_id=int(scope.provider_id))
+                    return vault_previews._read(args.account, args.binding, int(scope.provider_id), media_id) is not None
+
                 budget = await api._vision_budget(args.account)
                 if budget["capped"]:
                     summary["state"] = "budget_paused"
@@ -161,6 +196,15 @@ async def run(args):
                         if (effective_value(item, "description") or effective_value(item, "video_description")
                             or "description" in locked_fields(item) or "video_description" in locked_fields(item)):
                             continue
+                    preview_ready = await warm_preview(media_id)
+                    if item.kind == "photo" and not preview_ready:
+                        async with get_session() as session:
+                            await guard(session, media_id, phase="write")
+                            current_item = await session.get(VaultItem, (args.account, media_id))
+                            current_item.describe_status = "fetch_failed"
+                            current_item.describe_generated_at = utcnow()
+                        summary["failed"] += 1
+                        continue
                     result = await api._describe_one(args.account, media_id, model=caption_vault.DEFAULT_MODEL, scope_guard=guard)
                     summary["described" if result.get("ok") else "failed"] += 1
                     if result.get("status") == "capped":

@@ -33,6 +33,7 @@ locked field fences a result that was generated from an older snapshot.
 
 - `ONLYFANS_AUTOMATIC_IMPORTS_ENABLED=1` starts this background phase by default.
 - `ONLYFANS_VAULT_DESCRIPTIONS_ENABLED=0` disables this phase independently.
+- `ONLYFANS_VAULT_DESCRIPTION_INCLUDE_ACCOUNTS` optionally limits a controlled rollout.
 - `ONLYFANS_VAULT_DESCRIPTION_EXCLUDE_ACCOUNTS` preserves explicit account holds.
 - Saved `vault_ai_config_json.auto_describe_on_import=false` also holds an account
   and is rechecked before committing a running result.
@@ -56,6 +57,17 @@ failure cooldowns, manual descriptions, holds after the first 32 accounts,
 background lifecycle, and stale-generation refusal before reads and writes.
 No real provider/model call was made during these checks.
 
-The full PostgreSQL child/advisory-lock integration and controlled live rollout
-remain to be verified. This document is not evidence of deployment or completed
-live description backfill. The prior category backfill remains separate.
+Four additional PostgreSQL child integration checks passed on the Sydney server:
+real caption/category writes with restart skipping; concurrent advisory-lock
+refusal; a human edit during collection fencing the generated write; and fresh
+URLs preserving canonical raw evidence. The test fixture imports and page offset
+were corrected; the application's scope guards were not replaced in these checks.
+
+A derived image preserves the independently deployed inbox/video backend. It
+reuses native ownership receipts when warming previews, keeps refreshed signed
+URLs in memory rather than rewriting raw provenance, and reads the OpenRouter
+budget for the OpenRouter caption route. Its first controlled live batches saved
+one new description each for Alva and Katie. Existing caps remain unchanged.
+Naomi/Nicky checks and continuous-service verification are separate rollout steps.
+The dashboard folder/profile PR has merged, but its deployment is blocked by
+automatic approval review. No completed backlog or frontend deployment is claimed.

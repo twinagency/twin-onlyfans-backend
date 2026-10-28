@@ -27,8 +27,8 @@ def upgrade():
         sa.ForeignKeyConstraint(["transaction_id"], ["transactions.id"], name=op.f("fk_of_ledger_exclusion_transaction_id_transactions"), ondelete="RESTRICT"),
         sa.UniqueConstraint("account_id", "transaction_id", name=op.f("uq_of_ledger_exclusion_account_transaction")),
         sa.UniqueConstraint("command_key", name=op.f("uq_of_ledger_exclusion_command")),
-        sa.CheckConstraint("length(btrim(reason)) > 0", name=op.f("ck_of_ledger_exclusion_reason")),
-        sa.CheckConstraint("length(btrim(actor)) > 0", name=op.f("ck_of_ledger_exclusion_actor")),
+        sa.CheckConstraint("length(trim(reason)) > 0", name=op.f("ck_of_ledger_exclusion_reason")),
+        sa.CheckConstraint("length(trim(actor)) > 0", name=op.f("ck_of_ledger_exclusion_actor")),
     )
 
 

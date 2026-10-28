@@ -96,8 +96,8 @@ class OfLedgerExclusion(Base):
     __table_args__ = (
         UniqueConstraint("account_id", "transaction_id", name="account_transaction"),
         UniqueConstraint("command_key", name="command"),
-        CheckConstraint("length(btrim(reason)) > 0", name="reason"),
-        CheckConstraint("length(btrim(actor)) > 0", name="actor"),
+        CheckConstraint("length(trim(reason)) > 0", name="reason"),
+        CheckConstraint("length(trim(actor)) > 0", name="actor"),
         {"info": EXCLUSION},
     )
     id = Column(Integer, primary_key=True, autoincrement=True)

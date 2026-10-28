@@ -210,6 +210,18 @@ class NativeWorker:
                 recovery.step(self.tenant_id,account.account_id,account.reader,**scope)
             except Exception:report.held+=1
 
+    def _read_progress(self, account, **scope):
+        """A paced provider read retry leaves durable recovery checkpoints due."""
+        from .worker import read_step
+        from .provider_connector import NativeReadTransientError, NativeRateLimitError
+        try:
+            return read_step(self.store,self.tenant_id,account.account_id,account.reader,
+                recent_cutover=self.history_recovery,**scope)
+        except (NativeReadTransientError,NativeRateLimitError):
+            # The read owner already released its lease and saved provider
+            # backoff. Skip planning this turn; other accounts still get work.
+            return None
+
     def step(self,stop=None):
         """Bounded work, no waits; stop is cooperative between durable phases."""
         self._role()
@@ -227,9 +239,10 @@ class NativeWorker:
                 account_errors=report.errors
                 try:
                     if account.read_connection_revision is not None:
-                        from .worker import read_step
-                        progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,
-                            connection_revision=account.read_connection_revision,recent_cutover=self.history_recovery)
+                        progress=self._read_progress(account,connection_revision=account.read_connection_revision)
+                        if progress is None:
+                            report.held+=1
+                            continue
                         report.ingress+=progress.applied
                         # Inactive verified accounts import archive history too; no model, automation or send.
                         if not stop.is_set():self._history_turn(account,report,revision=account.read_connection_revision)
@@ -246,9 +259,10 @@ class NativeWorker:
                     if account.reader is None:
                         report.ingress+=self.store.drain(self.tenant_id,account.account_id)
                     else:
-                        from .worker import read_step
-                        progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,
-                            recent_cutover=self.history_recovery)
+                        progress=self._read_progress(account)
+                        if progress is None:
+                            report.held+=1
+                            continue
                         report.ingress+=progress.applied
                     if stop.is_set():break
                     # After recent intake and before a new reply claim; yields to any claimed live work.

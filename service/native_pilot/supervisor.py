@@ -76,7 +76,8 @@ BACKOFF_MIN_S = 5.0
 BACKOFF_MAX_S = 300.0
 CRASH_EXITS = 5
 CRASH_WINDOW_S = 600.0
-MAX_ACCOUNTS = 64
+MAX_ACCOUNTS = 64      # slots for ELIGIBLE accounts only; held-inactive accounts do not count
+_UNREAD = object()
 HANDLE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}")
 DEFAULT_MANIFEST_DIR = "/var/lib/fastt/manifests"
 DEFAULT_STATUS = "/var/lib/fastt/supervisor-status.json"
@@ -328,22 +329,33 @@ class Supervisor:
         pairs, accounts = self.scope_reader()
         bare = sorted(set(accounts) | {a for a, _ in pairs})
         out, unknown = {}, set()
-        for owner in bare[:MAX_ACCOUNTS]:
+        slots = 0
+        for owner in bare:
             account = "of-" + owner
             if not AccountScope.valid(account):
                 continue
             try:
-                out[account] = self.target(account, owner, pairs, accounts)
+                # Eligibility first: an account the database says may not run (disabled, revoked, expired...)
+                # is held with its real reason and never takes one of the MAX_ACCOUNTS slots.
+                row = self.account_reader(self.db, account)
+                if inactive_reason(row, AccountScope.parse(account), self.wall()):
+                    out[account] = self.target(account, owner, pairs, accounts, row=row)
+                    continue
+                if slots >= MAX_ACCOUNTS:
+                    out[account] = Hold("too-many-accounts")
+                    continue
+                slots += 1
+                out[account] = self.target(account, owner, pairs, accounts, row=row)
             except Exception as exc:     # a transient read failure must not stop or restart a running child
                 unknown.add(account)
+                slots += 1               # unknown eligibility keeps its slot: never push the fleet past the cap
                 self.emit({"event": "evaluate-error", "account": account, "error": type(exc).__name__})
-        for owner in bare[MAX_ACCOUNTS:]:
-            out["of-" + owner] = Hold("too-many-accounts")
         return out, unknown
 
-    def target(self, account, owner, pairs, accounts):
+    def target(self, account, owner, pairs, accounts, row=_UNREAD):
         scope = AccountScope.parse(account)
-        row = self.account_reader(self.db, account)
+        if row is _UNREAD:
+            row = self.account_reader(self.db, account)
         reason = inactive_reason(row, scope, self.wall())
         if reason:
             return Hold(reason)

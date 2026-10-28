@@ -22,6 +22,12 @@ from db.models import Chat, Fan, Message, OfConversationState, OfCreatorBinding,
 from db.onlyfans_models import OfControlAudit, OfIngress, OfRecovery, OfRuntime, OfWork, OfScan
 from onlyfans_read.contract import UNRESOLVED_OUTCOMES, ID_PATTERN
 
+# Owner decision: a new fan is NEVER enabled automatically. The only way a conversation becomes
+# mode='automated' is an explicit per-fan dashboard command. Both automatic writers (worker intake in
+# ``_apply`` and FASTT ``admit_new_conversation``) check this constant; it is deliberately not an env
+# flag or a DB value, so no setting, stored row or deployment edit can re-arm them.
+NEW_CONVERSATION_AUTOMATION_LOCKED = True
+
 MAX_PENDING = 1000
 PAGE_LIMIT = 100
 QUIET_SECONDS = 7
@@ -320,7 +326,8 @@ class Store:
             s.add(chat)
         if chat.last_message_at is None or (stamp, event.message_id) > (chat.last_message_at, chat.last_message_id or 0):
             chat.last_message_id, chat.last_message_at, chat.last_message_preview = event.message_id, stamp, event.body[:500]
-        if new_fan and new_state and event.direction == "in" and not historical and runtime.enabled and not fan.is_muted:
+        if (not NEW_CONVERSATION_AUTOMATION_LOCKED and new_fan and new_state and event.direction == "in"
+                and not historical and runtime.enabled and not fan.is_muted):
             from db.onlyfans_connection_models import OfProviderConnection
             connection=s.get(OfProviderConnection,account)
             if (connection is not None and connection.binding_id==runtime.binding_id and
@@ -454,7 +461,12 @@ class Store:
         is newer than the moment the operator armed future conversations, on a verified, unexpired
         connection bound to the runtime. Anything else (including an existing row, whatever its
         mode) changes nothing, so a paused / human / stopped fan is never enabled here. Returns
-        True only when it wrote the initial ``automated`` state."""
+        True only when it wrote the initial ``automated`` state.
+
+        LOCKED OFF (``NEW_CONVERSATION_AUTOMATION_LOCKED``): always returns False and writes nothing; a
+        new fan stays without a control row (never served) until an operator enables it explicitly."""
+        if NEW_CONVERSATION_AUTOMATION_LOCKED:
+            return False
         from db.onlyfans_connection_models import OfProviderConnection
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)

@@ -36,6 +36,18 @@ async def account_health(s,account):
     recovery=await s.scalar(select(func.count()).select_from(OfRecovery).where(OfRecovery.account_id==account,OfRecovery.status!='complete'))
     unknown=await s.scalar(select(func.count()).select_from(OfTextIntent).where(OfTextIntent.account_id==account,OfTextIntent.status=='unknown'))
     sender=sender_status(account)
+    from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+    observation=await s.scalar(select(OfLaunchCommand).where(OfLaunchCommand.account_id==account,
+        OfLaunchCommand.binding_id==runtime.binding_id,OfLaunchCommand.kind=='provider_profile_observation')
+        .order_by(OfLaunchCommand.created_at.desc(),OfLaunchCommand.command_key).limit(1)) if runtime else None
+    creator={}
+    if observation:
+        from onlyfans_runtime.profiles import profile
+        # Recorded values have normalized keys; validate their source form again.
+        try:
+            saved=json.loads(observation.result_json)
+            creator=profile({'name':saved.get('name'),'username':saved.get('handle'),'avatar':saved.get('avatar')})
+        except (ValueError,TypeError,AttributeError):creator={}
     enabled=bool(runtime and runtime.enabled)
     health={
       'connection':{'lastSuccessAt':iso(connection.verified_at) if connection else None,'reason':None if connection and connection.status=='verified' else 'Connection needs verification.'},
@@ -44,5 +56,5 @@ async def account_health(s,account):
       'financial':{'lastSuccessAt':iso(scan.last_complete_at) if scan else None,'fullHistoryAt':iso(history.last_full_at) if history else None,'reason':'Financial sync requires review.' if scan and scan.status=='held' or history and history.status=='held' else 'Financial coverage is incomplete.' if not history or not history.last_full_at else None},
       'sender':sender,
     }
-    return {'runtime':{'enabled':enabled,'sender':sender,'deliveryEnabled':bool(policy and policy.enabled)},'syncHealth':health,
+    return {'creatorProfile':{'name':creator.get('name'),'handle':creator.get('handle'),'avatarUrl':creator.get('avatar'),'observedAt':iso(observation.created_at) if observation else None},'runtime':{'enabled':enabled,'sender':sender,'deliveryEnabled':bool(policy and policy.enabled)},'syncHealth':health,
         'needsAttention':bool(counts.get('quarantined',0) or unknown or health['connection']['reason'] or health['history']['reason'] or health['financial']['reason'] or enabled and sender['state']!='running')}

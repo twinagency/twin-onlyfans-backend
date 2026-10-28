@@ -18,6 +18,10 @@ def test_server_search_precedes_pagination_and_never_crosses_accounts(database,m
             s.add(Fan(account_id=account,fan_id=318022380,of_username='u318022380',of_display_name='Gervonta'))
             s.add(Chat(account_id=account,fan_id=318022380,last_message_at=now-timedelta(days=7)))
         s.add(Chat(account_id='acc-a',fan_id=101,last_message_at=now))
+        from onlyfans_runtime.profiles import apply_profiles
+        runtime=s.get(OfRuntime,'acc-a')
+        owner={'name':'Verified creator','username':'creator_handle','avatar':'https://public.onlyfans.com/avatar.jpg'}
+        apply_profiles(s,runtime,[],{},owner);s.flush();apply_profiles(s,runtime,[],{},owner)
     async def check():
         from onlyfans_read import repo
         from onlyfans_read.search import normalize_search as normalize
@@ -39,5 +43,8 @@ def test_server_search_precedes_pagination_and_never_crosses_accounts(database,m
                 assert health['syncHealth']['incoming']['lastSuccessAt'] is None
                 assert health['syncHealth']['incoming']['coverage']=='Latest 256 applied intake events.'
                 assert health['syncHealth']['history']['quarantined']==0
+                assert health['creatorProfile']['avatarUrl']=='https://public.onlyfans.com/avatar.jpg'
+                assert health['creatorProfile']['handle']=='creator_handle'
+                assert not (await account_health(s,'acc-b'))['creatorProfile']['avatarUrl']
         finally:await ae.dispose()
     asyncio.run(check());store.close();other.close()

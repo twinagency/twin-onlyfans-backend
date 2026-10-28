@@ -1,5 +1,5 @@
 """Provider profile observations update display fields, never recipient identity or mode."""
-import re
+import re,json,hashlib
 from urllib.parse import urlsplit
 from db.models import Fan,OfCreatorBinding
 
@@ -32,3 +32,14 @@ def apply_profiles(s,runtime,fan_ids,profiles,creator=None):
         binding=s.get(OfCreatorBinding,runtime.binding_id)
         if binding and 'name' in data and ('@' in binding.creator_name or not binding.creator_name.strip()):binding.creator_name=data['name']
         if binding and 'handle' in data:binding.handle=data['handle']
+        # Reuse immutable import-command evidence for this small display-only
+        # observation. No credentials, recipient identity or automation changes.
+        from .launch_operations_models import OfLaunchCommand
+        from .store import utcnow
+        encoded=json.dumps(data,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+        key=hashlib.sha256(('provider_profile:'+runtime.binding_id+':'+encoded).encode()).hexdigest()
+        if s.get(OfLaunchCommand,(runtime.account_id,key)) is None:
+            s.add(OfLaunchCommand(account_id=runtime.account_id,command_key=key,binding_id=runtime.binding_id,
+                kind='provider_profile_observation',request_hash=key,actor='worker-import:'+key,
+                reason='Verified account owner profile from provider inbox sync',before_json='{}',
+                result_json=encoded,created_at=utcnow()))

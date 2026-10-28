@@ -50,6 +50,8 @@ async def control(request: Request, account_id: str, conversation_id: str):
         return refused("unauthorized", 401, "The control credential was not accepted.")
     if request.headers.get(HEADER) != SCHEMA:
         return refused("unsupported_schema", 400, "The control contract version is required.")
+    scope=current_scope.get()
+    if scope is not None and not scope.can_manage:return refused('forbidden',403,'Management permission is required.')
     store = getattr(request.app.state, "control_store", None)
     if store is None:
         return refused("controls_unavailable", 503, "Conversation controls are not available.")
@@ -70,7 +72,8 @@ async def control(request: Request, account_id: str, conversation_id: str):
             raise ValueError("nonfinite number")
         body = json.loads(raw, object_pairs_hook=unique_keys, parse_constant=nonfinite)
         manual = type(body) is dict and body.get("action") == "manual_message"
-        keys = {"action", "expectedRevision", "commandKey", "actor"} | ({"body"} if manual else set())
+        resolution = type(body) is dict and body.get("action") == "resolve_delivery_evidence"
+        keys = {"action", "expectedRevision", "commandKey", "actor"} | ({"body"} if manual else {"attemptId", "providerMessageId", "decision"} if resolution else set())
         if manual and "catalogItemId" in body:
             keys.add("catalogItemId")
         if not manual and len(raw) > 4096:
@@ -78,10 +81,13 @@ async def control(request: Request, account_id: str, conversation_id: str):
         if type(body) is not dict or set(body) != keys:
             raise ValueError()
         action, revision, key, actor = (body[k] for k in ("action", "expectedRevision", "commandKey", "actor"))
-        if (type(action) is not str or action not in {*ACTIONS, "manual_message"} or type(revision) is not int or
+        if (type(action) is not str or action not in {*ACTIONS, "manual_message", "resolve_delivery_evidence"} or type(revision) is not int or
                 not 0 <= revision < 2**31-1 or type(key) is not str or not re.fullmatch(r"[a-f0-9]{64}", key) or
                 not actor_allowed(actor)):
             raise ValueError()
+        if resolution and (body['decision']!='delivered' or type(body['attemptId']) is not str
+                or not re.fullmatch(r'[A-Za-z0-9-]{1,128}',body['attemptId'])
+                or type(body['providerMessageId']) is not int or not 0<body['providerMessageId']<2**63):raise ValueError()
         if manual and (type(body["body"]) is not str or not body["body"].strip() or "\x00" in body["body"]
                 or len(body["body"].encode()) > 4000):
             raise ValueError()
@@ -91,6 +97,15 @@ async def control(request: Request, account_id: str, conversation_id: str):
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return refused("invalid_request", 400, "That conversation control request is invalid.")
     try:
+        if resolution:
+            scope=current_scope.get()
+            if scope is not None and not scope.can_manage:return refused('forbidden',403,'Management permission is required.')
+            from onlyfans_runtime.delivery_resolution import resolve,operational
+            if not operational():return refused('resolution_unavailable',503,'Delivery reconciliation is not configured.')
+            await resolve(store,tenant,account_id,fan,attempt=body['attemptId'],provider_message_id=body['providerMessageId'],
+                expected_revision=revision,command_key=key,actor=actor)
+            return response({'ok':True,'applied':True,'commandKey':key,'accountId':account_id,'conversationId':conversation_id,
+                'action':action,'recordedRevision':revision})
         if manual:
             if manual_configured() is None:
                 return refused("manual_unavailable", 503, "Manual messaging is not configured.")
@@ -107,7 +122,24 @@ async def control(request: Request, account_id: str, conversation_id: str):
     except Refused as exc:
         if str(exc) in {"scope unavailable", "conversation unavailable"}:
             return refused("scope_unavailable", 404, "That conversation is not available.")
-        return refused("control_conflict", 409, "The control could not be applied. Refresh the conversation before trying again.")
+        from .refusals import public_refusal
+        code, message = public_refusal(str(exc))
+        current_revision = None
+        holds = [code]
+        try:
+            from sqlalchemy.orm import Session
+            from db.models import OfConversationState
+            from db.onlyfans_models import OfRuntime
+            with Session(store.engine) as session:
+                state = session.get(OfConversationState, (account_id, fan))
+                runtime = session.get(OfRuntime, account_id)
+                current_revision = state.revision if state else None
+                if runtime and not runtime.enabled:holds.append('account_disabled')
+                if state and state.unresolved_attempt_id:holds.append('delivery_unresolved')
+                if state and state.takeover_state == 'requested':holds.append('takeover_pending')
+        except Exception:pass
+        log.info("control_refused account=%s fan=%s action=%s expected_revision=%s current_revision=%s holds=%s command_key=%s", account_id, fan, action, revision, current_revision, sorted(set(holds)), key)
+        return response({'ok':False,'code':code,'error':message,'expectedRevision':revision,'currentRevision':current_revision,'holds':sorted(set(holds))},409)
     except Exception:
         log.exception("conversation control acknowledgement unavailable")
         return refused("outcome_unconfirmed", 500, "The outcome is not confirmed. Refresh or retry the same request.")

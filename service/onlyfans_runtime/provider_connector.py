@@ -254,6 +254,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
         value = load(self._call("GET", API_PATH + "/users/me"))
         if type(value.get("id")) is not int or value["id"] != self._handle.owner_id:
             raise NativeAuthenticationError("native provider owner mismatch")
+        return value
 
     def _signed_request(self, method, path, body=b"", *, max_response_bytes=None,
                         accepted_statuses=(200,), with_status=False):

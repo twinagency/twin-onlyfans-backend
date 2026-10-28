@@ -94,7 +94,10 @@ async def list_accounts(
     accounts = []
     for binding in bindings:
         anchor = await repo.account_activity_anchor(account_id=binding.account_id)
-        accounts.append(projections.account_model(binding, anchor=anchor, now=now))
+        account = projections.account_model(binding, anchor=anchor, now=now)
+        health = getattr(repo, "account_health", None)
+        if callable(health):account = {**account, **await health(account_id=binding.account_id)}
+        accounts.append(account)
 
     return accounts_envelope(
         creator_id=wanted_creator,
@@ -112,6 +115,7 @@ async def list_conversations(
     limit: int | None = None,
     now: datetime | None = None,
     ai_only: bool = False,
+    search: str | None = None,
 ) -> dict:
     """One page of an account's conversations, newest activity first."""
     account = _require_id(account_id, what="account")
@@ -119,10 +123,13 @@ async def list_conversations(
     if binding is None:
         raise Refused("unknown_account")
 
+    from .search import normalize_search
+    query = normalize_search(search)
+    query_key = query + ("|ai" if ai_only else "")
     before: tuple[datetime | None, int] | None = None
     if cursor:
         try:
-            raw_anchor, anchor_fan = decode_cursor(cursor, account_id=account)
+            raw_anchor, anchor_fan = decode_cursor(cursor, account_id=account, query_key=query_key)
             # `parse_iso`, not `datetime.fromisoformat`: a cursor's timestamp has
             # to be the same KIND of value the columns hold (naive UTC), or the
             # keyset comparison raises on an aware/naive mismatch.
@@ -134,6 +141,7 @@ async def list_conversations(
     # One extra row, so "is there another page" is answered by the data rather
     # than by a count that would be a second query.
     narrowing = {"ai_only": True} if ai_only else {}
+    if query:narrowing["search"] = query
     rows = await repo.conversation_page(account_id=account, before=before, limit=size + 1, **narrowing)
     has_more = len(rows) > size
     page_rows = rows[:size]
@@ -172,6 +180,7 @@ async def list_conversations(
             account_id=account,
             last_activity_at=iso(tail.last_message_at),
             fan_id=tail.fan_id,
+            query_key=query_key,
         )
 
     return page_envelope(account_id=account, items=items, next_cursor=next_cursor)
@@ -237,6 +246,8 @@ async def get_conversation(
         anchor=anchor,
         now=now,
     )
+    spend = getattr(repo, "fan_spend", None)
+    if callable(spend):detail["spend"] = await spend(account_id=account, fan_id=fan_id)
     detail["previousCursor"] = (encode_thread_cursor(account_id=account, fan_id=fan_id,
         before_message_id=messages[0].message_id) if len(messages) == DETAIL_MESSAGE_LIMIT else None)
     return conversation_envelope(account_id=account, conversation=detail)

@@ -122,6 +122,7 @@ class VaultPreviewWorker:
                     or media.get("isDeleted") is True or media.get("isHidden") is True
                     or media.get("canView") is False
                     or "userId" in media and media["userId"] != owner):
+                    vault_previews.clear_request(account,binding,owner,mid)
                     checkpoint(mid)
                     continue
                 parse_vault_page(json.dumps({"list": [media], "hasMore": False}).encode(), owner_id=owner)

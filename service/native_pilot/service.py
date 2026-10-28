@@ -987,7 +987,7 @@ class Service:
         fan, via = self.args.fan, "twin-control"
         try:
             from onlyfans_runtime.store import Store
-            from db.onlyfans_models import OfConversationState
+            from db.models import OfConversationState
             from sqlalchemy.orm import Session
             url, tenant = os.environ.get("DATABASE_URL", ""), os.environ.get("ONLYFANS_WORKER_TENANT", "")
             if not url or not tenant:
@@ -1029,7 +1029,7 @@ class Service:
         from onlyfans_runtime import runtime_stop
         try:
             from onlyfans_runtime.store import Store
-            from db.onlyfans_models import OfConversationState
+            from db.models import OfConversationState
             from sqlalchemy.orm import Session
             url, tenant = os.environ.get("DATABASE_URL", ""), os.environ.get("ONLYFANS_WORKER_TENANT", "")
             if not url or not tenant:

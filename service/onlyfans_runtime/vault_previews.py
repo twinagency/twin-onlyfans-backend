@@ -45,7 +45,13 @@ def _read(account, binding, owner, media_id):
             return None
         if any(proof[k] != v for k, v in _scope(account, binding, owner, media_id).items()):
             return None
-        with path.open("rb") as handle:
+        # Legacy caption collectors may replace their shared .jpg file. Serve
+        # the verified gallery copy independently so analysis cannot blank it.
+        owned = path.with_suffix(".owned.jpg")
+        if owned.is_symlink():
+            return None
+        source = owned if owned.exists() else path
+        with source.open("rb") as handle:
             data = handle.read(images.MAX_STILL_BYTES + 1)
         if (not data or len(data) > images.MAX_STILL_BYTES or not images.image_type(data)
                 or proof["sha256"] != hashlib.sha256(data).hexdigest()):
@@ -53,6 +59,20 @@ def _read(account, binding, owner, media_id):
         return data
     except (OSError, ValueError, TypeError):
         return None
+
+
+def promote_cached(account, binding, owner, media_id):
+    """Pin an already ownership-verified still before a legacy collector runs."""
+    if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
+        raise Refused("vault preview warming requires the worker role")
+    data = _read(account, binding, owner, media_id)
+    if data is None:
+        return False
+    path, _ = _paths(account, media_id)
+    owned = path.with_suffix(".owned.jpg")
+    if owned.is_symlink():
+        return False
+    return owned.exists() or images.write(owned, data)
 
 
 def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
@@ -72,7 +92,7 @@ def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
                 or media.get("isHidden") is True or media.get("canView") is False): return False
         mid = _id(media.get("id"))
         try:
-            if _read(transport.account_id, binding_id, owner_id, mid) is not None: return True
+            if promote_cached(transport.account_id, binding_id, owner_id, mid): return True
             url = still_url(media)
             if not url: return False
             data = transport.still_bytes(url)
@@ -80,7 +100,8 @@ def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
             path, receipt = _paths(transport.account_id, mid)
             proof = {**_scope(transport.account_id, binding_id, owner_id, mid),
                      "sha256": hashlib.sha256(data).hexdigest()}
-            return images.write(path, data) and images.write(receipt, canonical(proof).encode())
+            return (images.write(path, data) and images.write(path.with_suffix(".owned.jpg"), data)
+                and images.write(receipt, canonical(proof).encode()))
         except Exception:
             # CDN failures may contain authenticated URLs. No raw exception log.
             return False

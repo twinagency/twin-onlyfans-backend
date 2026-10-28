@@ -180,7 +180,7 @@ async def run(args):
                 vault_stills.resolve_fresh = fresh_media
 
                 async def warm_preview(media_id):
-                    if vault_previews._read(args.account, args.binding, int(scope.provider_id), media_id) is not None:
+                    if vault_previews.promote_cached(args.account, args.binding, int(scope.provider_id), media_id):
                         return True
                     fresh = await fresh_media(args.account, media_id, client)
                     if fresh.media is not None:

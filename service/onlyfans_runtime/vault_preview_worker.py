@@ -76,7 +76,7 @@ class VaultPreviewWorker:
             for mid in ids:
                 if self.stop.is_set():
                     return
-                if vault_previews._read(account, binding, owner, mid) is not None:
+                if vault_previews.promote_cached(account, binding, owner, mid):
                     self.cursors[account] = mid
                     continue
                 if attempted >= 4:

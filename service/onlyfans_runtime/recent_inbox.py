@@ -24,6 +24,7 @@ PAGES_PER_TURN = 2
 @dataclass
 class HeadState:
     due: float = 0
+    discovery_cursor: str | None = None
     pending: deque = field(default_factory=deque)
 
 
@@ -96,7 +97,7 @@ def _commit(store, tenant, account, revision, fan, page, claim, *, history_only)
 
 
 def poll_recent(store, tenant, account, reader, *, connection_revision=None, clock=time.monotonic):
-    """At most one head GET and two message pages, honoring the shared budget.
+    """At most one head, one continuation and two message pages per turn.
 
 The verified read-only branch always imports historically. Active accounts
 use the existing catch-up semantics and every existing send gate remains in
@@ -119,9 +120,9 @@ the native worker. This module has no planner, model or send dependency.
     applied = 0
     try:
         if clock() >= state.due:
-            fans = _read(store, tenant, account, revision,
+            fans, next_cursor = _read(store, tenant, account, revision,
                 lambda: reader.chats(cursor=None, limit=PAGE_LIMIT),
-                lambda page, claim: _missing(store, tenant, account, revision, page, claim))
+                lambda page, claim: (_missing(store, tenant, account, revision, page, claim), page.next_cursor))
             # Give the newest arrival one priority slot, retaining older queued
             # fans ahead of the rest. Optional missing head hints must not make
             # repeated top-of-inbox reads starve the tail of the queue.
@@ -129,6 +130,20 @@ the native worker. This module has no planner, model or send dependency.
             fresh = [fan for fan in fans if fan not in waiting]
             state.pending = deque(fresh[:1] + list(state.pending) + fresh[1:])
             state.due = clock() + INTERVAL_SECONDS
+            if state.discovery_cursor is None:
+                state.discovery_cursor = next_cursor
+        # Providers may return fewer rows than requested. Continue discovery
+        # independently of the head refresh so those conversations cannot vanish
+        # from recent intake. Commit the cursor only after a successful read.
+        if state.discovery_cursor is not None:
+            fans, next_cursor = _read(store, tenant, account, revision,
+                lambda: reader.chats(cursor=state.discovery_cursor, limit=PAGE_LIMIT),
+                lambda page, claim: (_missing(store, tenant, account, revision, page, claim), page.next_cursor))
+            if next_cursor == state.discovery_cursor:
+                raise Refused("inbox discovery cursor did not advance")
+            waiting = set(state.pending)
+            state.pending.extend(fan for fan in fans if fan not in waiting)
+            state.discovery_cursor = next_cursor
         for _ in range(PAGES_PER_TURN):
             if not state.pending:
                 break

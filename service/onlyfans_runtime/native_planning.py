@@ -21,7 +21,7 @@ from db.models import AccountAiConfig, Fan, FanProfile, Message, OfConversationS
 from db.onlyfans_models import OfWork, OfRuntime
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfNativePlan
 from .native_context import canonical, versions
-from .store import Claim, Refused, _id
+from .store import Claim, PlanRefused, Refused, _id
 from .text_delivery import TextAuthority
 
 PLANNER_VERSION = "native-text.v4"
@@ -179,8 +179,10 @@ class NativeTextPlanner:
                 raise Refused("native model mode does not match its delivery policy")
             if not self.authority._valid_work(claim, work, state, now):
                 raise Refused("stale native planning claim")
-            if self.authority._eligibility(s, runtime, policy, state, s.get(Fan, (claim.account_id, claim.fan_id)), "automated", now):
-                raise Refused("native planning is currently held")
+            held = self.authority._eligibility(s, runtime, policy, state, s.get(Fan, (claim.account_id, claim.fan_id)), "automated", now)
+            if held:
+                # No plan row or model call exists yet: a pre-model hold, with its reason preserved.
+                raise PlanRefused("native planning is currently held", reason=held, phase="before_model")
             count = s.scalar(select(func.count()).select_from(OfNativePlan).where(OfNativePlan.account_id == claim.account_id))
             if not live and count >= MAX_SYNTHETIC_INVOCATIONS:
                 raise Refused("synthetic planning allowance exhausted")

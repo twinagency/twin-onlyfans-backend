@@ -247,6 +247,8 @@ def main(argv=None):
         worker_options = {name: True for name, flag in (("history_recovery", "ONLYFANS_HISTORY_RECOVERY_ENABLED"),
             ("history_memory", "ONLYFANS_HISTORY_MEMORY_ENABLED"), ("engagement", "ONLYFANS_ENGAGEMENT_ENABLED"))
             if os.environ.get(flag) == "1"}
+        # The live path needs the approved fan's bounded recent slice regardless of the archive import flag.
+        worker_options["recent_bootstrap"] = True
         return run_loop(store, tenant, stop, once=args.once, refresh_seconds=args.refresh_seconds,facts_reader=facts_reader,
                         vault_jobs=_process_vault_jobs, enrollment_jobs=_process_connection_enrollments,
                         ledger_jobs=_process_ledger_jobs if os.environ.get("ONLYFANS_LEDGER_ENABLED") == "1" else None,

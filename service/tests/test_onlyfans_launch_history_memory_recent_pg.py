@@ -163,3 +163,146 @@ def test_completed_empty_history_does_not_silence_future_first_message(initial):
     store.drain(TENANT, ACCOUNT)
     with Session(engine) as s:
         assert s.get(OfWork, (ACCOUNT, FAN)).target_message_id == 1
+
+
+# --- Routine freshness polls, scoped freshness and archive-independent recent bootstrap ----------------------
+from onlyfans_runtime.store import fan_history_current
+from onlyfans_runtime.text_delivery import MAX_SYNC_AGE_SECONDS
+
+
+def fresh_fan(store, engine, monkeypatch):
+    """Recent recovery complete for the approved fan; account proof fresh but older than the poll interval."""
+    monkeypatch.setenv("ONLYFANS_FAN_CURRENT_OVERRIDE", f"{ACCOUNT}:{FAN}")
+    claim = store.claim_recovery(TENANT, ACCOUNT)
+    assert commit_recent_page(store, TENANT, claim, head(), has_more=True) == "complete"
+    with Session(engine) as s, s.begin():
+        runtime = s.get(OfRuntime, ACCOUNT)
+        assert not runtime.recovery_needed and runtime.last_sync_at is not None
+        runtime.last_sync_at = utcnow() - timedelta(seconds=30)
+        return runtime.last_sync_at
+
+
+def fan_current(engine):
+    with Session(engine) as s:
+        return fan_history_current(s, ACCOUNT, FAN)
+
+
+def test_routine_poll_keeps_valid_proof_and_completes_without_a_reset(database, monkeypatch):
+    url, engine = database
+    store = seed(url, engine)
+    store.begin_scan(TENANT, ACCOUNT)
+    scan = store.claim_scan(TENANT, ACCOUNT)
+    store.scan_page(TENANT, scan, [FAN], next_cursor=None)
+    try:
+        synced = fresh_fan(store, engine, monkeypatch)
+        authority = TextAuthority(store)
+        authority.configure(TENANT, ACCOUNT, expected_revision=0, enabled=True, limit_units=20,
+                            throttle_seconds=1, actor="synthetic-operator", reason="Offline test")
+        assert fan_current(engine)
+        assert store.request_poll(TENANT, ACCOUNT, min_interval_seconds=5) is True
+        assert store.request_poll(TENANT, ACCOUNT, min_interval_seconds=5) is False  # one probe in flight, no re-reset
+        with Session(engine) as s:
+            runtime = s.get(OfRuntime, ACCOUNT)
+            assert runtime.poll_pending and not runtime.recovery_needed and runtime.last_sync_at == synced
+            assert s.get(OfRecovery, (ACCOUNT, FAN)).status == "needed"  # the probe still re-reads the fan
+            # Valid proof survives the queued read: account-wide, with no override either.
+            monkeypatch.delenv("ONLYFANS_FAN_CURRENT_OVERRIDE")
+            from db.models import Fan, OfConversationState
+            from db.onlyfans_delivery_models import OfDeliveryPolicy
+            assert authority._eligibility(s, runtime, s.get(OfDeliveryPolicy, ACCOUNT),
+                s.get(OfConversationState, (ACCOUNT, FAN)), s.get(Fan, (ACCOUNT, FAN)), "automated", utcnow()) is None
+            monkeypatch.setenv("ONLYFANS_FAN_CURRENT_OVERRIDE", f"{ACCOUNT}:{FAN}")
+            assert fan_history_current(s, ACCOUNT, FAN)
+        # The probe completes: proof is refreshed, the marker clears, and nothing was stranded.
+        scan = store.claim_scan(TENANT, ACCOUNT)
+        store.scan_page(TENANT, scan, [FAN], next_cursor=None)
+        claim = store.claim_recovery(TENANT, ACCOUNT)
+        assert store.recovery_page(TENANT, claim, [], has_more=False) == "complete"
+        with Session(engine) as s:
+            runtime = s.get(OfRuntime, ACCOUNT)
+            assert not runtime.poll_pending and not runtime.recovery_needed and runtime.last_sync_at > synced
+            assert s.get(OfRecovery, (ACCOUNT, FAN)).status == "complete"
+    finally:
+        store.close()
+
+
+def test_real_disconnect_and_expired_freshness_still_require_reconciliation(database, monkeypatch):
+    url, engine = database
+    store = seed(url, engine)
+    store.begin_scan(TENANT, ACCOUNT)
+    scan = store.claim_scan(TENANT, ACCOUNT)
+    store.scan_page(TENANT, scan, [FAN], next_cursor=None)
+    try:
+        fresh_fan(store, engine, monkeypatch)
+        authority = TextAuthority(store)
+        authority.configure(TENANT, ACCOUNT, expected_revision=0, enabled=True, limit_units=20,
+                            throttle_seconds=1, actor="synthetic-operator", reason="Offline test")
+        # Expired fan proof: a historical complete flag alone is not enough.
+        with Session(engine) as s, s.begin():
+            s.get(OfRecovery, (ACCOUNT, FAN)).last_complete_at = utcnow() - timedelta(seconds=MAX_SYNC_AGE_SECONDS + 60)
+        assert not fan_current(engine)
+        with Session(engine) as s, s.begin():
+            s.get(OfRecovery, (ACCOUNT, FAN)).last_complete_at = utcnow()
+        assert fan_current(engine)
+        # Actual disconnect: begin_scan records the gap and the approved fan is no longer current.
+        store.begin_scan(TENANT, ACCOUNT)
+        with Session(engine) as s:
+            assert s.get(OfRuntime, ACCOUNT).recovery_needed
+        assert not fan_current(engine)
+        # An unrelated fan is never current through the scoped override.
+        with Session(engine) as s:
+            assert not fan_history_current(s, ACCOUNT, FAN + 1)
+        # Aged account proof (no override) is refused as history_not_current.
+        monkeypatch.delenv("ONLYFANS_FAN_CURRENT_OVERRIDE")
+        with Session(engine) as s, s.begin():
+            runtime = s.get(OfRuntime, ACCOUNT)
+            runtime.recovery_needed, runtime.last_sync_at = False, utcnow() - timedelta(seconds=MAX_SYNC_AGE_SECONDS + 60)
+        with Session(engine) as s:
+            from db.models import Fan, OfConversationState
+            from db.onlyfans_delivery_models import OfDeliveryPolicy
+            assert authority._eligibility(s, s.get(OfRuntime, ACCOUNT), s.get(OfDeliveryPolicy, ACCOUNT),
+                s.get(OfConversationState, (ACCOUNT, FAN)), s.get(Fan, (ACCOUNT, FAN)), "automated", utcnow()) == "history_not_current"
+    finally:
+        store.close()
+
+
+def test_recent_bootstrap_is_independent_of_the_archive_flag(database, monkeypatch):
+    from onlyfans_worker_fixture import ACCOUNT as WACCOUNT
+    from onlyfans_native_protocol_fixture import OWNER, native_message, native_peer
+    from onlyfans_runtime.native_connector import NativeLoopbackConnector, from_native_server
+    from onlyfans_runtime.native_worker import NativeWorker, WorkerAccount
+    from onlyfans_runtime.launch_history_memory.recent import RecentBootstrap
+    from onlyfans_runtime.launch_history_memory.recovery import OfHistoryScan
+    url, engine = database
+    monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "worker")
+    monkeypatch.setenv("DATABASE_URL", url)
+    store = seed(url, engine, account=WACCOUNT)
+    try:
+        store.begin_scan("tenant-a", WACCOUNT)
+        cutovers = []
+        import onlyfans_runtime.worker as worker_module
+        real = worker_module.read_step
+        def spy(*args, **kw):
+            cutovers.append(kw.get("recent_cutover"))
+            return real(*args, **kw)
+        monkeypatch.setattr(worker_module, "read_step", spy)
+        with native_peer(history={101: [native_message(text="<p>older</p>")]}) as peer:
+            transport = NativeLoopbackConnector(from_native_server(peer.server, account_id=WACCOUNT, owner_id=OWNER, policy_revision=1))
+            default = NativeWorker(store, "tenant-a", (WorkerAccount(WACCOUNT, SyntheticNativeModel(), transport, transport),))
+            assert default.history_recovery is False and default.recent_bootstrap is False  # legacy coupling is the default
+            paused = NativeWorker(store, "tenant-a", default.accounts, history_recovery=False, recent_bootstrap=True)
+            assert paused.history_recovery is False and paused.recent_bootstrap is True
+            for _ in range(6):
+                paused.step()
+        assert cutovers and all(value is True for value in cutovers)
+        with Session(engine) as s:
+            boot = s.get(RecentBootstrap, (WACCOUNT, 101))
+            assert boot is not None and boot.observed_count >= 1
+            recovery = s.get(OfRecovery, (WACCOUNT, 101))
+            assert recovery.status == "complete" and recovery.high_water > 0
+            # The archive import never ran, and was not marked finished to obtain readiness.
+            scan = s.get(OfHistoryScan, WACCOUNT)
+            assert scan is None or scan.status != "complete"
+            assert not s.get(OfRuntime, WACCOUNT).recovery_needed
+    finally:
+        store.close()

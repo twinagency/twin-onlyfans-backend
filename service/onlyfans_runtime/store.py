@@ -33,6 +33,21 @@ class Refused(ValueError):
     pass
 
 
+# Phases of a planning operation. Only a before-model hold is safe to resume automatically.
+PLAN_PHASES = frozenset({"before_model", "model_started", "ready_plan", "dispatch_started"})
+# Eligibility holds that clear on their own once history proof is restored.
+RETRYABLE_BLOCKS = frozenset({"history_not_current"})
+
+
+class PlanRefused(Refused):
+    """A planning refusal that keeps its reason and the phase it happened in."""
+    def __init__(self, message, *, reason, phase):
+        super().__init__(message)
+        if phase not in PLAN_PHASES:
+            raise ValueError("invalid planning phase")
+        self.reason, self.phase = str(reason)[:48], phase
+
+
 def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -118,18 +133,33 @@ def fan_current_override(account_id):
     return out
 
 
-def fan_history_current(s, account_id, fan_id):
-    """An override fan whose own recent recovery is complete and unquarantined."""
+def fan_history_current(s, account_id, fan_id, now=None):
+    """An override fan whose own recent recovery is fresh, applied and unquarantined.
+
+    A completed recovery proves currency only inside the freshness window. A routine
+    freshness poll may flip the row to needed/running without erasing that proof; a genuine
+    gap (runtime.recovery_needed) does.
+    """
     if fan_id not in fan_current_override(account_id):
         return False
+    from .text_delivery import MAX_SYNC_AGE_SECONDS
     row = s.get(OfRecovery, (account_id, fan_id))
+    if row is None or row.last_complete_at is None:
+        return False
+    now = now if now is not None else utcnow()
+    if row.last_complete_at < now - timedelta(seconds=MAX_SYNC_AGE_SECONDS) or row.last_complete_at > now + timedelta(minutes=5):
+        return False
+    if row.status != "complete":
+        runtime = s.get(OfRuntime, account_id)
+        if row.status not in {"needed", "running"} or runtime is None or runtime.recovery_needed:
+            return False
     quarantined = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account_id,
-        OfIngress.fan_id == fan_id, OfIngress.status == "quarantined").limit(1)) if hasattr(OfIngress, "fan_id") else None
+        OfIngress.fan_id == fan_id, OfIngress.status == "quarantined").limit(1))
     # The fan's own ingress must be fully applied (account-wide pending events
     # from other fans do not block this fan).
     unapplied = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account_id,
         OfIngress.fan_id == fan_id, OfIngress.status != "applied").limit(1))
-    return row is not None and row.status == "complete" and quarantined is None and unapplied is None
+    return quarantined is None and unapplied is None
 
 class Store:
     def __init__(self, url: str):
@@ -357,6 +387,7 @@ class Store:
             work.control_revision = state.revision
             work.status = "waiting" if eligible else "blocked"
             work.lease_token = work.lease_until = None
+            work.block_reason = work.block_phase = work.block_input_revision = None
         if event.direction == "in" and advances:
             # Event notification shares the runtime lock; final dispatch still
             # revalidates if best-effort cancellation could not be recorded.
@@ -423,6 +454,7 @@ class Store:
                 work.generation += 1
                 work.status = "blocked"
                 work.lease_token = work.lease_until = None
+                work.block_reason = work.block_phase = work.block_input_revision = None
             s.add(OfControlAudit(account_id=account_id, command_key=command_key, fan_id=fan_id, mode=mode,
                                  previous_revision=expected_revision, revision=state.revision, actor=actor,
                                  reason=reason, consent_ref=consent_ref, action=action,
@@ -486,6 +518,7 @@ class Store:
             account.last_claim_at = work.last_claim_at = now
             if state.mode != "automated" or state.takeover_state != "none" or self._unresolved(s, account.account_id, work.fan_id, state) or fan.is_muted:
                 work.status = "blocked"
+                work.block_reason = work.block_phase = work.block_input_revision = None
                 return None
             work.generation += 1
             work.lease_token = str(uuid.uuid4())
@@ -493,9 +526,14 @@ class Store:
             work.status, work.control_revision = "claimed", state.revision
             return Claim(account.account_id, work.fan_id, work.generation, work.lease_token, state.revision, work.target_message_id, state.input_revision)
 
-    def hold_claim(self, tenant_id, claim):
-        """Release only the exact current lease; never disturb newer input/control."""
+    def hold_claim(self, tenant_id, claim, *, reason=None, phase=None):
+        """Release only the exact current lease; never disturb newer input/control.
+
+        reason/phase record why the input is blocked. Only phase "before_model" with a
+        retryable reason is ever resumed by reconcile_blocked; anything else stays held.
+        """
         if type(claim) is not Claim:raise Refused("invalid worker claim")
+        if phase is not None and phase not in PLAN_PHASES:raise Refused("invalid planning phase")
         with Session(self.engine) as s,s.begin():
             self._runtime(s,tenant_id,claim.account_id)
             work=s.get(OfWork,(claim.account_id,claim.fan_id))
@@ -504,7 +542,63 @@ class Store:
                     or work.target_message_id!=claim.target_message_id):return False
             work.status="blocked"
             work.lease_token=work.lease_until=None
+            work.block_reason=str(reason)[:48] if reason is not None else "refused"
+            work.block_phase=phase
+            work.block_input_revision=claim.input_revision
             return True
+
+    def reconcile_blocked(self, tenant_id, account_id, *, limit=4):
+        """Wake blocked input whose retryable pre-model hold has cleared; return how many.
+
+        Never creates a plan or input revision, never touches plans/intents/allowance, and
+        never wakes work once any model operation began for the input (the unique native
+        plan key per input revision is that durable marker).
+        """
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise Refused("invalid reconcile limit")
+        from db.onlyfans_delivery_models import OfDeliveryPolicy, OfNativePlan
+        from .text_delivery import TextAuthority
+        woken = 0
+        with Session(self.engine) as s, s.begin():
+            runtime = self._runtime(s, tenant_id, account_id)
+            if not runtime.enabled:
+                return 0
+            rows = s.scalars(select(OfWork).where(
+                OfWork.account_id == account_id, OfWork.status == "blocked",
+                OfWork.block_phase == "before_model", OfWork.block_reason.in_(sorted(RETRYABLE_BLOCKS)))
+                .order_by(OfWork.first_input_at, OfWork.fan_id).limit(limit).with_for_update()).all()
+            if not rows:
+                return 0
+            authority = TextAuthority(self)
+            policy = s.get(OfDeliveryPolicy, account_id)
+            db_now = authority._db_now(s)
+            for work in rows:
+                state = s.get(OfConversationState, (account_id, work.fan_id))
+                fan = s.get(Fan, (account_id, work.fan_id))
+                if state is None or fan is None:
+                    continue
+                if (state.mode != "automated" or state.takeover_state != "none" or fan.is_muted
+                        or self._unresolved(s, account_id, work.fan_id, state)
+                        or work.control_revision != state.revision
+                        or work.block_input_revision != state.input_revision):
+                    continue
+                if s.scalar(select(OfNativePlan.plan_id).where(OfNativePlan.account_id == account_id,
+                        OfNativePlan.fan_id == work.fan_id,
+                        OfNativePlan.input_revision == state.input_revision).limit(1)) is not None:
+                    continue
+                latest = s.execute(select(Message.message_id, Message.direction).where(
+                    Message.account_id == account_id, Message.fan_id == work.fan_id,
+                    Message.is_unsent.is_(False)).order_by(Message.created_at.desc(), Message.message_id.desc()).limit(1)).first()
+                if latest is None or latest.direction != "in" or latest.message_id != work.target_message_id:
+                    continue
+                if authority._eligibility(s, runtime, policy, state, fan, "automated", db_now) is not None:
+                    continue
+                work.status = "waiting"
+                work.due_at = utcnow()
+                work.lease_token = work.lease_until = None
+                work.block_reason = work.block_phase = work.block_input_revision = None
+                woken += 1
+        return woken
 
     @staticmethod
     def _unresolved(s, account_id, fan_id, state):
@@ -686,7 +780,7 @@ class Store:
             if not runtime.enabled and connection_revision is None:
                 return False
             scan = s.get(OfScan, account_id)
-            if scan is not None and (scan.status != "complete" or runtime.recovery_needed):
+            if scan is not None and (scan.status != "complete" or runtime.recovery_needed or runtime.poll_pending):
                 return False
             if (scan is not None and runtime.last_sync_at is not None
                     and runtime.last_sync_at > utcnow() - timedelta(seconds=min_interval_seconds)):
@@ -697,7 +791,9 @@ class Store:
                 s.flush()
             self._begin_cycle(s, scan)
             self._seed_known(s, scan)
-            runtime.recovery_needed = True
+            # A routine poll is a freshness probe, not a missing-history obligation: existing
+            # proof stays valid until the probe completes. Genuine gaps set recovery_needed.
+            runtime.poll_pending = True
             return True
 
     def claim_scan(self, tenant_id, account_id, *, connection_revision=None):
@@ -756,7 +852,7 @@ class Store:
 
     def _mark_current(self, s, runtime):
         s.flush()
-        if not runtime.recovery_needed:
+        if not (runtime.recovery_needed or runtime.poll_pending):
             return  # An idle poll is not a new successful synchronization.
         scan = s.get(OfScan, runtime.account_id)
         if scan is None or scan.status != "complete" or not scan.known_fans_complete or runtime.pending_events:
@@ -769,4 +865,5 @@ class Store:
             self._begin_cycle(s, scan)
             return
         runtime.recovery_needed = False
+        runtime.poll_pending = False
         runtime.last_sync_at = utcnow()

@@ -268,3 +268,158 @@ def test_round_robin_account_window_progresses_without_cross_account_identity_co
     with Session(database[1]) as s:
         assert s.scalar(select(func.count()).select_from(Message).where(Message.direction=="out",Message.message_id==9001))==5
     store.close()
+
+
+# --- Temporary pre-model history holds recover without replay -------------------------------------------------
+from test_onlyfans_text_delivery_pg import FAN
+from db.onlyfans_models import OfIngress,OfRecovery
+
+
+def held_by_history(database,monkeypatch,*,model=None):
+    """A claimed input refused before any model call because this fan's own history is not current."""
+    monkeypatch.setenv("ONLYFANS_FAN_CURRENT_OVERRIDE",f"{ACCOUNT}:{FAN}")
+    store,_=start(database,monkeypatch)
+    with Session(database[1]) as s,s.begin():
+        runtime=s.get(OfRuntime,ACCOUNT);runtime.recovery_needed=True;runtime.last_sync_at=None
+    store.need_recovery(TENANT,ACCOUNT,FAN)
+    model=model or SyntheticNativeModel(reported_cost_millicents=7)
+    runner=worker(store,model=model)
+    report=runner.step()
+    assert (report.claims,report.held,report.queued)==(1,1,0)
+    with Session(database[1]) as s:
+        work=s.get(OfWork,(ACCOUNT,FAN))
+        assert (work.status,work.block_reason,work.block_phase)==("blocked","history_not_current","before_model")
+        assert s.scalar(select(func.count()).select_from(OfNativePlan))==0 and not model.calls
+    return store,runner,model
+
+
+def complete_fan_recovery(store):
+    claim=store.claim_recovery(TENANT,ACCOUNT)
+    assert claim is not None and claim.fan_id==FAN
+    assert store.recovery_page(TENANT,claim,[],has_more=False)=="complete"
+
+
+def counts(database):
+    with Session(database[1]) as s:
+        return (s.scalar(select(func.count()).select_from(OfNativePlan)),s.scalar(select(func.count()).select_from(OfTextIntent)),
+            s.scalar(select(func.count()).select_from(OfTextIntent).where(OfTextIntent.status=="accepted")))
+
+
+def test_temporary_history_hold_clears_and_the_same_input_is_answered_once(database,monkeypatch):
+    store,runner,model=held_by_history(database,monkeypatch)
+    # Still not current: stepping keeps the hold and makes no model call.
+    for _ in range(2):assert runner.step().claims==0
+    assert counts(database)==(0,0,0) and not model.calls
+    complete_fan_recovery(store)
+    first=runner.step()
+    assert (first.claims,first.queued,first.accepted,first.errors)==(1,1,1,0)
+    for _ in range(3):assert runner.step().claims==0
+    assert counts(database)==(1,1,1) and len(model.calls)==1
+    with Session(database[1]) as s:
+        work=s.get(OfWork,(ACCOUNT,FAN));assert work.block_reason is None and work.block_phase is None
+        assert s.scalar(select(func.count()).select_from(Message).where(Message.direction=="out"))==1
+        assert s.get(OfDeliveryPolicy,ACCOUNT).used_units==1
+    store.close()
+
+
+def plan_count_for_new_revision(database):
+    with Session(database[1]) as s:
+        return [(row.input_revision,row.status) for row in s.scalars(select(OfNativePlan).order_by(OfNativePlan.input_revision))]
+
+
+@pytest.mark.parametrize("change",["pause","takeover"])
+def test_control_change_during_a_history_hold_is_never_overridden(database,monkeypatch,change):
+    store,runner,model=held_by_history(database,monkeypatch)
+    with Session(database[1]) as s:revision=s.get(OfConversationState,(ACCOUNT,FAN)).revision
+    action,mode=("pause_automation","paused") if change=="pause" else ("request_takeover","human_controlled")
+    store.control(TENANT,ACCOUNT,FAN,mode=mode,expected_revision=revision,command_key="c-"+change,actor="synthetic",
+        reason="operator decision",action=action)
+    complete_fan_recovery(store)
+    assert store.reconcile_blocked(TENANT,ACCOUNT)==0
+    for _ in range(3):assert runner.step().claims==0
+    assert counts(database)==(0,0,0) and not model.calls
+    with Session(database[1]) as s:assert s.get(OfWork,(ACCOUNT,FAN)).status=="blocked"
+    store.close()
+
+
+def test_newer_input_after_a_history_hold_is_answered_once_on_its_own_revision(database,monkeypatch):
+    store,runner,model=held_by_history(database,monkeypatch)
+    store.record(TENANT,ACCOUNT,event(mid=2,body="Are you still there?"));store.drain(TENANT,ACCOUNT);due(database[1])
+    complete_fan_recovery(store)
+    assert store.reconcile_blocked(TENANT,ACCOUNT)==0  # _apply already re-waited it; nothing stale to wake
+    result=runner.step()
+    assert (result.claims,result.accepted)==(1,1)
+    for _ in range(3):assert runner.step().claims==0
+    assert counts(database)==(1,1,1) and len(model.calls)==1
+    assert "Are you still there?" in json.dumps(model.calls[0])
+    store.close()
+
+
+def test_stale_binding_during_a_history_hold_sends_nothing(database,monkeypatch):
+    store,runner,model=held_by_history(database,monkeypatch)
+    complete_fan_recovery(store)
+    with Session(database[1]) as s,s.begin():
+        s.get(OfCreatorBinding,"binding-"+ACCOUNT).revoked_at=utcnow()
+    with pytest.raises(Refused):store.reconcile_blocked(TENANT,ACCOUNT)
+    for _ in range(2):runner.step()
+    assert counts(database)==(0,0,0) and not model.calls
+    with Session(database[1]) as s:assert s.get(OfWork,(ACCOUNT,FAN)).status=="blocked"
+    store.close()
+
+
+def test_quarantined_ingress_keeps_a_history_hold(database,monkeypatch):
+    store,runner,model=held_by_history(database,monkeypatch)
+    complete_fan_recovery(store)
+    with Session(database[1]) as s,s.begin():
+        s.add(OfIngress(account_id=ACCOUNT,binding_id="binding-"+ACCOUNT,event_key="q"*64,fan_id=FAN,message_id=77,
+            source="rest",payload="{}",status="quarantined",reason="conflicting_message_identity",received_at=utcnow()))
+    assert store.reconcile_blocked(TENANT,ACCOUNT)==0
+    for _ in range(2):assert runner.step().claims==0
+    assert counts(database)==(0,0,0) and not model.calls
+    store.close()
+
+
+def test_uncertain_model_operation_is_never_resumed_or_replayed(database,monkeypatch):
+    store,_=start(database,monkeypatch)
+    model=SyntheticNativeModel(fail=True,reported_cost_millicents=7);runner=worker(store,model=model)
+    assert runner.step().claims==1
+    with Session(database[1]) as s:
+        assert [p.status for p in s.scalars(select(OfNativePlan))]==["unknown"]
+        assert s.get(OfWork,(ACCOUNT,FAN)).status=="blocked"
+    # Even if the block were mislabelled as a retryable pre-model hold, the plan row for this input revision wins.
+    with Session(database[1]) as s,s.begin():
+        work=s.get(OfWork,(ACCOUNT,FAN));state=s.get(OfConversationState,(ACCOUNT,FAN))
+        work.block_reason,work.block_phase,work.block_input_revision="history_not_current","before_model",state.input_revision
+    assert store.reconcile_blocked(TENANT,ACCOUNT)==0
+    for _ in range(3):assert runner.step().claims==0
+    assert len(model.calls)==1 and counts(database)==(1,0,0)
+    store.close()
+
+
+def test_started_dispatch_keeps_its_hold(database,monkeypatch):
+    store,_=start(database,monkeypatch)
+    model=SyntheticNativeModel(reported_cost_millicents=7)
+    runner=worker(store,model=model)
+    assert runner.step().accepted==1
+    # A later retryable-looking hold on the same revision is not woken: a plan and intent already exist.
+    with Session(database[1]) as s,s.begin():
+        work=s.get(OfWork,(ACCOUNT,FAN));state=s.get(OfConversationState,(ACCOUNT,FAN))
+        work.status,work.block_reason,work.block_phase,work.block_input_revision="blocked","history_not_current","before_model",state.input_revision
+    assert store.reconcile_blocked(TENANT,ACCOUNT)==0
+    assert counts(database)==(1,1,1) and len(model.calls)==1
+    store.close()
+
+
+def test_only_retryable_pre_model_reasons_are_woken(database,monkeypatch):
+    store,runner,model=held_by_history(database,monkeypatch)
+    complete_fan_recovery(store)
+    for reason,phase in (("refused","before_model"),("history_not_current","model_started"),("history_not_current",None)):
+        with Session(database[1]) as s,s.begin():
+            work=s.get(OfWork,(ACCOUNT,FAN));work.block_reason,work.block_phase=reason,phase
+        assert store.reconcile_blocked(TENANT,ACCOUNT)==0
+    with Session(database[1]) as s,s.begin():
+        work=s.get(OfWork,(ACCOUNT,FAN));work.block_reason,work.block_phase="history_not_current","before_model"
+    assert store.reconcile_blocked(TENANT,ACCOUNT)==1
+    with Session(database[1]) as s:
+        work=s.get(OfWork,(ACCOUNT,FAN));assert work.status=="waiting" and work.lease_token is None
+    store.close()

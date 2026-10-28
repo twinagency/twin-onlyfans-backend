@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from db.onlyfans_delivery_models import OfDeliveryPolicy,OfNativePlan,OfTextIntent
 from onlyfans_read.contract import ID_PATTERN
-from .store import Refused,Store
+from .store import PlanRefused,Refused,Store
 from .text_delivery import SyntheticTextTransport,TextAuthority,MAX_SYNC_AGE_SECONDS
 
 
@@ -50,7 +50,7 @@ class CycleReport:
 class NativeWorker:
     """One serial lane per instance; separate processes compete through PG."""
     def __init__(self,store,tenant_id,accounts,*,accounts_per_cycle=4,model_timeout_seconds=10,facts_reader=None,
-                 history_recovery=False,history_memory=False,engagement=False):
+                 history_recovery=False,history_memory=False,engagement=False,recent_bootstrap=None):
         if os.environ.get("ONLYFANS_PROCESS_ROLE")!="worker" or type(store) is not Store:
             raise Refused("native worker requires an explicit worker Store")
         from .native_planning import NativeTextPlanner,SyntheticNativeModel
@@ -104,6 +104,10 @@ class NativeWorker:
         for flag in (history_recovery,history_memory,engagement):
             if type(flag) is not bool:raise Refused("invalid worker feature flag")
         self.history_recovery,self.history_memory=history_recovery,history_memory
+        # Bounded newest-history bootstrap and incremental reads are live-path work; they must
+        # not depend on whether the background archive import is enabled. None keeps the old coupling.
+        if recent_bootstrap is not None and type(recent_bootstrap) is not bool:raise Refused("invalid worker feature flag")
+        self.recent_bootstrap=history_recovery if recent_bootstrap is None else recent_bootstrap
         self.engagement_service=None
         if engagement:
             from .launch_engagement.service import EngagementService
@@ -221,7 +225,7 @@ class NativeWorker:
                     if account.read_connection_revision is not None:
                         from .worker import read_step
                         progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,
-                            connection_revision=account.read_connection_revision,recent_cutover=self.history_recovery)
+                            connection_revision=account.read_connection_revision,recent_cutover=self.recent_bootstrap)
                         report.ingress+=progress.applied
                         # Inactive verified accounts import archive history too; no model, automation or send.
                         if not stop.is_set():self._history_turn(account,report,revision=account.read_connection_revision)
@@ -240,7 +244,7 @@ class NativeWorker:
                     else:
                         from .worker import read_step
                         progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,
-                            recent_cutover=self.history_recovery)
+                            recent_cutover=self.recent_bootstrap)
                         report.ingress+=progress.applied
                     if stop.is_set():break
                     # After recent intake and before a new reply claim; yields to any claimed live work.
@@ -249,6 +253,9 @@ class NativeWorker:
                         if stop.is_set():break
                     queued,retired=self.planner.recover(self.tenant_id,account.account_id,limit=4)
                     report.queued+=queued;report.held+=retired
+                    # A cleared pre-model history hold resumes its own input; no new inbound is needed.
+                    try:self.store.reconcile_blocked(self.tenant_id,account.account_id,limit=4)
+                    except Refused:report.held+=1
                     if stop.is_set():break
                     self._deliver(account,report)
                     if stop.is_set():break
@@ -296,7 +303,10 @@ class NativeWorker:
                         if status in {"ready","queued"}:
                             self.planner.queue(self.tenant_id,account.account_id,identity);report.queued+=1
                         else:
-                            self.store.hold_claim(self.tenant_id,claim);report.held+=1
+                            # A plan row exists, so a model operation began: never auto-resumed.
+                            self.store.hold_claim(self.tenant_id,claim,reason="plan_"+status,phase="model_started");report.held+=1
+                    except PlanRefused as exc:
+                        self.store.hold_claim(self.tenant_id,claim,reason=exc.reason,phase=exc.phase);report.held+=1
                     except Refused:
                         self.store.hold_claim(self.tenant_id,claim);report.held+=1
                     if stop.is_set():break

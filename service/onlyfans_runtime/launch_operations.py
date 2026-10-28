@@ -437,7 +437,7 @@ def _readiness_memory_counts(s, account):
         "processedCurrentMessages": processed, "complete": stored == inspected}
 
 
-def _readiness(s, runtime, *, credential_reader=None):
+def _readiness(s, runtime, *, credential_reader=None, lock_catalog=True):
     """Truthful readiness from current owners, with explicit capability limits."""
     from db.models import AccountAiConfig, CatalogItem, GrokDailyCost, OfConversationState
     from db.schema import HEAD, check_schema
@@ -542,7 +542,7 @@ def _readiness(s, runtime, *, credential_reader=None):
     usable = 0
     for item in items[:200]:
         try:
-            catalog_terms(s, account, item.id)
+            catalog_terms(s, account, item.id, lock=lock_catalog)
         except Refused:
             continue
         usable += 1
@@ -576,4 +576,4 @@ def launch_readiness(store, tenant, account, *, credential_reader=None):
             # Mutation and admission paths retain their existing runtime locks.
             s.connection(execution_options={"isolation_level": "REPEATABLE READ"}).exec_driver_sql("SET TRANSACTION READ ONLY")
         runtime = read_scope(store, s, tenant, account)
-        return _readiness(s, runtime, credential_reader=credential_reader)
+        return _readiness(s, runtime, credential_reader=credential_reader, lock_catalog=False)

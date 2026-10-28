@@ -15,11 +15,11 @@ from db.models import ContentOffer, Fan, Message, OfCreatorBinding, Transaction
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfNativePlan, OfTextIntent
 from db.onlyfans_ledger_models import OfLedgerEvidence, OfLedgerExclusion, OfLedgerScan
-from db.onlyfans_models import OfRuntime, OfWork
+from db.onlyfans_models import OfIngress, OfRuntime, OfWork
 from onlyfans_read.agency_scope import actor_allowed
 from .launch_operations_models import OfLaunchCommand, OfLedgerResolution, OfLaunchWorkerHealth
 from .native_context import canonical
-from .store import Refused, utcnow
+from .store import Event, Refused, body_equivalent, utcnow
 
 
 def z(value):
@@ -395,6 +395,179 @@ def exclude_unresolved_ledger(store, tenant, account, *, transaction_id, command
         return result
 
 
+QUARANTINE_REASON = "conflicting_message_identity"
+# Differences that are only a representation of the same text. Every other class (real text, price, media,
+# direction) is resolved only when the operator names that exact event.
+BENIGN_QUARANTINE_CLASSES = frozenset({"identical", "markup_equivalent"})
+
+
+def classify_conflict(message, event):
+    """Name how an observed event differs from the stored message with the same identity."""
+    if message is None:
+        return "message_missing"
+    flags = []
+    if message.direction != event.direction:
+        flags.append("direction_changed")
+    if message.price_cents != event.price_cents:
+        flags.append("price_changed")
+    stored_media, observed_media = json.loads(message.media_ids or "[]"), list(event.media_ids)
+    if stored_media != observed_media:
+        flags.append("media_reordered" if sorted(stored_media) == sorted(observed_media)
+                     else "media_added" if not stored_media else "media_removed" if not observed_media
+                     else "media_changed")
+    if not body_equivalent(message.body, event.body):
+        flags.append("body_changed")
+    if not flags:
+        return "identical" if message.body == event.body else "markup_equivalent"
+    return flags[0] if len(flags) == 1 else "mixed"
+
+
+def _quarantine_entries(s, account, *, lock=False):
+    query = select(OfIngress).where(OfIngress.account_id == account, OfIngress.status == "quarantined").order_by(OfIngress.event_key)
+    entries = []
+    for row in s.scalars(query.with_for_update() if lock else query):
+        entry = {"eventKey": row.event_key, "reason": row.reason, "source": row.source,
+                 "fanId": row.fan_id, "messageId": row.message_id, "class": "not_eligible", "row": row}
+        if row.reason == QUARANTINE_REASON:
+            try:
+                event = Event(**json.loads(row.payload)).normalized()
+            except (TypeError, ValueError, Refused):
+                entry["class"] = "payload_unreadable"
+            else:
+                message = s.get(Message, (account, event.fan_id, event.message_id))
+                entry["class"] = classify_conflict(message, event)
+                entry["observedHash"] = digest([event.direction, event.body, event.price_cents, list(event.media_ids)])
+                entry["storedHash"] = None if message is None else digest(
+                    [message.direction, message.body, message.price_cents, json.loads(message.media_ids or "[]")])
+        entries.append(entry)
+    return entries
+
+
+def _entry_evidence(entry):
+    return {key: value for key, value in entry.items() if key != "row"}
+
+
+def _quarantine_fingerprint(entries):
+    return digest([[e["eventKey"], e["reason"], e["class"], e.get("storedHash"), e.get("observedHash")] for e in entries])
+
+
+def quarantine_status(store, tenant, account, *, event_keys=None):
+    """What resolve_quarantined_ingress would do now, without writing anything."""
+    with Session(store.engine) as s, s.begin():
+        runtime = read_scope(store, s, tenant, account)
+        entries = _quarantine_entries(s, runtime.account_id)
+        selected, held = _select_quarantine(entries, event_keys)
+        classes, held_classes = {}, {}
+        for entry in selected:
+            classes[entry["class"]] = classes.get(entry["class"], 0) + 1
+        for entry in held:
+            held_classes[entry["class"]] = held_classes.get(entry["class"], 0) + 1
+        return {"quarantined": len(entries), "wouldResolve": len(selected), "wouldResolveClasses": classes,
+                "heldClasses": held_classes,
+                "heldEventKeys": {cls: [e["eventKey"] for e in held if e["class"] == cls] for cls in held_classes},
+                "fingerprint": _quarantine_fingerprint(entries)}
+
+
+def _select_quarantine(entries, event_keys):
+    if event_keys is None:
+        selected = [e for e in entries if e["reason"] == QUARANTINE_REASON and e["class"] in BENIGN_QUARANTINE_CLASSES]
+    else:
+        if (type(event_keys) not in {list, tuple} or not event_keys or len(set(event_keys)) != len(event_keys)
+                or any(type(k) is not str or re.fullmatch(r"[a-f0-9]{64}", k) is None for k in event_keys)):
+            raise Refused("invalid quarantined event selection")
+        by_key = {e["eventKey"]: e for e in entries}
+        if any(k not in by_key for k in event_keys):
+            raise Refused("quarantined event unavailable")
+        selected = [by_key[k] for k in sorted(event_keys)]
+        if any(e["reason"] != QUARANTINE_REASON for e in selected):
+            raise Refused("event is not a conflicting message identity")
+    chosen = {e["eventKey"] for e in selected}
+    return selected, [e for e in entries if e["eventKey"] not in chosen]
+
+
+def resolve_quarantined_ingress(store, tenant, account, *, command_key, actor, reason, expected_fingerprint, event_keys=None):
+    """Release conflicting_message_identity quarantines as an audited operator decision.
+
+    The stored message is canonical history and is never rewritten; no money, receipt, counter or control
+    state is touched. Only the ingress row's status/reason change, and the full before-evidence (event keys,
+    per-row difference class, stored-vs-observed hashes) goes into the immutable command record. Without
+    event_keys only representation-only differences are released; any other class needs its event named.
+    Rows quarantined for other reasons (binding_changed, future_timestamp) are never released here. Recovery
+    is not cleared here: _mark_current clears it itself on the next complete cycle once nothing is quarantined.
+    """
+    command_identity(command_key, actor, reason, expected_fingerprint)
+    if event_keys is not None and (type(event_keys) not in {list, tuple} or any(type(k) is not str for k in event_keys)):
+        raise Refused("invalid quarantined event selection")
+    keys = None if event_keys is None else sorted(event_keys)
+    request_hash = digest([expected_fingerprint, keys, actor, reason])
+    with Session(store.engine) as s, s.begin():
+        runtime = read_scope(store, s, tenant, account)
+        prior = _prior(s, runtime, command_key, "quarantine_resolution", request_hash)
+        if prior is not None:
+            return prior
+        entries = _quarantine_entries(s, runtime.account_id, lock=True)
+        fingerprint = _quarantine_fingerprint(entries)
+        if fingerprint != expected_fingerprint:
+            raise Refused("quarantine state changed")
+        selected, held = _select_quarantine(entries, keys)
+        if not selected:
+            raise Refused("no quarantined events to resolve")
+        now, classes = utcnow(), {}
+        before = {"fingerprint": fingerprint, "quarantined": len(entries),
+                  "resolving": [_entry_evidence(e) for e in selected]}
+        for entry in selected:
+            classes[entry["class"]] = classes.get(entry["class"], 0) + 1
+        result = {"recorded": True, "resolved": len(selected), "classes": classes,
+                  "stillQuarantined": len(held), "eventKeysDigest": digest([e["eventKey"] for e in selected]),
+                  "commandKey": command_key}
+        _record(s, runtime, command_key, "quarantine_resolution", request_hash, actor, reason, before, result, now)
+        for entry in selected:
+            row = entry["row"]
+            row.status, row.reason = "applied", ("resolved:" + entry["class"])[:64]
+        s.flush()
+        return result
+
+
+def main(argv=None):
+    """Operator entry: python -m onlyfans_runtime.launch_operations resolve-quarantine ... (uses DATABASE_URL)."""
+    import argparse
+    import os
+    parser = argparse.ArgumentParser(prog="launch_operations")
+    sub = parser.add_subparsers(dest="action", required=True)
+    cmd = sub.add_parser("resolve-quarantine", help="Release conflicting_message_identity quarantines (dry-run first)")
+    cmd.add_argument("--account", required=True)
+    cmd.add_argument("--actor", required=True, help="op-session:<64 hex>")
+    cmd.add_argument("--reason", required=True)
+    cmd.add_argument("--dry-run", action="store_true", help="Compute and print only; write nothing")
+    cmd.add_argument("--expected-fingerprint", help="64 hex from the dry-run (required to write)")
+    cmd.add_argument("--command-key", help="64 hex; default is derived so a rerun is idempotent")
+    cmd.add_argument("--event-key", action="append", help="Release exactly this event (repeatable); needed for non-benign classes")
+    args = parser.parse_args(argv)
+    from .store import Store
+    store = Store(os.environ.get("DATABASE_URL", ""))
+    try:
+        status = quarantine_status(store, None, args.account, event_keys=args.event_key)
+        printable = {k: v for k, v in status.items() if k != "heldEventKeys"}
+        printable["heldEventKeys"] = {cls: keys[:20] for cls, keys in status["heldEventKeys"].items()}
+        if args.dry_run:
+            print(json.dumps({"dryRun": True, **printable}, sort_keys=True))
+            return 0
+        fingerprint = args.expected_fingerprint
+        if fingerprint is None:
+            print(json.dumps({"error": "--expected-fingerprint is required unless --dry-run", **printable}, sort_keys=True))
+            return 2
+        key = args.command_key or digest([args.account, fingerprint, args.actor, args.reason, args.event_key and sorted(args.event_key)])
+        result = resolve_quarantined_ingress(store, None, args.account, command_key=key, actor=args.actor,
+            reason=args.reason, expected_fingerprint=fingerprint, event_keys=args.event_key)
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    except Refused as exc:
+        print(json.dumps({"refused": str(exc)}))
+        return 1
+    finally:
+        store.close()
+
+
 def _readiness(s, runtime, *, credential_reader=None):
     """Truthful readiness from current owners, with explicit capability limits."""
     from db.models import AccountAiConfig, CatalogItem, GrokDailyCost, OfConversationState
@@ -533,3 +706,7 @@ def launch_readiness(store, tenant, account, *, credential_reader=None):
     with Session(store.engine) as s, s.begin():
         runtime = read_scope(store, s, tenant, account)
         return _readiness(s, runtime, credential_reader=credential_reader)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

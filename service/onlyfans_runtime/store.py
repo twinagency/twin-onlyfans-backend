@@ -113,6 +113,26 @@ class ScanClaim:
 
 
 
+def body_equivalent(stored, observed):
+    """True when a stored body and a freshly observed body are the same text.
+
+    Rows written by the legacy mirror or by our own sends keep the provider's rich-text form
+    ("<p>a<br />b</p>", "&amp;"); native history observations carry the visible text ("a\nb", "&").
+    Only that one representation difference is benign, and only through the same converter native
+    history uses. Any other difference in the text stays a conflict.
+    """
+    if stored == observed:
+        return True
+    if (type(stored) is not str or type(observed) is not str
+            or not stored.startswith("<p>") or not stored.endswith("</p>")):
+        return False
+    from .native_protocol import NativeProtocolError, history_text
+    try:
+        return history_text(stored) == observed
+    except NativeProtocolError:
+        return False
+
+
 def fan_current_override(account_id):
     """Explicit owner-approved fans that may be served before the account-wide
     recent recovery finishes: ONLYFANS_FAN_CURRENT_OVERRIDE="acct:fan,acct:fan"."""
@@ -278,7 +298,7 @@ class Store:
             if s.get(Fan, (account, event.fan_id)) is None:
                 s.add(Fan(account_id=account, fan_id=event.fan_id))
                 s.flush()
-            same = (existing.direction == event.direction and existing.body == event.body and
+            same = (existing.direction == event.direction and body_equivalent(existing.body, event.body) and
                     existing.price_cents == event.price_cents and json.loads(existing.media_ids or "[]") == list(event.media_ids))
             row.status = "applied" if same else "quarantined"
             row.reason = None if same else "conflicting_message_identity"

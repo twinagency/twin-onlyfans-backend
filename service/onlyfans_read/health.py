@@ -26,8 +26,12 @@ def sender_status(account, *, now=None, path=None):
 async def account_health(s,account):
     runtime=await s.get(OfRuntime,account);policy=await s.get(OfDeliveryPolicy,account)
     connection=await s.get(OfProviderConnection,account);scan=await s.get(OfLedgerScan,account);history=await s.get(OfLedgerHistory,account)
-    counts=dict((await s.execute(select(OfIngress.status,func.count()).where(OfIngress.account_id==account).group_by(OfIngress.status))).all())
-    processed=await s.scalar(select(func.max(OfIngress.applied_at)).where(OfIngress.account_id==account,OfIngress.status=='applied',OfIngress.source.in_(('ws','rest'))))
+    counts=dict((await s.execute(select(OfIngress.status,func.count()).where(OfIngress.account_id==account,OfIngress.status.in_(('pending','quarantined'))).group_by(OfIngress.status))).all())
+    # Use the existing account/status/received_at index and bound heap reads.
+    # A global MAX(applied_at) scans every historical payload on large accounts.
+    recent=select(OfIngress.applied_at,OfIngress.source).where(OfIngress.account_id==account,
+        OfIngress.status=='applied').order_by(OfIngress.received_at.desc(),OfIngress.event_key.desc()).limit(256).subquery()
+    processed=await s.scalar(select(func.max(recent.c.applied_at)).where(recent.c.source.in_(('ws','rest','catchup'))))
     incoming=await s.scalar(select(func.max(Message.created_at)).where(Message.account_id==account,Message.direction=='in'))
     recovery=await s.scalar(select(func.count()).select_from(OfRecovery).where(OfRecovery.account_id==account,OfRecovery.status!='complete'))
     unknown=await s.scalar(select(func.count()).select_from(OfTextIntent).where(OfTextIntent.account_id==account,OfTextIntent.status=='unknown'))
@@ -35,7 +39,7 @@ async def account_health(s,account):
     enabled=bool(runtime and runtime.enabled)
     health={
       'connection':{'lastSuccessAt':iso(connection.verified_at) if connection else None,'reason':None if connection and connection.status=='verified' else 'Connection needs verification.'},
-      'incoming':{'lastSuccessAt':iso(processed),'latestMessageAt':iso(incoming),'pending':counts.get('pending',0)},
+      'incoming':{'lastSuccessAt':iso(processed),'latestMessageAt':iso(incoming),'pending':counts.get('pending',0),'coverage':'Latest 256 applied intake events.','reason':None if processed else 'No recent incoming processing observed in this sample.'},
       'history':{'lastSuccessAt':iso(runtime.last_sync_at) if runtime else None,'pendingConversations':recovery,'quarantined':counts.get('quarantined',0),'reason':'History import requires repair.' if counts.get('quarantined',0) else 'History import is incomplete.' if not runtime or runtime.recovery_needed else None},
       'financial':{'lastSuccessAt':iso(scan.last_complete_at) if scan else None,'fullHistoryAt':iso(history.last_full_at) if history else None,'reason':'Financial sync requires review.' if scan and scan.status=='held' or history and history.status=='held' else 'Financial coverage is incomplete.' if not history or not history.last_full_at else None},
       'sender':sender,

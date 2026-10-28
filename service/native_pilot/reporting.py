@@ -77,13 +77,14 @@ async def report_outcomes(*, account_id, fan_id, receipts, run_error=None, now=N
             ref = attempt_ref(r["attempt_id"])
             if s.bind.dialect.name == "postgresql":
                 from sqlalchemy import text
-                proof = (await s.execute(text('SELECT p.account_id,p.fan_id,r.state,r.provider_message_id,a.provider_message_id '
+                proof = (await s.execute(text('SELECT p.account_id,p.fan_id,r.state,r.provider_message_id,a.provider_message_id,a.state '
                     'FROM fastt_runtime.native_pilot_receipts r JOIN fastt_runtime.native_pilots p ON p.pilot_id=r.pilot_id '
                     'JOIN fastt_runtime.twin_bridge_send_attempts a ON a.id=r.attempt_id '
                     'WHERE r.attempt_id=:attempt AND a.account_id=p.account_id AND a.fan_id=p.fan_id'),
                     {'attempt':int(r['attempt_id'])})).first()
                 if (not proof or (proof[0],proof[1],proof[2]) != (account_id,fan_id,r['state']) or
-                        proof[2]=='sent' and (str(proof[3])!=str(r['provider_message_id']) or str(proof[4])!=str(proof[3]))):
+                        proof[2]=='sent' and (proof[5]!='sent' or str(proof[3])!=str(r['provider_message_id']) or str(proof[4])!=str(proof[3])) or
+                        proof and proof[2]=='not_sent' and proof[5]!='refused'):
                     out['conflicts']+=1;attention=True
                     continue
             if r["state"] == "not_sent":

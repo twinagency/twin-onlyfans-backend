@@ -34,4 +34,6 @@ async def resolve(store,tenant,account,fan,*,attempt,provider_message_id,expecte
     args=SimpleNamespace(account=account,tenant=tenant,fan=fan,message_id=provider_message_id,intent_id=intent,
         pilot_id=pilot,attempt_id=number,command_key=command_key,actor=actor,
         reason='Dashboard operator: reconcile exact provider receipt',expected_revision=expected_revision)
-    return await command(Ledger(store.engine.url.render_as_string(hide_password=False)),args)
+    from native_pilot.ledger import Refused as NativeRefused
+    try:return await command(Ledger(store.engine.url.render_as_string(hide_password=False)),args)
+    except NativeRefused as exc:raise Refused('unresolved_delivery') from exc

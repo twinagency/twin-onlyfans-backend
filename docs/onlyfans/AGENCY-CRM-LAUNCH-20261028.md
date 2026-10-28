@@ -80,3 +80,11 @@ Rollback: restore the compatible preceding dashboard first if reverting the back
 
 Working runtime command access and designated controlled creator/fan fixtures are the next concrete dependencies. Source changes alone do not clear the launch blockers.
 
+
+## Follow-up after deployment authorization
+
+Server command access recovered. Independent inspection found dashboard GIT_SHA 4686e2e02a98c8e8d074755fdc10914aa011d75c and image b765bebb; its Git tree is exactly ecf53d4084835ecd9f92e7f7bf09c7ef5d9ac51e, identical to release 52b2663, so the newer connection focus behavior is preserved. API and sender are image bc2a3dc7 / source 7f4eaf0b; worker is the separately deployed inbox-pagination image c3ef3b6f. Schema evidence reports 0098_ledger_exclusion.
+
+Nicky readiness root cause was reproduced with database read-only enforced: exact stored count 762898 took 2.213s; the source-validated memory receipt full join counted 762428 and took 18.815s, above both dashboard 8s and normal API statement 10s limits. A merge-join alternative also exceeded 20s. Readiness now keeps the exact stored total and checks a bounded keyed source/receipt sample, explicitly returning full processed count unverified for larger histories; it never marks full memory coverage ready from a sample. Body digest/direction/timestamp/unsent/algorithm checks remain. Readiness reads preserve tenant/creator predicates without taking the mutation runtime lock; command/admission callers retain locking by default. The readiness-specific transport deadline is 12s, still below the 15s UI read bound.
+
+Final GitHub checks uncovered fixtures missed by local targeted checks: existing native headings are retained with a separate explicit acting-creator label; sidebar fixtures now include the real scope helper; membership fixtures include can_chat without altering manager policy. A mixed SQLite/PostgreSQL test was split so its real PostgreSQL manual-send case runs in the PostgreSQL job, with no skipped assertion. The load harness now prints hold evidence when its unchanged reply assertion fails. Cross-repository checks still require an explicitly supplied exact source archive. These failures are not passing release evidence.

@@ -77,8 +77,11 @@ def test_runtime_binding_denies_cross_tenant_and_unassigned_creator():
         try:
             assert Store._runtime(s, "tenant", "a").account_id == "a"
             with pytest.raises(Refused): Store._runtime(s, "another-agency", "a")
+            assert Store._runtime(s, "tenant", "a", lock=False).account_id == "a"
+            with pytest.raises(Refused): Store._runtime(s, "another-agency", "a", lock=False)
             current_scope.set(parse_scope(json.dumps(grant(creatorIds=[OTHER]))))
             with pytest.raises(Refused): Store._runtime(s, "tenant", "a")
+            with pytest.raises(Refused): Store._runtime(s, "tenant", "a", lock=False)
         finally: current_scope.reset(token)
     engine.dispose()
 
@@ -142,4 +145,33 @@ def test_historical_imports_do_not_inflate_current_binding_purchase_blockers():
         evidence = _ledger_core(s, runtime)
         assert evidence["unresolvedTransactions"] == 1 and evidence["commerceHold"]
         assert all(s.get(Transaction, identity).message_id is None for identity in [1, 2]), "No purchase was linked or evidence removed"
+    engine.dispose()
+
+
+def test_readiness_memory_sample_never_claims_full_coverage(monkeypatch):
+    import hashlib
+    from sqlalchemy import event
+    from db.models import Message
+    from onlyfans_runtime import launch_operations as operations
+    from onlyfans_runtime.launch_history_memory.memory import ALGORITHM
+    from onlyfans_runtime.launch_history_memory.models import MemoryReceipt
+    engine = create_engine('sqlite://')
+    @event.listens_for(engine, 'connect')
+    def md5(connection, _):
+        connection.create_function('md5', 1, lambda value: hashlib.md5((value or '').encode()).hexdigest())
+    Base.metadata.create_all(engine, tables=[model.__table__ for model in [Account, Fan, Message, MemoryReceipt]])
+    monkeypatch.setattr(operations, 'READINESS_MEMORY_SAMPLE_LIMIT', 2)
+    now = datetime(2026, 10, 28)
+    with Session(engine) as s, s.begin():
+        s.add_all([Account(id='a'), Account(id='b')]); s.flush()
+        s.add_all([Fan(account_id='a', fan_id=1), Fan(account_id='b', fan_id=1)]); s.flush()
+        for account, mid, body in [('a',1,'one'),('a',2,'changed'),('a',3,'three'),('b',1,'one')]:
+            s.add(Message(account_id=account, fan_id=1, message_id=mid, direction='in', body=body, created_at=now, is_unsent=False))
+            s.flush()
+            s.add(MemoryReceipt(account_id=account, fan_id=1, message_id=mid, algorithm=ALGORITHM,
+                body_md5=hashlib.md5(('old' if mid==2 else body).encode()).hexdigest(),
+                source_digest='a'*64, source_direction='in', source_at=now, source_unsent=False, processed_at=now))
+        s.flush()
+        assert operations._readiness_memory_counts(s,'a') == (3,None,{'inspectedMessages':2,'processedCurrentMessages':1,'complete':False})
+        assert operations._readiness_memory_counts(s,'b') == (1,1,{'inspectedMessages':1,'processedCurrentMessages':1,'complete':True})
     engine.dispose()

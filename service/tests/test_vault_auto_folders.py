@@ -125,7 +125,7 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pending_moves_to_real_categories_and_keeps_operator_membership(self):
         async with self.sessions.begin() as s:
-            row = await s.get(VaultItem, ("a", 1)); row.tags = None; row.ai_fields_json = "{}"
+            row = await s.get(VaultItem, ("a", 1)); row.tags = "[]"; row.ai_fields_json = "{}"
         self.assertEqual((await self.apply())["status"], "awaiting_metadata")
         async with self.sessions.begin() as s:
             pending = await s.scalar(select(VaultFolder).where(VaultFolder.created_by == "auto-category:pending"))

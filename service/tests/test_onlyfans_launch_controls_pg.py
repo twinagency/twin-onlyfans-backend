@@ -601,3 +601,46 @@ def test_control_purpose_and_readonly_agency_cannot_mutate(database, monkeypatch
             assert s.scalar(select(func.count()).select_from(OfLaunchCommand)) == 0
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("projection", ["launch_readiness", "ledger_status"])
+def test_read_projection_snapshot_fences_concurrent_tenant_rebinding(database, monkeypatch, projection):
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+    import onlyfans_runtime.launch_operations as operations
+    store = seed(*database)
+    original = operations.read_scope
+    checked = []
+    def observe(owner, session, tenant, account):
+        runtime = original(owner, session, tenant, account)
+        assert session.scalar(text("SHOW transaction_isolation")) == "repeatable read"
+        assert session.scalar(text("SHOW transaction_read_only")) == "on"
+        old_binding = runtime.binding_id
+        with Session(store.engine) as other, other.begin():
+            other.get(OfCreatorBinding, old_binding).revoked_at = utcnow()
+            other.flush()
+            other.add(OfCreatorBinding(id="snapshot-new-owner", tenant_id="another-tenant",
+                creator_id="another-creator", creator_name="New synthetic owner",
+                account_id=account, handle="synthetic", channel="onlyfans"))
+            other.flush()
+            other.get(OfRuntime, account).binding_id = "snapshot-new-owner"
+            other.add(Message(account_id=account, fan_id=FAN, message_id=999,
+                direction="in", body="New owner's private evidence", created_at=utcnow()))
+        assert runtime.binding_id == old_binding
+        assert session.scalar(select(func.count()).select_from(Message).where(Message.account_id == account)) == 0
+        with pytest.raises(DBAPIError):
+            with session.begin_nested():
+                session.execute(text("UPDATE of_runtime SET enabled=false WHERE account_id=:account"), {"account": account})
+        checked.append(True)
+        return runtime
+    monkeypatch.setattr(operations, "read_scope", observe)
+    try:
+        from onlyfans_runtime.launch_personality_credentials import personality_credential_status
+        kwargs = {"credential_reader": personality_credential_status} if projection == "launch_readiness" else {}
+        getattr(operations, projection)(store, TENANT, ACCOUNT, **kwargs)
+        assert checked == [True]
+        monkeypatch.setattr(operations, "read_scope", original)
+        with pytest.raises(Refused):
+            getattr(operations, projection)(store, TENANT, ACCOUNT)
+    finally:
+        store.close()

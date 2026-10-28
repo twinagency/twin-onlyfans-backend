@@ -47,8 +47,12 @@ def test_worker_refuses_foreign_media_and_preserves_metadata(database,monkeypatc
 
 
 def test_import_places_pending_media_in_unsorted_then_classifies_saved_metadata(database,monkeypatch):
-    monkeypatch.setenv("ONLYFANS_AUTOMATIC_IMPORTS_ENABLED","1")
     store,account,_,_=sync(database,monkeypatch,[media()])
+    monkeypatch.setenv("ONLYFANS_AUTOMATIC_IMPORTS_ENABLED","1")
+    from onlyfans_runtime.vault_management import request_sync, process_vault_jobs
+    from test_onlyfans_connections_pg import ACTOR
+    request_sync(store,TENANT,account,expected_connection_revision=1,command_key="f"*64,actor=ACTOR)
+    assert process_vault_jobs(store,TENANT)==1
     folders=get_folders(store,TENANT,account)
     assert len(folders)==1 and folders[0]["name"]=="Unsorted" and folders[0]["count"]==1
     assert folders[0]["automatic"] is True and folders[0]["coverMediaId"]=="11"

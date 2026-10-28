@@ -28,6 +28,8 @@ the offline suite asserts that).
 """
 
 from __future__ import annotations
+import hashlib
+import json
 
 from datetime import datetime
 
@@ -47,7 +49,7 @@ from .contract import (
     parse_iso,
     accounts_envelope,
 )
-from .errors import BadRequest, Refused
+from .errors import Unavailable, BadRequest, Refused
 from .repo import DETAIL_MESSAGE_LIMIT, DETAIL_OWNED_LIMIT, OnlyFansReadRepo
 
 
@@ -116,7 +118,9 @@ async def list_conversations(
     limit: int | None = None,
     now: datetime | None = None,
     ai_only: bool = False,
+    query: str = "",
     search: str | None = None,
+    filter: str | None = None,
 ) -> dict:
     """One page of an account's conversations, newest activity first."""
     account = _require_id(account_id, what="account")
@@ -124,13 +128,19 @@ async def list_conversations(
     if binding is None:
         raise Refused("unknown_account")
 
-    from .search import normalize_search
-    query = normalize_search(search)
-    query_key = query + ("|ai" if ai_only else "")
+    if search is not None:
+        from .search import normalize_search
+        if query:
+            raise BadRequest("invalid_search", "Use one fan search parameter.")
+        query = normalize_search(search)
+    if type(query) is not str or len(query) > 200 or any(ord(c) < 32 for c in query) or filter not in (None, "unread", "attention"):
+        raise BadRequest("invalid_search", "Search fan name, username or ID using up to 200 characters.")
+    query = query.strip().removeprefix("@")
+    search_scope = hashlib.sha256(json.dumps([binding.binding_id, query, filter, ai_only], separators=(",", ":")).encode()).hexdigest()[:16] if query or filter else None
     before: tuple[datetime | None, int] | None = None
     if cursor:
         try:
-            raw_anchor, anchor_fan = decode_cursor(cursor, account_id=account, query_key=query_key)
+            raw_anchor, anchor_fan = decode_cursor(cursor, account_id=account, scope_key=search_scope)
             # `parse_iso`, not `datetime.fromisoformat`: a cursor's timestamp has
             # to be the same KIND of value the columns hold (naive UTC), or the
             # keyset comparison raises on an aware/naive mismatch.
@@ -142,7 +152,8 @@ async def list_conversations(
     # One extra row, so "is there another page" is answered by the data rather
     # than by a count that would be a second query.
     narrowing = {"ai_only": True} if ai_only else {}
-    if query:narrowing["search"] = query
+    if query: narrowing["query"] = query
+    if filter: narrowing["filter"] = filter
     rows = await repo.conversation_page(account_id=account, before=before, limit=size + 1, **narrowing)
     has_more = len(rows) > size
     page_rows = rows[:size]
@@ -181,7 +192,7 @@ async def list_conversations(
             account_id=account,
             last_activity_at=iso(tail.last_message_at),
             fan_id=tail.fan_id,
-            query_key=query_key,
+            scope_key=search_scope,
         )
 
     return page_envelope(account_id=account, items=items, next_cursor=next_cursor)
@@ -247,6 +258,13 @@ async def get_conversation(
         anchor=anchor,
         now=now,
     )
+    financials = getattr(repo, "fan_financials", None)
+    if callable(financials):
+        try:
+            detail["financials"] = await financials(account_id=account, fan_id=fan_id)
+        except Unavailable:
+            # A money read outage must stay visible without removing the fan transcript.
+            detail["financials"] = None
     spend = getattr(repo, "fan_spend", None)
     if callable(spend):detail["spend"] = await spend(account_id=account, fan_id=fan_id)
     detail["previousCursor"] = (encode_thread_cursor(account_id=account, fan_id=fan_id,

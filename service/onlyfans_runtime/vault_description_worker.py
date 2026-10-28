@@ -98,14 +98,14 @@ class VaultDescriptionWorker:
                 cursor = account
                 args = [sys.executable, "-m", "native_pilot.tools.describe_imported_vault",
                     "--tenant", self.tenant, "--account", account, "--binding", binding,
-                    "--revision", str(revision), "--limit", "4"]
+                    "--revision", str(revision), "--limit", "1"]
                 with self.lock:
                     if self.stop.is_set():
                         break
                     self.child = subprocess.Popen(args, cwd=Path(__file__).resolve().parents[1],
                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
                 try:
-                    output, _ = self.child.communicate(timeout=300)
+                    output, _ = self.child.communicate(timeout=900)
                 except subprocess.TimeoutExpired:
                     self.child.kill()
                     self.child.communicate()
@@ -133,7 +133,7 @@ class VaultDescriptionWorker:
                 except ProcessLookupError:
                     pass
         if self.thread is not None:
-            self.thread.join(timeout=310)
+            self.thread.join(timeout=910)
 
 
 def main():
@@ -161,3 +161,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

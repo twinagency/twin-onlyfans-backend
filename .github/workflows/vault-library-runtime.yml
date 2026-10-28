@@ -1,0 +1,71 @@
+name: Vault library runtime and checks
+on:
+  push:
+    branches: ["codex/automatic-media-library-20261029"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-onlyfans-test.txt aiosqlite pytest-asyncio
+      - name: Verify import, classification, preview ownership and caption guards
+        working-directory: service
+        env:
+          PYTHONPATH: .:tests
+          ONLYFANS_PROCESS_ROLE: worker
+          TWIN_FASTT_CONFIG_ISOLATED: "1"
+          DATABASE_URL: postgresql+psycopg2://postgres@localhost:5432/postgres
+          ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres@localhost:5432/postgres
+        run: >-
+          python -m pytest -q --tb=short
+          tests/test_vault_auto_folders.py
+          tests/test_vault_auto_folders_pg.py
+          tests/test_vault_preview_worker_pg.py
+          tests/test_automatic_vault_descriptions_pg.py
+          tests/test_onlyfans_vault_previews_pg.py
+          tests/test_onlyfans_vault_editing_pg.py
+          tests/test_onlyfans_vault_response_limits.py
+          tests/test_onlyfans_vault_pg.py
+          tests/test_native_pilot_caption_vault.py
+      - name: Package executable runtime without deployment credentials
+        run: |
+          docker build -f Dockerfile.onlyfans --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "twin-vault-library:$GITHUB_SHA" .
+          mkdir -p fixture-images fixture-spool
+          docker run --rm --network none \
+            -e ONLYFANS_PROCESS_ROLE=api \
+            -e DATABASE_URL=postgresql+psycopg2://synthetic@127.0.0.1:1/isolated \
+            -e VAULT_IMAGE_DIR=/readonly-images -e VAULT_SPOOL_DIR=/writable-spool \
+            -v "$PWD/fixture-images:/readonly-images:ro" \
+            -v "$PWD/fixture-spool:/writable-spool" \
+            "twin-vault-library:$GITHUB_SHA" python -c 'from pathlib import Path; from onlyfans_runtime.vault_previews import request_preview,requested_ids; assert request_preview("acc-a","synthetic-binding",7001,11); assert requested_ids("acc-a","synthetic-binding",7001)==[11]; assert not list(Path("/readonly-images").iterdir()); print("PASS read-only gallery volume with writable preview handoff")'
+          mkdir -p runtime
+          docker image inspect "twin-vault-library:$GITHUB_SHA" --format '{{.Id}}' > runtime/image-id.txt
+          printf '%s\n' "$GITHUB_SHA" > runtime/source-sha.txt
+          docker save "twin-vault-library:$GITHUB_SHA" | gzip -n > runtime/backend.docker.tar.gz
+          cd runtime
+          sha256sum backend.docker.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twin-vault-library-runtime
+          path: runtime/
+          compression-level: 0
+          retention-days: 7

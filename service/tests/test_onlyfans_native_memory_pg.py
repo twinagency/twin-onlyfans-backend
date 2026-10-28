@@ -176,7 +176,7 @@ def test_manual_fan_language_uses_native_language_and_identity_owner(database,mo
     model=SyntheticNativeModel("Soy un clon de chat con IA.")
     identity=planner.prepare(TENANT,store.claim(TENANT),model)
     with Session(engine) as s:assert s.get(OfNativePlan,(ACCOUNT,identity)).status=="ready"
-    prompt=str(model.calls[0]);assert "OUTPUT LANGUAGE: Español (es)" in prompt and "answer honestly and directly" in prompt
+    prompt=str(model.calls[0]);assert "OUTPUT LANGUAGE: Español (es)" in prompt and "never claim or swear to be human" in prompt
     store.close()
 
 

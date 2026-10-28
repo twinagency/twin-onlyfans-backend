@@ -7,6 +7,7 @@ No signed URL, credential, new media record, classifier or model is returned.
 import hashlib
 import json
 import os
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select
@@ -45,7 +46,13 @@ def _read(account, binding, owner, media_id):
             return None
         if any(proof[k] != v for k, v in _scope(account, binding, owner, media_id).items()):
             return None
-        with path.open("rb") as handle:
+        # Legacy caption collectors may replace their shared .jpg file. Serve
+        # the verified gallery copy independently so analysis cannot blank it.
+        owned = path.with_suffix(".owned.jpg")
+        if owned.is_symlink():
+            return None
+        source = owned if owned.exists() else path
+        with source.open("rb") as handle:
             data = handle.read(images.MAX_STILL_BYTES + 1)
         if (not data or len(data) > images.MAX_STILL_BYTES or not images.image_type(data)
                 or proof["sha256"] != hashlib.sha256(data).hexdigest()):
@@ -53,6 +60,67 @@ def _read(account, binding, owner, media_id):
         return data
     except (OSError, ValueError, TypeError):
         return None
+
+
+def _request_path(account, media_id):
+    # The API's image volume is deliberately read-only. Cache requests belong
+    # in the existing shared writable spool, alongside other worker handoffs.
+    _paths(account, media_id)  # validate the same account/media namespace
+    configured = os.environ.get("VAULT_SPOOL_DIR")
+    root = Path(configured) / "preview-requests" if configured else images.IMAGE_DIR / ".preview-requests"
+    path = root / account / f"{media_id}.preview-request"
+    if path.parent.resolve().parent != root.resolve():
+        raise Refused("vault preview request unavailable")
+    return path
+
+
+def request_preview(account, binding, owner, media_id):
+    """A canonical cache miss requests worker priority, without provider I/O."""
+    return images.write(_request_path(account, media_id), canonical(_scope(account, binding, owner, media_id)).encode())
+
+
+def requested_ids(account, binding, owner):
+    path = _request_path(account, 1)
+    result=[]
+    for marker in path.parent.glob("*.preview-request"):
+        try:
+            value=marker.name.split(".",1)[0]
+            if not value.isascii() or not value.isdecimal() or value.startswith("0") or len(value)>19:
+                continue
+            mid=_id(int(value))
+            if marker.is_symlink() or marker.stat().st_size>2048:
+                continue
+            if json.loads(marker.read_bytes()) == _scope(account,binding,owner,mid):
+                result.append((marker.stat().st_mtime,mid))
+        except (OSError,ValueError,TypeError,Refused):
+            continue
+    return [mid for _,mid in sorted(result)[:24]]
+
+
+def clear_request(account, binding, owner, media_id):
+    marker=_request_path(account,media_id)
+    try:
+        if not marker.is_symlink() and marker.stat().st_size<=2048 and json.loads(marker.read_bytes())==_scope(account,binding,owner,media_id):
+            marker.unlink(missing_ok=True)
+    except (OSError,ValueError,TypeError):
+        pass
+
+
+def promote_cached(account, binding, owner, media_id):
+    """Pin an already ownership-verified still before a legacy collector runs."""
+    if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
+        raise Refused("vault preview warming requires the worker role")
+    data = _read(account, binding, owner, media_id)
+    if data is None:
+        return False
+    path, _ = _paths(account, media_id)
+    owned = path.with_suffix(".owned.jpg")
+    if owned.is_symlink():
+        return False
+    okay = owned.exists() or images.write(owned, data)
+    if okay:
+        clear_request(account,binding,owner,media_id)
+    return okay
 
 
 def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
@@ -68,11 +136,11 @@ def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
         raise Refused("invalid vault preview page")
     def one(media):
         if stop is not None and stop.is_set(): return False
-        if (media.get("type") not in {"photo", "video"} or media.get("isDeleted") is True
+        if (media.get("type") not in {"photo", "video", "gif"} or media.get("isDeleted") is True
                 or media.get("isHidden") is True or media.get("canView") is False): return False
         mid = _id(media.get("id"))
         try:
-            if _read(transport.account_id, binding_id, owner_id, mid) is not None: return True
+            if promote_cached(transport.account_id, binding_id, owner_id, mid): return True
             url = still_url(media)
             if not url: return False
             data = transport.still_bytes(url)
@@ -80,7 +148,8 @@ def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
             path, receipt = _paths(transport.account_id, mid)
             proof = {**_scope(transport.account_id, binding_id, owner_id, mid),
                      "sha256": hashlib.sha256(data).hexdigest()}
-            return images.write(path, data) and images.write(receipt, canonical(proof).encode())
+            return (images.write(path, data) and images.write(path.with_suffix(".owned.jpg"), data)
+                and images.write(receipt, canonical(proof).encode()))
         except Exception:
             # CDN failures may contain authenticated URLs. No raw exception log.
             return False
@@ -88,7 +157,7 @@ def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
         return sum(executor.map(one, rows))
 
 
-def asset_scope(session, store, tenant, account, media_id):
+def asset_scope(session, store, tenant, account, media_id, *, allow_audio=False):
     """Shared canonical ownership check for cached stills and full video reads."""
     if (type(media_id) is not str or not media_id.isascii() or not media_id.isdecimal()
             or media_id.startswith("0") or len(media_id) > 19):
@@ -100,7 +169,7 @@ def asset_scope(session, store, tenant, account, media_id):
     job = session.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
     connection = session.execute(select(OfProviderConnection.binding_id, OfProviderConnection.owner_id,
         OfProviderConnection.revision).where(OfProviderConnection.account_id == account)).first()
-    if (row is None or row.removed_at is not None or row.kind not in {"photo", "video"}
+    if (row is None or row.removed_at is not None or row.kind not in ({"photo", "video", "gif", "audio"} if allow_audio else {"photo", "video", "gif"})
             or not _provenance(row, observation, job, connection, runtime.binding_id, current_revision=False)):
         raise Refused("vault preview unavailable")
     raw = json.loads(row.raw_json)
@@ -116,5 +185,8 @@ def read_preview(store, tenant, account, media_id):
         # Cached bytes remain readable after pause/expiry, never becoming sellable.
         mid = row.media_id
         data = _read(account, runtime.binding_id, connection.owner_id, mid)
-        if data is None: raise Refused("vault preview unavailable")
+        if data is None:
+            request_preview(account,runtime.binding_id,connection.owner_id,mid)
+            raise Refused("vault preview unavailable")
         return data, images.image_type(data)
+

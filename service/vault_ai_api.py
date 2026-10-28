@@ -2697,7 +2697,7 @@ def _parse_describe(text: str) -> dict[str, Any]:
 
 async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-30b",
                         prompt_version: str = "v2",
-                        frames: int | None = None) -> dict[str, Any]:
+                        frames: int | None = None, scope_guard=None) -> dict[str, Any]:
     """Describe one item.
 
     `prompt_version` picks the bake-off variant: "v2" (default — rich structured
@@ -2706,6 +2706,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     `frames` overrides the duration ladder; None = `_frames_for_duration`.
     """
     async with get_session() as s:
+        if scope_guard is not None:
+            await scope_guard(s, media_id)
         item = await s.get(VaultItem, (account_id, media_id))
     if item is None:
         raise HTTPException(status_code=404, detail={"error": "not_in_mirror", "media_id": media_id})
@@ -2715,6 +2717,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     if not got.images:
         status = _NO_IMAGE_STATUS.get(got.reason, "fetch_failed")
         async with get_session() as s:
+            if scope_guard is not None:
+                await scope_guard(s, media_id, phase="write")
             await s.execute(
                 update(VaultItem)
                 .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
@@ -2762,6 +2766,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
             # DEEPINFRA_API_KEY failed all 327 items of a vault while the UI
             # reported "done 327/327" and the row stayed blank.
             async with get_session() as s:
+                if scope_guard is not None:
+                    await scope_guard(s, media_id, phase="write")
                 await s.execute(
                     update(VaultItem)
                     .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
@@ -2781,6 +2787,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
 
     if not (data.get("description") or data.get("tags")):
         async with get_session() as s:
+            if scope_guard is not None:
+                await scope_guard(s, media_id, phase="write")
             await s.execute(
                 update(VaultItem)
                 .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
@@ -2838,7 +2846,7 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     # across a re-describe. A locked dispute fix outranks model and carried alike.
     prev = load_json(item.ai_fields_json, {}) or {}
     for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
-                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1"):
+                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
         if key in prev:
             data[key] = prev[key]
     for key, val in (load_json(item.operator_overrides_json, {}) or {}).items():
@@ -2871,13 +2879,17 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
         vals["search_text"] = search_text
 
     async with get_session() as s:
+        if scope_guard is not None:
+            await scope_guard(s, media_id, phase="write")
         # A concurrent backfill may have assigned folders while vision ran.
         # Carry its marker from the current row, not just the earlier snapshot.
         current_fields = await s.scalar(select(VaultItem.ai_fields_json).where(
             VaultItem.account_id == account_id, VaultItem.media_id == media_id).with_for_update())
         current_fields = load_json(current_fields, {}) or {}
-        if isinstance(current_fields, dict) and current_fields.get("_auto_folders_v1") is True:
-            data["_auto_folders_v1"] = True
+        if isinstance(current_fields, dict):
+            for marker in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
+                if current_fields.get(marker) is True:
+                    data[marker] = True
             vals["ai_fields_json"] = json.dumps(data, ensure_ascii=False, default=str)
         await s.execute(
             update(VaultItem)
@@ -2890,6 +2902,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     try:
         from vault_auto_folders import assign as assign_auto_folders
         async with get_session() as s:
+            if scope_guard is not None:
+                await scope_guard(s, media_id, phase="categorise")
             await assign_auto_folders(s, account_id, media_id)
             await s.commit()
     except Exception:
@@ -3743,3 +3757,4 @@ async def hide_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
         pass
     log.info("vault item hidden account=%s media=%s", account_id, media_id)
     return {"ok": True, "media_id": int(media_id), "hidden": True}
+

@@ -158,7 +158,7 @@ def get_connection(store,tenant,account,*,include_sync=False,include_runner=Fals
                 'lastCompleteSyncAt':runtime.last_sync_at.isoformat()+'Z' if runtime.last_sync_at else None}
         return result
 
-def personality_credential_status(s,account,binding_id,*,_unavailable_as_none=False):
+def personality_credential_status(s,account,binding_id,*,_unavailable_as_none=False,_lock_runtime=True):
     """Read non-secret readiness through the existing credential authority.
 
     The personality callback already runs inside its scoped transaction. Resolve
@@ -178,7 +178,7 @@ def personality_credential_status(s,account,binding_id,*,_unavailable_as_none=Fa
             or binding.revoked_at is not None or type(binding.tenant_id) is not str
             or not ID_PATTERN.fullmatch(binding.tenant_id)):
         raise Refused('scope unavailable')
-    runtime=Store._runtime(s,binding.tenant_id,account)
+    runtime=Store._runtime(s,binding.tenant_id,account,lock=_lock_runtime)
     if runtime.binding_id!=binding_id:raise Refused('scope unavailable')
     config=s.get(AccountAiConfig,account)
     try:selected=explicit_model(config,'ai_chatter',MODELS)

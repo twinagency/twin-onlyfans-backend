@@ -243,6 +243,9 @@ def main(argv=None):
     store = None
     media_worker = None
     ledger_worker = None
+    description_worker = None
+    preview_worker = None
+    folder_worker = None
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
             previous[sig] = signal.signal(sig, lambda *_: stop.set())
@@ -283,6 +286,16 @@ def main(argv=None):
             except Exception:
                 _emit({"schemaVersion":"of-worker.v1","state":"creator_source_unavailable"})
                 return 1
+        if os.environ.get("ONLYFANS_AUTOMATIC_IMPORTS_ENABLED") == "1" and not args.once:
+            from onlyfans_runtime.vault_description_worker import VaultDescriptionWorker
+            from onlyfans_runtime.vault_preview_worker import VaultPreviewWorker
+            from onlyfans_runtime.vault_folder_worker import VaultFolderWorker
+            description_worker = VaultDescriptionWorker(store, tenant, stop, observe=_emit)
+            preview_worker = VaultPreviewWorker(store, tenant, stop, observe=_emit)
+            folder_worker = VaultFolderWorker(store, tenant, stop)
+            folder_worker.start()
+            description_worker.start()
+            preview_worker.start()
         if os.environ.get("ONLYFANS_VAULT_MEDIA_ENABLED") == "1" and not args.once:
             from onlyfans_runtime.vault_media_worker import MediaWorker
             media_worker = MediaWorker(store, tenant, stop)
@@ -304,6 +317,12 @@ def main(argv=None):
                         worker_options=worker_options)
     finally:
         stop.set()
+        if description_worker is not None:
+            description_worker.join()
+        if folder_worker is not None:
+            folder_worker.join()
+        if preview_worker is not None:
+            preview_worker.join()
         if media_worker is not None:
             media_worker.join()
         if ledger_worker is not None:
@@ -318,3 +337,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+

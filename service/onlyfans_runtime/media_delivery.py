@@ -27,11 +27,11 @@ def media_ids(raw):
     return ids
 
 
-def catalog_terms(session, account_id, item_id, *, price_cents=None):
-    """Locked, bounded snapshot of an enabled single and its extant files."""
+def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
+    """Bounded terms; send paths lock, readiness uses its read-only snapshot."""
     _id(item_id)
-    item = session.scalar(select(CatalogItem).where(CatalogItem.account_id == account_id,
-        CatalogItem.id == item_id).with_for_update(read=True))
+    item_query = select(CatalogItem).where(CatalogItem.account_id == account_id, CatalogItem.id == item_id)
+    item = session.scalar(item_query.with_for_update(read=True) if lock else item_query)
     if (item is None or not item.enabled or item.script_id is not None or item.is_free_teaser
             or type(item.description_for_ai) is not str or not item.description_for_ai.strip()
             or len(item.description_for_ai.encode()) > 2000):
@@ -60,8 +60,9 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None):
     if (type(previews) is not list or any(type(v) is not int or v not in ids for v in previews)
             or len(set(previews)) != len(previews) or set(previews) == set(ids)):
         raise Refused("invalid preview identities")
-    rows = session.scalars(select(VaultItem).where(VaultItem.account_id == account_id,
-        VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id).with_for_update(read=True)).all()
+    media_query = select(VaultItem).where(VaultItem.account_id == account_id,
+        VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id)
+    rows = session.scalars(media_query.with_for_update(read=True) if lock else media_query).all()
     if len(rows) != len(ids) or any(r.removed_at is not None or r.kind not in {"image", "photo", "video"} for r in rows):
         raise Refused("catalogue media unavailable")
     snapshot = {"item": {key: getattr(item, key) for key in (

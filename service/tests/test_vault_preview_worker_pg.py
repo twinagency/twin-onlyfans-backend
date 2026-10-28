@@ -77,3 +77,18 @@ def test_single_asset_transport_has_bounded_scope_and_identity_check(monkeypatch
     monkeypatch.setattr(wire,"_signed_request",read)
     assert wire.vault_media_by_id(11)["id"]==11 and calls==["identity","read"]
     with pytest.raises(Refused):wire.vault_media_by_id(True)
+
+
+def test_background_classifier_catches_existing_and_later_imports_without_models(database,monkeypatch):
+    store,account,_,_=sync(database,monkeypatch,[media()])
+    from onlyfans_runtime.vault_folder_worker import classify_batch
+    assert classify_batch(store,TENANT,account)==1
+    assert next(f for f in get_folders(store,TENANT,account) if f["name"]=="Unsorted")["count"]==1
+    assert classify_batch(store,TENANT,account)==0
+    with Session(store.engine) as session,session.begin():
+        session.get(VaultItem,(account,11)).description="A selfie outdoors."
+    assert classify_batch(store,TENANT,account)==1
+    folders=get_folders(store,TENANT,account)
+    assert {f["name"] for f in folders if f["count"]}=={"Selfies","Outdoors"}
+    assert classify_batch(store,TENANT,account)==0
+    store.close()

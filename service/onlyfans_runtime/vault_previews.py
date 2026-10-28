@@ -88,7 +88,7 @@ def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
         return sum(executor.map(one, rows))
 
 
-def asset_scope(session, store, tenant, account, media_id):
+def asset_scope(session, store, tenant, account, media_id, *, allow_audio=False):
     """Shared canonical ownership check for cached stills and full video reads."""
     if (type(media_id) is not str or not media_id.isascii() or not media_id.isdecimal()
             or media_id.startswith("0") or len(media_id) > 19):
@@ -100,7 +100,7 @@ def asset_scope(session, store, tenant, account, media_id):
     job = session.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
     connection = session.execute(select(OfProviderConnection.binding_id, OfProviderConnection.owner_id,
         OfProviderConnection.revision).where(OfProviderConnection.account_id == account)).first()
-    if (row is None or row.removed_at is not None or row.kind not in {"photo", "video", "gif"}
+    if (row is None or row.removed_at is not None or row.kind not in ({"photo", "video", "gif", "audio"} if allow_audio else {"photo", "video", "gif"})
             or not _provenance(row, observation, job, connection, runtime.binding_id, current_revision=False)):
         raise Refused("vault preview unavailable")
     raw = json.loads(row.raw_json)

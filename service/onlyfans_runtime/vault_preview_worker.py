@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from db.models import VaultItem
+from .vault_folder_worker import accounts
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
 from .store import Refused
@@ -34,14 +35,11 @@ class VaultPreviewWorker:
     def run(self):
         while not self.stop.is_set():
             try:
-                with Session(self.store.engine) as session:
-                    accounts = list(session.scalars(select(OfRuntime.account_id)
-                        .join(OfProviderConnection, OfProviderConnection.account_id == OfRuntime.account_id)
-                        .where(OfProviderConnection.status == "verified").order_by(OfRuntime.account_id)))
+                scoped_accounts = accounts(self.store, self.tenant)
             except Exception:
                 self.stop.wait(15)
                 continue
-            for account in accounts:
+            for account in scoped_accounts:
                 if self.stop.is_set():
                     break
                 try:

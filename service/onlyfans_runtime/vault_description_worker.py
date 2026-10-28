@@ -151,8 +151,11 @@ def main():
     worker = VaultDescriptionWorker(store, os.environ["ONLYFANS_WORKER_TENANT"], stop,
         observe=lambda value: print(json.dumps(value), flush=True))
     from .vault_preview_worker import VaultPreviewWorker
+    from .vault_folder_worker import VaultFolderWorker
     previews = VaultPreviewWorker(store, os.environ["ONLYFANS_WORKER_TENANT"], stop)
+    folders = VaultFolderWorker(store, os.environ["ONLYFANS_WORKER_TENANT"], stop)
     try:
+        folders.start()
         previews.start()
         worker.start()
         stop.wait()
@@ -160,6 +163,7 @@ def main():
         stop.set()
         worker.join()
         previews.join()
+        folders.join()
         store.close()
 
 

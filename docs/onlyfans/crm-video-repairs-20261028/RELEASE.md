@@ -115,3 +115,6 @@ Worker release: https://github.com/twinagency/twin-dashboard/actions/runs/407230
 The worker-resolution rollback snapshot is `/var/lib/twin-release/crm-video-repairs-20261028/worker-resolution-f234c641/compose.before.json`. It restores the immediately preceding `1d5e4a31` / `afe0d86c` services and prior worker feature flag. A stopped `crm-resolution-rollback-f234c641` container retains that image. Reverting this particular worker patch must also switch off the API delivery-resolution capability; the old API implementation cannot execute provider reads under its role guard.
 
 Outstanding live acceptance is limited to fresh fan input followed by AI replies and native OnlyFans screen confirmation. Upload/paid delivery was not live-tested. No approval was requested for already-authorized deployments, and no account/fan pause, message budget, unknown attempt or raw history was reset.
+
+
+Final acceptance was repeated successfully at **2026-10-28 16:17:09 UTC**: https://github.com/twinagency/twin-dashboard/actions/runs/40724395998 . The task-owned, internally networked PostgreSQL test container was then stopped to release its resources; the production database and other test containers were untouched. Cleanup SSM command: `9b7cd3d6-1f1f-4419-bc84-6f613873a59e`. Build images, immutable receipts, source evidence and private rollback snapshots were retained.

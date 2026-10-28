@@ -1,23 +1,42 @@
 """File described media in existing internal folders, without model/provider calls.
 
-Classification happens once per item. A durable marker preserves subsequent
+Classification is versioned once per item. Unsorted membership is temporary. A durable marker preserves subsequent
 manual membership changes, folder renames and archives across analysis reruns.
 """
 from __future__ import annotations
 
 import json
 import re
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from db.models import Account, VaultItem, VaultFolder, VaultFolderItem
 from vault_ai_effective import effective_value
 
 MARKER = "_auto_folders_v1"
+CURRENT_MARKER = "_auto_folders_v2"
+PENDING_MARKER = "_auto_folder_pending_v1"
+LEGACY_KEYS = {"selfies", "swimwear", "lingerie", "casual", "fitness", "uncategorised"}
 FOLDERS = {
     "selfies": ("Selfies", {"selfie", "selfies", "mirror selfie", "handheld selfie", "sfw selfie"}),
     "swimwear": ("Bikini / swimwear", {"bikini", "swimsuit", "swimwear", "bathing suit"}),
     "lingerie": ("Lingerie", {"lingerie", "lingerie on", "bra", "panties", "underwear", "thong"}),
     "casual": ("Casual / everyday", {"casual", "everyday", "casual outfit", "casual clothes", "streetwear"}),
     "fitness": ("Fitness", {"fitness", "workout", "gym", "exercise", "activewear", "sports bra"}),
+    "outdoors": ("Outdoors", {"outdoor", "outdoors", "outside", "garden"}),
+    "bedroom": ("Bedroom", {"bedroom", "bed"}),
+    "bathroom": ("Bathroom / shower", {"bathroom", "shower", "bath", "shower bath"}),
+    "studio": ("Studio", {"studio", "photoshoot", "photo shoot"}),
+    "beach": ("Beach / pool", {"beach", "pool", "poolside", "swimming pool"}),
+    "cosplay": ("Outfits / cosplay", {"cosplay", "costume", "outfit cosplay"}),
+    "talking": ("Talking videos", {"talking head", "talking to camera"}),
+    "dance": ("Dance / twerk", {"dance", "dancing", "twerk", "ass twerk", "ass shaking"}),
+    "solo_tease": ("Solo tease", {"solo tease"}),
+    "solo_fingering": ("Solo fingering", {"solo fingering"}),
+    "solo_toy": ("Solo toys", {"solo toy"}),
+    "nude_stills": ("Nude photos", {"nude stills"}),
+    "boobs": ("Boobs", {"boobs"}),
+    "blowjob": ("Blowjob", {"blowjob"}),
+    "partner": ("With partner", {"sex with partner"}),
+    "feet": ("Feet", {"feet"}),
 }
 OWNER_PREFIX = "auto-category:"
 
@@ -39,7 +58,7 @@ def categories(item):
     """Conservative, overlapping categories from operator-effective metadata."""
     tags = _tags(effective_value(item, "tags", default=[]))
     tags |= _tags(effective_value(item, "clothing_items", default=[]))
-    for key in ("camera", "primary_folder", "clothing_state"):
+    for key in ("camera", "primary_folder", "clothing_state", "setting"):
         value = effective_value(item, key)
         if isinstance(value, str):
             tags.add(_normal(value))
@@ -59,18 +78,19 @@ def categories(item):
     return sorted(result) or ["uncategorised"]
 
 
-async def assign(session, account_id, media_id):
+def assign_sync(session, account_id, media_id):
     """Assign once in the caller's transaction. Account lock serializes folders.
 
     Existing operator folders are never adopted by matching their display name.
-    Archived auto folders are not recreated. No membership is ever deleted.
+    Archived auto folders are not recreated. Only the internally owned Unsorted
+    membership is removed after classification; operator memberships are retained.
     """
-    owner = await session.scalar(select(Account.id).where(Account.id == account_id).with_for_update())
+    owner = session.scalar(select(Account.id).where(Account.id == account_id).with_for_update())
     if owner is None:
         raise ValueError("Unknown vault account")
-    item = await session.scalar(select(VaultItem).where(
+    item = session.scalar(select(VaultItem).where(
         VaultItem.account_id == account_id, VaultItem.media_id == media_id).with_for_update())
-    if item is None or item.removed_at is not None or item.kind not in {"photo", "video", "gif"}:
+    if item is None or item.removed_at is not None or item.kind not in {"photo", "video", "gif", "audio"}:
         return {"status": "skipped"}
     try:
         fields = json.loads(item.ai_fields_json or "{}")
@@ -78,33 +98,55 @@ async def assign(session, account_id, media_id):
         return {"status": "invalid_metadata"}
     if not isinstance(fields, dict):
         return {"status": "invalid_metadata"}
-    if fields.get(MARKER) is True:
+    if fields.get(CURRENT_MARKER) is True:
         return {"status": "already_categorised"}
-    if not (effective_value(item, "description") or effective_value(item, "video_description")
-            or _tags(effective_value(item, "tags", default=[]))):
+    has_metadata = bool(effective_value(item, "description") or effective_value(item, "video_description")
+        or _tags(effective_value(item, "tags", default=[]))
+        or effective_value(item, "primary_folder") or effective_value(item, "setting"))
+    pending = not has_metadata
+    if pending and fields.get(PENDING_MARKER) is True:
         return {"status": "awaiting_metadata"}
-    wanted = categories(item)
+    wanted = ["pending"] if pending else categories(item)
+    # V1 already classified these categories. A migration must not re-add a
+    # membership an operator removed, or recreate their archived folders.
+    if not pending and fields.get(MARKER) is True:
+        wanted = [key for key in wanted if key not in LEGACY_KEYS]
     for key in wanted:
         actor = OWNER_PREFIX + key
-        folder = await session.scalar(select(VaultFolder).where(
+        folder = session.scalar(select(VaultFolder).where(
             VaultFolder.account_id == account_id, VaultFolder.created_by == actor).order_by(VaultFolder.id))
         if folder is None:
-            count = await session.scalar(select(func.count()).select_from(VaultFolder).where(
+            count = session.scalar(select(func.count()).select_from(VaultFolder).where(
                 VaultFolder.account_id == account_id, VaultFolder.deleted_at.is_(None)))
             if count >= 200:
                 raise ValueError("Internal folder limit reached")
             folder = VaultFolder(account_id=account_id, created_by=actor,
-                name=FOLDERS[key][0] if key in FOLDERS else "Uncategorised")
+                name="Unsorted" if key == "pending" else FOLDERS[key][0] if key in FOLDERS else "Uncategorised")
             session.add(folder)
-            await session.flush()
+            session.flush()
         if folder.deleted_at is not None:
             continue
         identity = (account_id, folder.id, media_id)
-        if await session.get(VaultFolderItem, identity) is None:
-            count = await session.scalar(select(func.count()).select_from(VaultFolderItem).where(
+        if session.get(VaultFolderItem, identity) is None:
+            count = session.scalar(select(func.count()).select_from(VaultFolderItem).where(
                 VaultFolderItem.account_id == account_id, VaultFolderItem.folder_id == folder.id))
             if count >= 5000:
                 raise ValueError("Internal folder membership limit reached")
             session.add(VaultFolderItem(account_id=account_id, folder_id=folder.id, media_id=media_id))
-    item.ai_fields_json = json.dumps({**fields, MARKER: True}, ensure_ascii=False)
-    return {"status": "categorised", "categories": wanted}
+    if pending:
+        fields[PENDING_MARKER] = True
+    else:
+        if fields.pop(PENDING_MARKER, False):
+            pending_folders = select(VaultFolder.id).where(VaultFolder.account_id == account_id,
+                VaultFolder.created_by == OWNER_PREFIX + "pending")
+            session.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == account_id,
+                VaultFolderItem.media_id == media_id, VaultFolderItem.folder_id.in_(pending_folders)))
+        fields.update({MARKER: True, CURRENT_MARKER: True})
+    item.ai_fields_json = json.dumps(fields, ensure_ascii=False)
+    return {"status": "awaiting_metadata" if pending else "categorised", "categories": wanted}
+
+
+async def assign(session, account_id, media_id):
+    """Keep the existing async caption-writer API over one shared classifier."""
+    return await session.run_sync(assign_sync, account_id, media_id)
+

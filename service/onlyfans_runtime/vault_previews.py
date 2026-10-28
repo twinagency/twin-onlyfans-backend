@@ -68,7 +68,7 @@ def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
         raise Refused("invalid vault preview page")
     def one(media):
         if stop is not None and stop.is_set(): return False
-        if (media.get("type") not in {"photo", "video"} or media.get("isDeleted") is True
+        if (media.get("type") not in {"photo", "video", "gif"} or media.get("isDeleted") is True
                 or media.get("isHidden") is True or media.get("canView") is False): return False
         mid = _id(media.get("id"))
         try:
@@ -100,7 +100,7 @@ def asset_scope(session, store, tenant, account, media_id):
     job = session.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
     connection = session.execute(select(OfProviderConnection.binding_id, OfProviderConnection.owner_id,
         OfProviderConnection.revision).where(OfProviderConnection.account_id == account)).first()
-    if (row is None or row.removed_at is not None or row.kind not in {"photo", "video"}
+    if (row is None or row.removed_at is not None or row.kind not in {"photo", "video", "gif"}
             or not _provenance(row, observation, job, connection, runtime.binding_id, current_revision=False)):
         raise Refused("vault preview unavailable")
     raw = json.loads(row.raw_json)
@@ -118,3 +118,4 @@ def read_preview(store, tenant, account, media_id):
         data = _read(account, runtime.binding_id, connection.owner_id, mid)
         if data is None: raise Refused("vault preview unavailable")
         return data, images.image_type(data)
+

@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 2bf1631150755878a216f08160f2f7c8e1f65cf9
+          ref: fbd5395cd0dcee1597e1964c2a858ebb94e17132
           persist-credentials: false
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
@@ -41,6 +41,7 @@ jobs:
           service/tests/test_crm_resolution_jobs_pg.py
           service/tests/test_agency_launch_contracts.py
           service/tests/test_onlyfans_launch_controls_pg.py
+          service/tests/test_onlyfans_connections_pg.py
           service/tests/test_onlyfans_recent_inbox_pg.py
           service/tests/test_onlyfans_native_memory_pg.py
           service/tests/test_onlyfans_fold_pending_pg.py

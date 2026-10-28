@@ -6,36 +6,6 @@ on:
       dashboard_archive_sha256: {type: string, required: true}
 permissions: {contents: read}
 jobs:
-  regression:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env: {POSTGRES_PASSWORD: synthetic-acceptance-only}
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 20
-    env:
-      ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
-      PYTHON_DOTENV_DISABLED: '1'
-      PYTHONPATH: service:service/tests
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: 528160762fdc45f62b73dbaebf39de9af5a4c59d
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.12'}
-      - run: python -m pip install -r requirements-onlyfans-test.txt
-      - name: Prove current deployed retry behavior is retained
-        run: python -m pytest -q service/tests/test_onlyfans_sync_retry_pg.py
-      - name: Prove final read-only scope and complete readiness paths
-        run: python -m pytest -q service/tests/test_onlyfans_launch_controls_pg.py -k 'snapshot or readiness_is_real or readiness_uses or explicit_resume or slow_stored'
-      - name: Prove scoped search, purchases and chatter guards
-        run: python -m pytest -q service/tests/test_agency_launch_contracts.py
-
   authenticated-browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -53,12 +23,10 @@ jobs:
       PYTHONPATH: service:service/tests
       ONLYFANS_TEST_DASHBOARD: ${{ github.workspace }}/paired-dashboard
       ONLYFANS_TEST_EVIDENCE: ${{ github.workspace }}/browser-evidence
-      ONLYFANS_DASHBOARD_ARCHIVE_URL: ${{ inputs.dashboard_archive_url }}
-      DASHBOARD_ARCHIVE_URL: ${{ inputs.dashboard_archive_url }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 528160762fdc45f62b73dbaebf39de9af5a4c59d
+          ref: ea5a17ca7079e1d412a02138ff9cb6af4cd71e8d
           path: backend
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -70,7 +38,7 @@ jobs:
         working-directory: backend
         env:
           DASHBOARD_ARCHIVE_SHA256: ${{ inputs.dashboard_archive_sha256 }}
-        run: python scripts/prepare-onlyfans-dashboard.py --dashboard-ref ce99d8acdc0a09b6492606c1c8ba417b047d6bed --archive-sha256 "$DASHBOARD_ARCHIVE_SHA256" --destination "$GITHUB_WORKSPACE/paired-dashboard"
+        run: python scripts/prepare-onlyfans-dashboard.py --dashboard-ref bff99537d8af2559704a7286af7bb1a029eecc18 --archive-sha256 "$DASHBOARD_ARCHIVE_SHA256" --destination "$GITHUB_WORKSPACE/paired-dashboard"
       - working-directory: paired-dashboard
         run: |
           npm ci

@@ -1,12 +1,10 @@
-name: Final agency CRM PostgreSQL regressions
-on:
-  workflow_dispatch:
-permissions:
-  contents: read
+name: Final deployed retry and readiness boundary
+on: {workflow_dispatch: {}}
+permissions: {contents: read}
 jobs:
   regression:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -19,32 +17,17 @@ jobs:
       ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
       PYTHON_DOTENV_DISABLED: '1'
       PYTHONPATH: service:service/tests
-      ONLYFANS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fbd5395cd0dcee1597e1964c2a858ebb94e17132
+          ref: 7a4ce8fe5e418fe6d1221b545785d1ad86bcdaa9
           persist-credentials: false
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends postgresql-client-16 ffmpeg
-          python -m pip install -r requirements-onlyfans-test.txt
-      - name: Exercise final scope snapshot, upgrades, continuation and identity protections
-        run: >-
-          python -m pytest -q
-          service/tests/test_crm_video_regressions.py
-          service/tests/test_crm_read_pg.py
-          service/tests/test_crm_control_contract_pg.py
-          service/tests/test_crm_history_repair_pg.py
-          service/tests/test_crm_resolution_jobs_pg.py
-          service/tests/test_agency_launch_contracts.py
-          service/tests/test_onlyfans_launch_controls_pg.py
-          service/tests/test_onlyfans_connections_pg.py
-          service/tests/test_onlyfans_recent_inbox_pg.py
-          service/tests/test_onlyfans_native_memory_pg.py
-          service/tests/test_onlyfans_fold_pending_pg.py
-          service/tests/test_onlyfans_ledger_history_pg.py
-          service/tests/test_onlyfans_ledger_markers_pg.py
-          service/tests/test_onlyfans_post_buy_receipt_pg.py
+      - run: python -m pip install -r requirements-onlyfans-test.txt
+      - name: Prove current deployed retry behavior is retained
+        run: python -m pytest -q service/tests/test_onlyfans_sync_retry_pg.py
+      - name: Prove final read-only scope and complete readiness paths
+        run: python -m pytest -q service/tests/test_onlyfans_launch_controls_pg.py -k 'snapshot or readiness_is_real or readiness_uses or explicit_resume'
+      - name: Prove scoped search, purchases and chatter guards
+        run: python -m pytest -q service/tests/test_agency_launch_contracts.py

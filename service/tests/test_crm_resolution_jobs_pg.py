@@ -4,7 +4,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select,func
 from sqlalchemy.orm import Session
-from test_onlyfans_send_recovery_pg import database,configured,observed,ACCOUNT,FAN,TENANT,ACTOR
+from test_onlyfans_send_recovery_pg import database,template,configured,observed,ACCOUNT,FAN,TENANT,ACTOR
 from db.models import OfConversationState,Message,OfMessageDelivery
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_delivery_models import OfTextIntent

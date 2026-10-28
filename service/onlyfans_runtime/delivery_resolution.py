@@ -10,7 +10,12 @@ from .store import Refused
 def operational():
     return os.environ.get('ONLYFANS_DELIVERY_RESOLUTION_ENABLED')=='1' and bool(os.environ.get('ONLYFANS_CONNECTION_KEY'))
 
-async def resolve(store,tenant,account,fan,*,attempt,provider_message_id,expected_revision,command_key,actor):
+async def resolve(*args,**kwargs):
+    from .delivery_resolution_jobs import enqueue
+    return await enqueue(*args,**kwargs)
+
+async def perform(store,tenant,account,fan,*,attempt,provider_message_id,expected_revision,command_key,actor):
+    if os.environ.get('ONLYFANS_PROCESS_ROLE')!='worker':raise Refused('worker resolution unavailable')
     if not operational():raise Refused('delivery resolution unavailable')
     if type(provider_message_id) is not int or provider_message_id<=0:raise Refused('provider evidence required')
     with Session(store.engine) as s,s.begin():

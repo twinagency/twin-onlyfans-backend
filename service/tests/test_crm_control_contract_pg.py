@@ -39,6 +39,8 @@ def test_resolution_http_requires_configuration_and_exact_positive_evidence_fiel
     called=[]
     async def verified(*args,**kwargs):called.append(kwargs);return {'recorded':True}
     monkeypatch.setattr(delivery_resolution,'operational',lambda:True)
+    from onlyfans_runtime import delivery_resolution_jobs
+    monkeypatch.setattr(delivery_resolution_jobs,'available_for',lambda *args:True)
     monkeypatch.setattr(delivery_resolution,'resolve',verified)
     response=client.post(path,headers=headers,json=body)
     assert response.status_code==200 and response.json()['recordedRevision']==0

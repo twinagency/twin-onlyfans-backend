@@ -97,6 +97,7 @@ async def list_accounts(
         account = projections.account_model(binding, anchor=anchor, now=now)
         health = getattr(repo, "account_health", None)
         if callable(health):account = {**account, **await health(account_id=binding.account_id)}
+        if not account.get('deliveryResolutionOperational',False):account['capabilities']={**account['capabilities'],'resolveDeliveryEvidence':'not_configured'}
         accounts.append(account)
 
     return accounts_envelope(

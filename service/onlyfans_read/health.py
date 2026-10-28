@@ -49,6 +49,10 @@ async def account_health(s,account):
             creator=profile({'name':saved.get('name'),'username':saved.get('handle'),'avatar':saved.get('avatar')})
         except (ValueError,TypeError,AttributeError):creator={}
     enabled=bool(runtime and runtime.enabled)
+    from onlyfans_runtime.delivery_resolution_jobs import row_ready
+    from onlyfans_runtime.delivery_resolution import operational
+    from onlyfans_runtime.launch_operations_models import OfLaunchWorkerHealth
+    resolution_ready=operational() and row_ready(runtime,await s.get(OfLaunchWorkerHealth,account))
     health={
       'connection':{'lastSuccessAt':iso(connection.verified_at) if connection else None,'reason':None if connection and connection.status=='verified' else 'Connection needs verification.'},
       'incoming':{'lastSuccessAt':iso(processed),'latestMessageAt':iso(incoming),'pending':counts.get('pending',0),'coverage':'Latest 256 applied intake events.','reason':None if processed else 'No recent incoming processing observed in this sample.'},
@@ -56,5 +60,5 @@ async def account_health(s,account):
       'financial':{'lastSuccessAt':iso(scan.last_complete_at) if scan else None,'fullHistoryAt':iso(history.last_full_at) if history else None,'reason':'Financial sync requires review.' if scan and scan.status=='held' or history and history.status=='held' else 'Financial coverage is incomplete.' if not history or not history.last_full_at else None},
       'sender':sender,
     }
-    return {'creatorProfile':{'name':creator.get('name'),'handle':creator.get('handle'),'avatarUrl':creator.get('avatar'),'observedAt':iso(observation.created_at) if observation else None},'runtime':{'enabled':enabled,'sender':sender,'deliveryEnabled':bool(policy and policy.enabled)},'syncHealth':health,
+    return {'deliveryResolutionOperational':resolution_ready,'creatorProfile':{'name':creator.get('name'),'handle':creator.get('handle'),'avatarUrl':creator.get('avatar'),'observedAt':iso(observation.created_at) if observation else None},'runtime':{'enabled':enabled,'sender':sender,'deliveryEnabled':bool(policy and policy.enabled)},'syncHealth':health,
         'needsAttention':bool(counts.get('quarantined',0) or unknown or health['connection']['reason'] or health['history']['reason'] or health['financial']['reason'] or enabled and sender['state']!='running')}

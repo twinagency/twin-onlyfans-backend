@@ -100,8 +100,9 @@ async def control(request: Request, account_id: str, conversation_id: str):
         if resolution:
             scope=current_scope.get()
             if scope is not None and not scope.can_manage:return refused('forbidden',403,'Management permission is required.')
-            from onlyfans_runtime.delivery_resolution import resolve,operational
-            if not operational():return refused('resolution_unavailable',503,'Delivery reconciliation is not configured.')
+            from onlyfans_runtime.delivery_resolution import resolve
+            from onlyfans_runtime.delivery_resolution_jobs import available_for
+            if not await asyncio.to_thread(available_for,store,tenant,account_id):return refused('resolution_unavailable',503,'Delivery reconciliation is not configured.')
             await resolve(store,tenant,account_id,fan,attempt=body['attemptId'],provider_message_id=body['providerMessageId'],
                 expected_revision=revision,command_key=key,actor=actor)
             return response({'ok':True,'applied':True,'commandKey':key,'accountId':account_id,'conversationId':conversation_id,

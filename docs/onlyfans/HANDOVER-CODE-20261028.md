@@ -1,5 +1,30 @@
 # Code handover: 28 October 2026
 
+## Update after Ronan's 10:51 AEST launch report
+
+The earlier deployed-baseline table below records the pre-launch inspection and is historical. Ronan now reports these versions live:
+
+| Component | Reported source | Reported image prefix |
+| --- | --- | --- |
+| Backend API / worker / sender | `7f4eaf0bcb0b461300a0301330acd773f2b3d8f0` | `bc2a3dc7` |
+| Twin dashboard | `2d0653343afddca830a9734dcc87e5eef4b2cde4` | `d5d4cc71` |
+| FLIRT dashboard | `2e5184d2e8ad0f5582002142f9f98785108ffff5` | `9305291f` |
+
+He reports migration `0098_ledger_exclusion` applied, sender scope `db:*`, Nicky/Naomi enabled for four chats each, and Maile/Katie Price/Alva Jay held at account level. These runtime facts and the provider receipt are operator-reported; this follow-up did not independently inspect production or send messages.
+
+GitHub was independently checked:
+- All three source branch heads matched the reported full commits.
+- Backend `codex/onlyfans-of-b1` and Twin `release/twin-20261028` advanced concurrently during review and exactly matched the respective reported commits before this documentation update.
+- FLIRT source was merged into `release/flirt-20261028` via [PR #308](https://github.com/twinagency/twin-dashboard/pull/308), merge `b1d05f627b614a19289370e03a6f6d46aa5d6e85`.
+- FLIRT exact-head verify check passed. Twin exact-head runtime packaging, its four OnlyFans checks, production build and creator ownership check passed. The broader [CI job](https://github.com/twinagency/twin-dashboard/actions/runs/40610022761/job/122559030069) failed its login smoke test: `/admin-auth` returned 500 rather than 303 with "The session service is unavailable." The consolidation changes do not touch login/session code; this is still an unresolved validation failure.
+- No backend GitHub check runs were present on the reported head. Additional local pytest collection failed because the available environment lacked HTTP client dependencies and the supervisor test hit a Windows SQLite file lock. Those attempts are not passing test evidence.
+
+The output guard is narrower than the email's claim that every mention of AI/bot/clone is blocked: `native_pilot/identity.py` checks specific self-description patterns. Its tests deliberately allow ordinary references such as "i love ai art tho". The prompt also instructs the model never to claim to be human; the inspected guard is not a general proof that all such claims are mechanically blocked.
+
+Still awaiting operator evidence/decisions: takeover -> manual reply -> hand-back -> resumed AI, capacity measurements, final dated activation record, handling Maile's 610 legacy automated chats, and ownership of identity-question flags. New-creator connection/import and fresh inbox synchronization also need explicit end-to-end proof if not covered elsewhere.
+
+This follow-up only consolidated source and updated documentation. It did not deploy, run a migration, change account/chat controls or alter Ronan's live work.
+
 ## Branches for new changes
 
 | Repository / product | Raise changes against |

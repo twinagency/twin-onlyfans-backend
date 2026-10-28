@@ -231,4 +231,7 @@ def update_content(store, tenant_id, account_id, item_id, *, patch, expected_rev
             previous_revision=revision, revision=revision + 1, fingerprint_before=expected_fingerprint,
             fingerprint_after=after_fingerprint, request_hash=request_hash, actor=actor,
             before_json=canonical(before), after_json=canonical(after), created_at=utcnow()))
+        session.flush()
+        from .launch_engagement.events import cancel_for_item
+        cancel_for_item(session, account_id, item_id, "catalogue_changed", now=utcnow())
         return revision + 1, after_fingerprint

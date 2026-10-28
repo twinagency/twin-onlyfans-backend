@@ -184,7 +184,9 @@ class EngagementService:
             # TextAuthority alone releases reservations and unresolved holds.
             # Its prewire hook will refuse; after wire start cancellation cannot
             # prove non-delivery or permit another attempt.
-            row.status = intent.status
+            # A refusal is terminal before provider acceptance. The action
+            # vocabulary calls this cancelled; retain its intent for evidence.
+            row.status = "cancelled" if intent.status == "refused" else intent.status
         else:
             row.status = "cancelled"
 
@@ -210,7 +212,10 @@ class EngagementService:
             intent = s.get(OfTextIntent, (row.account_id, row.intent_id))
             if intent is None:
                 raise Refused("engagement intent link missing")
-            row.status, row.updated_at = intent.status, now
+            row.status = "cancelled" if intent.status == "refused" else intent.status
+            if intent.status == "refused" and row.cancel_requested_at is None:
+                row.reason = intent.reason or "delivery_refused"
+            row.updated_at = now
             return
         try:
             self._validate(s, runtime, row, now, require_due=False)
@@ -302,3 +307,4 @@ class EngagementService:
             if row.status in ACTIVE:
                 self._refresh(s, runtime, row, self.authority._db_now(s))
             return self._view(row)
+

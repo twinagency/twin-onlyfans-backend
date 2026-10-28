@@ -282,7 +282,8 @@ class Store:
         # Older imports outside the latest-100 prompt window cannot change a reply; they must not
         # invalidate a live claim. Anything live, or inside the window, still advances the revision.
         from .launch_history_memory.recovery import affects_recent_context
-        if not historical or affects_recent_context(s, account, event.fan_id, event):
+        advances = not historical or affects_recent_context(s, account, event.fan_id, event)
+        if advances:
             state.input_revision += 1
         s.add(Message(account_id=account, fan_id=event.fan_id, message_id=event.message_id,
                       direction=event.direction, body=event.body, media_ids=json.dumps(event.media_ids),
@@ -331,6 +332,12 @@ class Store:
             work.control_revision = state.revision
             work.status = "waiting" if eligible else "blocked"
             work.lease_token = work.lease_until = None
+        if event.direction == "in" and advances:
+            # A fan reply makes unsent proactive work obsolete (reactive planner owns it).
+            # Same transaction/runtime lock; dispatch validation remains authoritative.
+            s.flush()
+            from .launch_engagement.events import cancel_for_fan
+            cancel_for_fan(s, account, event.fan_id, "reply", now=now)
         row.status, row.applied_at = "applied", now
         runtime.pending_events -= 1
         s.flush()
@@ -396,6 +403,10 @@ class Store:
                                  reason=reason, consent_ref=consent_ref, action=action,
                                  takeover_from=before_takeover if action is not None else None,
                                  takeover_to=state.takeover_state if action is not None else None, created_at=utcnow()))
+            s.flush()
+            from .launch_engagement.events import cancel_for_fan
+            cancel_for_fan(s, account_id, fan_id, {"human_controlled": "takeover", "paused": "pause",
+                "no_contact": "no_contact"}.get(mode, "operator_cancelled"), now=utcnow())
             return state.revision
 
     @staticmethod

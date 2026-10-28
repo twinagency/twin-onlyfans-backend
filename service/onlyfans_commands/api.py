@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from onlyfans_read.contract import ID_PATTERN, conversation_id_for, fan_id_from_conversation_id
-from onlyfans_read.agency_scope import actor_allowed
+from onlyfans_read.agency_scope import ACTOR_PATTERN, actor_allowed, current_scope
 from onlyfans_runtime.store import Refused
 from .settings import ACTIONS, HEADER, PREFIX, SCHEMA, configured, manual_configured
 
@@ -113,3 +113,72 @@ async def control(request: Request, account_id: str, conversation_id: str):
         return refused("outcome_unconfirmed", 500, "The outcome is not confirmed. Refresh or retry the same request.")
     return response({"ok": True, "applied": True, "commandKey": key, "accountId": account_id,
                      "conversationId": conversation_id, "action": action, "recordedRevision": recorded})
+
+
+LEDGER_RETRY_KEYS = {"commandKey", "expectedConnectionRevision", "expectedScanFingerprint"}
+LEDGER_RETRY_CODES = {"ledger busy": ("ledger_busy", "The ledger scan is running. Refresh before retrying."),
+    "ledger not held": ("ledger_not_held", "The ledger scan is not held. Refresh the ledger status."),
+    "ledger state changed": ("ledger_state_changed", "The ledger state changed. Refresh before retrying."),
+    "idempotency key conflict": ("command_conflict", "That command key was already used for a different request.")}
+
+
+def gateway_actor(request):
+    """The trusted gateway's identity: the verified agency grant, else the service-only actor header."""
+    scope = current_scope.get()
+    if scope is not None:
+        return scope.actor if scope.can_manage else None
+    actor = request.headers.get("x-onlyfans-actor", "")
+    return actor if re.fullmatch(ACTOR_PATTERN, actor) else None
+
+
+@router.post("/accounts/{account_id}/ledger/retry")
+async def ledger_retry(request: Request, account_id: str):
+    """Make a held ledger scan due. Acknowledges queued only; never contacts the provider or reconciles."""
+    config = configured()
+    if config is None:
+        return refused("controls_unavailable", 503, "Conversation controls are not configured.")
+    token, tenant = config
+    auth = request.headers.get("authorization", "").split()
+    if len(auth) != 2 or auth[0].lower() != "bearer" or not hmac.compare_digest(auth[1].encode(), token.encode()):
+        return refused("unauthorized", 401, "The control credential was not accepted.")
+    if request.headers.get(HEADER) != SCHEMA:
+        return refused("unsupported_schema", 400, "The control contract version is required.")
+    store = getattr(request.app.state, "control_store", None)
+    if store is None:
+        return refused("controls_unavailable", 503, "Conversation controls are not available.")
+    if current_scope.get() is not None and not current_scope.get().can_manage:
+        return refused("forbidden", 403, "That action needs management permission.")
+    try:
+        if not ID_PATTERN.fullmatch(account_id):
+            raise ValueError()
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            raise ValueError()
+        raw = bytearray()
+        async for part in request.stream():
+            if len(raw) + len(part) > 4096:
+                return refused("request_too_large", 413, "The control request is too large.")
+            raw.extend(part)
+        def nonfinite(_):
+            raise ValueError("nonfinite number")
+        body = json.loads(raw, object_pairs_hook=unique_keys, parse_constant=nonfinite)
+        actor = gateway_actor(request)
+        if type(body) is not dict or set(body) != LEDGER_RETRY_KEYS or actor is None:
+            raise ValueError()
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return refused("invalid_request", 400, "That ledger retry request is invalid.")
+    from onlyfans_runtime.launch_ledger.dashboard import retry
+    try:
+        ack = await asyncio.to_thread(retry, store, tenant, account_id, command_key=body["commandKey"],
+            expected_revision=body["expectedConnectionRevision"], expected_fingerprint=body["expectedScanFingerprint"], actor=actor)
+    except Refused as exc:
+        text = str(exc)
+        if text == "scope unavailable":
+            return refused("scope_unavailable", 404, "That account is not available.")
+        if text.startswith("invalid"):
+            return refused("invalid_request", 400, "That ledger retry request is invalid.")
+        code, message = LEDGER_RETRY_CODES.get(text, ("control_conflict", "The retry could not be applied. Refresh the ledger status."))
+        return refused(code, 409, message)
+    except Exception:
+        log.exception("ledger retry acknowledgement unavailable")
+        return refused("outcome_unconfirmed", 500, "The outcome is not confirmed. Refresh or retry the same request.")
+    return response({"ok": True, **ack})

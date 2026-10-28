@@ -24,8 +24,8 @@ def drop_0090(c):
     c.exec_driver_sql("DROP TABLE of_engagement_action, of_engagement_settings_change, of_engagement_settings,"
                       " of_history_memory_correction, of_history_memory_evidence, of_history_memory_receipt, of_history_memory_state,"
                       " of_launch_history_cursor, of_launch_history_scan, of_history_recent_bootstrap,"
-                      " of_personality_revision, of_personality_head;"
-                      " DROP FUNCTION of_engagement_action_guard(); DROP FUNCTION of_engagement_settings_immutable();"
+                      " of_personality_revision, of_personality_head, of_ledger_retry_command;"
+                      " DROP FUNCTION of_ledger_retry_immutable(); DROP FUNCTION of_engagement_action_guard(); DROP FUNCTION of_engagement_settings_immutable();"
                       " DROP FUNCTION of_history_memory_evidence_immutable(); DROP FUNCTION of_history_memory_correction_immutable();"
                       " DROP FUNCTION of_personality_immutable();"
                       " ALTER TABLE of_text_intent DROP CONSTRAINT ck_of_text_intent_origin;"
@@ -83,6 +83,7 @@ LAUNCH_PROTECTION = [
     ("of_history_memory_correction", "of_history_memory_correction_immutable", "append-only protection"),
     ("of_personality_revision", "of_personality_immutable", "append-only protection"),
     ("of_engagement_settings_change", "of_engagement_settings_immutable", "append-only protection"),
+    ("of_ledger_retry_command", "of_ledger_retry_immutable", "append-only protection"),
 ]
 
 

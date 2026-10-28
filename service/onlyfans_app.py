@@ -28,6 +28,7 @@ from onlyfans_commands.connection_api import router as connection_router,configu
 from onlyfans_commands.vault_api import router as vault_router
 from onlyfans_commands.vault_media_api import router as vault_media_router
 from onlyfans_runtime.launch_personality.api import router as personality_router
+from onlyfans_runtime.launch_personality_credentials import personality_credential_status
 from onlyfans_commands.launch_api import engagement_router, history_router
 
 
@@ -54,6 +55,7 @@ app.include_router(router)
 app.include_router(control_router)
 app.include_router(configuration_router)
 app.include_router(personality_router)
+app.state.personality_credential_status_reader = personality_credential_status
 app.include_router(engagement_router)
 app.include_router(history_router)
 app.include_router(campaign_router)

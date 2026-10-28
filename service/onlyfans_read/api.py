@@ -168,6 +168,24 @@ async def get_operations(request: Request, account_id: str) -> JSONResponse:
     return JSONResponse({"schemaVersion": SCHEMA_VERSION, "operations": body}, status_code=200, headers=_PRIVATE_HEADERS)
 
 
+@router.get("/accounts/{account_id}/ledger")
+async def ledger(request: Request, account_id: str) -> JSONResponse:
+    """Ledger reconciliation state for the selected account only (of-ledger.v1); reads no provider."""
+    try:
+        from .errors import Refused
+        principal = await _authenticate(request)
+        account_id = service._require_id(account_id, what="account")
+        body = await _repo().ledger(tenant_id=principal.tenant_id, account_id=account_id)
+        if body is None:
+            raise Refused("unknown_account")
+    except OnlyFansReadError as exc:
+        return _refusal(exc)
+    except Exception:
+        log.exception("onlyfans ledger read failed")
+        return _refusal(Unavailable("ledger_unavailable", "The OnlyFans ledger read did not succeed."))
+    return JSONResponse(body, headers=_PRIVATE_HEADERS)
+
+
 @router.get("/accounts/{account_id}/workspace/{section}")
 async def workspace(request: Request, account_id: str, section: str,
                     cursor: str | None = Query(default=None), limit: int = Query(default=25)):

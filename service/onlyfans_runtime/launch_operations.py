@@ -410,7 +410,23 @@ def _readiness_memory_counts(s, account):
     """
     from .launch_history_memory.memory import ALGORITHM
     from .launch_history_memory.models import MemoryReceipt
-    stored = s.scalar(select(func.count()).select_from(Message).where(Message.account_id == account))
+    stored = None
+    if s.bind.dialect.name == "postgresql":
+        # A cold full-account count must not consume the entire evidence read.
+        # Query cancellation is isolated by a savepoint; other failures surface.
+        from sqlalchemy.exc import DBAPIError
+        previous_timeout = s.scalar(select(func.current_setting("statement_timeout")))
+        try:
+            with s.begin_nested():
+                s.connection().exec_driver_sql("SET LOCAL statement_timeout = '1500ms'")
+                stored = s.scalar(select(func.count()).select_from(Message).where(Message.account_id == account))
+        except DBAPIError as error:
+            if getattr(error.orig, "pgcode", None) != "57014":
+                raise
+        finally:
+            s.scalar(select(func.set_config("statement_timeout", previous_timeout, True)))
+    else:
+        stored = s.scalar(select(func.count()).select_from(Message).where(Message.account_id == account))
     sample = select(Message.account_id, Message.fan_id, Message.message_id,
         func.md5(Message.body).label("body_md5"), Message.direction, Message.created_at, Message.is_unsent
     ).where(Message.account_id == account).order_by(Message.fan_id, Message.message_id
@@ -432,9 +448,9 @@ def _readiness_memory_counts(s, account):
         processed = s.scalar(select(func.count()).select_from(sample.join(receipt, true())))
     else:
         processed = s.scalar(select(func.count()).select_from(sample).join(MemoryReceipt, match))
-    inspected = min(stored, READINESS_MEMORY_SAMPLE_LIMIT)
-    return stored, processed if stored == inspected else None, {"inspectedMessages": inspected,
-        "processedCurrentMessages": processed, "complete": stored == inspected}
+    inspected = min(stored, READINESS_MEMORY_SAMPLE_LIMIT) if stored is not None else s.scalar(select(func.count()).select_from(sample))
+    return stored, processed if stored is not None and stored == inspected else None, {"inspectedMessages": inspected,
+        "processedCurrentMessages": processed, "complete": stored is not None and stored == inspected}
 
 
 def _readiness(s, runtime, *, credential_reader=None, lock_catalog=True):
@@ -558,7 +574,7 @@ def _readiness(s, runtime, *, credential_reader=None, lock_catalog=True):
     return {"readinessVersion": "of-launch-readiness.v1", "observedAt": z(now), "schemaRevision": HEAD,
         "readyToEnable": not any(c["blocking"] and c["status"] != "ready" for c in checks),
         "checks": checks, "accountControl": account_state(s, runtime),
-        "coverage": {"storedMessages": stored, "processedMessages": processed, "memorySample": memory_sample, "providerTotalMessages": None,
+        "coverage": {"storedMessages": stored, "storedCountStatus": "exact" if stored is not None else "unavailable", "processedMessages": processed, "memorySample": memory_sample, "providerTotalMessages": None,
             "archiveComplete": archive_complete, "pendingArchiveConversations": pending_archive},
         "catalogue": {"usableInspectedItems": usable, "inspectedItems": min(len(items), 200), "hasMore": len(items) > 200},
         "autonomy": {"accountEnabled": runtime.enabled, "deliveryEnabled": bool(policy and policy.enabled),

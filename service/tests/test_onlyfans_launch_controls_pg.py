@@ -644,3 +644,29 @@ def test_read_projection_snapshot_fences_concurrent_tenant_rebinding(database, m
             getattr(operations, projection)(store, TENANT, ACCOUNT)
     finally:
         store.close()
+
+
+def test_slow_stored_count_is_explicitly_unavailable_without_losing_readiness(database):
+    from sqlalchemy import event as sql_event, text
+    store = seed(*database)
+    injected = []
+    def delay_count(conn, cursor, statement, parameters, context, executemany):
+        if not injected and "count(*)" in statement and "FROM messages" in statement:
+            injected.append(True)
+            return "SELECT count(*) FROM pg_sleep(3)", {}
+        return statement, parameters
+    sql_event.listen(store.engine, "before_cursor_execute", delay_count, retval=True)
+    try:
+        result = launch_readiness(store, TENANT, ACCOUNT)
+        assert injected == [True]
+        assert result["coverage"]["storedMessages"] is None
+        assert result["coverage"]["storedCountStatus"] == "unavailable"
+        assert result["coverage"]["processedMessages"] is None
+        assert result["coverage"]["memorySample"] == {"inspectedMessages": 0, "processedCurrentMessages": 0, "complete": False}
+        assert next(c for c in result["checks"] if c["key"] == "memory")["status"] == "unknown"
+        assert result["readyToEnable"] is False
+        with Session(store.engine) as session:
+            assert session.scalar(text("SHOW statement_timeout")) != "1500ms"
+    finally:
+        sql_event.remove(store.engine, "before_cursor_execute", delay_count)
+        store.close()

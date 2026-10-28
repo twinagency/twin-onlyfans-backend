@@ -19,17 +19,26 @@ jobs:
       ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-acceptance-only@127.0.0.1:5432/postgres
       PYTHON_DOTENV_DISABLED: '1'
       PYTHONPATH: service:service/tests
+      ONLYFANS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: d891c2f2bafb381b8a7668ff5110ba02e63d85c3
+          ref: 2bf1631150755878a216f08160f2f7c8e1f65cf9
           persist-credentials: false
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: python -m pip install -r requirements-onlyfans-test.txt
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client-16 ffmpeg
+          python -m pip install -r requirements-onlyfans-test.txt
       - name: Exercise final scope snapshot, upgrades, continuation and identity protections
         run: >-
           python -m pytest -q
+          service/tests/test_crm_video_regressions.py
+          service/tests/test_crm_read_pg.py
+          service/tests/test_crm_control_contract_pg.py
+          service/tests/test_crm_history_repair_pg.py
+          service/tests/test_crm_resolution_jobs_pg.py
           service/tests/test_agency_launch_contracts.py
           service/tests/test_onlyfans_launch_controls_pg.py
           service/tests/test_onlyfans_recent_inbox_pg.py

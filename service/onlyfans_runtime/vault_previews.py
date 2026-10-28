@@ -7,6 +7,7 @@ No signed URL, credential, new media record, classifier or model is returned.
 import hashlib
 import json
 import os
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select
@@ -62,8 +63,15 @@ def _read(account, binding, owner, media_id):
 
 
 def _request_path(account, media_id):
-    path, _ = _paths(account, media_id)
-    return path.with_suffix(".preview-request")
+    # The API's image volume is deliberately read-only. Cache requests belong
+    # in the existing shared writable spool, alongside other worker handoffs.
+    _paths(account, media_id)  # validate the same account/media namespace
+    configured = os.environ.get("VAULT_SPOOL_DIR")
+    root = Path(configured) / "preview-requests" if configured else images.IMAGE_DIR / ".preview-requests"
+    path = root / account / f"{media_id}.preview-request"
+    if path.parent.resolve().parent != root.resolve():
+        raise Refused("vault preview request unavailable")
+    return path
 
 
 def request_preview(account, binding, owner, media_id):
@@ -72,7 +80,7 @@ def request_preview(account, binding, owner, media_id):
 
 
 def requested_ids(account, binding, owner):
-    path, _ = _paths(account, 1)
+    path = _request_path(account, 1)
     result=[]
     for marker in path.parent.glob("*.preview-request"):
         try:

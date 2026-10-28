@@ -49,6 +49,14 @@ jobs:
       - name: Package executable runtime without deployment credentials
         run: |
           docker build -f Dockerfile.onlyfans --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "twin-vault-library:$GITHUB_SHA" .
+          mkdir -p fixture-images fixture-spool
+          docker run --rm --network none \
+            -e ONLYFANS_PROCESS_ROLE=api \
+            -e DATABASE_URL=postgresql+psycopg2://synthetic@127.0.0.1:1/isolated \
+            -e VAULT_IMAGE_DIR=/readonly-images -e VAULT_SPOOL_DIR=/writable-spool \
+            -v "$PWD/fixture-images:/readonly-images:ro" \
+            -v "$PWD/fixture-spool:/writable-spool" \
+            "twin-vault-library:$GITHUB_SHA" python -c 'from pathlib import Path; from onlyfans_runtime.vault_previews import request_preview,requested_ids; assert request_preview("acc-a","synthetic-binding",7001,11); assert requested_ids("acc-a","synthetic-binding",7001)==[11]; assert not list(Path("/readonly-images").iterdir()); print("PASS read-only gallery volume with writable preview handoff")'
           mkdir -p runtime
           docker image inspect "twin-vault-library:$GITHUB_SHA" --format '{{.Id}}' > runtime/image-id.txt
           printf '%s\n' "$GITHUB_SHA" > runtime/source-sha.txt

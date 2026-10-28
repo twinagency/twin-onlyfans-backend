@@ -20,9 +20,12 @@ URL="https://cdn2.onlyfans.com/files/preview.png?Policy=synthetic"
 
 
 def test_worker_repairs_oldest_missing_stills_without_description_changes(database,monkeypatch,tmp_path):
-    monkeypatch.setattr(images,"IMAGE_DIR",tmp_path)
+    monkeypatch.setattr(images,"IMAGE_DIR",tmp_path/"images")
+    monkeypatch.setenv("VAULT_SPOOL_DIR",str(tmp_path/"spool"))
     store,account,_,_=sync(database,monkeypatch,[media(11,files={"preview":{"url":URL}})])
     with pytest.raises(Refused):read_preview(store,TENANT,account,"11")
+    assert list((tmp_path/"spool"/"preview-requests"/account).glob("*.preview-request"))
+    assert not (tmp_path/"images"/account/"11.preview-request").exists()
     calls=[]
     monkeypatch.setattr(NativeProviderConnector,"vault_media_by_id",lambda self,mid: calls.append(mid) or media(mid,files={"preview":{"url":URL}}))
     monkeypatch.setattr(NativeProviderConnector,"still_bytes",lambda self,url,**kw: PNG)

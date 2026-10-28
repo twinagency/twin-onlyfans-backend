@@ -635,7 +635,9 @@ def test_read_projection_snapshot_fences_concurrent_tenant_rebinding(database, m
         return runtime
     monkeypatch.setattr(operations, "read_scope", observe)
     try:
-        getattr(operations, projection)(store, TENANT, ACCOUNT)
+        from onlyfans_runtime.launch_personality_credentials import personality_credential_status
+        kwargs = {"credential_reader": personality_credential_status} if projection == "launch_readiness" else {}
+        getattr(operations, projection)(store, TENANT, ACCOUNT, **kwargs)
         assert checked == [True]
         monkeypatch.setattr(operations, "read_scope", original)
         with pytest.raises(Refused):

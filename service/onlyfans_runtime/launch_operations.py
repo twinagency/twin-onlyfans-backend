@@ -576,4 +576,5 @@ def launch_readiness(store, tenant, account, *, credential_reader=None):
             # Mutation and admission paths retain their existing runtime locks.
             s.connection(execution_options={"isolation_level": "REPEATABLE READ"}).exec_driver_sql("SET TRANSACTION READ ONLY")
         runtime = read_scope(store, s, tenant, account)
+        s.info["onlyfans_read_snapshot"] = True
         return _readiness(s, runtime, credential_reader=credential_reader, lock_catalog=False)

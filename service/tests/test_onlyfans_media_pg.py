@@ -172,12 +172,12 @@ def test_modified_media_grant_cannot_consume_the_original_wire_permission(databa
 
 def test_native_reply_and_existing_media_use_one_call_quote_and_real_http(database,monkeypatch):
     _,engine=database;store,authority,claim,planner,item=native(database,monkeypatch)
-    model=SyntheticNativeModel("Here is the available choice.",sale={"item_id":item,"quote":ASK},reported_cost_millicents=7)
+    model=SyntheticNativeModel("Here is the available choice.",sale={"item_id":item,"basis_kind":"direct_request","quote":ASK},reported_cost_millicents=7)
     plan=planner.prepare(TENANT,claim,model)
     with Session(engine) as s:
         saved=s.get(OfNativePlan,(ACCOUNT,plan));assert saved.status=="ready",saved.reason
         sale=json.loads(saved.sale_json);price=sale["price_cents"]
-        assert sale["source_message_id"]==2 and sale["source_quote"]==ASK
+        assert sale["basis"]["source_message_id"]==2 and sale["basis"]["source_quote"]==ASK and sale["basis"]["kind"]=="direct_request"
         assert "USD $" in saved.body and "A short scenic video" in saved.body
         assert "item_id" not in saved.body and "source_quote" not in saved.body
     assert planner.prepare(TENANT,claim,model)==plan and len(model.calls)==1
@@ -223,7 +223,7 @@ def test_native_sale_cannot_escape_existing_brakes_or_its_bounded_shelf(database
             s.add(LadderState(account_id=ACCOUNT,fan_id=FAN,status={"stopped":"stopped","tapped":"tapped","companion":"companion"}.get(cause,"idle"),
                 cooldown_until=utcnow()+timedelta(hours=1) if cause=="cooldown" else None))
         elif cause=="configuration":s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json="{}"
-    model=SyntheticNativeModel("Thanks for asking.",sale={"item_id":item+999 if cause=="unknown_item" else item,"quote":ask})
+    model=SyntheticNativeModel("Thanks for asking.",sale={"item_id":item+999 if cause=="unknown_item" else item,"basis_kind":"direct_request","quote":ask})
     identity=planner.prepare(TENANT,claim,model)
     with Session(engine) as s:
         plan=s.get(OfNativePlan,(ACCOUNT,identity));assert plan.status=="refused",(cause,plan.reason)
@@ -235,7 +235,7 @@ def test_native_sale_cannot_escape_existing_brakes_or_its_bounded_shelf(database
 
 def test_native_sale_rechecks_policy_after_generation_and_after_admission(database,monkeypatch):
     _,engine=database;store,authority,claim,planner,item=native(database,monkeypatch)
-    model=SyntheticNativeModel("Thanks for asking.",sale={"item_id":item,"quote":ASK})
+    model=SyntheticNativeModel("Thanks for asking.",sale={"item_id":item,"basis_kind":"direct_request","quote":ASK})
     plan=planner.prepare(TENANT,claim,model);identity=planner.queue(TENANT,ACCOUNT,plan)
     grant=authority.admit(TENANT,ACCOUNT,identity);assert type(grant) is Dispatch
     with Session(engine) as s,s.begin():s.add(LadderState(account_id=ACCOUNT,fan_id=FAN,status="stopped"))

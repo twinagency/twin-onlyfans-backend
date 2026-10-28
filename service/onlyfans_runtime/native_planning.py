@@ -24,7 +24,9 @@ from .native_context import canonical, versions
 from .store import Claim, Refused, _id
 from .text_delivery import TextAuthority
 
-PLANNER_VERSION = "native-text.v4"
+# v5: sales carry a versioned basis (native_sales); turn signals come from the shared
+# FASTT evaluators. v4 plans with a sale are read only by native_sales.legacy_current_sale.
+PLANNER_VERSION = "native-text.v5"
 MAX_CONTEXT_BYTES = 65536
 MAX_SYNTHETIC_INVOCATIONS = 1000
 
@@ -88,14 +90,31 @@ def _native_messages(context):
     # Use the same composer; all legacy callers retain its existing default.
     persona = compose_persona(cfg, fallback="", fact_value_clip=16000)
     bot_accused = detect_bot_accusation(candidate.last_in_text, language)
-    kind = native._turn_kind(bot_accused=bot_accused, pic_desc="", content_ask=False,
-                            escalation=False, image_dare=False, dare_callback=False,
-                            hot_thread=False, can_sell=False, pic_offer=False)
+    # The SAME evaluators ai_chatter.run uses. There is no image analysis in the
+    # native path, so every picture beat stays off (unknown is never invented).
+    sales, policy = context.get("sales"), context.get("sales_policy") or {}
+    stamp = datetime.fromisoformat(context["messages"][-1]["created_at"])
+    signals = native.turn_thread_signals([(m["direction"], m["body"]) for m in context["messages"]],
+        last_body=candidate.last_in_text, describe_on=False, last_in_desc=None,
+        last_in_desc_at=None, pic_sent=False, dare_recent=True, now=stamp)
+    settings = native.config_from_row(cfg)
+    can_sell = bool(sales) and bool(policy.get("kinds"))
+    content_ask, _escalation, kind = native.decide_pitch_turn(can_sell=can_sell,
+        last_body=candidate.last_in_text, fan_lang=language,
+        pivot_on_escalation=bool(settings.get("pivot_on_escalation")), fan_msg_n=candidate.fan_msg_n,
+        esc_min_msgs=int(settings.get("min_fan_msgs_before_escalation_pitch") or 0),
+        bot_accused=bot_accused, pic_desc="", image_dare=False, dare_callback=False,
+        pic_offer=False, hot_thread=signals.hot_thread)
+    close = ("If exactly one listed item fits under an allowed basis, select it in the sale field "
+             "and write a normal reply: the delivery authority sends the approved card. Never say "
+             "it was sent, never name a price, and keep choosing no sale if unsure.") if can_sell else ""
     messages, _ = native._build_messages(persona, fan, candidate, set(), history_tail=100,
                                          onlyfans_text_only=True, painful_on=False,
                                          onlyfans_memory=True, profile=profile,
-                                         onlyfans_sales=context.get("sales"),
+                                         onlyfans_sales=sales, onlyfans_bases=policy or None,
                                          bot_accused=bot_accused, kind=kind,
+                                         content_ask=content_ask, hot_thread=signals.hot_thread,
+                                         sell=native._SellSurface(close=close) if close else native._NO_SELL,
                                          v=_voice.blocks(cfg.voice, sell_customs=False),
                                          lang=language)
     memory = context.get("historicalMemory")
@@ -122,7 +141,7 @@ async def _draft(context, messages, model, timeout):
     if leak or not text.strip() or _unbacked_talk(text) or _DELIVERY_TALK_RE.search(text):
         raise Refused("unbacked native draft")
     sale = memory.pop("sale", None)
-    if sale is not None:
+    if sale is not None and sale["basis"]["kind"] != "text_offer":
         from .native_sales import caption
         text = caption(sale) + "\n\n" + text
         if len(text.encode()) > 20000:
@@ -197,8 +216,10 @@ class NativeTextPlanner:
                 raise Refused("native input has moved on")
             context = {**snapshot, "account_id": claim.account_id, "messages": list(reversed([dict(row) for row in messages]))}
             if policy.media_enabled:
-                from .native_sales import candidates
-                context["sales"] = candidates(s, claim.account_id, claim.fan_id, now)
+                from .native_sales import shelf
+                context["sales"], context["sales_policy"] = shelf(s, claim.account_id, claim.fan_id, now,
+                    input_revision=claim.input_revision, control_revision=claim.control_revision,
+                    expires_at=now + timedelta(seconds=60))
             encoded = canonical(context)
             if len(encoded.encode()) > MAX_CONTEXT_BYTES:
                 raise Refused("native context exceeds its byte budget")
@@ -282,8 +303,10 @@ class NativeTextPlanner:
                 work.lease_token = work.lease_until = None
             else:
                 from .native_memory import apply_memory
-                from .native_sales import current_sale
-                if sale is not None and not current_sale(s, claim.account_id, claim.fan_id, sale, now):
+                from .native_sales import current_sale, offer_holds, offered_in_text
+                held = (sale is not None and not (offer_holds(s, claim.account_id, claim.fan_id, sale["basis"], now)
+                    if sale["basis"]["kind"] == "text_offer" else current_sale(s, claim.account_id, claim.fan_id, sale, now)))
+                if held:
                     plan.status, plan.reason = "stale", "sales_snapshot_changed"
                     work.status, work.lease_token, work.lease_until = "blocked", None, None
                     return identity
@@ -295,7 +318,8 @@ class NativeTextPlanner:
                 else:
                     plan.context_hash = versions(s, claim.account_id, claim.fan_id)[0]
                     plan.status, plan.body = "ready", result
-                    plan.sale_json = canonical(sale) if sale is not None else None
+                    plan.sale_json = (None if sale is None else canonical(offered_in_text(sale))
+                        if sale["basis"]["kind"] == "text_offer" else canonical(sale))
         return identity
 
     def queue(self, tenant_id, account_id, plan_id):
@@ -306,7 +330,8 @@ class NativeTextPlanner:
                 raise Refused("native plan is not ready")
             claim = Claim(**json.loads(plan.claim_json))
             body = plan.body
-            sale = json.loads(plan.sale_json) if plan.sale_json else None
+            from .native_sales import card_sale
+            sale = card_sale(plan.sale_json)
         return self.authority.prepare(tenant_id, account_id, claim.fan_id,
             command_key="native:"+plan_id, expected_revision=claim.control_revision,
             body=body, origin="automated", actor="native-text-worker", work=claim,

@@ -73,6 +73,11 @@ def cost_matches(session, plan):
             and call.status == "done" and mode_matches and call.cost_cents == plan.charged_millicents)
 
 
+def _card_sale_json(sale_json):
+    from .native_sales import card_sale_json
+    return card_sale_json(sale_json)
+
+
 def matches(session, intent):
     if intent.native_plan_id is None:
         return True
@@ -80,6 +85,6 @@ def matches(session, intent):
     plan = session.get(OfNativePlan, (intent.account_id, intent.native_plan_id))
     return (plan is not None and plan.status == "queued" and plan.intent_id == intent.intent_id
             and plan.fan_id == intent.fan_id and plan.body == intent.body
-            and plan.sale_json == intent.catalog_snapshot_json
+            and _card_sale_json(plan.sale_json) == intent.catalog_snapshot_json
             and cost_matches(session, plan)
             and versions(session, intent.account_id, intent.fan_id)[0] == plan.context_hash)

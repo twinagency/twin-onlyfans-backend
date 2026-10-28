@@ -174,7 +174,7 @@ def test_native_media_requires_exact_preview_price_and_unpaid_evidence(database,
         s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json = canonical({"pack_send_enabled":True,
             "pack_on_ask_enabled":True,"qualification_gate_enabled":True})
     store.record(TENANT,ACCOUNT,event(mid=2,body=ASK)); store.drain(TENANT,ACCOUNT); due(engine)
-    model = SyntheticNativeModel("Here are the saved collection details.", sale={"item_id":item,"quote":ASK}, reported_cost_millicents=7)
+    model = SyntheticNativeModel("Here are the saved collection details.", sale={"item_id":item,"basis_kind":"direct_request","quote":ASK}, reported_cost_millicents=7)
     with native_peer(mode=mode) as peer:
         runtime = worker(store,model=model,transport=connector(peer,revision=2))
         report = runtime.step()

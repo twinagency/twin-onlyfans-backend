@@ -88,7 +88,8 @@ def terms_match(session, intent):
     try:
         expected = json.loads(intent.catalog_snapshot_json)
         current = catalog_terms(session, intent.account_id, intent.catalog_item_id, price_cents=intent.price_cents)
-        expected = {k: v for k, v in expected.items() if k not in {"native_quote", "source_quote", "source_message_id"}}
+        from .native_sales import BASIS_KEYS
+        expected = {k: v for k, v in expected.items() if k not in BASIS_KEYS}
         return (expected == current and json.loads(intent.media_json) == current["media_ids"]
                 and json.loads(intent.preview_json) == current["preview_ids"])
     except (Refused, ValueError, TypeError):

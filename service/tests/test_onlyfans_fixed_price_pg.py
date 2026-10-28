@@ -42,7 +42,7 @@ def test_native_fixed_sale_keeps_saved_amount_everywhere(database, monkeypatch, 
     fix(engine, item, 1007)
     with Session(engine) as s, s.begin():
         s.add(LadderState(account_id=ACCOUNT, fan_id=FAN, rung_index=rung))
-    model = SyntheticNativeModel("Here is the available choice.", sale={"item_id": item, "quote": ASK})
+    model = SyntheticNativeModel("Here is the available choice.", sale={"item_id": item, "basis_kind": "direct_request", "quote": ASK})
     plan = planner.prepare(TENANT, claim, model)
     with Session(engine) as s:
         saved = s.get(OfNativePlan, (ACCOUNT, plan))

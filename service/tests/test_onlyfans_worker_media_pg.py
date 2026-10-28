@@ -28,7 +28,7 @@ def test_worker_media_keeps_price_and_ownership_semantics_through_local_http(dat
         expected_revision=config["configurationRevision"],expected_fingerprint=config["fingerprint"],
         command_key="a"*64,actor="op-session:"+"b"*64)
     store.record(TENANT,ACCOUNT,event(mid=2,body=ASK));store.drain(TENANT,ACCOUNT);due(database[1])
-    model=SyntheticNativeModel("Here are the saved collection details.",sale={"item_id":item,"quote":ASK},reported_cost_millicents=7)
+    model=SyntheticNativeModel("Here are the saved collection details.",sale={"item_id":item,"basis_kind":"direct_request","quote":ASK},reported_cost_millicents=7)
     with peer_server(mode) as peer:
         transport=LoopbackTextTransport(from_server(peer.server,account_id=ACCOUNT,policy_revision=2))
         runtime=worker(store,model=model,transport=transport);result=runtime.step()

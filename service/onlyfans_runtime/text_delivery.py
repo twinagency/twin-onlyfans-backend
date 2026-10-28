@@ -350,28 +350,37 @@ class TextAuthority:
                 terms = catalog_terms(s, account_id, catalog_item_id, price_cents=quoted_price_cents)
                 assert_unowned(s, account_id, fan_id, terms)
                 if origin == "automated":
-                    from .native_sales import eligible, choice
-                    if not eligible(s, account_id, fan_id, now)[0]:
-                        raise Refused("native sales currently held")
+                    from .native_sales import card_sale, requote
                     plan = s.get(OfNativePlan, (account_id, native_plan_id))
-                    if plan is None or plan.sale_json is None:
+                    saved = card_sale(plan.sale_json) if plan is not None else None
+                    if saved is None or saved["item"]["id"] != catalog_item_id:
                         raise Refused("native sale evidence unavailable")
-                    saved = json.loads(plan.sale_json)
-                    terms = {**choice(s, account_id, fan_id, catalog_item_id, now),
-                        "source_quote": saved["source_quote"], "source_message_id": saved["source_message_id"]}
+                    # The saved basis is re-derived from live state (ownership, enabled
+                    # item, media, currency, caps, refusals), never trusted as stored.
+                    terms = requote(s, account_id, fan_id, catalog_item_id, saved, now)
                     if terms["price_cents"] != quoted_price_cents:
                         raise Refused("native price snapshot changed")
+                if origin in {"automated", "engagement"}:
+                    # One sale opportunity per fan: the reactive planner and the
+                    # engagement worker cannot both reserve a card for him.
+                    other = s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account_id,
+                        OfTextIntent.fan_id == fan_id, OfTextIntent.catalog_item_id.is_not(None),
+                        OfTextIntent.origin.in_(("automated", "engagement")),
+                        OfTextIntent.status.in_(("queued", "dispatching", "unknown"))).limit(1))
+                    if other is not None:
+                        raise Refused("sale opportunity already reserved")
             if origin == "automated":
                 row = s.get(OfWork, (account_id, fan_id))
                 if not self._valid_work(work, row, state, now):
                     raise Refused("stale planning claim")
                 if native_plan_id is not None:
                     from .native_context import canonical, versions, cost_matches
+                    from .native_sales import card_sale_json
                     plan = s.get(OfNativePlan, (account_id, native_plan_id))
                     if (plan is None or plan.status != "ready" or plan.expires_at <= now or not cost_matches(s, plan)
                             or plan.binding_id != runtime.binding_id or plan.fan_id != fan_id
                             or plan.claim_json != canonical(asdict(work)) or plan.body != body
-                            or plan.sale_json != (canonical(terms) if terms is not None else None)
+                            or card_sale_json(plan.sale_json) != (canonical(terms) if terms is not None else None)
                             or plan.context_hash != versions(s, account_id, fan_id)[0]):
                         raise Refused("native plan snapshot changed")
                 # Saving this immutable intent consumes the planning claim.

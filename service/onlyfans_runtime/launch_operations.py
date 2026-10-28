@@ -442,17 +442,17 @@ def _readiness(s, runtime, *, credential_reader=None):
     archive_complete = bool(scan and scan.binding_id == runtime.binding_id and scan.status == "complete"
         and scan.known_fans_complete and not pending_archive)
     archive_running = worker_current and capabilities.get("history_recovery") is True
-    check("archive", "ready" if archive_complete else "running" if archive_running else "disabled",
-        None if archive_complete else "available_history_recovery_incomplete" if archive_running else "history_recovery_worker_disabled_or_unobserved",
-        "history_backfill" if archive_running else "worker_configuration", blocking=False,
+    check("archive", "ready" if archive_complete else "running" if archive_running else "disabled" if worker_current else "unknown",
+        None if archive_complete else "available_history_recovery_incomplete" if archive_running else "history_recovery_worker_disabled" if worker_current else "worker_observation_missing_or_stale",
+        "history_backfill" if archive_running else "worker_configuration" if worker_current else "worker_status", blocking=False,
         observed=scan.updated_at if scan else None)
     stored = s.scalar(select(func.count()).select_from(Message).where(Message.account_id == account))
     processed = s.scalar(select(func.count()).select_from(Message).join(MemoryReceipt, _receipt_matches())
         .where(Message.account_id == account))
     memory_running = worker_current and capabilities.get("history_memory") is True
-    check("memory", "ready" if stored == processed else "running" if memory_running else "disabled",
-        None if stored == processed else "stored_memory_processing_incomplete" if memory_running else "history_memory_worker_disabled_or_unobserved",
-        "history_memory" if memory_running else "worker_configuration", blocking=False)
+    check("memory", "ready" if stored == processed else "running" if memory_running else "disabled" if worker_current else "unknown",
+        None if stored == processed else "stored_memory_processing_incomplete" if memory_running else "history_memory_worker_disabled" if worker_current else "worker_observation_missing_or_stale",
+        "history_memory" if memory_running else "worker_configuration" if worker_current else "worker_status", blocking=False)
     ledger = _ledger_core(s, runtime)
     ledger_ready = ledger["fresh"] and not ledger["commerceHold"]
     check("ledger", "ready" if ledger_ready else "blocked", None if ledger_ready else "ledger_held_or_stale", "ledger")

@@ -24,6 +24,7 @@ PAGES_PER_TURN = 2
 @dataclass
 class HeadState:
     due: float = 0
+    discovery_cursor: str | None = None
     pending: deque = field(default_factory=deque)
 
 
@@ -47,6 +48,8 @@ def _missing(store, tenant, account, revision, page, claim):
         runtime = store._runtime(s, tenant, account)
         store._read_connection(s, runtime, revision)
         current(store, tenant, claim, session=s)
+        from .profiles import apply_profiles
+        apply_profiles(s,runtime,page.fan_ids,getattr(page,"profiles",{}),getattr(page,"creator_profile",None))
         # Last-message identities are hints only. Missing hints cause a bounded
         # message read, never a completeness assertion or an archive reset.
         return [fan for fan in page.fan_ids
@@ -119,9 +122,9 @@ the native worker. This module has no planner, model or send dependency.
     applied = 0
     try:
         if clock() >= state.due:
-            fans = _read(store, tenant, account, revision,
+            fans, next_cursor = _read(store, tenant, account, revision,
                 lambda: reader.chats(cursor=None, limit=PAGE_LIMIT),
-                lambda page, claim: _missing(store, tenant, account, revision, page, claim))
+                lambda page, claim: (_missing(store, tenant, account, revision, page, claim), page.next_cursor))
             # Give the newest arrival one priority slot, retaining older queued
             # fans ahead of the rest. Optional missing head hints must not make
             # repeated top-of-inbox reads starve the tail of the queue.
@@ -129,6 +132,15 @@ the native worker. This module has no planner, model or send dependency.
             fresh = [fan for fan in fans if fan not in waiting]
             state.pending = deque(fresh[:1] + list(state.pending) + fresh[1:])
             state.due = clock() + INTERVAL_SECONDS
+            if state.discovery_cursor is None:state.discovery_cursor = next_cursor
+        if state.discovery_cursor is not None:
+            fans, next_cursor = _read(store, tenant, account, revision,
+                lambda: reader.chats(cursor=state.discovery_cursor, limit=PAGE_LIMIT),
+                lambda page, claim: (_missing(store, tenant, account, revision, page, claim), page.next_cursor))
+            if next_cursor == state.discovery_cursor:raise Refused("inbox discovery cursor did not advance")
+            waiting = set(state.pending)
+            state.pending.extend(fan for fan in fans if fan not in waiting)
+            state.discovery_cursor = next_cursor
         for _ in range(PAGES_PER_TURN):
             if not state.pending:
                 break

@@ -25,12 +25,12 @@ Two rules this module exists to keep:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from datetime import datetime, timezone
 from typing import Protocol
 
-from sqlalchemy import and_, or_, select, func, case, tuple_
+from sqlalchemy import and_, or_, select, func, case, tuple_, cast, String
 from sqlalchemy.exc import SQLAlchemyError
 
 from db.engine import get_session
@@ -49,7 +49,7 @@ from db.models import (
     parse_ts,
 )
 
-from db.onlyfans_models import OfRuntime
+from db.onlyfans_models import OfRuntime, OfIngress
 from db.onlyfans_connection_models import OfProviderConnection
 
 from .contract import UNRESOLVED_OUTCOMES
@@ -101,6 +101,7 @@ class ConversationRow:
     is_pinned: bool
     fan_username: str | None = None
     fan_display_name: str | None = None
+    fan_avatar_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,8 @@ class StateRow:
     unresolved_attempt_id: str | None
     requires_attention: bool
     updated_at: datetime | None
+    attempt_outcome: str | None = None
+    history_held: bool = False
 
 
 @dataclass(frozen=True)
@@ -174,7 +177,7 @@ class OnlyFansReadRepo(Protocol):
     async def get_binding(self, *, tenant_id: str | None, account_id: str) -> BindingRow | None: ...
 
     async def conversation_page(
-        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False
+        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False, search: str = ""
     ) -> list[ConversationRow]: ...
 
     async def conversation(self, *, account_id: str, fan_id: int) -> ConversationRow | None: ...
@@ -223,6 +226,18 @@ class SqlOnlyFansReadRepo:
                     section=section, cursor=cursor, limit=limit)
         except (SQLAlchemyError, ValueError, TypeError, RecursionError) as exc:
             raise _storage_failure(exc) from exc
+
+    async def fan_spend(self, *, account_id, fan_id):
+        from .spend import fan_spend
+        async with get_session() as session:
+            await lock_read_scope(session, account_id)
+            return await fan_spend(session, account_id, fan_id)
+
+    async def account_health(self, *, account_id):
+        from .health import account_health
+        async with get_session() as session:
+            await lock_read_scope(session, account_id)
+            return await account_health(session, account_id)
 
     async def ledger(self, *, tenant_id, account_id):
         from onlyfans_runtime.launch_ledger.dashboard import read_ledger
@@ -422,7 +437,7 @@ class SqlOnlyFansReadRepo:
         return rows[0] if rows else None
 
     async def conversation_page(
-        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False
+        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False, search: str = ""
     ) -> list[ConversationRow]:
         try:
             async with get_session() as s:
@@ -439,6 +454,7 @@ class SqlOnlyFansReadRepo:
                         Chat.is_pinned,
                         Fan.of_username,
                         Fan.of_display_name,
+                        Fan.avatar_url,
                     )
                     .select_from(Chat)
                     .outerjoin(Fan, and_(Fan.account_id == Chat.account_id, Fan.fan_id == Chat.fan_id))
@@ -450,6 +466,9 @@ class SqlOnlyFansReadRepo:
                     .order_by(Chat.last_message_at.desc().nullslast(), Chat.fan_id.desc())
                     .limit(limit)
                 )
+                if search:
+                    stmt = stmt.where(or_(func.lower(Fan.of_display_name).contains(search, autoescape=True),
+                        func.lower(Fan.of_username).contains(search, autoescape=True), cast(Chat.fan_id, String) == search))
                 if ai_only:
                     # Filter before the keyset limit, including enabled fans on later pages.
                     # Both identity columns are required: fan ids can repeat across creators.
@@ -495,6 +514,7 @@ class SqlOnlyFansReadRepo:
                 is_pinned=bool(row[7]),
                 fan_username=row[8],
                 fan_display_name=row[9],
+                fan_avatar_url=row[10],
             )
             for row in rows
         ]
@@ -516,6 +536,7 @@ class SqlOnlyFansReadRepo:
                             Chat.is_pinned,
                             Fan.of_username,
                             Fan.of_display_name,
+                        Fan.avatar_url,
                         )
                         .select_from(Chat)
                         .outerjoin(
@@ -539,6 +560,7 @@ class SqlOnlyFansReadRepo:
             is_pinned=bool(row[7]),
             fan_username=row[8],
             fan_display_name=row[9],
+            fan_avatar_url=row[10],
         )
 
     async def conversation_metadata(self, *, account_id: str, rows):
@@ -593,6 +615,16 @@ class SqlOnlyFansReadRepo:
                 unresolved_attempt_id=(pending[1] or f"message:{pending[2]}") if pending else row[4],
                 requires_attention=bool(pending or (row and row[5])),
                 updated_at=pending[3] if pending else row[6])
+        async with get_session() as session:
+            await lock_read_scope(session, account_id)
+            from .attempts import outcome
+            held_fans=set((await session.scalars(select(OfIngress.fan_id).where(OfIngress.account_id==account_id,
+                OfIngress.fan_id.in_(fans),OfIngress.status=='quarantined').distinct())).all())
+            for fan, state in result.items():
+                if state:result[fan]=state=replace(state,history_held=fan in held_fans)
+                if state and state.unresolved_attempt_id:
+                    value = await session.run_sync(lambda sync: outcome(sync, account_id, fan, state.unresolved_attempt_id))
+                    result[fan] = replace(state, attempt_outcome=value)
         return result, outcomes
 
     async def conversation_state(self, *, account_id: str, fan_id: int) -> StateRow | None:
@@ -640,7 +672,15 @@ class SqlOnlyFansReadRepo:
             raise _storage_failure(exc) from exc
         if row is None and unresolved is None:
             return None
+        reference = (unresolved[0] or f"message:{unresolved[1]}") if unresolved else row[3]
+        async with get_session() as session:
+            await lock_read_scope(session, account_id)
+            from .attempts import outcome
+            attempt_outcome = await session.run_sync(lambda sync: outcome(sync, account_id, fan_id, reference))
+            history_held = await session.scalar(select(OfIngress.event_key).where(OfIngress.account_id==account_id,OfIngress.fan_id==fan_id,OfIngress.status=='quarantined').limit(1)) is not None
         return StateRow(
+            history_held=history_held,
+            attempt_outcome=attempt_outcome,
             mode=(row[0] or "paused") if row else "paused",
             revision=int(row[1] or 0) if row else 0,
             takeover_state=(row[2] or "none") if row else "none",

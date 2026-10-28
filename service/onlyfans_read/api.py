@@ -138,6 +138,7 @@ async def list_conversations(
     cursor: str | None = Query(default=None),
     limit: int | None = Query(default=None),
     filter: str | None = Query(default=None),
+    q: str | None = Query(default=None),
 ) -> JSONResponse:
     try:
         principal = await _authenticate(request)
@@ -145,7 +146,7 @@ async def list_conversations(
             from .errors import BadRequest
             raise BadRequest("invalid_filter", "That conversation filter is not valid.")
         body = await service.list_conversations(
-            _repo(), principal, account_id=account_id, cursor=cursor, limit=limit, ai_only=filter == "ai"
+            _repo(), principal, account_id=account_id, cursor=cursor, limit=limit, ai_only=filter == "ai", search=q
         )
     except OnlyFansReadError as exc:
         return _refusal(exc)

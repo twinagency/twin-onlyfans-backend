@@ -114,7 +114,7 @@ def capabilities(binding: BindingRow | None = None) -> dict:
         "manageContent": content,
         "managePrices": content,
         "viewSales": CAPABILITY_AVAILABLE,
-        "resolveDeliveryEvidence": CAPABILITY_NOT_CONFIGURED,
+        "resolveDeliveryEvidence": controls if __import__("onlyfans_runtime.delivery_resolution", fromlist=["operational"]).operational() else CAPABILITY_NOT_CONFIGURED,
     }
 
 
@@ -282,6 +282,12 @@ def conversation_summary(
         or (state.requires_attention if state else False)
         or mode in ("paused", "no_contact")
     )
+    reasons=[]
+    if mode in ('paused','no_contact'):reasons.append('intentionally_paused')
+    elif state and state.requires_attention and not unresolved:reasons.append('human_review')
+    if conversation.unread_count and mode not in ('paused','no_contact'):reasons.append('needs_reply')
+    if last_delivery in ('unknown','partial','failed','refused') or unresolved and (not state or state.attempt_outcome not in ('dispatching','accepted_pending')):reasons.append('delivery_problem')
+    if state and state.history_held:reasons.append('history_repair')
     as_of = conversation.last_message_at or anchor
     return {
         "conversationId": conversation_id_for(conversation.account_id, conversation.fan_id),
@@ -291,15 +297,20 @@ def conversation_summary(
             "fanId": str(conversation.fan_id),
             "displayName": _fan_name(conversation),
             "shortRef": str(conversation.fan_id),
+            "username": conversation.fan_username,
+            "avatarUrl": conversation.fan_avatar_url,
         },
         "lastMessagePreview": (conversation.last_message_preview or "")[:160],
+        "lastMessageId": str(conversation.last_message_id) if conversation.last_message_id is not None else None,
         "lastActivityAt": iso(as_of) or "",
         "unreadCount": int(conversation.unread_count or 0),
         "priority": _priority(conversation),
         "automationMode": mode,
         "takeoverState": _takeover(state),
-        "delivery": _outcome(last_delivery),
-        "requiresAttention": requires_attention,
+        "delivery": _outcome(state.attempt_outcome if state and state.attempt_outcome else last_delivery),
+        "requiresAttention": any(reason != "intentionally_paused" for reason in reasons),
+        "attentionReasons": reasons,
+        "historyHeld": bool(state and state.history_held),
         "freshness": freshness(anchor, now=now),
     }
 
@@ -328,9 +339,9 @@ def delivery_incident(
                 }
         return {
             "attemptId": attempt_id,
-            "outcome": "unknown",
+            "outcome": state.attempt_outcome or "unknown",
             "recordedAt": iso(state.updated_at if state else None) or iso(utc_now()),
-            "detail": "A send on this conversation is unresolved. It is held until the outcome is resolved.",
+            "detail": ("Sending. Waiting for the provider response." if state.attempt_outcome == "dispatching" else "Provider accepted this exact attempt. CRM receipt update is pending." if state.attempt_outcome == "accepted_pending" else "A send on this conversation is unresolved. It is held until the outcome is resolved."),
         }
     for message in reversed(messages):
         recorded = deliveries.get(message.message_id)

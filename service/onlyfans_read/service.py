@@ -96,7 +96,11 @@ async def list_accounts(
     accounts = []
     for binding in bindings:
         anchor = await repo.account_activity_anchor(account_id=binding.account_id)
-        accounts.append(projections.account_model(binding, anchor=anchor, now=now))
+        account = projections.account_model(binding, anchor=anchor, now=now)
+        health = getattr(repo, "account_health", None)
+        if callable(health):account = {**account, **await health(account_id=binding.account_id)}
+        if not account.get('deliveryResolutionOperational',False):account['capabilities']={**account['capabilities'],'resolveDeliveryEvidence':'not_configured'}
+        accounts.append(account)
 
     return accounts_envelope(
         creator_id=wanted_creator,
@@ -115,6 +119,7 @@ async def list_conversations(
     now: datetime | None = None,
     ai_only: bool = False,
     query: str = "",
+    search: str | None = None,
     filter: str | None = None,
 ) -> dict:
     """One page of an account's conversations, newest activity first."""
@@ -123,9 +128,14 @@ async def list_conversations(
     if binding is None:
         raise Refused("unknown_account")
 
+    if search is not None:
+        from .search import normalize_search
+        if query:
+            raise BadRequest("invalid_search", "Use one fan search parameter.")
+        query = normalize_search(search)
     if type(query) is not str or len(query) > 200 or any(ord(c) < 32 for c in query) or filter not in (None, "unread", "attention"):
         raise BadRequest("invalid_search", "Search fan name, username or ID using up to 200 characters.")
-    query = query.strip()
+    query = query.strip().removeprefix("@")
     search_scope = hashlib.sha256(json.dumps([binding.binding_id, query, filter, ai_only], separators=(",", ":")).encode()).hexdigest()[:16] if query or filter else None
     before: tuple[datetime | None, int] | None = None
     if cursor:
@@ -255,6 +265,8 @@ async def get_conversation(
         except Unavailable:
             # A money read outage must stay visible without removing the fan transcript.
             detail["financials"] = None
+    spend = getattr(repo, "fan_spend", None)
+    if callable(spend):detail["spend"] = await spend(account_id=account, fan_id=fan_id)
     detail["previousCursor"] = (encode_thread_cursor(account_id=account, fan_id=fan_id,
         before_message_id=messages[0].message_id) if len(messages) == DETAIL_MESSAGE_LIMIT else None)
     return conversation_envelope(account_id=account, conversation=detail)

@@ -165,6 +165,7 @@ class NativeWorker:
             row.binding_id=runtime.binding_id
             row.observed_at=utcnow()
             row.capabilities_json=canonical({"history_recovery":self.history_recovery,
+                "delivery_resolution":__import__('onlyfans_runtime.delivery_resolution',fromlist=['operational']).operational(),
                 "history_memory":self.history_memory,"engagement":self.engagement_service is not None,
                 "connection_revision":generation})
             row.last_error="cycle_failed" if failed else None
@@ -216,6 +217,8 @@ class NativeWorker:
         if not self._lock.acquire(blocking=False):raise Refused("worker instance is already running")
         report=CycleReport()
         try:
+            from .delivery_resolution_jobs import poll
+            poll(self.store,self.tenant_id)
             count=min(self.accounts_per_cycle,len(self.accounts))
             selected=[self.accounts[(self._cursor+i)%len(self.accounts)] for i in range(count)]
             self._cursor=(self._cursor+count)%len(self.accounts)

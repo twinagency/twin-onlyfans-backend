@@ -48,6 +48,8 @@ def _missing(store, tenant, account, revision, page, claim):
         runtime = store._runtime(s, tenant, account)
         store._read_connection(s, runtime, revision)
         current(store, tenant, claim, session=s)
+        from .profiles import apply_profiles
+        apply_profiles(s,runtime,page.fan_ids,getattr(page,"profiles",{}),getattr(page,"creator_profile",None))
         # Last-message identities are hints only. Missing hints cause a bounded
         # message read, never a completeness assertion or an archive reset.
         return [fan for fan in page.fan_ids

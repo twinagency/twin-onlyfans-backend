@@ -23,7 +23,7 @@ def snapshot(authority,tenant,account,fan,intent_id):
             "payload_hash":row.payload_hash,"token":row.dispatch_token}
 
 
-def reconcile(authority,tenant,account,fan,intent_id,*,history,complete,provider_message_id,command_key,actor,reason):
+def reconcile(authority,tenant,account,fan,intent_id,*,history,complete,provider_message_id,command_key,actor,reason,expected_revision=None):
     from native_pilot.recovery import _matches,proof_hash
     intent=snapshot(authority,tenant,account,fan,intent_id)
     if complete is not True or type(history) is not list or len(history)>1000:
@@ -47,6 +47,11 @@ def reconcile(authority,tenant,account,fan,intent_id,*,history,complete,provider
         if runtime.binding_id!=intent["binding_id"] or row.attempt_id!=intent["attempt_id"] or row.payload_hash!=intent["payload_hash"]:
             raise Refused("recovery intent changed")
         if _prior(s,runtime,command_key,"send_reconciliation",request_hash) is None:
+            if expected_revision is not None:
+                from db.models import OfConversationState
+                state=s.get(OfConversationState,(account,fan))
+                if not state or state.revision!=expected_revision or state.unresolved_attempt_id!=intent['attempt_id']:
+                    raise Refused('control revision conflict')
             _record(s,runtime,command_key,"send_reconciliation",request_hash,actor,reason,
                 {"intentId":intent_id,"attemptId":intent["attempt_id"],"status":row.status,"providerObservation":raw},
                 {"recorded":True,"intentId":intent_id,"evidenceHash":evidence_hash,"resumed":False},utcnow())

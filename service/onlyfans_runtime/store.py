@@ -280,8 +280,8 @@ class Store:
             if s.get(Fan, (account, event.fan_id)) is None:
                 s.add(Fan(account_id=account, fan_id=event.fan_id))
                 s.flush()
-            same = (existing.direction == event.direction and existing.body == event.body and
-                    existing.price_cents == event.price_cents and json.loads(existing.media_ids or "[]") == list(event.media_ids))
+            from .history_repair import equivalent, saved_media
+            same = row.binding_id == runtime.binding_id and equivalent(existing, event, saved_media=saved_media(s,existing))
             row.status = "applied" if same else "quarantined"
             row.reason = None if same else "conflicting_message_identity"
             if not same:
@@ -839,7 +839,7 @@ class Store:
             scan.known_fan_after = ids[-1]
         scan.known_fans_complete = len(ids) < PAGE_LIMIT
 
-    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None, connection_revision=None,
+    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None, connection_revision=None, profiles=None, creator_profile=None,
                   provider_read_claim=None):
         if len(fan_ids) > PAGE_LIMIT or len(set(fan_ids)) != len(fan_ids):
             raise Refused("invalid discovery page")
@@ -857,6 +857,9 @@ class Store:
                 raise Refused("stale discovery claim")
             if scan.page_count >= 10000:
                 raise Refused("discovery page budget exhausted")
+            if profiles:
+                from .profiles import apply_profiles
+                apply_profiles(s,runtime,fan_ids,profiles,creator_profile)
             for fan_id in fan_ids:
                 if s.get(OfRecovery, (claim.account_id, fan_id)) is None:
                     s.add(OfRecovery(account_id=claim.account_id, fan_id=fan_id))

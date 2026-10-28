@@ -167,6 +167,37 @@ async def main():
     os.environ["OPENROUTER_API_KEY"] = "test-key"
     check(await llm_client._tenant_api_key(ACCOUNT, prov, "describe_media") == "test-key", "env key used")
 
+    # Automatic imports revalidate their frozen account generation before reads
+    # and every write, including failure stamps. A stale result cannot land.
+    async with get_session() as session:
+        session.add(VaultItem(account_id=ACCOUNT, media_id=10, kind="photo", created_at=NOW, raw_json="{}"))
+        await session.commit()
+    llm_client.chat = fake_chat
+    vault_frames.collect = fake_collect
+    for fail_on in (1, 2):
+        guards = []
+        async def changed(session, media_id, **kwargs):
+            guards.append(media_id)
+            if len(guards) == fail_on:
+                raise RuntimeError("synthetic-generation-changed")
+        calls["collect"].clear(); calls["chat"].clear()
+        try:
+            await api._describe_one(ACCOUNT, 10, model=cv.DEFAULT_MODEL, scope_guard=changed)
+        except RuntimeError as exc:
+            check(str(exc) == "synthetic-generation-changed", "scope refusal preserved")
+        else:
+            raise AssertionError("stale generation persisted")
+        async with get_session() as session:
+            row = await session.get(VaultItem, (ACCOUNT, 10))
+            check(row.description is None and row.describe_status is None, "stale caption/failure not written")
+        if fail_on == 1:
+            check(calls["collect"] == calls["chat"] == [], "revoked scope does no media/model work")
+    guards = []
+    async def current(session, media_id, **kwargs): guards.append(media_id)
+    result = await api._describe_one(ACCOUNT, 10, model=cv.DEFAULT_MODEL, scope_guard=current)
+    check(result["ok"] and len(guards) == 3, "current generation writes caption and categories")
+
 
 asyncio.run(main())
 print(f"ok {COUNT} checks")
+

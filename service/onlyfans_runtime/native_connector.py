@@ -113,7 +113,7 @@ class NativeLoopbackConnector:
         offset = 0 if cursor is None else int(cursor)
         if offset > 1_000_000:
             raise Refused("native discovery budget exhausted")
-        self.verify_identity()
+        creator = self.verify_identity()
         path = API_PATH + "/chats?" + urlencode({"limit": limit, "order": "recent", "offset": offset, "skip_users": "all"})
         rows, more = self._page(load(self._call("GET", path), max_bytes=MAX_HISTORY_BYTES), limit)
         try:
@@ -128,7 +128,8 @@ class NativeLoopbackConnector:
             mid = last.get("id") if type(last) is dict else None
             if type(mid) is int and 0 < mid < 2**63:
                 heads[fan] = mid
-        return ChatPage(fans, str(offset + len(rows)) if more else None, heads)
+        return ChatPage(fans, str(offset + len(rows)) if more else None, heads,
+            {fan: row["withUser"] for fan,row in zip(fans,rows)}, creator if type(creator) is dict else None)
 
     def messages(self, *, fan_id, before_id, limit):
         self._ready(); self._limit(limit); _id(fan_id)

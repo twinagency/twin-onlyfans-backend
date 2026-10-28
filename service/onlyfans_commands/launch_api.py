@@ -44,7 +44,7 @@ def action_view(row):
     # "accepted" means the transport accepted the message. Purchases come only from the ledger, never from here.
 
 
-async def _body(request, required, optional=()):
+async def _body(request, required, optional=(), *, capability="manage"):
     if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
         raise Refused("invalid JSON required")
     raw = bytearray()
@@ -60,7 +60,7 @@ async def _body(request, required, optional=()):
         raise Refused("invalid JSON") from None
     if type(body) is not dict or not set(required) <= set(body) <= set(required) | set(optional):
         raise Refused("invalid fields")
-    if not actor_allowed(body.get("actor")):
+    if not actor_allowed(body.get("actor"), capability=capability):
         raise Refused("invalid managing actor")
     return body
 
@@ -71,13 +71,13 @@ def _fan(value):
     return int(value)
 
 
-async def _run(request, account_id, work, *, required=None, optional=()):
+async def _run(request, account_id, work, *, required=None, optional=(), capability="manage"):
     context = authenticate(request, account_id)
     if isinstance(context, JSONResponse):
         return context
     store, tenant = context
     try:
-        body = await _body(request, required, optional) if required is not None else None
+        body = await _body(request, required, optional, capability=capability) if required is not None else None
         result = await asyncio.to_thread(work, store, tenant, body)
     except Refused as exc:
         text = str(exc)
@@ -226,7 +226,7 @@ async def history_correct(request: Request, account_id: str, fan_id: str):
             command_key=body["commandKey"], actor=body["actor"], reason=body["reason"])
         return {"correction": result, "commandKey": body["commandKey"]}
     return await _run(request, account_id, work, required=("field", "operation", "value", "expectedVersion",
-                                                           "commandKey", "actor", "reason"))
+                                                           "commandKey", "actor", "reason"), capability="chat")
 
 
 @history_router.post("/backfill")

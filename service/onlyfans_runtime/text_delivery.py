@@ -294,6 +294,9 @@ class TextAuthority:
     def prepare(self, tenant_id, account_id, fan_id, *, command_key, expected_revision,
                 body, origin, actor, work: Claim | None = None, ttl_seconds=300, native_plan_id=None,
                 catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None):
+        from onlyfans_read.agency_scope import current_scope, actor_allowed
+        if current_scope.get() is not None and (origin != "manual" or not actor_allowed(actor, capability="chat")):
+            raise Refused("manual messaging permission required")
         _id(fan_id)
         if (not isinstance(command_key, str) or not 1 <= len(command_key) <= 64
                 or type(expected_revision) is not int or expected_revision < 0

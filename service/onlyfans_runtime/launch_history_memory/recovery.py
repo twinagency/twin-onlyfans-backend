@@ -334,9 +334,8 @@ class HistoryRecovery:
                     raise Refused("future historical timestamp")
                 existing = session.get(Message, (claim.account_id, claim.fan_id, event.message_id))
                 stamp = datetime.fromisoformat(event.created_at).replace(tzinfo=None)
-                if existing is not None and (existing.direction != event.direction or existing.body != event.body
-                        or existing.price_cents != event.price_cents or existing.created_at != stamp
-                        or json.loads(existing.media_ids or "[]") != list(event.media_ids)):
+                from ..history_identity import same_message
+                if existing is not None and not same_message(existing, event):
                     # Preserve the shared fail-closed conflict behaviour without
                     # partially importing this page. Only the offending ingress
                     # becomes durable diagnostic evidence; cursor/counts stay put.
@@ -518,3 +517,4 @@ class HistoryRecovery:
         if scan_error is not None:
             raise scan_error
         return completed
+

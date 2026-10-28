@@ -122,9 +122,8 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
             if stamp > utcnow() + timedelta(minutes=5):
                 raise Refused("future recent timestamp")
             old = s.get(Message, (claim.account_id, claim.fan_id, event.message_id))
-            if old is not None and (old.body != event.body or old.direction != event.direction
-                    or old.created_at != stamp or old.price_cents != event.price_cents
-                    or json.loads(old.media_ids or "[]") != list(event.media_ids)):
+            from ..history_identity import same_message
+            if old is not None and not same_message(old, event):
                 # Existing mandatory recovery remains held; do not publish a
                 # false recent-sync proof or a partial archive cutover.
                 raise Refused("conflicting recent message identity")
@@ -165,3 +164,4 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
         row.lease_token = row.lease_until = None
         store._mark_current(s, runtime)
         return "complete"
+

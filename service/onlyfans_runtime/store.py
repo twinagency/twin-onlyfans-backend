@@ -278,8 +278,8 @@ class Store:
             if s.get(Fan, (account, event.fan_id)) is None:
                 s.add(Fan(account_id=account, fan_id=event.fan_id))
                 s.flush()
-            same = (existing.direction == event.direction and existing.body == event.body and
-                    existing.price_cents == event.price_cents and json.loads(existing.media_ids or "[]") == list(event.media_ids))
+            from .history_identity import same_message
+            same = same_message(existing, event, timestamp=False)
             row.status = "applied" if same else "quarantined"
             row.reason = None if same else "conflicting_message_identity"
             if not same:
@@ -877,3 +877,4 @@ class Store:
             return
         runtime.recovery_needed = False
         runtime.last_sync_at = utcnow()
+

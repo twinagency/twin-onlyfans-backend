@@ -1,3 +1,5 @@
+> Historical candidate notes. The current deployment, exact versions, verified results and acceptance blockers are recorded in [AGENCY-CRM-DEPLOYED-20261029.md](./AGENCY-CRM-DEPLOYED-20261029.md). Statements below about no deployment or inaccessible runtime are historical and superseded.
+
 # Agency CRM launch repair, 28 October 2026
 
 ## Release status

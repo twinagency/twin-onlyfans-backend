@@ -65,7 +65,9 @@ def read_ledger(s, tenant, account, *, now=None):
         connection = None
     from ..launch_operations import _ledger_core
     core = _ledger_core(s, runtime, now=now)
-    conflicts, unlinked = core["conflictingEvidence"], core["unresolvedTransactions"]
+    # An audited exclusion only lifts the account-wide commerce hold; the purchase is still unlinked, so the
+    # dashboard keeps counting it (its field set is a fixed contract).
+    conflicts, unlinked = core["conflictingEvidence"], core["unresolvedTransactions"] + core["excludedTransactions"]
     error = None if scan is None or scan.last_error is None else scan.last_error if scan.last_error in ERRORS else "unknown_error"
     return {"schemaVersion": SCHEMA, "accountId": account,
         "status": "not_started" if scan is None else scan.status,

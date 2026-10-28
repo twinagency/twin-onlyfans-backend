@@ -69,8 +69,32 @@ def purchases(con, account, now):
     return sorted(out)
 
 
+def unlinked_paid_fans(con, account):
+    """Fans with a paid ``ppv_message`` ledger purchase since the current creator binding that no message explains.
+
+    Such a fan's card can look unpaid (``messages.is_paid`` is only set by a linked purchase), so no discount or other
+    post-sale action may be queued for them, whether or not an operator excluded the purchase from the account hold
+    (``commerce.held``'s ``_unlinked_paid``). Read only; a database without these tables has none."""
+    from transaction_contract import PAID
+    from twin_bridge.store import has_table
+    if not has_table(con, "transactions"):
+        return set()
+    since = None
+    if has_table(con, "of_runtime") and has_table(con, "of_creator_bindings"):
+        row = con.execute("SELECT b.created_at FROM of_runtime r JOIN of_creator_bindings b ON b.id=r.binding_id "
+                          "WHERE r.account_id=?", (account,)).fetchone()
+        since = _naive(row[0]) if row and row[0] is not None else None
+    marks = ",".join("?" for _ in PAID)
+    rows = con.execute("SELECT fan_id,occurred_at FROM transactions WHERE account_id=? AND source='ledger' "
+                       f"AND kind='ppv_message' AND message_id IS NULL AND fan_id IS NOT NULL AND status IN ({marks})",
+                       (account, *sorted(PAID))).fetchall()
+    return {int(fan) for fan, occurred in rows if since is None or _naive(occurred) >= since}
+
+
 def unpaid_cards(con, account, now, after_minutes):
-    """Vault cards still unpaid ``after_minutes`` after they were sent: ``[(offer_id, fan_id, offered_at, price_cents)]``."""
+    """Vault cards still unpaid ``after_minutes`` after they were sent: ``[(offer_id, fan_id, offered_at, price_cents)]``.
+
+    Cards of a fan with an unlinked paid purchase are never returned (see ``unlinked_paid_fans``)."""
     clause, args = _lane_clause()
     rows = con.execute(
         "SELECT o.id,o.fan_id,o.offered_at,o.price_cents,o.offer_message_id FROM content_offers o "
@@ -79,7 +103,10 @@ def unpaid_cards(con, account, now, after_minutes):
         f"WHERE o.account_id=? AND o.status='open' AND o.mode='ppv' AND o.offer_message_id IS NOT NULL AND ({clause}) "
         "AND NOT COALESCE(m.is_paid, FALSE) ORDER BY o.id LIMIT 200", (account, *args)).fetchall()
     out = []
+    blocked = unlinked_paid_fans(con, account) if rows else set()
     for oid, fan, offered, price, _msg in rows:
+        if int(fan) in blocked:
+            continue
         offered = _naive(offered)
         if offered is not None and offered <= now - timedelta(minutes=after_minutes):
             out.append((int(oid), int(fan), offered, int(price or 0)))

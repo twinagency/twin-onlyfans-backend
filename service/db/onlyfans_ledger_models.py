@@ -1,9 +1,10 @@
 """Ledger scan leases and immutable observations; Transaction remains the money owner."""
-from sqlalchemy import Column, String, Integer, BigInteger, DateTime, ForeignKey, Text, CheckConstraint, Index
+from sqlalchemy import Column, String, Integer, BigInteger, DateTime, ForeignKey, Text, CheckConstraint, Index, UniqueConstraint
 from .models import Base
 
 INFO = {"onlyfans_since": "0084_native_ledger"}
 MARKERS = {"onlyfans_since": "0093_ledger_markers"}
+EXCLUSION = {"onlyfans_since": "0098_ledger_exclusion"}
 
 
 class OfLedgerScan(Base):
@@ -83,3 +84,30 @@ class OfLedgerHistory(Base):
     last_full_at = Column(DateTime)
     last_error = Column(String(64))
     updated_at = Column(DateTime, nullable=False)
+
+
+class OfLedgerExclusion(Base):
+    """Operator decision that one unlinked paid purchase no longer holds the whole account.
+
+    It never links, clears or rewrites the Transaction: the purchase stays unlinked and keeps
+    blocking paid offers to its own fan. Only the account-wide hold ignores it.
+    """
+    __tablename__ = "of_ledger_exclusion"
+    __table_args__ = (
+        UniqueConstraint("account_id", "transaction_id", name="account_transaction"),
+        UniqueConstraint("command_key", name="command"),
+        CheckConstraint("length(btrim(reason)) > 0", name="reason"),
+        CheckConstraint("length(btrim(actor)) > 0", name="actor"),
+        {"info": EXCLUSION},
+    )
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(String, ForeignKey("of_runtime.account_id", ondelete="RESTRICT"), nullable=False)
+    binding_id = Column(String, ForeignKey("of_creator_bindings.id", ondelete="RESTRICT"), nullable=False)
+    fan_id = Column(BigInteger, nullable=False)
+    transaction_id = Column(Integer, ForeignKey("transactions.id", ondelete="RESTRICT"), nullable=False)
+    blocker = Column(String(64), nullable=False)
+    reason = Column(String(512), nullable=False)
+    actor = Column(String(128), nullable=False)
+    command_key = Column(String(64), nullable=False)
+    evidence_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False)

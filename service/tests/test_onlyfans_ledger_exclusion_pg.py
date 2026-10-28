@@ -71,6 +71,11 @@ def test_account_is_held_before_exclusion_and_only_the_unlinked_fan_after(databa
         state = ledger_status(store, TENANT, account)
         assert state["unresolvedTransactions"] == 0 and state["excludedTransactions"] == 1
         assert state["commerceHold"] is False
+        from onlyfans_runtime.launch_ledger.dashboard import read_ledger
+        with Session(store.engine) as s, s.begin():
+            dash = read_ledger(s, TENANT, account)
+        # The dashboard keeps showing the purchase (fixed field set); only the account-wide hold is lifted.
+        assert dash["unlinkedPaidCount"] == 1 and dash["commerceHeld"] is False and dash["requiresInvestigation"] is True
     finally:
         store.close()
 

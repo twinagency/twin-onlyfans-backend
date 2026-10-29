@@ -54,6 +54,7 @@ def setup(database, monkeypatch):
         assert kwargs["account_id"] == ACCOUNT and kwargs["purpose"] == "describe_media"
         assert os.environ.get("ONLYFANS_PROCESS_ROLE") is None
         if kwargs.get("temperature") == 0.0:
+            assert kwargs["model"] == "openrouter/qwen3-vl-235b", "Use the configured provider and the same account budget"
             data = {"description_accurate": True, "checks": [{"category": "outdoors", "confirmed": True, "confidence": 99, "evidence": "The outdoor surroundings are clearly visible."}]}
         else:
             calls.append((ACCOUNT, MID))

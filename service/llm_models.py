@@ -306,6 +306,16 @@ MODELS: dict[str, LLMModel] = {
         api_model="qwen/qwen3-vl-30b-a3b-instruct",
         input_per_1k_cents=0.015, output_per_1k_cents=0.06, vision_ok=True,
     ),
+    # Independent folder verifier. OpenRouter published rates checked 2026-10-29:
+    # https://openrouter.ai/qwen/qwen3-vl-235b-a22b-instruct
+    # Reserve the maximum allowed routing rate, without assuming cache discounts.
+    "openrouter/qwen3-vl-235b": LLMModel(
+        "openrouter/qwen3-vl-235b", "openrouter",
+        api_model="qwen/qwen3-vl-235b-a22b-instruct",
+        input_per_1k_cents=0.03, input_cache_hit_per_1k_cents=0.03,
+        output_per_1k_cents=0.19, vision_ok=True,
+        reasoning_body=_body(provider={"max_price": {"prompt": 0.30, "completion": 1.90}}),
+    ),
 }
 
 # The pin must be offerable. A model that defaults to an effort it does not

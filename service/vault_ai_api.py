@@ -2746,7 +2746,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     result = None
     used_model = model
     data: dict[str, Any] = {}
-    for attempt_model in (model, "qwen3-vl-235b"):
+    verifier_model = "openrouter/qwen3-vl-235b" if accurate else "qwen3-vl-235b"
+    for attempt_model in (model, verifier_model):
         try:
             result = await llm_client.chat(
                 model=attempt_model,
@@ -2786,7 +2787,7 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
             if parsed.get("description") or parsed.get("tags"):
                 data = parsed
                 break
-        if attempt_model == "qwen3-vl-235b":
+        if attempt_model == verifier_model:
             break  # escalation also failed
 
     if not (data.get("description") or data.get("tags")):
@@ -2812,7 +2813,7 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
                 + "\nDescription to check: " + str(data.get("description") or "")[:2000]}]
             check_content += [{"type": "image_url", "image_url": {"url": u}} for u in got.images]
             try:
-                checked = await llm_client.chat(model="qwen3-vl-235b",
+                checked = await llm_client.chat(model=verifier_model,
                     messages=[{"role": "user", "content": check_content}], purpose="describe_media",
                     account_id=account_id, temperature=0.0)
                 verification = _parse_describe(checked.content)

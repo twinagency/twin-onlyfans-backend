@@ -127,7 +127,7 @@ async def run(args):
 
                 async def caption_chat(**kwargs):
                     if (kwargs.get("account_id") != args.account or kwargs.get("purpose") != "describe_media"
-                        or kwargs.get("model") not in {caption_vault.DEFAULT_MODEL, "qwen3-vl-235b"}):
+                        or kwargs.get("model") not in {caption_vault.DEFAULT_MODEL, "openrouter/qwen3-vl-235b"}):
                         raise Refused("caption model scope unavailable")
                     # The established caption CLI's legacy bridge is confined
                     # to this one serial, metadata-only child and purpose.

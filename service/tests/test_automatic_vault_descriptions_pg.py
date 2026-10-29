@@ -34,7 +34,7 @@ def setup(database, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", url)
     import importlib
     db = importlib.import_module("db.engine")
-    async_engine = create_async_engine(engine.url.set(drivername="postgresql+asyncpg"))
+    async_engine = create_async_engine(engine.url.set(drivername="postgresql+asyncpg"), pool_size=1, max_overflow=0)
     monkeypatch.setattr(db, "async_session_factory", async_sessionmaker(async_engine, expire_on_commit=False))
     from onlyfans_runtime import connections
     from native_pilot import connection
@@ -196,6 +196,7 @@ def test_fresh_urls_do_not_rewrite_native_raw_evidence(database, monkeypatch):
 
 
 def test_parallel_photos_keep_scope_and_persist_once(database, monkeypatch):
+    monkeypatch.setenv("ONLYFANS_VAULT_COMPACT_DB", "1")
     args, calls, engine, _ = setup(database, monkeypatch)
     args.limit, args.concurrency = 8, 4
     with Session(database[1]) as s, s.begin():

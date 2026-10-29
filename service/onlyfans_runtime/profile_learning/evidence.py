@@ -48,6 +48,20 @@ def _topic_words(value, field):
     return words
 
 
+def _planned_work(fact):
+    if fact.get('field')!='occupation' or fact.get('manual') or fact.get('protected'):
+        return False
+    phrases=re.finditer(r"\bi(?:['’]m| am)?\s+(?:going\s+to\s+be|want\s+to\s+be|hope\s+to\s+be|plan(?:ning)?\s+to\s+be)\b[^\n.!?]*|\bi(?:['’]ll| will)\s+be\b[^\n.!?]*",fact.get('quote',''),re.I)
+    return any(norm(fact['value']) in norm(m.group()) for m in phrases)
+
+
+def _as_plan(fact):
+    if _planned_work(fact):
+        fact.update(field='event',kind='event',key='planned work '+fact['value'],
+                    review_at=(day(fact.get('last_confirmed',fact['at']))+timedelta(days=7)).isoformat())
+    return fact
+
+
 def validate(result, sources, *, creator=False):
     if type(result) is not dict or set(result) != {'facts'} or type(result['facts']) is not list:
         raise ValueError('invalid profile response')
@@ -162,6 +176,7 @@ def validate(result, sources, *, creator=False):
                 manual=False,protected=False,confidence='supported',context_evidence=context_evidence)
             fact['evidence'] = [{'source':fact['source'],'quote':fact['quote'],'digest':fact['digest'],'at':at,
                                  'context_evidence':context_evidence}]
+            _as_plan(fact)
             fact['memory_key']=_key(fact)
             accepted.append(fact)
     return accepted
@@ -173,6 +188,7 @@ def merge(previous, additions):
     for fact in previous+additions:
         # Backwards-compatible upgrading of the candidate's unstructured observations.
         f=deepcopy(fact)
+        _as_plan(f)
         f.setdefault('subject','fan'); f.setdefault('kind','changing' if f['field'] in CHANGING else
                      'request' if f['field']=='request' else 'event' if f['field'] in {'event','travel','recent_topic'} else 'persistent')
         f.setdefault('key',f['value']); f.setdefault('operation','assert');f.setdefault('last_confirmed',f['at'])
@@ -214,7 +230,7 @@ def merge(previous, additions):
 
 
 def project(memory, *, now=None):
-    f=deepcopy(memory); today=day(now,tz=f.get('timezone'))
+    f=_as_plan(deepcopy(memory)); today=day(now,tz=f.get('timezone'))
     status=f.get('status','current')
     f['status']=status
     f['last_confirmed']=f.get('last_confirmed',f['at'])

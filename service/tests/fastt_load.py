@@ -146,8 +146,14 @@ PROFILES = {
 }
 
 
-def build(profile, minutes=None):
+def build(profile, minutes=None, accounts=None):
     p = dict(PROFILES[profile])
+    if accounts:
+        # Scale the fleet DOWN keeping the per-account rate: accounts are independent processes, so the per-account
+        # latency / backlog / zero-tolerance counters do not depend on how many siblings run (the shared database is the
+        # one exception and is measured separately).
+        p["fleet_per_h"] = p["fleet_per_h"] * accounts / p["accounts"]
+        p["accounts"] = accounts
     n = p["accounts"]
     accounts = {str(100000 + i): [10000 + k for k in range(p["fans"])] for i in range(n)}
     # sends/h: reply count per burst averages (1.2 bubbles) -> bursts/h = fleet / 1.2. One hot creator gets p["hot"] x.
@@ -158,8 +164,8 @@ def build(profile, minutes=None):
     return p, accounts, rates
 
 
-def run(profile, minutes=None, out=None, seed=7):
-    p, accounts, rates = build(profile, minutes)
+def run(profile, minutes=None, out=None, seed=7, n_accounts=None, drain=600.0):
+    p, accounts, rates = build(profile, minutes, n_accounts)
     minutes = minutes or p["minutes"]
     rng = random.Random(seed)
     hot = next(iter(accounts))
@@ -183,7 +189,7 @@ def run(profile, minutes=None, out=None, seed=7):
                 chaos_counts.update(await chaos(sim, rng, duration))
             jobs.append(c())
         await asyncio.gather(*jobs)
-        await asyncio.sleep(600)                      # drain: whatever the 20 s rule allows to finish
+        await asyncio.sleep(drain)                    # drain: whatever the 20 s rule allows to finish
         stop.set()
         sampler.cancel()
         # per-account results over the traffic window
@@ -216,7 +222,7 @@ def run(profile, minutes=None, out=None, seed=7):
         for e in sim.events:
             events[e["event"]] = events.get(e["event"], 0) + 1
         res = {
-            "profile": profile, "accounts": len(accounts), "minutes_of_traffic": minutes,
+            "profile": profile, "accounts": len(accounts), "fleet_sends_per_h_planned": round(p["fleet_per_h"]), "minutes_of_traffic": minutes,
             "virtual_seconds": round(horizon), "wall_seconds": round(time.time() - wall0),
             "sends_total": tot_sends, "sends_per_hour_fleet": round(tot_sends / (minutes / 60)),
             "inbound_messages": sim.inbound_total, "replies_per_inbound": round(tot_sends / max(1, sim.inbound_total), 2),
@@ -231,6 +237,10 @@ def run(profile, minutes=None, out=None, seed=7):
                 "turn-released", "turn-requeued", "turn-abandoned", "turn-cancel-requested", "delivery-reconcile", "held",
                 "runner-lease-acquired", "runner-lease-lost", "intake-connected", "setting-clamped", "reconcile-error",
                 "turn-task-error", "work-board-flush-failed")},
+            "abandoned_reasons": {k: sum(1 for e in sim.events if e["event"] == "turn-abandoned" and e.get("reason") == k)
+                                  for k in {e.get("reason") for e in sim.events if e["event"] == "turn-abandoned"}},
+            "released_reasons": {k: sum(1 for e in sim.events if e["event"] == "turn-released" and e.get("reason") == k)
+                                 for k in {e.get("reason") for e in sim.events if e["event"] == "turn-released"}},
             "backlog_over_time": series, "chaos": chaos_counts,
             "max_sends_per_hour_per_account_by_rule": MAX_PER_ACCOUNT_PER_HOUR,
             "per_account": per,
@@ -251,7 +261,9 @@ if __name__ == "__main__":
     ap.add_argument("--minutes", type=float)
     ap.add_argument("--out")
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--accounts", type=int, help="scale the fleet down to N accounts at the same per-account rate")
+    ap.add_argument("--drain", type=float, default=600.0, help="virtual seconds to let the queue drain after the traffic stops")
     args = ap.parse_args()
-    res = run(args.profile, args.minutes, args.out, args.seed)
+    res = run(args.profile, args.minutes, args.out, args.seed, args.accounts, args.drain)
     summary = {k: v for k, v in res.items() if k != "per_account"}
     print(json.dumps(summary, indent=1, default=str))

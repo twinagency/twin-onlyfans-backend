@@ -2,7 +2,8 @@
 
 The existing FASTT frame collector, caption writer, daily cap and category
 assignment remain authoritative. A PostgreSQL advisory lock prevents two
-automatic workers captioning one account; no account row lock spans vision.
+automatic batches captioning one account; bounded photo tasks share that lease.
+Provider reads remain serial; no account row lock spans vision.
 """
 import argparse
 import asyncio
@@ -71,6 +72,8 @@ async def run(args):
                 with Session(store.engine) as session:
                     if ids and session.get(VaultItem, (args.account, ids[0])).kind == "video":
                         ids = ids[:1]
+                    elif ids:
+                        ids = [mid for mid in ids if session.get(VaultItem, (args.account, mid)).kind == "photo"]
                 metadata = {}
 
                 async def guard(session, media_id, *, phase="read"):
@@ -129,13 +132,13 @@ async def run(args):
                     if (kwargs.get("account_id") != args.account or kwargs.get("purpose") != "describe_media"
                         or kwargs.get("model") not in {caption_vault.DEFAULT_MODEL, "openrouter/qwen3-vl-235b"}):
                         raise Refused("caption model scope unavailable")
-                    # The established caption CLI's legacy bridge is confined
-                    # to this one serial, metadata-only child and purpose.
-                    os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
+                    # Task-local authority avoids process-wide role races while
+                    # provider reads and other photo tasks run concurrently.
+                    token = llm_client._vault_caption_account.set(args.account)
                     try:
                         return await legacy_chat(**kwargs)
                     finally:
-                        os.environ["ONLYFANS_PROCESS_ROLE"] = "worker"
+                        llm_client._vault_caption_account.reset(token)
 
                 llm_client.chat = caption_chat
                 from onlyfans_runtime.provider_read_budget import acquire, current, release
@@ -206,14 +209,21 @@ async def run(args):
                 if budget["capped"]:
                     summary["state"] = "budget_paused"
                     return summary
-                for media_id in ids:
+                preview_lock = asyncio.Lock()
+                capped = asyncio.Event()
+                concurrency = getattr(args, "concurrency", 1)
+
+                async def describe_item(media_id):
+                    if capped.is_set():
+                        return
                     async with get_session() as session:
                         await guard(session, media_id)
                         item = await session.get(VaultItem, (args.account, media_id))
                         if ("_folder_evidence_v1" in (item.ai_fields_json or "")
                             or "description" in locked_fields(item) or "video_description" in locked_fields(item)):
-                            continue
-                    preview_ready = await warm_preview(media_id)
+                            return
+                    async with preview_lock:
+                        preview_ready = await warm_preview(media_id)
                     if item.kind == "photo" and not preview_ready:
                         async with get_session() as session:
                             await guard(session, media_id, phase="write")
@@ -221,12 +231,21 @@ async def run(args):
                             current_item.describe_status = "fetch_failed"
                             current_item.describe_generated_at = utcnow()
                         summary["failed"] += 1
-                        continue
+                        return
                     result = await api._describe_one(args.account, media_id, model=caption_vault.DEFAULT_MODEL,
                         prompt_version="v3", scope_guard=guard)
                     summary["described" if result.get("ok") else "failed"] += 1
                     if result.get("status") == "capped":
                         summary["state"] = "budget_paused"
+                        capped.set()
+
+                for offset in range(0, len(ids), concurrency):
+                    outcomes = await asyncio.gather(*(describe_item(mid) for mid in ids[offset:offset+concurrency]), return_exceptions=True)
+                    # Let sibling tasks finish before releasing the shared account lease.
+                    for outcome in outcomes:
+                        if isinstance(outcome, BaseException):
+                            raise outcome
+                    if capped.is_set():
                         break
                 return summary
             finally:
@@ -244,9 +263,10 @@ def main(argv=None):
     parser.add_argument("--binding", required=True)
     parser.add_argument("--revision", required=True, type=int)
     parser.add_argument("--limit", type=int, default=4)
+    parser.add_argument("--concurrency", type=int, default=1)
     args = parser.parse_args(argv)
-    if not 1 <= args.limit <= 4 or args.revision < 1:
-        parser.error("Use a current revision and a batch of 1..4")
+    if not 1 <= args.limit <= 32 or not 1 <= args.concurrency <= 8 or args.revision < 1:
+        parser.error("Use a current revision, batch of 1..32 and concurrency of 1..8")
     try:
         result = asyncio.run(run(args))
     except Exception:

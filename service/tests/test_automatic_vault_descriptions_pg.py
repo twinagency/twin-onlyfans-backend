@@ -52,7 +52,8 @@ def setup(database, monkeypatch):
         return vault_frames.Collected(["data:image/jpeg;base64,AAAA"], "ok")
     async def chat(**kwargs):
         assert kwargs["account_id"] == ACCOUNT and kwargs["purpose"] == "describe_media"
-        assert os.environ.get("ONLYFANS_PROCESS_ROLE") is None
+        assert os.environ.get("ONLYFANS_PROCESS_ROLE") == "worker"
+        assert llm_client._vault_caption_account.get() == ACCOUNT
         if kwargs.get("temperature") == 0.0:
             assert kwargs["model"] == "openrouter/qwen3-vl-235b", "Use the configured provider and the same account budget"
             data = {"description_accurate": True, "checks": [{"category": "outdoors", "confirmed": True, "confidence": 99, "evidence": "The outdoor surroundings are clearly visible."}]}
@@ -193,3 +194,67 @@ def test_fresh_urls_do_not_rewrite_native_raw_evidence(database, monkeypatch):
     with Session(database[1]) as s:
         assert s.get(OfVaultObservation,(ACCOUNT,MID)).raw_hash == digest(s.get(VaultItem,(ACCOUNT,MID)).raw_json)
 
+
+def test_parallel_photos_keep_scope_and_persist_once(database, monkeypatch):
+    args, calls, engine, _ = setup(database, monkeypatch)
+    args.limit, args.concurrency = 8, 4
+    with Session(database[1]) as s, s.begin():
+        for mid in range(MID+1, MID+8):
+            raw = canonical({"id": mid, "type": "photo", "userId": 900001})
+            s.add(VaultItem(account_id=ACCOUNT, media_id=mid, kind="photo", created_at=utcnow(), raw_json=raw))
+            s.flush()
+            s.add(OfVaultObservation(account_id=ACCOUNT, media_id=mid, job_id="caption-sync", raw_hash=digest(raw), observed_at=utcnow()))
+    import llm_client
+    original = llm_client.chat
+    active = peak = 0
+    async def slow_chat(**kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0.05)
+            return await original(**kwargs)
+        finally:
+            active -= 1
+    monkeypatch.setattr(llm_client, "chat", slow_chat)
+    async def run():
+        try:
+            assert (await child.run(args))["described"] == 8
+            assert (await child.run(args))["described"] == 0
+            assert llm_client._vault_caption_account.get() is None
+        finally:
+            await engine.dispose()
+    asyncio.run(run())
+    assert 2 <= peak <= 4
+    assert len(calls) == 8
+    assert os.environ["ONLYFANS_PROCESS_ROLE"] == "worker"
+    with Session(database[1]) as s:
+        items = list(s.scalars(select(VaultItem).where(VaultItem.account_id == ACCOUNT)))
+        assert len(items) == 8
+        assert all("_folder_evidence_v1" in item.ai_fields_json for item in items)
+
+
+def test_caption_permission_is_task_local_and_cannot_send_to_fans(monkeypatch):
+    import llm_client
+    monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "worker")
+    def stop_at_provider(model):
+        raise LookupError("provider boundary reached")
+    monkeypatch.setattr(llm_client, "_resolve", stop_at_provider)
+    kwargs = dict(model="openrouter/qwen3-vl-30b", messages=[], purpose="describe_media", account_id=ACCOUNT)
+    async def run():
+        async def unprivileged():
+            with pytest.raises(RuntimeError, match="Legacy model"):
+                await llm_client.chat(**kwargs)
+        task = asyncio.create_task(unprivileged())
+        token = llm_client._vault_caption_account.set(ACCOUNT)
+        try:
+            with pytest.raises(LookupError, match="provider boundary"):
+                await llm_client.chat(**kwargs)
+            for change in ({"account_id": "of-900009"}, {"purpose": "fan_reply"}, {"fan_id": 12}, {"model": "grok-4-1-fast-non-reasoning"}):
+                with pytest.raises(RuntimeError, match="Legacy model"):
+                    await llm_client.chat(**{**kwargs, **change})
+            await task
+        finally:
+            llm_client._vault_caption_account.reset(token)
+        await unprivileged()
+    asyncio.run(run())

@@ -97,7 +97,8 @@ class VaultDescriptionWorker:
                 cursor = account
                 args = [sys.executable, "-m", "native_pilot.tools.describe_imported_vault",
                     "--tenant", self.tenant, "--account", account, "--binding", binding,
-                    "--revision", str(revision), "--limit", "4"]
+                    "--revision", str(revision), "--limit", os.environ.get("ONLYFANS_VAULT_DESCRIPTION_BATCH_SIZE", "4"),
+                    "--concurrency", os.environ.get("ONLYFANS_VAULT_DESCRIPTION_CONCURRENCY", "1")]
                 with self.lock:
                     if self.stop.is_set():
                         break

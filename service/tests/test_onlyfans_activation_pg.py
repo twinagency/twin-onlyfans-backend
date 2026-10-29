@@ -537,3 +537,35 @@ def test_activation_needs_the_accounts_own_model_credential_and_never_arms_anyth
             current_scope.reset(token)
     finally:
         store.close()
+
+
+# ── what actually happened: provider credit errors, who spent the budget, why replies failed ──────────────────
+
+def test_status_shows_provider_credit_errors_budget_by_purpose_and_reply_failures(account):
+    from db.models import AutomationRun, GrokCall, GrokDailyCost
+    store, acct, engine = account
+    activate(store, acct, limit=500)
+    now = utcnow()
+    def call(purpose, units, status="done", error=None, minutes=1):
+        return GrokCall(purpose=purpose, account_id=acct, model="m", endpoint="e", prompt_json="{}", status=status, cost_cents=units,
+                        error_text=error, called_at=now - timedelta(minutes=minutes))
+    with Session(engine) as s, s.begin():
+        s.add_all([call("gen_info", 4400), call("describe_media", 580), call("ai_chatter", 20),
+                   call("describe_media", 0, "error", 'openrouter HTTP 402: {"error":{"message":"requires more credits"}}', minutes=5)])
+        s.add(GrokDailyCost(day=now.date().isoformat(), account_id=acct, provider="xai", cost_cents=5000, call_count=4, is_capped=True, updated_at=now))
+        s.get(AccountAiConfig, acct).daily_cost_cap_cents = 50
+        s.add_all([AutomationRun(account_id=acct, kind="ai_chatter", status="error", error_text="model-budget-exhausted", started_at=now),
+                   AutomationRun(account_id=acct, kind="ai_chatter", status="error", error_text="model-budget-exhausted", started_at=now)])
+    result = status(store, acct)
+    model = stage(result, "model")
+    assert model["code"] == "provider_no_credit" and "HTTP 402" in model["reason"] and result["provider"]["creditErrors24h"] == 1
+    by = {row["purpose"]: row for row in result["budget"]["spendByPurpose"]}
+    assert by["gen_info"]["label"] == "Fan memory learner" and by["gen_info"]["share"] > 0.85 and by["ai_chatter"]["share"] < 0.01
+    assert result["budget"]["state"] == "exhausted" and "Fan memory learner" in result["budget"]["flag"]
+    assert result["recentFailures"][0] == {"reason": "model-budget-exhausted", "count": 2, "lastAt": result["recentFailures"][0]["lastAt"]}
+    # An old credit error is a warning, not a current block.
+    with Session(engine) as s, s.begin():
+        for row in s.scalars(select(GrokCall).where(GrokCall.status == "error")):
+            row.called_at = now - timedelta(hours=3)
+    later = status(store, acct)
+    assert stage(later, "model")["code"] == "budget_exhausted" and any(w["code"] == "provider_credit_errors" for w in later["warnings"])

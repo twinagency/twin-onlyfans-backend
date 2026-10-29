@@ -21,7 +21,7 @@ from datetime import timedelta, timezone
 
 from sqlalchemy import and_, exists, func, select
 
-from db.models import AccountAiConfig, GrokCall, GrokDailyCost, OfConversationState
+from db.models import AccountAiConfig, AutomationRun, GrokCall, GrokDailyCost, OfConversationState
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_models import OfControlAudit
@@ -66,6 +66,9 @@ CREDENTIAL_REASONS = {
     "model_mismatch": ("model_credential_model_mismatch", "The saved key is for a different model than the one selected in settings."),
     "expired": ("model_credential_expired", "The model credential expired with the connection lease."),
 }
+
+
+PURPOSE_LABELS = {"ai_chatter": "Chat replies", "gen_info": "Fan memory learner", "describe_media": "Media descriptions"}
 
 
 def _stage(state, code=None, reason=None, action=None, **extra):
@@ -115,16 +118,22 @@ def _budget(s, account, config, now, policy):
     ).group_by(GrokCall.purpose))}
     chat_today = by_purpose.get("ai_chatter", 0)
     other_today = max(0, sum(by_purpose.values()) - chat_today)
+    total_today = sum(by_purpose.values())
+    spend = [{"purpose": purpose, "label": PURPOSE_LABELS.get(purpose, purpose), "units": units,
+              "share": round(units / total_today, 3) if total_today else 0.0}
+             for purpose, units in sorted(by_purpose.items(), key=lambda item: -item[1]) if units > 0]
+    breakdown = ", ".join(f"{row['label']} {round(row['share'] * 100)}%" for row in spend)
     result = {"dailyCostCapCents": cap, "spentTodayUnits": int(spent), "capUnits": cap * 100 if isinstance(cap, int) else None,
               "resetsAt": _z((now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)),
-              "chatSpendTodayUnits": chat_today, "otherSpendTodayUnits": other_today,
+              "chatSpendTodayUnits": chat_today, "otherSpendTodayUnits": other_today, "spendByPurpose": spend,
               "sampleReplies": int(chat[0]), "avgUnitsPerReply": round(float(chat[1]), 1) if chat[0] else None,
               "state": "unset", "flag": None}
     if not isinstance(cap, int) or cap <= 0:
         result["flag"] = "No daily model budget is set, so the sender cannot call the model."
         return result
     if spent >= cap * 100:
-        result.update(state="exhausted", flag="Today's model budget is spent, so no reply can be written until it resets.")
+        result.update(state="exhausted", flag="Today's model budget is spent, so no reply can be written until it resets at 00:00 UTC."
+                      + (f" Spend by purpose: {breakdown}." if breakdown else ""))
         return result
     result["state"] = "ok"
     remaining_allowance = max(0, (policy.limit_units - policy.used_units)) if policy else 0
@@ -137,11 +146,40 @@ def _budget(s, account, config, now, policy):
             f"{round(workload * float(chat[1]) / 100, 1)} cents at the observed cost per reply, above the {cap} cent daily budget."))
     elif cap and other_today * 2 >= cap * 100 and chat_today * 4 < other_today:
         result.update(state="shared", flag=(
-            "Most of today's budget was used by background work (memory, profiles or imports), not by chat replies."))
+            "Most of today's budget was used by background work, not by chat replies. " + (f"Spend by purpose: {breakdown}." if breakdown else "")))
     return result
 
 
-def _model_stage(s, runtime, config, connection, credential_reader, now, budget):
+def provider_errors(s, account, now):
+    """What the model provider has been answering this account's calls with (observed, not probed)."""
+    since = now - timedelta(hours=24)
+    rows = s.execute(select(GrokCall.error_text, func.count(), func.max(GrokCall.called_at)).where(
+        GrokCall.account_id == account, GrokCall.status == "error", GrokCall.called_at >= since,
+        GrokCall.error_text.is_not(None)).group_by(GrokCall.error_text).limit(500)).all()
+    out = {"credit": [0, None], "rejected": [0, None], "rate_limited": [0, None]}
+    for text_, count, last in rows:
+        head = (text_ or "")[:60]
+        kind = ("credit" if "HTTP 402" in head else "rejected" if "HTTP 401" in head or "HTTP 403" in head
+                else "rate_limited" if "HTTP 429" in head else None)
+        if kind:
+            out[kind][0] += count
+            out[kind][1] = max(filter(None, [out[kind][1], last])) if last else out[kind][1]
+    recent = out["credit"][1] is not None and now - out["credit"][1] <= timedelta(minutes=30)
+    return {"creditErrors24h": out["credit"][0], "lastCreditErrorAt": _z(out["credit"][1]), "creditErrorsRecent": recent,
+            "rejectedKey24h": out["rejected"][0], "lastRejectedAt": _z(out["rejected"][1]),
+            "rateLimited24h": out["rate_limited"][0]}
+
+
+def recent_failures(s, account, now, limit=6):
+    """Why chat replies failed in the last 24 hours (fixed reasons recorded by the sender)."""
+    rows = s.execute(select(AutomationRun.error_text, func.count(), func.max(AutomationRun.started_at)).where(
+        AutomationRun.account_id == account, AutomationRun.kind == "ai_chatter", AutomationRun.status == "error",
+        AutomationRun.started_at >= now - timedelta(hours=24), AutomationRun.error_text.is_not(None)
+    ).group_by(AutomationRun.error_text).order_by(func.count().desc()).limit(limit)).all()
+    return [{"reason": (reason or "")[:80], "count": count, "lastAt": _z(last)} for reason, count, last in rows]
+
+
+def _model_stage(s, runtime, config, connection, credential_reader, now, budget, provider):
     from .launch_personality.policy import readiness as ai_readiness
     credentials = None
     if credential_reader is not None:
@@ -160,6 +198,10 @@ def _model_stage(s, runtime, config, connection, credential_reader, now, budget)
         if connection is None or connection.status != "verified" or connection.expires_at <= now:
             reason += " It is stored with the connection, which is not currently verified."
         return _stage("blocked", code, reason, "model_credential", **extra)
+    if provider["creditErrorsRecent"]:
+        return _stage("blocked", "provider_no_credit", (
+            f"The model provider refused recent requests for lack of credit (HTTP 402, {provider['creditErrors24h']} in the last 24 hours, "
+            f"last at {provider['lastCreditErrorAt']}). Top up the provider account for this key."), "model_credential", **extra)
     if budget["state"] == "unset":
         return _stage("blocked", "budget_unset", budget["flag"], "settings", **extra)
     if budget["state"] == "exhausted":
@@ -283,7 +325,8 @@ def activation_status(s, runtime, *, credential_reader=None, runner_path=None, n
     selection, selection_valid = _selection(config)
     budget = _budget(s, account, config, now, policy)
     stages = {"connection": _connection_stage(connection, runtime, now)}
-    stages["model"] = _model_stage(s, runtime, config, connection, credential_reader, now, budget)
+    provider = provider_errors(s, account, now)
+    stages["model"] = _model_stage(s, runtime, config, connection, credential_reader, now, budget, provider)
     stages["runtime"] = _runtime_stage(account, runtime, runner_path, now)
     counts = conversation_counts(s, account)
     stages["replies"] = _replies_stage(runtime, connection, policy, selection, selection_valid, counts, stages)
@@ -295,6 +338,11 @@ def activation_status(s, runtime, *, credential_reader=None, runner_path=None, n
     warnings = []
     if overrides:
         warnings.append({"code": "pilot_fan_override", "text": f"A temporary single-fan history override is set for {len(overrides)} fan(s) on this deployment."})
+    if provider["creditErrors24h"] and not provider["creditErrorsRecent"]:
+        warnings.append({"code": "provider_credit_errors", "text": (
+            f"The model provider refused {provider['creditErrors24h']} requests for lack of credit in the last 24 hours (last at {provider['lastCreditErrorAt']}).")})
+    if provider["rejectedKey24h"]:
+        warnings.append({"code": "provider_rejected_key", "text": f"The model provider rejected this key {provider['rejectedKey24h']} times in the last 24 hours."})
     if budget["flag"] and budget["state"] in ("too_small", "shared", "exhausted"):
         warnings.append({"code": "budget_" + budget["state"], "text": budget["flag"]})
     if policy is not None and limit and used >= limit * 0.9 and used < limit:
@@ -308,7 +356,7 @@ def activation_status(s, runtime, *, credential_reader=None, runner_path=None, n
                       "mediaEnabled": bool(policy and policy.media_enabled), "policyRevision": policy.revision if policy else 0,
                       "nextSendAt": _z(policy.next_dispatch_at) if policy and policy.next_dispatch_at else None,
                       "state": "none" if policy is None else "exhausted" if used >= limit else "ok"},
-        "budget": budget,
+        "budget": budget, "provider": provider, "recentFailures": recent_failures(s, account, now),
         "scope": {**scope, "selection": selection, "selectionValid": selection_valid,
                   "pilotFanOverride": [str(f) for f in overrides]},
         "conversations": counts,

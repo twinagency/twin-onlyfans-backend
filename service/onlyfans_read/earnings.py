@@ -3,6 +3,7 @@
 Amounts are not offers, opens or fan balances. A missing baseline is unknown,
 never zero. Refund/pending states stay separate from cleared gross receipts.
 """
+import re
 from datetime import timedelta
 from sqlalchemy import select,func,and_,text
 from db.models import Transaction,OfCreatorBinding
@@ -33,7 +34,25 @@ def safe_integer(value):
     return value
 
 
-async def read_earnings(session,*,tenant_id,start,end):
+_SCOPE_ID=re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+
+
+def parse_scope(raw):
+    """`accountIds` query value (comma separated) to a sorted unique list, or None when not supplied."""
+    if raw is None:return None
+    ids=raw.split(",")
+    if not 1<=len(ids)<=50 or any(not _SCOPE_ID.match(i) for i in ids):raise BadRequest("invalid_earnings_scope","Supply up to 50 valid account ids.")
+    return sorted(set(ids))
+
+
+def scope_bindings(bindings,account_ids):
+    """Authorized bindings intersect the requested ids. An unknown id selects nothing, never the tenant's first account."""
+    if account_ids is None:return list(bindings)
+    wanted=set(account_ids)
+    return [b for b in bindings if b.account_id in wanted]
+
+
+async def read_earnings(session,*,tenant_id,start,end,account_ids=None):
     begin,finish=window(start,end)
     await session.connection(execution_options={"isolation_level":"REPEATABLE READ"})
     await session.execute(text("SET LOCAL statement_timeout='3000ms'"))
@@ -42,12 +61,14 @@ async def read_earnings(session,*,tenant_id,start,end):
     query=select(OfCreatorBinding).where(OfCreatorBinding.channel=="onlyfans",OfCreatorBinding.revoked_at.is_(None))
     if tenant_id is not None:query=query.where(OfCreatorBinding.tenant_id==tenant_id)
     bindings=list(await session.scalars(query.order_by(OfCreatorBinding.account_id).limit(1001).with_for_update(read=True)))
+    bindings=scope_bindings(bindings,account_ids)
     ids=[r.account_id for r in bindings]
     if len(ids)>1000 or len(set(ids))!=len(ids):raise Unavailable("earnings_scope_unavailable","The financial account scope needs review.")
     result={"schemaVersion":SCHEMA,"window":{"start":stamp(begin),"end":stamp(finish)},"asOf":stamp(now),
         "accountCount":len(ids),"coveredAccountCount":0,"status":"unavailable","reasons":[],"currency":"USD",
         "clearedGrossCents":None,"clearedNetCents":None,"clearedCount":None,"pendingCount":None,"refundedCount":None,
         "recentLedgerAt":None,"fullLedgerAt":None}
+    if account_ids is not None:result["scope"]={"accountIds":sorted(ids)}  # echo what was applied; absent means agency-wide
     if not ids:result["reasons"]=["no_bound_accounts"];return result
     rows=(await session.execute(select(OfLedgerScan,OfRuntime.binding_id.label("runtime_binding"),
         OfProviderConnection.binding_id.label("connection_binding"),OfProviderConnection.owner_id.label("connection_owner"),

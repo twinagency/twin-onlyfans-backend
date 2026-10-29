@@ -4,9 +4,10 @@ from sqlalchemy import text
 
 def restore_pre95_content_vault_shape(connection):
     assert connection.scalar(text('select current_database()')).startswith('of_test_')
-    connection.exec_driver_sql('DROP TABLE of_ledger_exclusion')
     # These objects did not exist in revisions 0091–0094. Leaving them in a
     # fixture and changing only alembic_version is not a historical database.
+    connection.exec_driver_sql('DROP INDEX IF EXISTS ix_fans_of_profile_due')
+    connection.exec_driver_sql('ALTER TABLE fans DROP COLUMN IF EXISTS of_profile_checked_at, DROP COLUMN IF EXISTS of_profile_error')
     connection.exec_driver_sql('DROP TRIGGER of_content_fold_pending ON messages')
     connection.exec_driver_sql('DROP FUNCTION public.of_content_fold_pending()')
     connection.exec_driver_sql('ALTER TABLE of_content_sync_source DROP COLUMN fold_pending CASCADE')

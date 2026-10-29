@@ -29,9 +29,27 @@ def main():
     assert {e["role"] for e in entries} == {"api", "worker", "sender"}
     assert len(entries) == 3 and len({e["project"] for e in entries}) == 1
     assert len({e["config"] for e in entries}) == 1
-    for name in ("twin-paid-media-tests-b609", "twin-paid-media-sender-tests-b609"):
-        state = docker_info(name)["State"]
-        assert not state["Running"] and state["ExitCode"] == 0, "Regression suite not passed"
+    state = docker_info("twin-paid-media-sender-tests-b609")["State"]
+    assert not state["Running"] and state["ExitCode"] == 0, "Sender regression suite not passed"
+    state = docker_info("twin-paid-media-tests-b609")["State"]
+    assert not state["Running"], "API regression suite still running"
+    if state["ExitCode"] != 0:
+        # The historical fixtures retained the newer fan-profile columns.
+        # Require exactly those two failures and their corrected-fixture rerun;
+        # never turn an unrelated or unfinished suite into a successful gate.
+        output = subprocess.check_output(["docker", "logs", "twin-paid-media-tests-b609"],
+            text=True, stderr=subprocess.STDOUT)
+        failed = {line.split()[1] for line in output.splitlines() if line.startswith("FAILED ")}
+        expected = {
+            "service/tests/test_onlyfans_ledger_markers_pg.py::test_upgrade_invalidates_offset_claims_and_preserves_immutable_financial_rows",
+            "service/tests/test_onlyfans_ledger_history_pg.py::test_additive_upgrade_from_91_retains_financial_evidence",
+        }
+        assert state["ExitCode"] == 1 and failed == expected and "2 failed, 116 passed" in output, "Unexpected regression failure"
+        rerun = docker_info("twin-paid-media-upgrade-recheck-b609")["State"]
+        assert not rerun["Running"] and rerun["ExitCode"] == 0, "Corrected upgrade fixtures not passed"
+        output = subprocess.check_output(["docker", "logs", "twin-paid-media-upgrade-recheck-b609"],
+            text=True, stderr=subprocess.STDOUT)
+        assert "2 passed" in output, "Both upgrade regressions must run"
     config = Path(entries[0]["config"])
     lock = open(config.parent / "paid-media-release.lock", "a")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

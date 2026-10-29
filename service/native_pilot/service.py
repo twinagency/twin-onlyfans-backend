@@ -85,8 +85,16 @@ RELEASE_BACKOFF_S = {"new-message-during-generation": 1.0, "source-changed": 1.0
                      "runner-lease-lost": 30.0, "authority-lost-before-post": 5.0,
                      # genuine holds, surfaced with their reason; the message is answered once they clear
                      "creator-persona-not-approved": 60.0, "creator-facts-not-current": 60.0,
-                     "twin-context-unavailable": 30.0}
+                     "twin-context-unavailable": 30.0, "service-stopping": 1.0,
+                     # account-wide limits: the message stays pending with the reason, the whole account waits
+                     "allowance-disabled": 30.0, "allowance-exhausted": 30.0, "allowance-missing": 30.0,
+                     "account-credential-changed": 2.0}
 ACCOUNT_BLOCK_PREFIXES = ("allowance-", "model-budget")
+# A reply the model could not produce (timeout, HTTP error such as a 402, budget exhausted) is kept PENDING with its
+# reason and retried with backoff; it is never dropped. Only an input older than the horizon is let go (surfaced).
+MODEL_RETRY_LIMIT = 12
+MODEL_BACKOFF_MIN_S = 15.0
+MODEL_BACKOFF_MAX_S = 900.0
 RATE_LIMIT_BACKOFF_S = 60.0   # a provider 429: wait this long (times the retry number) unless Retry-After says otherwise
 RATE_LIMIT_BACKOFF_MAX_S = 300.0
 
@@ -150,6 +158,8 @@ class ServiceGateway(runner.Gateway):
         # Engine v2: the account's FIFO send gate, the account-level hold re-read at the wire, tunable waits.
         tuning = getattr(service, "tuning", None) or Tuning.from_env()
         self.send_gate = getattr(service, "send_gate", None)
+        self.send_priority = getattr(service, "priority", None)
+        self.tolerate_newer = bool(getattr(service, "tolerate_newer", False))
         if getattr(service, "send_gate", None) is not None:
             self.open_offer_blocks = False         # persistent service: an open offer never stops a text reply
         self.eligibility_check = getattr(service, "account_hold", None)
@@ -266,7 +276,12 @@ class Service:
         self.next_lease_renew = 0.0
         self.next_queue_event = 0.0
         self.phase = "preparing"
+        self.tolerate_newer = False    # this turn answers a burst past the hard maximum wait: later fan messages do not stale it
+        self.priority = None           # ISO text: when this fan's first unanswered message was ingested (send-queue order)
         self.release_reason = None
+        self.account_block_reason = None   # a released reply was stopped by an account-wide condition (allowance, account hold)
+        self.unresolved: dict[int, str] = {}   # fan -> why an admitted send is unsettled (surfaced on the work board)
+        self.budget_block = False       # a reply failed on the account's model budget: no fan of the account starts a model call
         self.queue_stats = {}
         self.pilot_id = getattr(args, "service_id", None) or f"svc-{self.scope.provider_id}-{getattr(args, 'fan', None)}"
         self.path = None
@@ -361,7 +376,7 @@ class Service:
     async def acquire(self):
         from twin_bridge.coordination import reserve_ownership
         profile = runner.check_local(self.path, self.db, self.args.fan,
-                                         approved_item=self.approved_catalog_ids())
+                                         approved_item=self.approved_catalog_ids(), open_offer_blocks=False)
         if not self.ensured:
             await ensure_fan_conversation(self.scope, self.args.fan)
             self.ensured = True
@@ -536,9 +551,12 @@ class Service:
                 owned[fan] = bool(self._owned(fan))
             return owned[fan]
 
+        ledger = getattr(self, "ledger", None)
+        unl_sql, unl_args = ledger.unlabelled_clause("n", now) if ledger is not None else ("", ())
         base = ("SELECT m.fan_id,m.message_id,m.created_at FROM messages m WHERE m.account_id=? AND m.direction='in' "
                 "AND m.created_at>? AND NOT EXISTS (SELECT 1 FROM messages n WHERE n.account_id=m.account_id "
                 "AND n.fan_id=m.fan_id AND NOT (n.direction='out' AND n.is_unsent) "
+                + (f"AND NOT {unl_sql} " if unl_sql else "") +
                 "AND (n.created_at>m.created_at OR (n.created_at=m.created_at AND n.message_id>m.message_id)))")
         serve, controlled = [], []
         with runner.readonly(self.path) as con:
@@ -547,11 +565,11 @@ class Service:
                 # which arrived during that reply. Every other newer row still blocks.
                 base = base[:-1] + " AND NOT (" + older_reply_sql() + "))"
             for fan, _, created in con.execute(base + " ORDER BY m.created_at DESC,m.message_id DESC LIMIT ?",
-                                               (self.db, since, CANDIDATES_MAX)).fetchall():
+                                               (self.db, since, *unl_args, CANDIDATES_MAX)).fetchall():
                 if _dt(created) > since and is_owned(fan) and fan not in controlled:
                     controlled.append(fan)
             if store.has_table(con, "of_conversation_state"):  # strict: no projection table = nobody enabled
-                sql, params = base, [self.db, since]
+                sql, params = base, [self.db, since, *unl_args]
                 sql += (" AND EXISTS (SELECT 1 FROM of_conversation_state s WHERE s.account_id=m.account_id "
                         "AND s.fan_id=m.fan_id AND s.mode='automated' AND (s.takeover_state IS NULL OR s.takeover_state='none'))")
                 if store.has_table(con, "skip_list"):
@@ -665,6 +683,16 @@ class Service:
         if row["policy_enabled"] is not None and not row["policy_enabled"]:
             return "account-policy-disabled"
         if row["connection_status"] is not None:
+            owner = self.catalog_owner
+            if owner.conn is not None:
+                try:
+                    with runner.readonly(self.path) as con:
+                        rev = con.execute("SELECT revision FROM of_provider_connection WHERE account_id=?", (self.db,)).fetchone()
+                except Exception:
+                    rev = None
+                if rev is not None and rev[0] is not None and rev[0] != owner.conn.revision:
+                    owner.next_conn_check = 0.0       # reload the session at the next tick
+                    return "account-credential-changed"
             if row["connection_status"] != "verified":
                 return "account-connection-not-verified"
             if row["last_error"] is not None:
@@ -694,12 +722,13 @@ class Service:
         if self.board is not None:
             self.board.set(fan, state, reason, **kw)
 
-    async def _run_fan(self, fan):
+    async def _run_fan(self, fan, first=None):
         """One fan's whole turn as a task. Never raises: every outcome becomes a hold / board state."""
         child = self.child(fan)
         child.last_active = runner.now()
         child.cancel_reason = None
         child.phase = "preparing"
+        child.priority = first
         before = child.turns_started
         try:
             await child.serve_fan()
@@ -718,11 +747,23 @@ class Service:
             child.note("service-error:" + type(exc).__name__)
             self._hold_fan(fan, "service-error")
             return
+        if child.account_block_reason:
+            reason, child.account_block_reason = child.account_block_reason, None
+            self.account_block = (reason, runner.now() + timedelta(seconds=RELEASE_BACKOFF_S.get(reason, self.hold_s)))
+        if child.budget_block:
+            child.budget_block = False
+            self.account_block = ("model-budget-exhausted", runner.now() + timedelta(seconds=BUDGET_HOLD_S))
         if child.backoff_s:
             # A requeued / released input (provider 429, model failure, takeover, stale draft): leave the fan alone while it backs off.
             self.fan_holds[fan] = (runner.now() + timedelta(seconds=child.backoff_s), child.release_reason or "retry-backoff")
             child.backoff_s = 0.0
             child.release_reason = None
+        if child.turns_started == before:
+            # Nothing was ready after all (quiet window in the ledger's own clock, a claim that already exists): look at
+            # this fan again after a poll interval instead of starting a task for it on every tick.
+            self.fan_holds.setdefault(fan, (runner.now() + timedelta(seconds=self.poll_s), "not-ready"))
+            if self.fan_holds[fan][0] <= runner.now():
+                self.fan_holds[fan] = (runner.now() + timedelta(seconds=self.poll_s), "not-ready")
         return child.turns_started > before
 
     def _reap(self):
@@ -848,11 +889,11 @@ class Service:
             if self.already_claimed(fan, mid):
                 continue
             self._status(fan, "preparing", None, message_id=mid, waiting_since=first)
-            self.tasks[fan] = asyncio.get_running_loop().create_task(self._run_fan(fan), name=f"fan-{fan}")
+            self.tasks[fan] = asyncio.get_running_loop().create_task(self._run_fan(fan, first), name=f"fan-{fan}")
             started += 1
         for fan, mid, first in waiting:
             self._status(fan, "quiet", "burst-quiet-window", message_id=mid, waiting_since=first)
-        live = {f for f, _ in pending} | set(self.tasks)
+        live = {f for f, _ in pending} | set(self.tasks) | set(self.unresolved)
         if self.board is not None:
             for fan in list(self.board._known) + list(self.board._dirty):
                 if fan not in live:
@@ -924,9 +965,15 @@ class Service:
         self._next_reconcile = now + self.tuning.reconcile_wait_s
         from .autoreconcile import reconcile_unresolved
         try:
+            seen = set()
             for result in await reconcile_unresolved(self):
-                if self.board is not None and result["outcome"] == "unresolved":
-                    self.board.set(result["fan_id"], "blocked", result["reason"])
+                if result["outcome"] == "unresolved":
+                    self.unresolved[result["fan_id"]] = result["reason"]
+                    seen.add(result["fan_id"])
+                    if self.board is not None:
+                        self.board.set(result["fan_id"], "blocked", result["reason"])
+            for fan in [f for f in self.unresolved if f not in seen]:
+                del self.unresolved[fan]       # settled (proven, or opted-in absent): no longer blocked
         except store.DB_ERRORS:
             pass            # a busy / locked store: try again at the next interval
         except Exception as exc:
@@ -973,6 +1020,9 @@ class Service:
         if quiet_for < self.quiet_s and burst_age < self.tuning.burst_max_wait_s:
             # Still typing: wait for the quiet window, but a continuously typing fan is answered after the hard maximum.
             return await self.wait(self.poll_s)
+        # Past the hard maximum the reply goes out even if the fan typed on while it was prepared; those later messages
+        # are answered next. Before it, a newer message makes the draft stale and it is regenerated.
+        self.tolerate_newer = burst_age >= self.tuning.burst_max_wait_s
         wait = self.cooldown_left()
         if wait > 0:
             # FASTT's own short post-send cooldown (fans.automation_paused_until) would make
@@ -985,6 +1035,7 @@ class Service:
             if exc.reason in ("input-already-claimed", "source-changed"):
                 return await self.wait(self.poll_s)
             raise
+        await self._note_unlabelled(snap)
         from .identity import sincere_identity_question
         if any(sincere_identity_question((src or {}).get("body")) for src in sources.values()):
             # Identity rule: the AI never answers "are you a bot / AI / real?". The chat is paused and
@@ -993,6 +1044,21 @@ class Service:
             ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
             return
         await self.execute(key, sources, source_id=snap.message_id)
+
+    async def _note_unlabelled(self, snap):
+        """Surface outbound messages from an UNKNOWN sender after this fan's message: they are not an answer (engine v2)."""
+        if not self.ledger.unlabelled_clause("m", runner.now())[0]:
+            return
+        try:
+            with runner.readonly(self.path) as con:
+                n = con.execute("SELECT count(*) FROM messages WHERE account_id=? AND fan_id=? AND direction='out' "
+                                "AND automation_kind IS NULL AND sent_by_employee_id IS NULL AND created_at>=?",
+                                (self.db, self.args.fan, snap.earliest_created_at or snap.created_at)).fetchone()[0]
+        except Exception:
+            return
+        if n:
+            runner.emit({"event": "unlabelled-outbound-not-an-answer", "fan_id": self.args.fan, "count": int(n),
+                         "source_message_id": snap.message_id})
 
     async def execute(self, key, sources, *, source_id, job=None):
         """Run FASTT's engine for one claimed input (fan message, or the nudge job ``job``) through the
@@ -1038,7 +1104,12 @@ class Service:
             if not isinstance(stats, dict) or stats.get("errors") or stats.get("cap_hit"):
                 raise Refused("native-turn-failed")
         except Exception as exc:
-            error = exc.reason if isinstance(exc, Refused) else (gateway.stopped_reason or model.stopped_reason or "native-turn-failed")
+            from .engine import PilotBoundaryError
+            # A boundary refusal carries its fixed reason (identity held, media claim held, persona not approved, ...);
+            # it used to be flattened into "native-turn-failed", which hid it and abandoned the message.
+            error = exc.reason if isinstance(exc, Refused) else (
+                gateway.stopped_reason or model.stopped_reason
+                or (str(exc) if isinstance(exc, PilotBoundaryError) and str(exc) else "native-turn-failed"))
         finally:
             runner.finish_native_run(self.path, run_id, stats, error)
             if isinstance(stats, dict):
@@ -1062,6 +1133,8 @@ class Service:
                 if released:
                     self.release_reason = error
                     self.backoff_s = RELEASE_BACKOFF_S.get(error, self.poll_s)
+                    if error.startswith(ACCOUNT_BLOCK_PREFIXES) or error.startswith("account-"):
+                        self.account_block_reason = error
                     runner.emit({"event": "turn-released", "reason": error, "backoff_s": self.backoff_s,
                                  **({"fan_id": self.args.fan} if self.strict else {})})
                     return error
@@ -1071,6 +1144,8 @@ class Service:
                     retry = ("provider", gateway.not_sent.retry_after) if gateway.not_sent.retry else None
                 elif error in MODEL_RETRY_REASONS:
                     retry = ("model", None)
+                elif error.startswith("model-budget"):
+                    retry = ("budget", None)      # the account's daily model budget: pending until it allows, no retry count
             await self.after_failure(error, key, retry=retry)
             return error
         try:
@@ -1393,7 +1468,15 @@ class Service:
                 if provider_defer else self.hold_s
             # Provider refusals must not consume the separate one-model-retry budget.
             provider_attempts = sum(r["state"] == "not_sent" for r in ledger.receipts(pilot_id=pilot.pilot_id, input_key=key))
-            retry_limit = None if provider_defer else MAX_REQUEUES_PROVIDER if kind == "provider" else MAX_REQUEUES_MODEL + provider_attempts
+            retry_limit = (None if provider_defer or kind == "budget" else MAX_REQUEUES_PROVIDER if kind == "provider"
+                           else MODEL_RETRY_LIMIT + provider_attempts)
+            if kind == "budget":
+                backoff = BUDGET_HOLD_S
+                self.budget_block = True
+            elif kind == "model":
+                backoff = min(MODEL_BACKOFF_MAX_S, MODEL_BACKOFF_MIN_S * 2 ** prior)
+                if reason == "media-claim-unbacked":      # a regenerate, not an outage: twice at most, straight away
+                    backoff, retry_limit = 5.0, 2 + provider_attempts
             count = ledger.requeue_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now(),
                                          max_requeues=retry_limit,
                                          not_before=runner.now() + timedelta(seconds=backoff) if provider_defer else None)
@@ -1401,6 +1484,7 @@ class Service:
                 runner.emit({"event": "turn-requeued", "reason": reason, "retry": count, "backoff_s": backoff,
                              **({"fan_id": self.args.fan} if self.strict else {})})
                 self.backoff_s = backoff
+                self.release_reason = reason
                 await self.wait(backoff)
                 return
         await runner.report_to_twin(ledger, pilot, reason)
@@ -1423,7 +1507,8 @@ class Service:
         if not self.path:
             raise Refused("pilot-store-required")
         runner.require_store_schema(self.path)
-        self.ledger = Ledger(self.path, allowance=True, min_send_interval_s=self.tuning.min_send_interval_s)
+        self.ledger = Ledger(self.path, allowance=True, min_send_interval_s=self.tuning.min_send_interval_s,
+                             lock_scope=self.db if self.all_fans else None)
         for var, why in self.tuning.clamped:
             runner.emit({"event": "setting-clamped", "setting": var, "why": why})
         if self.all_fans:
@@ -1489,7 +1574,9 @@ class Service:
         pilot = self.pilot
         try:
             if self.tasks:
-                # Drain: queued and generating replies stop at once (stop is set); a send on the wire settles.
+                # Drain: queued and generating replies stop at once; a send on the wire settles. Their claims are
+                # given back, so the messages are answered after the restart.
+                self.stop.set()
                 await self.cancel_inflight("service-stopping")
                 await self.drain_tasks(self.tuning.drain_grace_s)
             if self.board is not None:

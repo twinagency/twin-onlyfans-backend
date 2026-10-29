@@ -63,7 +63,7 @@ async def extract(store, tenant, account, binding, fan, sources, *, creator=Fals
     raw = json.dumps(body, ensure_ascii=False).encode()
     if len(raw) > 80000:
         raise Refused('profile-prompt-too-large')
-    budget = DailyBudget(AccountScope.parse(account), selected, endpoint=endpoint)
+    budget = DailyBudget(AccountScope.parse(account), selected, endpoint=endpoint, background=True)
     # The creator call is audited against a real source fan, not a fabricated id.
     audit_fan = fan or next(iter(sources.values()))['fan']
     reservation = await budget.reserve(fan_id=audit_fan, request_bytes=len(raw), max_output_tokens=2400)

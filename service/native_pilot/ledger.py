@@ -163,11 +163,17 @@ SERVICE_BUDGET_CEILING = 10000
 REQUEUED = "requeued:"
 MAX_REQUEUES_MODEL = 1
 MAX_REQUEUES_PROVIDER = 2
+REQUEUE_HORIZON = timedelta(hours=24)
+# An outbound message with no automation kind and no employee is an UNKNOWN sender (a blast, a script, another tool). It
+# does not count as an answer to a fan's message (engine v2; FASTT_UNLABELLED_COUNTS_AS_ANSWER=1 restores the old reading).
+# Younger than the grace it still counts: our own just-sent reply is unlabelled until its attribution row is written.
+UNLABELLED_GRACE = timedelta(seconds=90)
 SERVICE_ID = re.compile(r"svc-[A-Za-z0-9_-]{1,92}")
 
 
 class Ledger:
-    def __init__(self, path: str | Path, *, allowance: bool = False, min_send_interval_s: float | None = None):
+    def __init__(self, path: str | Path, *, allowance: bool = False, min_send_interval_s: float | None = None,
+                 lock_scope: str | None = None):
         # A PostgreSQL target is the application URL (never printed or logged).
         self.path = path if store.is_pg(path) else Path(path)
         self.pg = store.is_pg(path)
@@ -175,6 +181,9 @@ class Ledger:
         # one unit of the account's EXISTING of_delivery_policy, in the same
         # transaction as the durable attempt. The bounded pilot never sets it.
         self.allowance = allowance
+        # Engine v2: the one account this Ledger writes for (the per-account engine process). PostgreSQL write
+        # transactions are then scoped to it (see twin_bridge.store.PG_LOCK_KEY) instead of one global lock.
+        self.lock_scope = lock_scope
         # Engine v2: the account send interval is never below the floor (20 s), whatever the policy row says.
         from . import tuning
         self.min_send_interval_s = max(float(tuning.MIN_SEND_INTERVAL_FLOOR_S),
@@ -189,6 +198,31 @@ class Ledger:
         # input_key -> how many times it has been requeued so far (set when a requeued input is re-claimed).
         self._requeues: dict[str, int] = {}
 
+    def unlabelled_clause(self, alias: str, now) -> tuple[str, tuple]:
+        """``(sql, params)``: a condition true for an outbound row that is NOT an answer (unknown sender, past the grace,
+        not one of our own receipts), to be used as ``AND NOT (<sql>)`` where "a later message answers the fan" is
+        decided. ``("", ())`` when the old reading is selected or the sender columns do not exist (older fixtures)."""
+        if os.environ.get("FASTT_UNLABELLED_COUNTS_AS_ANSWER") == "1":
+            return "", ()
+        if getattr(self, "_sender_cols", None) is None:
+            try:
+                with store.readonly(self.path) as con:
+                    if self.pg:
+                        names = {r[0] for r in con.execute("SELECT column_name FROM information_schema.columns "
+                                                           "WHERE table_schema='public' AND table_name='messages'")}
+                    else:
+                        names = {r[1] for r in con.execute("PRAGMA table_info(messages)")}
+                self._sender_cols = {"automation_kind", "sent_by_employee_id"} <= names
+            except Exception:
+                self._sender_cols = False
+        if not self._sender_cols:
+            return "", ()
+        cutoff = _dt(datetime.fromisoformat(_dt(now)) - UNLABELLED_GRACE)
+        a = alias
+        return (f"({a}.direction='out' AND {a}.automation_kind IS NULL AND {a}.sent_by_employee_id IS NULL "
+                f"AND CAST({a}.created_at AS TEXT)<? AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts ur "
+                f"WHERE ur.provider_message_id=CAST({a}.message_id AS TEXT)))", (cutoff,))
+
     def _check_target(self) -> None:
         # Never silently create an empty database at a misspelled production path.
         if not self.pg and not self.path.is_file():
@@ -197,7 +231,7 @@ class Ledger:
     @contextmanager
     def _tx(self, *, initialize: bool = False) -> Iterator[object]:
         self._check_target()
-        with store.transaction(self.path) as con:
+        with store.transaction(self.path, self.lock_scope) as con:
             if self.pg and con.execute("SELECT to_regnamespace('onlyfans_restore')").fetchone()[0]:
                 raise Refused("restore-quarantined")
             # PostgreSQL: fastt_runtime tables are created by store.ensure_runtime_schema (runner/control), not here.
@@ -300,7 +334,7 @@ class Ledger:
         return bool(row and isinstance(row[0], str) and row[0].strip())
 
     def _source(self, con, p, now: str,
-                exclude_input_key: str | None = None) -> SourceSnapshot | None:
+                exclude_input_key: str | None = None, ignore_newer_than: SourceSnapshot | None = None) -> SourceSnapshot | None:
         # Exclude this input's proven outputs, and completed replies whose recorded
         # input predates a newly arrived message. External/unknown sends still hold.
         latest_in = con.execute(
@@ -310,14 +344,23 @@ class Ledger:
         ignored = {int(r[0]) for r in overlap}
         covered = {int(mid) for r in overlap for mid in json.loads(r[1])}
         overlap_sql = ("AND m.message_id NOT IN (" + ",".join("?" for _ in ignored) + ") ") if ignored else ""
+        unl_sql, unl_args = self.unlabelled_clause("m", now)
         rows = con.execute("SELECT m.message_id,m.direction,m.body,m.media_ids,m.media_count,m.price_cents,"
                           "m.is_tip,m.is_unsent,m.created_at,m.ingested_at,m.raw_json FROM messages m "
                           "WHERE m.account_id=? AND m.fan_id=? AND NOT (m.direction='out' AND m.is_unsent) "
                           "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts r "
                           "WHERE r.pilot_id=? AND r.input_key=? AND r.state='sent' "
                           "AND r.provider_message_id=CAST(m.message_id AS TEXT)) "
-                          + overlap_sql + "ORDER BY m.created_at DESC,m.message_id DESC LIMIT 101",
-                          (p["account_id"], p["fan_id"], p["pilot_id"], exclude_input_key, *sorted(ignored))).fetchall()
+                          + overlap_sql + (f"AND NOT {unl_sql} " if unl_sql else "")
+                          + "ORDER BY m.created_at DESC,m.message_id DESC LIMIT 101",
+                          (p["account_id"], p["fan_id"], p["pilot_id"], exclude_input_key, *sorted(ignored), *unl_args)).fetchall()
+        if ignore_newer_than is not None:
+            # Hard-maximum burst: the reply was prepared for ``ignore_newer_than``; fan messages that arrived after its
+            # newest member (and only those, only inbound) do not invalidate it. They stay unanswered and are
+            # answered next (see overlap: a reply to an older input never consumes a later message).
+            anchor = (ignore_newer_than.created_at, ignore_newer_than.message_id)
+            while rows and rows[0]["direction"] == "in" and (_dt(rows[0]["created_at"]), rows[0]["message_id"]) > anchor:
+                rows = rows[1:]
         if not rows or rows[0]["direction"] != "in":
             return None
         members = []
@@ -473,7 +516,7 @@ class Ledger:
         return True
 
     def begin_attempt(self, *, pilot_id: str, owner_token: str, input_key: str,
-                      bubble_no: int, revision: int, now: datetime | str) -> Attempt:
+                      bubble_no: int, revision: int, now: datetime | str, tolerate_newer: bool = False) -> Attempt:
         """Atomic final source + authority check, budget charge, durable intent."""
         if not isinstance(bubble_no, int) or isinstance(bubble_no, bool) or not 1 <= bubble_no < 2**31:
             raise Refused("invalid-bubble")
@@ -500,7 +543,8 @@ class Ledger:
             if i["source_hash"].startswith(FOLLOWUP_MARK):
                 if not self._followup_unchanged(con, p, i):
                     raise Refused("source-changed")
-            elif self._source(con, p, now_s, exclude_input_key=input_key) != expected:
+            elif self._source(con, p, now_s, exclude_input_key=input_key,
+                              ignore_newer_than=expected if tolerate_newer else None) != expected:
                 raise Refused("source-changed")
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND bubble_no=?", (input_key, bubble_no)).fetchone():
                 raise Refused("attempt-already-exists")
@@ -583,7 +627,7 @@ class Ledger:
                 "next_dispatch_at": None if due is None else _dt(due)}
 
     def validate_dispatch(self, *, pilot_id: str, owner_token: str, attempt_id: int,
-                          now: datetime | str) -> None:
+                          now: datetime | str, tolerate_newer: bool = False) -> None:
         """Read-only recheck after thread handoff, immediately BEFORE guarded_send.
 
         This admitted attempt is the sole permitted unsettled intent; its last
@@ -640,7 +684,8 @@ class Ledger:
             if i["source_hash"].startswith(FOLLOWUP_MARK):
                 if not self._followup_unchanged(con, p, i):
                     raise Refused("source-changed")
-            elif self._source(con, p, now_s, exclude_input_key=r["input_key"]) != expected:
+            elif self._source(con, p, now_s, exclude_input_key=r["input_key"],
+                              ignore_newer_than=expected if tolerate_newer else None) != expected:
                 raise Refused("source-changed")
 
     def record_sent(self, *, pilot_id: str, owner_token: str, attempt_id: int,
@@ -787,10 +832,12 @@ class Ledger:
             p = con.execute("SELECT owner_token,account_id FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
-            i = con.execute("SELECT state,source_hash FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
+            i = con.execute("SELECT state,source_hash,created_at FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
                             (pilot_id, input_key)).fetchone()
             if i is None or i["state"] != "generating" or i["source_hash"].startswith(FOLLOWUP_MARK):
                 return 0
+            if self.allowance and _dt(i["created_at"]) < _dt(datetime.fromisoformat(now_s) - REQUEUE_HORIZON):
+                return 0          # engine v2: a reply unanswerable for a day is let go (the caller surfaces it)
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND state<>'not_sent' LIMIT 1",
                            (input_key,)).fetchone():
                 return 0
@@ -924,6 +971,10 @@ class Ledger:
                         (now_s, attempt_id))
             con.execute("UPDATE twin_bridge_conversations SET send_budget_used=send_budget_used-1,updated_at=? "
                         "WHERE account_id=? AND fan_id=? AND send_budget_used>?", (now_s, account_id, fan_id, p["baseline_used"]))
+            # The fan's message was never answered: open its input again so it is answered from the latest state.
+            con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? WHERE input_key=? AND state IN ('stopped','generating') "
+                        "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts x WHERE x.input_key=native_pilot_inputs.input_key "
+                        "AND x.state IN ('sent','dispatching','delivery_unknown'))", (f"{REQUEUED}0", now_s, r["input_key"]))
             if p["state"] != "stopped":
                 con.execute("UPDATE native_pilots SET state='stopped',reason='receipt-reconciled',updated_at=? WHERE pilot_id=?",
                             (now_s, pilot_id))

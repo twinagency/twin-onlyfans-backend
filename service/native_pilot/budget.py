@@ -49,12 +49,28 @@ class Reservation:
     reserved_units: int
 
 
+def reply_reserve_fraction() -> float:
+    """Share of the account's daily cap held back for replies (FASTT_REPLY_RESERVE_FRACTION, default 0.4, 0..0.9).
+
+    Background model work (the fan-memory learner, purpose ``gen_info``) may only spend what is left after it, so
+    replies always have their own slice; the cap itself is never raised."""
+    import os
+    try:
+        value = float(os.environ.get("FASTT_REPLY_RESERVE_FRACTION", "0.4"))
+    except ValueError:
+        return 0.4
+    return min(0.9, max(0.0, value)) if value == value else 0.4
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class DailyBudget:
-    def __init__(self, scope: AccountScope, model_id: str, *, endpoint: str, clock=_utcnow) -> None:
+    def __init__(self, scope: AccountScope, model_id: str, *, endpoint: str, clock=_utcnow, background: bool = False) -> None:
+        # background=True (the learner): spend is limited to cap x (1 - reply reserve), counted over every non-reply
+        # purpose of the day, so it backs off (LLMCapExceeded, its own existing hold) BEFORE replies are affected.
+        self.background = background
         from llm_models import MODELS
         spec = MODELS.get(model_id)
         if spec is None:
@@ -104,6 +120,15 @@ class DailyBudget:
                 raise BudgetRefused("budget-evidence-invalid")
             if spent + reserve > cap * 100:
                 raise LLMCapExceeded(self.scope.db_id, cap, (spent + reserve + 99) // 100)
+            if self.background:
+                from sqlalchemy import func
+                day_start = datetime.strptime(day, "%Y-%m-%d")
+                background_spent = await s.scalar(select(func.coalesce(func.sum(GrokCall.cost_cents), 0)).where(
+                    GrokCall.account_id == self.scope.db_id, GrokCall.called_at >= day_start,
+                    GrokCall.purpose != "ai_chatter")) or 0
+                background_cap = int(cap * 100 * (1 - reply_reserve_fraction()))
+                if background_spent + reserve > background_cap:
+                    raise LLMCapExceeded(self.scope.db_id, cap, (background_spent + reserve + 99) // 100)
             if ledger is None:
                 s.add(GrokDailyCost(day=day, account_id=self.scope.db_id, provider=self.provider,
                                     cost_cents=reserve, call_count=1, is_capped=False, updated_at=now))
@@ -111,7 +136,7 @@ class DailyBudget:
                 ledger.cost_cents += reserve
                 ledger.call_count += 1
                 ledger.updated_at = now
-            call = GrokCall(purpose="ai_chatter", account_id=self.scope.db_id, fan_id=fan_id,
+            call = GrokCall(purpose="gen_info" if self.background else "ai_chatter", account_id=self.scope.db_id, fan_id=fan_id,
                             model=self.model_id, provider=self.provider, endpoint=self.endpoint,
                             prompt_json=json.dumps({"native_pilot": True, "request_bytes": request_bytes},
                                                    sort_keys=True),

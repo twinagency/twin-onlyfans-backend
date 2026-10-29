@@ -410,6 +410,7 @@ async def loop_level(backend, root):
     from twin_bridge import coordination
 
     logging.disable(logging.CRITICAL)
+    service.MODEL_RETRY_LIMIT = 1   # engine v2 default is 12 (never drop a reply); this suite asserts the bounded variant
     A, F = L.ACCT, L.FAN
     events = []
     clock = Clock(datetime.now(timezone.utc).replace(tzinfo=None, microsecond=123000))
@@ -843,6 +844,8 @@ async def loop_level(backend, root):
         f, http, client = make("loop-model-bound", limit=100, used=4, throttle=1)
         FakeEngine.fail_models = 2
         events.clear()
+        model_bound = patch.object(service, "MODEL_RETRY_LIMIT", 1)   # engine v2 default is 12; the bound itself is still honoured
+        model_bound.start()
         task, patcher = start(client)
         await until(lambda: kinds("ready"), "ready", events)
         fan_says(f)
@@ -854,6 +857,7 @@ async def loop_level(backend, root):
         fan_says(f, "next message")
         await replied(f, http, 1, "the fan is answered on his next message")
         await stop(task, patcher)
+        model_bound.stop()
 
         f, http, client = make("loop-model-after-send", limit=100, used=4, throttle=1)
         FakeEngine.texts, FakeEngine.die_after_first = ["first bubble", "second bubble"], True

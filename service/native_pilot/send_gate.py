@@ -5,7 +5,8 @@ process and by human/campaign sends). This gate is only the in-process half: it 
 replies take their turn at the wire in arrival order instead of racing at admission, and it makes every
 waiter cancellable (a takeover, a stop, a lost lease) without losing its place for anyone else.
 
-* strictly FIFO, one holder at a time;
+* one holder at a time; waiters are served OLDEST-FIRST by ``priority`` (the age of the fan's first unanswered
+  message), arrival order among equals, so a reply prepared late for an old message does not wait behind newer ones;
 * a waiter polls ``should_abort`` about once a second and leaves the queue at once when it returns a reason;
 * a waiter that waits longer than ``wait_max_s`` leaves with ``send-queue-timeout`` (its reply is released
   and answered later, never silently dropped);
@@ -14,14 +15,15 @@ waiter cancellable (a takeover, a stop, a lost lease) without losing its place f
 from __future__ import annotations
 
 import asyncio
-from collections import deque
+import itertools
 
 from .ledger import Refused
 
 
 class SendGate:
     def __init__(self, *, poll_s: float = 1.0):
-        self._queue: deque = deque()
+        self._queue: list = []          # [(priority, seq, future)]
+        self._seq = itertools.count()
         self._held = False
         self.poll_s = poll_s
         self.max_waiting = 0
@@ -35,13 +37,14 @@ class SendGate:
     def held(self) -> bool:
         return self._held
 
-    async def acquire(self, should_abort, wait_max_s: float) -> None:
+    async def acquire(self, should_abort, wait_max_s: float, priority=None) -> None:
         if not self._held and not self._queue:
             self._held = True
             self.acquired += 1
             return
         fut = asyncio.get_running_loop().create_future()
-        self._queue.append(fut)
+        entry = (priority if priority is not None else "\uffff", next(self._seq), fut)
+        self._queue.append(entry)
         self.max_waiting = max(self.max_waiting, len(self._queue))
         waited = 0.0
         try:
@@ -61,7 +64,7 @@ class SendGate:
                 self._handoff()       # we were handed the gate just as we left: pass it on
             else:
                 try:
-                    self._queue.remove(fut)
+                    self._queue.remove(entry)
                 except ValueError:
                     pass
                 fut.cancel()
@@ -72,7 +75,8 @@ class SendGate:
 
     def _handoff(self) -> None:
         while self._queue:
-            fut = self._queue.popleft()
+            self._queue.sort(key=lambda e: (e[0], e[1]))
+            _, _, fut = self._queue.pop(0)
             if not fut.done():
                 fut.set_result(True)    # the gate stays held, now by that waiter
                 return

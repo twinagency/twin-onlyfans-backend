@@ -132,7 +132,7 @@ def read_sources(path, account, fan, ids):
     return sources
 
 
-def check_provider_history(history, sources, confirmed_ids, *, account, fan, dashboard_handover=False):
+def check_provider_history(history, sources, confirmed_ids, *, account, fan, dashboard_handover=False, tolerate_newer=False):
     """Validate inputs; dashboard-managed chats use explicit control for handover."""
     from twin_bridge.contract import parse_canonical_timestamp
     from twin_bridge.delivery import external_outbound_ids
@@ -147,6 +147,8 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan, das
     outbound = set(external_outbound_ids(history, set(confirmed_ids), creator_id=account, fan_id=fan, since=since))
     if outbound and not dashboard_handover:
         raise Refused("external-outbound")
+    latest_source = max(datetime.fromisoformat(r["created_at"]) for r in sources.values())
+    latest_source = latest_source.replace(microsecond=latest_source.microsecond // 1000 * 1000)
     seen = set()
     for item in history:
         mid = item.get("id")
@@ -168,6 +170,8 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan, das
         if mid in confirmed_ids:
             continue
         if mid not in sources:
+            if tolerate_newer and not item.get("isFromMe") and stamp > latest_source:
+                continue        # hard-maximum burst: a later fan message does not stale the reply (answered next)
             raise Refused("new-message-during-generation")
         source_stamp = datetime.fromisoformat(sources[mid]["created_at"])
         source_stamp = source_stamp.replace(microsecond=source_stamp.microsecond // 1000 * 1000)
@@ -359,6 +363,8 @@ class Gateway:
     ADMISSION_RETRY = frozenset({"allowance-throttled", "allowance-busy", "allowance-changed"})
     send_gate = None            # engine v2: the account's SendGate (service-owned); None = bounded pilot, no gate
     send_wait_max_s = 900.0
+    tolerate_newer = False      # engine v2: set for a burst past the hard maximum wait (see Service.turn)
+    send_priority = None        # engine v2: sort key at the gate (age of the fan's first unanswered message, ISO text)
     throttled_retries = 40
     open_offer_blocks = True    # engine v2: the persistent service sets False (an open offer never stops a text reply)
     eligibility_check = None    # engine v2: account-level hold (runtime/policy/credential), re-read at the wire
@@ -367,7 +373,7 @@ class Gateway:
         gate = self.send_gate
         if gate is None:
             return await self._send_inner(text, terms)
-        await gate.acquire(self.abort_reason, self.send_wait_max_s)
+        await gate.acquire(self.abort_reason, self.send_wait_max_s, priority=self.send_priority)
         try:
             for tries in range(self.throttled_retries):
                 try:
@@ -405,7 +411,7 @@ class Gateway:
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
             (check_followup_history if self.followup else check_provider_history)(
                 history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id,
-                dashboard_handover=self.dashboard_handover)
+                dashboard_handover=self.dashboard_handover, **({"tolerate_newer": True} if self.tolerate_newer and not self.followup else {}))
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
                             approved_item=self.content.catalog_ids if self.content else None,
                             open_offer_blocks=self.open_offer_blocks)
@@ -430,7 +436,8 @@ class Gateway:
                             raise Refused("content-asset-unavailable")
             self.bubble += 1
             attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
-                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now(),
+                **({"tolerate_newer": True} if self.tolerate_newer and not self.followup else {}))
             from .recovery import freeze
             try:
                 freeze(self.ledger, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
@@ -456,7 +463,8 @@ class Gateway:
                 if self.hold_check is not None and self.hold_check():
                     raise Refused("fan-held-before-post")
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
-                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
+                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now(),
+                    **({"tolerate_newer": True} if self.tolerate_newer and not self.followup else {}))
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
                     if unsend_id is not None:
                         wire[0] = True    # the DELETE may have reached OnlyFans from here on

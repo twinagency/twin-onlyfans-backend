@@ -62,6 +62,10 @@ CREATE TABLE automation_runs(id INTEGER PRIMARY KEY,account_id TEXT,kind TEXT,st
 CREATE TABLE skip_list(account_id TEXT,fan_id INTEGER,reason TEXT);
 CREATE TABLE of_conversation_state(account_id TEXT,fan_id INTEGER,mode TEXT,takeover_state TEXT,
  PRIMARY KEY(account_id,fan_id));
+CREATE TABLE of_runtime(account_id TEXT PRIMARY KEY,enabled INTEGER,binding_id TEXT);
+CREATE TABLE of_creator_bindings(id TEXT PRIMARY KEY,account_id TEXT,channel TEXT,revoked_at TEXT,handle TEXT);
+CREATE TABLE of_provider_connection(account_id TEXT PRIMARY KEY,binding_id TEXT,owner_id TEXT,status TEXT,verified_at TEXT,
+ last_error TEXT,expires_at TEXT,revision INTEGER);
 CREATE TABLE of_delivery_policy(account_id TEXT PRIMARY KEY,enabled INTEGER,limit_units INTEGER,
  used_units INTEGER,throttle_seconds INTEGER,next_dispatch_at TEXT,active_intent_id TEXT);
 """
@@ -225,6 +229,10 @@ class Sim:
             con.executescript(SCHEMA)
             for acct, fans in self.accounts.items():
                 con.execute("INSERT INTO accounts VALUES(?)", (acct,))
+                con.execute("INSERT INTO of_runtime VALUES(?,1,?)", (acct, "b-" + acct))
+                con.execute("INSERT INTO of_creator_bindings VALUES(?,?,'onlyfans',NULL,'sim')", ("b-" + acct, acct))
+                con.execute("INSERT INTO of_provider_connection VALUES(?,?,?,'verified','2026-10-01 00:00:00',NULL,'2099-01-01 00:00:00',1)",
+                            (acct, "b-" + acct, acct))
                 con.execute("INSERT INTO of_delivery_policy VALUES(?,1,100000000,0,?,NULL,NULL)", (acct, self.throttle))
                 con.executemany("INSERT INTO twin_bridge_conversations VALUES(?,?,'active',NULL,4,NULL,NULL,1,3,3,?)",
                                 [(acct, f, "2026-10-16T12:00:00") for f in fans])
@@ -244,10 +252,11 @@ class Sim:
         mid = self.next_id(acct, fan)
         stamp = when.replace(microsecond=(when.microsecond // 1000) * 1000)
         created = stamp.isoformat(timespec="milliseconds") + "Z"
-        base = {"id": mid, "text": text, "createdAt": created, "price": 0, "media": []}
+        base = {"id": mid, "text": text, "createdAt": created, "price": 0, "media": [], "mediaCount": 0, "previews": [],
+                "lockedText": False, "responseType": "message"}
         if direction == "in":
-            return {**base, "isFromMe": False, "fromUser": {"id": int(fan)}, "withUser": {"id": int(fan)}}
-        return {**base, "isFromMe": True, "fromUser": {"id": int(acct)}, "withUser": {"id": int(fan)}}
+            return {**base, "isFromMe": False, "fromUser": {"id": int(fan)}, "toUser": {"id": int(acct)}, "withUser": {"id": int(fan)}}
+        return {**base, "isFromMe": True, "fromUser": {"id": int(acct)}, "toUser": {"id": int(fan)}, "withUser": {"id": int(fan)}}
 
     def on_post(self, acct, fan, msg, now):
         """Audit one accepted POST and record the outbound row the engine's attribution write would."""
@@ -318,6 +327,7 @@ class Sim:
 
     def change_credentials(self, acct):
         self.generation[acct] += 1
+        self.sql("UPDATE of_provider_connection SET revision=? WHERE account_id=?", (self.generation[acct], acct))
 
     # ── wiring ────────────────────────────────────────────────────────────────
     def emit(self, event):
@@ -399,21 +409,31 @@ class Sim:
 
     # ── run ───────────────────────────────────────────────────────────────────
     async def start_services(self):
+        for acct in self.accounts:
+            self.start_service(acct)
+
+    def start_service(self, acct):
         import argparse
         from native_pilot import service
-        for acct in self.accounts:
-            self.sockets.setdefault(acct, asyncio.Queue())
-            args = argparse.Namespace(account=acct, fan=None, all_fans=True, handle="sim", enable_send=True,
-                                      twin_context=False, content_manifest=None, service_id=None, followups=False,
-                                      vault_mode=False)
-            svc = service.Service(args, stop=asyncio.Event(), tuning=self.tuning, ttl_s=120, renew_s=30, poll_s=self.poll_s,
-                                  hold_s=15, connection_check_s=300, intake_factory=self.intake_factory(acct))
-            self.services[acct] = svc
+        self.sockets.setdefault(acct, asyncio.Queue())
+        args = argparse.Namespace(account=acct, fan=None, all_fans=True, handle="sim", enable_send=True,
+                                  twin_context=False, content_manifest=None, service_id=None, followups=False,
+                                  vault_mode=False)
+        svc = service.Service(args, stop=asyncio.Event(), tuning=self.tuning, ttl_s=120, renew_s=30, poll_s=self.poll_s,
+                              hold_s=15, connection_check_s=300, intake_factory=self.intake_factory(acct))
+        self.services[acct] = svc
 
-            def start(acct=acct, svc=svc):
-                _account_var.set(acct)
-                return asyncio.get_running_loop().create_task(svc.run(), name=f"svc-{acct}")
-            self.tasks[acct] = contextvars.copy_context().run(start)
+        def start():
+            _account_var.set(acct)
+            return asyncio.get_running_loop().create_task(svc.run(), name=f"svc-{acct}")
+        self.tasks[acct] = contextvars.copy_context().run(start)
+
+    async def kill_service(self, acct):
+        """A crash: the process stops without any shutdown path (no release, no lease hand-back)."""
+        self.tasks[acct].cancel()
+        for t in list(self.services[acct].tasks.values()):
+            t.cancel()
+        await asyncio.gather(self.tasks[acct], *self.services[acct].tasks.values(), return_exceptions=True)
 
     async def stop_services(self):
         for svc in self.services.values():
@@ -465,6 +485,10 @@ def _engine_factory(sim):
             rng = sim.rng
             latency = sim.model_latency(rng)
             await asyncio.sleep(latency)
+            if sim.fail_models > 0:
+                sim.fail_models -= 1
+                model.stopped_reason = sim.fail_reason
+                return {"errors": 1}
             if rng.random() < sim.model_failure_rate:
                 model.stopped_reason = "model-timeout"
                 return {"errors": 1}
@@ -479,6 +503,13 @@ def _engine_factory(sim):
             newest = rows[0][0]
             for i in range(sim.bubbles(rng)):
                 text = f"re:{acct}:{fan}:{newest}:{i}"
+                if sim.text_override is not None:
+                    text = sim.text_override(acct, fan, newest, i) or text
+                from native_pilot.media_claims import MEDIA_CLAIM_HELD, claims_media_sent
+                if claims_media_sent(text):
+                    # what the real boundary does (engine._TextClient): hold the bubble, end the turn with the reason
+                    from native_pilot.engine import PilotBoundaryError
+                    raise PilotBoundaryError(MEDIA_CLAIM_HELD)
                 try:
                     raw = await vtime.to_thread_blocking(self.send, fan, text, {})
                 except Exception:
@@ -493,6 +524,9 @@ def _engine_factory(sim):
 
 
 Sim.model_failure_rate = 0.0
+Sim.text_override = None
+Sim.fail_models = 0
+Sim.fail_reason = "model-timeout"
 
 
 def run_sim(scenario, *, root, accounts, **kw):
@@ -509,7 +543,11 @@ def run_sim(scenario, *, root, accounts, **kw):
         loop.set_default_executor(ThreadPoolExecutor(max_workers=48, thread_name_prefix="sim"))
         try:
             await sim.start_services()
-            return await scenario(sim)
+            try:
+                return await scenario(sim)
+            except BaseException as exc:
+                exc.sim = sim
+                raise
         finally:
             await sim.stop_services()
             for p in patches:

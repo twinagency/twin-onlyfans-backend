@@ -39,6 +39,14 @@ services:
       dockerfile: Dockerfile.onlyfans
     restart: unless-stopped
     stop_grace_period: 45s
+    mem_limit: 768m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "PYTHONPATH=/app/service python -c 'from onlyfans_runtime.inbox_health import healthy; raise SystemExit(0 if healthy() else 1)'"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
     env_file: ${ONLYFANS_ENV_FILE:-onlyfans.env}
     environment:
       ONLYFANS_PROCESS_ROLE: worker
@@ -125,3 +133,4 @@ volumes:
   onlyfans-vault-images:
   onlyfans-vault-spool:
   onlyfans-fastt:
+

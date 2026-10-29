@@ -285,6 +285,7 @@ def conversation_summary(
     reasons=[]
     if mode in ('paused','no_contact'):reasons.append('intentionally_paused')
     elif state and state.requires_attention and not unresolved:reasons.append('human_review')
+    if state and state.asked_for_person:reasons.append('asked_for_person')
     if conversation.unread_count and mode not in ('paused','no_contact'):reasons.append('needs_reply')
     if last_delivery in ('unknown','partial','failed','refused') or unresolved and (not state or state.attempt_outcome not in ('dispatching','accepted_pending')):reasons.append('delivery_problem')
     if state and state.history_held:reasons.append('history_repair')

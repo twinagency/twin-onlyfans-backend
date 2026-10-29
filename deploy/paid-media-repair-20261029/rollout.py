@@ -18,6 +18,17 @@ def docker_info(name):
     return json.loads(subprocess.check_output(["docker", "inspect", name], text=True))[0]
 
 
+def runtime_value(config, key):
+    # Compose can reorder environment entries when recreating a container.
+    # Compare every name and value, without printing any credential values.
+    if key == "Env":
+        values = config.get(key) or []
+        mapped = dict(value.split("=", 1) for value in values)
+        assert len(mapped) == len(values), "Duplicate environment variable"
+        return mapped
+    return config.get(key)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--release-dir", type=Path, required=True)
@@ -74,6 +85,9 @@ def main():
     assert not backup.exists(), "Deployment backup already exists; review previous run"
     backup.write_bytes(original)
     backup.chmod(0o600)
+    runtime_backup = root / "runtime-before.json"
+    runtime_backup.write_text(json.dumps(before))
+    runtime_backup.chmod(0o600)
     log = open(root / "rollout.log", "a")
     os.chmod(root / "rollout.log", 0o600)
     compose = ["docker", "compose", "-p", entries[0]["project"], "-f", str(config)]
@@ -100,7 +114,7 @@ def main():
                 assert live["Image"] == entry["candidate_id"], "Unexpected running image"
                 old = before[entry["name"]]
                 for key in ("Env", "Cmd", "Entrypoint", "User", "WorkingDir"):
-                    assert live["Config"].get(key) == old["Config"].get(key), "Runtime configuration changed"
+                    assert runtime_value(live["Config"], key) == runtime_value(old["Config"], key), "Runtime configuration changed: " + key
             if ready:
                 return
             time.sleep(2)

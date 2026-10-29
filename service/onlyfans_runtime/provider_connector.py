@@ -344,6 +344,17 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 raise failure from None
             raise NativeProtocolError("native HTTPS request outcome is uncertain") from None
 
+    def chats(self, *, cursor, limit):
+        # A 100-message page with media metadata exceeded the 1 MiB wire
+        # budget in production. Keep explicit provider hasMore/cursors while
+        # reducing individual read work instead of lifting the byte ceiling.
+        self._limit(limit)
+        return super().chats(cursor=cursor, limit=min(limit,20))
+
+    def messages(self, *, fan_id, before_id, limit):
+        self._limit(limit)
+        return super().messages(fan_id=fan_id,before_id=before_id,limit=min(limit,20))
+
     def profiles(self, fan_ids):
         """One bounded lookup of known recipients, including archived chats.
 

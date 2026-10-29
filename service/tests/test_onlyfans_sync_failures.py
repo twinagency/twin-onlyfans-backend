@@ -32,6 +32,46 @@ def test_read_deadline_remains_bounded(value):
     with pytest.raises(Refused):NativeProviderConnector(credential(),read_timeout_seconds=value)
 
 
+def test_native_history_pages_bound_wire_rows_and_keep_provider_cursors(monkeypatch):
+    from onlyfans_native_protocol_fixture import native_message
+    from onlyfans_runtime.native_protocol import MAX_HISTORY_BYTES
+    monkeypatch.setenv('ONLYFANS_PROCESS_ROLE','worker')
+    wire=NativeProviderConnector(credential())
+    calls=[]
+    def read(method,path,body=b'',**options):
+        calls.append((path,options))
+        if path.endswith('/users/me'):return b'{"id":7001}'
+        if '/messages?' in path:
+            row=native_message(10,owner=7001,outgoing=True)
+        else:row={'withUser':{'id':101}}
+        return json.dumps({'list':[row],'hasMore':True}).encode()
+    monkeypatch.setattr(wire,'_signed_request',read)
+    page=wire.chats(cursor='100',limit=100)
+    assert page.fan_ids==[101] and page.next_cursor=='101'
+    messages=wire.messages(fan_id=101,before_id=20,limit=100)
+    assert messages.has_more and messages.events[0].message_id==10
+    pages=[(parse_qs(urlsplit(path).query),opts) for path,opts in calls if not path.endswith('/users/me')]
+    assert all(q['limit']==['20'] and opts['max_response_bytes']==MAX_HISTORY_BYTES for q,opts in pages)
+    assert pages[1][0]['id']==['20']
+
+
+@pytest.mark.parametrize('line_break',['<br>','<br/>','<br />','<BR>'])
+def test_observed_unwrapped_history_line_breaks_are_plain_text_only(line_break):
+    from onlyfans_native_protocol_fixture import native_message
+    from onlyfans_runtime.native_protocol import message
+    row=native_message(10,owner=7001,outgoing=True,text='First &amp; second'+line_break+'Next line')
+    event=message(row,owner_id=7001,fan_id=101,history=True)
+    assert event.body=='First & second\nNext line'
+    with pytest.raises(NativeProtocolError):message(row,owner_id=7001,fan_id=101)
+
+
+@pytest.mark.parametrize('body',['Text<br onload="bad()">Other','Text<br><script>bad()</script>',
+    'Text<br><img src="bad">','Text<br></p>Other','x'*20001+'<br>'])
+def test_unwrapped_history_still_refuses_other_markup_and_oversize(body):
+    from onlyfans_runtime.native_protocol import history_text
+    with pytest.raises(NativeProtocolError):history_text(body)
+
+
 @pytest.mark.parametrize('code,expected', [(5,'provider_proxy_failed'), (6,'provider_dns_failed'),
     (7,'provider_transport_failed'), (28,'provider_timeout'), (35,'provider_tls_failed'),
     (60,'provider_tls_failed'), (97,'provider_proxy_failed'), (12345,'provider_transport_failed')])

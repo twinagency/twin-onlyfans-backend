@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import math
 import re
+import time
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urlsplit
 
@@ -199,17 +200,24 @@ class NativeProviderConnector(NativeLoopbackConnector):
     the one-use marker before the only POST. Identity checks precede it. Live
     account activation and credential custody belong to the deployment owner.
     """
-    def __init__(self, session, *, timeout_seconds=5, max_response_bytes=MAX_BYTES,
+    def __init__(self, session, *, timeout_seconds=5, read_timeout_seconds=10, max_response_bytes=MAX_BYTES,
                  max_vault_response_bytes=MAX_VAULT_BYTES):
         if type(session) is not NativeProviderSession:
             raise Refused("an explicit account-bound native session is required")
         if (type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds)
                 or not .05 <= timeout_seconds <= 10
+                or type(read_timeout_seconds) not in {int, float} or not math.isfinite(read_timeout_seconds)
+                or not .05 <= read_timeout_seconds <= 10
                 or type(max_response_bytes) is not int or not 1 <= max_response_bytes <= MAX_BYTES
                 or type(max_vault_response_bytes) is not int or not 1 <= max_vault_response_bytes <= MAX_VAULT_BYTES):
             raise Refused("invalid native HTTPS resource bound")
         self._handle = session
         self._timeout, self._max_bytes = float(timeout_seconds), max_response_bytes
+        # Live history responses can begin arriving before five seconds yet
+        # exceed that total deadline. Two bounded reads (identity plus page)
+        # remain within the existing 45-second shared lease. Writes retain
+        # their original deadline and single-attempt semantics.
+        self._read_timeout = float(read_timeout_seconds)
         self._vault_max_bytes = max_vault_response_bytes
 
     @property
@@ -282,19 +290,22 @@ class NativeProviderConnector(NativeLoopbackConnector):
         # not open clients, read session files or reach the network.
         from curl_cffi import requests
         chunks, size = [], 0
+        started, status, callback_failed = time.monotonic(), None, False
         def bounded(chunk):
-            nonlocal size
+            nonlocal size, callback_failed
             size += len(chunk)
             if size > limit:
+                callback_failed = True
                 raise NativeProtocolError("native HTTPS response exceeded its byte budget")
             chunks.append(chunk)
             return len(chunk)
         try:
             with requests.Session(impersonate="chrome", trust_env=False, retry=0) as client:
                 response = client.request(method, url, headers=headers, data=body,
-                    proxy=self._handle.proxy_url, timeout=self._timeout,
+                    proxy=self._handle.proxy_url, timeout=self._read_timeout if method == "GET" else self._timeout,
                     allow_redirects=False, verify=True, accept_encoding="identity",
                     content_callback=bounded, discard_cookies=True)
+                status = response.status_code
                 if response.status_code in {401, 403}:
                     raise NativeAuthenticationError("native provider rejected authentication")
                 if response.status_code == 429:
@@ -311,14 +322,63 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 if len(raw) > limit:
                     raise NativeProtocolError("native HTTPS response exceeded its byte budget")
                 return (response.status_code, raw) if with_status else raw
-        except (NativeProtocolError, Refused):
+        except Refused:
             raise
-        except Exception:
+        except Exception as error:
             # curl errors may contain authenticated proxy URLs or response
             # bodies. Never propagate those to logs/API/worker observations.
+            if isinstance(error, NativeProtocolError):
+                if method == "GET":
+                    from .read_failures import observe
+                    error.read_failure = observe(error, account=self.account_id, path=path,
+                        started=started, status=status, response_bytes=size, callback_failed=callback_failed)
+                raise
             if method == "GET":
-                raise NativeReadTransientError() from None
+                from .read_failures import observe
+                # A callback byte-limit failure can be wrapped by curl as a
+                # transport exception. Keep its protocol classification.
+                failure = (NativeProtocolError("native HTTPS response exceeded its byte budget")
+                           if callback_failed else NativeReadTransientError())
+                failure.read_failure = observe(error, account=self.account_id, path=path,
+                    started=started, status=status, response_bytes=size, callback_failed=callback_failed)
+                raise failure from None
             raise NativeProtocolError("native HTTPS request outcome is uncertain") from None
+
+    def chats(self, *, cursor, limit):
+        # A 100-message page with media metadata exceeded the 1 MiB wire
+        # budget in production. Keep explicit provider hasMore/cursors while
+        # reducing individual read work instead of lifting the byte ceiling.
+        self._limit(limit)
+        return super().chats(cursor=cursor, limit=min(limit,20))
+
+    def messages(self, *, fan_id, before_id, limit):
+        self._limit(limit)
+        return super().messages(fan_id=fan_id,before_id=before_id,limit=min(limit,20))
+
+    def profiles(self, fan_ids):
+        """One bounded lookup of known recipients, including archived chats.
+
+        Reuses the repository's existing /users/list contract. Missing rows
+        mean unavailable profile data, never deletion or a new recipient.
+        """
+        self._ready()
+        if type(fan_ids) not in {list, tuple} or not 1 <= len(fan_ids) <= 20:
+            raise Refused("invalid native profile batch")
+        for fan in fan_ids: _id(fan)
+        if len(set(fan_ids)) != len(fan_ids) or self._handle.owner_id in fan_ids:
+            raise Refused("invalid native profile identities")
+        self.verify_identity()
+        path = API_PATH + "/users/list?" + urlencode([("m[]", str(fan)) for fan in fan_ids])
+        data = load(self._signed_request("GET", path, max_response_bytes=MAX_HISTORY_BYTES),
+                    max_bytes=MAX_HISTORY_BYTES)
+        requested = {str(fan): fan for fan in fan_ids}
+        result = {}
+        for key, raw in data.items():
+            if (key not in requested or type(raw) is not dict
+                    or type(raw.get("id")) is not int or raw["id"] != requested[key]):
+                raise NativeProtocolError("native profile identity mismatch")
+            result[requested[key]] = raw
+        return result
 
     def vault_page(self, *, offset, limit=24):
         """Read one bounded selected-account vault page, without importing it.

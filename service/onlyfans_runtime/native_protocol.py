@@ -121,6 +121,13 @@ def history_text(value):
     try:
         return plain_text(value)
     except NativeProtocolError:
+        # Real historical fan messages also use unwrapped text with bare
+        # line breaks. Normalize only this observed dialect; arbitrary tags,
+        # attributes and strict outgoing acceptance remain unchanged.
+        if type(value) is str and len(value.encode()) <= 20000:
+            unwrapped = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+            if unwrapped != value and '<' not in unwrapped and '>' not in unwrapped:
+                return html.unescape(unwrapped)
         if (type(value) is not str or len(value.encode()) > 20000
                 or not value.startswith("<p>") or not value.endswith("</p>")):
             raise NativeProtocolError("unsupported native history formatting") from None

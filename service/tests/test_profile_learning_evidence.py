@@ -72,3 +72,40 @@ def test_conversation_activity_does_not_evict_personal_facts():
 
 def test_silent_fan_summary_is_honest():
     assert 'No supported personal details' in summary([])
+
+
+@pytest.mark.parametrize('confirmation', ["I've always lived here", 'here', 'I live there'])
+def test_referential_location_confirmation_does_not_conflict_with_named_place(confirmation):
+    named = validate(proposal('location', 'New Jersey', "I'm in New Jersey"),
+                     {'1:2': source("I'm in New Jersey")})
+    repeated = validate(proposal('location', confirmation, confirmation, '1:3'),
+                        {'1:3': source(confirmation)})
+    memories = merge(named, repeated)
+    assert len(memories) == 1 and memories[0]['value'] == 'New Jersey'
+    assert not memories[0].get('conflicts')
+
+
+def test_relative_proximity_is_not_an_identifiable_current_location():
+    body='Like 10min from where I usually go. Pretty close lol'
+    assert not validate(proposal('location', '10min from where I usually go', body),
+                        {'1:2': source(body)})
+
+
+def test_hometown_and_current_residence_are_distinct_memories():
+    born=validate(proposal('hometown', 'Hawaii', 'Born and raised in Hawaii'),
+                  {'1:2':source('Born and raised in Hawaii')})
+    current=validate(proposal('location', 'Palolo valley', 'I live in Palolo valley', '1:3'),
+                     {'1:3':source('I live in Palolo valley')})
+    merged=merge(born,current)
+    assert len(merged)==2 and all(not f.get('conflicts') for f in merged)
+
+
+def test_short_answer_retains_disambiguating_question_in_reply_context():
+    from onlyfans_runtime.profile_learning.evidence import select_memories
+    sources={'q':{**source('Do you enjoy the ocean?',direction='out'),'fan':1,'context_only':True},
+             '1:2':{**source('Always'),'fan':1}}
+    result=proposal('interests','Always','Always')
+    result['facts'][0].update(context_sources=['q'],context_quotes=['Do you enjoy the ocean?'])
+    memories=select_memories(validate(result,sources),now='2026-01-02')
+    assert memories[0]['contextEvidence'][0]['quote']=='Do you enjoy the ocean?'
+    assert 'Do you enjoy the ocean?' in summary(validate(result,sources),now='2026-01-02')

@@ -49,6 +49,10 @@ class PromptContext:
     persona: str
     finish: Callable[[list], list] | None = None
     dated_memory: bool = False
+    # Engine v2: the name the fan gave in this conversation (latest wins) and the canonical fact fields an operator
+    # cleared or replaced; the prompt uses the first and withholds the second.
+    name_override: str | None = None
+    suppress_fields: frozenset = frozenset()
 
 
 _active: contextvars.ContextVar[TelegramNativeCapabilities | None] = contextvars.ContextVar(

@@ -217,6 +217,9 @@ class Sim:
         self.takeovers: dict[tuple, list] = {}                       # (acct,fan) -> [[start, end|None]]
         self.takeover_violations = 0
         self.inbound_total = 0
+        self.unanswered_n: dict[str, int] = {}
+        self.takeovers_open = False
+        self.fast_idle = False            # load profiles: skip the (SQLite-slow) pending query while the account has nothing unanswered
         self.backlog_samples: list[tuple] = []
         self.replies_per_inbound = []
         self.failures: list[str] = []
@@ -285,6 +288,7 @@ class Sim:
             self.wait_first[acct].append((now - min(pend.values())).total_seconds())
             for mid in [m for m in pend if m <= covered]:
                 del pend[mid]
+                self.unanswered_n[acct] -= 1
 
     # ── fan side ──────────────────────────────────────────────────────────────
     def fan_says(self, acct, fan, text="hey", when=None):
@@ -293,6 +297,7 @@ class Sim:
         msg = self.new_provider_message(acct, fan, "in", text, when)
         self.providers[acct].add(fan, msg)
         self.inbound_at.setdefault((acct, fan), {})[msg["id"]] = when
+        self.unanswered_n[acct] = self.unanswered_n.get(acct, 0) + 1
         self.inbound_total += 1
         self.sockets[acct].put_nowait({"api2_chat_message": {**msg, "fromUser": {"id": fan}}})
         return msg
@@ -312,6 +317,7 @@ class Sim:
                  (acct, fan, msg["id"], text, now.replace(microsecond=(now.microsecond // 1000) * 1000).isoformat(sep=" "),
                   now.isoformat(sep=" ")))
         pend = self.inbound_at.get((acct, fan), {})
+        self.unanswered_n[acct] = self.unanswered_n.get(acct, 0) - len(pend)
         pend.clear()                      # the human answered what was waiting
         return msg
 
@@ -377,12 +383,19 @@ class Sim:
         def owned(self_, fan):
             return fan not in sim.not_owned[self_.db]
 
+        orig_pending = service.Service.pending_fans
+
+        def pending_fans(self_):
+            if sim.fast_idle and sim.unanswered_n.get(self_.db, 0) <= 0 and not sim.takeovers_open:
+                return [], []
+            return orig_pending(self_)
+
         sim_engine = _engine_factory(sim)
         return [patch.object(runner, "emit", sim.emit), patch.object(runner, "now", sim.clock),
                 patch.object(runner, "report_to_twin", no_report), patch.object(service, "ensure_fan_conversation", no_ensure),
                 patch.object(service, "time", timeshim), patch.object(model_mod, "time", timeshim), patch.object(engine_mod, "NativeEngine", sim_engine),
                 patch.object(conn_mod, "load_verified_connection", fake_load), patch.object(conn_mod, "build_client", fake_build),
-                patch.object(attribution, "require_sentinels", fake_sentinels), patch.object(service.Service, "_owned", owned),
+                patch.object(attribution, "require_sentinels", fake_sentinels), patch.object(service.Service, "_owned", owned), patch.object(service.Service, "pending_fans", pending_fans),
                 patch("native_pilot.autoreconcile.runner.emit", sim.emit)]
 
     def intake_factory(self, acct):
@@ -540,7 +553,7 @@ def run_sim(scenario, *, root, accounts, **kw):
             p.start()
         # the executor: sends wait in the queue holding a thread, so give the loop's pool room
         from concurrent.futures import ThreadPoolExecutor
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=48, thread_name_prefix="sim"))
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=64, thread_name_prefix="sim"))
         try:
             await sim.start_services()
             try:

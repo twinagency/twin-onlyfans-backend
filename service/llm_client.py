@@ -83,6 +83,8 @@ from llm_models import LLMModel, MODELS  # noqa: E402,F401
 _CHARS_PER_TOKEN = 4
 _ASSUMED_OUTPUT_TOKENS = 1024
 _MILLICENTS_PER_CENT = 100  # internal cost unit: 1 cent = 100 millicents
+# Model work that is never part of answering a fan: it yields to replies (see native_pilot.budget.reply_reserve_fraction).
+BACKGROUND_PURPOSES = frozenset({"gen_info", "describe_media", "describe_flags", "vault_ppv_week_caption", "enrich_persona", "pins_judge"})
 _DEFAULT_CAP_CENTS = 100  # mirrors AccountAiConfig.daily_cost_cap_cents default
 _REQUEST_TIMEOUT_S = 120.0
 
@@ -1052,6 +1054,11 @@ async def chat(
     est_in = _estimate_input_tokens(messages)
     reserve_mc = _cost_millicents(model, est_in, _ASSUMED_OUTPUT_TOKENS)
     cap_mc = await _get_cap_cents(account_id) * _MILLICENTS_PER_CENT  # cap is stored in cents
+    if purpose in BACKGROUND_PURPOSES:
+        # Replies keep a reserved share of the day's cap: background analysis stops when TOTAL spend reaches
+        # cap x (1 - FASTT_REPLY_RESERVE_FRACTION), well before replies are affected. The cap itself is unchanged.
+        from native_pilot.budget import reply_reserve_fraction
+        cap_mc = int(cap_mc * (1 - reply_reserve_fraction()))
     await _reserve(day, account_id, reserve_mc, cap_mc, now, prov.name)  # raises LLMCapExceeded
 
     # ── Build the OpenAI-compatible body ────────────────────────────────

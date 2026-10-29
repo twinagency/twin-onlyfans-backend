@@ -91,11 +91,11 @@ class _TextClient:
         if (type(fan_id) is not int or fan_id != self.engine.fan_id
                 or not isinstance(text, str) or not text.strip() or (kwargs and not self.engine.content)):
             self.engine._refuse("forbidden-platform-operation")
-        from .identity import IDENTITY_HELD, discloses_ai
-        if discloses_ai(text):
+        from .identity import IDENTITY_HELD, denies_automation, discloses_ai
+        if discloses_ai(text) or denies_automation(text):
             # Identity rule: a bubble saying it is an AI / bot / clone is never sent (nor resent).
             self.engine._refuse(IDENTITY_HELD)
-        if not kwargs and not self.engine._card_sent:
+        if not kwargs and not getattr(self.engine, "_card_sent", False):
             from .media_claims import MEDIA_CLAIM_HELD, claims_media_sent
             if claims_media_sent(text):
                 # Never claim media was sent when none was: the bubble is held, the turn is regenerated once.

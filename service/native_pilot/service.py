@@ -1045,7 +1045,9 @@ class Service:
         if any(sincere_identity_question((src or {}).get("body")) for src in sources.values()):
             # Identity rule: the AI never answers "are you a bot / AI / real?". The chat is paused and
             # flagged so a human answers it, then hands back with the normal dashboard controls.
-            await self.identity_handoff("fan-asked")
+            from .identity import HUMAN_REQUESTED, wants_human
+            asked_for_human = any(wants_human((src or {}).get("body")) for src in sources.values())
+            await self.identity_handoff("fan-asked", attention=HUMAN_REQUESTED if asked_for_human else "identity-question")
             ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
             return
         await self.execute(key, sources, source_id=snap.message_id)
@@ -1375,7 +1377,7 @@ class Service:
                               f"AND price_cents>0 AND message_id IN ({marks}) LIMIT 1", (self.db, self.args.fan, *ids)).fetchone()
         return row is not None
 
-    async def identity_handoff(self, trigger):
+    async def identity_handoff(self, trigger, attention="identity-question"):
         """Pause the AI for this fan and flag the chat for a human (the identity rule, see identity.py).
 
         Same control path as ``stop_after_card`` (``Store.control``, action pause_automation) so the
@@ -1387,6 +1389,7 @@ class Service:
         from db.engine import get_session
         from onlyfans_runtime import runtime_stop
         from .identity import IDENTITY_REASON
+        HUMAN_REQUESTED_REASON = "Fan asked for a real person; a human must answer."
         from .reporting import report_attention
         fan, via = self.args.fan, "twin-control"
         try:
@@ -1406,7 +1409,8 @@ class Service:
                     rev = row.revision
                 key = hashlib.sha256(f"identity-handoff:{self.db}:{fan}:{rev}".encode()).hexdigest()[:64]
                 return store.control(tenant, self.db, fan, mode="paused", expected_revision=rev,
-                                     command_key=key, actor="identity-guard", reason=IDENTITY_REASON,
+                                     command_key=key, actor="identity-guard",
+                                     reason=HUMAN_REQUESTED_REASON if attention == "human-requested" else IDENTITY_REASON,
                                      action="pause_automation")
             await asyncio.to_thread(pause)
         except Exception as exc:  # fail closed: the runtime stop is still written
@@ -1415,7 +1419,7 @@ class Service:
                 await session.commit()
             via = "runtime-stop-only:" + (str(exc)[:60] or type(exc).__name__)
         try:
-            await report_attention(account_id=self.db, fan_id=fan, reason="identity-question")
+            await report_attention(account_id=self.db, fan_id=fan, reason=attention)
         except Exception as exc:
             via += ";attention-failed:" + type(exc).__name__
         runner.emit({"event": "identity-handoff", "trigger": trigger, "account_id": self.db, "fan_id": fan, "via": via})

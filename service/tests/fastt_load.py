@@ -137,6 +137,8 @@ PROFILES = {
     # planning there, so a 2 s poll across 100 accounts is not affordable. It adds at most 5 s (mean 2.5 s) to a reply latency.
     "peak": dict(accounts=50, fleet_per_h=6250, hot=2.0, fans=120, latency=lognorm(1.5, .8, .01), minutes=25, poll=5.0),
     "peak2x": dict(accounts=100, fleet_per_h=12500, hot=1.6, fans=100, latency=lognorm(1.5, .8, .01), minutes=12, poll=5.0),
+    "peak_bal": dict(accounts=50, fleet_per_h=6250, hot=1.0, fans=120, latency=lognorm(1.5, .8, .01), minutes=25, poll=5.0),
+    "peak2x_bal": dict(accounts=100, fleet_per_h=12500, hot=1.0, fans=100, latency=lognorm(1.5, .8, .01), minutes=12, poll=5.0),
     "avg": dict(accounts=50, fleet_per_h=50000 / 24, hot=2.0, fans=120, latency=lognorm(1.5, .8, .01), minutes=40, poll=5.0),
     "impossible": dict(accounts=50, fleet_per_h=12500, hot=1.0, fans=150, latency=lognorm(1.5, .8, .01), minutes=15, poll=5.0),
     "slowmodel": dict(accounts=20, fleet_per_h=2500, hot=2.0, fans=100, latency=lognorm(14, .7, .05, (30, 45)), minutes=25, poll=5.0),
@@ -166,6 +168,8 @@ def run(profile, minutes=None, out=None, seed=7):
     result = {}
 
     async def scenario(sim):
+        sim.fast_idle = True          # idle polls skip the SQLite pending query (see PROFILES note); busy accounts run the real one
+        sim.takeovers_open = bool(p.get('chaos'))
         warm = 120.0
         await asyncio.sleep(warm)                     # services start, sockets connect
         t0 = sim.loop._vt

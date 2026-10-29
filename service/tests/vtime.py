@@ -59,6 +59,7 @@ class VirtualLoop(asyncio.SelectorEventLoop):
         super().__init__()
         self._vt = 0.0
         self._outstanding = 0
+        self._blocking_pool = None
         self._selector = _VSelector(self._selector, self)
 
     def time(self):
@@ -68,7 +69,10 @@ class VirtualLoop(asyncio.SelectorEventLoop):
         if executor is UNCOUNTED:
             # A thread that blocks on the loop itself (the engine's synchronous send waiting for the async send
             # path): virtual time must keep moving while it waits, so it is not counted as real work.
-            return super().run_in_executor(None, func, *args)
+            if self._blocking_pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+                self._blocking_pool = ThreadPoolExecutor(max_workers=4000, thread_name_prefix="blocked")
+            return super().run_in_executor(self._blocking_pool, func, *args)
         fut = super().run_in_executor(executor, func, *args)
         self._outstanding += 1
         fut.add_done_callback(self._thread_done)

@@ -144,8 +144,13 @@ class Store:
         parsed = make_url(url)
         if parsed.get_backend_name() != "postgresql":
             raise Refused("durable intake requires PostgreSQL")
-        self.engine = create_engine(parsed.set(drivername="postgresql+psycopg2"), pool_size=pool_size,
-                                    max_overflow=0, pool_timeout=3, pool_pre_ping=True,
+        # Bulk metadata work keeps one explicit advisory lease, but returns
+        # short-lived read/write connections immediately between remote calls.
+        from sqlalchemy.pool import NullPool
+        pool_options = ({"poolclass": NullPool} if os.environ.get("ONLYFANS_VAULT_COMPACT_DB") == "1"
+            else {"pool_size": pool_size, "max_overflow": 0, "pool_timeout": 3})
+        self.engine = create_engine(parsed.set(drivername="postgresql+psycopg2"), **pool_options,
+                                    pool_pre_ping=True,
                                     connect_args={"options": "-c timezone=UTC -c statement_timeout=10000 -c lock_timeout=3000"})
         from db.schema import check_schema
         try:

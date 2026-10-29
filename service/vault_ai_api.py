@@ -2697,7 +2697,7 @@ def _parse_describe(text: str) -> dict[str, Any]:
 
 async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-30b",
                         prompt_version: str = "v2",
-                        frames: int | None = None) -> dict[str, Any]:
+                        frames: int | None = None, scope_guard=None) -> dict[str, Any]:
     """Describe one item.
 
     `prompt_version` picks the bake-off variant: "v2" (default — rich structured
@@ -2706,6 +2706,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     `frames` overrides the duration ladder; None = `_frames_for_duration`.
     """
     async with get_session() as s:
+        if scope_guard is not None:
+            await scope_guard(s, media_id)
         item = await s.get(VaultItem, (account_id, media_id))
     if item is None:
         raise HTTPException(status_code=404, detail={"error": "not_in_mirror", "media_id": media_id})
@@ -2715,6 +2717,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     if not got.images:
         status = _NO_IMAGE_STATUS.get(got.reason, "fetch_failed")
         async with get_session() as s:
+            if scope_guard is not None:
+                await scope_guard(s, media_id, phase="write")
             await s.execute(
                 update(VaultItem)
                 .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
@@ -2729,7 +2733,11 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
         return {"media_id": media_id, "ok": False, "status": status,
                 "detail": got.detail or f"no frames ({status})"}
 
-    prompt = _DESCRIBE_PROMPT if str(prompt_version) == "v1" else _DESCRIBE_PROMPT_V2
+    from vault_category_evidence import prompt as category_prompt, proposals, receipt, verification_prompt, KEY as CATEGORY_KEY
+    accurate = str(prompt_version) == "v3"
+    source = getattr(got, "source", "unknown")
+    prompt = (category_prompt(item.kind, source, len(got.images)) if accurate else
+              _DESCRIBE_PROMPT if str(prompt_version) == "v1" else _DESCRIBE_PROMPT_V2)
     content = [{"type": "text", "text": prompt}]
     content += [{"type": "image_url", "image_url": {"url": u}} for u in got.images]
 
@@ -2738,7 +2746,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     result = None
     used_model = model
     data: dict[str, Any] = {}
-    for attempt_model in (model, "qwen3-vl-235b"):
+    verifier_model = "openrouter/qwen3-vl-235b" if accurate else "qwen3-vl-235b"
+    for attempt_model in (model, verifier_model):
         try:
             result = await llm_client.chat(
                 model=attempt_model,
@@ -2762,6 +2771,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
             # DEEPINFRA_API_KEY failed all 327 items of a vault while the UI
             # reported "done 327/327" and the row stayed blank.
             async with get_session() as s:
+                if scope_guard is not None:
+                    await scope_guard(s, media_id, phase="write")
                 await s.execute(
                     update(VaultItem)
                     .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
@@ -2776,11 +2787,13 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
             if parsed.get("description") or parsed.get("tags"):
                 data = parsed
                 break
-        if attempt_model == "qwen3-vl-235b":
+        if attempt_model == verifier_model:
             break  # escalation also failed
 
     if not (data.get("description") or data.get("tags")):
         async with get_session() as s:
+            if scope_guard is not None:
+                await scope_guard(s, media_id, phase="write")
             await s.execute(
                 update(VaultItem)
                 .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
@@ -2791,6 +2804,39 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
             await s.commit()
         return {"media_id": media_id, "ok": False, "status": "refused",
                 "raw": (result.content if result else "" or "")[:200]}
+
+    if accurate:
+        candidates = proposals(data, kind=item.kind, source=source, frame_count=len(got.images))
+        verification = {}
+        if candidates:
+            check_content = [{"type": "text", "text": verification_prompt(candidates, item.kind)
+                + "\nDescription to check: " + str(data.get("description") or "")[:2000]}]
+            check_content += [{"type": "image_url", "image_url": {"url": u}} for u in got.images]
+            try:
+                checked = await llm_client.chat(model=verifier_model,
+                    messages=[{"role": "user", "content": check_content}], purpose="describe_media",
+                    account_id=account_id, temperature=0.0)
+                verification = _parse_describe(checked.content)
+            except LLMCapExceeded:
+                return {"media_id": media_id, "ok": False, "status": "capped"}
+            except LLMError:
+                # Do not publish the first pass as verified when checking failed.
+                async with get_session() as s:
+                    if scope_guard is not None:
+                        await scope_guard(s, media_id, phase="write")
+                    await s.execute(update(VaultItem).where(VaultItem.account_id == account_id,
+                        VaultItem.media_id == media_id).values(describe_status="failed", describe_generated_at=datetime.utcnow()))
+                    await s.commit()
+                return {"media_id": media_id, "ok": False, "status": "verification_pending"}
+        data[CATEGORY_KEY] = receipt(data, verification, got.images, account=account_id,
+            media_id=media_id, kind=item.kind, source=source)
+        if verification.get("description_accurate") is not True:
+            # Retain the rejected answer for audit, never as user-facing metadata.
+            data = {"description": "", "tags": [], "acts": [], "confidence": 0,
+                "primary_folder": "other", CATEGORY_KEY: {**data[CATEGORY_KEY],
+                    "status": "needs_review", "categories": [], "rejected_analysis": data}}
+            from vault_category_evidence import metadata_digest
+            data[CATEGORY_KEY]["metadata_digest"] = metadata_digest(data)
 
     tags = [str(t).lower().strip() for t in (data.get("tags") or []) if str(t).strip()][:12]
     desc = str(data.get("description") or "")
@@ -2815,7 +2861,7 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     locked = set(load_json(item.locked_fields_json, []))
     # Stamp WHICH variant produced this row: a v1 row is a candidate for a later
     # v2 re-scan, and without the stamp "already described" is ambiguous.
-    data = {**data, "_prompt_version": ("v1" if str(prompt_version) == "v1" else "v2"),
+    data = {**data, "_prompt_version": ("v3" if accurate else "v1" if str(prompt_version) == "v1" else "v2"),
             "_frames": len(got.images)}
 
     # `ai_fields_json` is written whole from `data`, which holds ONLY what the
@@ -2838,7 +2884,7 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     # across a re-describe. A locked dispute fix outranks model and carried alike.
     prev = load_json(item.ai_fields_json, {}) or {}
     for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
-                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1"):
+                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1", "_auto_folders_v3"):
         if key in prev:
             data[key] = prev[key]
     for key, val in (load_json(item.operator_overrides_json, {}) or {}).items():
@@ -2856,6 +2902,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
         "ai_fields_json": json.dumps(data, ensure_ascii=False, default=str),
         "frames_sampled": len(got.images) if is_video else None,
     }
+    if accurate:
+        vals["review_state"] = "needs_review" if data[CATEGORY_KEY]["status"] == "needs_review" else "ai_verified"
     if "tip_vault_flag" not in locked:
         vals["tip_vault_flag"] = sellable
     if "tags" not in locked:
@@ -2871,13 +2919,19 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
         vals["search_text"] = search_text
 
     async with get_session() as s:
+        if scope_guard is not None:
+            await scope_guard(s, media_id, phase="write")
         # A concurrent backfill may have assigned folders while vision ran.
         # Carry its marker from the current row, not just the earlier snapshot.
         current_fields = await s.scalar(select(VaultItem.ai_fields_json).where(
             VaultItem.account_id == account_id, VaultItem.media_id == media_id).with_for_update())
         current_fields = load_json(current_fields, {}) or {}
-        if isinstance(current_fields, dict) and current_fields.get("_auto_folders_v1") is True:
-            data["_auto_folders_v1"] = True
+        if isinstance(current_fields, dict):
+            for marker in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
+                if current_fields.get(marker) is True:
+                    data[marker] = True
+            if "_auto_folders_v3" in current_fields:
+                data["_auto_folders_v3"] = current_fields["_auto_folders_v3"]
             vals["ai_fields_json"] = json.dumps(data, ensure_ascii=False, default=str)
         await s.execute(
             update(VaultItem)
@@ -2890,6 +2944,8 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     try:
         from vault_auto_folders import assign as assign_auto_folders
         async with get_session() as s:
+            if scope_guard is not None:
+                await scope_guard(s, media_id, phase="categorise")
             await assign_auto_folders(s, account_id, media_id)
             await s.commit()
     except Exception:
@@ -3743,3 +3799,4 @@ async def hide_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
         pass
     log.info("vault item hidden account=%s media=%s", account_id, media_id)
     return {"ok": True, "media_id": int(media_id), "hidden": True}
+

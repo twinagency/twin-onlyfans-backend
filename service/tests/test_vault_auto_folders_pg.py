@@ -1,5 +1,6 @@
 """Concurrent category writes in an isolated PostgreSQL schema, no provider calls."""
 import asyncio
+import json
 import os
 import unittest
 import uuid
@@ -9,6 +10,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from db.models import Base, Account, VaultItem, VaultFolder, VaultFolderItem
 from vault_auto_folders import assign
+from vault_category_evidence import KEY, receipt
 
 
 @unittest.skipUnless(os.environ.get("ONLYFANS_TEST_PG_URL"), "disposable PostgreSQL URL required")
@@ -27,8 +29,12 @@ class ConcurrentFoldersTests(unittest.IsolatedAsyncioTestCase):
         async with self.sessions.begin() as s:
             s.add(Account(id="category-test"))
             await s.flush()
-            s.add_all([VaultItem(account_id="category-test", media_id=i, kind="photo",
-                created_at=datetime.utcnow(), tags='["selfie","bikini"]') for i in range(1, 9)])
+            for i in range(1,9):
+                evidence=[{"category":k,"confidence":99,"evidence":"Visible supporting detail in this synthetic fixture","frames":[1]} for k in ("selfies","swimwear")]
+                data={"description":"Synthetic swimsuit selfie","tags":["selfie","bikini"],"category_evidence":evidence}
+                check={"description_accurate":True,"checks":[{**e,"confirmed":True} for e in evidence]}
+                data[KEY]=receipt(data,check,["synthetic-frame"],account="category-test",media_id=i,kind="photo",source="photo")
+                s.add(VaultItem(account_id="category-test",media_id=i,kind="photo",created_at=datetime.utcnow(),ai_fields_json=json.dumps(data)))
 
     async def asyncTearDown(self):
         await self.engine.dispose()
@@ -51,3 +57,4 @@ class ConcurrentFoldersTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

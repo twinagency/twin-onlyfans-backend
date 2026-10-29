@@ -73,7 +73,9 @@ engine: AsyncEngine = create_async_engine(
     echo=os.environ.get("DB_ECHO") == "1",
     connect_args=_connect_args,
     future=True,
-    **({"pool_size": 4, "max_overflow": 0, "pool_timeout": 3, "pool_pre_ping": True} if ONLYFANS_PROCESS_ROLE else {}),
+    **({"pool_size": 1 if os.environ.get("ONLYFANS_VAULT_COMPACT_DB") == "1" else 4,
+        "max_overflow": 0, "pool_timeout": 15 if os.environ.get("ONLYFANS_VAULT_COMPACT_DB") == "1" else 3,
+        "pool_pre_ping": True} if ONLYFANS_PROCESS_ROLE else {}),
 )
 
 async_session_factory = async_sessionmaker(

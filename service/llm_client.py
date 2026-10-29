@@ -51,6 +51,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING
 from typing import Any
@@ -67,6 +68,12 @@ from llm_providers import (
     telegram_credential)
 
 log = logging.getLogger("of-relay.llm_client")
+
+# Task-local authority for the isolated, account-bound vault caption child.
+# Keep the process role intact while concurrent metadata calls await I/O.
+_vault_caption_account: ContextVar[str | None] = ContextVar("vault_caption_account", default=None)
+_VAULT_CAPTION_MODELS = {"openrouter/qwen3-vl-30b", "openrouter/qwen3-vl-235b"}
+
 
 # ── Model registry ──────────────────────────────────────────────────────
 # Moved to `llm_models` — WHAT there is to call, next to WHO serves it
@@ -1024,7 +1031,12 @@ async def chat(
     """
     import os
     if "ONLYFANS_PROCESS_ROLE" in os.environ:
-        raise RuntimeError("Legacy model calls are unavailable in dedicated OnlyFans roles")
+        caption_allowed = (os.environ.get("ONLYFANS_PROCESS_ROLE") == "worker"
+            and _vault_caption_account.get() == account_id
+            and purpose == "describe_media" and model in _VAULT_CAPTION_MODELS
+            and fan_id is None)
+        if not caption_allowed:
+            raise RuntimeError("Legacy model calls are unavailable in dedicated OnlyFans roles")
     mdl, prov = _resolve(model)
     # P2-I7: the trusted Telegram policy gate. The full decision - trusted
     # billing account, enabled purpose, configured model and allowed provider -

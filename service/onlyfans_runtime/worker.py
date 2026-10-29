@@ -73,7 +73,8 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
         raise Refused("reader scope mismatch")
     scope = {"connection_revision": connection_revision} if connection_revision is not None else {}
     applied = store.drain(tenant_id, account_id, **scope)
-    if os.environ.get("ONLYFANS_RECENT_INBOX_ENABLED") == "1":
+    if (os.environ.get("ONLYFANS_RECENT_INBOX_ENABLED") == "1"
+            and not getattr(store, "_independent_inbox", False)):
         from .recent_inbox import poll_recent
         applied += poll_recent(store, tenant_id, account_id, reader, connection_revision=connection_revision)
     discovered = recovered = 0
@@ -129,3 +130,4 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
 def tick(store: Store, tenant_id: str, account_id: str, reader: BoundReader) -> int:
     progress = read_step(store, tenant_id, account_id, reader)
     return progress.applied + progress.discovery_pages + progress.recovery_pages
+

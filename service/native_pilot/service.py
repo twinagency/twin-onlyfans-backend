@@ -63,7 +63,7 @@ LEASE_TTL_S = 120.0
 RENEW_S = 30.0
 POLL_S = 2.0
 FAN_IDLE_RELEASE_S = 900.0
-CANDIDATES_MAX = 200      # fans served per tick, and the size of one scan page / the controls window
+CANDIDATES_MAX = Tuning.from_env().queue_max   # (FASTT_QUEUE_MAX, default 200) fans per tick = size of one scan page / the controls window = the bounded queue
 SCAN_PAGES_MAX = 10       # a tick reads at most this many pages of CANDIDATES_MAX rows: bounded work
 BUDGET_HOLD_S = 300.0
 FOLLOWUPS_PER_TICK = 5
@@ -74,7 +74,7 @@ DESCRIBE_WAIT_S = 45.0       # a caption-less fan photo waits this long for its 
 CONNECTION_CHECK_S = 300.0
 TURN_MAX_S = 600.0
 PACE_MAX_S = 180.0
-MODEL_RETRY_REASONS = ("model-timeout", "model-http-failed", "model-response-failed")
+MODEL_RETRY_REASONS = ("model-timeout", "model-http-failed", "model-response-failed", "media-claim-unbacked")
 # Reasons a reply ends WITHOUT any send standing and that are not the fan message's fault. The claim is given
 # back (Ledger.release_input) so the fan's latest state is answered from scratch once the cause clears; a draft
 # is never kept. value = seconds this fan is left alone before it is looked at again.
@@ -82,7 +82,10 @@ RELEASE_PREFIXES = ("fan-", "account-")
 RELEASE_BACKOFF_S = {"new-message-during-generation": 1.0, "source-changed": 1.0, "source-text-changed": 1.0,
                      "source-time-changed": 1.0, "source-invalidated": 1.0, "source-missing": 1.0,
                      "send-queue-timeout": 15.0, "allowance-wait-timeout": 15.0, "credential-change": 5.0,
-                     "runner-lease-lost": 30.0, "authority-lost-before-post": 5.0}
+                     "runner-lease-lost": 30.0, "authority-lost-before-post": 5.0,
+                     # genuine holds, surfaced with their reason; the message is answered once they clear
+                     "creator-persona-not-approved": 60.0, "creator-facts-not-current": 60.0,
+                     "twin-context-unavailable": 30.0}
 ACCOUNT_BLOCK_PREFIXES = ("allowance-", "model-budget")
 RATE_LIMIT_BACKOFF_S = 60.0   # a provider 429: wait this long (times the retry number) unless Retry-After says otherwise
 RATE_LIMIT_BACKOFF_MAX_S = 300.0
@@ -147,6 +150,8 @@ class ServiceGateway(runner.Gateway):
         # Engine v2: the account's FIFO send gate, the account-level hold re-read at the wire, tunable waits.
         tuning = getattr(service, "tuning", None) or Tuning.from_env()
         self.send_gate = getattr(service, "send_gate", None)
+        if getattr(service, "send_gate", None) is not None:
+            self.open_offer_blocks = False         # persistent service: an open offer never stops a text reply
         self.eligibility_check = getattr(service, "account_hold", None)
         self.send_wait_max_s = tuning.pace_wait_max_s
         self.throttled_retries = tuning.throttled_retries
@@ -261,6 +266,7 @@ class Service:
         self.next_lease_renew = 0.0
         self.next_queue_event = 0.0
         self.phase = "preparing"
+        self.release_reason = None
         self.queue_stats = {}
         self.pilot_id = getattr(args, "service_id", None) or f"svc-{self.scope.provider_id}-{getattr(args, 'fan', None)}"
         self.path = None
@@ -515,10 +521,10 @@ class Service:
         unanswered inbound that arrived after the persisted activation watermark. The ineligible are removed
         BEFORE the bound is applied, so they cannot occupy it: operator-paused / restricted / taken-over /
         never-enabled fans and fans whose newest message is already claimed are filtered in SQL, non-owned
-        fans and fans in a live hold in Python while paging oldest first. At most ``self.tuning.queue_max`` fans
+        fans and fans in a live hold in Python while paging oldest first. At most ``CANDIDATES_MAX`` fans
         and ``SCAN_PAGES_MAX`` pages per tick.
 
-        ``controlled``: every owned fan with an unanswered inbound among the newest ``self.tuning.queue_max``
+        ``controlled``: every owned fan with an unanswered inbound among the newest ``CANDIDATES_MAX``
         (paused or not: Twin's controls still run for them), plus ``serve``.
         """
         from .ledger import _dt
@@ -541,7 +547,7 @@ class Service:
                 # which arrived during that reply. Every other newer row still blocks.
                 base = base[:-1] + " AND NOT (" + older_reply_sql() + "))"
             for fan, _, created in con.execute(base + " ORDER BY m.created_at DESC,m.message_id DESC LIMIT ?",
-                                               (self.db, since, self.tuning.queue_max)).fetchall():
+                                               (self.db, since, CANDIDATES_MAX)).fetchall():
                 if _dt(created) > since and is_owned(fan) and fan not in controlled:
                     controlled.append(fan)
             if store.has_table(con, "of_conversation_state"):  # strict: no projection table = nobody enabled
@@ -561,14 +567,14 @@ class Service:
                     rows = con.execute(
                         sql + (" AND (m.created_at,m.message_id)>(?,?)" if cursor else "")
                         + " ORDER BY m.created_at,m.message_id LIMIT ?",
-                        tuple(params) + cursor + (self.tuning.queue_max,)).fetchall()
+                        tuple(params) + cursor + (CANDIDATES_MAX,)).fetchall()
                     for fan, mid, created in rows:
                         hold = self.fan_holds.get(fan)
                         if _dt(created) > since and is_owned(fan) and not (hold and now < hold[0]):
                             serve.append((fan, mid))
-                            if len(serve) >= self.tuning.queue_max:
+                            if len(serve) >= CANDIDATES_MAX:
                                 break
-                    if len(serve) >= self.tuning.queue_max or len(rows) < self.tuning.queue_max:
+                    if len(serve) >= CANDIDATES_MAX or len(rows) < CANDIDATES_MAX:
                         break
                     cursor = (rows[-1][2], rows[-1][1])
         controlled += [fan for fan, _ in serve if fan not in controlled]
@@ -714,8 +720,9 @@ class Service:
             return
         if child.backoff_s:
             # A requeued / released input (provider 429, model failure, takeover, stale draft): leave the fan alone while it backs off.
-            self.fan_holds[fan] = (runner.now() + timedelta(seconds=child.backoff_s), "retry-backoff")
+            self.fan_holds[fan] = (runner.now() + timedelta(seconds=child.backoff_s), child.release_reason or "retry-backoff")
             child.backoff_s = 0.0
+            child.release_reason = None
         return child.turns_started > before
 
     def _reap(self):
@@ -1020,7 +1027,7 @@ class Service:
             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
                               content=self.content, context=self.context,
                               **({"unanswered_reply_ids": unanswered} if unanswered else {}),
-                              **({"own_offers_only": True} if self.strict else {}),
+                              **({"own_offers_only": True} if self.strict else {}), open_offers_ok=True,
                               arm_unsend=gateway.arm_unsend, unsent=lambda: gateway.unsent_ids,
                               unlinked_paid=lambda: self.fan_has_unlinked_payment(args.fan),
                               card_of=lambda mid: ledger.card_evidence(account_id=self.db, fan_id=args.fan, provider_message_id=str(mid)),
@@ -1053,6 +1060,7 @@ class Service:
                 released = await asyncio.to_thread(ledger.release_input, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
                                                    input_key=key, now=runner.now())
                 if released:
+                    self.release_reason = error
                     self.backoff_s = RELEASE_BACKOFF_S.get(error, self.poll_s)
                     runner.emit({"event": "turn-released", "reason": error, "backoff_s": self.backoff_s,
                                  **({"fan_id": self.args.fan} if self.strict else {})})

@@ -46,7 +46,7 @@ def emit(event):
 readonly = store.readonly
 
 
-def check_local(path, account, fan, approved_item=None):
+def check_local(path, account, fan, approved_item=None, open_offer_blocks=True):
     """Inspect only the chosen account's configuration and delivery metadata."""
     with readonly(path) as con:
         if not con.execute("SELECT 1 FROM accounts WHERE id=?", (account,)).fetchone():
@@ -72,11 +72,15 @@ def check_local(path, account, fan, approved_item=None):
         ids = sorted({approved_item} if isinstance(approved_item, int) else set(approved_item or ()))
         approved = (" AND NOT (mode='ppv' AND status='open' AND item_id IN (%s))" % ",".join("?" * len(ids)),
                     tuple(ids)) if ids else ("", ())
-        if con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status IN ('open','paid','delivering')"
-                       + approved[0] + " LIMIT 1", (account, fan, *approved[1])).fetchone():
-            raise Refused("chat-offer-open")
-        if con.execute("SELECT 1 FROM pending_offer WHERE account_id=? AND fan_id=? LIMIT 1", (account, fan)).fetchone():
-            raise Refused("chat-offer-open")
+        # Engine v2: the persistent service passes open_offer_blocks=False. An unpaid (or paid, still being
+        # delivered) offer is settled by OnlyFans / Twin's paid-media path, not by this runner; it must not stop
+        # an ordinary text reply. The bounded pilot keeps the original refusal.
+        if open_offer_blocks:
+            if con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status IN ('open','paid','delivering')"
+                           + approved[0] + " LIMIT 1", (account, fan, *approved[1])).fetchone():
+                raise Refused("chat-offer-open")
+            if con.execute("SELECT 1 FROM pending_offer WHERE account_id=? AND fan_id=? LIMIT 1", (account, fan)).fetchone():
+                raise Refused("chat-offer-open")
         if con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? AND fan_id=? AND state IN ('dispatching','delivery_unknown') LIMIT 1", (account, fan)).fetchone():
             raise Refused("delivery-unresolved")
         if con.execute("SELECT 1 FROM twin_bridge_turns WHERE account_id=? AND state NOT IN ('delivered','cancelled','parked') LIMIT 1", (account,)).fetchone():
@@ -356,6 +360,7 @@ class Gateway:
     send_gate = None            # engine v2: the account's SendGate (service-owned); None = bounded pilot, no gate
     send_wait_max_s = 900.0
     throttled_retries = 40
+    open_offer_blocks = True    # engine v2: the persistent service sets False (an open offer never stops a text reply)
     eligibility_check = None    # engine v2: account-level hold (runtime/policy/credential), re-read at the wire
 
     async def _send(self, text, terms=None):
@@ -402,7 +407,8 @@ class Gateway:
                 history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id,
                 dashboard_handover=self.dashboard_handover)
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
-                            approved_item=self.content.catalog_ids if self.content else None)
+                            approved_item=self.content.catalog_ids if self.content else None,
+                            open_offer_blocks=self.open_offer_blocks)
             if self.hold_check is not None:
                 held = await asyncio.to_thread(self.hold_check)
                 if held:

@@ -66,6 +66,15 @@ def test_two_simultaneous_workers_do_not_call_the_same_fan(pg_store):
     assert sorted(results)==[False,True] and calls==[1]
 
 
+def test_restart_maintenance_preserves_failure_retry_deadline(pg_store):
+    fan_due(pg_store)
+    due=datetime.utcnow()+timedelta(minutes=30)
+    with pg_store.engine.begin() as c:
+        c.execute(text("UPDATE of_profile_learning SET error_code='model-credential-missing',next_at=:due,maintenance_at=NULL WHERE fan_id=1"),{'due':due})
+    worker.daily_maintenance(pg_store,'tenant')
+    assert state(pg_store)['next_at']==due
+
+
 def test_source_change_rolls_back_all_receipts_and_memories(pg_store):
     add_message(pg_store);fan_due(pg_store)
     async def changed(*args,**kwargs):
@@ -109,6 +118,49 @@ def test_edited_fact_free_source_is_reprocessed_and_withdrawn_evidence_disappear
         assert load_memories(s,'of-1',1)
         s.get(Message,('of-1',1,1)).is_unsent=True
     with Session(pg_store.engine) as s,s.begin(): assert load_memories(s,'of-1',1)==[]
+
+
+def test_new_message_makes_history_coverage_pending_until_reprocessed(pg_store):
+    add_message(pg_store);fan_due(pg_store);run(pg_store)
+    with Session(pg_store.engine) as s,s.begin():
+        assert profile_view(s,'tenant','of-1','binding',1)['storedHistoryProcessed']
+    add_message(pg_store,mid=2,body='I enjoy swimming')
+    with Session(pg_store.engine) as s,s.begin():
+        p=profile_view(s,'tenant','of-1','binding',1)
+        assert p['state']=='processing_updates' and not p['storedHistoryProcessed']
+        assert coverage(s,'tenant','of-1','binding')['pendingProfiles']>=1
+    # The creator draft shares the fair queue and may be claimed first.
+    for _ in range(3):
+        run(pg_store)
+        with Session(pg_store.engine) as s,s.begin():
+            if profile_view(s,'tenant','of-1','binding',1)['storedHistoryProcessed']: break
+    with Session(pg_store.engine) as s,s.begin():
+        assert profile_view(s,'tenant','of-1','binding',1)['storedHistoryProcessed']
+
+
+def test_large_request_archive_preserves_identity_in_database_retrieval(pg_store):
+    from onlyfans_runtime.profile_learning.evidence import validate,merge,summary
+    from onlyfans_runtime.profile_learning.worker import fingerprint
+    from db.onlyfans_models import OfIngress
+    fan_due(pg_store)
+    facts=[]
+    with Session(pg_store.engine) as s,s.begin():
+        for i in range(301):
+            body='My name is Carlos' if i==0 else f'Please send photo outfit {i}'
+            message=Message(account_id='of-1',fan_id=1,message_id=i+1,direction='in',
+                body=body,created_at=datetime(2026,1,1),ingested_at=datetime(2026,1,1))
+            s.add(message);s.flush()
+            s.add(OfIngress(account_id='of-1',event_key=f'archive:{i}',binding_id='binding',fan_id=1,
+                message_id=i+1,source='poll',payload='{}',status='applied',received_at=datetime(2026,1,1)))
+            key=f'1:{i+1}'
+            facts+=validate({'facts':[{'field':'name' if i==0 else 'request','value':'Carlos' if i==0 else body,
+                'source':key,'quote':body}]},{key:{'text':body,'direction':'in','at':message.created_at.isoformat(),
+                    'digest':fingerprint(message),'fan':1}})
+        for f in merge([],facts):
+            s.execute(text("INSERT INTO of_profile_memories(tenant_id,account_id,binding_id,fan_id,memory_key,field,status,kind,document_json) VALUES('tenant','of-1','binding',1,:key,:field,:status,:kind,:doc)"),
+                {'key':f['memory_key'],'field':f['field'],'status':f['status'],'kind':f['kind'],'doc':json.dumps(f)})
+    with Session(pg_store.engine) as s,s.begin():
+        assert 'Carlos' in summary(load_memories(s,'of-1',1),now='2026-01-08')
 
 
 def test_full_roster_not_limited_to_first_batch(pg_store):

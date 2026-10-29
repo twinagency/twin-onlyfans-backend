@@ -6,9 +6,12 @@ import json
 import os
 import signal
 import threading
+import random
+import time
 import uuid
 
-from sqlalchemy import exists, select, text, tuple_, func, or_, and_
+from sqlalchemy import bindparam, exists, select, text, tuple_, func, or_, and_
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 from db.models import Fan, FanProfile, Message, OfCreatorBinding
 from db.onlyfans_models import OfIngress, OfRuntime
@@ -22,10 +25,22 @@ CHUNK_CHARS=4000
 CHUNK_OVERLAP=300
 CALL_BYTES=45000
 LEASE=timedelta(seconds=120)
+SILENT_BATCH=200
+SILENT_RECHECK=timedelta(days=1)
+SEED_EVERY=60
+CONFIG_RETRY=timedelta(minutes=15)
+# Queue tiers: 0 = a new/changed incoming message, 1 = fan with incoming history,
+# 2 = no incoming messages (nothing to learn until one arrives) and creator draft.
+HOT,WARM,COLD=0,1,2
+# Account-level problems: one account-wide pause, not a per-fan retry storm.
+ACCOUNT_CODES={'model-credential-missing','model-credential-mismatch','model-credential-unavailable',
+    'profile-model-config-missing','profile-credential-changed','profile-connection-scope','profile-budget-exhausted'}
 
 
 def scoped(store,s,tenant,account,binding):
-    runtime=store._runtime(s,tenant,account)
+    # Read-only identity check. Taking the runtime row lock here queued the learner behind (and
+    # in front of) the reply, sync and vault paths; every write below is keyed by binding_id.
+    runtime=store._runtime(s,tenant,account,lock=False)
     if runtime.binding_id!=binding: raise Refused('profile-binding-changed')
     return runtime
 
@@ -87,7 +102,7 @@ def source_page(store,job):
         scoped(store,s,job['tenant_id'],job['account_id'],job['binding_id'])
         ids=s.execute(text(f'''SELECT m.fan_id,m.message_id FROM messages m
             WHERE m.account_id=:account_id AND (:fan_id=0 OR m.fan_id=:fan_id)
-            AND (:fan_id<>0 OR m.direction='out') AND EXISTS (SELECT 1 FROM of_ingress i
+            AND m.direction=(CASE WHEN :fan_id=0 THEN 'out' ELSE 'in' END) AND EXISTS (SELECT 1 FROM of_ingress i
                 WHERE i.account_id=m.account_id AND i.binding_id=:binding_id AND i.fan_id=m.fan_id
                 AND i.message_id=m.message_id AND i.status='applied')
             AND NOT EXISTS (SELECT 1 FROM of_profile_receipts r WHERE {receipt_match(job)})
@@ -170,27 +185,80 @@ def publish_creator(store,job,document):
 
 
 def claim_job(store,tenant,stop):
+    """Fair across accounts, tiered within an account, and index-only.
+
+    The previous single global ORDER BY sorted every due row (72k+) on each claim (7-9 s, past
+    the 10 s statement limit under load) and its "starved" tier swallowed every row at once.
+    """
+    now=datetime.utcnow()
     with Session(store.engine) as s,s.begin():
         # A row lock claims a single job, not the whole tenant. Leases recover crashes.
         suffix=' FOR UPDATE OF p SKIP LOCKED' if store.engine.dialect.name=='postgresql' else ''
-        job=s.execute(text('''SELECT p.* FROM of_profile_learning p
-            JOIN of_creator_bindings b ON b.id=p.binding_id AND b.account_id=p.account_id
-            JOIN of_profile_accounts scheduler ON scheduler.tenant_id=p.tenant_id AND scheduler.account_id=p.account_id AND scheduler.binding_id=p.binding_id
-            JOIN of_runtime runtime ON runtime.account_id=p.account_id AND runtime.binding_id=p.binding_id
-            LEFT JOIN fans f ON f.account_id=p.account_id AND f.fan_id=p.fan_id
-            WHERE p.tenant_id=:tenant AND b.tenant_id=:tenant AND b.revoked_at IS NULL
-            AND b.channel='onlyfans' AND p.next_at<=CURRENT_TIMESTAMP
-            AND (p.lease_until IS NULL OR p.lease_until<CURRENT_TIMESTAMP)
-            ORDER BY scheduler.last_claimed_at,
-            CASE WHEN p.next_at<:starved THEN 0 WHEN f.last_message_received_at>:active THEN 1 ELSE 2 END,
-            p.next_at,p.account_id,p.fan_id LIMIT 1'''+suffix),
-            {'tenant':tenant,'starved':datetime.utcnow()-timedelta(hours=6),'active':datetime.utcnow()-timedelta(days=1)}).mappings().first()
+        accounts=s.execute(text('''SELECT a.account_id,a.binding_id FROM of_profile_accounts a
+            JOIN of_creator_bindings b ON b.id=a.binding_id AND b.account_id=a.account_id
+            JOIN of_runtime runtime ON runtime.account_id=a.account_id AND runtime.binding_id=a.binding_id
+            WHERE a.tenant_id=:tenant AND b.tenant_id=:tenant AND b.revoked_at IS NULL AND b.channel='onlyfans'
+            AND (a.hold_until IS NULL OR a.hold_until<=:now)
+            ORDER BY a.last_claimed_at,a.account_id'''),{'tenant':tenant,'now':now}).all()
+        job=None
+        for account,binding in accounts:
+            job=s.execute(text('''SELECT p.* FROM of_profile_learning p
+                WHERE p.tenant_id=:tenant AND p.account_id=:account AND p.binding_id=:binding
+                AND p.next_at<=:now AND (p.lease_until IS NULL OR p.lease_until<:now)
+                ORDER BY p.priority,p.next_at,p.fan_id LIMIT 1'''+suffix),
+                {'tenant':tenant,'account':account,'binding':binding,'now':now}).mappings().first()
+            if job: break
         if not job or stop.is_set(): return None
         job=dict(job);job['lease_token']=str(uuid.uuid4())
         s.execute(text('UPDATE of_profile_accounts SET last_claimed_at=CURRENT_TIMESTAMP WHERE tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id'),job)
         s.execute(text(f'UPDATE of_profile_learning SET lease_token=:lease_token,lease_until=:until WHERE {SCOPE}'),
             {**job,'until':datetime.utcnow()+LEASE})
         return job
+
+
+def finalize_silent(store,tenant,stop,*,limit=SILENT_BATCH):
+    """Complete fans that have no incoming message at all, in bulk and without a model call.
+
+    Such a fan has nothing to learn from (mass messages we sent are not the fan's words), so an
+    honest empty record is correct. Whether the provider history was fetched is reported
+    separately by the profile view; a later incoming message re-queues the fan at top priority.
+    Returns the number of fans completed.
+    """
+    done=0
+    now=datetime.utcnow()
+    document=json.dumps({'schema_version':'of-profile-memory.v2','summary':'','memory_count':0,
+        'history_complete':True,'summary_locked':False,
+        'coverage':'Stored current-binding messages only; provider import is tracked separately.'})
+    with Session(store.engine) as s,s.begin():
+        accounts=s.execute(text('''SELECT a.account_id,a.binding_id FROM of_profile_accounts a
+            JOIN of_creator_bindings b ON b.id=a.binding_id AND b.account_id=a.account_id
+            JOIN of_runtime runtime ON runtime.account_id=a.account_id AND runtime.binding_id=a.binding_id
+            WHERE a.tenant_id=:tenant AND b.tenant_id=:tenant AND b.revoked_at IS NULL AND b.channel='onlyfans'
+            ORDER BY a.account_id'''),{'tenant':tenant}).all()
+    suffix=' FOR UPDATE OF p SKIP LOCKED' if store.engine.dialect.name=='postgresql' else ''
+    for account,binding in accounts:
+        if stop.is_set(): break
+        with Session(store.engine) as s,s.begin():
+            keys=s.execute(text('''SELECT p.fan_id FROM of_profile_learning p
+                WHERE p.tenant_id=:tenant AND p.account_id=:account AND p.binding_id=:binding
+                AND p.priority=:cold AND p.fan_id>0 AND p.next_at<=:now AND (p.lease_until IS NULL OR p.lease_until<:now)
+                AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.account_id=p.account_id AND m.fan_id=p.fan_id AND m.direction='in')
+                AND NOT EXISTS (SELECT 1 FROM of_profile_observations o WHERE o.tenant_id=p.tenant_id AND o.account_id=p.account_id
+                    AND o.binding_id=p.binding_id AND o.fan_id=p.fan_id)
+                AND NOT EXISTS (SELECT 1 FROM of_profile_memories o WHERE o.tenant_id=p.tenant_id AND o.account_id=p.account_id
+                    AND o.binding_id=p.binding_id AND o.fan_id=p.fan_id)
+                ORDER BY p.next_at,p.fan_id LIMIT :limit'''+suffix),
+                {'tenant':tenant,'account':account,'binding':binding,'cold':COLD,'now':now,'limit':limit}).scalars().all()
+            if not keys: continue
+            due=datetime.utcnow()+SILENT_RECHECK
+            s.execute(text('''UPDATE of_profile_learning SET document_json=:doc,processed_messages=0,
+                next_at=:due,queued_at=:due,last_completed_at=CURRENT_TIMESTAMP,checked_at=CURRENT_TIMESTAMP,
+                error_code=NULL,attempts=0,maintenance_at=CURRENT_TIMESTAMP,lease_token=NULL,lease_until=NULL
+                WHERE tenant_id=:tenant AND account_id=:account AND binding_id=:binding AND fan_id IN :keys''').bindparams(
+                bindparam('keys',expanding=True)),
+                {'doc':document,'due':due,'tenant':tenant,'account':account,'binding':binding,'keys':list(keys)})
+            done+=len(keys)
+    return done
 
 
 def _persist(store,job,sources,progress,additions,more,count,call_id):
@@ -254,7 +322,7 @@ def _persist(store,job,sources,progress,additions,more,count,call_id):
                 :key,:field,:status,:kind,:doc)'''),{**p,'key':f['memory_key'],'field':f['field'],
                 'status':f['status'],'kind':f['kind'],'doc':json.dumps(f,ensure_ascii=False)})
         remaining=s.execute(text(f'''SELECT 1 FROM messages m WHERE m.account_id=:account_id
-            AND (:fan_id=0 OR m.fan_id=:fan_id) AND (:fan_id<>0 OR m.direction='out')
+            AND (:fan_id=0 OR m.fan_id=:fan_id) AND m.direction=(CASE WHEN :fan_id=0 THEN 'out' ELSE 'in' END)
             AND EXISTS(SELECT 1 FROM of_ingress i WHERE i.account_id=m.account_id AND i.binding_id=:binding_id
                 AND i.fan_id=m.fan_id AND i.message_id=m.message_id AND i.status='applied')
             AND NOT EXISTS(SELECT 1 FROM of_profile_receipts r WHERE {receipt_match(job)}) LIMIT 1'''),p).first()
@@ -270,7 +338,7 @@ def _persist(store,job,sources,progress,additions,more,count,call_id):
             AND r.binding_id=:binding_id AND r.fan_id=:fan_id AND r.next_chunk=r.total_chunks),
             next_at=:due,queued_at=CASE WHEN :more THEN queued_at ELSE :due END,
             last_completed_at=CASE WHEN :more THEN last_completed_at ELSE CURRENT_TIMESTAMP END,
-            checked_at=CURRENT_TIMESTAMP,error_code=NULL,
+            checked_at=CURRENT_TIMESTAMP,error_code=NULL,priority=CASE WHEN :fan_id=0 THEN 2 ELSE 1 END,
             attempts=0,maintenance_at=CURRENT_TIMESTAMP WHERE {SCOPE}'''),{**p,'doc':json.dumps(document,ensure_ascii=False),'due':due,'more':more})
         return document
 
@@ -296,18 +364,39 @@ async def step(store,tenant,stop,*,extractor=None):
     except Exception as exc:
         from native_pilot.budget import BudgetRefused
         from llm_client import LLMCapExceeded
+        if transient_database_error(exc):
+            # Lock/statement timeouts are contention, not a failed fan: no error state, no
+            # exponential back-off, and the lease is released so any worker may retry shortly.
+            with Session(store.engine) as s,s.begin():
+                s.execute(text(f'UPDATE of_profile_learning SET next_at=:due,lease_token=NULL,lease_until=NULL WHERE {SCOPE} AND lease_token=:token'),
+                    {**p,'due':datetime.utcnow()+timedelta(seconds=random.randint(20,90)),'token':job['lease_token']})
+            return True
         allowed={'model-credential-missing','model-credential-mismatch','model-credential-unavailable','profile-binding-changed',
                  'profile-model-usage-unavailable','profile-model-config-missing','profile-source-changed','profile-review-in-progress',
                  'profile-model-request-failed','profile-model-response-incomplete','profile-model-response-too-large',
                  'profile-model-route-invalid','profile-prompt-too-large','profile-credential-changed','profile-connection-scope'}
         code=str(exc) if isinstance(exc,Refused) and str(exc) in allowed else 'profile-budget-exhausted' if isinstance(exc,(BudgetRefused,LLMCapExceeded)) else 'profile-analysis-deferred'
         attempts=int(job.get('attempts',0))+1
+        account_wide=code in ACCOUNT_CODES
+        delay=CONFIG_RETRY if account_wide else timedelta(minutes=min(120,5*2**min(attempts,5)))
         with Session(store.engine) as s,s.begin():
             s.execute(text(f'''UPDATE of_profile_learning SET error_code=:error,next_at=:due,
                 lease_token=NULL,lease_until=NULL,attempts=:attempts WHERE {SCOPE} AND lease_token=:token'''),
-                {**p,'error':code,'due':datetime.utcnow()+timedelta(minutes=min(120,5*2**min(attempts,5))),
-                 'attempts':attempts,'token':job['lease_token']})
+                {**p,'error':code,'due':datetime.utcnow()+delay,'attempts':attempts,'token':job['lease_token']})
+            if account_wide:
+                # Every fan of this account would fail the same way; pause the account's model work
+                # (silent-fan completion needs no model and continues) instead of retrying each fan.
+                s.execute(text('''UPDATE of_profile_accounts SET hold_until=:until,hold_code=:error
+                    WHERE tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id'''),
+                    {**p,'error':code,'until':datetime.utcnow()+CONFIG_RETRY})
         return True
+
+
+def transient_database_error(exc):
+    """Lock timeout (55P03), statement timeout (57014) or a dropped connection."""
+    if not isinstance(exc,DBAPIError): return False
+    code=getattr(exc.orig,'pgcode',None)
+    return code in {'55P03','57014','40001','40P01'} or bool(exc.connection_invalidated) or 'timeout' in str(exc.orig).lower()
 
 
 def daily_maintenance(store,tenant):
@@ -329,15 +418,20 @@ def main():
     store=Store(os.environ['DATABASE_URL'])
     async def run():
         last_maintenance=datetime.min
+        last_seed=0.0
         try:
             while not stop.is_set():
                 try:
-                    seed(store,tenant)
+                    if time.monotonic()-last_seed>=SEED_EVERY:
+                        seed(store,tenant);last_seed=time.monotonic()
                     if datetime.utcnow()-last_maintenance>timedelta(days=1):
                         daily_maintenance(store,tenant);last_maintenance=datetime.utcnow()
-                    worked=any(await asyncio.gather(*(step(store,tenant,stop) for _ in range(concurrency))))
-                except Exception:
-                    print(json.dumps({'component':'profile-learning','state':'unavailable'}),flush=True);worked=False
+                    try: silent=await asyncio.to_thread(finalize_silent,store,tenant,stop)
+                    except Exception as exc:
+                        print(json.dumps({'component':'profile-learning','state':'silent-batch-failed','kind':type(exc).__name__}),flush=True);silent=0
+                    worked=any(await asyncio.gather(*(step(store,tenant,stop) for _ in range(concurrency)))) or bool(silent)
+                except Exception as exc:
+                    print(json.dumps({'component':'profile-learning','state':'unavailable','kind':type(exc).__name__}),flush=True);worked=False
                 await asyncio.sleep(1 if worked else 30)
         finally:
             from db.engine import engine

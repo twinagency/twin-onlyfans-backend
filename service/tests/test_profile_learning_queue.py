@@ -234,3 +234,99 @@ def test_entire_silent_roster_is_processed_beyond_discovery_page(store):
     for _ in range(505): assert run(store)
     with store.engine.connect() as c:
         assert c.scalar(text('SELECT count(*) FROM of_profile_learning WHERE fan_id>0 AND checked_at IS NOT NULL AND error_code IS NULL'))==505
+
+
+# ---- fan-memory throughput release (2026-10-29) ----
+def add_outgoing(store, mid, fan=1, body='Mass message: new set tonight'):
+    with Session(store.engine) as s, s.begin():
+        s.add(Message(account_id='of-1', fan_id=fan, message_id=mid, direction='out', body=body,
+                      created_at=NOW, ingested_at=NOW))
+        s.add(OfIngress(account_id='of-1', event_key=f'o{fan}:{mid}', binding_id='binding', fan_id=fan,
+            message_id=mid, source='poll', payload='{}', status='applied', received_at=NOW))
+
+
+def test_fan_job_never_spends_steps_on_outgoing_messages(store):
+    for mid in range(100, 100+worker.PAGE*3): add_outgoing(store, mid)
+    add_message(store, mid=1)
+    fan_due(store)
+    assert run(store)
+    row = state(store)
+    # One step completes the fan: the 120 outgoing mass messages are not receipted at all.
+    assert row['processed_messages'] == 1 and row['document']['history_complete'] is True
+    with store.engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM of_profile_receipts WHERE direction='out'")).scalar() == 0
+
+
+def test_claim_prefers_incoming_tiers_then_age(store):
+    worker.seed(store, 'tenant')
+    old = NOW
+    with store.engine.begin() as c:
+        c.execute(text('UPDATE of_profile_learning SET next_at=:t,priority=2'), {'t': old})
+        c.execute(text('UPDATE of_profile_learning SET next_at=:t WHERE fan_id=3'), {'t': old-timedelta(days=1)})
+        c.execute(text('UPDATE of_profile_learning SET priority=1 WHERE fan_id=2'))
+        c.execute(text('UPDATE of_profile_learning SET priority=0,next_at=:t WHERE fan_id=1'), {'t': datetime.utcnow()-timedelta(seconds=1)})
+    order = []
+    for _ in range(3):
+        job = worker.claim_job(store, 'tenant', threading.Event())
+        order.append(job['fan_id'])
+    assert order == [1, 2, 3]
+
+
+def test_silent_fans_complete_in_bulk_without_a_model_and_stay_honest(store):
+    with Session(store.engine) as s, s.begin():
+        s.add_all(Fan(account_id='of-1', fan_id=i) for i in range(4, 60))
+    add_message(store, mid=1, fan=1)           # has incoming: must not be bulk-completed
+    for _ in range(2): worker.seed(store, 'tenant')
+    with store.engine.begin() as c:
+        c.execute(text('UPDATE of_profile_learning SET next_at=:t'), {'t': NOW})
+        c.execute(text('UPDATE of_profile_learning SET priority=1 WHERE fan_id=1'))
+    done = worker.finalize_silent(store, 'tenant', threading.Event(), limit=25)
+    assert done == 25
+    done += worker.finalize_silent(store, 'tenant', threading.Event(), limit=100)
+    assert done == 58        # fans 2..59; fan 1 (incoming) and the creator draft are left to the normal path
+    assert state(store, 1)['checked_at'] is None
+    silent = state(store, 30)
+    assert silent['checked_at'] and silent['document']['history_complete'] and silent['document']['memory_count'] == 0
+    assert silent['error_code'] is None
+    assert 86000 <= (datetime.fromisoformat(str(silent['next_at'])) - datetime.utcnow()).total_seconds() <= 86500
+    assert worker.finalize_silent(store, 'tenant', threading.Event()) == 0
+    assert state(store, 0)['checked_at'] is None
+
+
+def test_new_incoming_message_after_silent_completion_is_still_learned(store):
+    worker.seed(store, 'tenant')
+    with store.engine.begin() as c: c.execute(text('UPDATE of_profile_learning SET next_at=:t'), {'t': NOW})
+    worker.finalize_silent(store, 'tenant', threading.Event())
+    add_message(store, mid=9, fan=2, body='I love hiking')
+    fan_due(store, fan=2)
+    assert run(store)
+    assert state(store, 2)['processed_messages'] == 1 and state(store, 2)['document']['facts']
+
+
+def test_lock_or_statement_timeout_is_not_a_failure_and_does_not_back_off(store):
+    from sqlalchemy.exc import OperationalError
+    class Timeout(Exception): pgcode = '55P03'
+    add_message(store); fan_due(store)
+    async def busy(*a, **kw): raise OperationalError('SELECT 1', {}, Timeout('canceling statement due to lock timeout'))
+    run(store, busy)
+    row = state(store)
+    assert row['error_code'] is None and row['attempts'] == 0 and row['lease_token'] is None
+    assert 0 < (datetime.fromisoformat(str(row['next_at'])) - datetime.utcnow()).total_seconds() <= 95
+
+
+def test_missing_model_pauses_the_account_not_every_fan_and_silent_work_continues(store):
+    from onlyfans_runtime.store import Refused
+    with Session(store.engine) as s, s.begin():
+        s.add_all(Fan(account_id='of-1', fan_id=i) for i in range(4, 8))
+    add_message(store, mid=1, fan=1); add_message(store, mid=2, fan=2, body='I like golf')
+    fan_due(store)
+    with store.engine.begin() as c: c.execute(text('UPDATE of_profile_learning SET next_at=:t WHERE fan_id IN (1,2)'), {'t': NOW})
+    async def nokey(*a, **kw): raise Refused('model-credential-missing')
+    run(store, nokey)
+    assert state(store, 1)['error_code'] == 'model-credential-missing'
+    assert worker.claim_job(store, 'tenant', threading.Event()) is None        # account paused; fan 2 not hammered
+    with store.engine.connect() as c:
+        assert c.execute(text('SELECT hold_code FROM of_profile_accounts')).scalar() == 'model-credential-missing'
+    assert state(store, 2)['error_code'] is None and state(store, 2)['checked_at'] is None   # still incomplete
+    with store.engine.begin() as c: c.execute(text('UPDATE of_profile_learning SET next_at=:t WHERE fan_id>3'), {'t': NOW})
+    assert worker.finalize_silent(store, 'tenant', threading.Event()) == 4       # no model needed

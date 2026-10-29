@@ -118,13 +118,26 @@ def coverage(s, tenant, account, binding, fan=None):
         OfHistoryCursor.account_id==account,OfHistoryCursor.binding_id==binding,OfHistoryCursor.status!='complete'))
     provider_complete=bool(scan and scan.binding_id==binding and scan.status=='complete' and
                            scan.known_fans_complete and not unfinished)
+    # Separate measurements: stored incoming history, analysed profiles and saved memories are not interchangeable.
+    with_incoming=s.scalar(text('SELECT count(DISTINCT fan_id) FROM messages WHERE account_id=:a AND direction=\'in\''),{'a':account})
+    with_memories=s.scalar(text('SELECT count(DISTINCT fan_id) FROM of_profile_memories WHERE tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id AND fan_id>0'),params)
+    partial=s.scalar(text('SELECT count(*) FROM of_profile_learning WHERE tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id AND fan_id>0 AND checked_at IS NOT NULL AND document_json LIKE :partial'),
+        {**params,'partial':'%"history_complete": false%'})
+    last_hour=s.scalar(text('SELECT count(*) FROM of_profile_learning WHERE tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id AND fan_id>0 AND checked_at>:since'),
+        {**params,'since':datetime.utcnow()-timedelta(hours=1)})
+    hold=s.execute(text('SELECT hold_until,hold_code FROM of_profile_accounts WHERE tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id'),params).first()
     creator=s.execute(text('SELECT checked_at,error_code FROM of_profile_learning WHERE tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id AND fan_id=0'),params).first()
     return {'creatorProfileState':'failed' if creator and creator[1] else 'processed' if creator and creator[0] else 'pending',
             'creatorProfileError':creator[1] if creator else None,
             'totalDiscoveredFans':known,'queuedFans':row['discovered'],'processedFans':row['processed'] or 0,
             'pendingProfiles':pending+max(0,known-row['discovered']), 'deferredFailures':row['deferred'] or 0,
             'queueLagSeconds':int(lag),'refreshOverdue':lag>7200,
-            'providerHistoryComplete':provider_complete,'historicalImportIncomplete':not provider_complete}
+            'providerHistoryComplete':provider_complete,'historicalImportIncomplete':not provider_complete,
+            'fansWithIncomingHistory':with_incoming or 0,'fansWithSavedMemories':with_memories or 0,
+            'partialProfiles':partial or 0,'profilesCheckedLastHour':last_hour or 0,
+            'fansAwaitingProviderHistory':unfinished or 0,
+            'modelWorkPausedUntil':str(hold[0]) if hold and hold[0] and hold[0]>datetime.utcnow() else None,
+            'modelWorkPausedReason':hold[1] if hold and hold[0] and hold[0]>datetime.utcnow() else None}
 
 
 def profile_view(s,tenant,account,binding,fan,*,query='',now=None):
@@ -146,6 +159,13 @@ def profile_view(s,tenant,account,binding,fan,*,query='',now=None):
     if evaluated.tzinfo is not None: evaluated=evaluated.astimezone(timezone.utc).replace(tzinfo=None)
     pending=bool(queued and queued<=evaluated)
     state='failed' if row and row['error_code'] else 'not_processed' if not row or not row['checked_at'] else 'processing_history' if not document.get('history_complete') else 'processing_updates' if pending else 'ready' if facts else 'no_current_details' if document.get('memory_count') else 'no_personal_details'
+    provider_history=None
+    if fan:
+        from onlyfans_runtime.launch_history_memory.recovery import OfHistoryCursor
+        cursor=s.get(OfHistoryCursor,(account,fan))
+        if cursor is not None and cursor.binding_id==binding: provider_history=cursor.status=='complete'
+    # A fan whose conversation has not been fetched from OnlyFans yet is incomplete, not "empty".
+    if provider_history is False and state in {'no_personal_details','no_current_details'}: state='awaiting_history_import'
     fanrow=s.get(Fan,(account,fan)) if fan else None
     # Identity is provider metadata; it is not an inferred real name or an inferred spend.
     metadata={k:getattr(fanrow,k) for k in ('of_username','of_display_name') if getattr(fanrow,k,None)} if fanrow else {}
@@ -156,6 +176,7 @@ def profile_view(s,tenant,account,binding,fan,*,query='',now=None):
     return {'schemaVersion':'of-profile-memory.v2','accountId':account,'bindingId':binding,'fanId':str(fan),
             'summary':text_summary,'state':state,'lastUpdated':str(row['checked_at']) if row and row['checked_at'] else None,
             'errorCode':row['error_code'] if row else None,'accountInformation':metadata,'manualCorrections':manual,
+            'providerHistoryComplete':provider_history,
             'processedMessages':row['processed_messages'] if row else 0,'storedHistoryProcessed':document.get('history_complete',False) and not pending,
             'memories':[structured_record(project(f,now=now)) for f in facts if project(f,now=now)['status'] not in {'expired','cancelled','superseded','invalidated'}][:50],
             'replyContext':select_memories(facts,query,now=now),

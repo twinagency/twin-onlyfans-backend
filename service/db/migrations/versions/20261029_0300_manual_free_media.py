@@ -1,8 +1,8 @@
 """Permit explicitly selected free media in manual delivery intents."""
 from alembic import op
 
-revision = "0099_manual_free_media"
-down_revision = "0098_ledger_exclusion"
+revision = "0100_manual_free_media"
+down_revision = "0099_fan_identity_sync"
 branch_labels = None
 depends_on = None
 

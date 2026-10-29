@@ -375,6 +375,29 @@ async def s_unlabelled(sim):
     check(not [1 for _, f, _ in sim.providers[A].post_log if f == fs[1]], "a reply from a known sender is an answer")
 
 
+async def s_human_request(sim):
+    from unittest.mock import patch
+    from native_pilot import service
+    calls = []
+
+    async def handoff(self, trigger, attention="identity-question"):
+        calls.append((self.args.fan, trigger, attention))
+        # what the real handoff does through Twin's control path: the chat leaves automation and is flagged for staff
+        sim.sql("UPDATE of_conversation_state SET mode='paused' WHERE account_id=? AND fan_id=?", (self.db, self.args.fan))
+    with patch.object(service.Service, "identity_handoff", handoff):
+        await asyncio.sleep(3)
+        fs = sim.accounts[A]
+        sim.fan_says(A, fs[0], "I want to talk to a real person please")
+        sim.fan_says(A, fs[1], "wait are you a bot?")
+        sim.fan_says(A, fs[2], "hey beautiful")
+        await asyncio.sleep(200)
+    check((fs[0], "fan-asked", "human-requested") in calls, "a request for a real person goes to the staff handoff, flagged as such")
+    check((fs[1], "fan-asked", "identity-question") in calls, "a sincere 'are you a bot' goes to the handoff")
+    check(not [1 for _, f, _ in sim.providers[A].post_log if f in (fs[0], fs[1])], "the AI answered neither")
+    check([1 for _, f, _ in sim.providers[A].post_log if f == fs[2]], "an ordinary fan is answered as usual")
+    check(sim.sql("SELECT mode FROM of_conversation_state WHERE fan_id=?", (fs[0],))[0][0] == "paused")
+
+
 ONE = lambda rng: 1  # noqa: E731
 
 SCENARIOS = [
@@ -397,6 +420,7 @@ SCENARIOS = [
     ("offer", s_offer, dict(accounts={A: fans(2)}, concurrency=2, model_latency=lambda rng: 5.0, bubbles=ONE)),
     ("budget", s_budget, dict(accounts={A: fans(2)}, concurrency=2, model_latency=lambda rng: 5.0, bubbles=ONE)),
     ("unlabelled", s_unlabelled, dict(accounts={A: fans(2)}, concurrency=2, model_latency=lambda rng: 5.0, bubbles=ONE)),
+    ("human-request", s_human_request, dict(accounts={A: fans(3)}, concurrency=3, model_latency=lambda rng: 5.0, bubbles=ONE)),
     ("media-claim", s_claim, dict(accounts={A: fans(2)}, concurrency=2, model_latency=lambda rng: 5.0, bubbles=ONE)),
 ]
 

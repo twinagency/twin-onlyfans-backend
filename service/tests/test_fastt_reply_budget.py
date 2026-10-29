@@ -78,3 +78,7 @@ async def main():
 
 asyncio.run(main())
 print(f"fastt reply budget: all cases passed ({CHECKS} checks)")
+
+from llm_client import BACKGROUND_PURPOSES  # noqa: E402
+assert {"gen_info", "describe_media"} <= BACKGROUND_PURPOSES and not ({"ai_chatter", "describe_inbound_image"} & BACKGROUND_PURPOSES)
+print("background purposes yield to replies in llm_client too")

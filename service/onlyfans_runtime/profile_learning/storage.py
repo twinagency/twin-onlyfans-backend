@@ -1,5 +1,5 @@
 """Scoped projections shared by the inbox, native planner and FASTT prompt hook."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import os
 
@@ -58,8 +58,8 @@ def load_memories(s, account, fan, *, query='', now=None):
     rows=s.execute(text(f'''SELECT document_json FROM of_profile_memories WHERE {SCOPE}
         AND (status NOT IN ('expired','superseded','cancelled','invalidated') OR ({match}))
         ORDER BY CASE WHEN ({match}) THEN 0 ELSE 1 END,
-        CASE WHEN kind='request' AND status NOT IN ('past','cancelled') THEN 0 ELSE 1 END,
         CASE field WHEN 'name' THEN 0 WHEN 'occupation' THEN 1 WHEN 'interests' THEN 2 ELSE 3 END,
+        CASE WHEN kind='request' AND status NOT IN ('past','cancelled') THEN 0 ELSE 1 END,
         memory_key LIMIT 256'''),params).scalars()
     from onlyfans_runtime.launch_history_memory.memory import locked_fields
     locks=locked_fields(s,account,fan) if fan else set()
@@ -75,7 +75,12 @@ def load_memories(s, account, fan, *, query='', now=None):
     candidates.sort(key=lambda item:(-item[0],item[1]['memory_key']))
     # At most 24 candidate proofs per reply. Repeated mentions do not create
     # thousands of provenance reads in the synchronous reply path.
-    for _,f in candidates[:24]:
+    proofs=request_proofs=0
+    for _,f in candidates:
+        if f['kind']=='request' and request_proofs>=6: continue
+        if proofs>=24: break
+        proofs+=1
+        request_proofs+=f['kind']=='request'
         if not valid_observation(s,account,binding,f): continue
         if any(not valid_observation(s,account,binding,c) for c in f.get('conflicts',[])):
             continue  # Rebuild uncertain/corrected history in the learner before use.
@@ -94,14 +99,14 @@ def coverage(s, tenant, account, binding, fan=None):
     params=identity(tenant,account,binding,fan or 0)
     known=s.scalar(select(__import__('sqlalchemy').func.count()).select_from(Fan).where(Fan.account_id==account))
     row=s.execute(text('''SELECT count(*) AS discovered,
-        sum(CASE WHEN checked_at IS NOT NULL AND error_code IS NULL AND document_json LIKE :complete THEN 1 ELSE 0 END) AS processed,
+        sum(CASE WHEN checked_at IS NOT NULL AND error_code IS NULL AND queued_at>CURRENT_TIMESTAMP AND document_json LIKE :complete THEN 1 ELSE 0 END) AS processed,
         sum(CASE WHEN error_code IS NOT NULL THEN 1 ELSE 0 END) AS deferred,
         min(CASE WHEN queued_at<CURRENT_TIMESTAMP THEN queued_at ELSE NULL END) AS oldest_due
         FROM of_profile_learning WHERE tenant_id=:tenant_id AND account_id=:account_id
         AND binding_id=:binding_id AND fan_id>0'''),{**params,'complete':'%"history_complete": true%'}).mappings().one()
     pending=s.execute(text('''SELECT count(*) FROM of_profile_learning WHERE tenant_id=:tenant_id
         AND account_id=:account_id AND binding_id=:binding_id AND fan_id>0
-        AND (checked_at IS NULL OR error_code IS NOT NULL OR document_json LIKE :partial)'''),
+        AND (checked_at IS NULL OR error_code IS NOT NULL OR queued_at<=CURRENT_TIMESTAMP OR document_json LIKE :partial)'''),
         {**params,'partial':'%"history_complete": false%'}).scalar()
     oldest=row['oldest_due']
     if isinstance(oldest,str): oldest=datetime.fromisoformat(oldest)
@@ -135,7 +140,12 @@ def profile_view(s,tenant,account,binding,fan,*,query='',now=None):
             manual[c.field]={'value':c.value,'operation':c.operation,'manual':True,'protected':True,
                              'lastConfirmed':c.created_at.isoformat(),'revision':c.revision}
     document=json.loads(row['document_json']) if row else {}
-    state='failed' if row and row['error_code'] else 'not_processed' if not row or not row['checked_at'] else 'processing_history' if not document.get('history_complete') else 'ready' if facts else 'no_current_details' if document.get('memory_count') else 'no_personal_details'
+    queued=row['queued_at'] if row else None
+    if isinstance(queued,str): queued=datetime.fromisoformat(queued)
+    evaluated=datetime.fromisoformat(str(now).replace('Z','+00:00')) if now is not None else datetime.utcnow()
+    if evaluated.tzinfo is not None: evaluated=evaluated.astimezone(timezone.utc).replace(tzinfo=None)
+    pending=bool(queued and queued<=evaluated)
+    state='failed' if row and row['error_code'] else 'not_processed' if not row or not row['checked_at'] else 'processing_history' if not document.get('history_complete') else 'processing_updates' if pending else 'ready' if facts else 'no_current_details' if document.get('memory_count') else 'no_personal_details'
     fanrow=s.get(Fan,(account,fan)) if fan else None
     # Identity is provider metadata; it is not an inferred real name or an inferred spend.
     metadata={k:getattr(fanrow,k) for k in ('of_username','of_display_name') if getattr(fanrow,k,None)} if fanrow else {}
@@ -146,7 +156,7 @@ def profile_view(s,tenant,account,binding,fan,*,query='',now=None):
     return {'schemaVersion':'of-profile-memory.v2','accountId':account,'bindingId':binding,'fanId':str(fan),
             'summary':text_summary,'state':state,'lastUpdated':str(row['checked_at']) if row and row['checked_at'] else None,
             'errorCode':row['error_code'] if row else None,'accountInformation':metadata,'manualCorrections':manual,
-            'processedMessages':row['processed_messages'] if row else 0,'storedHistoryProcessed':document.get('history_complete',False),
+            'processedMessages':row['processed_messages'] if row else 0,'storedHistoryProcessed':document.get('history_complete',False) and not pending,
             'memories':[structured_record(project(f,now=now)) for f in facts if project(f,now=now)['status'] not in {'expired','cancelled','superseded','invalidated'}][:50],
             'replyContext':select_memories(facts,query,now=now),
             'credentialOwner':'existing account model configuration' if row and row['error_code'] in {'model-credential-missing','model-credential-mismatch','model-credential-unavailable','profile-model-config-missing'} else None}

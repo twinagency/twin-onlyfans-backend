@@ -133,3 +133,19 @@ def test_old_requests_cannot_crowd_out_enduring_facts():
     assert {'name','occupation','interests'} <= {f['field'] for f in selected}
     assert 'Carlos' in summary(facts,now='2026-01-08')
     assert len(merge([],facts))==33  # Outstanding requests remain stored.
+
+
+@pytest.mark.parametrize('value', ["I'm going to be a pilot", 'pilot'])
+def test_future_career_plan_is_not_a_current_job(value):
+    from onlyfans_runtime.profile_learning.evidence import project
+    body="I'm going to be a pilot"
+    fact=validate(proposal('occupation',value,body),{'1:2':source(body)})[0]
+    assert fact['field']=='event' and fact['kind']=='event'
+    assert project(fact,now='2026-01-02')['status']=='uncertain'
+    assert project(fact,now='2026-02-01')['status']=='expired'
+
+
+def test_current_job_is_distinct_from_an_aspiration_in_the_same_message():
+    body='I work as an engineer and want to be a pilot'
+    f=validate(proposal('occupation','engineer',body),{'1:2':source(body)})[0]
+    assert f['field']=='occupation'

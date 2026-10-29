@@ -27,10 +27,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import json
+import os
 from datetime import datetime, timezone
 from typing import Protocol
 
-from sqlalchemy import and_, or_, select, func, case, tuple_, cast, String
+from sqlalchemy import and_, or_, select, func, case, tuple_, cast, String, text as sql_text
 from sqlalchemy.exc import SQLAlchemyError
 
 from db.engine import get_session
@@ -783,6 +784,7 @@ class SqlOnlyFansReadRepo:
         renders the list it is given, and a row saying "unknown" would read as a
         corrected fact.
         """
+        learning = None
         try:
             async with get_session() as s:
                 await lock_read_scope(s, account_id)
@@ -799,6 +801,16 @@ class SqlOnlyFansReadRepo:
                         ).where(Fan.account_id == account_id, Fan.fan_id == fan_id)
                     )
                 ).first()
+                if os.environ.get("ONLYFANS_PROFILE_LEARNING_ENABLED") == "1":
+                    from onlyfans_runtime.profile_learning.storage import profile_view, coverage
+                    from db.onlyfans_models import OfRuntime
+                    from db.models import OfCreatorBinding
+                    runtime = await s.get(OfRuntime,account_id)
+                    binding = await s.get(OfCreatorBinding,runtime.binding_id) if runtime else None
+                    if binding is not None and binding.revoked_at is None:
+                        learning = await s.run_sync(lambda sync: profile_view(sync,binding.tenant_id,account_id,binding.id,fan_id))
+                        learning['coverage'] = await s.run_sync(lambda sync: coverage(sync,binding.tenant_id,account_id,binding.id))
+
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
         if row is None:
@@ -809,6 +821,22 @@ class SqlOnlyFansReadRepo:
             text = (value or "").strip() if isinstance(value, str) else value
             if text:
                 out.append(FactRow(label=label, value=str(text)))
+        if learning is not None:
+            # Undated legacy ages/locations must not contradict the dated profile.
+            protected=learning['manualCorrections']
+            label_fields={'Age':'his_age','Country':'home_country','City':'home_city'}
+            out=[r for r in out if r.label not in label_fields or label_fields[r.label] in protected]
+            out.append(FactRow(label="Conversation summary",value=learning['summary']))
+            out.append(FactRow(label="Profile learning",value=learning['state'] +
+                (" · "+learning['errorCode'] if learning['errorCode'] else "") +
+                (" · Updated "+learning['lastUpdated']+" UTC" if learning['lastUpdated'] else "")))
+            out.append(FactRow(label="History coverage",value=str(learning['processedMessages'])+
+                " messages processed · "+("Stored history analysed" if learning['storedHistoryProcessed'] else "Analysis pending")))
+            c=learning['coverage']
+            out.append(FactRow(label="Creator profile coverage",value=
+                f"{c['processedFans']}/{c['totalDiscoveredFans']} fans processed · {c['pendingProfiles']} pending · "
+                f"{c['deferredFailures']} deferred · queue lag {c['queueLagSeconds']}s · " +
+                ("Historical import incomplete" if c['historicalImportIncomplete'] else "Historical import complete")))
         return out
 
     async def owned_media(self, *, account_id: str, fan_id: int, limit: int) -> list[OwnedRow]:
@@ -906,3 +934,4 @@ def _message_media_kinds(raw, ids):
                 and m.get('type') in {'photo','image','gif','video','audio'}}
     except (ValueError, TypeError, AttributeError):
         return {}
+

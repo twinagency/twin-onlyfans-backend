@@ -345,6 +345,9 @@ class Fan(Base):
 
     # ── Sync provenance ──────────────────────────────────────
     profile_last_synced_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Provider display lookup attempts are distinct from a successful profile.
+    of_profile_checked_at: Mapped[datetime | None] = mapped_column(DateTime, info={"onlyfans_since": "0099_fan_identity_sync"})
+    of_profile_error: Mapped[str | None] = mapped_column(String(40), info={"onlyfans_since": "0099_fan_identity_sync"})
     grok_facts_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     # ── Notes (may be written back to OF via apply_profiles) ─

@@ -170,6 +170,17 @@ def snapshot(s, account_id, fan_id, *, query="", max_interactions=6):
         "facts": facts, "summaries": summaries,
         "overrides": {f: {k: v for k, v in item.items() if k != "value"} for f, item in overrides.items()},
         "interactions": interactions, "summaryKind": "saved_profile_and_source_excerpts"}
+    # V2 replaces automatic undated notes, not operator corrections or provider facts.
+    # The exact same projection is consumed by FASTT, native planning and the inbox.
+    from onlyfans_runtime.profile_learning.storage import reply_memory
+    learned = reply_memory(s, account_id, fan_id, query=query)
+    if learned is not None:
+        result["learnedProfile"] = learned
+        result["facts"] = {k: v for k, v in result["facts"].items() if v["source"] == "operator"}
+        result["summaries"] = {k: v for k, v in result["summaries"].items() if k in overrides}
+        # Old source quotes are retrieved on a concrete topic, never injected just
+        # because they were the most recent thing outside the latest-100 window.
+        result["interactions"] = []
     # Bound the additive context without trimming the existing 100 messages.
     while len(canonical(result).encode()) > MAX_MEMORY_BYTES and result["interactions"]:
         result["interactions"].pop()

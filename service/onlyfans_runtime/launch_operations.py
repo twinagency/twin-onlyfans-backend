@@ -148,7 +148,7 @@ def _ledger_core(s, runtime, *, now=None):
     binding = s.get(OfCreatorBinding, runtime.binding_id)
     now = now or utcnow()
     connection = s.get(OfProviderConnection, runtime.account_id)
-    from .ledger import _current, coverage_proven
+    from .ledger import _current, coverage_proven, scan_position
     from .launch_ledger.dashboard import ERRORS, fingerprint
     connection_current = bool(current and _current(runtime, connection, scan, now))
     conflicts = select(OfLedgerEvidence.evidence_hash).where(OfLedgerEvidence.account_id == runtime.account_id,
@@ -172,7 +172,7 @@ def _ledger_core(s, runtime, *, now=None):
     from .commerce import held
     value = {"bindingCurrent": current, "status": scan.status if current else "not_started",
         "windowStart": z(scan.window_start) if current else None, "windowEnd": z(scan.window_end) if current else None,
-        "pageOffset": scan.page_offset if current else None,
+        "pageOffset": scan_position(scan) if current else None,
         "lastCompleteAt": z(scan.last_complete_at) if current else None,
         "lastFullAt": z(scan.last_full_at) if current else None,
         "leaseUntil": z(scan.lease_until) if current else None,

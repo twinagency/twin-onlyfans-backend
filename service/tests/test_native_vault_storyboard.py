@@ -88,7 +88,8 @@ class StoryboardTests(unittest.TestCase):
 
     def test_worker_can_check_video_cache_without_legacy_server(self):
         env = dict(os.environ, ONLYFANS_PROCESS_ROLE="worker",
-                   STORYBOARD_DIR=str(self.root / "empty"))
+                   STORYBOARD_DIR=str(self.root / "empty"),
+                   DATABASE_URL="postgresql://test:test@127.0.0.1:1/test")
         result = subprocess.run(
             [sys.executable, "-c",
              "import sys, vault_frames; "

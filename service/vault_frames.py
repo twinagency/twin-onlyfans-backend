@@ -123,7 +123,7 @@ def warm_one_sync(client: Any, url: str, dur: float) -> str:
 
     Returns its own outcome vocabulary; `_WARM_REASON` is the only place that
     translates it into this module's."""
-    import server as srv  # lazy: avoid the server↔vault_frames import cycle
+    import vault_storyboard as srv  # worker-safe frame helpers
 
     h = srv._video_path_hash(url)
     if srv._storyboard_all_frames_present(h):
@@ -190,7 +190,7 @@ def storyboard_frames(url: str | None, want: int) -> list[str]:
     nothing and concludes the clip is un-renderable."""
     if not url:
         return []
-    import server as srv  # lazy
+    import vault_storyboard as srv  # worker-safe frame helpers
 
     h = srv._video_path_hash(url)
     if not srv._storyboard_all_frames_present(h):

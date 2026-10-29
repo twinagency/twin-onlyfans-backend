@@ -109,3 +109,27 @@ def test_short_answer_retains_disambiguating_question_in_reply_context():
     memories=select_memories(validate(result,sources),now='2026-01-02')
     assert memories[0]['contextEvidence'][0]['quote']=='Do you enjoy the ocean?'
     assert 'Do you enjoy the ocean?' in summary(validate(result,sources),now='2026-01-02')
+
+
+def test_repeated_photo_requests_merge_without_erasing_the_request():
+    old=validate(proposal('request','Send me a pic','Send me a pic'),{'1:2':source('Send me a pic')})
+    new=validate(proposal('request','Please send another picture','Please send another picture','1:3'),
+                 {'1:3':source('Please send another picture')})
+    result=merge(old,new)
+    assert len(result)==1 and len(result[0]['evidence'])==2
+    assert result[0]['status']=='current' and not result[0].get('conflicts')
+
+
+def test_old_requests_cannot_crowd_out_enduring_facts():
+    from onlyfans_runtime.profile_learning.evidence import select_memories
+    facts=validate(proposal(),{'1:2':source()})
+    facts+=validate(proposal('occupation','engineer','I work as an engineer','1:3'),
+                    {'1:3':source('I work as an engineer')})
+    facts+=validate(proposal('interests','tennis','I play tennis','1:4'),{'1:4':source('I play tennis')})
+    for i in range(30):
+        body=f'Please send photo in outfit {i}'
+        facts+=validate(proposal('request',body,body,f'1:{i+5}'),{f'1:{i+5}':source(body)})
+    selected=select_memories(merge([],facts),now='2026-01-08')
+    assert {'name','occupation','interests'} <= {f['field'] for f in selected}
+    assert 'Carlos' in summary(facts,now='2026-01-08')
+    assert len(merge([],facts))==33  # Outstanding requests remain stored.

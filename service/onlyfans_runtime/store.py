@@ -22,11 +22,14 @@ from db.models import Chat, Fan, Message, OfConversationState, OfCreatorBinding,
 from db.onlyfans_models import OfControlAudit, OfIngress, OfRecovery, OfRuntime, OfWork, OfScan
 from onlyfans_read.contract import UNRESOLVED_OUTCOMES, ID_PATTERN
 
-# Owner decision: a new fan is NEVER enabled automatically. The only way a conversation becomes
-# mode='automated' is an explicit per-fan dashboard command. Both automatic writers (worker intake in
-# ``_apply`` and FASTT ``admit_new_conversation``) check this constant; it is deliberately not an env
-# flag or a DB value, so no setting, stored row or deployment edit can re-arm them.
-NEW_CONVERSATION_AUTOMATION_LOCKED = True
+# A new fan is enabled automatically ONLY when an authorised administrator explicitly turned on "future
+# conversations" for that one account (``activation_commands.set_future_conversations``). The setting is
+# per-account, visible in the dashboard, and OFF by default. It is cleared whenever the connection is replaced,
+# verified again, paused or activated, so a newly connected or reconnected account never auto-enables anyone.
+# Both automatic writers (worker intake in ``_apply`` and FASTT ``admit_new_conversation``) still require the
+# connection to be verified, unexpired and bound, and only conversations that begin after the setting was
+# turned on. Kept as a constant so tests can pin the old fully-locked behaviour.
+NEW_CONVERSATION_AUTOMATION_LOCKED = False
 
 MAX_PENDING = 1000
 PAGE_LIMIT = 100
@@ -468,8 +471,8 @@ class Store:
         mode) changes nothing, so a paused / human / stopped fan is never enabled here. Returns
         True only when it wrote the initial ``automated`` state.
 
-        LOCKED OFF (``NEW_CONVERSATION_AUTOMATION_LOCKED``): always returns False and writes nothing; a
-        new fan stays without a control row (never served) until an operator enables it explicitly."""
+        With the lock constant set, always returns False and writes nothing. Otherwise only the explicit
+        per-account setting (default off) can enable a conversation here."""
         if NEW_CONVERSATION_AUTOMATION_LOCKED:
             return False
         from db.onlyfans_connection_models import OfProviderConnection

@@ -49,7 +49,7 @@ from db.models import (
     parse_ts,
 )
 
-from db.onlyfans_models import OfRuntime, OfIngress
+from db.onlyfans_models import OfRuntime, OfIngress, OfControlAudit
 from db.onlyfans_connection_models import OfProviderConnection
 
 from .contract import UNRESOLVED_OUTCOMES, iso
@@ -143,6 +143,8 @@ class StateRow:
     updated_at: datetime | None
     attempt_outcome: str | None = None
     history_held: bool = False
+    #: The engine paused this chat because the fan asked for a person (identity guard), and it is still paused.
+    asked_for_person: bool = False
 
 
 @dataclass(frozen=True)
@@ -663,8 +665,13 @@ class SqlOnlyFansReadRepo:
             from .attempts import outcome
             held_fans=set((await session.scalars(select(OfIngress.fan_id).where(OfIngress.account_id==account_id,
                 OfIngress.fan_id.in_(fans),OfIngress.status=='quarantined').distinct())).all())
+            asked=set((await session.scalars(select(OfControlAudit.fan_id).join(OfConversationState,and_(
+                OfConversationState.account_id==OfControlAudit.account_id,OfConversationState.fan_id==OfControlAudit.fan_id,
+                OfConversationState.revision==OfControlAudit.revision)).where(OfControlAudit.account_id==account_id,
+                OfControlAudit.fan_id.in_(fans),OfControlAudit.action=='pause_automation',OfControlAudit.actor=='identity-guard',
+                OfConversationState.mode=='paused').distinct())).all())
             for fan, state in result.items():
-                if state:result[fan]=state=replace(state,history_held=fan in held_fans)
+                if state:result[fan]=state=replace(state,history_held=fan in held_fans,asked_for_person=fan in asked)
                 if state and state.unresolved_attempt_id:
                     value = await session.run_sync(lambda sync: outcome(sync, account_id, fan, state.unresolved_attempt_id))
                     result[fan] = replace(state, attempt_outcome=value)
@@ -721,8 +728,12 @@ class SqlOnlyFansReadRepo:
             from .attempts import outcome
             attempt_outcome = await session.run_sync(lambda sync: outcome(sync, account_id, fan_id, reference))
             history_held = await session.scalar(select(OfIngress.event_key).where(OfIngress.account_id==account_id,OfIngress.fan_id==fan_id,OfIngress.status=='quarantined').limit(1)) is not None
+            asked_for_person = row is not None and row[0] == "paused" and await session.scalar(select(OfControlAudit.command_key).where(
+                OfControlAudit.account_id==account_id,OfControlAudit.fan_id==fan_id,OfControlAudit.action=='pause_automation',
+                OfControlAudit.actor=='identity-guard',OfControlAudit.revision==int(row[1] or 0)).limit(1)) is not None
         return StateRow(
             history_held=history_held,
+            asked_for_person=bool(asked_for_person),
             attempt_outcome=attempt_outcome,
             mode=(row[0] or "paused") if row else "paused",
             revision=int(row[1] or 0) if row else 0,

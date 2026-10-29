@@ -187,6 +187,18 @@ class TextAuthority:
 
     @staticmethod
     def _media_current(s, row, policy, now):
+        if row.origin == "manual" and row.catalog_snapshot_json and json.loads(row.catalog_snapshot_json).get("manual_vault") is True:
+            from .manual_media import matches
+            runtime = s.get(OfRuntime, row.account_id)
+            if policy is None or not policy.media_enabled or not matches(s, runtime, row):
+                return False
+            if row.price_cents > 0:
+                from .media_delivery import assert_unowned
+                try:
+                    assert_unowned(s, row.account_id, row.fan_id, json.loads(row.catalog_snapshot_json))
+                except (Refused, ValueError, TypeError):
+                    return False
+            return True
         if row.catalog_item_id is None:
             return row.media_json == "[]" and row.preview_json == "[]" and row.price_cents == 0 and row.catalog_snapshot_json is None
         if policy is None or not policy.media_enabled:
@@ -293,14 +305,14 @@ class TextAuthority:
 
     def prepare(self, tenant_id, account_id, fan_id, *, command_key, expected_revision,
                 body, origin, actor, work: Claim | None = None, ttl_seconds=300, native_plan_id=None,
-                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None):
+                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None, manual_media=None):
         from onlyfans_read.agency_scope import current_scope, actor_allowed
         if current_scope.get() is not None and (origin != "manual" or not actor_allowed(actor, capability="chat")):
             raise Refused("manual messaging permission required")
         _id(fan_id)
         if (not isinstance(command_key, str) or not 1 <= len(command_key) <= 64
                 or type(expected_revision) is not int or expected_revision < 0
-                or not isinstance(body, str) or not body.strip() or len(body.encode()) > 20000
+                or not isinstance(body, str) or (not body.strip() and manual_media is None) or len(body.encode()) > 20000
                 or origin not in {"automated", "manual", "campaign", "engagement"}
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 600):
@@ -321,6 +333,11 @@ class TextAuthority:
                 raise Refused("automated media requires its native plan")
         if quoted_price_cents is not None and (catalog_item_id is None or native_plan_id is None):
             raise Refused("only a recorded native quote may change the sticker price")
+        if manual_media is not None:
+            from .manual_media import normalize
+            if origin != "manual" or catalog_item_id is not None or native_plan_id is not None:
+                raise Refused("invalid manual media selection")
+            manual_media = normalize(manual_media)
         request = dict(account_id=account_id, fan_id=fan_id, command_key=command_key,
                        expected_revision=expected_revision, body=body, origin=origin,
                        actor=actor, work=asdict(work) if work else None, ttl_seconds=ttl_seconds)
@@ -335,6 +352,8 @@ class TextAuthority:
         if catalog_item_id is not None:
             request["catalog_item_id"] = catalog_item_id
             request["quoted_price_cents"] = quoted_price_cents
+        if manual_media is not None:
+            request["manual_media"] = manual_media
         fingerprint = hashlib.sha256(_json(request).encode()).hexdigest()
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant_id, account_id)
@@ -370,7 +389,15 @@ class TextAuthority:
                 # Same transaction as the intent below: validation and attach commit together.
                 engagement = self._engagement()
             terms = None
-            if catalog_item_id is not None:
+            if manual_media is not None:
+                if not policy.media_enabled:
+                    raise Refused("media delivery disabled")
+                from .manual_media import freeze
+                catalog_item_id, terms = freeze(s, runtime, manual_media)
+                if terms["price_cents"] > 0:
+                    from .media_delivery import assert_unowned
+                    assert_unowned(s, account_id, fan_id, terms)
+            elif catalog_item_id is not None:
                 from .media_delivery import catalog_terms, assert_unowned
                 if not policy.media_enabled:
                     raise Refused("media delivery disabled")
@@ -542,7 +569,7 @@ class TextAuthority:
                 or len(set(grant.preview_ids)) != len(grant.preview_ids)
                 or type(grant.price_cents) is not int
                 or (not grant.media_ids and (grant.preview_ids or grant.price_cents != 0))
-                or (grant.media_ids and not 300 <= grant.price_cents <= 20000)):
+                or (grant.media_ids and not (300 <= grant.price_cents <= 20000 or grant.origin == "manual" and grant.price_cents == 0))):
             raise Refused("invalid media dispatch grant")
 
     def check_dispatch_preflight(self, tenant_id, grant: Dispatch, *, transport_generation):

@@ -65,7 +65,7 @@ async def run(args):
                     ids = list(session.scalars(select(VaultItem.media_id).where(
                         VaultItem.account_id == args.account, pending(utcnow()))
                         .order_by(case((VaultItem.kind == "photo", 0), else_=1),
-                            case((VaultItem.describe_status.is_(None), 0), else_=1), VaultItem.media_id).limit(args.limit)))
+                            case((VaultItem.describe_status == "described", 0), else_=1), VaultItem.media_id).limit(args.limit)))
 
                 # Keep video batches bounded; photos should not wait for a long clip.
                 with Session(store.engine) as session:

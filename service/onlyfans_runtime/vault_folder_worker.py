@@ -12,11 +12,14 @@ from vault_auto_folders import assign_sync, CURRENT_MARKER, PENDING_MARKER
 
 
 def accounts(store, tenant):
+    included = {x.strip() for x in os.environ.get("ONLYFANS_VAULT_DESCRIPTION_INCLUDE_ACCOUNTS", "").split(",") if x.strip()}
+    excluded = {x.strip() for x in os.environ.get("ONLYFANS_VAULT_DESCRIPTION_EXCLUDE_ACCOUNTS", "").split(",") if x.strip()}
     with Session(store.engine) as session:
-        return list(session.scalars(select(OfRuntime.account_id)
+        rows = list(session.scalars(select(OfRuntime.account_id)
             .join(OfCreatorBinding, OfCreatorBinding.id == OfRuntime.binding_id)
             .where(OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
                 OfCreatorBinding.channel == "onlyfans").order_by(OfRuntime.account_id)))
+        return [a for a in rows if (not included or a in included) and a not in excluded]
 
 
 def classify_batch(store, tenant, account, *, after=0, on_scanned=lambda mid: None):

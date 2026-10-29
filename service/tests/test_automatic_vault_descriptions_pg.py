@@ -113,6 +113,39 @@ def test_real_advisory_lock_prevents_duplicate_batch(database, monkeypatch):
     assert calls == []
 
 
+def test_existing_tagged_media_is_rechecked_before_uncaptioned_imports(database, monkeypatch):
+    args, calls, engine, _ = setup(database, monkeypatch)
+    with Session(database[1]) as s,s.begin():
+        item=s.get(VaultItem,(ACCOUNT,MID));item.describe_status="described";item.description="Legacy caption"
+        raw=canonical({"id":MID-1,"type":"photo","userId":900001})
+        s.add(VaultItem(account_id=ACCOUNT,media_id=MID-1,kind="photo",created_at=utcnow(),raw_json=raw));s.flush()
+        s.add(OfVaultObservation(account_id=ACCOUNT,media_id=MID-1,job_id="caption-sync",raw_hash=digest(raw),observed_at=utcnow()))
+    async def run():
+        try:assert (await child.run(args))["described"] == 1
+        finally:await engine.dispose()
+    asyncio.run(run())
+    with Session(database[1]) as s:
+        assert "_folder_evidence_v1" in s.get(VaultItem,(ACCOUNT,MID)).ai_fields_json
+        assert s.get(VaultItem,(ACCOUNT,MID-1)).describe_status is None
+
+
+def test_folder_and_preview_discovery_obey_the_same_creator_lanes(database, monkeypatch):
+    args, calls, engine, _ = setup(database, monkeypatch)
+    from onlyfans_runtime.vault_folder_worker import accounts
+    store=Store(database[0])
+    try:
+        monkeypatch.setenv("ONLYFANS_VAULT_DESCRIPTION_INCLUDE_ACCOUNTS",ACCOUNT)
+        monkeypatch.setenv("ONLYFANS_VAULT_DESCRIPTION_EXCLUDE_ACCOUNTS","")
+        assert accounts(store,TENANT)==[ACCOUNT]
+        monkeypatch.setenv("ONLYFANS_VAULT_DESCRIPTION_EXCLUDE_ACCOUNTS",ACCOUNT)
+        assert accounts(store,TENANT)==[]
+        monkeypatch.setenv("ONLYFANS_VAULT_DESCRIPTION_INCLUDE_ACCOUNTS","other")
+        monkeypatch.setenv("ONLYFANS_VAULT_DESCRIPTION_EXCLUDE_ACCOUNTS","")
+        assert accounts(store,TENANT)==[]
+    finally:
+        store.close();asyncio.run(engine.dispose())
+
+
 def test_operator_edit_during_collection_fences_generated_write(database, monkeypatch):
     args, calls, engine, _ = setup(database, monkeypatch)
     import vault_frames

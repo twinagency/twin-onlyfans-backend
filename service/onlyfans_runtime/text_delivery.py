@@ -553,13 +553,16 @@ class TextAuthority:
             raise Refused("invalid dispatch grant")
         _id(grant.fan_id)
         fields = ((grant.account_id, 128), (grant.intent_id, 36), (grant.attempt_id, 36),
-                  (grant.token, 36), (grant.body, 20000), (grant.payload_hash, 64))
+                  (grant.token, 36), (grant.payload_hash, 64))
         if (any(type(value) is not str or not 1 <= len(value.encode()) <= limit for value, limit in fields)
                 or len(grant.payload_hash) != 64 or any(c not in "0123456789abcdef" for c in grant.payload_hash)
                 or type(grant.origin) is not str or grant.origin not in {"automated", "manual", "campaign", "engagement"}
                 or type(grant.deadline) is not datetime or grant.deadline.tzinfo is not None
                 or type(grant.policy_revision) is not int or grant.policy_revision < 0
                 or type(grant.wire_version) is not int or grant.wire_version not in {0, 1}):
+            raise Refused("invalid dispatch grant")
+        if (type(grant.body) is not str or len(grant.body.encode()) > 20000
+                or (not grant.body.strip() and (grant.origin != "manual" or not grant.media_ids))):
             raise Refused("invalid dispatch grant")
         if (type(grant.media_ids) is not tuple or type(grant.preview_ids) is not tuple
                 or len(grant.media_ids) > 35

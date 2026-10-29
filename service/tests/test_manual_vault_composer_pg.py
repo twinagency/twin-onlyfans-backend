@@ -111,4 +111,7 @@ def test_media_without_caption(database, monkeypatch, price):
     wire = SyntheticTextTransport(account)
     assert authority.dispatch(TENANT, account, identity, wire) == "accepted"
     assert len(wire.calls) == 1 and wire.calls[0].body == ""
+    from onlyfans_runtime.native_protocol import request
+    payload = json.loads(request(wire.calls[0]))
+    assert payload["mediaFiles"] == [11, 13] and payload["price"] == price / 100
     store.close()

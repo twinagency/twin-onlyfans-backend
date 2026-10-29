@@ -35,8 +35,17 @@ def norm(value):
 
 def _key(fact):
     # Exclusive fields have one slot per subject. Events/requests need stable topic keys.
-    topic = '' if fact['field'] in SINGLE else ' '.join(sorted({w for w in norm(fact.get('key') or fact['value']).split() if w not in {'my','the','a','an'}}))
+    topic = '' if fact['field'] in SINGLE else ' '.join(sorted(_topic_words(fact.get('key') or fact['value'], fact['field'])))
     return digest([fact['field'], fact.get('subject','fan'), topic])
+
+
+def _topic_words(value, field):
+    words=set(norm(value).split())-{'my','the','a','an'}
+    if field=='request':
+        words={dict(pic='photo',pics='photo',picture='photo',pictures='photo',photos='photo',
+                    vid='video',vids='video',videos='video').get(w,w) for w in words}
+        words-=set('send show give can could would will you please me another some more want request for of it'.split())
+    return words
 
 
 def validate(result, sources, *, creator=False):
@@ -179,7 +188,9 @@ def merge(previous, additions):
         if old.get('protected') or old.get('manual'):
             continue
         evidence={digest(e):e for e in old['evidence']+f['evidence']}
-        same = norm(f['value']) == norm(old['value'])
+        same = norm(f['value']) == norm(old['value']) or (f['field']=='request'
+            and bool(_topic_words(f['value'],'request'))
+            and _topic_words(f['value'],'request')==_topic_words(old['value'],'request'))
         if f['operation'] in {'cancel','postpone','fulfill'} or f['operation'] in {'correct','update'}:
             history=old.get('history',[])+[{**old,'history':[],'status':'cancelled' if f['operation']=='cancel' else 'superseded'}]
             f.update(evidence=list(evidence.values()),history=history,
@@ -256,8 +267,8 @@ def relevance(memory, query, now=None):
     if f['status']=='invalidated' or history and not overlap:
         return None
     if f['status']=='past' and f['kind']=='request' and not overlap: return None
-    base= {'name':9,'occupation':7,'interests':6,'family':6,'date_of_birth':4}.get(f['field'],4)
-    if f['kind']=='request' and f['status']=='current': base+=6
+    base= {'name':13,'occupation':11,'interests':10,'family':10,'date_of_birth':7}.get(f['field'],4)
+    if f['kind']=='request' and f['status']=='current': base+=4
     if f['status']=='upcoming': base+=4
     if f['status']=='uncertain': base-=3
     if f.get('potentially_stale'): base-=4
@@ -272,7 +283,12 @@ def select_memories(facts, query='', *, now=None, limit=8, byte_budget=MAX_CONTE
     ranked=[r for f in facts if (r:=relevance(f,query,now)) is not None]
     ranked.sort(key=lambda x:(-x[0],x[1].get('memory_key',''),x[1]['value']))
     selected=[]
+    requests=0
     for _,f in ranked:
+        # Repeated historical asks must not occupy the entire visible profile
+        # or ordinary reply context. All requests remain in structured history.
+        if f['kind']=='request' and requests>=3:
+            continue
         view={k:f[k] for k in ('field','value','subject','status','attribution','last_confirmed') if k in f}
         view['value']=f.get('display_value',f['value'])
         for k in ('event_start','event_end','review_at','active_until','event_outcome','potentially_stale'):
@@ -286,6 +302,7 @@ def select_memories(facts, query='', *, now=None, limit=8, byte_budget=MAX_CONTE
             view['alternatives']=[x['value'] for x in f['conflicts'][:3]]
         if len(json.dumps(selected+[view],ensure_ascii=False).encode())<=byte_budget:
             selected.append(view)
+            requests+=f['kind']=='request'
         if len(selected)>=limit: break
     return selected
 

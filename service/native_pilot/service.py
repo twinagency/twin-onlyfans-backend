@@ -640,8 +640,13 @@ class Service:
                 return False  # nothing has ever been claimed on this store
         return self.ledger.input_claimed(pilot_id=f"svc-{self.scope.provider_id}-{fan}", message_id=message_id)
 
+    SLOW_HOLDS = ("delivery-unresolved", "delivery-unknown", "writer-unresolved", "twin-work-open", "ownership-unavailable",
+                  "owner-live", "canonical-control-held", "canonical-delivery-unresolved")
+
     def _hold_fan(self, fan, reason):
-        wait = self.poll_s if reason.startswith("fan-") else self.hold_s
+        # A fan with an unsettled send (or a competing owner) is looked at rarely: every look can wait on the writer-marker
+        # quiesce, which would otherwise occupy one of the concurrent preparation slots on every retry.
+        wait = self.poll_s if reason.startswith("fan-") else 4 * self.hold_s if reason in self.SLOW_HOLDS else self.hold_s
         self.fan_holds[fan] = (runner.now() + timedelta(seconds=wait), reason)
 
     # ── engine v2: bounded concurrent preparation, strictly ordered per fan ───────
@@ -936,7 +941,7 @@ class Service:
                 await self.cancel_inflight("account-" + exc.reason)
             raise
         await self.reconcile_pass()
-        policy = self.ledger.allowance_status(self.db, self.args.fan)
+        policy = None if self.all_fans else self.ledger.allowance_status(self.db, self.args.fan)
         if policy and policy["next_dispatch_at"] and not self.all_fans:
             # (All-fans mode keeps preparing replies while the send gate is closed: only the projected send
             # backlog limits new work, see tick_all. Single-fan mode keeps the original behaviour.)

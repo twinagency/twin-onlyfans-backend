@@ -33,9 +33,12 @@ class _VSelector:
 
     def select(self, timeout=None):
         loop = self._loop
+        if timeout == 0:
+            return self._real.select(0)           # something is ready to run: just poll
         if loop._outstanding > 0:
-            # Thread work in flight: real wait, virtual time frozen.
-            return self._real.select(0.0005)
+            # Thread work in flight: block until a thread finishes (it wakes the loop through the self-pipe);
+            # virtual time stays frozen. A thread that is stuck would show here as a hang, not a silent skip.
+            return self._real.select(5.0)
         if timeout is None:
             events = self._real.select(0.0005)
             return events

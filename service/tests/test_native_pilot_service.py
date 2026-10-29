@@ -48,6 +48,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # The existing suite explicitly exercises compatibility with the legacy shared cap.
 os.environ.setdefault("FASTT_FAN_DAILY_REPLY_LIMIT", "0")
+# This suite asserts the serial order (oldest inbound first, one turn at a time). Engine v2 prepares replies concurrently by
+# default; the concurrent behaviour is covered by test_fastt_engine_v2.py, so here the bound is 1.
+os.environ.setdefault("FASTT_PREPARE_CONCURRENCY", "1")
 
 CHECKS = 0
 PID_SUFFIX = "svc-synthetic"

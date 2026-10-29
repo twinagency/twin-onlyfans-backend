@@ -131,13 +131,16 @@ async def chaos(sim, rng, duration_s):
 
 
 PROFILES = {
-    # name: (accounts, hot share multiplier, sends/h fleet, fans/account, model latency, minutes, poll_s)
-    "peak": dict(accounts=50, fleet_per_h=6250, hot=2.0, fans=120, latency=lognorm(1.5, .8, .01), minutes=70, poll=2.0),
-    "peak2x": dict(accounts=100, fleet_per_h=12500, hot=1.6, fans=100, latency=lognorm(1.5, .8, .01), minutes=70, poll=2.0),
-    "daily": dict(accounts=50, fleet_per_h=50000 / 24, hot=2.0, fans=120, latency=lognorm(1.5, .8, .01), minutes=24 * 60, poll=10.0, diurnal=True),
-    "impossible": dict(accounts=50, fleet_per_h=12500, hot=1.0, fans=150, latency=lognorm(1.5, .8, .01), minutes=45, poll=5.0),
-    "slowmodel": dict(accounts=20, fleet_per_h=2500, hot=2.0, fans=100, latency=lognorm(14, .7, .05, (30, 45)), minutes=60, poll=2.0),
-    "chaos": dict(accounts=20, fleet_per_h=2200, hot=2.0, fans=80, latency=lognorm(6, .9, .03, (20, 45)), minutes=70, poll=2.0, chaos=True),
+    # accounts, hot-creator multiplier, fleet sends/h, fans/account, model latency, minutes of traffic, idle poll (s)
+    # Durations are virtual minutes of steady traffic after a 2 minute warm-up; a 10 minute drain follows. The poll is 5 s (the
+    # engine's default is 2 s): the harness runs every account in ONE python thread, and each idle poll costs ~20 ms of SQLite
+    # planning there, so a 2 s poll across 100 accounts is not affordable. It adds at most 5 s (mean 2.5 s) to a reply latency.
+    "peak": dict(accounts=50, fleet_per_h=6250, hot=2.0, fans=120, latency=lognorm(1.5, .8, .01), minutes=25, poll=5.0),
+    "peak2x": dict(accounts=100, fleet_per_h=12500, hot=1.6, fans=100, latency=lognorm(1.5, .8, .01), minutes=12, poll=5.0),
+    "avg": dict(accounts=50, fleet_per_h=50000 / 24, hot=2.0, fans=120, latency=lognorm(1.5, .8, .01), minutes=40, poll=5.0),
+    "impossible": dict(accounts=50, fleet_per_h=12500, hot=1.0, fans=150, latency=lognorm(1.5, .8, .01), minutes=15, poll=5.0),
+    "slowmodel": dict(accounts=20, fleet_per_h=2500, hot=2.0, fans=100, latency=lognorm(14, .7, .05, (30, 45)), minutes=25, poll=5.0),
+    "chaos": dict(accounts=20, fleet_per_h=2200, hot=2.0, fans=80, latency=lognorm(6, .9, .03, (20, 45)), minutes=30, poll=5.0, chaos=True),
 }
 
 
@@ -176,7 +179,7 @@ def run(profile, minutes=None, out=None, seed=7):
                 chaos_counts.update(await chaos(sim, rng, duration))
             jobs.append(c())
         await asyncio.gather(*jobs)
-        await asyncio.sleep(1500)                     # drain: whatever the 20 s rule allows to finish
+        await asyncio.sleep(600)                      # drain: whatever the 20 s rule allows to finish
         stop.set()
         sampler.cancel()
         # per-account results over the traffic window

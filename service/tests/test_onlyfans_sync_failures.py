@@ -11,6 +11,27 @@ from onlyfans_runtime.native_protocol import NativeProtocolError
 from onlyfans_runtime import read_failures
 
 
+@pytest.mark.parametrize('read_seconds,write_seconds', [(10,5),(.25,.75)])
+def test_read_deadline_is_independent_and_does_not_retry_writes(monkeypatch,read_seconds,write_seconds):
+    monkeypatch.setenv('ONLYFANS_PROCESS_ROLE','worker')
+    records=fake_curl(monkeypatch)
+    options={} if (read_seconds,write_seconds)==(10,5) else {'read_timeout_seconds':read_seconds,'timeout_seconds':write_seconds}
+    wire=NativeProviderConnector(credential(),**options)
+    wire.verify_identity()
+    wire._signed_request('POST','/api2/v2/chats/12/messages',b'{}')
+    calls=[r for r in records if 'url' in r]
+    assert len(calls)==2
+    assert calls[0]['options']['timeout']==read_seconds
+    assert calls[1]['options']['timeout']==write_seconds
+    assert all(r['constructor']['retry']==0 for r in records if 'constructor' in r)
+
+
+@pytest.mark.parametrize('value',[True,0,11,float('inf'),float('nan')])
+def test_read_deadline_remains_bounded(value):
+    from onlyfans_runtime.store import Refused
+    with pytest.raises(Refused):NativeProviderConnector(credential(),read_timeout_seconds=value)
+
+
 @pytest.mark.parametrize('code,expected', [(5,'provider_proxy_failed'), (6,'provider_dns_failed'),
     (7,'provider_transport_failed'), (28,'provider_timeout'), (35,'provider_tls_failed'),
     (60,'provider_tls_failed'), (97,'provider_proxy_failed'), (12345,'provider_transport_failed')])

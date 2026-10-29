@@ -200,17 +200,24 @@ class NativeProviderConnector(NativeLoopbackConnector):
     the one-use marker before the only POST. Identity checks precede it. Live
     account activation and credential custody belong to the deployment owner.
     """
-    def __init__(self, session, *, timeout_seconds=5, max_response_bytes=MAX_BYTES,
+    def __init__(self, session, *, timeout_seconds=5, read_timeout_seconds=10, max_response_bytes=MAX_BYTES,
                  max_vault_response_bytes=MAX_VAULT_BYTES):
         if type(session) is not NativeProviderSession:
             raise Refused("an explicit account-bound native session is required")
         if (type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds)
                 or not .05 <= timeout_seconds <= 10
+                or type(read_timeout_seconds) not in {int, float} or not math.isfinite(read_timeout_seconds)
+                or not .05 <= read_timeout_seconds <= 10
                 or type(max_response_bytes) is not int or not 1 <= max_response_bytes <= MAX_BYTES
                 or type(max_vault_response_bytes) is not int or not 1 <= max_vault_response_bytes <= MAX_VAULT_BYTES):
             raise Refused("invalid native HTTPS resource bound")
         self._handle = session
         self._timeout, self._max_bytes = float(timeout_seconds), max_response_bytes
+        # Live history responses can begin arriving before five seconds yet
+        # exceed that total deadline. Two bounded reads (identity plus page)
+        # remain within the existing 45-second shared lease. Writes retain
+        # their original deadline and single-attempt semantics.
+        self._read_timeout = float(read_timeout_seconds)
         self._vault_max_bytes = max_vault_response_bytes
 
     @property
@@ -295,7 +302,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
         try:
             with requests.Session(impersonate="chrome", trust_env=False, retry=0) as client:
                 response = client.request(method, url, headers=headers, data=body,
-                    proxy=self._handle.proxy_url, timeout=self._timeout,
+                    proxy=self._handle.proxy_url, timeout=self._read_timeout if method == "GET" else self._timeout,
                     allow_redirects=False, verify=True, accept_encoding="identity",
                     content_callback=bounded, discard_cookies=True)
                 status = response.status_code

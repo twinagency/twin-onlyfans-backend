@@ -297,7 +297,9 @@ async def step(store,tenant,stop,*,extractor=None):
         from native_pilot.budget import BudgetRefused
         from llm_client import LLMCapExceeded
         allowed={'model-credential-missing','model-credential-mismatch','model-credential-unavailable','profile-binding-changed',
-                 'profile-model-usage-unavailable','profile-model-config-missing','profile-source-changed','profile-review-in-progress'}
+                 'profile-model-usage-unavailable','profile-model-config-missing','profile-source-changed','profile-review-in-progress',
+                 'profile-model-request-failed','profile-model-response-incomplete','profile-model-response-too-large',
+                 'profile-model-route-invalid','profile-prompt-too-large','profile-credential-changed','profile-connection-scope'}
         code=str(exc) if isinstance(exc,Refused) and str(exc) in allowed else 'profile-budget-exhausted' if isinstance(exc,(BudgetRefused,LLMCapExceeded)) else 'profile-analysis-deferred'
         attempts=int(job.get('attempts',0))+1
         with Session(store.engine) as s,s.begin():
@@ -312,7 +314,7 @@ def daily_maintenance(store,tenant):
     """Re-evaluation is also performed on every read. Daily sweep rebuilds cold summaries."""
     with Session(store.engine) as s,s.begin():
         s.execute(text('''UPDATE of_profile_learning SET next_at=CURRENT_TIMESTAMP WHERE tenant_id=:tenant
-            AND next_at>CURRENT_TIMESTAMP AND (maintenance_at IS NULL OR maintenance_at<:yesterday)'''),
+            AND error_code IS NULL AND next_at>CURRENT_TIMESTAMP AND (maintenance_at IS NULL OR maintenance_at<:yesterday)'''),
             {'tenant':tenant,'yesterday':datetime.utcnow()-timedelta(days=1)})
 
 

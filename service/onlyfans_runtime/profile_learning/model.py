@@ -25,7 +25,7 @@ async def extract(store, tenant, account, binding, fan, sources, *, creator=Fals
     from llm_providers import PROVIDERS
     from model_selection import explicit_model
     with Session(store.engine) as s, s.begin():
-        runtime = store._runtime(s, tenant, account)
+        runtime = store._runtime(s, tenant, account, lock=False)
         row = s.get(OfProviderConnection, account)
         cfg = s.get(AccountAiConfig, account)
         if runtime.binding_id != binding or row is None or row.binding_id != binding:
@@ -69,7 +69,7 @@ async def extract(store, tenant, account, binding, fan, sources, *, creator=Fals
     reservation = await budget.reserve(fan_id=audit_fan, request_bytes=len(raw), max_output_tokens=2400)
     try:
         with Session(store.engine) as s, s.begin():
-            runtime = store._runtime(s, tenant, account)
+            runtime = store._runtime(s, tenant, account, lock=False)
             if runtime.binding_id != binding:
                 raise Refused('profile-binding-changed')
             current = s.get(OfProviderConnection, account)

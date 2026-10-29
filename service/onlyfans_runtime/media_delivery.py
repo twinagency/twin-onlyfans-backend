@@ -117,6 +117,10 @@ def project(session, intent, message_id, stamp):
     if intent.offer_id is not None:
         raise Refused("media offer already projected without its receipt marker")
     snapshot = json.loads(intent.catalog_snapshot_json)
+    if intent.origin == "manual" and snapshot.get("manual_vault") is True and intent.price_cents == 0:
+        from .manual_media import project_free
+        project_free(session, intent, message_id, stamp)
+        return
     # Use saved terms, not a mutable or disabled catalogue's current values.
     if (snapshot["media_ids"] != json.loads(intent.media_json)
             or snapshot["preview_ids"] != json.loads(intent.preview_json)

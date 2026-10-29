@@ -19,9 +19,13 @@ CREATE TABLE IF NOT EXISTS of_profile_learning (
     lease_until timestamp,
     attempts integer NOT NULL DEFAULT 0,
     maintenance_at timestamp,
+    -- Queue tier: 0 new/changed incoming message, 1 fan with incoming history, 2 no incoming messages / creator draft.
+    priority smallint NOT NULL DEFAULT 2,
     PRIMARY KEY (tenant_id, account_id, binding_id, fan_id)
 );
 CREATE INDEX IF NOT EXISTS ix_of_profile_learning_due ON of_profile_learning(tenant_id,next_at);
+CREATE INDEX IF NOT EXISTS ix_of_profile_learning_claim
+    ON of_profile_learning(tenant_id,account_id,binding_id,priority,next_at,fan_id);
 -- Current-binding evidence lookup for the history scanner. Run during the
 -- reviewed deployment window; a busy production table may need CONCURRENTLY.
 CREATE INDEX IF NOT EXISTS ix_of_ingress_profile_source
@@ -78,5 +82,6 @@ CREATE TABLE IF NOT EXISTS of_profile_manual_changes (
 CREATE TABLE IF NOT EXISTS of_profile_accounts (
     tenant_id text NOT NULL,account_id text NOT NULL,binding_id text NOT NULL,
     last_claimed_at timestamp NOT NULL DEFAULT '1970-01-01',
+    hold_until timestamp, hold_code text, -- account-wide pause after a model/credential/budget refusal
     PRIMARY KEY(tenant_id,account_id,binding_id)
 );

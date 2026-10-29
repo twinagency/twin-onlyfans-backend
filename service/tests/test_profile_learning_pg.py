@@ -342,3 +342,37 @@ def test_stored_history_model_uses_own_credential_even_with_expired_of_session(p
         assert s.get(OfRuntime,'of-1').enabled is False
         assert s.scalar(select(GrokCall)).status=='done'
         assert s.get(OfProviderConnection,'of-1').status=='expired'
+
+
+def test_trigger_requeues_only_for_incoming_and_claim_is_fast_on_a_large_roster(pg_store):
+    import time
+    with Session(pg_store.engine) as s,s.begin():
+        s.add_all(Fan(account_id='of-1',fan_id=i) for i in range(4,2004))
+    with pg_store.engine.connect().execution_options(isolation_level='AUTOCOMMIT') as c: c.exec_driver_sql('ANALYZE')
+    for _ in range(5): worker.seed(pg_store,'tenant')
+    with pg_store.engine.begin() as c:
+        c.execute(text("UPDATE of_profile_learning SET next_at='2026-01-01',queued_at=CURRENT_TIMESTAMP+interval '1 day',priority=2"))
+    # An outgoing mass message changes neither the fan row nor its tier.
+    with Session(pg_store.engine) as s,s.begin():
+        s.add(Message(account_id='of-1',fan_id=2,message_id=1,direction='out',body='mass',
+                      created_at=datetime(2026,1,1),ingested_at=datetime(2026,1,1)))
+    with pg_store.engine.connect() as c:
+        assert c.scalar(text('SELECT priority FROM of_profile_learning WHERE fan_id=2'))==2
+    # An incoming message lifts the fan to tier 0 and it is claimed ahead of 2,000 older silent fans.
+    add_message(pg_store,mid=5,fan=1500)
+    with pg_store.engine.connect() as c:
+        assert c.scalar(text('SELECT priority FROM of_profile_learning WHERE fan_id=1500'))==0
+    t=time.time(); job=worker.claim_job(pg_store,'tenant',threading.Event()); took=time.time()-t
+    assert job['fan_id']==1500 and took<1.0
+
+
+def test_view_reports_unfetched_provider_history_as_incomplete_not_empty(pg_store):
+    from onlyfans_runtime.launch_history_memory.recovery import OfHistoryCursor
+    fan_due(pg_store,3);run(pg_store)
+    with Session(pg_store.engine) as s,s.begin():
+        s.add(OfHistoryCursor(account_id='of-1',fan_id=3,binding_id='binding',status='needed',updated_at=datetime(2026,1,1)))
+    with Session(pg_store.engine) as s,s.begin():
+        v=profile_view(s,'tenant','of-1','binding',3)
+        assert v['state']=='awaiting_history_import' and v['providerHistoryComplete'] is False
+        c=coverage(s,'tenant','of-1','binding')
+        assert c['fansAwaitingProviderHistory']>=1 and 'fansWithIncomingHistory' in c and 'profilesCheckedLastHour' in c

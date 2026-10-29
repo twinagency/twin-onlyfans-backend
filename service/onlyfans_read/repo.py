@@ -27,10 +27,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from datetime import datetime, timezone
 from typing import Protocol
 
-from sqlalchemy import and_, or_, select, func, case, tuple_
+from sqlalchemy import and_, or_, select, func, case, tuple_, text as sql_text
 from sqlalchemy.exc import SQLAlchemyError
 
 from db.engine import get_session
@@ -743,6 +744,7 @@ class SqlOnlyFansReadRepo:
         renders the list it is given, and a row saying "unknown" would read as a
         corrected fact.
         """
+        learning = None
         try:
             async with get_session() as s:
                 await lock_read_scope(s, account_id)
@@ -759,6 +761,13 @@ class SqlOnlyFansReadRepo:
                         ).where(Fan.account_id == account_id, Fan.fan_id == fan_id)
                     )
                 ).first()
+                if os.environ.get("ONLYFANS_PROFILE_LEARNING_ENABLED") == "1":
+                    learning = (await s.execute(sql_text('''SELECT p.document_json,p.checked_at,
+                        p.error_code,p.processed_messages FROM of_profile_learning p
+                        JOIN of_runtime r ON r.account_id=p.account_id AND r.binding_id=p.binding_id
+                        JOIN of_creator_bindings b ON b.id=p.binding_id AND b.tenant_id=p.tenant_id
+                        WHERE p.account_id=:account AND p.fan_id=:fan AND b.revoked_at IS NULL'''),
+                        {"account": account_id, "fan": fan_id})).first()
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
         if row is None:
@@ -769,6 +778,14 @@ class SqlOnlyFansReadRepo:
             text = (value or "").strip() if isinstance(value, str) else value
             if text:
                 out.append(FactRow(label=label, value=str(text)))
+        if learning is not None:
+            from onlyfans_runtime.profile_learning.evidence import summary
+            document = json.loads(learning[0])
+            if not document.get("summary_locked"):
+                out.append(FactRow(label="Conversation summary", value=summary(document.get("facts", []))))
+            status = learning[2] or ("Updated " + str(learning[1]) + " UTC" if learning[1] else "Awaiting analysis")
+            out.append(FactRow(label="Profile learning", value=status))
+            out.append(FactRow(label="History coverage", value=str(learning[3]) + " imported messages processed"))
         return out
 
     async def owned_media(self, *, account_id: str, fan_id: int, limit: int) -> list[OwnedRow]:
@@ -866,3 +883,4 @@ def _message_media_kinds(raw, ids):
                 and m.get('type') in {'photo','image','gif','video','audio'}}
     except (ValueError, TypeError, AttributeError):
         return {}
+

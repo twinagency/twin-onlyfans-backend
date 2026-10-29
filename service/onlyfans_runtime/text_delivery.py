@@ -195,7 +195,7 @@ class TextAuthority:
             if row.price_cents > 0:
                 from .media_delivery import assert_unowned
                 try:
-                    assert_unowned(s, row.account_id, row.fan_id, json.loads(row.catalog_snapshot_json))
+                    assert_unowned(s, row.account_id, row.fan_id, json.loads(row.catalog_snapshot_json), manual=True)
                 except (Refused, ValueError, TypeError):
                     return False
             return True
@@ -396,7 +396,7 @@ class TextAuthority:
                 catalog_item_id, terms = freeze(s, runtime, manual_media)
                 if terms["price_cents"] > 0:
                     from .media_delivery import assert_unowned
-                    assert_unowned(s, account_id, fan_id, terms)
+                    assert_unowned(s, account_id, fan_id, terms, manual=True)
             elif catalog_item_id is not None:
                 from .media_delivery import catalog_terms, assert_unowned
                 if not policy.media_enabled:

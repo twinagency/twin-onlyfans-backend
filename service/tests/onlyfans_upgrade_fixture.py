@@ -4,6 +4,7 @@ from sqlalchemy import text
 
 def restore_pre95_content_vault_shape(connection):
     assert connection.scalar(text('select current_database()')).startswith('of_test_')
+    connection.exec_driver_sql('DROP TABLE of_ledger_exclusion')
     # These objects did not exist in revisions 0091–0094. Leaving them in a
     # fixture and changing only alembic_version is not a historical database.
     connection.exec_driver_sql('DROP INDEX IF EXISTS ix_fans_of_profile_due')

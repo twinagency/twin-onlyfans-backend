@@ -92,7 +92,7 @@ class DailyBudget:
         day = now.strftime("%Y-%m-%d")
         async with get_session() as s:
             cfg = await s.scalar(select(AccountAiConfig).where(
-                AccountAiConfig.account_id == self.scope.db_id).with_for_update(read=True))
+                AccountAiConfig.account_id == self.scope.db_id).with_for_update())
             cap = cfg.daily_cost_cap_cents if cfg is not None else None
             if type(cap) is not int or not 0 <= cap <= 1_000_000:
                 raise BudgetRefused("budget-cap-unset")
@@ -166,3 +166,4 @@ class DailyBudget:
                 GrokCall.id == reservation.call_id, GrokCall.account_id == self.scope.db_id).with_for_update())
             if call is not None and call.status == "pending":
                 call.status = "unknown"
+

@@ -46,9 +46,9 @@ def _build(session, account_id: str, fan_id: int, last_inbound: str) -> PromptCo
     persona = compose_persona(view, fallback="", fact_value_clip=16000)
     memory = snapshot(session, account_id, fan_id, query=(last_inbound or "")[:2000])
     memory = {k: v for k, v in memory.items() if k not in {"version", "revision"}}
-    extra = bool(memory["interactions"] or memory["overrides"]
+    extra = bool(memory.get("learnedProfile") or memory["interactions"] or memory["overrides"]
                  or any(f["source"] != "canonical" for f in memory["facts"].values()))
-    return PromptContext(persona=persona,
+    return PromptContext(persona=persona, dated_memory="learnedProfile" in memory,
                          finish=(lambda messages: augment_prompt(messages, memory)) if extra else None)
 
 

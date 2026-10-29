@@ -14,6 +14,8 @@ class ChatPage:
     fan_ids: list[int]
     next_cursor: str | None
     heads: dict[int, int] = field(default_factory=dict)
+    profiles: dict = field(default_factory=dict)
+    creator_profile: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -86,7 +88,7 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
                 # No database transaction remains open across this network boundary.
                 page = reader.chats(cursor=scan.cursor, limit=PAGE_LIMIT)
                 fenced={'provider_read_claim':budget} if budget is not None else {}
-                store.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor, **scope,**fenced)
+                store.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor, profiles=page.profiles, creator_profile=page.creator_profile, **scope,**fenced)
                 discovered = 1
             except Exception as failure:
                 error=failure

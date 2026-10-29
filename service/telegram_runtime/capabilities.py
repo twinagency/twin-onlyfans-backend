@@ -48,6 +48,7 @@ class PromptContext:
     """
     persona: str
     finish: Callable[[list], list] | None = None
+    dated_memory: bool = False
 
 
 _active: contextvars.ContextVar[TelegramNativeCapabilities | None] = contextvars.ContextVar(

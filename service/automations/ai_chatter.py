@@ -6492,6 +6492,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     # to be human and the self-invention allowance; selling blocks,
                     # offer contract and pacing are untouched.
                     twin_context: bool = False,
+                    dated_memory: bool = False,
                     ) -> tuple[list[dict], list[str]]:
     """Compose the (system, user) pair — welcome_chatter_for_info's girly info-gather prompt
     with one structural difference: `sell`. `_NO_SELL` (M2) → the no-offers line
@@ -6520,11 +6521,13 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     name = resolve_fan_name(f)
     if name:
         facts.append(f"name/nickname: {name.split('/')[0][:40]}")
-    for label, val in (("age", f.his_age), ("city", f.home_city),
+    for label, val in (() if dated_memory else (("age", f.his_age), ("city", f.home_city),
                        ("country", f.home_country), ("hobbies", f.hobbies),
-                       ("occupation", f.occupation), ("fetishes", f.fetishes)):
+                       ("occupation", f.occupation), ("fetishes", f.fetishes))):
         if nonempty(val):
             facts.append(f"{label}: {str(val).strip()[:80]}")
+    if dated_memory:
+        profile = None  # Dated structured projection arrives through the scoped prompt hook.
     # gen_info's rich profile — the bio + bullet notes a human chatter reads before
     # replying. This is what makes a bubble land as "she remembers me", not generic.
     if profile is not None:
@@ -9548,7 +9551,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                               day=day,
                                               sell_signal=signal_on,
                                               v=v,
-                                              twin_context=twin_ctx is not None)
+                                              twin_context=twin_ctx is not None,
+                                              dated_memory=bool(getattr(twin_ctx,"dated_memory",False)))
             if twin_ctx is not None and twin_ctx.finish is not None:
                 msgs = twin_ctx.finish(msgs)
             try:

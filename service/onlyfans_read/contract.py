@@ -94,7 +94,7 @@ DELIVERY_OUTCOMES = (
     "none",
     "generating",
     "queued",
-    "dispatching",
+    "dispatching", "accepted_pending",
     "sent",
     "retracted",
     "partial",
@@ -173,16 +173,16 @@ def fan_id_from_conversation_id(conversation_id: str, account_id: str) -> int | 
 _CURSOR_VERSION = 1
 
 
-def encode_cursor(*, account_id: str, last_activity_at: str | None, fan_id: int) -> str:
+def encode_cursor(*, account_id: str, last_activity_at: str | None, fan_id: int, scope_key: str | None = None, query_key: str = "") -> str:
     raw = json.dumps(
-        {"v": _CURSOR_VERSION, "a": account_id, "t": last_activity_at, "f": int(fan_id)},
+        {"v": _CURSOR_VERSION, "a": account_id, "t": last_activity_at, "f": int(fan_id), **({"s": scope_key} if scope_key else {}), **({"q": query_key} if query_key else {})},
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
-def decode_cursor(value: str, *, account_id: str) -> tuple[str | None, int]:
+def decode_cursor(value: str, *, account_id: str, scope_key: str | None = None, query_key: str = "") -> tuple[str | None, int]:
     """Decode a cursor for `account_id`. Raises ValueError on anything else."""
     if not value or len(value) > 512:
         raise ValueError("cursor is empty or absurdly long")
@@ -199,10 +199,12 @@ def decode_cursor(value: str, *, account_id: str) -> tuple[str | None, int]:
         raise ValueError("cursor is not an object")
     if body.get("v") != _CURSOR_VERSION:
         raise ValueError("cursor version is not supported")
-    if body.get("a") != account_id:
+    if body.get("a") != account_id or body.get("q", "") != query_key:
         # The same refusal as a conversation from another account: the caller
         # learns that the cursor is not usable, not what it would have shown.
         raise ValueError("cursor belongs to another account")
+    if body.get("s") != scope_key:
+        raise ValueError("cursor belongs to another search")
     fan_id = body.get("f")
     if not isinstance(fan_id, int) or isinstance(fan_id, bool) or fan_id < 0:
         raise ValueError("cursor carries no fan id")

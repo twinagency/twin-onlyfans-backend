@@ -123,6 +123,36 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
             row = await s.get(VaultItem, ("a", 1)); row.removed_at = datetime.utcnow()
         self.assertEqual((await self.apply())["status"], "skipped")
 
+    async def test_pending_moves_to_real_categories_and_keeps_operator_membership(self):
+        async with self.sessions.begin() as s:
+            row = await s.get(VaultItem, ("a", 1)); row.tags = "[]"; row.ai_fields_json = "{}"
+        self.assertEqual((await self.apply())["status"], "awaiting_metadata")
+        async with self.sessions.begin() as s:
+            pending = await s.scalar(select(VaultFolder).where(VaultFolder.created_by == "auto-category:pending"))
+            self.assertIsNotNone(await s.get(VaultFolderItem, ("a", pending.id, 1)))
+            manual = VaultFolder(account_id="a", name="Pinned", created_by="operator")
+            s.add(manual); await s.flush()
+            s.add(VaultFolderItem(account_id="a", folder_id=manual.id, media_id=1)); manual_id=manual.id
+            row = await s.get(VaultItem, ("a", 1)); row.description="A selfie outdoors at the beach."
+        self.assertEqual((await self.apply())["categories"], ["beach", "outdoors", "selfies"])
+        async with self.sessions() as s:
+            self.assertIsNone(await s.get(VaultFolderItem, ("a", pending.id, 1)))
+            self.assertIsNotNone(await s.get(VaultFolderItem, ("a", manual_id, 1)))
+        self.assertEqual((await self.apply())["status"], "already_categorised")
+
+    async def test_v1_migration_adds_new_categories_without_readding_manual_removals(self):
+        await self.apply()
+        async with self.sessions.begin() as s:
+            row=await s.get(VaultItem, ("a", 1))
+            fields=json.loads(row.ai_fields_json);fields.pop("_auto_folders_v2");fields["setting"]="bedroom"
+            row.ai_fields_json=json.dumps(fields)
+            await s.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id=="a"))
+        self.assertEqual((await self.apply())["categories"], ["bedroom"])
+        async with self.sessions() as s:
+            entries=list(await s.scalars(select(VaultFolderItem).where(VaultFolderItem.account_id=="a")))
+            self.assertEqual(len(entries),1)
+            self.assertEqual((await s.get(VaultFolder,entries[0].folder_id)).name,"Bedroom")
+
     async def test_invalid_metadata_does_not_get_overwritten(self):
         async with self.sessions.begin() as s:
             row = await s.get(VaultItem, ("a", 1)); row.ai_fields_json = "bad JSON"
@@ -140,3 +170,4 @@ class MembershipTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

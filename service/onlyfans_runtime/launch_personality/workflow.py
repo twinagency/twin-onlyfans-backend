@@ -94,6 +94,28 @@ class PersonalityWorkflow:
         row = s.get(PersonalityRevision, (runtime.account_id, head.revision)) if head else None
         return head, row
 
+    @staticmethod
+    def _configuration_drift(s, row, runtime, config):
+        """Read immutable settings changes; a broken chain stays explicitly unverified."""
+        from db.onlyfans_models import OfConfigurationChange
+        changes = s.scalars(select(OfConfigurationChange).where(
+            OfConfigurationChange.account_id == runtime.account_id,
+            OfConfigurationChange.revision > row.configuration_revision,
+            OfConfigurationChange.revision <= runtime.configuration_revision)
+            .order_by(OfConfigurationChange.revision).limit(201)).all()
+        revision, fingerprint_value = row.configuration_revision, row.configuration_fingerprint
+        complete, result = True, []
+        for change in changes[:200]:
+            if change.previous_revision != revision or change.fingerprint_before != fingerprint_value:
+                complete = False
+            revision, fingerprint_value = change.revision, change.fingerprint_after
+            result.append({"revision": change.revision, "actor": change.actor,
+                "recordedAt": change.created_at.isoformat() + "Z",
+                "before": json.loads(change.before_json), "after": json.loads(change.after_json)})
+        complete = bool(complete and len(changes) <= 200 and revision == runtime.configuration_revision and fingerprint_value == fingerprint(config))
+        return {"fromRevision": row.configuration_revision, "toRevision": runtime.configuration_revision,
+                "auditComplete": complete, "changes": result}
+
     def _view(self, s, row, runtime, config, credentials=None):
         document = json.loads(row.document_json)
         current_facts, source = effective(s, config)
@@ -131,6 +153,7 @@ class PersonalityWorkflow:
             "bindingId": row.binding_id, "document": document,
             "configurationRevision": row.configuration_revision,
             "configurationFingerprint": row.configuration_fingerprint,
+            "configurationDrift": self._configuration_drift(s, row, runtime, config),
             "configurationCurrent": (runtime.configuration_revision == row.configuration_revision
                 and fingerprint(config) == row.configuration_fingerprint),
             "conflicts": conflicts(proposed.get("persona", ""), proposed.get("creatorFacts")),

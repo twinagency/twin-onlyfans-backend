@@ -254,6 +254,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
         value = load(self._call("GET", API_PATH + "/users/me"))
         if type(value.get("id")) is not int or value["id"] != self._handle.owner_id:
             raise NativeAuthenticationError("native provider owner mismatch")
+        return value
 
     def _signed_request(self, method, path, body=b"", *, max_response_bytes=None,
                         accepted_statuses=(200,), with_status=False):
@@ -335,6 +336,17 @@ class NativeProviderConnector(NativeLoopbackConnector):
         path = API_PATH + "/vault/media?" + urlencode(
             {"limit":limit,"offset":offset,"sort":"desc","field":"recent","list":"all"})
         return self._call("GET", path)
+
+    def vault_media_by_id(self, media_id):
+        """One bounded read of a known imported asset; caller owns provenance."""
+        self._ready()
+        _id(media_id)
+        self.verify_identity()
+        status, raw = self._signed_request("GET", API_PATH + f"/vault/media/{media_id}",
+            max_response_bytes=self._vault_max_bytes, accepted_statuses=(200, 404), with_status=True)
+        if status == 404:
+            return None
+        return load(raw, max_bytes=self._vault_max_bytes)
 
     def posts_page(self, *, before_marker=None, limit=10):
         """One bounded page of this creator's own feed posts, newest first.
@@ -452,3 +464,4 @@ class NativeProviderConnector(NativeLoopbackConnector):
         raw = self._call("POST", API_PATH + f"/chats/{current.fan_id}/messages", body)
         proof = acceptance(raw, current, owner_id=self._handle.owner_id, request_bytes=body)
         return replace(proof, evidence_ref=proof.evidence_ref.replace("native-local:", "native-https:", 1))
+

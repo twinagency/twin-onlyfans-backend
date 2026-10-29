@@ -86,7 +86,7 @@ def test_folders_use_existing_membership_scoped_filter_versions_and_archive(data
     added=folder_save(store,"add",folder=folder,ids=["11","12"],key="d"*64)
     assert folder_save(store,"add",folder=folder,ids=["11","12"],key="d"*64)==added
     assert [r["mediaId"] for r in list_vault(store,TENANT,ACCOUNT,folder_id=folder["folderId"])["items"]]==["11","12"]
-    assert get_folders(store,TENANT,ACCOUNT)==[{"folderId":folder["folderId"],"name":"Coast","count":2}]
+    assert get_folders(store,TENANT,ACCOUNT)==[{"folderId":folder["folderId"],"name":"Coast","count":2,"coverMediaId":"11","coverKind":"photo","automatic":False}]
     with pytest.raises(Refused):folder_save(store,"rename",folder=folder,name="Stale",key="e"*64)
     folder=get_folders(store,TENANT,ACCOUNT,folder["folderId"])
     folder_save(store,"remove",folder=folder,ids=["12"],key="f"*64)
@@ -140,3 +140,4 @@ def test_populated_shared_fact_upgrade_preserves_metadata_and_checks_immutable_c
         assert before==c.exec_driver_sql("SELECT row_to_json(t) FROM vault_items t ORDER BY media_id").scalars().all()
         c.exec_driver_sql("ALTER TABLE of_vault_edit DISABLE TRIGGER of_vault_edit_immutable")
         with pytest.raises(SchemaMismatch,match="append-only"):check_schema(c)
+

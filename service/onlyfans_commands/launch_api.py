@@ -44,7 +44,7 @@ def action_view(row):
     # "accepted" means the transport accepted the message. Purchases come only from the ledger, never from here.
 
 
-async def _body(request, required, optional=()):
+async def _body(request, required, optional=(), *, capability="manage"):
     if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
         raise Refused("invalid JSON required")
     raw = bytearray()
@@ -60,7 +60,7 @@ async def _body(request, required, optional=()):
         raise Refused("invalid JSON") from None
     if type(body) is not dict or not set(required) <= set(body) <= set(required) | set(optional):
         raise Refused("invalid fields")
-    if not actor_allowed(body.get("actor")):
+    if not actor_allowed(body.get("actor"), capability=capability):
         raise Refused("invalid managing actor")
     return body
 
@@ -71,13 +71,13 @@ def _fan(value):
     return int(value)
 
 
-async def _run(request, account_id, work, *, required=None, optional=()):
+async def _run(request, account_id, work, *, required=None, optional=(), capability="manage"):
     context = authenticate(request, account_id)
     if isinstance(context, JSONResponse):
         return context
     store, tenant = context
     try:
-        body = await _body(request, required, optional) if required is not None else None
+        body = await _body(request, required, optional, capability=capability) if required is not None else None
         result = await asyncio.to_thread(work, store, tenant, body)
     except Refused as exc:
         text = str(exc)
@@ -226,7 +226,7 @@ async def history_correct(request: Request, account_id: str, fan_id: str):
             command_key=body["commandKey"], actor=body["actor"], reason=body["reason"])
         return {"correction": result, "commandKey": body["commandKey"]}
     return await _run(request, account_id, work, required=("field", "operation", "value", "expectedVersion",
-                                                           "commandKey", "actor", "reason"))
+                                                           "commandKey", "actor", "reason"), capability="chat")
 
 
 @history_router.post("/backfill")
@@ -244,3 +244,62 @@ async def history_fan_backfill(request: Request, account_id: str, fan_id: str):
         return {"requested": "fan"}
     return await _run(request, account_id, work, required=("actor",))
 
+
+
+@history_router.get("/profiles/progress")
+async def profile_learning_progress(request: Request, account_id: str):
+    def work(store, tenant, _):
+        from onlyfans_runtime.profile_learning.storage import coverage
+        with Session(store.engine) as s, s.begin():
+            runtime=store._runtime(s,tenant,account_id)
+            return {"profiles":coverage(s,tenant,account_id,runtime.binding_id)}
+    return await _run(request,account_id,work)
+
+
+@history_router.get("/fans/{fan_id}/profile")
+async def fan_profile_learning(request: Request, account_id: str, fan_id: str):
+    def work(store,tenant,_):
+        from onlyfans_runtime.profile_learning.storage import profile_view
+        if set(request.query_params)-{"query"} or len(request.query_params.getlist("query"))>1:
+            raise Refused("invalid query")
+        query=request.query_params.get("query","")
+        if len(query)>2000: raise Refused("invalid query")
+        with Session(store.engine) as s,s.begin():
+            runtime=store._runtime(s,tenant,account_id)
+            fan=_fan(fan_id)
+            if s.get(__import__('db.models',fromlist=['Fan']).Fan,(account_id,fan)) is None:
+                raise Refused("scope unavailable")
+            return {"profile":profile_view(s,tenant,account_id,runtime.binding_id,fan,query=query)}
+    return await _run(request,account_id,work)
+
+
+@history_router.get("/fans/{fan_id}/profile/history")
+async def fan_profile_learning_history(request: Request, account_id: str, fan_id: str):
+    def work(store,tenant,_):
+        from sqlalchemy import text
+        from onlyfans_runtime.profile_learning.storage import SCOPE,identity,structured_record
+        from onlyfans_runtime.profile_learning.evidence import project
+        cursor,limit=query_bounds(request.query_params)
+        with Session(store.engine) as s,s.begin():
+            runtime=store._runtime(s,tenant,account_id)
+            fan=_fan(fan_id)
+            position=decode(cursor,"profile-history",account_id,runtime.binding_id)
+            if position is not None and (type(position) is not list or len(position)!=2 or position[0]!=fan
+                    or type(position[1]) is not str or re.fullmatch(r"[a-f0-9]{64}",position[1]) is None):
+                raise Refused("invalid profile history cursor")
+            params={**identity(tenant,account_id,runtime.binding_id,fan),'after':position[1] if position else '', 'limit':limit+1}
+            rows=s.execute(text(f"SELECT memory_key,document_json FROM of_profile_memories WHERE {SCOPE} AND memory_key>:after ORDER BY memory_key LIMIT :limit"),params).all()
+            page=rows[:limit]
+            return {"history":[structured_record(project(json.loads(r[1]))) for r in page],
+                    "nextCursor":encode("profile-history",account_id,runtime.binding_id,[fan,page[-1][0]]) if len(rows)>limit else None}
+    return await _run(request,account_id,work)
+
+
+@history_router.post("/fans/{fan_id}/profile/memories/{memory_key}/corrections")
+async def profile_memory_correct(request: Request,account_id: str,fan_id: str,memory_key: str):
+    def work(store,tenant,body):
+        from onlyfans_runtime.profile_learning.manual import correct
+        return correct(store,tenant,account_id,_fan(fan_id),memory_key,
+            expected_revision=body['expectedRevision'],command_key=body['commandKey'],actor=body['actor'],
+            reason=body['reason'],operation=body['operation'],value=body.get('value'))
+    return await _run(request,account_id,work,required=('expectedRevision','commandKey','actor','reason','operation'),optional=('value',))

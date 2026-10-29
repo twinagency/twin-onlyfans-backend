@@ -11,6 +11,7 @@ def personality_credential_status(session, account_id, binding_id):
     """Return the scoped four-field metadata, or None when unverified."""
     try:
         return connections.personality_credential_status(
-            session, account_id, binding_id, _unavailable_as_none=True)
+            session, account_id, binding_id, _unavailable_as_none=True,
+            _lock_runtime=not session.info.get("onlyfans_read_snapshot", False))
     except Refused:
         return None

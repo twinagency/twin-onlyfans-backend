@@ -36,7 +36,8 @@ def test_no_fan_fact_from_creator_message():
 
 
 def test_no_automatic_message_biography():
-    assert not validate(proposal('hobbies'), {'1:2': source(direction='out', automation='ai')}, creator=True)
+    facts=validate(proposal('hobbies'), {'1:2': source(direction='out', automation='ai')}, creator=True)
+    assert facts[0]['attribution']=='automation account claim'
 
 
 def test_creator_claims_remain_unverified():
@@ -54,7 +55,9 @@ def test_updates_keep_old_facts_deduplicate_and_preserve_conflicts():
     old = validate(proposal(), {'1:2': source()})
     newer = validate(proposal(value='Bob', quote='Bob', key='1:3'), {'1:3': source('Bob')})
     assert len(merge(old, old)) == 1
-    assert {x['value'] for x in merge(old, newer)} == {'Carlos', 'Bob'}
+    result=merge(old,newer)
+    assert len(result)==1 and result[0]['status']=='uncertain'
+    assert result[0]['conflicts'][0]['value']=='Bob'
 
 
 def test_conversation_activity_does_not_evict_personal_facts():
@@ -62,8 +65,9 @@ def test_conversation_activity_does_not_evict_personal_facts():
     topics = [{**old[0], 'field': 'recent_topic', 'source': f'1:{i}', 'at': f'2026-02-{i:03}'}
               for i in range(100)]
     result = merge(old, topics)
-    assert old[0] in result
-    assert len(result) == 7
+    assert any(f['field']=='name' and f['value']=='Carlos' for f in result)
+    assert len(result)==2
+    assert len(next(f for f in result if f['field']=='recent_topic')['evidence'])==1  # same evidence is not duplicated
 
 
 def test_silent_fan_summary_is_honest():

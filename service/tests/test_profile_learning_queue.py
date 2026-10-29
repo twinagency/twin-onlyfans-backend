@@ -30,6 +30,8 @@ def store():
     engine = create_engine('sqlite://', poolclass=StaticPool)
     @event.listens_for(engine, 'connect')
     def functions(db, _):
+        import hashlib
+        db.create_function('md5',1,lambda x:hashlib.md5(x.encode()).hexdigest())
         db.create_function('hashtext', 1, lambda x: 1)
         for name in ('pg_advisory_xact_lock', 'pg_try_advisory_lock', 'pg_advisory_unlock'):
             db.create_function(name, 1, lambda _: 1)
@@ -77,7 +79,9 @@ def run(store, fn=extractor):
 def state(store, fan=1):
     with store.engine.connect() as c:
         row = c.execute(text('SELECT * FROM of_profile_learning WHERE fan_id=:f'), {'f': fan}).mappings().one()
-        return {**row, 'document': json.loads(row['document_json'])}
+        doc=json.loads(row['document_json'])
+        doc['facts']=[json.loads(r[0]) for r in c.execute(text('SELECT document_json FROM of_profile_memories WHERE fan_id=:f'),{'f':fan})]
+        return {**row, 'document':doc}
 
 
 def test_every_fan_including_silent_fans_gets_a_record(store):
@@ -176,12 +180,12 @@ def test_incremental_summary_changes_without_reprocessing_old_messages(store):
     fan_due(store)
     run(store)
     with Session(store.engine) as s:
-        assert 'tennis' in s.get(FanProfile, ('of-1', 1)).short_bio
+        assert 'tennis' in state(store)['document']['summary']
     add_message(store, mid=2, body='I enjoy music', ingested_at=NOW+timedelta(hours=2))
     fan_due(store)
     run(store)
     with Session(store.engine) as s:
-        value = s.get(FanProfile, ('of-1', 1)).short_bio
+        value = state(store)['document']['summary']
         assert 'tennis' in value and 'music' in value
     checked = datetime.fromisoformat(state(store)['checked_at'])
     due = datetime.fromisoformat(state(store)['next_at'])
@@ -219,3 +223,14 @@ def test_seed_continues_beyond_first_five_hundred_fans(store):
         worker.seed(store, 'tenant')
     with store.engine.connect() as c:
         assert c.execute(text('SELECT count(*) FROM of_profile_learning WHERE fan_id>0')).scalar() == 1001
+
+
+def test_entire_silent_roster_is_processed_beyond_discovery_page(store):
+    with Session(store.engine) as s,s.begin():
+        s.add_all(Fan(account_id='of-1',fan_id=i) for i in range(4,506))
+    for _ in range(2): worker.seed(store,'tenant')
+    with store.engine.begin() as c:
+        c.execute(text('UPDATE of_profile_learning SET next_at=:future WHERE fan_id=0'),{'future':datetime.utcnow()+timedelta(days=1)})
+    for _ in range(505): assert run(store)
+    with store.engine.connect() as c:
+        assert c.scalar(text('SELECT count(*) FROM of_profile_learning WHERE fan_id>0 AND checked_at IS NOT NULL AND error_code IS NULL'))==505

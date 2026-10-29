@@ -81,7 +81,7 @@ def proof_hash(raw,intent):
 
 
 def reconcile(ledger, *, pilot_id, attempt_id, account_id, fan_id, provider_message_id,
-              history, complete, command_key, actor, reason, now):
+              history, complete, command_key, actor, reason, now, expected_revision=None):
     """Settle only one exact positive observation in a completely read bounded window."""
     from onlyfans_read.agency_scope import actor_allowed
     if (not actor_allowed(actor) or type(reason) is not str or not reason.strip() or len(reason)>512
@@ -121,6 +121,9 @@ def reconcile(ledger, *, pilot_id, attempt_id, account_id, fan_id, provider_mess
                 "WHERE account_id=? AND command_key=?",(account_id,command_key)).fetchone()
             if command and (command["binding_id"],command["kind"],command["request_hash"])!=(intent["binding_id"],"native_send_reconciliation",command_hash):
                 raise Refused("recovery-command-conflict")
+        if ledger.pg and not command and expected_revision is not None:
+            state=con.execute("SELECT revision,unresolved_attempt_id FROM public.of_conversation_state WHERE account_id=? AND fan_id=?",(account_id,fan_id)).fetchone()
+            if not state or state[0]!=expected_revision or state[1]!=f'fastt-pilot-{attempt_id}':raise Refused('control revision conflict')
         prior=retained.get("reconciliation")
         if prior:
             if prior!=audit or r["state"]!="sent" or a["state"]!="sent":
@@ -220,10 +223,10 @@ async def command(ledger,args):
         if args.intent_id:
             return await asyncio.to_thread(send_recovery.reconcile,authority,args.tenant,scope.db_id,args.fan,args.intent_id,
                 provider_message_id=args.message_id,history=history,complete=complete,
-                command_key=args.command_key,actor=args.actor,reason=args.reason)
+                command_key=args.command_key,actor=args.actor,reason=args.reason,expected_revision=getattr(args,"expected_revision",None))
         changed=await asyncio.to_thread(reconcile,ledger,pilot_id=args.pilot_id,attempt_id=args.attempt_id,
             account_id=scope.db_id,fan_id=args.fan,provider_message_id=args.message_id,history=history,complete=complete,
-            command_key=args.command_key,actor=args.actor,reason=args.reason,now=datetime.utcnow())
+            command_key=args.command_key,actor=args.actor,reason=args.reason,now=datetime.utcnow(),expected_revision=getattr(args,"expected_revision",None))
         await project(ledger,pilot_id=args.pilot_id,attempt_id=args.attempt_id,account_id=scope.db_id,fan_id=args.fan)
         await report_outcomes(account_id=scope.db_id,fan_id=args.fan,receipts=ledger.receipts(pilot_id=args.pilot_id))
         return {"recorded":True,"changed":changed,"outcome":"sent","attemptId":args.attempt_id,"resumed":False}

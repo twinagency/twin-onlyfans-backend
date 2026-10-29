@@ -30,12 +30,18 @@ async def extract(store, tenant, account, binding, fan, sources, *, creator=Fals
         cfg = s.get(AccountAiConfig, account)
         if runtime.binding_id != binding or row is None or row.binding_id != binding:
             raise Refused('profile-connection-scope')
-        credential = _open(row, tenant).get('model')
+        try:
+            credential = _open(row, tenant).get('model')
+        except Refused:
+            raise Refused('model-credential-unavailable') from None
         connection_revision, sealed_snapshot = row.revision, row.sealed_config
         if type(credential) is not dict or not credential.get('apiKey'):
             raise Refused('model-credential-missing')
         # Keys are scoped to the explicitly saved model, never another provider.
-        selected = explicit_model(cfg, 'ai_chatter', MODELS)
+        try:
+            selected = explicit_model(cfg, 'ai_chatter', MODELS)
+        except ValueError:
+            raise Refused('profile-model-config-missing') from None
         if credential.get('modelId') != selected:
             raise Refused('model-credential-mismatch')
         spec = MODELS[selected]

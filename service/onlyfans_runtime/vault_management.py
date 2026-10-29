@@ -531,6 +531,16 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                         observation = OfVaultObservation(account_id=account, media_id=media["id"])
                         s.add(observation)
                     observation.job_id, observation.raw_hash, observation.observed_at = identity, digest(row.raw_json), utcnow()
+                    # Category assignment belongs to import as well as captioning.
+                    # Undescribed assets enter Unsorted until analysis finishes.
+                    if os.environ.get("ONLYFANS_AUTOMATIC_IMPORTS_ENABLED") == "1":
+                        from vault_auto_folders import assign_sync
+                        try:
+                            with s.begin_nested():
+                                assign_sync(s, account, row.media_id)
+                        except ValueError:
+                            # A curator's folder limit must not discard imported data.
+                            pass
                 job.page_offset += len(rows)
                 job.items_seen += len(rows)
                 job.pages_read += 1
@@ -551,4 +561,5 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             from .worker import _release_provider
             _release_provider(store,tenant,budget,failure)
     return processed
+
 

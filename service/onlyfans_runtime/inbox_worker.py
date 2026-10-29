@@ -17,10 +17,10 @@ from .connections import _open
 from .provider_connector import NativeProviderConnector, session_from_capture
 from .recent_inbox import poll_recent
 from .store import Refused, utcnow
+from .inbox_health import HEALTH_PATH, healthy
 
 ROSTER_SECONDS = 5
 STALE_SECONDS = 120
-HEALTH_PATH = "/tmp/onlyfans-inbox-health.json"
 
 
 def account_ids(store, tenant):
@@ -162,15 +162,3 @@ class InboxWorker(threading.Thread):
         finally:
             if self.owns_store:
                 self.store.close()
-
-
-def healthy(path=HEALTH_PATH):
-    try:
-        value = json.loads(Path(path).read_text())
-        now = time.time()
-        return (now - value["observedAt"] < 30
-                and value.get("rosterUpdatedAt") is not None
-                and now - value["rosterUpdatedAt"] < 60
-                and all(not row.get("stale", True) for row in value["accounts"].values()))
-    except (OSError, ValueError, KeyError, TypeError):
-        return False

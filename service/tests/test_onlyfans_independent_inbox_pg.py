@@ -4,6 +4,8 @@ from datetime import timedelta
 import json
 import threading
 import time
+import subprocess
+import sys
 
 import pytest
 from sqlalchemy import func, select
@@ -20,7 +22,7 @@ from db.onlyfans_connection_models import OfProviderConnection
 from onlyfans_runtime import inbox_worker as module
 from onlyfans_runtime.inbox_worker import InboxWorker, account_ids, poll_account, healthy
 from onlyfans_runtime.provider_connector import NativeProviderConnector
-from onlyfans_runtime.store import utcnow
+from onlyfans_runtime.store import utcnow, Refused, Store
 from onlyfans_runtime.worker import ChatPage, MessagePage, read_step
 
 
@@ -46,7 +48,7 @@ def test_scope_revocation_and_connection_expiry_remove_inbox_authority(native):
     with Session(store.engine) as s, s.begin():
         s.get(OfProviderConnection, account).expires_at = utcnow()-timedelta(seconds=1)
     assert account_ids(store, TENANT) == []
-    with pytest.raises(Exception):
+    with pytest.raises(Refused):
         poll_account(store, TENANT, account)
 
 
@@ -123,3 +125,25 @@ def test_background_worker_yields_live_inbox_ownership(native, monkeypatch):
     monkeypatch.setattr(reader, 'chats', lambda **kw: ChatPage([], None))
     monkeypatch.setattr(reader, 'messages', lambda **kw: MessagePage([], False))
     read_step(store, TENANT, account, reader, connection_revision=1)
+
+
+def test_healthcheck_imports_no_application_or_database_modules():
+    result = subprocess.run([sys.executable, '-c',
+        'import sys; from onlyfans_runtime.inbox_health import healthy; '
+        'assert "sqlalchemy" not in sys.modules; assert "db.models" not in sys.modules'],
+        capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+
+
+def test_independent_pool_can_serve_all_inbox_slots(database):
+    store = Store(database[0], pool_size=8)
+    try:
+        assert store.engine.pool.size() == 8
+        connections = [store.engine.connect() for _ in range(8)]
+        try:
+            assert store.engine.pool.checkedout() == 8
+        finally:
+            for connection in connections:
+                connection.close()
+    finally:
+        store.close()

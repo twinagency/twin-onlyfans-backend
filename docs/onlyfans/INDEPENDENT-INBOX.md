@@ -29,7 +29,10 @@ account's last successful provider head read, queue length and sanitized error
 type. It contains no session values, message bodies or fan identifiers. A head
 read older than 120 seconds is stale. `inbox_worker.healthy()` also rejects a dead
 scheduler or a roster refresh older than a minute. Configure the worker image's
-health check to call this function with `/app/service` on `PYTHONPATH`.
+health check to call `inbox_health.healthy()` with `/app/service` on `PYTHONPATH`.
+The health module uses only the standard library, avoiding a second application
+and ORM import on every probe. The worker has a 768 MB memory allowance and one
+CPU; its independent inbox database pool has eight slots to match its readers.
 
 The scheduler retries failed reads automatically. Provider outages, expired
 sessions, explicit rate limits and sustained load beyond configured capacity can

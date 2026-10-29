@@ -297,7 +297,7 @@ def main(argv=None):
         # imports paused accounts without activating any conversation or sender.
         if os.environ.get("ONLYFANS_RECENT_INBOX_ENABLED", "1") == "1" and not args.once:
             from onlyfans_runtime.inbox_worker import InboxWorker
-            inbox_worker = InboxWorker(Store(url), tenant, stop, observe=_emit, owns_store=True)
+            inbox_worker = InboxWorker(Store(url, pool_size=8), tenant, stop, observe=_emit, owns_store=True)
             store._independent_inbox = True
             inbox_worker.start()
         # Launch features stay off unless explicitly enabled; engagement additionally needs saved per-account settings.
@@ -329,4 +329,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-

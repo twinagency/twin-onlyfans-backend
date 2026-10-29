@@ -203,4 +203,3 @@ def test_failing_fan_is_retried_when_a_new_message_arrives(native, monkeypatch):
     mid[0] = 201
     assert poll_recent(store, TENANT, account, reader, connection_revision=1, clock=lambda:122) == 1
     assert calls == [200, 201]
-

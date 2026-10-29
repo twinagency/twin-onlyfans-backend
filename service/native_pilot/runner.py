@@ -321,6 +321,10 @@ class Gateway:
             raise RuntimeError("unsend-unconfirmed")
         self.unsent_ids.add(message_id)
 
+    def abort_reason(self):
+        """Cheap, no-database reason a queued sender should leave the gate at once, else None."""
+        return self.stopped_reason
+
     async def pace(self):
         """Wait point before history/admission; the bounded pilot has no pacing."""
 
@@ -346,7 +350,33 @@ class Gateway:
             self.stopped_reason = "time-limit-reached"
         return bool(self.stopped_reason)
 
+    # Transient admission refusals raised before any attempt row exists: the account's gate was taken a moment
+    # earlier by another sender (another process, a human send) or the throttle moved. Nothing was written.
+    ADMISSION_RETRY = frozenset({"allowance-throttled", "allowance-busy", "allowance-changed"})
+    send_gate = None            # engine v2: the account's SendGate (service-owned); None = bounded pilot, no gate
+    send_wait_max_s = 900.0
+    throttled_retries = 40
+    eligibility_check = None    # engine v2: account-level hold (runtime/policy/credential), re-read at the wire
+
     async def _send(self, text, terms=None):
+        gate = self.send_gate
+        if gate is None:
+            return await self._send_inner(text, terms)
+        await gate.acquire(self.abort_reason, self.send_wait_max_s)
+        try:
+            for tries in range(self.throttled_retries):
+                try:
+                    return await self._send_inner(text, terms)
+                except Refused as exc:
+                    if exc.reason not in self.ADMISSION_RETRY or self.stopped_reason:
+                        raise
+                    await asyncio.sleep(min(2.0, 0.25 * (tries + 1)))      # re-pace; the DB gate decides
+            self.stopped_reason = "allowance-wait-timeout"
+            raise Refused(self.stopped_reason)
+        finally:
+            gate.release()
+
+    async def _send_inner(self, text, terms=None):
         from twin_bridge.coordination import authorize_dispatch, revoke_dispatch, guarded_send
         from twin_bridge.platform import escape_plain_text, validate_created_message
         from twin_bridge.normalize import html_to_text
@@ -375,6 +405,10 @@ class Gateway:
                             approved_item=self.content.catalog_ids if self.content else None)
             if self.hold_check is not None:
                 held = await asyncio.to_thread(self.hold_check)
+                if held:
+                    raise Refused(held)
+            if self.eligibility_check is not None:
+                held = await asyncio.to_thread(self.eligibility_check)
                 if held:
                     raise Refused(held)
             if self.content:
@@ -462,6 +496,8 @@ class Gateway:
                   "limit": self.limit_label()})
             return raw
         except Exception as exc:
+            if attempt is None and self.send_gate is not None and isinstance(exc, Refused) and exc.reason in self.ADMISSION_RETRY:
+                raise
             self.stopped_reason = exc.reason if isinstance(exc, (Refused, NotSent)) else "send-check-failed"
             if attempt is not None and not settled:
                 certain = False

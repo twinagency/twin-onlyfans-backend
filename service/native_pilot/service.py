@@ -52,9 +52,12 @@ from datetime import datetime, timedelta, timezone
 from twin_bridge import store
 
 from . import postsale, runner
+from .engine_state import RunnerLease, WorkBoard
 from .followups import DISCOUNT_KIND, NUDGE_KIND
 from .ledger import MAX_REQUEUES_MODEL, MAX_REQUEUES_PROVIDER, Ledger, Refused
 from .scope import AccountScope
+from .send_gate import SendGate
+from .tuning import Tuning
 
 LEASE_TTL_S = 120.0
 RENEW_S = 30.0
@@ -72,6 +75,15 @@ CONNECTION_CHECK_S = 300.0
 TURN_MAX_S = 600.0
 PACE_MAX_S = 180.0
 MODEL_RETRY_REASONS = ("model-timeout", "model-http-failed", "model-response-failed")
+# Reasons a reply ends WITHOUT any send standing and that are not the fan message's fault. The claim is given
+# back (Ledger.release_input) so the fan's latest state is answered from scratch once the cause clears; a draft
+# is never kept. value = seconds this fan is left alone before it is looked at again.
+RELEASE_PREFIXES = ("fan-", "account-")
+RELEASE_BACKOFF_S = {"new-message-during-generation": 1.0, "source-changed": 1.0, "source-text-changed": 1.0,
+                     "source-time-changed": 1.0, "source-invalidated": 1.0, "source-missing": 1.0,
+                     "send-queue-timeout": 15.0, "allowance-wait-timeout": 15.0, "credential-change": 5.0,
+                     "runner-lease-lost": 30.0, "authority-lost-before-post": 5.0}
+ACCOUNT_BLOCK_PREFIXES = ("allowance-", "model-budget")
 RATE_LIMIT_BACKOFF_S = 60.0   # a provider 429: wait this long (times the retry number) unless Retry-After says otherwise
 RATE_LIMIT_BACKOFF_MAX_S = 300.0
 
@@ -132,6 +144,12 @@ class ServiceGateway(runner.Gateway):
         self.service = service
         self.hold_check = lambda: fan_hold_reason(service.path, service.db, service.args.fan, *service.strict_arg)
         self.dashboard_handover = bool(service.strict_arg)
+        # Engine v2: the account's FIFO send gate, the account-level hold re-read at the wire, tunable waits.
+        tuning = getattr(service, "tuning", None) or Tuning.from_env()
+        self.send_gate = getattr(service, "send_gate", None)
+        self.eligibility_check = getattr(service, "account_hold", None)
+        self.send_wait_max_s = tuning.pace_wait_max_s
+        self.throttled_retries = tuning.throttled_retries
 
     @property
     def deadline(self):  # type: ignore[override]
@@ -141,12 +159,29 @@ class ServiceGateway(runner.Gateway):
     def deadline(self, value):  # the base __init__ assigns the frozen pilot deadline
         pass
 
+    def abort_reason(self):
+        """What a reply waiting in the send queue checks about once a second (no database)."""
+        svc = self.service
+        if self.stopped_reason:
+            return self.stopped_reason
+        if svc.stop.is_set():
+            return "service-stopping"
+        if getattr(svc, "cancel_reason", None):
+            return svc.cancel_reason
+        if getattr(svc.catalog_owner, "runner_lost", False):
+            return "runner-lease-lost"
+        return None
+
     def stopped(self):
         if self.stopped_reason:
             return True
         svc = self.service
         if svc.stop.is_set():
             self.stopped_reason = "service-stopping"
+        elif getattr(svc, "cancel_reason", None):
+            self.stopped_reason = svc.cancel_reason
+        elif getattr(svc.catalog_owner, "runner_lost", False):
+            self.stopped_reason = "runner-lease-lost"
         elif svc.lease.lost or runner.now() >= datetime.fromisoformat(svc.lease.deadline):
             self.stopped_reason = "authority-lost"
         else:
@@ -158,6 +193,13 @@ class ServiceGateway(runner.Gateway):
     def limit_label(self):
         policy = self.ledger.allowance_status(self.pilot.account_id, self.pilot.fan_id)
         return None if policy is None else policy["limit"] - policy["used"]
+
+    async def _send(self, text, terms=None):
+        self.service.phase = "sending"
+        try:
+            return await super()._send(text, terms)
+        finally:
+            self.service.phase = "preparing"
 
     async def pace(self):
         """Wait out the account's throttle, then let begin_attempt spend the unit atomically."""
@@ -182,7 +224,7 @@ class ServiceGateway(runner.Gateway):
                 wait = max(wait, (datetime.fromisoformat(policy["next_dispatch_at"]) - runner.now()).total_seconds())
             if wait <= 0:
                 return
-            if waited >= PACE_MAX_S:
+            if waited >= self.send_wait_max_s:
                 raise Refused("allowance-wait-timeout")
             step = min(wait, 1.0)
             await self.service.idle(step)
@@ -190,8 +232,10 @@ class ServiceGateway(runner.Gateway):
 
 
 class Service:
+    tuning = Tuning()          # class default (objects built without __init__, e.g. query-only tests); __init__ sets the real one
+
     def __init__(self, args, *, stop=None, ttl_s=LEASE_TTL_S, renew_s=RENEW_S, poll_s=POLL_S, hold_s=HOLD_S,
-                 quiet_s=QUIET_S, connection_check_s=CONNECTION_CHECK_S, intake_factory=None):
+                 quiet_s=None, connection_check_s=CONNECTION_CHECK_S, intake_factory=None, tuning=None):
         self.all_fans = bool(getattr(args, "all_fans", False))
         if self.all_fans == (getattr(args, "fan", None) is not None):
             raise Refused("fan-scope-invalid")  # exactly one of --fan / --all-fans
@@ -203,7 +247,21 @@ class Service:
         self.db = self.scope.db_id
         self.stop = stop or asyncio.Event()
         self.ttl_s, self.renew_s, self.poll_s, self.hold_s = ttl_s, renew_s, poll_s, hold_s
-        self.quiet_s, self.connection_check_s = quiet_s, connection_check_s
+        self.tuning = tuning or Tuning.from_env()
+        self.quiet_s = self.tuning.quiet_s if quiet_s is None else quiet_s
+        self.connection_check_s = connection_check_s
+        # Engine v2 (all-fans runner): bounded concurrent turns, one FIFO send gate per account, durable work board.
+        self.send_gate = SendGate()
+        self.cancel_reason = None      # set on a per-fan child: its in-flight reply must stop (takeover, pause, credential change)
+        self.runner_lost = False       # the account runner lease was lost: nothing may be sent by this process
+        self.tasks: dict[int, asyncio.Task] = {}
+        self.board = None
+        self.runner_lease = None
+        self.account_block = None      # (reason, until): an account-wide limit (allowance / model budget) holds new turns
+        self.next_lease_renew = 0.0
+        self.next_queue_event = 0.0
+        self.phase = "preparing"
+        self.queue_stats = {}
         self.pilot_id = getattr(args, "service_id", None) or f"svc-{self.scope.provider_id}-{getattr(args, 'fan', None)}"
         self.path = None
         self.ledger = None
@@ -255,6 +313,10 @@ class Service:
             return
         conn = await connection.load_verified_connection(self.scope)
         if self.client is None or conn.revision != self.conn.revision or conn.expires_at != self.conn.expires_at:
+            if self.client is not None and self.tasks:
+                # Credential change: nothing prepared with the old session may go out with the new one, and the old
+                # client is only closed after every send on it has settled.
+                await self.quiesce("credential-change")
             client = await asyncio.to_thread(connection.build_client, conn)
             me = await asyncio.to_thread(client.me)
             if str(me.get("id")) != self.scope.provider_id or str(me.get("username", "")).lstrip("@").casefold() != self.args.handle.casefold():
@@ -453,10 +515,10 @@ class Service:
         unanswered inbound that arrived after the persisted activation watermark. The ineligible are removed
         BEFORE the bound is applied, so they cannot occupy it: operator-paused / restricted / taken-over /
         never-enabled fans and fans whose newest message is already claimed are filtered in SQL, non-owned
-        fans and fans in a live hold in Python while paging oldest first. At most ``CANDIDATES_MAX`` fans
+        fans and fans in a live hold in Python while paging oldest first. At most ``self.tuning.queue_max`` fans
         and ``SCAN_PAGES_MAX`` pages per tick.
 
-        ``controlled``: every owned fan with an unanswered inbound among the newest ``CANDIDATES_MAX``
+        ``controlled``: every owned fan with an unanswered inbound among the newest ``self.tuning.queue_max``
         (paused or not: Twin's controls still run for them), plus ``serve``.
         """
         from .ledger import _dt
@@ -479,7 +541,7 @@ class Service:
                 # which arrived during that reply. Every other newer row still blocks.
                 base = base[:-1] + " AND NOT (" + older_reply_sql() + "))"
             for fan, _, created in con.execute(base + " ORDER BY m.created_at DESC,m.message_id DESC LIMIT ?",
-                                               (self.db, since, CANDIDATES_MAX)).fetchall():
+                                               (self.db, since, self.tuning.queue_max)).fetchall():
                 if _dt(created) > since and is_owned(fan) and fan not in controlled:
                     controlled.append(fan)
             if store.has_table(con, "of_conversation_state"):  # strict: no projection table = nobody enabled
@@ -499,14 +561,14 @@ class Service:
                     rows = con.execute(
                         sql + (" AND (m.created_at,m.message_id)>(?,?)" if cursor else "")
                         + " ORDER BY m.created_at,m.message_id LIMIT ?",
-                        tuple(params) + cursor + (CANDIDATES_MAX,)).fetchall()
+                        tuple(params) + cursor + (self.tuning.queue_max,)).fetchall()
                     for fan, mid, created in rows:
                         hold = self.fan_holds.get(fan)
                         if _dt(created) > since and is_owned(fan) and not (hold and now < hold[0]):
                             serve.append((fan, mid))
-                            if len(serve) >= CANDIDATES_MAX:
+                            if len(serve) >= self.tuning.queue_max:
                                 break
-                    if len(serve) >= CANDIDATES_MAX or len(rows) < CANDIDATES_MAX:
+                    if len(serve) >= self.tuning.queue_max or len(rows) < self.tuning.queue_max:
                         break
                     cursor = (rows[-1][2], rows[-1][1])
         controlled += [fan for fan, _ in serve if fan not in controlled]
@@ -519,6 +581,7 @@ class Service:
             child = Service(args, stop=self.stop, ttl_s=self.ttl_s, renew_s=self.renew_s, poll_s=self.poll_s,
                             hold_s=self.hold_s, quiet_s=self.quiet_s, connection_check_s=self.connection_check_s)
             child.strict, child.cutoff = True, self.started_at
+            child.send_gate, child.tuning = self.send_gate, self.tuning
             child.path, child.ledger, child.context = self.path, self.ledger, self.context
             child.content, child.catalog_owner = self.content, self
             child.followups = self.followups
@@ -557,56 +620,278 @@ class Service:
         wait = self.poll_s if reason.startswith("fan-") else self.hold_s
         self.fan_holds[fan] = (runner.now() + timedelta(seconds=wait), reason)
 
+    # ── engine v2: bounded concurrent preparation, strictly ordered per fan ───────
+    def burst_state(self, fans):
+        """``{fan: (newest inbound ingested_at, first ingested_at of the unanswered burst)}`` in ONE read.
+
+        The burst is the fan's inbound messages after our last outbound and after the activation watermark,
+        which is exactly what the ledger would answer together. Drives the quiet window and its hard maximum."""
+        from .ledger import _dt
+        if not fans:
+            return {}
+        since = _dt(self.started_at)
+        marks = ",".join("?" for _ in fans)
+        with runner.readonly(self.path) as con:
+            rows = con.execute(
+                "SELECT m.fan_id,MAX(m.ingested_at),MIN(m.ingested_at) FROM messages m WHERE m.account_id=? AND m.fan_id IN (" + marks + ") "
+                "AND m.direction='in' AND m.created_at>? AND m.created_at>COALESCE((SELECT MAX(n.created_at) FROM messages n "
+                "WHERE n.account_id=m.account_id AND n.fan_id=m.fan_id AND n.direction='out' AND NOT n.is_unsent),?) GROUP BY m.fan_id",
+                (self.db, *fans, since, since)).fetchall()
+        return {r[0]: (_dt(r[1]), _dt(r[2])) for r in rows}
+
+    def account_hold(self):
+        """Account-level reason NOT to send right now (runtime / policy / binding / credential), else None.
+
+        The same facts the supervisor uses to decide whether an account may run, re-read at the wire so a
+        credential change, a paused account or a revoked binding stops a reply that was prepared before it.
+        A store without those tables (fixtures) or a row that is simply absent expresses no opinion."""
+        from . import supervisor
+        try:
+            row = supervisor.read_account(self.path, self.db)
+        except Exception:
+            return None
+        if row is None:
+            return None
+        if row["runtime_enabled"] is not None and not row["runtime_enabled"]:
+            return "account-runtime-disabled"
+        if row["binding_revoked_at"] is not None:
+            return "account-binding-revoked"
+        if row["policy_enabled"] is not None and not row["policy_enabled"]:
+            return "account-policy-disabled"
+        if row["connection_status"] is not None:
+            if row["connection_status"] != "verified":
+                return "account-connection-not-verified"
+            if row["last_error"] is not None:
+                return "account-connection-check-failing"
+            try:
+                if row["expires_at"] is not None and supervisor._naive_utc(row["expires_at"]) <= runner.now():
+                    return "account-connection-expired"
+            except (TypeError, ValueError):
+                return "account-connection-expired"
+        return None
+
+    def held_reasons(self, fans):
+        """``{fan: reason}`` for the in-flight fans that must stop now (takeover, pause, restriction, not owned)."""
+        out = {}
+        for fan in fans:
+            try:
+                held = fan_hold_reason(self.path, self.db, fan, True)
+            except Exception:
+                held = None
+            if held:
+                out[fan] = held
+            elif not self._owned(fan):
+                out[fan] = "fan-not-owned"
+        return out
+
+    def _status(self, fan, state, reason=None, **kw):
+        if self.board is not None:
+            self.board.set(fan, state, reason, **kw)
+
+    async def _run_fan(self, fan):
+        """One fan's whole turn as a task. Never raises: every outcome becomes a hold / board state."""
+        child = self.child(fan)
+        child.last_active = runner.now()
+        child.cancel_reason = None
+        child.phase = "preparing"
+        before = child.turns_started
+        try:
+            await child.serve_fan()
+        except Refused as exc:
+            child.note(exc.reason)
+            if exc.reason.startswith(ACCOUNT_BLOCK_PREFIXES):
+                # Account-wide (allowance, model budget): stop starting turns for everyone until it clears.
+                wait = BUDGET_HOLD_S if exc.reason.startswith("model-budget") else self.hold_s
+                self.account_block = (exc.reason, runner.now() + timedelta(seconds=wait))
+            else:
+                self._hold_fan(fan, exc.reason)
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            child.note("service-error:" + type(exc).__name__)
+            self._hold_fan(fan, "service-error")
+            return
+        if child.backoff_s:
+            # A requeued / released input (provider 429, model failure, takeover, stale draft): leave the fan alone while it backs off.
+            self.fan_holds[fan] = (runner.now() + timedelta(seconds=child.backoff_s), "retry-backoff")
+            child.backoff_s = 0.0
+        return child.turns_started > before
+
+    def _reap(self):
+        for fan, task in list(self.tasks.items()):
+            if task.done():
+                del self.tasks[fan]
+                if not task.cancelled() and task.exception() is not None:
+                    runner.emit({"event": "turn-task-error", "fan_id": fan, "reason": type(task.exception()).__name__})
+                    self._hold_fan(fan, "service-error")
+
+    async def cancel_inflight(self, reason, fans=None):
+        """Ask in-flight replies to stop (they leave the send queue / abort the model call at their next check).
+        Nothing is torn down: a POST already on the wire finishes and is reconciled by the ledger."""
+        for fan in list(self.tasks) if fans is None else fans:
+            child = self.children.get(fan)
+            if child is not None and fan in self.tasks and child.cancel_reason is None:
+                child.cancel_reason = reason
+                runner.emit({"event": "turn-cancel-requested", "fan_id": fan, "reason": reason})
+
+    async def drain_tasks(self, timeout_s):
+        """Wait for every in-flight task; whatever is left after the grace is hard-cancelled."""
+        tasks = list(self.tasks.values())
+        if not tasks:
+            return
+        done, pending = await asyncio.wait(tasks, timeout=timeout_s)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._reap()
+
+    async def quiesce(self, reason):
+        """Stop starting turns, cancel what is queued or generating, wait for any send on the wire to settle."""
+        await self.cancel_inflight(reason)
+        await self.drain_tasks(self.tuning.drain_grace_s)
+
+    def renew_runner_lease(self):
+        if self.runner_lease is None:
+            return
+        now = time.monotonic()
+        if now < self.next_lease_renew:
+            return
+        self.next_lease_renew = now + self.tuning.runner_lease_ttl_s / 3
+        try:
+            ok = self.runner_lease.renew(runner.now())
+        except Exception:
+            runner.emit({"event": "runner-lease-renew-failed"})
+            return
+        if not ok:
+            self.runner_lost = True
+            runner.emit({"event": "runner-lease-lost"})
+
+    def queue_event(self, ready, waiting, oldest_s):
+        now = time.monotonic()
+        if now < self.next_queue_event:
+            return
+        self.next_queue_event = now + self.tuning.status_every_s
+        self.queue_stats = {"pending": len(ready) + len(waiting), "ready": len(ready), "quiet": len(waiting),
+                            "in_flight": len(self.tasks), "send_waiting": self.send_gate.waiting,
+                            "oldest_wait_s": round(oldest_s, 1), "concurrency": self.tuning.concurrency}
+        runner.emit({"event": "engine-queue", **self.queue_stats})
+
     async def tick_all(self):
+        self.renew_runner_lease()
+        if self.runner_lost:
+            await self.cancel_inflight("runner-lease-lost")
+            self.stop.set()
+            return
+        self._reap()
         pending, controlled = await asyncio.to_thread(self.pending_fans)
+        now = runner.now()
+        # Takeover / pause / restriction landing while a reply is queued or being generated stops it now.
+        if self.tasks:
+            for fan, reason in (await asyncio.to_thread(self.held_reasons, list(self.tasks))).items():
+                await self.cancel_inflight(reason, [fan])
+        # Burst coalescing: a fan whose messages are still arriving waits for the quiet window, but never longer
+        # than the hard maximum from the first unanswered message.
+        bursts = await asyncio.to_thread(self.burst_state, [fan for fan, _ in pending])
+        from .ledger import _dt
+        ready, waiting, oldest = [], [], 0.0
+        for fan, mid in pending:
+            newest, first = bursts.get(fan, (None, None))
+            if newest is not None:
+                oldest = max(oldest, (now - datetime.fromisoformat(first)).total_seconds())
+            quiet_for = (now - datetime.fromisoformat(newest)).total_seconds() if newest else None
+            waited = (now - datetime.fromisoformat(first)).total_seconds() if first else None
+            if newest is not None and quiet_for < self.quiet_s and waited < self.tuning.burst_max_wait_s:
+                waiting.append((fan, mid, first))
+            else:
+                ready.append((fan, mid, first))
+        # Start work, oldest first, up to the concurrency bound. The rest stays in the database (the durable queue).
+        blocked = self.account_block and now < self.account_block[1] and self.account_block[0]
+        if self.account_block and not blocked:
+            self.account_block = None
+        if not blocked:
+            # Backpressure: replies prepared now would only wait for the send gate. When the projected wait (the
+            # account's next allowed send, e.g. a provider 429 cooldown, plus the replies already queued) is beyond
+            # the horizon, start nothing new; the messages stay in the database and are answered when it clears.
+            policy = await asyncio.to_thread(self.ledger.allowance_status, self.db, None)
+            gate_in = 0.0
+            if policy and policy["next_dispatch_at"]:
+                gate_in = max(0.0, (datetime.fromisoformat(policy["next_dispatch_at"]) - now).total_seconds())
+            interval = max(self.tuning.min_send_interval_s, (policy or {}).get("throttle_seconds") or 0)
+            horizon = interval * (self.tuning.concurrency + 1) + 30
+            if gate_in + self.send_gate.waiting * interval > horizon:
+                blocked = "send-backlog" if gate_in <= horizon else "provider-cooldown"
+        started = 0
+        for fan, mid, first in ready:
+            if self.stop.is_set():
+                break
+            if fan in self.tasks:
+                continue
+            hold = self.fan_holds.get(fan)
+            if hold and now < hold[0]:
+                self._status(fan, "held", hold[1], message_id=mid, waiting_since=first)
+                continue
+            if blocked:
+                self._status(fan, "blocked", blocked, message_id=mid, waiting_since=first)
+                continue
+            if len(self.tasks) >= self.tuning.concurrency:
+                self._status(fan, "waiting", "concurrency-limit", message_id=mid, waiting_since=first)
+                continue
+            if self.already_claimed(fan, mid):
+                continue
+            self._status(fan, "preparing", None, message_id=mid, waiting_since=first)
+            self.tasks[fan] = asyncio.get_running_loop().create_task(self._run_fan(fan), name=f"fan-{fan}")
+            started += 1
+        for fan, mid, first in waiting:
+            self._status(fan, "quiet", "burst-quiet-window", message_id=mid, waiting_since=first)
+        live = {f for f, _ in pending} | set(self.tasks)
+        if self.board is not None:
+            for fan in list(self.board._known) + list(self.board._dirty):
+                if fan not in live:
+                    self.board.clear(fan)
+            for fan in self.tasks:
+                self._status(fan, "sending" if getattr(self.children.get(fan), "phase", "") == "sending" else "preparing")
+        self.queue_event(ready, waiting, oldest)
         try:
             await asyncio.to_thread(self._twin_controls, controlled)
         except Exception as exc:
             runner.emit({"event": "twin-controls-error", "reason": (str(exc) or type(exc).__name__)[:120]})
         # Give back the lease of any fan quiet for a while (bounds renewal tasks and ownership).
         for fan, child in list(self.children.items()):
-            if child.pilot is not None and fan not in controlled and \
+            if child.pilot is not None and fan not in controlled and fan not in self.tasks and \
                     (runner.now() - child.last_active).total_seconds() > FAN_IDLE_RELEASE_S:
                 await self.release_child(fan)
-        for fan, mid in pending:
-            if self.stop.is_set():
-                return
-            hold = self.fan_holds.get(fan)
-            if hold and runner.now() < hold[0]:
-                continue
-            if self.already_claimed(fan, mid):
-                continue  # already worked (a reply, or a no-reply/abandoned turn): never regenerated
-            child = self.child(fan)
-            child.last_active = runner.now()
-            before = child.turns_started
+        if not self.tasks and not ready:
+            await self.run_postsale_scan()
+            if await self.run_followups():
+                return  # a follow-up turn started: re-read controls and the queue first
+        if self.board is not None and self.board.pending():
             try:
-                await child.serve_fan()
-            except Refused as exc:
-                child.note(exc.reason)
-                if exc.reason.startswith(("allowance-", "model-budget")):
-                    raise  # account-wide: stop selecting fans until it clears
-                self._hold_fan(fan, exc.reason)
-                continue
-            except Exception as exc:
-                child.note("service-error:" + type(exc).__name__)
-                self._hold_fan(fan, "service-error")
-                continue
-            if child.backoff_s:
-                # A requeued input (provider 429 / model failure): leave this fan alone while it backs off.
-                self.fan_holds[fan] = (runner.now() + timedelta(seconds=child.backoff_s), "retry-backoff")
-                child.backoff_s = 0.0
-            if child.turns_started > before:
-                return  # one turn at a time; re-read controls and the queue before the next fan
-        await self.run_postsale_scan()
-        if await self.run_followups():
-            return  # a follow-up turn started: re-read controls and the queue first
+                await asyncio.to_thread(self.board.flush, runner.now())
+            except Exception:
+                runner.emit({"event": "work-board-flush-failed"})
         self.note(None)
-        await self.idle(self.poll_s)
+        waiters = [asyncio.ensure_future(self.stop.wait())] + list(self.tasks.values())
+        try:
+            await asyncio.wait(waiters, timeout=self.poll_s, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            waiters[0].cancel()
+            await asyncio.gather(waiters[0], return_exceptions=True)
 
     async def tick(self):
-        await self.ensure_session()
+        try:
+            await self.ensure_session()
+        except Refused as exc:
+            if self.all_fans and self.tasks:
+                # Credential / connection problem: queued and generating replies stop; a send already on the wire settles.
+                await self.cancel_inflight("account-" + exc.reason)
+            raise
+        await self.reconcile_pass()
         policy = self.ledger.allowance_status(self.db, self.args.fan)
-        if policy and policy["next_dispatch_at"]:
+        if policy and policy["next_dispatch_at"] and not self.all_fans:
+            # (All-fans mode keeps preparing replies while the send gate is closed: only the projected send
+            # backlog limits new work, see tick_all. Single-fan mode keeps the original behaviour.)
             wait = (datetime.fromisoformat(policy["next_dispatch_at"]) - runner.now()).total_seconds()
             if wait > 0:
                 # The shared send gate includes a provider cooldown, durably retained after restart.
@@ -623,6 +908,22 @@ class Service:
         if await self.run_followups():
             return
         await self.serve_fan()
+
+    async def reconcile_pass(self):
+        """Settle crashed / unknown admitted sends from the provider's history (autoreconcile). Best effort."""
+        now = time.monotonic()
+        if now < getattr(self, "_next_reconcile", 0.0):
+            return
+        self._next_reconcile = now + self.tuning.reconcile_wait_s
+        from .autoreconcile import reconcile_unresolved
+        try:
+            for result in await reconcile_unresolved(self):
+                if self.board is not None and result["outcome"] == "unresolved":
+                    self.board.set(result["fan_id"], "blocked", result["reason"])
+        except store.DB_ERRORS:
+            pass            # a busy / locked store: try again at the next interval
+        except Exception as exc:
+            runner.emit({"event": "reconcile-error", "reason": type(exc).__name__})
 
     async def serve_fan(self, job=None):
         """Everything one fan's turn needs, after the account-level session and Twin controls.
@@ -658,8 +959,12 @@ class Service:
     async def turn(self):
         pilot, ledger, args = self.pilot, self.ledger, self.args
         snap = ledger.snapshot(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
-        if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id) \
-                or (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < self.quiet_s:
+        if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id):
+            return await self.wait(self.poll_s)
+        quiet_for = (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds()
+        burst_age = (runner.now() - datetime.fromisoformat(snap.earliest_created_at or snap.created_at)).total_seconds()
+        if quiet_for < self.quiet_s and burst_age < self.tuning.burst_max_wait_s:
+            # Still typing: wait for the quiet window, but a continuously typing fan is answered after the hard maximum.
             return await self.wait(self.poll_s)
         wait = self.cooldown_left()
         if wait > 0:
@@ -743,6 +1048,15 @@ class Service:
             # Answer the input again later only when no send attempt stands for it (the ledger re-checks):
             # a model timeout/error, or a POST that certainly did not reach OnlyFans (a provider 429, or a
             # last-instant hold). A definite non-429 refusal and every follow-up job are not retried.
+            if job is None and gateway.not_sent is None and (error.startswith(RELEASE_PREFIXES) or error in RELEASE_BACKOFF_S):
+                # Not the message's fault and nothing stands on the wire for it: give the claim back, keep no draft.
+                released = await asyncio.to_thread(ledger.release_input, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
+                                                   input_key=key, now=runner.now())
+                if released:
+                    self.backoff_s = RELEASE_BACKOFF_S.get(error, self.poll_s)
+                    runner.emit({"event": "turn-released", "reason": error, "backoff_s": self.backoff_s,
+                                 **({"fan_id": self.args.fan} if self.strict else {})})
+                    return error
             retry = None
             if job is None:
                 if gateway.not_sent is not None:
@@ -919,6 +1233,8 @@ class Service:
             hold = self.fan_holds.get(fan)
             if hold and runner.now() < hold[0]:
                 continue
+            if fan in self.tasks:
+                continue          # a fan message is being answered: the nudge would be stale anyway
             if self.all_fans and not self._owned(fan):
                 self.settle_job(job, "dropped", "fan-not-owned")
                 continue
@@ -1099,7 +1415,13 @@ class Service:
         if not self.path:
             raise Refused("pilot-store-required")
         runner.require_store_schema(self.path)
-        self.ledger = Ledger(self.path, allowance=True)
+        self.ledger = Ledger(self.path, allowance=True, min_send_interval_s=self.tuning.min_send_interval_s)
+        for var, why in self.tuning.clamped:
+            runner.emit({"event": "setting-clamped", "setting": var, "why": why})
+        if self.all_fans:
+            self._size_thread_pool()
+            await self._take_runner_lease()
+            self.board = WorkBoard(self.ledger, self.db)
         if getattr(self.args, "followups", False):
             from .followups import FollowupQueue
             runner.require_store_schema(self.path, followups=True)
@@ -1131,11 +1453,44 @@ class Service:
         finally:
             await self.shutdown()
 
+    def _size_thread_pool(self):
+        """Blocking sends and reads run in threads. A reply waiting in the send queue holds one, so the pool has to
+        be larger than the concurrency bound or the sender that would free the queue could never get a thread."""
+        from concurrent.futures import ThreadPoolExecutor
+        asyncio.get_running_loop().set_default_executor(
+            ThreadPoolExecutor(max_workers=self.tuning.concurrency * 3 + 12, thread_name_prefix="fastt"))
+
+    async def _take_runner_lease(self):
+        """One live engine process per account. While another holder's lease is live this process waits (it does
+        not exit, so a rolling deploy cannot trip the supervisor's crash-loop guard)."""
+        import socket
+        self.runner_lease = RunnerLease(self.ledger, self.db, f"{socket.gethostname()}:{os.getpid()}", self.tuning.runner_lease_ttl_s)
+        while not self.stop.is_set():
+            try:
+                gen = self.runner_lease.acquire(runner.now())
+                runner.emit({"event": "runner-lease-acquired", "generation": gen})
+                return
+            except Refused as exc:
+                self.note(exc.reason)
+                await self.idle(min(5.0, self.hold_s))
+        raise Refused("service-stopping")
+
     async def shutdown(self):
         from db.engine import engine
         from twin_bridge.coordination import clear_owner
         pilot = self.pilot
         try:
+            if self.tasks:
+                # Drain: queued and generating replies stop at once (stop is set); a send on the wire settles.
+                await self.cancel_inflight("service-stopping")
+                await self.drain_tasks(self.tuning.drain_grace_s)
+            if self.board is not None:
+                try:
+                    for fan in list(self.board._known):
+                        self.board.clear(fan)
+                    await asyncio.to_thread(self.board.flush, runner.now())
+                except Exception:
+                    pass
             for fan in list(self.children):
                 await self.release_child(fan)
             task, self._renew_task = self._renew_task, None
@@ -1150,6 +1505,11 @@ class Service:
                     pass
                 clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
             self.restore_catalog()
+            if self.runner_lease is not None:
+                try:
+                    self.runner_lease.release(runner.now())
+                except Exception:
+                    pass
             runner.emit({"event": "finished", "persistent": True})
         finally:
             try:

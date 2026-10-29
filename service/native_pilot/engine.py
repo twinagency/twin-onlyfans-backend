@@ -8,6 +8,7 @@ The runner owns fresh-input admission, transport, durable send cap and recovery.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 from datetime import timedelta
 from types import SimpleNamespace
@@ -47,6 +48,12 @@ FOLLOWUPS = {
     "msg_limits_by_spend": [],
     "daily_quota_enabled": False, "daily_quota_enforce": False,
 }
+
+
+# Engine v2: several fan turns run concurrently in one account process, each in its own asyncio task. The
+# capability binding was already a ContextVar; "one engine at a time" is now enforced per task context, not per
+# process. A task that tries to open a second engine inside itself is still refused.
+_ENGINE_IN_CONTEXT: contextvars.ContextVar = contextvars.ContextVar("fastt_native_engine_in_context", default=False)
 
 
 class PilotBoundaryError(RuntimeError):
@@ -175,8 +182,6 @@ class NativeEngine:
     context token is reversible and task-local; no second conversation engine
     or hidden process-global routing table exists.
     """
-
-    _active = False
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
@@ -512,7 +517,7 @@ class NativeEngine:
         return None
 
     def __enter__(self):
-        if self._token is not None or NativeEngine._active:
+        if self._token is not None or _ENGINE_IN_CONTEXT.get():
             raise PilotBoundaryError("engine-already-active")
         # Lazy import: merely importing this module never loads repo .env,
         # opens a DB, constructs a platform client or resolves credentials.
@@ -520,11 +525,11 @@ class NativeEngine:
         from telegram_runtime.capabilities import set_telegram_capabilities
 
         self.native = native
-        NativeEngine._active = True
+        self._flag = _ENGINE_IN_CONTEXT.set(True)
         try:
             self._token = set_telegram_capabilities(self)
         except BaseException:
-            NativeEngine._active = False
+            _ENGINE_IN_CONTEXT.reset(self._flag)
             raise
         return self
 
@@ -583,5 +588,5 @@ class NativeEngine:
             from telegram_runtime.capabilities import reset_telegram_capabilities
             token, self._token = self._token, None
             reset_telegram_capabilities(token)
-            NativeEngine._active = False
+            _ENGINE_IN_CONTEXT.reset(self._flag)
         return False

@@ -53,7 +53,7 @@ from db.models import (
 from db.onlyfans_models import OfRuntime, OfIngress, OfControlAudit
 from db.onlyfans_connection_models import OfProviderConnection
 
-from .contract import UNRESOLVED_OUTCOMES
+from .contract import UNRESOLVED_OUTCOMES, iso
 from .errors import Unavailable
 
 MAX_ACCOUNT_READ = 500
@@ -180,7 +180,7 @@ class OnlyFansReadRepo(Protocol):
     async def get_binding(self, *, tenant_id: str | None, account_id: str) -> BindingRow | None: ...
 
     async def conversation_page(
-        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False, search: str = ""
+        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False, query: str = "", filter: str | None = None, search: str | None = None
     ) -> list[ConversationRow]: ...
 
     async def conversation(self, *, account_id: str, fan_id: int) -> ConversationRow | None: ...
@@ -439,9 +439,45 @@ class SqlOnlyFansReadRepo:
         rows = await self.list_bindings(tenant_id=tenant_id, creator_id=None, account_id=account_id)
         return rows[0] if rows else None
 
+    async def fan_financials(self, *, account_id: str, fan_id: int) -> dict:
+        """Canonical transaction rows, counted once per receipt, never per asset.
+
+        Amounts remain separated by recorded currency and payment status. These
+        are recorded totals, not a claim of complete lifetime provider coverage.
+        """
+        from db.models import Transaction
+        from db.onlyfans_ledger_models import OfLedgerScan
+        from onlyfans_runtime.ledger import coverage_proven
+        from onlyfans_runtime.commerce import held
+        try:
+            async with get_session() as s:
+                await lock_read_scope(s, account_id)
+                rows = (await s.execute(select(Transaction.currency, Transaction.status,
+                    func.count(), func.sum(Transaction.amount_cents), func.sum(Transaction.net_cents),
+                    func.count(Transaction.net_cents), func.max(Transaction.occurred_at)).where(
+                    Transaction.account_id == account_id, Transaction.fan_id == fan_id,
+                    Transaction.source == "ledger").group_by(Transaction.currency, Transaction.status)
+                    .order_by(Transaction.currency, Transaction.status))).all()
+                scan = await s.get(OfLedgerScan, account_id)
+                runtime = await s.get(OfRuntime, account_id)
+                current = bool(scan and runtime and scan.binding_id == runtime.binding_id)
+                coverage = bool(current and coverage_proven(scan))
+                commerce_held = await s.run_sync(lambda sync: held(sync, account_id, fan_id))
+                return {"version": "of-fan-financials.v1", "totals": [
+                    {"currency": row[0], "status": row[1], "transactions": row[2], "grossCents": row[3],
+                     "netCents": row[4] if row[5] == row[2] else None, "lastTransactionAt": iso(row[6])}
+                    for row in rows], "coverageComplete": coverage,
+                    "coverageAt": iso(scan.last_complete_at) if current else None,
+                    "commerceHeld": commerce_held}
+        except SQLAlchemyError as exc:
+            raise _storage_failure(exc) from exc
+
     async def conversation_page(
-        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False, search: str = ""
+        self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False, query: str = "", filter: str | None = None, search: str | None = None
     ) -> list[ConversationRow]:
+        if search is not None:
+            from .search import normalize_search
+            query = normalize_search(search)
         try:
             async with get_session() as s:
                 await lock_read_scope(s, account_id)
@@ -469,9 +505,16 @@ class SqlOnlyFansReadRepo:
                     .order_by(Chat.last_message_at.desc().nullslast(), Chat.fan_id.desc())
                     .limit(limit)
                 )
-                if search:
-                    stmt = stmt.where(or_(func.lower(Fan.of_display_name).contains(search, autoescape=True),
-                        func.lower(Fan.of_username).contains(search, autoescape=True), cast(Chat.fan_id, String) == search))
+                if query:
+                    stmt = stmt.where(or_(Fan.of_username.icontains(query, autoescape=True),
+                        Fan.of_display_name.icontains(query, autoescape=True),
+                        cast(Chat.fan_id, String).contains(query, autoescape=True)))
+                if filter == "unread":
+                    stmt = stmt.where(Chat.unread_count > 0)
+                elif filter == "attention":
+                    stmt = stmt.where(select(OfConversationState.fan_id).where(
+                        OfConversationState.account_id == Chat.account_id, OfConversationState.fan_id == Chat.fan_id,
+                        OfConversationState.requires_attention.is_(True)).exists())
                 if ai_only:
                     # Filter before the keyset limit, including enabled fans on later pages.
                     # Both identity columns are required: fan ids can repeat across creators.

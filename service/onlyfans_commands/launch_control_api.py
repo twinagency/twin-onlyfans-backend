@@ -2,6 +2,9 @@
 import asyncio
 import hmac
 import re
+import logging
+import traceback
+import uuid
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -28,6 +31,7 @@ def _store(request):
 
 
 async def _read(request, account, operation):
+    reference = uuid.uuid4().hex
     try:
         principal = await _authenticate(request)
         if not ID_PATTERN.fullmatch(account):
@@ -53,8 +57,14 @@ async def _read(request, account, operation):
         if "invalid" in str(exc):
             return _refusal(BadRequest("invalid_request", "That request needs correction."))
         return _refusal(ReadRefused("unknown_account"))
-    except Exception:
-        return _refusal(Unavailable("launch_unavailable", "Account launch evidence could not be read."))
+    except Exception as error:
+        # Stack locations and error class identify the failure without logging
+        # SQL values, provider payloads, fan text or credentials.
+        frames = [(frame.filename.rsplit("/", 1)[-1], frame.name, frame.lineno) for frame in traceback.extract_tb(error.__traceback__)]
+        logging.getLogger("onlyfans.launch").error("evidence failure ref=%s operation=%s class=%s stack=%s", reference, operation, type(error).__name__, frames)
+        answer = _refusal(Unavailable("launch_unavailable", "Account launch evidence could not be read."))
+        answer.headers["X-OnlyFans-Evidence-Reference"] = reference
+        return answer
     return JSONResponse({"ok": True, "schemaVersion": SCHEMA_VERSION, "accountId": account, operation: value},
                         headers=_PRIVATE_HEADERS)
 

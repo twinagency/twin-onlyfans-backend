@@ -160,18 +160,20 @@ class Store:
         self.engine.dispose()
 
     @staticmethod
-    def _runtime(s, tenant_id, account_id):
+    def _runtime(s, tenant_id, account_id, *, lock=True):
         # Lock ordering is runtime -> binding -> conversation everywhere.
-        runtime = s.scalar(select(OfRuntime).where(OfRuntime.account_id == account_id).with_for_update())
+        runtime_query = select(OfRuntime).where(OfRuntime.account_id == account_id)
+        runtime = s.scalar(runtime_query.with_for_update() if lock else runtime_query)
         if runtime is None:
             raise Refused("scope unavailable")
-        binding = s.scalar(select(OfCreatorBinding).where(
+        binding_query = select(OfCreatorBinding).where(
             OfCreatorBinding.id == runtime.binding_id,
             OfCreatorBinding.account_id == account_id,
             OfCreatorBinding.tenant_id == tenant_id,
             OfCreatorBinding.channel == "onlyfans",
             OfCreatorBinding.revoked_at.is_(None),
-        ).with_for_update(read=True))
+        )
+        binding = s.scalar(binding_query.with_for_update(read=True) if lock else binding_query)
         from onlyfans_read.agency_scope import creator_allowed
         if binding is None or not creator_allowed(binding.creator_id):
             raise Refused("scope unavailable")
@@ -378,6 +380,9 @@ class Store:
         s.flush()
 
     def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None):
+        from onlyfans_read.agency_scope import current_scope, actor_allowed
+        if current_scope.get() is not None and not actor_allowed(actor, capability="chat" if action in {"request_takeover", "release_takeover"} else "manage"):
+            raise Refused("management permission required")
         _id(fan_id)
         if mode not in {"automated", "human_controlled", "paused", "no_contact"}:
             raise Refused("invalid control mode")

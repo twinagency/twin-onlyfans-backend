@@ -35,7 +35,7 @@ def test_new_head_imports_while_archive_cursors_and_send_settings_stay_unchanged
     def chats(**kw):
         assert store.engine.pool.checkedout() == 0
         calls.append(kw["cursor"])
-        return ChatPage([901], "50", {901: 200})
+        return ChatPage([901], "50", {901: 200}) if kw["cursor"] is None else ChatPage([], None)
     monkeypatch.setattr(reader, "chats", chats)
     monkeypatch.setattr(reader, "messages", lambda **kw: MessagePage([incoming()], True))
     assert poll_recent(store, TENANT, account, reader, connection_revision=1, clock=lambda:100) == 1
@@ -49,7 +49,7 @@ def test_new_head_imports_while_archive_cursors_and_send_settings_stay_unchanged
         assert not s.get(OfProviderConnection, account).automate_new_conversations
         assert s.scalar(select(func.count()).select_from(OfWork)) == 0
         assert s.get(OfProviderReadBudget, account).lease_token is None
-    assert calls == [None]
+    assert calls == [None, "50"]
 
 
 def test_known_head_does_not_reread_messages_and_new_head_is_detected_on_next_interval(native, monkeypatch):
@@ -138,7 +138,7 @@ def test_enabled_read_step_imports_new_head_and_continues_older_scan(native,monk
     monkeypatch.setattr(reader,'chats',chats)
     monkeypatch.setattr(reader,'messages',messages)
     progress=read_step(store,TENANT,account,reader,connection_revision=1)
-    assert cursors==[None,'12000']
+    assert cursors==[None,'50','12000']
     assert (progress.discovery_pages,progress.recovery_pages)==(1,1)
     with Session(store.engine) as s:assert s.get(Chat,(account,901)).last_message_id==200
 

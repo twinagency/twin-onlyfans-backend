@@ -50,8 +50,6 @@ async def control(request: Request, account_id: str, conversation_id: str):
         return refused("unauthorized", 401, "The control credential was not accepted.")
     if request.headers.get(HEADER) != SCHEMA:
         return refused("unsupported_schema", 400, "The control contract version is required.")
-    scope=current_scope.get()
-    if scope is not None and not scope.can_manage:return refused('forbidden',403,'Management permission is required.')
     store = getattr(request.app.state, "control_store", None)
     if store is None:
         return refused("controls_unavailable", 503, "Conversation controls are not available.")
@@ -85,7 +83,7 @@ async def control(request: Request, account_id: str, conversation_id: str):
         action, revision, key, actor = (body[k] for k in ("action", "expectedRevision", "commandKey", "actor"))
         if (type(action) is not str or action not in {*ACTIONS, "manual_message", "resolve_delivery_evidence"} or type(revision) is not int or
                 not 0 <= revision < 2**31-1 or type(key) is not str or not re.fullmatch(r"[a-f0-9]{64}", key) or
-                not actor_allowed(actor)):
+                not actor_allowed(actor, capability="chat" if action in {"manual_message", "request_takeover", "release_takeover"} else "manage")):
             raise ValueError()
         if resolution and (body['decision']!='delivered' or type(body['attemptId']) is not str
                 or not re.fullmatch(r'[A-Za-z0-9-]{1,128}',body['attemptId'])

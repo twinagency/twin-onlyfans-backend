@@ -355,7 +355,7 @@ class HistoricalMemory:
     def correct(self, tenant_id, account_id, fan_id, *, field, operation, value,
                 expected_version, command_key, actor, reason):
         if (type(field) is not str or field not in FACT_FIELDS | PROFILE_FIELDS.keys()
-                or type(operation) is not str or operation not in {"set", "clear"} or not actor_allowed(actor)
+                or type(operation) is not str or operation not in {"set", "clear"} or not actor_allowed(actor, capability="chat")
                 or type(reason) is not str or not 1 <= len(reason) <= 512
                 or type(command_key) is not str or not 1 <= len(command_key) <= 64
                 or type(expected_version) is not str or not re.fullmatch(r"[a-f0-9]{64}", expected_version)):

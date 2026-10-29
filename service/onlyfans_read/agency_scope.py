@@ -22,6 +22,8 @@ class AgencyScope:
     creator_ids: tuple[str, ...]
     actor: str
     can_manage: bool
+    can_chat: bool = False
+    version: str = VERSION
 
 
 current_scope: ContextVar[AgencyScope | None] = ContextVar("onlyfans_agency_scope", default=None)
@@ -39,12 +41,14 @@ def parse_scope(raw):
             value[key] = item
         return value
     value = json.loads(raw, object_pairs_hook=unique)
-    if (type(value) is not dict or set(value) != {"creatorIds", "actor", "canManage"}
+    if (type(value) is not dict or set(value) not in ({"creatorIds", "actor", "canManage"}, {"creatorIds", "actor", "canManage", "canChat"})
+            or ("canChat" in value and type(value["canChat"]) is not bool)
             or type(value["creatorIds"]) is not list or type(value["canManage"]) is not bool
             or type(value["actor"]) is not str or not re.fullmatch(rf"agency-user:{UUID}:{UUID}", value["actor"])
             or any(type(item) is not str or not re.fullmatch(UUID, item) for item in value["creatorIds"])):
         raise ValueError("invalid agency scope")
-    return AgencyScope(tuple(sorted(set(value["creatorIds"]))), value["actor"], value["canManage"])
+    return AgencyScope(tuple(sorted(set(value["creatorIds"]))), value["actor"], value["canManage"], value.get("canChat", False),
+        "of-agency.v2" if "canChat" in value else VERSION)
 
 
 def creator_allowed(creator_id):
@@ -52,7 +56,7 @@ def creator_allowed(creator_id):
     return scope is None or creator_id in scope.creator_ids
 
 
-def actor_allowed(actor):
+def actor_allowed(actor, *, capability="manage"):
     scope = current_scope.get()
     # Internal import tasks are named explicitly, never as fabricated users.
     # They exist only in the worker and cannot enter an HTTP agency scope.
@@ -60,7 +64,7 @@ def actor_allowed(actor):
             and type(actor) is str and re.fullmatch(r"worker-import:[a-f0-9]{64}", actor)):
         return True
     return (type(actor) is str and re.fullmatch(ACTOR_PATTERN, actor) is not None
-            and (scope is None or scope.can_manage and actor == scope.actor))
+            and (scope is None or (scope.can_manage or capability == "chat" and scope.can_chat) and actor == scope.actor))
 
 
 async def lock_read_scope(session, account_id):
@@ -107,9 +111,11 @@ class AgencyScopeMiddleware:
                 # content-sync/v1 lists its own operations; a draft chunk upload is the only PUT.
                 chunk = sync and scope["method"] == "PUT" and bool(re.fullmatch(
                     r"/onlyfans/content-sync/v1/accounts/[A-Za-z0-9._:-]{1,64}/drafts/[0-9a-f-]{36}/files/[0-9a-f-]{36}/chunks/[0-9]{1,6}", path))
+                chat_write = grant.can_chat and scope["method"] == "POST" and bool(re.fullmatch(
+                    r"/onlyfans/(?:control/v1/accounts/[A-Za-z0-9._:-]{1,64}/conversations/[A-Za-z0-9._:-]{1,64}|configuration/v1/accounts/[A-Za-z0-9._:-]{1,64}/history-memory/fans/[1-9][0-9]{0,17}/corrections)", path))
                 if (not allowed
                         or scope["method"] not in ({"GET", "HEAD", "POST"} | ({"PUT"} if chunk else set()))
-                        or (scope["method"] in {"POST", "PUT"} and not grant.can_manage)):
+                        or (scope["method"] in {"POST", "PUT"} and not grant.can_manage and not chat_write)):
                     raise ValueError("agency action unavailable")
         except (ValueError, TypeError, RecursionError):
             return await JSONResponse({"ok": False, "code": "agency_scope_denied", "error": "That agency request is not available."},
@@ -117,7 +123,7 @@ class AgencyScopeMiddleware:
         token = current_scope.set(grant)
         async def scoped_send(message):
             if message["type"] == "http.response.start" and grant is not None:
-                message = {**message, "headers": [*message.get("headers", []), (VERSION_HEADER.lower().encode(), VERSION.encode())]}
+                message = {**message, "headers": [*message.get("headers", []), (VERSION_HEADER.lower().encode(), grant.version.encode())]}
             await send(message)
         try:
             await self.app(scope, receive, scoped_send)

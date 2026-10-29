@@ -26,6 +26,7 @@ from .store import Refused, _id, utcnow
 
 PAGE_SIZE = 20
 MAX_OFFSET = 10000
+MAX_MARKER_ROWS = 1000000000
 
 
 def timestamp(value):
@@ -155,8 +156,12 @@ def _cursor(scan):
         if not scan.continuation_json or len(scan.continuation_json.encode()) > 8192:
             return None
         value = load(scan.continuation_json.encode())
-        if (set(value) != {"version", "scope", "marker", "anchor", "power", "distance"}
-                or type(value["version"]) is not int or value["version"] != 1
+        version = value.get("version")
+        keys = {"version", "scope", "marker", "anchor", "power", "distance"}
+        if version == 2:
+            keys.add("rows")
+        if (set(value) != keys
+                or type(version) is not int or version not in (1, 2)
                 or value["scope"] != _cursor_scope(scan)
                 or type(value["power"]) is not int or not 1 <= value["power"] <= 2**31
                 or type(value["distance"]) is not int or not 0 <= value["distance"] < value["power"]):
@@ -164,9 +169,19 @@ def _cursor(scan):
         for key in ("marker", "anchor"):
             if value[key] is not None and transaction_marker(value[key]) != value[key]:
                 return None
+        if version == 2 and (type(value["rows"]) is not int
+                or not MAX_OFFSET < value["rows"] <= MAX_MARKER_ROWS
+                or scan.page_offset != MAX_OFFSET):
+            return None
         return value
     except (NativeProtocolError, ValueError, TypeError, UnicodeError):
         return None
+
+
+def scan_position(scan):
+    """Actual marker traversal count; the legacy offset column stays in range."""
+    cursor = _cursor(scan)
+    return cursor.get("rows", scan.page_offset) if cursor else scan.page_offset
 
 
 def _advance_cursor(cursor, marker):
@@ -401,7 +416,7 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
             token = str(uuid.uuid4())
             scan.status, scan.lease_token, scan.last_error = "running", token, None
             scan.lease_until, scan.next_poll_at, scan.updated_at = now + timedelta(seconds=60), now, now
-            start, end, offset, owner, expiry = scan.window_start, scan.window_end, scan.page_offset, scan.owner_id, connection.expires_at
+            start, end, offset, owner, expiry = scan.window_start, scan.window_end, cursor.get("rows", scan.page_offset), scan.owner_id, connection.expires_at
             connection_revision=connection.revision
         if stop is not None and stop.is_set():
             break
@@ -439,7 +454,7 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                 # row order, optional metadata or a changed terminal-page flag.
                 page_hash = hashlib.sha256(canonical(identities).encode()).hexdigest() if error is None else None
                 legacy_hash = hashlib.sha256(raw).hexdigest() if error is None else None
-                if error is None and (offset + len(identities) > (1000000000 if history else MAX_OFFSET)
+                if error is None and (offset + len(identities) > (MAX_MARKER_ROWS if history or cursor["marker"] is not None else MAX_OFFSET)
                         or identities and scan.last_page_hash in {page_hash, legacy_hash}):
                     error = "unsupported_ledger_pagination"
                 if error is None:
@@ -454,7 +469,14 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                     continue
                 for row in rows:
                     apply_observation(s, account, row, now=now, backfill=history)
-                scan.page_offset, scan.last_page_hash = offset + len(identities), page_hash
+                position = offset + len(identities)
+                # The older recent-scan schema bounds its offset at 10,000.
+                # Marker traversal has no offset dependency. Keep its complete
+                # count in the versioned cursor without changing that schema.
+                scan.page_offset = position if history else min(position, MAX_OFFSET)
+                if not history and position > MAX_OFFSET:
+                    next_cursor.update(version=2, rows=position)
+                scan.last_page_hash = page_hash
                 scan.continuation_json = canonical(next_cursor)
                 scan.next_poll_at = now + timedelta(seconds=1 if more else 300)
                 if not more:

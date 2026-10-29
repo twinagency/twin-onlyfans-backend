@@ -427,7 +427,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
     def transaction_page(self, *, offset, limit=20, start, end, history=False, marker=None):
         """Reuse the legacy ledger endpoint with frozen UTC bounds and no retries."""
         self._ready()
-        if (type(offset) is not int or not 0 <= offset <= (1000000000 if history is True else 10000)
+        if (type(offset) is not int or not 0 <= offset <= (1000000000 if history is True or marker is not None else 10000)
                 or type(limit) is not int or not 1 <= limit <= 20
                 or type(start) is not datetime or type(end) is not datetime
                 or start.tzinfo is not None or end.tzinfo is not None

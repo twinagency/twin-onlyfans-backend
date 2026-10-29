@@ -1,0 +1,57 @@
+name: Vault accuracy validation and runtime
+on:
+  push:
+    branches: ["gpt/vault-accuracy-20261029"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-onlyfans-test.txt aiosqlite pytest-asyncio
+      - name: Verify real persistence, scope isolation and two-pass classification
+        working-directory: service
+        env:
+          PYTHONPATH: .:tests
+          ONLYFANS_PROCESS_ROLE: worker
+          TWIN_FASTT_CONFIG_ISOLATED: "1"
+          DATABASE_URL: postgresql+psycopg2://postgres@localhost:5432/postgres
+          ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres@localhost:5432/postgres
+        run: >-
+          python -m pytest -q --tb=short
+          tests/test_vault_auto_folders.py
+          tests/test_automatic_vault_descriptions_pg.py
+          tests/test_onlyfans_vault_previews_pg.py
+          tests/test_onlyfans_vault_editing_pg.py
+      - name: Package tested runtime
+        run: |
+          docker build -f Dockerfile.onlyfans --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "twin-vault-accuracy:$GITHUB_SHA" .
+          mkdir -p runtime
+          docker image inspect "twin-vault-accuracy:$GITHUB_SHA" --format '{{.Id}}' > runtime/image-id.txt
+          printf '%s\n' "$GITHUB_SHA" > runtime/source-sha.txt
+          docker save "twin-vault-accuracy:$GITHUB_SHA" | gzip -n > runtime/backend.docker.tar.gz
+          cd runtime
+          sha256sum backend.docker.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twin-vault-accuracy-runtime
+          path: runtime/
+          compression-level: 0
+          retention-days: 7

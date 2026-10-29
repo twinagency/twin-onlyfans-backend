@@ -232,6 +232,7 @@ class Collected(NamedTuple):
     # raising, this is the ONLY channel that difference has — the sweep hands it
     # straight to `first_error`, which is what the button reports.
     detail: str = ""
+    source: str = "unknown"
 
 
 # `warm_one_sync`'s outcome in the vocabulary above. Anything not listed either
@@ -270,7 +271,7 @@ async def _poster_stills(account_id: str, media_id: int, media: dict,
         elif still.reason == "fetch_failed":
             transient = True
     if frames:
-        return Collected(frames, "ok")
+        return Collected(frames, "ok", source="posters")
     if transient:
         return Collected([], "fetch_failed")
     return Collected([], _WARM_REASON.get(warm, "no_variant"))
@@ -292,7 +293,7 @@ async def _collect_video(account_id: str, media_id: int, raw: dict,
     the same read end up describing different media."""
     frames = storyboard_frames(video_url(raw), want)
     if frames:
-        return Collected(frames, "ok")
+        return Collected(frames, "ok", source="storyboard")
 
     fresh = await vault_stills.resolve_fresh(account_id, media_id, client)
     if fresh.media is None:
@@ -309,7 +310,7 @@ async def _collect_video(account_id: str, media_id: int, raw: dict,
             float(media.get("duration") or raw.get("duration") or 0))
         frames = storyboard_frames(fresh_url, want)
         if frames:
-            return Collected(frames, "ok")
+            return Collected(frames, "ok", source="storyboard")
 
     return await _poster_stills(account_id, media_id, media, want, warm)
 
@@ -361,4 +362,4 @@ async def _collect(account_id: str, item: VaultItem, raw: dict,
         vault_stills.image_path(account_id, item.media_id), pick_image)
     if still.data is None:
         return Collected([], still.reason)
-    return Collected([vision.img_data_url(still.data)], "ok")
+    return Collected([vision.img_data_url(still.data)], "ok", source="photo")

@@ -77,7 +77,17 @@ def get_folders(store,tenant,account,folder_id=None):
         if len(rows)>200:raise Refused("vault folder list exceeds editor budget")
         counts=dict(s.execute(select(VaultFolderItem.folder_id,func.count()).where(VaultFolderItem.account_id==account,
             VaultFolderItem.folder_id.in_([r.id for r in rows])).group_by(VaultFolderItem.folder_id)).all())
-        return [{"folderId":str(r.id),"name":r.name,"count":counts.get(r.id,0)} for r in rows]
+        covers=dict(s.execute(select(VaultFolderItem.folder_id,func.min(VaultFolderItem.media_id))
+            .join(VaultItem,(VaultItem.account_id==VaultFolderItem.account_id)&(VaultItem.media_id==VaultFolderItem.media_id))
+            .where(VaultFolderItem.account_id==account,VaultFolderItem.folder_id.in_([r.id for r in rows]),
+                VaultItem.removed_at.is_(None),VaultItem.kind.in_(("photo","video","gif")))
+            .group_by(VaultFolderItem.folder_id)).all())
+        kinds=dict(s.execute(select(VaultItem.media_id,VaultItem.kind).where(VaultItem.account_id==account,
+            VaultItem.media_id.in_(list(covers.values())))).all()) if covers else {}
+        return [{"folderId":str(r.id),"name":r.name,"count":counts.get(r.id,0),
+            "coverMediaId":str(covers[r.id]) if r.id in covers else None,
+            "coverKind":kinds.get(covers.get(r.id)),
+            "automatic":bool(r.created_by and r.created_by.startswith("auto-category:"))} for r in rows]
 
 
 def _prior(s,runtime,key,request_hash,actor):
@@ -121,6 +131,11 @@ def edit_asset(store,tenant,account,media_id,*,patch,expected_fingerprint,comman
         for field,value in patch.items():project_operator_text(field,value,overrides,locked,columns)
         for field,value in columns.items():setattr(row,field,value)
         row.operator_overrides_json=canonical(overrides);row.locked_fields_json=canonical(sorted(locked))
+        fields=object_value(row.ai_fields_json)
+        fields.pop("_auto_folders_v3",None)
+        # The earlier visual receipt does not validate newly edited text.
+        fields.pop("_folder_evidence_v1",None)
+        row.ai_fields_json=canonical(fields)
         after=asset_view(row)
         if after["fingerprint"]==before["fingerprint"]:raise InvalidVault("No asset change was needed.")
         return _record(s,runtime,command_key,request_hash,actor,"asset_edit",media,before,after)
@@ -167,3 +182,4 @@ def edit_folder(store,tenant,account,folder_id,*,action,name,media_ids,expected_
         s.flush();after=folder_view(s,row)
         if before and before["fingerprint"]==after["fingerprint"]:raise InvalidVault("No folder change was needed.")
         return _record(s,runtime,command_key,request_hash,actor,"folder_"+action,row.id,before,after)
+

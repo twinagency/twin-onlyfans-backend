@@ -203,23 +203,42 @@ class NativeWorker:
                 HistoricalMemory(self.store).step(self.tenant_id,account.account_id,limit=40)
             except (Refused,SQLAlchemyError):report.held+=1
         if archive and self.history_recovery and account.reader is not None:
-            try:
-                from .launch_history_memory.recovery import HistoryRecovery
-                recovery=HistoryRecovery(self.store)
+            from .launch_history_memory.recovery import HistoryRecovery
+            from . import profile_sync
+            from .provider_read_budget import ReadDeferred
+            from .history_diagnostics import record_history_failure
+            recovery=HistoryRecovery(self.store)
+            def history():
                 recovery.request_account(self.tenant_id,account.account_id,**scope)
-                recovery.step(self.tenant_id,account.account_id,account.reader,**scope)
-            except Exception:report.held+=1
+                return recovery.step(self.tenant_id,account.account_id,account.reader,**scope)
+            def profiles():
+                return profile_sync.step(self.store,self.tenant_id,account.account_id,account.reader,**scope)
+            # Retain rotation through cohort reconstruction. Both lanes use
+            # the same budget and leave recent intake's reserve untouched.
+            turns=getattr(self.store,'_sync_profile_turns',None)
+            if turns is None:turns=self.store._sync_profile_turns={}
+            key=(self.tenant_id,account.account_id)
+            first=turns.get(key,False);turns[key]=not first
+            for job in ((profiles,history) if first else (history,profiles)):
+                try:job()
+                except (ReadDeferred,Refused):report.held+=1
+                except Exception as error:
+                    record_history_failure(error)
+                    report.held+=1;report.errors+=1
 
-    def _read_progress(self, account, **scope):
+    def _read_progress(self, account, report, **scope):
         """A paced provider read retry leaves durable recovery checkpoints due."""
         from .worker import read_step
-        from .provider_connector import NativeReadTransientError, NativeRateLimitError
+        from .native_protocol import NativeProtocolError
         try:
             return read_step(self.store,self.tenant_id,account.account_id,account.reader,
                 recent_cutover=self.history_recovery,**scope)
-        except (NativeReadTransientError,NativeRateLimitError):
+        except NativeProtocolError as error:
             # The read owner already released its lease and saved provider
             # backoff. Skip planning this turn; other accounts still get work.
+            from .history_diagnostics import record_history_failure
+            record_history_failure(error)
+            report.errors+=1
             return None
 
     def step(self,stop=None):
@@ -239,9 +258,11 @@ class NativeWorker:
                 account_errors=report.errors
                 try:
                     if account.read_connection_revision is not None:
-                        progress=self._read_progress(account,connection_revision=account.read_connection_revision)
+                        progress=self._read_progress(account,report,connection_revision=account.read_connection_revision)
                         if progress is None:
                             report.held+=1
+                            if not stop.is_set():self._history_turn(account,report,
+                                revision=account.read_connection_revision,memory=False)
                             continue
                         report.ingress+=progress.applied
                         # Inactive verified accounts import archive history too; no model, automation or send.
@@ -259,9 +280,10 @@ class NativeWorker:
                     if account.reader is None:
                         report.ingress+=self.store.drain(self.tenant_id,account.account_id)
                     else:
-                        progress=self._read_progress(account)
+                        progress=self._read_progress(account,report)
                         if progress is None:
                             report.held+=1
+                            if not stop.is_set():self._history_turn(account,report,memory=False)
                             continue
                         report.ingress+=progress.applied
                     if stop.is_set():break

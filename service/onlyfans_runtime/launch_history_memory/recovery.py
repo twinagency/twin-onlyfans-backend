@@ -19,7 +19,8 @@ from sqlalchemy import (BigInteger, Boolean, CheckConstraint, Column, DateTime,
 from sqlalchemy.orm import Session
 
 from db.models import Base, Fan, Message, OfCreatorBinding
-from db.onlyfans_models import OfIngress, OfRuntime, OfWork
+from db.onlyfans_models import OfIngress, OfRecovery, OfRuntime, OfWork
+from onlyfans_runtime.read_failures import ERROR_CODES as READ_ERROR_CODES, failure_code
 from onlyfans_runtime.store import Event, LEASE_SECONDS, MAX_PENDING, PAGE_LIMIT, Refused, _id, utcnow
 
 RecoveryBase = Base  # shared registry (see models.MemoryBase)
@@ -28,7 +29,7 @@ MAX_SCAN_PAGES = 10_000
 RETRY_SECONDS = 5
 LIVE_RESERVE = PAGE_LIMIT
 ERROR_CODES = frozenset({"provider_read_failed", "invalid_page", "backpressure", "live_input_pending",
-                         "conflicting_history", "discovery_budget_exhausted", "provider_read_deferred"})
+                         "conflicting_history", "discovery_budget_exhausted", "provider_read_deferred"}) | READ_ERROR_CODES
 
 
 class OfHistoryScan(RecoveryBase):
@@ -177,6 +178,21 @@ class HistoryRecovery:
                 session.add(OfHistoryScan(account_id=account_id, binding_id=runtime.binding_id, updated_at=utcnow()))
             else:
                 self._binding(row, runtime)
+            # Discovery's initial keyset sweep is finite. New fans can arrive
+            # later (including IDs below that sweep's cursor), or through
+            # another canonical intake. Enrol every known missing identity in
+            # bounded batches without resetting existing/completed archives.
+            known = self._known_fans(account_id)
+            missing = select(known.c.fan_id).where(~select(OfHistoryCursor.fan_id).where(
+                OfHistoryCursor.account_id == account_id,
+                OfHistoryCursor.fan_id == known.c.fan_id).exists())
+            for fan_id in session.scalars(missing.order_by(known.c.fan_id).limit(PAGE_LIMIT)):
+                self._ensure_fan(session, runtime, fan_id)
+
+    @staticmethod
+    def _known_fans(account_id):
+        return select(Fan.fan_id).where(Fan.account_id == account_id).union(
+            select(OfRecovery.fan_id).where(OfRecovery.account_id == account_id)).subquery()
 
     @staticmethod
     def _eligible(model, now):
@@ -235,7 +251,8 @@ class HistoryRecovery:
             return ArchiveScanClaim(account_id, runtime.binding_id, row.generation, row.lease_token,
                                     row.cursor, connection_revision)
 
-    def scan_page(self, tenant_id, claim, fan_ids, *, next_cursor, provider_read_claim=None):
+    def scan_page(self, tenant_id, claim, fan_ids, *, next_cursor, profiles=None,
+                  creator_profile=None, provider_read_claim=None):
         if type(claim) is not ArchiveScanClaim:
             raise Refused("invalid historical scan claim")
         if type(fan_ids) not in {list, tuple} or len(fan_ids) > PAGE_LIMIT:
@@ -258,6 +275,8 @@ class HistoryRecovery:
                 from onlyfans_runtime.provider_read_budget import current
                 current(self.store,tenant_id,provider_read_claim,session=session)
             row = self._check_claim(session, runtime, claim)
+            from onlyfans_runtime.profiles import apply_profiles
+            apply_profiles(session, runtime, fan_ids, profiles or {}, creator_profile)
             for fan_id in fan_ids:
                 self._ensure_fan(session, runtime, fan_id)
             row.page_count += 1
@@ -384,14 +403,18 @@ class HistoryRecovery:
             self._release(row, status="needed" if has_more else "complete")
             return "continue" if has_more else "complete"
 
-    def fail(self, tenant_id, claim, *, code="provider_read_failed"):
+    def fail(self, tenant_id, claim, *, code="provider_read_failed", retry_at=None):
         """Persist bounded retry metadata; never store provider error text/PII."""
         if type(claim) not in {ArchiveClaim, ArchiveScanClaim} or code not in ERROR_CODES:
             raise Refused("invalid historical failure")
+        if retry_at is not None and (type(retry_at) is not datetime or retry_at.tzinfo is not None):
+            raise Refused("invalid historical retry time")
         with Session(self.store.engine) as session, session.begin():
             runtime = self._runtime(session, tenant_id, claim.account_id, claim.connection_revision)
             row = self._check_claim(session, runtime, claim)
             self._release(row, error=code)
+            if retry_at is not None:
+                row.retry_at = max(row.retry_at, min(retry_at, utcnow() + timedelta(hours=1)))
 
     def progress(self, tenant_id, account_id, *, fan_id=None):
         """Counts are observed coverage, never an invented total or percentage."""
@@ -421,20 +444,41 @@ class HistoryRecovery:
             deferred = session.scalar(select(func.count()).select_from(OfHistoryCursor).where(*filters,
                 OfHistoryCursor.status != "complete", live_work)) if runtime.enabled else 0
             discovery_complete = scan is not None and scan.status == "complete" and scan.known_fans_complete
+            known = self._known_fans(account_id)
+            missing = select(known.c.fan_id).where(~select(OfHistoryCursor.fan_id).where(
+                OfHistoryCursor.account_id == account_id,
+                OfHistoryCursor.fan_id == known.c.fan_id).exists())
+            if fan_id is not None:
+                missing = missing.where(known.c.fan_id == fan_id)
+            unscheduled = session.scalar(select(func.count()).select_from(missing.subquery()))
             complete = bool(states) and not (states.get("needed", 0) or states.get("running", 0))
             if fan_id is None:
-                complete = discovery_complete and not (states.get("needed", 0) or states.get("running", 0))
+                complete = discovery_complete and not (unscheduled or states.get("needed", 0) or states.get("running", 0))
             result = {"schemaVersion": "of-history-recovery.v1", "accountId": account_id, "fanId": str(fan_id) if fan_id is not None else None,
                 "status": "complete" if complete else "incomplete", "discoveryComplete": discovery_complete,
                 "discoveryCursor": scan.cursor if scan is not None else None,
                 "discoveryLastError": scan.last_error if scan is not None else None,
                 "conversationsDiscovered": sum(states.values()), "conversationsComplete": states.get("complete", 0),
+                "conversationsUnscheduled": unscheduled,
                 "conversationsRetrying": retrying, "conversationsDeferredForLiveInput": deferred,
                 # PostgreSQL SUM(bigint) returns NUMERIC/Decimal. These are
                 # exact integral counters, not money or floating-point values.
                 "pagesCommitted": int(totals[0]), "messagesObserved": int(totals[1]), "messagesAdded": int(totals[2]),
                 "totalMessages": None, "percentComplete": None, "proof": "available_provider_history",
                 "recentRecoveryNeeded": runtime.recovery_needed}
+            fan_filter = [Fan.account_id == account_id]
+            if fan_id is not None: fan_filter.append(Fan.fan_id == fan_id)
+            named = or_(func.length(func.trim(Fan.of_display_name)) > 0,
+                        func.length(func.trim(Fan.of_username)) > 0)
+            known_count,named_count,unchecked,unavailable,retrying_profiles = session.execute(select(
+                func.count(), func.count().filter(named),
+                func.count().filter(Fan.of_profile_checked_at.is_(None)),
+                func.count().filter(Fan.of_profile_error.in_(('profile_unavailable', 'profile_fields_missing'))),
+                func.count().filter(Fan.of_profile_error.in_((*READ_ERROR_CODES, 'provider_read_failed')))
+            ).select_from(Fan).where(*fan_filter)).one()
+            result['fanProfiles'] = {'known': known_count, 'named': named_count,
+                'missingNames': known_count - named_count,
+                'unchecked': unchecked, 'unavailable': unavailable, 'retrying': retrying_profiles}
             if fan_id is not None:
                 row = session.get(OfHistoryCursor, (account_id, fan_id))
                 result.update({"beforeId": str(row.before_id) if row and row.before_id is not None else None,
@@ -465,17 +509,19 @@ class HistoryRecovery:
             budget=error=None
             try:
                 try:budget=_provider_claim(self.store,tenant_id,account_id,reader,connection_revision,'history')
-                except ReadDeferred:
-                    self.fail(tenant_id,scan,code='provider_read_deferred')
+                except ReadDeferred as deferred:
+                    self.fail(tenant_id,scan,code='provider_read_deferred',retry_at=deferred.retry_at)
                     raise
                 try:
                     page = reader.chats(cursor=scan.cursor, limit=PAGE_LIMIT)
-                except Exception:
-                    self.fail(tenant_id, scan)
+                except Exception as failure:
+                    self.fail(tenant_id, scan, code=failure_code(failure),
+                        retry_at=utcnow() + timedelta(seconds=getattr(failure, 'retry_after', RETRY_SECONDS)))
                     raise
                 try:
                     fenced={'provider_read_claim':budget} if budget is not None else {}
-                    self.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor,**fenced)
+                    self.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor,
+                        profiles=page.profiles, creator_profile=page.creator_profile, **fenced)
                 except (Refused, AttributeError):
                     self.fail(tenant_id, scan, code="invalid_page")
                     raise
@@ -493,13 +539,14 @@ class HistoryRecovery:
             budget=error=None
             try:
                 try:budget=_provider_claim(self.store,tenant_id,account_id,reader,connection_revision,'history')
-                except ReadDeferred:
-                    self.fail(tenant_id,claim,code='provider_read_deferred')
+                except ReadDeferred as deferred:
+                    self.fail(tenant_id,claim,code='provider_read_deferred',retry_at=deferred.retry_at)
                     raise
                 try:
                     page = reader.messages(fan_id=claim.fan_id, before_id=claim.before_id, limit=PAGE_LIMIT)
-                except Exception:
-                    self.fail(tenant_id, claim)
+                except Exception as failure:
+                    self.fail(tenant_id, claim, code=failure_code(failure),
+                        retry_at=utcnow() + timedelta(seconds=getattr(failure, 'retry_after', RETRY_SECONDS)))
                     raise
                 try:
                     fenced={'provider_read_claim':budget} if budget is not None else {}

@@ -19,14 +19,20 @@ def profile(raw):
 
 def apply_profiles(s,runtime,fan_ids,profiles,creator=None):
     if type(profiles) is not dict or any(type(fan) is not int or fan not in fan_ids for fan in profiles):return
-    for fan,raw in profiles.items():
+    from .store import _id, utcnow
+    for fan in fan_ids:
+        _id(fan)
+        raw=profiles.get(fan)
+        if type(raw) is dict and 'id' in raw and (type(raw['id']) is not int or raw['id'] != fan):
+            from .store import Refused
+            raise Refused('provider profile identity mismatch')
         data=profile(raw)
-        if not data:continue
         row=s.get(Fan,(runtime.account_id,fan))
         if row is None:row=Fan(account_id=runtime.account_id,fan_id=fan);s.add(row)
         if 'name' in data:row.of_display_name=data['name']
         if 'handle' in data:row.of_username=data['handle']
         if 'avatar' in data:row.avatar_url=data['avatar']
+        if data:row.profile_last_synced_at=utcnow()
     data=profile(creator)
     if data:
         binding=s.get(OfCreatorBinding,runtime.binding_id)

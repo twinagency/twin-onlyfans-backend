@@ -37,6 +37,7 @@ jobs:
         run: >-
           python -m pytest -q --tb=short
           tests/test_vault_auto_folders.py
+          tests/test_vault_auto_folders_pg.py
           tests/test_automatic_vault_descriptions_pg.py
           tests/test_onlyfans_vault_previews_pg.py
           tests/test_onlyfans_vault_editing_pg.py

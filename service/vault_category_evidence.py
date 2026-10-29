@@ -152,8 +152,11 @@ def receipt(data, verification, images, *, account, media_id, kind, source):
 def verified_categories(item):
     try:
         fields = json.loads(item.ai_fields_json or "{}")
+        overrides = json.loads(getattr(item, "operator_overrides_json", None) or "{}")
     except (ValueError, TypeError):
         return []
+    if isinstance(overrides, dict) and set(overrides) & set(META_KEYS):
+        return []  # a human correction invalidates the older model evidence
     evidence = fields.get(KEY) if isinstance(fields, dict) else None
     if not isinstance(evidence, dict) or evidence.get("version") != VERSION:
         return []

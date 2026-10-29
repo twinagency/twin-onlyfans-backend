@@ -25,7 +25,8 @@ def classify_batch(store, tenant, account, *, after=0, on_scanned=lambda mid: No
         ids=list(session.scalars(select(VaultItem.media_id).where(
             VaultItem.account_id == account, VaultItem.removed_at.is_(None), VaultItem.media_id > after,
             VaultItem.kind.in_(("photo", "video", "gif", "audio")),
-            func.coalesce(VaultItem.ai_fields_json, "").not_like('%"'+CURRENT_MARKER+'"%'),
+            or_(func.coalesce(VaultItem.ai_fields_json, "").not_like('%"'+CURRENT_MARKER+'"%'),
+                func.coalesce(VaultItem.operator_overrides_json,"{}").not_in(("{}","null",""))),
             or_(func.coalesce(VaultItem.ai_fields_json, "").not_like('%"'+PENDING_MARKER+'"%'),
                 func.trim(func.coalesce(VaultItem.description,"")) != "",
                 func.trim(func.coalesce(VaultItem.video_description,"")) != "",
@@ -63,8 +64,15 @@ class VaultFolderWorker:
             try:
                 for account in accounts(self.store,self.tenant):
                     if self.stop.is_set():break
-                    classify_batch(self.store,self.tenant,account,after=self.cursors.get(account,0),
-                        on_scanned=lambda mid,account=account:self.cursors.__setitem__(account,mid))
+                    try:
+                        count=classify_batch(self.store,self.tenant,account,after=self.cursors.get(account,0),
+                            on_scanned=lambda mid,account=account:self.cursors.__setitem__(account,mid))
+                        if count:
+                            import json
+                            print(json.dumps({"schemaVersion":"of-vault-folder.v3","account":account,"scanned":count}),flush=True)
+                    except Exception as exc:
+                        import json
+                        print(json.dumps({"schemaVersion":"of-vault-folder.v3","account":account,"state":"retry_pending","errorType":type(exc).__name__}),flush=True)
             except Exception:
                 pass  # metadata stays intact; next pass retries without provider/model I/O
             self.stop.wait(3)

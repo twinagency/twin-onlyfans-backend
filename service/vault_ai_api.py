@@ -2816,8 +2816,16 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
                     messages=[{"role": "user", "content": check_content}], purpose="describe_media",
                     account_id=account_id, temperature=0.0)
                 verification = _parse_describe(checked.content)
-            except (LLMError, LLMCapExceeded):
+            except LLMCapExceeded:
+                return {"media_id": media_id, "ok": False, "status": "capped"}
+            except LLMError:
                 # Do not publish the first pass as verified when checking failed.
+                async with get_session() as s:
+                    if scope_guard is not None:
+                        await scope_guard(s, media_id, phase="write")
+                    await s.execute(update(VaultItem).where(VaultItem.account_id == account_id,
+                        VaultItem.media_id == media_id).values(describe_status="failed", describe_generated_at=datetime.utcnow()))
+                    await s.commit()
                 return {"media_id": media_id, "ok": False, "status": "verification_pending"}
         data[CATEGORY_KEY] = receipt(data, verification, got.images, account=account_id,
             media_id=media_id, kind=item.kind, source=source)

@@ -107,7 +107,7 @@ async def main():
     async with get_session() as s:
         folders = list(await s.scalars(select(VaultFolder)))
         members = list(await s.scalars(select(VaultFolderItem)))
-        check(len(folders) == 1 and folders[0].name == "Uncategorised", "existing folder owner reused")
+        check(len(folders) == 1 and folders[0].name == "Needs review", "unverified descriptions await review")
         check(sorted(m.media_id for m in members) == [1, 2], "photo and video filed without duplicate folders")
         await s.execute(delete(VaultFolderItem).where(VaultFolderItem.account_id == ACCOUNT,
                                                      VaultFolderItem.media_id == 1))
@@ -170,3 +170,4 @@ async def main():
 
 asyncio.run(main())
 print(f"ok {COUNT} checks")
+

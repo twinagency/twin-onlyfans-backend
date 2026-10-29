@@ -135,11 +135,19 @@ def test_operator_edit_during_collection_fences_generated_write(database, monkey
 def test_fresh_urls_do_not_rewrite_native_raw_evidence(database, monkeypatch):
     args, calls, engine, client = setup(database, monkeypatch)
     import vault_stills, vault_frames
-    monkeypatch.setattr(vault_stills, "_resolve_fresh_sync", lambda *a: vault_stills._Resolved({"id":MID,"type":"photo","userId":900001,"files":{}}, False))
+    with Session(database[1]) as s, s.begin():
+        item=s.get(VaultItem,(ACCOUNT,MID));item.kind="video"
+        raw=json.loads(item.raw_json);raw["type"]="video";item.raw_json=canonical(raw)
+        s.get(OfVaultObservation,(ACCOUNT,MID)).raw_hash=digest(item.raw_json)
+    resolved=[]
+    def resolve(*a):
+        resolved.append(True)
+        return vault_stills._Resolved({"id":MID,"type":"video","userId":900001,"files":{}}, False)
+    monkeypatch.setattr(vault_stills, "_resolve_fresh_sync", resolve)
     async def collect(account, item, raw, want):
         fresh = await vault_stills.resolve_fresh(account, item.media_id, client)
         assert fresh.media["id"] == MID
-        return vault_frames.Collected(["data:image/jpeg;base64,AAAA"], "ok")
+        return vault_frames.Collected(["data:image/jpeg;base64,"+str(i) for i in range(6)], "ok", source="storyboard")
     monkeypatch.setattr(vault_frames, "collect", collect)
     async def run():
         try:
@@ -147,6 +155,7 @@ def test_fresh_urls_do_not_rewrite_native_raw_evidence(database, monkeypatch):
         finally:
             await engine.dispose()
     asyncio.run(run())
+    assert resolved == [True]
     with Session(database[1]) as s:
         assert s.get(OfVaultObservation,(ACCOUNT,MID)).raw_hash == digest(s.get(VaultItem,(ACCOUNT,MID)).raw_json)
 

@@ -71,8 +71,10 @@ def test_no_unproven_foreign_corrupt_hidden_or_removed_cache_is_exposed(database
     receipt.write_text(json.dumps({**proof,"ownerId":OWNER+1}))
     with pytest.raises(Refused):read_preview(store,TENANT,account,"11")
     receipt.write_text(json.dumps(proof));path.write_bytes(PNG+b"corrupt")
+    assert read_preview(store,TENANT,account,"11") == (PNG,"image/png"), "Legacy analysis cannot replace the owned gallery copy"
+    owned=path.with_suffix(".owned.jpg");owned.write_bytes(PNG+b"corrupt")
     with pytest.raises(Refused):read_preview(store,TENANT,account,"11")
-    path.write_bytes(PNG)
+    path.write_bytes(PNG);owned.write_bytes(PNG)
     with Session(store.engine) as s,s.begin():s.get(VaultItem,(account,11)).removed_at=utcnow()
     with pytest.raises(Refused):read_preview(store,TENANT,account,"11")
     store.close()
@@ -131,3 +133,4 @@ def test_cdn_get_has_no_credentials_retries_redirects_or_unbounded_body(monkeypa
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE","api");calls=fake_curl(monkeypatch)
     with pytest.raises(Refused):wire.still_bytes(URL)
     assert calls==[]
+

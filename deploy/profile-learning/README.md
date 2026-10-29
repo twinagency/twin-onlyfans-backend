@@ -1,143 +1,135 @@
-# OnlyFans profiles with dated memory
+# OnlyFans dated profile memory
 
-Release candidate integrated with the API currently observed on 29 October 2026.
-Not deployed, backfilled or accepted in the browser. The real-history model test
-was blocked by automatic approval review because it sends private OnlyFans text
-to an external model destination. Do not start the learner until that is resolved.
+## Release status, 29 October 2026
 
-## Established running release
+The API, FASTT prompt integration and a separate supervised learner are deployed.
+Jesse explicitly authorised this task's direct safe deployment, overriding the
+earlier PR-only restriction. All deployment commands used IAM user jesse-gpt.
+No AWS root or IAM changes were used. Backups and rollback containers remain.
+Reply activation, fan permissions, allowances, model selection, caps and sales
+rules were not changed. Only the profile read/reply integration flag was enabled.
 
-Repository source hashes match the changed files read from running containers:
+Application code revision: `8a912627879e2d59d65fe6cca0b21a78a5b2634a`.
 
-| Component | Source revision | Image |
+| Component | Live image | Preserved parent |
 | --- | --- | --- |
-| API | b338c0cfa6d408a5f3729b85e549fdc1743ec9a4 | e5cd643dd613 |
-| FASTT sender | f234c641a0afd68b3314ad428284fcc24c96f1c2 | 80341b333fb1 |
-| Sync worker, initial observation | 1dcb9846fe1ebee6dc4fe389fa6038ce1313774f | e45c4d6ff228 |
-| Sync worker, concurrent update preserved | label still 1dcb9846 | e02594de92cf |
-| Twin dashboard | f656663d44a0cf3c762b306a252c89e1b4a4e2e1 | 3e7aff70aa8d |
-| FLIRT dashboard | 9ba775278fabf62177197a906f149b3896eb18c4 | bb4e7f7c5e53 |
+| API and independent learner | 3d2825f5cfe8 | 3e6e4579fefd |
+| FASTT sender | 1fb5e52bc4d3 | f542dedd0ac5 |
+| Sync worker, separately deployed | 946e343a07d2 | Preserved |
+| Dashboard | 3e7aff70aa8d | Preserved |
 
-The database is at `0098_ledger_exclusion`. The profile tables do not yet exist.
-Five connected accounts have 65,911 stored fans. These are discovery counts,
-not claims that profiles were extracted. No message text was exported to S3.
+The first release used the originally observed API b338c0c and sender f234c641.
+A concurrent sync deployment changed all backend images. The cutover guard
+refused the outdated candidate. The final upgrade verified that the three memory
+modules were unchanged, then layered only those files onto the new API and sender
+images. Do not deploy this PR's entire source tree over newer runtime work.
+`runtime-overlays.json` records original integration changes and current parent
+images/content guards. `upgrade-current-runtime.py` records the guarded cutover.
 
-The staging guard caught the concurrent sync-worker image change before any
-replacement. That worker remains intact. The API derivative image
-`twin-onlyfans:profiles-api-20261029` was built on the exact API image. It is a
-staged image only, not a running deployment. Other service overlays require their
-own fresh image/hash checks. Reuse the API derivative for the independent learner
-with the existing worker environment; do not replace the sync worker.
+A schema-only backup was saved on the host before additive DDL. The evidence
+lookup index was built concurrently and verified valid. Profile tables and the
+message-change trigger are installed; the existing Alembic head remains
+0098_ledger_exclusion. No sender/control/payment table was rewritten.
+The learner has restart-unless-stopped supervision, two concurrent calls, a
+512 MiB memory limit and bounded logs; the active compose definition includes it.
 
-`runtime-overlays.json` records narrow, hash-checked changes for the separately
-observed API/worker/sender sources. It also contains the common additive modules
-and tests. Never deploy the original PR base wholesale. The PR now carries the
-integrated API source and preserves its newer permissions, financial views and
-sync-related code. Other containers must retain their own source bases.
+## Implemented behaviour
 
-## Implementation
-
-* Persistent facts, changing circumstances, dated events and outstanding requests
-  have separate lifecycles. Observations and historical evidence live outside the
-  compact materialized memory and 250-word profile summary.
-* Exact fan quotes, preceding-question references, source dates, confirmation
-  dates, account/tenant/binding scope and manual protection are retained. Creator
-  account claims remain reviewable drafts; approved backend facts remain distinct.
+* Separate persistent facts, changing circumstances, events and outstanding
+  requests, with exact message evidence, dates, account/tenant/binding identity,
+  review dates, status and manual protection. Repeated canonical facts merge;
+  clear updates supersede, ambiguous contradictions remain uncertain.
 * Relative dates use the original message timestamp and known IANA timezone.
-  Imprecise dates remain ranges. Ordinary events leave active context 14 days
-  after the end; a passed plan never proves attendance. Cancellation, postponement
-  and unclear contradictions retain their uncertainty and history.
-* Birth dates calculate age on demand. Age-only statements retain the statement
-  date and become ranges when current age is uncertain. Jobs and locations are
-  flagged stale after 90 days without confirmation. Unfulfilled requests do not
-  time out. No automatic reconfirmation messages are sent.
-* Relevance retrieval supplies up to eight memories, at most ten, inside a hard
-  6,000-byte context budget. Dates are evaluated at reply preparation. The inbox,
-  FASTT hook and native planner share the projection. Undated automatic biography
-  fragments cannot reintroduce expired events. Operator overrides remain primary.
-* Long messages use lazy overlapping chunks and persistent per-chunk checkpoints.
-  Edited, withdrawn and context-question changes invalidate supporting evidence;
-  edits to formerly fact-free messages are discovered too. A message is complete
-  only when every chunk has committed.
-* Every stored fan is discovered in repeated 500-row batches, including silent
-  fans. Leased jobs, account scheduling, retries and 1–4 bounded concurrent calls
-  are independent of reply activation and OnlyFans session expiry. Triggers mark
-  changed messages, complete profiles refresh every two hours, and daily sweeps
-  re-evaluate cold records. Queue lag retains the original request time through
-  retries, rather than hiding backlog behind a later retry date.
-* Subscription, ownership and spend remain canonical OnlyFans data. This feature
-  does not change activation, fan permissions, delivery allowances or sales rules.
+  Passed plans have unconfirmed outcomes. Ordinary events leave active context
+  fourteen days after their end. Unresolved dates get a review period. Cancellation
+  and postponement are explicit. Future career plans are not current employment.
+* Known supported birth dates calculate age at read time, including leap-year
+  boundaries. Age-only statements retain their date and become uncertain ranges.
+  Unconfirmed jobs/locations become potentially stale after ninety days.
+* A 250-word summary, structured memories and a separate observation archive.
+  Replies select at most ten memories, normally eight, under a 6,000-byte budget.
+  Names, occupations and enduring interests survive temporary chatter and large
+  request archives. At most three requests occupy the compact presentation;
+  outstanding requests remain stored until fulfilled, cancelled or superseded.
+* Current-binding evidence checks and the same dynamic projection serve the
+  existing inbox, FASTT hook and native planner. Dates are re-evaluated on every
+  read. Preceding questions accompany short answers. Unverified creator account
+  messages remain distinct from verified backend facts and manual information.
+* Persistent per-chunk receipts process long messages without 1,400-character
+  truncation. A message is complete only after every chunk commits. Edits,
+  withdrawal and changed question context invalidate evidence.
+* Resumable full-roster discovery, silent-fan account information, active-thread
+  priority, leased jobs, account fairness, retries, two-hour refresh scheduling,
+  daily maintenance and original queue-age measurements. Restart maintenance
+  preserves failure retry deadlines. Incoming/imported messages queue new work.
+  Pending edits/refreshes are displayed as processing, not fully analysed history.
+* Stored-history learning uses each account's saved matching credential and
+  existing budget independently of reply activation and OnlyFans session expiry.
+  Purchase, subscription and spend information remain with canonical OF records.
 
-## Verified offline
+## Verification
 
-The integrated current API release passed 79 focused tests, including 14 real
-PostgreSQL tests. A Windows test initially lacked IANA timezone data; installing
-`tzdata` corrected the environment and all 29 temporal tests passed. Another
-64 existing history/personality/role tests and 26 native prompt checks passed.
-Compilation and patch whitespace checks passed.
+Ninety focused cases passed together, including seventeen real PostgreSQL cases.
+After the final career-plan correction, sixty-two evidence/date cases passed,
+covering three additional cases: ninety-three unique focused cases in total.
+The earlier current-release integration also passed sixty-four existing regression
+cases and twenty-six native prompt checks. Compilation and whitespace checks pass.
 
-PostgreSQL coverage includes real leases and concurrent claims, atomic rollback,
-first daily budget reservation races/caps, restart recovery, long-message chunk
-checkpoints, edited and withdrawn evidence, manual corrections and tenant scope,
-expired-event retrieval, a 1,001-fan discovered roster, and the actual native
-prompt and FASTT hook. SQLite additionally processes an entire 505-fan roster.
-An encrypted synthetic credential plus mocked HTTPS verifies analysis while the
-OnlyFans session is expired and reply activation is off. No fake fan input or
-real provider message was sent.
+PostgreSQL coverage includes claims/locks, restart leases, transaction rollback,
+first-budget reservation races, cap refusal, long chunks, edited/withdrawn evidence,
+manual correction/tenant isolation, refresh state, a 301-memory request archive,
+and actual native/FASTT context construction. Full-roster tests discover 1,001 fans
+and process all 505 fans in a separate silent-roster fixture. Test PostgreSQL was
+local and disposable and has been stopped. No synthetic fan message was sent.
 
-## Outstanding real-history permission and configuration
+Authorised real-history extraction used eight stored messages for one fan each
+on Nicky, Naomi and Maile, through their saved OpenRouter/DeepSeek credentials.
+It correctly excluded promotional spam. Review found and fixed relative-place
+confusion, birthplace/current-residence conflation and request-heavy presentation.
+A read-only canary on existing history verified the final API-parent image,
+native prompt, FASTT hook, expired-memory filtering and 6 KB context limit.
+The authenticated live profile endpoint returns HTTP 200; the live inbox repository
+returns the new summary/status/coverage rows. The sample summary was 99 words and
+selected eight memories. No model-generated reply was sent as a test.
 
-Read-only inspection found:
+A creator-facts freshness guard refused two canaries while the existing cache was
+stale. Automatic approval review rejected an additional forced cache refresh;
+that refresh was not executed. A materially safer read-only check passed after the
+normal source updater refreshed the cache. The freshness guard was retained.
 
-| Creator | Saved selection | Configured matching credential | Daily cap |
-| --- | --- | --- | --- |
-| Nicky Baby | openrouter/deepseek-v4.1-flash | yes | 1,000 US cents |
-| naomii | openrouter/deepseek-v4.1-flash | yes | 1,000 US cents |
-| Maile | openrouter/deepseek-v4.1-flash | yes | 100 US cents |
-| Alva Jay Free | configuration needs owner review | not established | not established |
-| Katie Price | configuration needs owner review | not established | not established |
+## Backfill and outstanding acceptance
 
-The selected destination is `https://openrouter.ai/api/v1/chat/completions`.
-The blocked proposal was a bounded real-history sample, followed by ordinary
-ongoing learning under each account's own saved model credential and budget.
-No key is printed, copied between accounts, replaced or supplied as a fallback.
-Alva/Katie require repair through their existing account configuration owner.
+Last recorded live snapshot: 68,364 discovered fans, 68,358 queued, 281 processed,
+68,083 pending and six deferred fan profiles. Counts keep changing as historical
+import discovers fans. Queue lag was about 56 minutes. These are actual processing
+counts, not a claim of complete provider history or complete fleet backfill.
+Every creator still reported incomplete provider history. Two hours is the refresh
+schedule; completion within two hours has not been established.
 
-## Rollout after the block is resolved
+Alva and Katie lack account-specific saved model credentials. Their current saved
+model selections also require owner review. No other account's key was copied.
+Naomi and Maile creator-draft jobs have deferred analysis errors and will retry;
+Nicky's creator job has processed. These jobs are not reported as completed.
 
-1. Re-establish all image/source hashes, schema and runtime patches; acquire the
-   existing native release lock for cutover. Preserve the concurrent sync fix.
-2. Run `validate_history.py` in the staged API-derived image with the existing
-   worker environment, explicit worker role and tenant `twin-internal`. It reads
-   at most eight stored messages for one selected fan per account, sends no fan
-   input, and records only ordinary model-budget audits. Inspect the returned
-   facts/quotes and source dates before proceeding. Missing account configuration
-   is a deferred failure, never permission to borrow another credential.
-3. Back up and apply `schema.sql`; if V1 was partially installed, apply
-   `upgrade-v1-postgresql.sql` before V2. Build the ingress index concurrently
-   separately on a busy database. Apply `notifications-postgresql.sql` only after
-   the new tables exist. No sender/control or payment table is rewritten.
-4. Add a separate supervised learner using the staged current API image with the
-   existing worker environment, `ONLYFANS_PROCESS_ROLE=worker`, explicit tenant,
-   `PYTHONPATH=/app/service`, and `ONLYFANS_PROFILE_CONCURRENCY=2`. Command:
-   `python -m onlyfans_runtime.profile_learning.worker`. Keep the sync worker.
-5. Deploy the API and sender as derivatives of their individually verified images.
-   Preserve exact existing env/volumes/secrets and rollback images. Set
-   `ONLYFANS_PROFILE_LEARNING_ENABLED=1` only on installed read/reply services.
-   Stop the sender before its replacement and preserve every activation/counter.
-6. Verify creator draft status and fan coverage via the existing inbox and
-   `/history-memory/profiles/progress`; inspect one fan through
-   `/history-memory/fans/{id}/profile`. History is paginated under `/profile/history`.
-   Versioned set/clear/protect/unprotect commands use existing managing grants at
-   `/profile/memories/{key}/corrections`. New structured editing controls are API
-   capabilities; a dedicated visual editor has not been added to the dashboard.
-7. Verify actual browser display and captured generated context on authorised
-   existing history, without sending fabricated messages. Measure actual queue
-   lag and counts until all available history is processed. Two hours is the
-   refresh schedule, not a proven fleet completion SLA. Continue through older
-   history as the importer supplies it, and report incomplete provider import.
+Browser visual acceptance remains pending because the available browser is at the
+CRM sign-in screen. A dedicated structured-memory visual editor has not been added;
+review/correction and historical pagination are API capabilities. Superseded source
+observations are archived, but deeper old-version retrieval beyond materialized
+history still needs acceptance and further work. Exact ISO birth-date evidence is
+supported; unsupported date forms remain unaccepted/uncertain rather than invented.
+Real-sample checks are bounded and do not establish fleet-wide extraction quality.
 
-Rollback: stop the learner and disable the read/reply feature flag; restore only
-changed API/sender images, preserving newer sync work, credentials, counters,
-profile evidence and model audits. Disable the notification trigger if rolling
-back ingestion overhead. Do not drop the stored evidence tables.
+## Operations and rollback
+
+Existing profile endpoints are under the account's configuration-purpose auth:
+`/history-memory/profiles/progress`, `/history-memory/fans/{id}/profile`,
+`/history-memory/fans/{id}/profile/history`, and versioned memory corrections at
+`/history-memory/fans/{id}/profile/memories/{key}/corrections`.
+
+The running learner is `twin-onlyfans-profile-learner`. Runtime/private snapshots,
+compose backups and stopped rollback containers are retained on the same host.
+Restore only the changed API/sender/learner generation after a fresh version check;
+preserve newer sync work and all counters/credentials. Disable profile read context
+and stop the learner if needed. Retain observation tables, source history and budget
+audits. Do not drop evidence or delete backups. Reconcile the repository/main and
+normal pipeline before replacing these pinned runtime derivatives in a later release.

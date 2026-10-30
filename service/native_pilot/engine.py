@@ -253,6 +253,7 @@ class NativeEngine:
         result = dict(native)
         sales_enabled = result.pop("_native_on_request_sales_enabled", False) is True
         result.update(TEXT_ONLY)
+        result.pop("_native_reply_format", None)  # internal capability, never a saved switch
         if self.reply_format and self._job is None:
             result["_native_reply_format"] = True
         if self.followups is not None:

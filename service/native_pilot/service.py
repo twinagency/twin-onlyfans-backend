@@ -698,6 +698,8 @@ class Service:
             await self.identity_handoff("fan-asked")
             ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
             return
+        if self.reply_decision:
+            self.reply_decision["admitted_at"] = runner.now()
         error = await self.execute(key, sources, source_id=snap.message_id)
         if self.reply_decision:
             receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)

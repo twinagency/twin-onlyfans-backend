@@ -361,7 +361,9 @@ class Gateway:
                 raise Refused("unsend-needs-card")
             if len(text.encode("utf-16-le")) // 2 > 4000:
                 raise Refused("output-too-long")
+            draft_ready_at = now()
             await self.pace()
+            throttle_done_at = now()
             if self.stopped():
                 raise Refused(self.stopped_reason)
             since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
@@ -462,11 +464,13 @@ class Gateway:
                 validated_response=raw, evidence={**validated.evidence, **({"content": content_evidence} if terms else {})}, now=now())
             settled = True
             decision = getattr(self, "reply_decision", None)
-            if decision and decision["schedule"]:
+            if decision and decision["schedule"] and not known:
                 from .pacing import delivery_event
                 try:
                     emit(delivery_event(decision["authority"], decision["schedule"], receipt_at=now(),
-                                        wire_at=wire_at[0], provider_created_at=raw.get("createdAt")))
+                                        wire_at=wire_at[0], provider_created_at=raw.get("createdAt"),
+                                        admitted_at=decision.get("admitted_at"), draft_ready_at=draft_ready_at,
+                                        throttle_done_at=throttle_done_at, eligible_at=decision["eligible_at"]))
                 except Exception:
                     emit({"event": "reply-pacing-metric-error"})
             emit({"event": "sent", "engine": "fastt-native", "provider_message_id": validated.provider_message_id,

@@ -170,6 +170,12 @@ def test_delivery_metric_uses_receipt_not_target(f):
     assert event['provider_created_to_receipt_s']==99
     assert event['target_miss_s']==38
     assert event['intake_lag_s']==1
+    detailed=pacing.delivery_event(d['authority'],d['schedule'],wire_at=L.NOW+timedelta(seconds=96),
+        receipt_at=L.NOW+timedelta(seconds=100),eligible_at=L.NOW+timedelta(seconds=62),
+        admitted_at=L.NOW+timedelta(seconds=70),draft_ready_at=L.NOW+timedelta(seconds=85),
+        throttle_done_at=L.NOW+timedelta(seconds=90))
+    assert detailed['components']==dict(intentional_wait_s=52,before_scheduling_s=8,scheduler_queue_s=8,
+        generation_and_shaping_s=15,account_throttle_s=5,preflight_s=6,transport_to_receipt_s=4)
 
 
 def test_policy_bounds():
@@ -177,3 +183,52 @@ def test_policy_bounds():
     for mode in (35,60):
         values=[dice.triangular(25,90,mode) for _ in range(1000)]
         assert min(values)>=25 and max(values)<=90 and len(set(values))>900
+
+
+def test_confirmed_active_exchange_uses_shorter_mode_and_measured_allowance(f):
+    key=f.claim()
+    attempt=f.attempt(key)
+    f.sent(attempt,900)
+    f.sql("UPDATE native_pilot_receipts SET updated_at=?",(_dt(L.NOW+timedelta(seconds=14)),))
+    f.ledger.finish_input(**f.call,input_key=key)
+    f.source(900,direction='out',created_at=_dt(L.NOW+timedelta(seconds=14)),ingested_at=_dt(L.NOW+timedelta(seconds=14)))
+    f.source(101,created_at=_dt(L.NOW+timedelta(seconds=20)),ingested_at=_dt(L.NOW+timedelta(seconds=21)))
+    dice=Dice(25)
+    d,_,_=prepare(f,seconds=30,dice=dice)
+    assert dice.calls==[(25,90,35)]
+    assert d['pipeline_allowance_s']==4
+    # The lower target also includes observed processing time, not an added 25-second hold.
+    assert d['eligible_at']==L.NOW+timedelta(seconds=42)
+    # A follow-up receipt must not make an exchange active.
+    f.sql("UPDATE native_reply_pacing SET state='invalidated'")
+    f.sql("UPDATE of_conversation_state SET revision=revision+1")
+    f.sql("UPDATE native_pilot_inputs SET source_hash='followup:synthetic'")
+    dice=Dice(50)
+    prepare(f,seconds=31,dice=dice)
+    assert dice.calls==[(25,90,60)]
+
+
+def test_waiting_turn_releases_engine_and_claim_slot(f):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from native_pilot.service import Service
+    from native_pilot.engine import NativeEngine
+
+    async def run():
+        service=Service(SimpleNamespace(account=L.ACCT,fan=L.FAN,all_fans=False))
+        service.path,service.ledger,service.pilot=f.path,f.ledger,f.pilot
+        service.strict=True
+        service.cooldown_left=lambda:0
+        called=[]
+        async def execute(*args,**kwargs):called.append(args);return None
+        service.execute=execute
+        with patch('native_pilot.runner.now',return_value=L.NOW+timedelta(seconds=10)),patch.object(pacing.random,'triangular',return_value=25):
+            await asyncio.wait_for(service.turn(),timeout=0.5)
+        assert not called and NativeEngine._active is False
+        assert not f.sql('SELECT * FROM native_pilot_inputs')
+        assert not f.sql('SELECT * FROM native_pilot_receipts')
+        with patch('native_pilot.runner.now',return_value=L.NOW+timedelta(seconds=70)):
+            await service.turn()
+        assert len(called)==1
+    asyncio.run(run())

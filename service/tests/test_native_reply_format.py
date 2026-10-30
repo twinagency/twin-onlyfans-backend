@@ -70,5 +70,5 @@ def test_native_format_is_independent_and_excludes_jobs():
             assert '_native_reply_format' not in cfg
         engine=NativeEngine('900001',900002,chat=chat_stub,send=lambda *a:None)
         with patch.object(engine,'_fan_unlinked_paid',return_value=False),patch.object(engine,'_resumed_after_last_human',return_value=False):
-            assert '_native_reply_format' not in await engine.load_config('900001',{})
+            assert '_native_reply_format' not in await engine.load_config('900001',{'_native_reply_format':True})
     asyncio.run(run())

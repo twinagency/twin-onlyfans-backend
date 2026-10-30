@@ -17,7 +17,14 @@ MAX_ADMISSIONS = 3
 
 def _settings(con, account):
     row = con.execute("SELECT ai_chatter_config_json FROM account_ai_config WHERE account_id=?", (account,)).fetchone()
-    value = json.loads(row[0]) if row and row[0] else {}
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate-configuration-key")
+            result[key] = value
+        return result
+    value = json.loads(row[0], object_pairs_hook=unique) if row and row[0] else {}
     if type(value) is not dict:
         raise ValueError("configuration-object-required")
     return {key: enabled(value, key) for key in SWITCHES.values()}
@@ -27,8 +34,11 @@ def settings(path, account):
     try:
         with store.readonly(path) as con:
             return _settings(con, account)
-    except (ValueError, TypeError, *store.DB_ERRORS):
-        # Missing configuration on older fixtures/clients means disabled.
+    except (ValueError, TypeError, RecursionError):
+        logging.getLogger(__name__).warning("invalid-native-reply-configuration")
+        return {key: False for key in SWITCHES.values()}
+    except store.DB_ERRORS:
+        # Older fixtures/clients may have no native configuration column.
         return {key: False for key in SWITCHES.values()}
 
 
@@ -96,7 +106,7 @@ def _measurements(con, account, fan, since, now):
     rows = con.execute("SELECT p.fan_id,i.claimed_at,r.created_at,r.updated_at,i.source_hash "
         "FROM native_pilot_receipts r JOIN native_pilots p ON p.pilot_id=r.pilot_id "
         "JOIN native_pilot_inputs i ON i.input_key=r.input_key WHERE p.account_id=? AND r.state='sent' "
-        "AND r.bubble_no=1 AND i.source_hash NOT LIKE 'followup:%' ORDER BY r.updated_at DESC LIMIT 64",
+        "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts earlier WHERE earlier.input_key=r.input_key AND earlier.state='sent' AND earlier.bubble_no<r.bubble_no) AND i.source_hash NOT LIKE 'followup:%' ORDER BY r.updated_at DESC LIMIT 64",
         (account,)).fetchall()
     durations, active = [], False
     lower = max(since, _dt(now - timedelta(minutes=5)))
@@ -104,7 +114,7 @@ def _measurements(con, account, fan, since, now):
         end, start = datetime.fromisoformat(_dt(row['updated_at'])), datetime.fromisoformat(_dt(row['claimed_at']))
         if start <= end <= now and 0 <= (end-start).total_seconds() <= 180:
             durations.append((end-start).total_seconds())
-        if row['fan_id'] == fan and lower <= _dt(end) <= _dt(now):
+        if row['fan_id'] == fan and _dt(start) >= since and lower <= _dt(end) <= _dt(now):
             active = True
     # Observed claim-to-first-receipt time includes generation, throttle and preflight.
     # No observations means zero allowance, never an invented performance estimate.
@@ -179,7 +189,7 @@ def prepare(ledger, pilot, snapshot, *, now, quiet_s=7.0, rng=None):
         latest = max(datetime.fromisoformat(_dt(s['ingested_at'])) for s in sources)
         quiet = min(latest+timedelta(seconds=quiet_s), first+timedelta(seconds=20))
         target = datetime.fromisoformat(row['target_at'])
-        eligible = max(quiet, target-timedelta(seconds=allowance), first+timedelta(seconds=25))
+        eligible = max(quiet, target-timedelta(seconds=allowance))
         expected['schedule_key'] = row['schedule_key']
         return {"authority":expected,"eligible_at":eligible,"schedule":row,"pipeline_allowance_s":allowance}
 
@@ -209,14 +219,32 @@ def finish(ledger, decision, *, now, error=None, sent=False):
                     (_dt(now),decision['schedule']['schedule_key']))
 
 
-def delivery_event(expected, schedule, *, receipt_at, wire_at, provider_created_at=None):
+def delivery_event(expected, schedule, *, receipt_at, wire_at, provider_created_at=None,
+                   admitted_at=None, draft_ready_at=None, throttle_done_at=None, eligible_at=None):
     """Actual validated receipt arrival, never a planned time reported as delivery."""
     receipt_at = datetime.fromisoformat(_dt(receipt_at))
     first = datetime.fromisoformat(schedule['first_received_at'])
     origin = datetime.fromisoformat(schedule['provider_created_at'])
     target = datetime.fromisoformat(schedule['target_at'])
     miss = (receipt_at-target).total_seconds()
+    components = {}
+    reasons = []
+    if admitted_at is not None and draft_ready_at is not None and throttle_done_at is not None:
+        created = datetime.fromisoformat(schedule['created_at'])
+        components = {
+            "intentional_wait_s": max(0.0, (min(admitted_at, eligible_at)-created).total_seconds()),
+            "before_scheduling_s": max(0.0, (created-first).total_seconds()),
+            "scheduler_queue_s": max(0.0, (admitted_at-max(created,eligible_at)).total_seconds()),
+            "generation_and_shaping_s": max(0.0, (draft_ready_at-admitted_at).total_seconds()),
+            "account_throttle_s": max(0.0, (throttle_done_at-draft_ready_at).total_seconds()),
+            "preflight_s": max(0.0, (wire_at-throttle_done_at).total_seconds()),
+            "transport_to_receipt_s": max(0.0, (receipt_at-wire_at).total_seconds()),
+        }
+        if miss > 0:
+            reasons = [name for name in ("scheduler_queue_s", "account_throttle_s", "generation_and_shaping_s",
+                                         "preflight_s", "transport_to_receipt_s") if components[name] > 0]
     return {"event":"reply-pacing-receipt","schedule_key":schedule['schedule_key'],
+            "components":components,"observed_late_components":reasons,"provider_clock_ahead_of_ingest":origin>first,
             "account_id":expected['account'],"fan_id":expected['fan'],
             "target_at":schedule['target_at'],"wire_at":_dt(wire_at),"receipt_at":_dt(receipt_at),
             "provider_created_at":provider_created_at,

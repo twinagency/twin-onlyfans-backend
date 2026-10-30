@@ -38,6 +38,18 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements-onlyfans-test.txt
+      - name: Bound database waits on the disposable test server
+        run: |
+          python - <<'PYTESTDB'
+          import psycopg2
+          c = psycopg2.connect(host='127.0.0.1', user='postgres', password='synthetic-contextual-only', dbname='postgres')
+          c.autocommit = True
+          with c.cursor() as q:
+              q.execute("ALTER SYSTEM SET lock_timeout = '15s'")
+              q.execute("ALTER SYSTEM SET statement_timeout = '60s'")
+              q.execute('SELECT pg_reload_conf()')
+          c.close()
+          PYTESTDB
       - name: Contextual routing and durable guards
         if: matrix.suite == 'contextual'
         run: |

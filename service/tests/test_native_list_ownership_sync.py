@@ -96,6 +96,30 @@ def test_cross_account_ledger_is_refused(tmp_path):
         Mirror(path, "of-2")
 
 
+def test_lost_create_response_recovers_unique_list_without_duplicate(tmp_path):
+    mirror = Mirror(tmp_path / "ledger.db", "of-1")
+    class Lists:
+        def __init__(self):
+            self.rows = []
+            self.fail = True
+        def create_list(self, name):
+            result = dict(id=len(self.rows)+1, name=name)
+            self.rows.append(result)
+            if self.fail:
+                self.fail = False
+                raise TimeoutError()
+            return result
+        def get_lists(self, **kw):
+            return dict(list=self.rows[:], hasMore=False)
+        def set_list_pinned_to_chat(self, *args):
+            pass
+    client = Lists()
+    with pytest.raises(TimeoutError):
+        mirror.lists(client)
+    assert mirror.lists(client) == LISTS
+    assert len(client.rows) == 3
+
+
 def test_complete_100001_fan_snapshot_and_noop_delta(tmp_path, monkeypatch):
     path = tmp_path / "source.db"
     source = sqlite3.connect(path)

@@ -65,6 +65,9 @@ async def get(request:Request,account_id:str):
     # this additive field, as activation already does, before exposing it.
     if request.query_params.get("contextual") != "1":
         data.pop("fasttContextualSalesMode", None)
+    if request.query_params.get("replyPolicy") != "1":
+        data.pop("nativeReplyPacingEnabled", None)
+        data.pop("nativeReplyFormatEnabled", None)
     return response({"ok":True,"accountId":account_id,"configuration":data})
 
 

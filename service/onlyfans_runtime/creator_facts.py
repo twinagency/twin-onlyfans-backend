@@ -2,7 +2,7 @@
 
 Twin typed facts remain authoritative. This cache cannot write Twin, compile a
 persona, change a model, create fan memory or send. Explicit OF overrides win;
-freshness is checked again with the saved context before native egress.
+saved facts do not expire; content and binding changes are checked before egress.
 """
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -27,7 +27,6 @@ SOURCE_COLUMNS = ("id", "updated_at", "date_of_birth", "hometown", "current_city
     "occupation", "relationship_canon", "tattoos", "tattoo_details", "turn_ons", "hard_limits", "hard_limits_extra")
 FACT_KEYS = ("age", "job", "home_city", "relationship", "kids", "family", "tattoos", "kinks", "limits")
 REFRESH_SECONDS = 30
-MAX_AGE_SECONDS = 120
 
 
 def object_value(raw):
@@ -157,8 +156,9 @@ def effective(session, row, *, now=None):
     required = source is not None or os.environ.get("ONLYFANS_TWIN_FACTS_ENABLED") == "1"
     if source is None:
         return object_value(row.persona_facts_json), None if not required else {"state":"unavailable", "sourceHash":None}
-    current = (source.checked_at is not None and source.source_json is not None
-        and timedelta(0) <= now-source.checked_at <= timedelta(seconds=MAX_AGE_SECONDS))
+    # Saved facts remain usable until an explicit source or operator edit.
+    # Polling failures and elapsed time do not revoke successfully loaded facts.
+    current = source.checked_at is not None and source.source_json is not None
     values = map_facts(object_value(source.source_json), today=now.date()) if source.source_json else {}
     overrides = object_value(source.overrides_json)
     values.update(overrides)

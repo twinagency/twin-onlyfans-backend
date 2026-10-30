@@ -673,8 +673,8 @@ class Service:
             if exc.reason in ("input-already-claimed", "source-changed"):
                 return await self.wait(self.poll_s)
             raise
-        from .identity import sincere_identity_question
-        if any(sincere_identity_question((src or {}).get("body")) for src in sources.values()):
+        questions = self.identity_questions(sources)
+        if questions:
             # Identity rule: the AI never answers "are you a bot / AI / real?". The chat is paused and
             # flagged so a human answers it, then hands back with the normal dashboard controls.
             await self.identity_handoff("fan-asked")
@@ -970,6 +970,14 @@ class Service:
             row = con.execute(f"SELECT 1 FROM messages WHERE account_id=? AND fan_id=? AND direction='out' "
                               f"AND price_cents>0 AND message_id IN ({marks}) LIMIT 1", (self.db, self.args.fan, *ids)).fetchone()
         return row is not None
+
+    def identity_questions(self, sources):
+        """Only new questions trigger a handoff; all sources remain model context."""
+        from .identity import sincere_identity_question
+        questions = {int(mid): src for mid, src in sources.items()
+                     if sincere_identity_question((src or {}).get("body"))}
+        pending = self.ledger.unhandled_source_ids(pilot_id=self.pilot_id, source_ids=questions)
+        return {mid: src for mid, src in questions.items() if mid in pending}
 
     async def identity_handoff(self, trigger):
         """Pause the AI for this fan and flag the chat for a human (the identity rule, see identity.py).

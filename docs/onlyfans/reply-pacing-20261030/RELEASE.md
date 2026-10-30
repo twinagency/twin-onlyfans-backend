@@ -4,9 +4,9 @@
 
 Deployed on 30 October 2026 with the user's approval. Backend runtime source is `d745017852e33df3c7a01f305f116084df2ef7bd`; both dashboard consumers run `2e4dfea7acbc5fa3fe14b64dc2d3bb981b5da7db`. Later documentation commits do not change those deployed runtime sources.
 
-Pacing (Patch A) was enabled for **Maile only** at **07:22:30 UTC / 17:22:30 Brisbane** through the existing authenticated, audited configuration endpoint. Readback confirmed the requested revision and fingerprint. Formatting (Patch B) remains off everywhere, and pacing remains off for all other creators. Account activation, provider connections, budgets, delivery caps, throttles and other settings were preserved. Nicky/Nikki remains excluded; no accounts were reconnected or newly activated.
+Pacing (Patch A) was enabled for **Maile only** at **07:22:30 UTC / 17:22:30 Brisbane** through the existing authenticated, audited configuration endpoint. Readback confirmed the requested revision and fingerprint. Formatting (Patch B) was also enabled for Maile at **08:06:08 UTC / 18:06:08 Brisbane**, following the user's explicit instruction to make it live after the incomplete live-verification status was explained. Both features remain off for all other creators. Account activation, provider connections, budgets, delivery caps, throttles and other settings were preserved. Nicky/Nikki remains excluded; no accounts were reconnected or newly activated.
 
-At the first observation, 07:24:19 UTC, no new pacing schedules or validated pacing receipts had appeared. Sixteen structured sender events were observed with no pacing-metric or service-error events in that window. This is deployment and configuration proof, **not live reply or interruption proof**. B stays off until A has sufficient naturally occurring evidence. No customer test messages or purchases were made.
+At the latest observation before enabling B, 08:00:30 UTC, no new pacing schedules or validated pacing receipts had appeared. There were 355 structured sender events since enabling A, with no recorded pacing-metric, task, reconcile or service-error events. The user then explicitly requested immediate enablement, overriding the original staged waiting requirement. Both settings were read back through the authenticated API with matching audit revision and fingerprint. This is deployment and configuration proof, **not live reply or interruption proof**. No customer test messages or purchases were made.
 
 ## Deployed artifacts
 
@@ -80,7 +80,7 @@ The [dashboard deployment run](https://github.com/twinagency/twin-dashboard/acti
 
 The same byte-identical checker on the retained previous dashboard image completed 1,313 checks: 1,309 passed and four failed for one creator. This establishes a pre-existing catalogue verification problem; it does not establish the cause of the candidate's incomplete run. Media routes and the checker were not changed by this feature. The catalogue audit is not marked green.
 
-Actual pacing receipt timing, grouping under live fan traffic, stale-draft interruption, takeover, reconnect/restart and purchase interactions have not all been observed live. No customer test traffic is fabricated to claim those results. Formatting remains deployed but disabled pending the separate next stage.
+Actual pacing receipt timing, grouping under live fan traffic, stale-draft interruption, takeover, reconnect/restart and purchase interactions have not all been observed live. No customer test traffic is fabricated to claim those results. Formatting is now enabled for Maile by explicit user instruction while these live-verification limits remain recorded.
 
 ## Evidence and rollback
 
@@ -91,9 +91,10 @@ Server-local evidence is under `/var/lib/twin-release/reply-pacing-20261030-2087
 | Successful backend promotion | `873a74f9-f1b2-4639-8173-faac7968c4a3` |
 | OF dashboard promotion | `00b20998-cc63-4eff-ae3d-eda0bc53cc9f` |
 | A-only canary enablement | `470660dc-4bb7-4140-a7dd-86175d1d28de` |
+| Formatting enablement after explicit user instruction | `4738ae52-da19-4d27-8abc-e4639b7a17a0` |
 | Baseline catalogue comparison | `a5b4b770-c8e1-4021-aecf-0292de998a64` |
 
-First rollback is the existing audited setting update to turn A off for the canary. It invalidates waiting schedules and rejects captured stale configuration authority; it cannot retract a call already handed to the provider. B is already off.
+First rollback is the existing audited setting update to turn A off for the canary. It invalidates waiting schedules and rejects captured stale configuration authority; it cannot retract a call already handed to the provider. Formatting can be disabled independently through the same audited endpoint; this restores baseline style on subsequent turns and invalidates captured formatting authority on unsent work.
 
 If application rollback is needed, refresh the current compose/runtime state under the release lock, then restore only the affected API/sender image references from `promotion-2/backend-compose.before.json`. Do not copy an old whole compose file over concurrent releases. Exact compatible predecessors are API `sha256:cf7dd2382962def7ca18f8b26a39713e61cab5bf5bb637093ce8bf95068527ff` and sender `sha256:42a374a0e29fa08419c2ec4987299d187215a28066528a48d1ac94c79a97e84a`. Retain the additive table and public schema head.
 

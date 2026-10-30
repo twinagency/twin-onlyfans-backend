@@ -363,7 +363,9 @@ class Gateway:
                 raise Refused("unsend-needs-card")
             if len(text.encode("utf-16-le")) // 2 > 4000:
                 raise Refused("output-too-long")
+            draft_ready_at = now()
             await self.pace()
+            throttle_done_at = now()
             if self.stopped():
                 raise Refused(self.stopped_reason)
             since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
@@ -395,7 +397,8 @@ class Gateway:
                             raise Refused("content-asset-unavailable")
             self.bubble += 1
             attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
-                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now(),
+                **({"reply_authority": self.reply_decision["authority"]} if getattr(self, "reply_decision", None) else {}))
             from .recovery import freeze
             try:
                 if terms and getattr(self, "contextual", None) is not None and self.contextual.armed is not None:
@@ -409,6 +412,7 @@ class Gateway:
                 attempt_no=attempt.attempt_no, owner_token=self.pilot.owner_token, revision=self.pilot.revision)
 
             wire = [False]
+            wire_at = [None]
 
             def physical_post():
                 # Re-read stop/owner after the thread handoff, immediately at the wire.
@@ -426,7 +430,9 @@ class Gateway:
                 if contextual_metadata is not None:
                     self.contextual.before_post(contextual_metadata)
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
-                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
+                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now(),
+                    **({"reply_authority": self.reply_decision["authority"]} if getattr(self, "reply_decision", None) else {}))
+                wire_at[0] = now()
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
                     if unsend_id is not None:
                         wire[0] = True    # the DELETE may have reached OnlyFans from here on
@@ -469,6 +475,16 @@ class Gateway:
             settled = True
             if contextual_metadata is not None:
                 self.contextual.outcome("sent", int(validated.provider_message_id))
+            decision = getattr(self, "reply_decision", None)
+            if decision and decision["schedule"] and not known:
+                from .pacing import delivery_event
+                try:
+                    emit(delivery_event(decision["authority"], decision["schedule"], receipt_at=now(),
+                                        wire_at=wire_at[0], provider_created_at=raw.get("createdAt"),
+                                        admitted_at=decision.get("admitted_at"), draft_ready_at=draft_ready_at,
+                                        throttle_done_at=throttle_done_at, eligible_at=decision["eligible_at"]))
+                except Exception:
+                    emit({"event": "reply-pacing-metric-error"})
             emit({"event": "sent", "engine": "fastt-native", "provider_message_id": validated.provider_message_id,
                   "pilot_sent": len([r for r in self.ledger.receipts(pilot_id=self.pilot.pilot_id) if r["state"] == "sent"]),
                   "limit": self.limit_label()})

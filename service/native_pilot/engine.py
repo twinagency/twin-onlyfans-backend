@@ -182,7 +182,7 @@ class NativeEngine:
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
-                 unanswered_reply_ids=(), unlinked_paid=None, contextual=None):
+                 unanswered_reply_ids=(), unlinked_paid=None, contextual=None, reply_format=False):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
@@ -196,6 +196,7 @@ class NativeEngine:
             raise ValueError("invalid-pilot-model")
         self.model = model
         self.contextual = contextual
+        self.reply_format = reply_format is True
         self.content = content
         # Optional Twin approved-context source for the single prompt hook.
         self.context = context
@@ -258,6 +259,9 @@ class NativeEngine:
         contextual_mode = mode(result)
         result.update(TEXT_ONLY)
         result[KEY] = contextual_mode if getattr(self, "contextual", None) is not None and sales_enabled else "off"
+        result.pop("_native_reply_format", None)  # internal capability, never a saved switch
+        if self.reply_format and self._job is None:
+            result["_native_reply_format"] = True
         if self.followups is not None:
             result.update(copy.deepcopy(FOLLOWUPS))
             minutes = result.get("nudge_after_minutes")

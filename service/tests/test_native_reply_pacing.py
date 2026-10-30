@@ -158,7 +158,7 @@ def test_flag_strict_default_off_and_diagnostic(f,caplog):
         assert pacing.settings(f.path,L.ACCT)[pacing.PACING] is False
     assert 'invalid-native-reply-switch' in caplog.text
     f.sql("UPDATE account_ai_config SET ai_chatter_config_json='{}'")
-    assert pacing.settings(f.path,L.ACCT)=={pacing.PACING:False}
+    assert not any(pacing.settings(f.path,L.ACCT).values())
     assert not f.sql("SELECT * FROM native_reply_pacing")
 
 

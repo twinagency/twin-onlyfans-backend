@@ -6427,6 +6427,14 @@ def _turn_kind(*, bot_accused: bool, pic_desc: str, content_ask: bool,
     return ""
 
 
+REPLY_FORMAT_INSTRUCTION = (
+    "Answer the latest complete message in the creator's approved voice. Use the amount of detail the reply needs. "
+    "A brief acknowledgment or one short sentence is sufficient when it answers the turn. "
+    "Expand when the question needs explanation. Ask a follow-up only when it helps the conversation. "
+    "Do not pad the reply or split it merely to meet a format."
+)
+
+
 def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     history_tail: int = _HISTORY_TAIL,
                     # Arm G's three transforms. Defaults to OFF, so every
@@ -6493,6 +6501,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     # offer contract and pacing are untouched.
                     twin_context: bool = False,
                     dated_memory: bool = False,
+                    reply_format: bool = False,
                     ) -> tuple[list[dict], list[str]]:
     """Compose the (system, user) pair — welcome_chatter_for_info's girly info-gather prompt
     with one structural difference: `sell`. `_NO_SELL` (M2) → the no-offers line
@@ -6506,6 +6515,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     for the opening line and the output contract. That is the whole reason
     `_SellSurface` exists — see its docstring. Adding a way to sell means one
     more construction there, not four more branches here."""
+    reply_format = reply_format is True and not kind and not sell.live
     questions = _questions_still_needed(f, asked)
     # One flag for "answer identity questions honestly": Twin's scoped text path
     # and the FASTT path with Twin context share the same identity wording.
@@ -6866,6 +6876,9 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     elif life_tip:
         need_block = ("YOUR GOAL THIS MESSAGE: answer him, then the ask "
                       "below. No get-to-know question this turn — it can wait.")
+    elif reply_format:
+        need_block = "Answer what he said. Ask for clarification only if it is needed to answer accurately."
+        presented = []
     elif opener is not None:
         # The gather is done, so this turn works in one gen_info opener — a question
         # mined from something he actually said — instead of the generic banter
@@ -6908,7 +6921,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         if name_dodged else "")
 
     style_extra = ((STYLE_3LINE,) * 2 + (STYLE_BRIEF,) * 2) if style_on else ()
-    style = random.choice(_STYLE_VARIANTS + style_extra)
+    style = REPLY_FORMAT_INSTRUCTION if reply_format else random.choice(_STYLE_VARIANTS + style_extra)
     # A "solo" sticker roll owns the per-message STYLE slot — a bullet buried
     # mid-prompt loses to "YOUR GOAL THIS MESSAGE"/the style line (verified
     # live: 5/5 solo rolls yielded plain text until the directive moved here).
@@ -7047,7 +7060,9 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         f"{register_intro}"
         "- Short and casual — lowercase, u/ur. React to what he said first.\n"
         "- VARY it — never reuse an opener, phrase, or emoji from this chat.\n"
-        "- At most ONE question, never one he already answered. No paragraphs.\n"
+        + ("- Ask a follow-up only when useful; never repeat an answered question.\n" if reply_format else
+           "- At most ONE question, never one he already answered. No paragraphs.\n")
+        +
         f"{narration_rule}"
         "- If he gets explicit early: playfully tease and slow it down — warm, "
         "never preachy.\n"
@@ -9552,7 +9567,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                               sell_signal=signal_on,
                                               v=v,
                                               twin_context=twin_ctx is not None,
-                                              dated_memory=bool(getattr(twin_ctx,"dated_memory",False)))
+                                              dated_memory=bool(getattr(twin_ctx,"dated_memory",False)),
+                                              reply_format=cfg.get("_native_reply_format") is True)
             if twin_ctx is not None and twin_ctx.finish is not None:
                 msgs = twin_ctx.finish(msgs)
             try:
@@ -10025,11 +10041,17 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             _ret_gap_s = ((datetime.utcnow() - _ret_anchor).total_seconds()
                           if _ret_anchor is not None else 0.0)
             _one_bubble = bool(return_single_s > 0 and _ret_gap_s >= return_single_s)
-            parts = [_language.apply_word_restriction(p, fan_lang)[:_REPLY_MAX_CHARS]
-                     for p in split_for_bubbles(raw, max_bubbles,
-                                                rng=random.Random(f"split:{fan_id}:{raw}"),
-                                                force_single=_one_bubble)
-                     if p.strip()][:max_bubbles]
+            if cfg.get("_native_reply_format") is True and not kind and not sell.live:
+                # Preserve complete text; the existing transport limit refuses oversized output.
+                # The existing bubble loop still checks freshness before every send.
+                parts = [_language.apply_word_restriction(p, fan_lang)
+                         for p in split_for_bubbles(raw, 2, preserve_complete=True)]
+            else:
+                parts = [_language.apply_word_restriction(p, fan_lang)[:_REPLY_MAX_CHARS]
+                         for p in split_for_bubbles(raw, max_bubbles,
+                                                    rng=random.Random(f"split:{fan_id}:{raw}"),
+                                                    force_single=_one_bubble)
+                         if p.strip()][:max_bubbles]
             parts = [p for p in parts if not _looks_like_echo(p, c.last_body)]
             if style_on and parts:
                 recent_out = [b for d, b in c.messages if d == "out"]

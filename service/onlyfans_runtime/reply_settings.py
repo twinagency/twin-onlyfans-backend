@@ -1,7 +1,8 @@
 """Literal opt-ins shared by the audited editor and the native runner."""
 import logging
 
-SWITCHES = {"nativeReplyPacingEnabled": "native_reply_pacing_enabled"}
+SWITCHES = {"nativeReplyPacingEnabled": "native_reply_pacing_enabled",
+            "nativeReplyFormatEnabled": "native_reply_format_enabled"}
 
 
 def enabled(settings, key):

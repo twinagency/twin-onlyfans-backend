@@ -59,3 +59,20 @@ and confirm the desired inbox filter in Messages Pro or OF Manager. Official
 Split Inbox groups are not automatically driven by these native lists. No
 Infloww-side send prevention is claimed. Broad activation remains pending that
 check and provider reconciliation work.
+
+## Applied pilot evidence
+
+The applied pilot completed one assignment for Maile test fan 318022380. A second
+applied run reported zero changes. Sixteen offline tests pass. Managed native list
+IDs are AI 1325034694, Human 1325034696, and Pending 1325034701. The live test
+identified native membership-removal 404 responses; these are accepted only after
+verifying the list itself still exists.
+
+The isolated pilot process uses `/tmp/twin-infloww-pilot-20261031` in the existing
+supervisor container, with its durable ledger, PID and bounded operational output
+under `/var/lib/fastt/infloww-sync/maile-test.*`. This pilot is not installed as a
+restart-managed production service: a supervisor-container replacement stops it.
+The repository is the durable source for packaging after the desktop acceptance
+check. Before stopping the pilot, verify that the PID file still identifies a
+`native_list_ownership_sync` process with this account and test fan. Stop that
+process only; do not restart or stop the supervisor container.

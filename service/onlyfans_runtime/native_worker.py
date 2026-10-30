@@ -223,6 +223,12 @@ class NativeWorker:
                 if stop.is_set():break
                 account_errors=report.errors
                 try:
+                    # A deferred recent read must not skip an opted-in import turn.
+                    try:
+                        from .sync_fairness import turn
+                        turn(self.store,self.tenant_id,account.account_id)
+                    except Exception:report.held+=1
+                    if stop.is_set():break
                     if account.read_connection_revision is not None:
                         from .worker import read_step
                         progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,

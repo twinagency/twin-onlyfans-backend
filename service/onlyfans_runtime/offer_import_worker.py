@@ -63,7 +63,10 @@ def _transport(connection, tenant, account):
         expires_at=connection.expires_at.replace(tzinfo=timezone.utc)))
 
 
-def process_refresh_jobs(store, tenant, *, limit=1, stop=None, transport_factory=_transport):
+from sqlalchemy import true
+
+
+def process_refresh_jobs(store, tenant, *, limit=1, stop=None, transport_factory=_transport, account_id=None):
     """At most `limit` history pages across accounts, one per account per 5s."""
     if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
         raise Refused("offer refresh requires the worker role")
@@ -80,6 +83,7 @@ def process_refresh_jobs(store, tenant, *, limit=1, stop=None, transport_factory
             job = s.scalar(select(OfOfferImportJob).join(OfCreatorBinding, OfCreatorBinding.id == OfOfferImportJob.binding_id)
                 .where(OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
                     OfOfferImportJob.mode == "refresh",
+                    (OfOfferImportJob.account_id == account_id) if account_id is not None else true(),
                     or_(OfOfferImportJob.next_attempt_at.is_(None), OfOfferImportJob.next_attempt_at <= now),
                     or_(OfOfferImportJob.status == "pending",
                         and_(OfOfferImportJob.status == "running", OfOfferImportJob.lease_until <= now)))

@@ -4,7 +4,15 @@ import json
 
 PACING_KEY = "native_reply_pacing_enabled"
 FORMAT_KEY = "native_reply_format_enabled"
-SWITCHES = {"nativeReplyPacingEnabled": PACING_KEY}
+SWITCHES = {"nativeReplyPacingEnabled": PACING_KEY, "nativeReplyFormatEnabled": FORMAT_KEY}
+
+FORMAT_INSTRUCTION = (
+    "Answer the latest complete message in the creator's approved voice. "
+    "Use the amount of detail the reply needs. A brief acknowledgment or one short sentence "
+    "is sufficient when it answers the turn. Expand when the question needs explanation. "
+    "Ask a follow-up only when it helps the conversation. Do not pad the reply or split it "
+    "merely to meet a format."
+)
 
 
 def saved_object(raw):

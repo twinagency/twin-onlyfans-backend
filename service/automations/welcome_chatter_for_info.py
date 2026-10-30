@@ -427,7 +427,7 @@ def _dedupe_lead_reaction(parts: list[str], recent_out: list[str]) -> list[str]:
 
 
 def split_for_bubbles(text: str, max_bubbles: int = 2, rng=None,
-                      force_single: bool = False) -> list[str]:
+                      force_single: bool = False, preserve_complete: bool = False) -> list[str]:
     """Make one generated reply read like real texting, and NO em-dash ever survives
     (every return path runs _strip_dash). Content is NEVER dropped:
 
@@ -458,6 +458,10 @@ def split_for_bubbles(text: str, max_bubbles: int = 2, rng=None,
     # merges instead — `_group_to_target(..., 1)` casually joins every unit, so a
     # one-bubble reply says everything the multi-bubble one would have.
     if force_single and text:
+        if preserve_complete:
+            # Native ordinary-chat format: keep the complete response's
+            # sentences, URLs and required text. Existing callers remain equal.
+            return [_strip_dash(text)]
         units = _break_units(text)
         return [_strip_dash(_casual_join(units) if units else text)]
     if max_bubbles >= 3:                         # STYLE MODE

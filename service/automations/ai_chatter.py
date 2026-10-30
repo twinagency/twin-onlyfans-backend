@@ -6493,6 +6493,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     # offer contract and pacing are untouched.
                     twin_context: bool = False,
                     dated_memory: bool = False,
+                    native_reply_format: bool = False,
                     ) -> tuple[list[dict], list[str]]:
     """Compose the (system, user) pair — welcome_chatter_for_info's girly info-gather prompt
     with one structural difference: `sell`. `_NO_SELL` (M2) → the no-offers line
@@ -6909,6 +6910,14 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
 
     style_extra = ((STYLE_3LINE,) * 2 + (STYLE_BRIEF,) * 2) if style_on else ()
     style = random.choice(_STYLE_VARIANTS + style_extra)
+    # One scoped ordinary-chat style owner; paid/content/required turn contracts
+    # retain their current instructions and captions. False is byte-transparent.
+    flexible_format = native_reply_format and not kind and not sell.live and not content_ask and not life_tip and opener is None
+    if flexible_format:
+        from onlyfans_runtime.reply_policy import FORMAT_INSTRUCTION
+        style = FORMAT_INSTRUCTION
+        need_block = "Answer his latest complete message. A follow-up is optional when useful."
+        presented = []
     # A "solo" sticker roll owns the per-message STYLE slot — a bullet buried
     # mid-prompt loses to "YOUR GOAL THIS MESSAGE"/the style line (verified
     # live: 5/5 solo rolls yielded plain text until the directive moved here).
@@ -7047,8 +7056,9 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         f"{register_intro}"
         "- Short and casual — lowercase, u/ur. React to what he said first.\n"
         "- VARY it — never reuse an opener, phrase, or emoji from this chat.\n"
-        "- At most ONE question, never one he already answered. No paragraphs.\n"
-        f"{narration_rule}"
+        + ("- Ask only useful follow-ups; never re-ask what he already answered.\n" if flexible_format else
+           "- At most ONE question, never one he already answered. No paragraphs.\n")
+        + f"{narration_rule}"
         "- If he gets explicit early: playfully tease and slow it down — warm, "
         "never preachy.\n"
         f"{_good_examples(f, asked, have_durable_name)}\n"
@@ -9552,6 +9562,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                               sell_signal=signal_on,
                                               v=v,
                                               twin_context=twin_ctx is not None,
+                                              native_reply_format=cfg.get("_native_reply_format_enabled") is True,
                                               dated_memory=bool(getattr(twin_ctx,"dated_memory",False)))
             if twin_ctx is not None and twin_ctx.finish is not None:
                 msgs = twin_ctx.finish(msgs)
@@ -10025,10 +10036,13 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             _ret_gap_s = ((datetime.utcnow() - _ret_anchor).total_seconds()
                           if _ret_anchor is not None else 0.0)
             _one_bubble = bool(return_single_s > 0 and _ret_gap_s >= return_single_s)
-            parts = [_language.apply_word_restriction(p, fan_lang)[:_REPLY_MAX_CHARS]
+            _flexible_reply = cfg.get("_native_reply_format_enabled") is True and not kind and offer_item is None and teaser is None
+            parts = [(_language.apply_word_restriction(p, fan_lang) if _flexible_reply else
+                      _language.apply_word_restriction(p, fan_lang)[:_REPLY_MAX_CHARS])
                      for p in split_for_bubbles(raw, max_bubbles,
                                                 rng=random.Random(f"split:{fan_id}:{raw}"),
-                                                force_single=_one_bubble)
+                                                force_single=_one_bubble or _flexible_reply,
+                                                **({"preserve_complete":True} if _flexible_reply else {}))
                      if p.strip()][:max_bubbles]
             parts = [p for p in parts if not _looks_like_echo(p, c.last_body)]
             if style_on and parts:

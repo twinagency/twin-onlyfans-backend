@@ -752,6 +752,7 @@ class Service:
                                                      input_key=key, now=runner.now()) if job is None else ()
             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
                               content=self.content, context=self.context,
+                              **({"reply_format_enabled":True} if reply_authority is not None and reply_authority.policy.formatting else {}),
                               **({"unanswered_reply_ids": unanswered} if unanswered else {}),
                               **({"own_offers_only": True} if self.strict else {}),
                               arm_unsend=gateway.arm_unsend, unsent=lambda: gateway.unsent_ids,

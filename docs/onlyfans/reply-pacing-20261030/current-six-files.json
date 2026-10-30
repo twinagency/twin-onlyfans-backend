@@ -1,0 +1,26 @@
+{
+  "native_pilot/service.py": {
+    "baseline": "9aa169c826d33c739297e42e6a49995475129090d5a195caef9e986ec8850914",
+    "candidate": "78ac4768bdecddc61d70a83cc43bb9f369dce342438f96248f2ec327eb43fff6"
+  },
+  "native_pilot/engine.py": {
+    "baseline": "c2c120b50add60bd2ab0c11a3225979dda3814b75e3eab21972f69a9b4737a72",
+    "candidate": "84292267d0d7707981d3beee2812f6c1245e77e6a4395168bcec2985518cfb6e"
+  },
+  "native_pilot/runner.py": {
+    "baseline": "209f41c36517e35cb911365841c924037676b20de8c6e1e221e9669646558634",
+    "candidate": "f59cff06775213220bbbb169b5c9f4678752600902bc726a3c5765ebc4ad3de1"
+  },
+  "native_pilot/ledger.py": {
+    "baseline": "e5dae32898f5bbf253a836241a3f13756738a618471ed79111646c04b84856dd",
+    "candidate": "9ec795148828441592418428fc34d35d5411217b7bbb7fede3636c2fc0f76f97"
+  },
+  "db/onlyfans_pilot_models.py": {
+    "baseline": "11569368d04c1511a059bb8bb97f3771fa9f7567e7256c51f559cf0233d2843a",
+    "candidate": "70041c36f88a8dd162be47e42c1743dff2318775213ef1e0fcff582a70295236"
+  },
+  "automations/ai_chatter.py": {
+    "baseline": "ce13b107b65c90f87942b9d5d9d81bb52cea05687ffce0ae7852b69feab68b5b",
+    "candidate": "6fec0c52457f9ba1f2b1a3363986a4f0425f761df990c6da217fbaa69fa46240"
+  }
+}

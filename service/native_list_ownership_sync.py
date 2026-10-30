@@ -70,12 +70,13 @@ class Mirror:
             import uuid
             key = "name:" + state
             unique = self.get(key)
+            new_name = unique is None
             if unique is None:
                 unique = name + " " + uuid.uuid4().hex[:8]
                 self.put(key, unique)
             found = None
             offset = 0
-            while True:
+            while not new_name:
                 page = client.get_lists(limit=100, offset=offset)
                 rows = page.get("list") if isinstance(page, dict) else page
                 if not isinstance(rows, list):

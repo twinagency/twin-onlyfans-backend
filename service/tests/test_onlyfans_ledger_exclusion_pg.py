@@ -204,7 +204,7 @@ def test_migration_downgrade_drops_only_the_exclusion_table_and_upgrade_restores
     from alembic import command
     from db.schema import HEAD, _config, check_schema
     url, engine = database
-    assert HEAD == "0098_ledger_exclusion"
+    assert HEAD == "0101_contextual_offers"
     with engine.begin() as c:
         command.downgrade(_config(c), "0097_release_controls")
         assert not c.dialect.has_table(c, "of_ledger_exclusion")

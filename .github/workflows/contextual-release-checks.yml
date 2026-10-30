@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [contextual, manual, ledger, native]
+        suite: [contextual, manual, ledger, ledger-upgrade, native]
     services:
       postgres:
         image: postgres:16-alpine
@@ -75,3 +75,10 @@ jobs:
         run: |
           python service/tests/test_native_pilot_load_pg.py
           python service/tests/test_native_pilot_storage_pg.py
+      - name: Reconstructed historical schema upgrade regressions
+        if: matrix.suite == 'ledger-upgrade'
+        run: >-
+          python -m pytest -q
+          service/tests/test_onlyfans_ledger_history_pg.py::test_additive_upgrade_from_91_retains_financial_evidence
+          service/tests/test_onlyfans_ledger_markers_pg.py::test_upgrade_invalidates_offset_claims_and_preserves_immutable_financial_rows
+          service/tests/test_onlyfans_ledger_exclusion_pg.py::test_migration_downgrade_drops_only_the_exclusion_table_and_upgrade_restores_it

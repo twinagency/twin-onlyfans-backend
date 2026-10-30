@@ -6,7 +6,7 @@ import os
 from sqlalchemy import select, text
 from db.models import Fan, Message, OfCreatorBinding
 from db.onlyfans_models import OfRuntime
-from .evidence import FIELD_LOCKS, digest, norm, project, relevance, select_memories, summary
+from .evidence import FIELD_LOCKS, digest, norm, project, relevance, select_memories, summary, subject_supported
 
 SCOPE = 'tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id AND fan_id=:fan_id'
 
@@ -70,6 +70,7 @@ def load_memories(s, account, fan, *, query='', now=None):
     for raw in rows:
         f=json.loads(raw)
         if f['memory_key'] in manual or locks & FIELD_LOCKS.get(f['field'],set()): continue
+        if not subject_supported(f, creator=not bool(fan)): continue
         rank=relevance(f,query,now)
         if rank is not None: candidates.append((rank[0],f))
     candidates.sort(key=lambda item:(-item[0],item[1]['memory_key']))

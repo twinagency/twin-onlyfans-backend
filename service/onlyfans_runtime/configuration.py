@@ -13,6 +13,7 @@ from llm_models import MODELS
 from .native_context import canonical,approved_persona
 from .store import Refused,utcnow
 from .activation import activation_view
+from .reply_policy import SWITCHES as REPLY_SWITCHES, enabled as reply_switch_enabled
 
 def fact_fields():
     from automations._persona_contract import PERSONA_FACT_FIELDS
@@ -25,7 +26,7 @@ class InvalidConfiguration(ValueError):
 
 SALES_FLAGS = ("pack_send_enabled", "pack_on_ask_enabled", "qualification_gate_enabled")
 # FASTT runner switches, same JSON blob; default OFF, only a literal boolean true is on.
-FASTT_SWITCHES = {"fasttDiscountResend": "fastt_discount_resend", "fasttPostBuyUpsell": "fastt_post_buy_upsell"}
+FASTT_SWITCHES = {"fasttDiscountResend": "fastt_discount_resend", "fasttPostBuyUpsell": "fastt_post_buy_upsell", **REPLY_SWITCHES}
 
 
 def sales_settings(row):
@@ -126,7 +127,7 @@ def editable(row,runtime,session,*,include_activation=False):
         "reasoningOptions":({key:list(model.effort_choices) for key,model in MODELS.items()} if options is None else {key:[] for key in options}),
         "salesConfigurationValid":sales_valid,
         "onRequestSalesEnabled":on_request_sales_enabled(sales, valid=sales_valid),
-        **{name:sales_valid and sales.get(key) is True for name,key in FASTT_SWITCHES.items()},
+        **{name:sales_valid and reply_switch_enabled(sales,key) for name,key in FASTT_SWITCHES.items()},
         **({"activation": activation_view(session,row.account_id,sales,binding_id=runtime.binding_id,model_id=resolved)} if include_activation else {})}
 
 
@@ -343,6 +344,20 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
                 if not credential or not credential.get("configured") or credential.get("modelId")!=resolved:
                     raise InvalidConfiguration("A verified model credential matching this reply model is required before saving it.")
         if not changed:raise InvalidConfiguration("No configuration change was needed.")
+        if any(patch.get(name) is False for name in REPLY_SWITCHES):
+            # Additive native schema is independently migrated. Keep all input,
+            # receipt and unknown-outcome evidence on disable, including after rollback.
+            from sqlalchemy import text as sql
+            from sqlalchemy import inspect
+            if s.bind.dialect.name == "postgresql":
+                present = s.execute(sql("SELECT to_regclass('fastt_runtime.native_reply_schedules')")).scalar()
+                table = "fastt_runtime.native_reply_schedules"
+            else:
+                present = inspect(s.connection()).has_table("native_reply_schedules")
+                table = "native_reply_schedules"
+            if present:
+                s.execute(sql("UPDATE " + table + " SET state='cancelled',updated_at=:now WHERE account_id=:account "
+                              "AND state IN ('waiting','generating','held')"), {"account":account_id,"now":utcnow().isoformat(sep=" ",timespec="microseconds")})
         row.updated_at=utcnow()
         s.flush()
         after_fingerprint=fingerprint(row)

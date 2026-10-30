@@ -26,7 +26,7 @@ import os
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, Column, DateTime, Index, Integer, MetaData, String, Text,
+    BigInteger, Boolean, Column, DateTime, Float, Index, Integer, MetaData, String, Text,
     UniqueConstraint, text, true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -51,6 +51,30 @@ metadata = MetaData(naming_convention=NAMING_CONVENTION, schema=SCHEMA)
 
 class Base(DeclarativeBase):
     metadata = metadata
+
+
+class NativeReplySchedule(Base):
+    """One retained target per unanswered native burst and authority generation."""
+    __tablename__ = "native_reply_schedules"
+    schedule_id = Column(Text, primary_key=True)
+    account_id = Column(Text, nullable=False)
+    fan_id = Column(BigInteger, nullable=False)
+    generation = Column(Text, nullable=False)
+    anchor_id = Column(BigInteger, nullable=False)
+    first_received_at = Column(Text, nullable=False)
+    latest_received_at = Column(Text, nullable=False)
+    provider_created_at = Column(Text, nullable=False)
+    delay_seconds = Column(Float, nullable=False)
+    target_send_at = Column(Text, nullable=False)
+    pipeline_allowance_s = Column(Float, nullable=False)
+    admissions = Column(Integer, nullable=False, server_default=text("0"))
+    state = Column(Text, nullable=False)
+    input_key = Column(Text)
+    created_at = Column(Text, nullable=False)
+    updated_at = Column(Text, nullable=False)
+    __table_args__ = (Index("native_reply_one_pending", "account_id", "fan_id", "generation", unique=True,
+        postgresql_where=text("state IN ('waiting','generating','held')"),
+        sqlite_where=text("state IN ('waiting','generating','held')")),)
 
 
 def ensure_tables(bind) -> None:

@@ -288,6 +288,7 @@ class Gateway:
         # here (never from the frozen Pilot) and a held fan can refuse a bubble.
         self.deadline = pilot.deadline
         self.hold_check = None
+        self.reply_authority = None
         self.not_sent = None   # the NotSent that ended a send (a retryable one lets the caller answer the input again)
         # Discounted resend (service.py arms these for exactly one job): the one unpaid card of this fan the job may
         # remove, and the ids whose removal the provider confirmed. The DELETE happens at the wire, inside the SAME
@@ -364,6 +365,8 @@ class Gateway:
             await self.pace()
             if self.stopped():
                 raise Refused(self.stopped_reason)
+            if getattr(self, "reply_authority", None) is not None:
+                await asyncio.to_thread(self.reply_authority.check)
             since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
             history = await self.reader.preflight_history(self.pilot.fan_id, since=since, source_ids=set(self.sources))
             receipts = self.ledger.receipts(pilot_id=self.pilot.pilot_id, input_key=self.input_key)
@@ -390,7 +393,8 @@ class Gateway:
                             raise Refused("content-asset-unavailable")
             self.bubble += 1
             attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
-                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now(),
+                **({"authority_check":self.reply_authority.check} if getattr(self, "reply_authority", None) is not None else {}))
             from .recovery import freeze
             try:
                 freeze(self.ledger, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
@@ -416,7 +420,8 @@ class Gateway:
                 if self.hold_check is not None and self.hold_check():
                     raise Refused("fan-held-before-post")
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
-                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
+                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now(),
+                    **({"authority_check":self.reply_authority.check} if getattr(self, "reply_authority", None) is not None else {}))
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
                     if unsend_id is not None:
                         wire[0] = True    # the DELETE may have reached OnlyFans from here on

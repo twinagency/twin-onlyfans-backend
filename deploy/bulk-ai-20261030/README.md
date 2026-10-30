@@ -26,7 +26,7 @@ The full test:onlyfans-ui suite passed on the connected workstation, including t
 
 The frontend synthetic suite passed locally, covering 50/50/5 batching, inverse action, progress, nonzero revisions, skip continuation, malformed/lost acknowledgements, cancellation, pagination/account isolation and credentialed proxy behavior.
 
-No test messages, paid media or real fan control changes were sent. Actual user-triggered account-wide completion is not claimed. Dashboard release status will be appended after verification.
+No test messages, paid media or real fan control changes were sent. Actual user-triggered account-wide completion is not claimed. The Windows workstation production build also passed (198.04 seconds), with the existing Supabase Edge Runtime warning. The approved main-branch workflow dispatch with exact frontend ref, run41060447256, initially ended startup_failure before any jobs; its rerun is queued without jobs. No environment approval is pending. The dashboard pair still serves source8cde4384ab5f8af5e45a838d1d8c81ff41d9a245; the new UI is not yet deployed. The prepared companion script has not been executed. The release remains incomplete until the normal build/check/deploy workflow succeeds and both dashboards are verified.
 
 ## Recovery
 

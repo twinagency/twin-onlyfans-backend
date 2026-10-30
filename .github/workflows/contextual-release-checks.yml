@@ -9,6 +9,10 @@ jobs:
   postgres:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [contextual, manual, ledger, native]
     services:
       postgres:
         image: postgres:16-alpine
@@ -35,20 +39,27 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements-onlyfans-test.txt
       - name: Contextual routing and durable guards
+        if: matrix.suite == 'contextual'
         run: |
           python -m pytest -q service/tests/test_contextual_offers.py
           python service/tests/test_contextual_native_turn.py
-      - name: Real PostgreSQL configuration, manual media, purchase and lease regressions
+      - name: Contextual populated migration and audited settings
+        if: matrix.suite == 'contextual'
+        run: python -m pytest -q service/tests/test_contextual_release_pg.py service/tests/test_onlyfans_configuration_pg.py
+      - name: Manual free and paid media under takeover
+        if: matrix.suite == 'manual'
+        run: python -m pytest -q service/tests/test_manual_vault_composer_pg.py service/tests/test_onlyfans_manual_pg.py
+      - name: Purchase history and shared provider leases
+        if: matrix.suite == 'ledger'
         run: >-
           python -m pytest -q
-          service/tests/test_onlyfans_configuration_pg.py
-          service/tests/test_manual_vault_composer_pg.py
-          service/tests/test_onlyfans_manual_pg.py
           service/tests/test_onlyfans_ledger_pg.py
           service/tests/test_onlyfans_ledger_history_pg.py
           service/tests/test_onlyfans_ledger_markers_pg.py
           service/tests/test_onlyfans_ledger_exclusion_pg.py
+          service/tests/test_onlyfans_launch_provider_budget_pg.py
       - name: Real sender load, takeover and schema compatibility
+        if: matrix.suite == 'native'
         run: |
           python service/tests/test_native_pilot_load_pg.py
           python service/tests/test_native_pilot_storage_pg.py

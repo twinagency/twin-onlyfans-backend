@@ -332,7 +332,10 @@ def _revisit_posts(store, tenant, account, token, revision, binding, owner, tran
                 release(store, tenant, read_claim, retry_after=retry_after)
 
 
-def process_posts(store, tenant, *, limit=1, stop=None, transport_factory=_transport, now=None):
+from sqlalchemy import true
+
+
+def process_posts(store, tenant, *, limit=1, stop=None, transport_factory=_transport, now=None, account_id=None):
     """Durable newest-page intake plus a fair bounded historical/revisit walk.
 
     Native historical reads require a recorded verified cursor contract. Known
@@ -353,6 +356,7 @@ def process_posts(store, tenant, *, limit=1, stop=None, transport_factory=_trans
             OfCreatorBinding.id == OfContentSyncAccount.binding_id).where(OfContentSyncAccount.enabled.is_(True),
             OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
             OfContentSyncAccount.status == "active",
+                    (OfContentSyncAccount.account_id == account_id) if account_id is not None else true(),
             (OfContentSyncAccount.posts_checked_at.is_(None))
             | (OfContentSyncAccount.posts_checked_at <= now - timedelta(seconds=INTERVAL_SECONDS)))
             .order_by(OfContentSyncAccount.posts_checked_at.asc().nulls_first(), OfContentSyncAccount.account_id)

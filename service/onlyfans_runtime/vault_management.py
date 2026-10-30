@@ -403,7 +403,10 @@ def _vault_job_expired(requested_at, last_progress_at, now):
     return now - last_activity > timedelta(hours=1)
 
 
-def process_vault_jobs(store, tenant, *, limit=1, stop=None):
+from sqlalchemy import true
+
+
+def process_vault_jobs(store, tenant, *, limit=1, stop=None, account_id=None):
     """At most limit GET pages, including identity checks, outside transactions.
 
     One page is checkpointed atomically. A crash after HTTP simply rereads the
@@ -427,7 +430,8 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             candidate = s.execute(select(OfVaultSyncJob.account_id, OfVaultSyncJob.job_id).join(
                 OfCreatorBinding, OfCreatorBinding.id == OfVaultSyncJob.binding_id).where(
                 OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
-                OfCreatorBinding.channel == "onlyfans", or_(OfVaultSyncJob.status == "pending",
+                OfCreatorBinding.channel == "onlyfans",
+                OfVaultSyncJob.account_id == account_id if account_id is not None else true(), or_(OfVaultSyncJob.status == "pending",
                     and_(OfVaultSyncJob.status == "running", OfVaultSyncJob.lease_until <= now)))
                 .order_by(OfVaultSyncJob.updated_at, OfVaultSyncJob.account_id).limit(1)).first()
         if candidate is None:

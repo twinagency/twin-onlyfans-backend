@@ -202,6 +202,12 @@ class NativeWorker:
                 HistoricalMemory(self.store).step(self.tenant_id,account.account_id,limit=40)
             except (Refused,SQLAlchemyError):report.held+=1
         if archive and self.history_recovery and account.reader is not None:
+            # An opted-in account gets one bounded import turn before archive work.
+            # A deferred import must never suppress history or alter send authority.
+            try:
+                from .sync_fairness import turn
+                turn(self.store,self.tenant_id,account.account_id)
+            except Exception:report.held+=1
             try:
                 from .launch_history_memory.recovery import HistoryRecovery
                 recovery=HistoryRecovery(self.store)

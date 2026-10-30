@@ -376,11 +376,13 @@ class Store:
         runtime.pending_events -= 1
         s.flush()
 
-    def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None):
+    def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None, bulk=False):
         from onlyfans_read.agency_scope import current_scope, actor_allowed
         if current_scope.get() is not None and not actor_allowed(actor, capability="chat" if action in {"request_takeover", "release_takeover"} else "manage"):
             raise Refused("management permission required")
         _id(fan_id)
+        if type(bulk) is not bool or bulk and action not in {"pause_automation", "resume_automation"}:
+            raise Refused("invalid bulk control")
         if mode not in {"automated", "human_controlled", "paused", "no_contact"}:
             raise Refused("invalid control mode")
         actions = {"pause_automation":"paused", "resume_automation":"automated", "mark_no_contact":"no_contact",
@@ -403,6 +405,22 @@ class Store:
             state = self._state(s, account_id, fan_id)
             if state.revision != expected_revision:
                 raise Refused("control revision conflict")
+            if bulk and state.takeover_state != "none":
+                raise Refused("bulk_human_control")
+            if bulk and action == "resume_automation":
+                if state.requires_attention:
+                    # Initial default-off imports carry this informational flag.
+                    # Explicit operator activation may resume an untouched chat;
+                    # actual holds below remain authoritative and attention is retained.
+                    untouched = state.revision == 0 and not s.scalar(select(OfControlAudit.command_key).where(
+                        OfControlAudit.account_id == account_id, OfControlAudit.fan_id == fan_id).limit(1))
+                    quarantined = s.scalar(select(OfIngress.event_key).where(
+                        OfIngress.account_id == account_id, OfIngress.fan_id == fan_id,
+                        OfIngress.status == "quarantined").limit(1))
+                    if not untouched or quarantined:
+                        raise Refused("bulk_human_review")
+                if s.get(Fan, (account_id, fan_id)).is_muted:
+                    raise Refused("bulk_contact_blocked")
             if state.mode == "no_contact" and mode != "no_contact" and not consent_ref:
                 raise Refused("recorded renewed consent is required")
             before_takeover = state.takeover_state

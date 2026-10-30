@@ -1,3 +1,5 @@
+> Historical pre-deployment snapshot. Current deployed status, tests and rollback: [COMPLETION.md](COMPLETION.md).
+
 # Contextual FASTT offers: candidate and release gates
 
 30 October 2026, Australia/Brisbane. This is a code candidate, not a production release.

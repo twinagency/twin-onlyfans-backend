@@ -1,17 +1,25 @@
 # Contextual offers: reconciled release status
 30 October 2026. This report supersedes the earlier COMPLETION.md deployment, enabled-state, sync-blocker and whole-compose rollback instructions.
 
+## Live enablement update, 08:24 UTC
+
+After Preview and the absence of a verified contextual send were explained, the user explicitly requested On. Maile alone was switched from shadow to live through the authenticated audited configuration API at 2026-10-30 08:24:50.405284 UTC, revision 10 to 11. SSM: 52e3751f-2c9a-4457-bd36-ad60fbf768f0. Command key: 02542b3d7ca953dee8f01d823e3cfec835d668e61a80c2c67c31c86c44ce90f8.
+
+The audit confirms fasttContextualSalesMode was the only changed field. Current purchase coverage passed the unchanged freshness check, with cutoff 2026-10-30 08:19:37.883112 UTC. Existing 608 automated conversations, six takeover conversations, fan selection, 600-cent daily model budget, prices, caps, on-request sales, pacing and formatting were preserved. Other creator modes were unchanged; Nicky remains excluded. No test message, fan activation, reconnection or purchase occurred.
+
+The setting is live and read back successfully. There were zero contextual origin rows at that check, so no contextual provider send or purchase/unlock cycle is claimed. The earlier lack of natural Preview decisions remains a validation limitation. All deterministic eligibility, purchase, content, duplicate, takeover, revision and transport checks remain enforced. Contextual offers Off is the independent kill switch.
+
 ## Status
 | Item | Evidence/status |
 |---|---|
 | Contextual code | Implemented in backend PR 56 and dashboard PR 335, retained by the subsequent pacing release |
 | Regression testing | Passed focused contextual, delivery, takeover, pricing, manual-media and purchase-sync tests; limitations below |
 | Production deployment | Feature source 0b4e7eaf0afd87846723f134313d5db2eb78727f is present in the current API/sender overlays |
-| Enabled | Preview (shadow) on Maile only; live contextual selling is not enabled |
+| Enabled | On (live) for Maile only since 08:24:50 UTC, verified at revision 11 |
 | Live contextual decision | Not observed in reviewed traffic |
 | Contextual provider send | Not verified |
 | Purchase/unlock cycle | Not verified; recent transaction coverage is separately verified |
-| Completion | Code and deployment work are recorded; live canary acceptance remains incomplete |
+| Completion | Code, deployment and requested enablement are complete; live send/purchase acceptance remains incomplete |
 
 Contextual offers means suggesting or offering relevant, actually available creator content during an existing AI conversation, even without an explicit buying request. The initial implementation selects ordinary chat or one matched paid card; it does not emit suggestion-only messages.
 
@@ -77,13 +85,13 @@ Successful cutoffs advanced repeatedly from the earlier 07:31 and 07:48 observat
 
 This establishes recent transaction-sync progress under ongoing message reads. It does not prove a new purchase/unlock cycle.
 
-Only Maile (of-323358988) is in Preview. The audited contextual change was revision 7 to 8; the independent pacing change later advanced it to 9 while retaining Preview. Existing 608 automated conversations, five takeover conversations, all-fans selection, 20-second throttle and 600-cent daily model budget were retained at activation. New conversations remain outside any new activation by this feature. Pacing is on for Maile. Formatting was off at the 08:02 read, then a concurrent writer enabled it at revision 10 before the compatibility API verification; both are retained. The 08:02:14 live check still showed revision 9, 608 automated conversations and now six takeover conversations; no takeover was cleared. Values must be refreshed before a future write.
+Maile (of-323358988) was the sole Preview creator and is now the sole live contextual creator following the explicit 08:24 enablement request. The audited contextual change was revision 7 to 8; the independent pacing change later advanced it to 9 while retaining Preview. Existing 608 automated conversations, five takeover conversations, all-fans selection, 20-second throttle and 600-cent daily model budget were retained at activation. New conversations remain outside any new activation by this feature. Pacing is on for Maile. Formatting was off at the 08:02 read, then a concurrent writer enabled it at revision 10 before the compatibility API verification; both are retained. The 08:02:14 live check still showed revision 9, 608 automated conversations and now six takeover conversations; no takeover was cleared. Values must be refreshed before a future write.
 
 Naomi (of-99421145) remains contextual Off. Nicky (of-176774528) remains paused/disconnected_by_owner and is excluded. Katie (of-210806616) remains paused. Alva (of-87030857) remains held for no approved manifest items; no incidental sales/model repair was made.
 
 At the reviewed 07:00 UTC onward traffic sample, Maile had one incoming message at 07:39:36 and Naomi one at 07:02:54. Both belonged to human-controlled conversations. No contextual decisions or origin rows were observed. This is insufficient live Preview evidence, not a reason to override takeover. Older delivery-unknown attempt 543 from October 26 remains held without a provider message ID; uncertainty was not cleared or resent.
 
-A bounded live canary remains conditional on reviewing naturally occurring Preview decisions and guards, with fresh purchase coverage. Keep Maile as the sole creator and preserve existing eligibility/caps; do not activate fans or reconnect anyone. Verify matching content/price and an actual provider receipt separately from purchase/unlock evidence. Do not claim conversion uplift. Stop via Off immediately for any duplicate, wrong creator/content/price, takeover violation, ignored-offer chase or unintended activation.
+The user explicitly requested the live switch after the Preview limitation was explained; it is now enabled for Maile alone. Continue observing naturally occurring decisions and guards with fresh purchase coverage. Keep Maile as the sole creator and preserve existing eligibility/caps; do not activate fans or reconnect anyone. Verify matching content/price and an actual provider receipt separately from purchase/unlock evidence. Do not claim conversion uplift. Stop via Off immediately for any duplicate, wrong creator/content/price, takeover violation, ignored-offer chase or unintended activation.
 
 ## Kill switch and rollback after concurrent changes
 Set Contextual offers to Off in the existing creator editor, or POST only fasttContextualSalesMode: off through the existing audited configuration API using a freshly read revision/fingerprint and stable command key. Final transport rechecks invalidate queued contextual actions. On-request sales remain independent. Do not toggle qualification_gate_enabled, prompt_sell_catalog or hook_upsell_enabled to accomplish this.

@@ -1,4 +1,4 @@
-"""A chosen free photo does not depend on archive recovery; controls still apply."""
+"""A manually selected photo does not depend on archive recovery; controls still apply."""
 from datetime import timedelta
 import json
 
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from test_onlyfans_foundation_pg import database
 from test_manual_vault_composer_pg import prepared, prepare, spec, FAN
 from test_onlyfans_connections_pg import TENANT
-from db.models import Fan, OfConversationState, ContentOffer, Message
+from db.models import Fan, OfConversationState, ContentOffer, Message, VaultSend
 from db.onlyfans_models import OfIngress, OfRuntime
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from onlyfans_runtime.store import Refused, utcnow
@@ -29,15 +29,16 @@ def history_hold(engine, account, *, stale=False):
             runtime.last_sync_at = utcnow() - timedelta(hours=2)
 
 
+@pytest.mark.parametrize("price", [0, 1200])
 @pytest.mark.parametrize("stage", ["prepare", "queued", "admitted"])
 @pytest.mark.parametrize("stale", [False, True])
-def test_free_attachment_survives_archive_hold_at_every_send_boundary(database, monkeypatch, stage, stale):
+def test_manual_attachment_survives_archive_hold_at_every_send_boundary(database, monkeypatch, stage, stale, price):
     store, authority, account = prepared(database, monkeypatch)
     try:
         if stage == "prepare":
             history_hold(database[1], account, stale=stale)
-        identity = prepare(authority, account, spec(0), body="")
-        assert prepare(authority, account, spec(0), body="") == identity
+        identity = prepare(authority, account, spec(price), body="")
+        assert prepare(authority, account, spec(price), body="") == identity
         if stage == "queued":
             history_hold(database[1], account, stale=stale)
         if stage == "admitted":
@@ -50,9 +51,9 @@ def test_free_attachment_survives_archive_hold_at_every_send_boundary(database, 
             assert authority.dispatch(TENANT, account, identity, wire) == "accepted"
             assert authority.dispatch(TENANT, account, identity, wire) == "accepted"
             assert len(wire.calls) == 1
-            assert wire.calls[0].media_ids == (11, 13) and wire.calls[0].price_cents == 0
+            assert wire.calls[0].media_ids == (11, 13) and wire.calls[0].price_cents == price
             with Session(database[1]) as s:
-                assert s.scalar(select(func.count()).select_from(ContentOffer)) == 0
+                assert s.scalar(select(func.count()).select_from(ContentOffer)) == (1 if price else 0)
                 assert s.scalar(select(func.count()).select_from(Message)) == 1
         with Session(database[1]) as s:
             evidence = s.get(OfIngress, (account, "synthetic-unrelated-history"))
@@ -63,29 +64,26 @@ def test_free_attachment_survives_archive_hold_at_every_send_boundary(database, 
         store.close()
 
 
-@pytest.mark.parametrize("kind", ["paid", "text", "automated", "campaign", "engagement"])
+@pytest.mark.parametrize("kind", ["text", "automated", "campaign", "engagement"])
 def test_exception_does_not_bypass_history_for_other_send_origins(database, monkeypatch, kind):
     store, authority, account = prepared(database, monkeypatch)
     try:
         history_hold(database[1], account)
-        if kind == "paid":
-            with pytest.raises(Refused, match="history_quarantined"):
-                prepare(authority, account, spec(1200))
-        else:
-            with Session(database[1]) as s:
-                runtime = s.get(OfRuntime, account)
-                policy = s.get(OfDeliveryPolicy, account)
-                state = s.get(OfConversationState, (account, FAN))
-                fan = s.get(Fan, (account, FAN))
-                assert authority._eligibility(s, runtime, policy, state, fan,
-                    "manual" if kind == "text" else kind, utcnow(),
-                    free_manual_attachment=kind != "text") == "history_quarantined"
+        with Session(database[1]) as s:
+            runtime = s.get(OfRuntime, account)
+            policy = s.get(OfDeliveryPolicy, account)
+            state = s.get(OfConversationState, (account, FAN))
+            fan = s.get(Fan, (account, FAN))
+            assert authority._eligibility(s, runtime, policy, state, fan,
+                "manual" if kind == "text" else kind, utcnow(),
+                manual_attachment=kind != "text") == "history_quarantined"
     finally:
         store.close()
 
 
+@pytest.mark.parametrize("price", [0, 1200])
 @pytest.mark.parametrize("change", ["paused", "muted", "takeover_pending", "unknown", "disabled", "media_disabled"])
-def test_free_photo_still_respects_operator_and_delivery_controls(database, monkeypatch, change):
+def test_manual_photo_still_respects_operator_and_delivery_controls(database, monkeypatch, change, price):
     store, authority, account = prepared(database, monkeypatch)
     try:
         history_hold(database[1], account, stale=True)
@@ -99,8 +97,38 @@ def test_free_photo_still_respects_operator_and_delivery_controls(database, monk
             elif change == "disabled": policy.enabled = False
             elif change == "media_disabled": policy.media_enabled = False
         with pytest.raises(Refused):
-            prepare(authority, account, spec(0))
+            prepare(authority, account, spec(price))
         with Session(database[1]) as s:
             assert s.scalar(select(func.count()).select_from(OfTextIntent)) == 0
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("stage", ["prepare", "queued", "admitted"])
+@pytest.mark.parametrize("guard", ["owned", "commerce"])
+def test_paid_photo_retains_purchase_checks_at_every_boundary(database, monkeypatch, stage, guard):
+    store, authority, account = prepared(database, monkeypatch)
+    try:
+        history_hold(database[1], account, stale=True)
+        identity = None if stage == "prepare" else prepare(authority, account, spec(1200))
+        grant = authority.admit(TENANT, account, identity) if stage == "admitted" else None
+        if guard == "owned":
+            with Session(database[1]) as s, s.begin():
+                s.add(VaultSend(account_id=account, fan_id=FAN, media_id=13, was_purchased=True))
+        else:
+            from onlyfans_runtime import commerce
+            monkeypatch.setattr(commerce, "manual_held", lambda *args, **kwargs: True)
+        if stage == "prepare":
+            with pytest.raises(Refused, match="already owned|commerce evidence"):
+                prepare(authority, account, spec(1200))
+        elif stage == "queued":
+            assert authority.admit(TENANT, account, identity) == "cancelled"
+        else:
+            assert authority.consume_dispatch(TENANT, grant) is None
+        with Session(database[1]) as s:
+            assert s.scalar(select(func.count()).select_from(Message)) == 0
+            assert s.scalar(select(func.count()).select_from(ContentOffer)) == 0
+            if identity is not None:
+                assert s.get(OfTextIntent, (account, identity)).wire_started_at is None
     finally:
         store.close()

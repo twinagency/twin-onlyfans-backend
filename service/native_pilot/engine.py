@@ -180,7 +180,7 @@ class NativeEngine:
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
-                 unanswered_reply_ids=(), unlinked_paid=None):
+                 unanswered_reply_ids=(), unlinked_paid=None, reply_format_enabled=False):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
@@ -193,6 +193,7 @@ class NativeEngine:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("invalid-pilot-model")
         self.model = model
+        self.reply_format_enabled = reply_format_enabled is True
         self.content = content
         # Optional Twin approved-context source for the single prompt hook.
         self.context = context
@@ -250,6 +251,9 @@ class NativeEngine:
     async def load_config(self, account_id, native):
         self._account(account_id)
         result = dict(native)
+        from onlyfans_runtime.reply_policy import FORMAT_KEY, enabled as reply_switch_enabled
+        result["_native_reply_format_enabled"] = (self.reply_format_enabled and self._job is None
+                                                  and reply_switch_enabled(native, FORMAT_KEY))
         sales_enabled = result.pop("_native_on_request_sales_enabled", False) is True
         result.update(TEXT_ONLY)
         if self.followups is not None:

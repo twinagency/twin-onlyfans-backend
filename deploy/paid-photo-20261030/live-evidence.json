@@ -1,0 +1,197 @@
+[
+  {
+    "live_service": "api",
+    "image": "sha256:396ae34df2beb8cdf82aeb98a42757bc4ff3d4f068acb142360b8b073cd45af8",
+    "running": true,
+    "health": null,
+    "restarts": 0
+  },
+  {
+    "live_service": "fastt-supervisor",
+    "image": "sha256:3078c0f3ddeb92660c6fca79c6ee415e53a074b5b15666aa8ae95c3a59b1c171",
+    "running": true,
+    "health": null,
+    "restarts": 0
+  },
+  {
+    "live_service": "worker",
+    "image": "sha256:f15fecf7b87acb0a8300e1addf443dabb90dd909aa062f388ec305a91e09c628",
+    "running": true,
+    "health": "healthy",
+    "restarts": 0
+  },
+  {
+    "account": "of-323358988",
+    "fan": 318022380,
+    "mode": "automated",
+    "takeover": "none",
+    "quarantined_history_retained": 1,
+    "delivery_enabled": true,
+    "media_enabled": true,
+    "operator_control_guard_result": null,
+    "actual_control_guard_result": "human_control_required",
+    "history_exception_verified": true,
+    "checked_at": "2026-10-30T10:59:54.038087Z",
+    "used_units": 500,
+    "limit_units": 2000,
+    "queued": 0,
+    "active_intent": false,
+    "manual_commerce_held": false,
+    "read_only": true,
+    "messages_sent": 0
+  },
+  {
+    "evidence": "prepared.json",
+    "data": {
+      "api": {
+        "container": "twin-onlyfans-api-1",
+        "before_id": "145f0abe1889a52d9a2f9c400c32cbf72c803f5aaaf4bdf47b69e7b4313d9653",
+        "before_image": "sha256:76b172a539e1a44998ffd1122348d36c19fb55544a1ce49044972a94d4747ccd",
+        "candidate_image": "sha256:396ae34df2beb8cdf82aeb98a42757bc4ff3d4f068acb142360b8b073cd45af8",
+        "before_source": "0a3cb3bb716a0408e2af448d87e0c2d6e776082118da7bc66261d3a947d93c41",
+        "after_source": "813552a2e5f053cdc2df0abf6bbebc2ecfc6ae6f75245158eeb1edf70286fa26",
+        "command_drift": true,
+        "smoke": {
+          "offline_guard_checks": 27,
+          "passed": true
+        }
+      },
+      "fastt-supervisor": {
+        "container": "twin-onlyfans-fastt-supervisor-1",
+        "before_id": "56c6b68b7702dd970b9a1e2385cf5e7b28007af03196083a0f273f3c39bace94",
+        "before_image": "sha256:bff962697d6e986ba4a7c04088c0676b18690dec477d43ba3aaab0d53f08a050",
+        "candidate_image": "sha256:3078c0f3ddeb92660c6fca79c6ee415e53a074b5b15666aa8ae95c3a59b1c171",
+        "before_source": "a68fd6bc6d8d1b0b782e8c0c7cb24fba9753cf7802d662d6c14d7b6a8f244848",
+        "after_source": "2fa75cf2f907b55ddf55240a26bc4888c2ecbe11309aee5beec67c54e4921404",
+        "command_drift": false,
+        "smoke": {
+          "offline_guard_checks": 27,
+          "passed": true
+        }
+      },
+      "worker": {
+        "container": "twin-onlyfans-worker-1",
+        "before_id": "a7af568c4ff6d2f36ef9994557107a330340457a323638ed4485f0d9f3077642",
+        "before_image": "sha256:1a04a11e11827f1490b7987dfe188122e6b9f5857ec64c91eabf14a4adc8f777",
+        "candidate_image": "sha256:f15fecf7b87acb0a8300e1addf443dabb90dd909aa062f388ec305a91e09c628",
+        "before_source": "a68fd6bc6d8d1b0b782e8c0c7cb24fba9753cf7802d662d6c14d7b6a8f244848",
+        "after_source": "2fa75cf2f907b55ddf55240a26bc4888c2ecbe11309aee5beec67c54e4921404",
+        "command_drift": false,
+        "smoke": {
+          "offline_guard_checks": 27,
+          "passed": true
+        }
+      }
+    }
+  },
+  {
+    "evidence": "deployed.json",
+    "data": {
+      "worker": {
+        "image": "sha256:f15fecf7b87acb0a8300e1addf443dabb90dd909aa062f388ec305a91e09c628",
+        "id": "bb671501db5fd8a6bf5f5abd02a658000f2170d52d1cd62dbaef748b97271a4e",
+        "source": "2fa75cf2f907b55ddf55240a26bc4888c2ecbe11309aee5beec67c54e4921404",
+        "state": "running",
+        "health": "healthy",
+        "offline": {
+          "offline_guard_checks": 27,
+          "passed": true
+        },
+        "configuration_preserved": true
+      },
+      "fastt-supervisor": {
+        "image": "sha256:3078c0f3ddeb92660c6fca79c6ee415e53a074b5b15666aa8ae95c3a59b1c171",
+        "id": "bcafb1b2e0ce2008fd04e38806bd44e593f0e93c2bd9bdbd3561b61774b1395c",
+        "source": "2fa75cf2f907b55ddf55240a26bc4888c2ecbe11309aee5beec67c54e4921404",
+        "state": "running",
+        "health": null,
+        "offline": {
+          "offline_guard_checks": 27,
+          "passed": true
+        },
+        "configuration_preserved": true
+      },
+      "api": {
+        "image": "sha256:396ae34df2beb8cdf82aeb98a42757bc4ff3d4f068acb142360b8b073cd45af8",
+        "id": "2482f87cb1683ba1068412ebac426f8ec33f05b11c9ee5fce9ad63ca22ec86a5",
+        "source": "813552a2e5f053cdc2df0abf6bbebc2ecfc6ae6f75245158eeb1edf70286fa26",
+        "state": "running",
+        "health": null,
+        "offline": {
+          "offline_guard_checks": 27,
+          "passed": true
+        },
+        "configuration_preserved": true
+      }
+    }
+  },
+  {
+    "evidence": "pg-tests/results.json",
+    "data": [
+      {
+        "service": "api",
+        "application_image": "sha256:396ae34df2beb8cdf82aeb98a42757bc4ff3d4f068acb142360b8b073cd45af8",
+        "exit": 0,
+        "tail": [
+          ".....................................................................    [100%]",
+          "=============================== warnings summary ===============================",
+          "../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1",
+          "  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.",
+          "    from starlette.testclient import TestClient as TestClient  # noqa",
+          "",
+          "service/tests/test_manual_attachment_history_pg.py: 215 warnings",
+          "service/tests/test_manual_vault_composer_pg.py: 60 warnings",
+          "service/tests/test_onlyfans_manual_pg.py: 99 warnings",
+          "  /app/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).",
+          "    return datetime.utcnow()",
+          "",
+          "service/tests/test_manual_attachment_history_pg.py: 102 warnings",
+          "service/tests/test_manual_vault_composer_pg.py: 27 warnings",
+          "  /app/service/vault_mirror.py:105: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).",
+          "    now = datetime.utcnow()",
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "69 passed, 504 warnings in 198.74s (0:03:18)"
+        ]
+      },
+      {
+        "service": "fastt-supervisor",
+        "application_image": "sha256:3078c0f3ddeb92660c6fca79c6ee415e53a074b5b15666aa8ae95c3a59b1c171",
+        "exit": 0,
+        "tail": [
+          ".....................................................................    [100%]",
+          "=============================== warnings summary ===============================",
+          "../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1",
+          "  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.",
+          "    from starlette.testclient import TestClient as TestClient  # noqa",
+          "",
+          "service/tests/test_manual_attachment_history_pg.py: 215 warnings",
+          "service/tests/test_manual_vault_composer_pg.py: 60 warnings",
+          "service/tests/test_onlyfans_manual_pg.py: 99 warnings",
+          "  /app/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).",
+          "    return datetime.utcnow()",
+          "",
+          "service/tests/test_manual_attachment_history_pg.py: 102 warnings",
+          "service/tests/test_manual_vault_composer_pg.py: 27 warnings",
+          "  /app/service/vault_mirror.py:105: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).",
+          "    now = datetime.utcnow()",
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "69 passed, 504 warnings in 196.80s (0:03:16)"
+        ]
+      }
+    ]
+  },
+  {
+    "endpoint": "/healthz",
+    "status": 200,
+    "ok": true,
+    "schemaReady": null
+  },
+  {
+    "endpoint": "/onlyfans/api/v1/ready",
+    "status": 200,
+    "ok": true,
+    "schemaReady": true
+  }
+]

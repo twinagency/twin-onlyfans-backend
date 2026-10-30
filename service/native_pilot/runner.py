@@ -390,7 +390,8 @@ class Gateway:
                             raise Refused("content-asset-unavailable")
             self.bubble += 1
             attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
-                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now(),
+                **({"reply_authority": self.reply_decision["authority"]} if getattr(self, "reply_decision", None) else {}))
             from .recovery import freeze
             try:
                 freeze(self.ledger, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
@@ -401,6 +402,7 @@ class Gateway:
                 attempt_no=attempt.attempt_no, owner_token=self.pilot.owner_token, revision=self.pilot.revision)
 
             wire = [False]
+            wire_at = [None]
 
             def physical_post():
                 # Re-read stop/owner after the thread handoff, immediately at the wire.
@@ -416,7 +418,9 @@ class Gateway:
                 if self.hold_check is not None and self.hold_check():
                     raise Refused("fan-held-before-post")
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
-                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
+                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now(),
+                    **({"reply_authority": self.reply_decision["authority"]} if getattr(self, "reply_decision", None) else {}))
+                wire_at[0] = now()
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
                     if unsend_id is not None:
                         wire[0] = True    # the DELETE may have reached OnlyFans from here on
@@ -457,6 +461,14 @@ class Gateway:
                 attempt_id=attempt.id, provider_message_id=validated.provider_message_id,
                 validated_response=raw, evidence={**validated.evidence, **({"content": content_evidence} if terms else {})}, now=now())
             settled = True
+            decision = getattr(self, "reply_decision", None)
+            if decision and decision["schedule"]:
+                from .pacing import delivery_event
+                try:
+                    emit(delivery_event(decision["authority"], decision["schedule"], receipt_at=now(),
+                                        wire_at=wire_at[0], provider_created_at=raw.get("createdAt")))
+                except Exception:
+                    emit({"event": "reply-pacing-metric-error"})
             emit({"event": "sent", "engine": "fastt-native", "provider_message_id": validated.provider_message_id,
                   "pilot_sent": len([r for r in self.ledger.receipts(pilot_id=self.pilot.pilot_id) if r["state"] == "sent"]),
                   "limit": self.limit_label()})

@@ -220,6 +220,7 @@ class Service:
         self.backoff_s = 0.0       # set by after_failure when an input was requeued; the all-fans runner turns it into a hold
         self.last_active = runner.now()
         self.last_held = None
+        self.reply_decision = None
         self.ensured = False
         self._renew_task = None
         self._intake_factory = intake_factory
@@ -658,8 +659,24 @@ class Service:
     async def turn(self):
         pilot, ledger, args = self.pilot, self.ledger, self.args
         snap = ledger.snapshot(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
-        if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id) \
-                or (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < self.quiet_s:
+        self.reply_decision = None
+        if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id):
+            return await self.wait(self.poll_s)
+        from . import pacing
+        flags = pacing.settings(self.path, self.db)
+        if any(flags.values()):
+            try:
+                self.reply_decision = pacing.prepare(ledger, pilot, snap, now=runner.now(), quiet_s=self.quiet_s)
+            except Refused as exc:
+                if exc.reason == "source-changed":
+                    return await self.wait(self.poll_s)
+                raise
+        paced = self.reply_decision and self.reply_decision["schedule"]
+        if paced:
+            if runner.now() < self.reply_decision["eligible_at"]:
+                self.note("reply-target-wait")
+                return await self.wait(self.poll_s)
+        elif (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < self.quiet_s:
             return await self.wait(self.poll_s)
         wait = self.cooldown_left()
         if wait > 0:
@@ -668,7 +685,8 @@ class Service:
             return await self.wait(min(wait + 0.5, self.poll_s * 10))
         try:
             sources = runner.read_sources(self.path, self.db, args.fan, getattr(snap, "member_ids", (snap.message_id,)))
-            key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now())
+            key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now(),
+                                     **({"reply_authority": self.reply_decision["authority"]} if self.reply_decision else {}))
         except Refused as exc:
             if exc.reason in ("input-already-claimed", "source-changed"):
                 return await self.wait(self.poll_s)
@@ -680,7 +698,11 @@ class Service:
             await self.identity_handoff("fan-asked")
             ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
             return
-        await self.execute(key, sources, source_id=snap.message_id)
+        error = await self.execute(key, sources, source_id=snap.message_id)
+        if self.reply_decision:
+            receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
+            pacing.finish(ledger, self.reply_decision, now=runner.now(), error=error,
+                          sent=any(r["state"] == "sent" for r in receipts))
 
     async def execute(self, key, sources, *, source_id, job=None):
         """Run FASTT's engine for one claimed input (fan message, or the nudge job ``job``) through the
@@ -692,6 +714,8 @@ class Service:
         pilot, ledger, args = self.pilot, self.ledger, self.args
         self.turns_started += 1
         gateway = ServiceGateway(self, pilot, content=self.content, scope=self.scope)
+        if job is None and self.reply_decision:
+            gateway.reply_decision = self.reply_decision
         # A requeued input already owns bubble numbers (its refused attempts): continue after them.
         prior = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
         gateway.sources, gateway.input_key, gateway.bubble = sources, key, max((r["bubble_no"] for r in prior), default=0)
@@ -747,7 +771,7 @@ class Service:
             if job is None:
                 if gateway.not_sent is not None:
                     retry = ("provider", gateway.not_sent.retry_after) if gateway.not_sent.retry else None
-                elif error in MODEL_RETRY_REASONS:
+                elif error in MODEL_RETRY_REASONS or error in ("reply-configuration-changed", "reply-schedule-invalidated"):
                     retry = ("model", None)
             await self.after_failure(error, key, retry=retry)
             return error

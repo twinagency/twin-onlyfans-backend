@@ -409,7 +409,16 @@ class Store:
                 raise Refused("bulk_human_control")
             if bulk and action == "resume_automation":
                 if state.requires_attention:
-                    raise Refused("bulk_human_review")
+                    # Initial default-off imports carry this informational flag.
+                    # Explicit operator activation may resume an untouched chat;
+                    # actual holds below remain authoritative and attention is retained.
+                    untouched = state.revision == 0 and not s.scalar(select(OfControlAudit.command_key).where(
+                        OfControlAudit.account_id == account_id, OfControlAudit.fan_id == fan_id).limit(1))
+                    quarantined = s.scalar(select(OfIngress.event_key).where(
+                        OfIngress.account_id == account_id, OfIngress.fan_id == fan_id,
+                        OfIngress.status == "quarantined").limit(1))
+                    if not untouched or quarantined:
+                        raise Refused("bulk_human_review")
                 if s.get(Fan, (account_id, fan_id)).is_muted:
                     raise Refused("bulk_contact_blocked")
             if state.mode == "no_contact" and mode != "no_contact" and not consent_ref:

@@ -107,6 +107,12 @@ def unpaid_cards(con, account, now, after_minutes):
     for oid, fan, offered, price, _msg in rows:
         if int(fan) in blocked:
             continue
+        from twin_bridge.store import has_table
+        if has_table(con, "of_contextual_offer") and con.execute(
+                "SELECT 1 FROM of_contextual_offer WHERE account_id=? AND fan_id=? AND message_id=?",
+                (account, int(fan), _msg)).fetchone():
+            # Silence never authorizes a discounted replacement for a contextual card.
+            continue
         offered = _naive(offered)
         if offered is not None and offered <= now - timedelta(minutes=after_minutes):
             out.append((int(oid), int(fan), offered, int(price or 0)))

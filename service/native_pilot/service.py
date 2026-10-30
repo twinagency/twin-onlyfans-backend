@@ -696,6 +696,9 @@ class Service:
         prior = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
         gateway.sources, gateway.input_key, gateway.bubble = sources, key, max((r["bubble_no"] for r in prior), default=0)
         self.backoff_s = 0.0
+        from .contextual import ContextualAuthority
+        contextual = ContextualAuthority(self.path, self.db, args.fan, source_id, emit=runner.emit, hold_check=gateway.hold_check) if job is None else None
+        gateway.contextual = contextual
         gateway.followup = job is not None
         if job is not None and job["kind"] == DISCOUNT_KIND:
             # The one card this job may remove (re-read here, not trusted from the queue row).
@@ -713,7 +716,7 @@ class Service:
             unanswered = ledger.unanswered_reply_ids(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
                                                      input_key=key, now=runner.now()) if job is None else ()
             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
-                              content=self.content, context=self.context,
+                              content=self.content, context=self.context, contextual=contextual,
                               **({"unanswered_reply_ids": unanswered} if unanswered else {}),
                               **({"own_offers_only": True} if self.strict else {}),
                               arm_unsend=gateway.arm_unsend, unsent=lambda: gateway.unsent_ids,

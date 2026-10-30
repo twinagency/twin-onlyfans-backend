@@ -128,6 +128,8 @@ def reconcile(ledger, *, pilot_id, attempt_id, account_id, fan_id, provider_mess
         if prior:
             if prior!=audit or r["state"]!="sent" or a["state"]!="sent":
                 raise Refused("recovery-command-conflict")
+            from .contextual import reconcile_origin
+            reconcile_origin(con,intent,attempt_id,provider_message_id)
             return False
         if r["state"] not in ("dispatching","delivery_unknown") or a["state"] not in ("dispatching","delivery_unknown"):
             raise Refused("recovery-attempt-settled")
@@ -152,6 +154,8 @@ def reconcile(ledger, *, pilot_id, attempt_id, account_id, fan_id, provider_mess
         con.execute("UPDATE twin_bridge_send_attempts SET state='sent',provider_message_id=?,evidence_json=?,updated_at=? WHERE id=?",
             (str(provider_message_id),encoded,now_s,attempt_id))
         con.execute("UPDATE native_pilots SET state='stopped',reason='receipt-reconciled',updated_at=? WHERE pilot_id=?",(now_s,pilot_id))
+        from .contextual import reconcile_origin
+        reconcile_origin(con,intent,attempt_id,provider_message_id)
         return True
 
 

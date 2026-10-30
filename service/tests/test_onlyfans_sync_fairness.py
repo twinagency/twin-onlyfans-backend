@@ -54,3 +54,32 @@ def test_feature_flags_still_gate_offer_and_post_reads(monkeypatch):
     store=SimpleNamespace()
     for _ in range(3):fair.turn(store,'tenant','emma')
     assert [x[0] for x in calls]==['vault']
+
+
+def test_import_turn_runs_even_when_recent_read_is_deferred(monkeypatch):
+    import sys
+    import threading
+    from onlyfans_runtime.native_worker import NativeWorker
+    from onlyfans_runtime.store import Refused
+    calls=[]
+    lanes(monkeypatch,calls)
+    monkeypatch.setenv('ONLYFANS_FAIR_SYNC_ACCOUNTS','emma')
+    monkeypatch.setitem(sys.modules,'onlyfans_runtime.delivery_resolution_jobs',
+                        SimpleNamespace(poll=lambda *args:None))
+    worker=object.__new__(NativeWorker)
+    worker.store=SimpleNamespace()
+    worker.tenant_id='tenant'
+    worker.accounts=[SimpleNamespace(account_id='emma',read_connection_revision=1)]
+    worker.accounts_per_cycle=1
+    worker._cursor=0
+    worker._lock=threading.Lock()
+    worker._role=lambda:None
+    worker._heartbeat=lambda *args,**kwargs:None
+    worker.history_recovery=False
+    def deferred(*args,**kwargs):raise Refused('synthetic busy reader')
+    worker._read_progress=deferred
+    from onlyfans_runtime import worker as read_worker
+    monkeypatch.setattr(read_worker,'read_step',deferred)
+    report=worker.step()
+    assert calls==[('vault','tenant','emma',1)]
+    assert report.held==1 and report.errors==0

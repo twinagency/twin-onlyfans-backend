@@ -378,3 +378,14 @@ def test_crash_after_receipt_retention_keeps_hold_until_matching_purchase(db):
     with b.arm(delivery((103,)),p,"new gym",(11,)):b.reserve(terms((103,)),43)
     with store.readonly(db) as c:
         assert tuple(c.execute("SELECT state,message_id FROM of_contextual_offer WHERE source_message_id=10").fetchone())==("purchased",500)
+
+
+def test_explicit_same_item_cannot_duplicate_a_card_after_projection_crash(db):
+    a=authority(db);p=a.check()
+    with a.arm(delivery(),p,"gym",(10,)):a.reserve(terms(),42)
+    a.outcome("sent",500)
+    # No vault_sends projection exists yet, but origin evidence already does.
+    with store.readonly(db) as con:
+        with pytest.raises(Refused,match="item-already-pending"):
+            refuse_repeat_media(con,ACCOUNT,FAN,terms((101,),800))
+        refuse_repeat_media(con,ACCOUNT,FAN,terms((103,),800))

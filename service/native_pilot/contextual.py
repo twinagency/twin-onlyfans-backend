@@ -94,6 +94,13 @@ def refuse_repeat_media(con, account, fan, terms):
     paid_media = set(terms["media_ids"]) - set(terms["preview_ids"])
     if not paid_media:
         return
+    origins=con.execute("SELECT state,snapshot_json FROM of_contextual_offer WHERE account_id=? AND fan_id=? "
+                        "AND state <> 'cancelled'",(account,fan)).fetchall()
+    for origin in origins:
+        snapshot=json.loads(origin["snapshot_json"])
+        offered=set(snapshot["media_ids"])-set(snapshot["preview_ids"])
+        if paid_media & offered:
+            raise Refused("item-already-purchased" if origin["state"]=="purchased" else "item-already-pending")
     marks = ",".join("?" for _ in paid_media)
     row = con.execute("SELECT message_id,was_purchased FROM vault_sends WHERE account_id=? AND fan_id=? "
                       f"AND price_cents>0 AND media_id IN ({marks}) ORDER BY sent_at DESC LIMIT 1",

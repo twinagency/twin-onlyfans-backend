@@ -1,7 +1,7 @@
 {
   "newBehaviorTests": {
     "command": "PYTHONPATH=service TWIN_FASTT_CONFIG_ISOLATED=1 DATABASE_URL=sqlite+aiosqlite:////tmp/contextual-review-final.db python -m pytest -q service/tests/test_contextual_offers.py --disable-warnings --tb=short",
-    "result": "..............................................                           [100%]\n46 passed, 2 warnings in 1.58s"
+    "result": "...............................................                          [100%]\n47 passed, 2 warnings in 1.63s"
   },
   "syntheticNativeTurns": {
     "command": "PYTHONPATH=service python service/tests/test_contextual_native_turn.py",

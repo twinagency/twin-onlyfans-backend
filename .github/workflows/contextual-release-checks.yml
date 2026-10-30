@@ -60,7 +60,7 @@ jobs:
         run: python -m pytest -q service/tests/test_contextual_release_pg.py service/tests/test_onlyfans_configuration_pg.py
       - name: Manual free and paid media under takeover
         if: matrix.suite == 'manual'
-        run: python -m pytest -q service/tests/test_manual_vault_composer_pg.py service/tests/test_onlyfans_manual_pg.py
+        run: python -m pytest -q service/tests/test_manual_attachment_history_pg.py service/tests/test_manual_vault_composer_pg.py service/tests/test_onlyfans_manual_pg.py
       - name: Purchase history and shared provider leases
         if: matrix.suite == 'ledger'
         run: >-

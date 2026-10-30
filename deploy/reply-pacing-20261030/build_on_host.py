@@ -1,5 +1,7 @@
-import base64,gzip,json,pathlib,subprocess,hashlib,datetime
-BUNDLE='PAYLOAD'
+import argparse,base64,gzip,json,pathlib,subprocess,hashlib,datetime
+parser=argparse.ArgumentParser(description='Build pinned API/sender overlays from a reviewed base64 gzip bundle')
+parser.add_argument('bundle',type=pathlib.Path)
+BUNDLE=parser.parse_args().bundle.read_text().strip()
 ROOT=pathlib.Path('/var/lib/twin-release/reply-pacing-20261030-208785')
 BASE={'api':'sha256:cf7dd2382962def7ca18f8b26a39713e61cab5bf5bb637093ce8bf95068527ff','sender':'sha256:42a374a0e29fa08419c2ec4987299d187215a28066528a48d1ac94c79a97e84a'}
 NAMES={'api':'twin-onlyfans-api-1','sender':'twin-onlyfans-fastt-supervisor-1'}
@@ -35,7 +37,7 @@ for role,files in bundle['roles'].items():
  for path,content in bundle['tests'].items():
   dest=test/path;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text(content)
  lines=['FROM '+image]
- for package in ['pytest','_pytest','pluggy','iniconfig','packaging','pygments']:
+ for package in ['pytest','_pytest','pluggy','iniconfig','packaging','pygments','py.py']:
   path='/usr/local/lib/python3.12/site-packages/'+package
   lines.append('COPY --from=twin-paid-media-repair-20261029:tests '+path+' '+path)
  lines.append('COPY service/ /app/service/')

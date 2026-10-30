@@ -1142,6 +1142,28 @@ class Ledger:
             con.execute("UPDATE native_pilots SET model_calls=model_calls+1,updated_at=? WHERE pilot_id=?", (now_s, pilot_id))
             return p["model_calls"] + 1
 
+    def unhandled_source_ids(self, *, pilot_id: str, source_ids) -> set[int]:
+        """Sources not examined by a completed input of this durable pilot.
+
+        Unanswered bursts retain historical context after a human handoff. Completion
+        proves the inbound identity guard already examined every member. Generating,
+        abandoned and requeued inputs are deliberately not evidence of handling.
+        This only filters identity triggers, never context or delivery admission.
+        """
+        pending = {int(mid) for mid in source_ids}
+        if not pending:
+            return pending
+        with store.readonly(self.path) as con:
+            rows = con.execute("SELECT message_id,member_ids_json FROM native_pilot_inputs "
+                               "WHERE pilot_id=? AND state='complete'", (pilot_id,)).fetchall()
+        for row in rows:
+            members = json.loads(row["member_ids_json"] or "[]")
+            pending.difference_update(int(mid) for mid in members)
+            pending.discard(int(row["message_id"]))
+            if not pending:
+                break
+        return pending
+
     def input_claimed(self, *, pilot_id: str, message_id: int) -> bool:
         with store.readonly(self.path) as con:
             return con.execute("SELECT 1 FROM native_pilot_inputs WHERE pilot_id=? AND message_id=? AND state NOT LIKE 'requeued:%'",

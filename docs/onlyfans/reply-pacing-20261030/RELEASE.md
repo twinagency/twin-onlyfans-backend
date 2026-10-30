@@ -85,3 +85,23 @@ The last available prior schema evidence was `0100_manual_free_media`; it was no
 Not verified: identical-load baseline/candidate throughput and p50/p95 delivered latency; oldest unanswered age and model calls per answered turn under sustained load; combined runtime with contextual PR #56; complete manual-media PostgreSQL regression; all production schema consumers; deployment rollback; dashboard browser behavior; actual customer/provider timing, purchases or takeover observations. Synthetic zero failures do not prove zero live failures.
 
 These material dependencies and the failed live-source application block rollout. No canary was selected. After resolving them, deploy with both flags off, verify baseline, refresh a currently eligible already-enabled creator, evaluate A alone on naturally occurring traffic, then evaluate B separately. Insufficient live traffic or missing interruption cases remains incomplete verification.
+
+
+## Approved completion pass
+
+The user explicitly approved retrieval of the five production source files and completion/deployment. Their differences were retrieved and reconciled in an isolated workspace. In the meantime contextual release `0b4e7eaf0afd87846723f134313d5db2eb78727f` was deployed. This pass preserves that release and builds separate API/sender overlays on its exact live images, rather than treating their source trees as interchangeable.
+
+The actual sender already uses bounded concurrent preparation with task-local NativeEngine capabilities. This patch preserves that existing architecture. With pacing on, both the outer queue and turn admission use the 20-second debounce cap, and the sender's existing `tolerate_newer` escape is disabled for these conversational turns so freshness still wins over timing. With pacing off, those existing sender settings remain unchanged.
+
+Both exact reconciled candidate images passed **114 tests each**, including real PostgreSQL, pacing, format, recovery and contextual integration. The initial test-image setup was missing pytest's `py` helper; adding it changed only the disposable test layer. The application images were unaffected.
+
+Baseline for this pass: API `sha256:cf7dd2382962def7ca18f8b26a39713e61cab5bf5bb637093ce8bf95068527ff`; sender `sha256:42a374a0e29fa08419c2ec4987299d187215a28066528a48d1ac94c79a97e84a`; worker `sha256:3257dba4b75a0a0bbf43a9a0b99a17e04a0af11f76b4105a770b9667fd17c0df`; dashboards `sha256:99c570f226a2bebd435af40cee5ef50072d30ffb5b95e3a3eb26fdd7aa880fc1`. Public schema is now `0101_contextual_offers`. Worker schema head is preserved.
+
+Candidate API `sha256:ca09c9079b72e045795ee35ce4ab921ac4b7398b95dd885488179de66f6c687b`; sender `sha256:2fa1dd0604814eb0a287e67599d4215a648169c3078c1ac0c871069656c01e8c`. All baseline and resulting patch-file hashes were checked before building. Exact baseline/candidate images are retained by non-running Docker containers so the dashboard release's unused-image pruning cannot remove rollback inputs.
+
+Protected server evidence: `/var/lib/twin-release/reply-pacing-20261030-208785/`. No credentials or private configuration snapshots are committed to Git. The live schema/default-off gates passed using server-local assertions. Automatic review rejected exporting per-account runtime/connection/count/flag data; those checks remain on the host with pass/fail output only.
+
+Dashboard candidate `2e4dfea7acbc5fa3fe14b64dc2d3bb981b5da7db` combines the live contextual settings UI with both reply controls. Its established release pipeline run is https://github.com/twinagency/twin-dashboard/actions/runs/41015046700. Local merged-editor type and reply-contract tests passed. Final deployment and load/rollback results will be appended after the gates complete.
+
+
+The deterministic load comparison used the same fixed 44-message arrival trace, two accounts, 12 fans each, 20-second account throttle, a constant 3-second synthetic model, 0.6-second synthetic provider transport and a ten-times scaled real clock. All three runs answered every input with 22 replies, 22 model calls, no errors, no crashes, no starvation and no remaining backlog. Baseline p50/p95 was 16.48/17.37 and 16.37/16.92 seconds by account. Candidate-off was 15.79/17.53 and 15.46/16.83. Candidate-on was 65.48/87.15 and 63.32/105.52. Account throttles were respected throughout. The 105.52-second tail shows why the selected 25–90-second target is not a transport guarantee under queue/account delays. Actual synthetic validated receipt metrics were emitted for all 22 pacing-enabled replies. This short mocked-model/socket run is not a production capacity guarantee. A preliminary stochastic/scaled run had scheduling variation; the fixed trace removes that ambiguity for the baseline comparison.

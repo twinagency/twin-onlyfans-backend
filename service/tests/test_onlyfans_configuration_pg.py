@@ -263,6 +263,12 @@ def test_api_separate_credential_strict_contract_scope_revocation_and_no_default
         assert client.post(path,headers={HEADER:SCHEMA,**auth},json=body).status_code==401
     assert client.get(path,headers={"Authorization":"Bearer synthetic-configuration"}).status_code==400
     response=client.get(path,headers=headers);assert response.status_code==200 and "no-store" in response.headers["cache-control"]
+    legacy=response.json()["configuration"]
+    assert "fasttContextualSalesMode" not in legacy
+    extended=client.get(path+"?contextual=1",headers=headers).json()["configuration"]
+    assert extended.pop("fasttContextualSalesMode")=="off"
+    assert extended==legacy
+    assert client.get(path+"?contextual=invalid",headers=headers).json()["configuration"]==legacy
     assert client.get(path.replace("acc-a","acc-b"),headers=headers).status_code==404
     assert client.post(path.replace("acc-a","acc-b"),headers=headers,json=body).status_code==404
     for bad in ({**body,"expectedRevision":True},{**body,"actor":"forged"},{**body,"unexpected":True},{**body,"patch":{"dailyCostCap":0}}):

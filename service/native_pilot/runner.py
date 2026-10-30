@@ -288,6 +288,7 @@ class Gateway:
         # here (never from the frozen Pilot) and a held fan can refuse a bubble.
         self.deadline = pilot.deadline
         self.hold_check = None
+        self.contextual = None
         self.not_sent = None   # the NotSent that ended a send (a retryable one lets the caller answer the input again)
         # Discounted resend (service.py arms these for exactly one job): the one unpaid card of this fan the job may
         # remove, and the ids whose removal the provider confirmed. The DELETE happens at the wire, inside the SAME
@@ -352,6 +353,7 @@ class Gateway:
         from twin_bridge.normalize import html_to_text
 
         attempt = None
+        contextual_metadata = None
         settled = False
         unsend_id, self.unsend_id = self.unsend_id, None      # armed for THIS send only, never carried to another
         try:
@@ -384,6 +386,9 @@ class Gateway:
                     self.content.check_catalog(con, self.pilot.account_id)
                     if terms:
                         terms = self.content.check_send(con, self.pilot.account_id, terms)
+                        from .contextual import refuse_repeat_media
+                        if unsend_id is None:
+                            refuse_repeat_media(con, self.pilot.account_id, self.pilot.fan_id, terms)
                 if terms:
                     for media_id in terms["media_ids"]:
                         asset = await asyncio.to_thread(self.client.vault_media_by_id, media_id)
@@ -396,6 +401,9 @@ class Gateway:
                 **({"reply_authority": self.reply_decision["authority"]} if getattr(self, "reply_decision", None) else {}))
             from .recovery import freeze
             try:
+                if terms and getattr(self, "contextual", None) is not None and self.contextual.armed is not None:
+                    contextual_metadata = await asyncio.to_thread(self.contextual.reserve, terms, attempt.id)
+                    terms = {**terms, "contextual": contextual_metadata}
                 freeze(self.ledger, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                        attempt_id=attempt.id, body=text, terms=terms)
             except Exception:
@@ -419,6 +427,8 @@ class Gateway:
                         raise Refused("authority-lost-before-post")
                 if self.hold_check is not None and self.hold_check():
                     raise Refused("fan-held-before-post")
+                if contextual_metadata is not None:
+                    self.contextual.before_post(contextual_metadata)
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
                     owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now(),
                     **({"reply_authority": self.reply_decision["authority"]} if getattr(self, "reply_decision", None) else {}))
@@ -463,6 +473,8 @@ class Gateway:
                 attempt_id=attempt.id, provider_message_id=validated.provider_message_id,
                 validated_response=raw, evidence={**validated.evidence, **({"content": content_evidence} if terms else {})}, now=now())
             settled = True
+            if contextual_metadata is not None:
+                self.contextual.outcome("sent", int(validated.provider_message_id))
             decision = getattr(self, "reply_decision", None)
             if decision and decision["schedule"] and not known:
                 from .pacing import delivery_event
@@ -492,6 +504,9 @@ class Gateway:
                     self.ledger.record_unknown(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                                                attempt_id=attempt.id, now=now())
                     self.stopped_reason = "delivery-unknown"
+            if contextual_metadata is not None and not settled:
+                # A failed evidence write is not proof that nothing went out.
+                self.contextual.outcome("cancelled" if self.not_sent else "unknown")
             raise Refused(self.stopped_reason) from None
 
 

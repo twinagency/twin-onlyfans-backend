@@ -225,7 +225,7 @@ def test_waiting_turn_releases_engine_and_claim_slot(f):
         service.execute=execute
         with patch('native_pilot.runner.now',return_value=L.NOW+timedelta(seconds=10)),patch.object(pacing.random,'triangular',return_value=25):
             await asyncio.wait_for(service.turn(),timeout=0.5)
-        assert not called and NativeEngine._active is False
+        assert not called and getattr(NativeEngine, "_active", False) is False
         assert not f.sql('SELECT * FROM native_pilot_inputs')
         assert not f.sql('SELECT * FROM native_pilot_receipts')
         with patch('native_pilot.runner.now',return_value=L.NOW+timedelta(seconds=70)):

@@ -1,0 +1,722 @@
+--- /dev/null
++++ b/service/onlyfans_runtime/reply_settings.py
+@@ -0,0 +1,13 @@
++"""Literal opt-ins shared by the audited editor and the native runner."""
++import logging
++
++SWITCHES = {"nativeReplyPacingEnabled": "native_reply_pacing_enabled",
++            "nativeReplyFormatEnabled": "native_reply_format_enabled"}
++
++
++def enabled(settings, key):
++    value = settings.get(key, False)
++    if type(value) is not bool:
++        logging.getLogger(__name__).warning("invalid-native-reply-switch: %s", key)
++        return False
++    return value
+--- a/service/onlyfans_runtime/configuration.py
++++ b/service/onlyfans_runtime/configuration.py
+@@ -14,6 +14,7 @@
+ from .store import Refused,utcnow
+ from .activation import activation_view
+ from .contextual_mode import FIELD as CONTEXTUAL_FIELD, KEY as CONTEXTUAL_KEY, MODES, mode as contextual_mode
++from .reply_settings import SWITCHES as REPLY_SWITCHES, enabled as reply_enabled
+ 
+ def fact_fields():
+     from automations._persona_contract import PERSONA_FACT_FIELDS
+@@ -26,7 +27,7 @@
+ 
+ SALES_FLAGS = ("pack_send_enabled", "pack_on_ask_enabled", "qualification_gate_enabled")
+ # FASTT runner switches, same JSON blob; default OFF, only a literal boolean true is on.
+-FASTT_SWITCHES = {"fasttDiscountResend": "fastt_discount_resend", "fasttPostBuyUpsell": "fastt_post_buy_upsell"}
++FASTT_SWITCHES = {"fasttDiscountResend": "fastt_discount_resend", "fasttPostBuyUpsell": "fastt_post_buy_upsell", **REPLY_SWITCHES}
+ 
+ 
+ def sales_settings(row):
+@@ -128,7 +129,7 @@
+         "salesConfigurationValid":sales_valid,
+         CONTEXTUAL_FIELD:contextual_mode(sales) if sales_valid else "off",
+         "onRequestSalesEnabled":on_request_sales_enabled(sales, valid=sales_valid),
+-        **{name:sales_valid and sales.get(key) is True for name,key in FASTT_SWITCHES.items()},
++        **{name:sales_valid and reply_enabled(sales,key) for name,key in FASTT_SWITCHES.items()},
+         **({"activation": activation_view(session,row.account_id,sales,binding_id=runtime.binding_id,model_id=resolved)} if include_activation else {})}
+ 
+ 
+@@ -266,6 +267,9 @@
+                     before["fasttSwitches"][key]={"present":key in sales,"value":sales.get(key)}
+                     sales[key]=patch[name]
+                     after["fasttSwitches"][key]={"present":True,"value":patch[name]}
++                    if name == "nativeReplyPacingEnabled" and before["fasttSwitches"][key]["value"] != patch[name]:
++                        from native_pilot.pacing import invalidate_settings
++                        invalidate_settings(s, account_id)
+             if previous_switches!=canonical(sales):
+                 changed=True
+                 row.ai_chatter_config_json=canonical(sales)
+--- a/service/native_pilot/ledger.py
++++ b/service/native_pilot/ledger.py
+@@ -374,7 +374,7 @@
+                 con, p["account_id"], p["fan_id"], i[0])}))
+ 
+     def claim_input(self, *, pilot_id: str, owner_token: str, snapshot: SourceSnapshot,
+-                    now: datetime | str) -> str:
++                    now: datetime | str, reply_authority=None) -> str:
+         """Claim before a model call; recovery requires explicit pre-wire proof."""
+         if not isinstance(snapshot, SourceSnapshot):
+             raise Refused("invalid-snapshot")
+@@ -395,9 +395,15 @@
+                             "earliest_created_at=?,state='generating',claimed_at=?,updated_at=? WHERE input_key=?",
+                             (snapshot.source_hash, snapshot.created_at, snapshot.ingested_at, _json(snapshot.member_ids),
+                              snapshot.earliest_created_at, now_s, now_s, prior["input_key"]))
++                if reply_authority is not None:
++                    from .pacing import claimed
++                    claimed(con, reply_authority, prior["input_key"], now_s)
+                 self._requeues[prior["input_key"]] = int(str(prior["state"])[len(REQUEUED):] or 1)
+                 return prior["input_key"]
+             key = _hash([pilot_id, snapshot.message_id])
++            if reply_authority is not None:
++                from .pacing import claimed
++                claimed(con, reply_authority, key, now_s)
+             con.execute("INSERT INTO native_pilot_inputs(input_key,pilot_id,message_id,source_hash,created_at,ingested_at,"
+                         "member_ids_json,earliest_created_at,state,claimed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'generating',?,?)",
+                         (key, pilot_id, snapshot.message_id, snapshot.source_hash, snapshot.created_at,
+@@ -460,7 +466,7 @@
+         return True
+ 
+     def begin_attempt(self, *, pilot_id: str, owner_token: str, input_key: str,
+-                      bubble_no: int, revision: int, now: datetime | str) -> Attempt:
++                      bubble_no: int, revision: int, now: datetime | str, reply_authority=None) -> Attempt:
+         """Atomic final source + authority check, budget charge, durable intent."""
+         if not isinstance(bubble_no, int) or isinstance(bubble_no, bool) or not 1 <= bubble_no < 2**31:
+             raise Refused("invalid-bubble")
+@@ -470,6 +476,9 @@
+         with self._tx() as con:
+             p = self._active(con, pilot_id, owner_token, now_s)
+             canonical = self._canonical_guard(con, p, lock=True)
++            if reply_authority is not None:
++                from .pacing import guard
++                guard(con, reply_authority, now_s)
+             if bubble_no > 10:
+                 # Preserve the ten-bubble limit, excluding definitively refused attempts.
+                 # Each retry still gets a distinct immutable attempt/receipt sequence number.
+@@ -570,7 +579,7 @@
+                 "next_dispatch_at": None if due is None else _dt(due)}
+ 
+     def validate_dispatch(self, *, pilot_id: str, owner_token: str, attempt_id: int,
+-                          now: datetime | str) -> None:
++                          now: datetime | str, reply_authority=None) -> None:
+         """Read-only recheck after thread handoff, immediately BEFORE guarded_send.
+ 
+         This admitted attempt is the sole permitted unsettled intent; its last
+@@ -606,6 +615,9 @@
+             if a["state"] != "dispatching" or r["state"] != "dispatching":
+                 raise Refused("attempt-not-dispatching")
+             self._canonical_guard(con, p, own_attempt=attempt_id)
++            if reply_authority is not None:
++                from .pacing import guard
++                guard(con, reply_authority, now_s)
+             if con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? AND fan_id=? "
+                            "AND id<>? AND state IN ('dispatching','delivery_unknown') LIMIT 1",
+                            (p["account_id"], p["fan_id"], attempt_id)).fetchone():
+--- /dev/null
++++ b/service/native_pilot/pacing.py
+@@ -0,0 +1,254 @@
++"""Durable admission timing, never a sender or a sleeping engine context."""
++from __future__ import annotations
++
++import json
++import logging
++import random
++import statistics
++from datetime import datetime, timedelta
++
++from twin_bridge import store
++from onlyfans_runtime.reply_settings import SWITCHES, enabled
++from .ledger import Refused, _dt, _hash
++
++PACING = "native_reply_pacing_enabled"
++MAX_ADMISSIONS = 3
++
++
++def _settings(con, account):
++    row = con.execute("SELECT ai_chatter_config_json FROM account_ai_config WHERE account_id=?", (account,)).fetchone()
++    def unique(pairs):
++        result = {}
++        for key, value in pairs:
++            if key in result:
++                raise ValueError("duplicate-configuration-key")
++            result[key] = value
++        return result
++    value = json.loads(row[0], object_pairs_hook=unique) if row and row[0] else {}
++    if type(value) is not dict:
++        raise ValueError("configuration-object-required")
++    return {key: enabled(value, key) for key in SWITCHES.values()}
++
++
++def settings(path, account):
++    try:
++        with store.readonly(path) as con:
++            return _settings(con, account)
++    except (ValueError, TypeError, RecursionError):
++        logging.getLogger(__name__).warning("invalid-native-reply-configuration")
++        return {key: False for key in SWITCHES.values()}
++    except store.DB_ERRORS:
++        # Older fixtures/clients may have no native configuration column.
++        return {key: False for key in SWITCHES.values()}
++
++
++def authority(con, account, fan):
++    """Canonical control generation, independent of workers/pilot leases."""
++    flags = _settings(con, account)
++    r = con.execute("SELECT enabled,binding_id,activated_at,configuration_revision FROM of_runtime "
++                    "WHERE account_id=?", (account,)).fetchone()
++    c = con.execute("SELECT binding_id,revision,status,expires_at,automation_starts_at FROM of_provider_connection "
++                    "WHERE account_id=?", (account,)).fetchone()
++    s = con.execute("SELECT mode,takeover_state,revision FROM of_conversation_state "
++                    "WHERE account_id=? AND fan_id=?", (account, fan)).fetchone()
++    if (not r or not r['enabled'] or not c or c['status'] != 'verified'
++            or c['binding_id'] != r['binding_id'] or not s or s['mode'] != 'automated'
++            or s['takeover_state'] not in (None, 'none')):
++        raise Refused("reply-controls-held")
++    # Include the last change to this flag, including disable/re-enable between ticks.
++    epoch = 0
++    if store.has_table(con, "of_configuration_change"):
++        rows = con.execute("SELECT revision,after_json FROM of_configuration_change WHERE account_id=? "
++                           "AND after_json LIKE ? ORDER BY revision DESC LIMIT 1", (account, '%"'+PACING+'"%')).fetchall()
++        if rows:
++            epoch = rows[0]['revision']
++    generation = _hash([account, fan, r['binding_id'], _dt(r['activated_at']), c['revision'], s['revision'], epoch])
++    since = _dt(c['automation_starts_at'] or r['activated_at'])
++    if store.has_table(con, "of_control_audit"):
++        row = con.execute("SELECT max(created_at) FROM of_control_audit WHERE account_id=? AND fan_id=?",
++                          (account, fan)).fetchone()
++        if row and row[0]:
++            since = max(since, _dt(row[0]))
++    return {"account": account, "fan": fan, "generation": generation,
++            "revision": r['configuration_revision'], "flags": flags, "since": since,
++            "expires": _dt(c['expires_at'])}
++
++
++def guard(con, expected, now):
++    current = authority(con, expected['account'], expected['fan'])
++    if any(current[k] != expected[k] for k in ('generation', 'revision', 'flags')):
++        raise Refused("reply-configuration-changed")
++    if _dt(now) >= current['expires']:
++        raise Refused("reply-connection-expired")
++    key = expected.get('schedule_key')
++    if key:
++        row = con.execute("SELECT state,generation FROM native_reply_pacing WHERE schedule_key=?", (key,)).fetchone()
++        if not row or row['state'] != 'waiting' or row['generation'] != current['generation']:
++            raise Refused("reply-schedule-invalidated")
++
++
++def invalidate_settings(session, account):
++    """Inside the editor's existing transaction; receipts/claims are never erased."""
++    from sqlalchemy import text
++    if session.bind.dialect.name == 'postgresql':
++        name = 'fastt_runtime.native_reply_pacing'
++        exists = session.execute(text("SELECT to_regclass(:name)"), {"name": name}).scalar()
++    else:
++        name = 'native_reply_pacing'
++        exists = session.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name=:name"),
++                                 {"name": name}).scalar()
++    if exists:
++        session.execute(text(f"UPDATE {name} SET state='invalidated' WHERE account_id=:a AND state='waiting'"),
++                        {"a": account})
++
++
++def _measurements(con, account, fan, since, now):
++    rows = con.execute("SELECT p.fan_id,i.claimed_at,r.created_at,r.updated_at,i.source_hash "
++        "FROM native_pilot_receipts r JOIN native_pilots p ON p.pilot_id=r.pilot_id "
++        "JOIN native_pilot_inputs i ON i.input_key=r.input_key WHERE p.account_id=? AND r.state='sent' "
++        "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts earlier WHERE earlier.input_key=r.input_key AND earlier.state='sent' AND earlier.bubble_no<r.bubble_no) AND i.source_hash NOT LIKE 'followup:%' ORDER BY r.updated_at DESC LIMIT 64",
++        (account,)).fetchall()
++    durations, active = [], False
++    lower = max(since, _dt(now - timedelta(minutes=5)))
++    for row in rows:
++        end, start = datetime.fromisoformat(_dt(row['updated_at'])), datetime.fromisoformat(_dt(row['claimed_at']))
++        if start <= end <= now and 0 <= (end-start).total_seconds() <= 180:
++            durations.append((end-start).total_seconds())
++        if row['fan_id'] == fan and _dt(start) >= since and lower <= _dt(end) <= _dt(now):
++            active = True
++    # Observed claim-to-first-receipt time includes generation, throttle and preflight.
++    # No observations means zero allowance, never an invented performance estimate.
++    return min(20.0, statistics.median(durations)) if durations else 0.0, active
++
++
++def prepare(ledger, pilot, snapshot, *, now, quiet_s=7.0, rng=None):
++    """Choose once, then return a due time without claiming inputs or holding locks."""
++    now = datetime.fromisoformat(_dt(now))
++    rng = rng or random
++    with ledger._tx() as con:
++        p = ledger._active(con, pilot.pilot_id, pilot.owner_token, _dt(now))
++        expected = authority(con, p['account_id'], p['fan_id'])
++        if not any(expected['flags'].values()):
++            return None
++        guard(con, expected, now)
++        if not expected['flags'][PACING]:
++            return {"authority": expected, "eligible_at": now, "schedule": None}
++        if not store.has_table(con, 'native_reply_pacing'):
++            raise Refused("reply-pacing-migration-required")
++        # Same ownership/source fences as claim_input. This transaction creates no claim.
++        if ledger._source(con, p, _dt(now)) != snapshot:
++            raise Refused("source-changed")
++        con.execute("UPDATE native_reply_pacing SET state='invalidated',updated_at=? "
++                    "WHERE account_id=? AND fan_id=? AND generation<>? AND state='waiting'",
++                    (_dt(now), p['account_id'], p['fan_id'], expected['generation']))
++        row = con.execute("SELECT * FROM native_reply_pacing WHERE account_id=? AND fan_id=? "
++                          "AND generation=? AND state='waiting'",
++                          (p['account_id'], p['fan_id'], expected['generation'])).fetchone()
++        if row is not None and row['input_key']:
++            receipt = con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND state='sent' LIMIT 1",
++                                  (row['input_key'],)).fetchone()
++            if receipt:
++                con.execute("UPDATE native_reply_pacing SET state='done',updated_at=? WHERE schedule_key=?",
++                            (_dt(now),row['schedule_key']))
++                row = None
++        allowance, active = _measurements(con, p['account_id'], p['fan_id'], expected['since'], now)
++        ids = snapshot.member_ids or (snapshot.message_id,)
++        marks = ','.join('?' for _ in ids)
++        sources = con.execute(f"SELECT message_id,created_at,ingested_at FROM messages WHERE account_id=? "
++                              f"AND fan_id=? AND message_id IN ({marks})", (p['account_id'],p['fan_id'],*ids)).fetchall()
++        if len(sources) != len(ids):
++            raise Refused("source-changed")
++        for source in sources:
++            if not p['cutoff'] < _dt(source['ingested_at']) <= _dt(now) or _dt(source['created_at']) > _dt(now):
++                raise Refused("reply-timestamp-invalid")
++        if row is None:
++            # Prior completed native claims can still be visible in a no-reply history.
++            covered = set()
++            for old in con.execute("SELECT member_ids_json FROM native_pilot_inputs WHERE pilot_id=? "
++                                   "AND (state='complete' OR EXISTS (SELECT 1 FROM native_pilot_receipts r "
++                                   "WHERE r.input_key=native_pilot_inputs.input_key AND r.state='sent'))", (pilot.pilot_id,)).fetchall():
++                covered.update(json.loads(old[0]))
++            unhandled = [s for s in sources if s['message_id'] not in covered]
++            if not unhandled:
++                raise Refused("input-already-claimed")
++            first = min(unhandled, key=lambda s: (_dt(s['ingested_at']),s['message_id']))
++            received = _dt(first['ingested_at'])
++            delay = float(rng.triangular(25.0,90.0,35.0 if active else 60.0))
++            if not 25 <= delay <= 90:
++                raise Refused("reply-delay-invalid")
++            key = _hash([p['account_id'],p['fan_id'],expected['generation'],first['message_id']])
++            target = _dt(datetime.fromisoformat(received)+timedelta(seconds=delay))
++            con.execute("INSERT INTO native_reply_pacing(schedule_key,account_id,fan_id,generation,anchor_id,"
++                "first_received_at,provider_created_at,target_at,delay_seconds,active_exchange,state,created_at,updated_at) "
++                "VALUES(?,?,?,?,?,?,?,?,?,?,'waiting',?,?)",
++                (key,p['account_id'],p['fan_id'],expected['generation'],first['message_id'],received,
++                 _dt(first['created_at']),target,delay,int(active),_dt(now),_dt(now)))
++            row = con.execute("SELECT * FROM native_reply_pacing WHERE schedule_key=?", (key,)).fetchone()
++        row = dict(row)
++        first = datetime.fromisoformat(row['first_received_at'])
++        latest = max(datetime.fromisoformat(_dt(s['ingested_at'])) for s in sources)
++        quiet = min(latest+timedelta(seconds=quiet_s), first+timedelta(seconds=20))
++        target = datetime.fromisoformat(row['target_at'])
++        eligible = max(quiet, target-timedelta(seconds=allowance))
++        expected['schedule_key'] = row['schedule_key']
++        return {"authority":expected,"eligible_at":eligible,"schedule":row,"pipeline_allowance_s":allowance}
++
++
++def claimed(con, expected, input_key, now):
++    guard(con, expected, now)
++    key = expected.get('schedule_key')
++    if not key:
++        return
++    row = con.execute("SELECT admissions FROM native_reply_pacing WHERE schedule_key=?", (key,)).fetchone()
++    if row['admissions'] >= MAX_ADMISSIONS:
++        raise Refused("reply-regeneration-budget-held")
++    con.execute("UPDATE native_reply_pacing SET admissions=admissions+1,input_key=?,updated_at=? WHERE schedule_key=?",
++                (input_key,_dt(now),key))
++
++
++def finish(ledger, decision, *, now, error=None, sent=False):
++    if not decision or not decision['schedule']:
++        return
++    # Stale unsent work retains its original target for bounded re-admission.
++    retryable = error and (error in ('source-changed','new-message-during-generation','reply-configuration-changed')
++                           or error.startswith(('model-', 'provider-', 'allowance-')))
++    if retryable and not sent:
++        return
++    with ledger._tx() as con:
++        con.execute("UPDATE native_reply_pacing SET state='done',updated_at=? WHERE schedule_key=? AND state='waiting'",
++                    (_dt(now),decision['schedule']['schedule_key']))
++
++
++def delivery_event(expected, schedule, *, receipt_at, wire_at, provider_created_at=None,
++                   admitted_at=None, draft_ready_at=None, throttle_done_at=None, eligible_at=None):
++    """Actual validated receipt arrival, never a planned time reported as delivery."""
++    receipt_at = datetime.fromisoformat(_dt(receipt_at))
++    first = datetime.fromisoformat(schedule['first_received_at'])
++    origin = datetime.fromisoformat(schedule['provider_created_at'])
++    target = datetime.fromisoformat(schedule['target_at'])
++    miss = (receipt_at-target).total_seconds()
++    components = {}
++    reasons = []
++    if admitted_at is not None and draft_ready_at is not None and throttle_done_at is not None:
++        created = datetime.fromisoformat(schedule['created_at'])
++        components = {
++            "intentional_wait_s": max(0.0, (min(admitted_at, eligible_at)-created).total_seconds()),
++            "before_scheduling_s": max(0.0, (created-first).total_seconds()),
++            "scheduler_queue_s": max(0.0, (admitted_at-max(created,eligible_at)).total_seconds()),
++            "generation_and_shaping_s": max(0.0, (draft_ready_at-admitted_at).total_seconds()),
++            "account_throttle_s": max(0.0, (throttle_done_at-draft_ready_at).total_seconds()),
++            "preflight_s": max(0.0, (wire_at-throttle_done_at).total_seconds()),
++            "transport_to_receipt_s": max(0.0, (receipt_at-wire_at).total_seconds()),
++        }
++        if miss > 0:
++            reasons = [name for name in ("scheduler_queue_s", "account_throttle_s", "generation_and_shaping_s",
++                                         "preflight_s", "transport_to_receipt_s") if components[name] > 0]
++    return {"event":"reply-pacing-receipt","schedule_key":schedule['schedule_key'],
++            "components":components,"observed_late_components":reasons,"provider_clock_ahead_of_ingest":origin>first,
++            "account_id":expected['account'],"fan_id":expected['fan'],
++            "target_at":schedule['target_at'],"wire_at":_dt(wire_at),"receipt_at":_dt(receipt_at),
++            "provider_created_at":provider_created_at,
++            "verified_receipt_to_receipt_s":(receipt_at-first).total_seconds(),
++            "provider_created_to_receipt_s":(receipt_at-origin).total_seconds(),
++            "intake_lag_s":(first-origin).total_seconds(),"target_miss_s":miss,
++            "timing":"late" if miss>0 else "early" if miss<0 else "on-target"}
+--- a/service/native_pilot/runner.py
++++ b/service/native_pilot/runner.py
+@@ -363,7 +363,9 @@
+                 raise Refused("unsend-needs-card")
+             if len(text.encode("utf-16-le")) // 2 > 4000:
+                 raise Refused("output-too-long")
++            draft_ready_at = now()
+             await self.pace()
++            throttle_done_at = now()
+             if self.stopped():
+                 raise Refused(self.stopped_reason)
+             since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
+@@ -395,7 +397,8 @@
+                             raise Refused("content-asset-unavailable")
+             self.bubble += 1
+             attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+-                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
++                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now(),
++                **({"reply_authority": self.reply_decision["authority"]} if getattr(self, "reply_decision", None) else {}))
+             from .recovery import freeze
+             try:
+                 if terms and getattr(self, "contextual", None) is not None and self.contextual.armed is not None:
+@@ -409,6 +412,7 @@
+                 attempt_no=attempt.attempt_no, owner_token=self.pilot.owner_token, revision=self.pilot.revision)
+ 
+             wire = [False]
++            wire_at = [None]
+ 
+             def physical_post():
+                 # Re-read stop/owner after the thread handoff, immediately at the wire.
+@@ -426,7 +430,9 @@
+                 if contextual_metadata is not None:
+                     self.contextual.before_post(contextual_metadata)
+                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
+-                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
++                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now(),
++                    **({"reply_authority": self.reply_decision["authority"]} if getattr(self, "reply_decision", None) else {}))
++                wire_at[0] = now()
+                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
+                     if unsend_id is not None:
+                         wire[0] = True    # the DELETE may have reached OnlyFans from here on
+@@ -469,6 +475,16 @@
+             settled = True
+             if contextual_metadata is not None:
+                 self.contextual.outcome("sent", int(validated.provider_message_id))
++            decision = getattr(self, "reply_decision", None)
++            if decision and decision["schedule"] and not known:
++                from .pacing import delivery_event
++                try:
++                    emit(delivery_event(decision["authority"], decision["schedule"], receipt_at=now(),
++                                        wire_at=wire_at[0], provider_created_at=raw.get("createdAt"),
++                                        admitted_at=decision.get("admitted_at"), draft_ready_at=draft_ready_at,
++                                        throttle_done_at=throttle_done_at, eligible_at=decision["eligible_at"]))
++                except Exception:
++                    emit({"event": "reply-pacing-metric-error"})
+             emit({"event": "sent", "engine": "fastt-native", "provider_message_id": validated.provider_message_id,
+                   "pilot_sent": len([r for r in self.ledger.receipts(pilot_id=self.pilot.pilot_id) if r["state"] == "sent"]),
+                   "limit": self.limit_label()})
+--- a/service/native_pilot/engine.py
++++ b/service/native_pilot/engine.py
+@@ -182,7 +182,7 @@
+ 
+     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
+                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
+-                 unanswered_reply_ids=(), unlinked_paid=None, contextual=None):
++                 unanswered_reply_ids=(), unlinked_paid=None, contextual=None, reply_format=False):
+         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
+         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
+         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
+@@ -196,6 +196,7 @@
+             raise ValueError("invalid-pilot-model")
+         self.model = model
+         self.contextual = contextual
++        self.reply_format = reply_format is True
+         self.content = content
+         # Optional Twin approved-context source for the single prompt hook.
+         self.context = context
+@@ -258,6 +259,9 @@
+         contextual_mode = mode(result)
+         result.update(TEXT_ONLY)
+         result[KEY] = contextual_mode if getattr(self, "contextual", None) is not None and sales_enabled else "off"
++        result.pop("_native_reply_format", None)  # internal capability, never a saved switch
++        if self.reply_format and self._job is None:
++            result["_native_reply_format"] = True
+         if self.followups is not None:
+             result.update(copy.deepcopy(FOLLOWUPS))
+             minutes = result.get("nudge_after_minutes")
+--- a/service/native_pilot/service.py
++++ b/service/native_pilot/service.py
+@@ -220,6 +220,7 @@
+         self.backoff_s = 0.0       # set by after_failure when an input was requeued; the all-fans runner turns it into a hold
+         self.last_active = runner.now()
+         self.last_held = None
++        self.reply_decision = None
+         self.ensured = False
+         self._renew_task = None
+         self._intake_factory = intake_factory
+@@ -658,8 +659,24 @@
+     async def turn(self):
+         pilot, ledger, args = self.pilot, self.ledger, self.args
+         snap = ledger.snapshot(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
+-        if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id) \
+-                or (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < self.quiet_s:
++        self.reply_decision = None
++        if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id):
++            return await self.wait(self.poll_s)
++        from . import pacing
++        flags = pacing.settings(self.path, self.db)
++        if any(flags.values()):
++            try:
++                self.reply_decision = pacing.prepare(ledger, pilot, snap, now=runner.now(), quiet_s=self.quiet_s)
++            except Refused as exc:
++                if exc.reason == "source-changed":
++                    return await self.wait(self.poll_s)
++                raise
++        paced = self.reply_decision and self.reply_decision["schedule"]
++        if paced:
++            if runner.now() < self.reply_decision["eligible_at"]:
++                self.note("reply-target-wait")
++                return await self.wait(self.poll_s)
++        elif (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < self.quiet_s:
+             return await self.wait(self.poll_s)
+         wait = self.cooldown_left()
+         if wait > 0:
+@@ -668,7 +685,8 @@
+             return await self.wait(min(wait + 0.5, self.poll_s * 10))
+         try:
+             sources = runner.read_sources(self.path, self.db, args.fan, getattr(snap, "member_ids", (snap.message_id,)))
+-            key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now())
++            key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now(),
++                                     **({"reply_authority": self.reply_decision["authority"]} if self.reply_decision else {}))
+         except Refused as exc:
+             if exc.reason in ("input-already-claimed", "source-changed"):
+                 return await self.wait(self.poll_s)
+@@ -680,7 +698,13 @@
+             await self.identity_handoff("fan-asked")
+             ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+             return
+-        await self.execute(key, sources, source_id=snap.message_id)
++        if self.reply_decision:
++            self.reply_decision["admitted_at"] = runner.now()
++        error = await self.execute(key, sources, source_id=snap.message_id)
++        if self.reply_decision:
++            receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
++            pacing.finish(ledger, self.reply_decision, now=runner.now(), error=error,
++                          sent=any(r["state"] == "sent" for r in receipts))
+ 
+     async def execute(self, key, sources, *, source_id, job=None):
+         """Run FASTT's engine for one claimed input (fan message, or the nudge job ``job``) through the
+@@ -692,6 +716,8 @@
+         pilot, ledger, args = self.pilot, self.ledger, self.args
+         self.turns_started += 1
+         gateway = ServiceGateway(self, pilot, content=self.content, scope=self.scope)
++        if job is None and self.reply_decision:
++            gateway.reply_decision = self.reply_decision
+         # A requeued input already owns bubble numbers (its refused attempts): continue after them.
+         prior = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
+         gateway.sources, gateway.input_key, gateway.bubble = sources, key, max((r["bubble_no"] for r in prior), default=0)
+@@ -717,6 +743,8 @@
+                                                      input_key=key, now=runner.now()) if job is None else ()
+             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
+                               content=self.content, context=self.context, contextual=contextual,
++                              **({"reply_format": True} if job is None and self.reply_decision
++                                 and self.reply_decision["authority"]["flags"].get("native_reply_format_enabled") else {}),
+                               **({"unanswered_reply_ids": unanswered} if unanswered else {}),
+                               **({"own_offers_only": True} if self.strict else {}),
+                               arm_unsend=gateway.arm_unsend, unsent=lambda: gateway.unsent_ids,
+@@ -750,7 +778,7 @@
+             if job is None:
+                 if gateway.not_sent is not None:
+                     retry = ("provider", gateway.not_sent.retry_after) if gateway.not_sent.retry else None
+-                elif error in MODEL_RETRY_REASONS:
++                elif error in MODEL_RETRY_REASONS or error in ("reply-configuration-changed", "reply-schedule-invalidated"):
+                     retry = ("model", None)
+             await self.after_failure(error, key, retry=retry)
+             return error
+--- /dev/null
++++ b/service/native_pilot/pacing_schema.py
+@@ -0,0 +1,45 @@
++"""Explicit additive native-runtime migration. Rollback retains timing evidence.
++
++Run against the selected release database BEFORE enabling pacing:
++python -m native_pilot.pacing_schema --url-env ONLYFANS_MIGRATION_URL
++This does not advance the public application's Alembic head.
++"""
++from twin_bridge import store
++
++DDL = """CREATE TABLE IF NOT EXISTS native_reply_pacing (
++    schedule_key TEXT PRIMARY KEY, account_id TEXT NOT NULL, fan_id BIGINT NOT NULL,
++    generation TEXT NOT NULL, anchor_id BIGINT NOT NULL, first_received_at TEXT NOT NULL,
++    provider_created_at TEXT NOT NULL, target_at TEXT NOT NULL, delay_seconds REAL NOT NULL,
++    active_exchange INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'waiting',
++    admissions INTEGER NOT NULL DEFAULT 0, input_key TEXT,
++    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
++    CHECK(state IN ('waiting','done','invalidated')),
++    CHECK(delay_seconds>=25 AND delay_seconds<=90), CHECK(admissions>=0))"""
++INDEX = """CREATE UNIQUE INDEX IF NOT EXISTS native_reply_pacing_pending
++    ON native_reply_pacing(account_id,fan_id,generation) WHERE state='waiting'"""
++
++
++def upgrade(target):
++    with store.transaction(target) as con:
++        if not store.has_table(con, "native_pilots"):
++            raise RuntimeError("native-runtime-schema-required")
++        con.execute(DDL)
++        con.execute(INDEX)
++
++
++def downgrade(target):
++    # Old runners ignore the additive table. Never delete timing/dispatch evidence.
++    return None
++
++
++if __name__ == "__main__":
++    import argparse
++    import os
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--url-env", required=True)
++    args = parser.parse_args()
++    target = store.target_from_url(os.environ[args.url_env])
++    if target is None:
++        raise SystemExit("explicit-database-required")
++    upgrade(target)
++    print("native-reply-pacing-schema-ready")
+--- a/service/automations/ai_chatter.py
++++ b/service/automations/ai_chatter.py
+@@ -6435,6 +6435,14 @@
+     return ""
+ 
+ 
++REPLY_FORMAT_INSTRUCTION = (
++    "Answer the latest complete message in the creator's approved voice. Use the amount of detail the reply needs. "
++    "A brief acknowledgment or one short sentence is sufficient when it answers the turn. "
++    "Expand when the question needs explanation. Ask a follow-up only when it helps the conversation. "
++    "Do not pad the reply or split it merely to meet a format."
++)
++
++
+ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
+                     history_tail: int = _HISTORY_TAIL,
+                     # Arm G's three transforms. Defaults to OFF, so every
+@@ -6501,6 +6509,7 @@
+                     # offer contract and pacing are untouched.
+                     twin_context: bool = False,
+                     dated_memory: bool = False,
++                    reply_format: bool = False,
+                     ) -> tuple[list[dict], list[str]]:
+     """Compose the (system, user) pair — welcome_chatter_for_info's girly info-gather prompt
+     with one structural difference: `sell`. `_NO_SELL` (M2) → the no-offers line
+@@ -6514,6 +6523,7 @@
+     for the opening line and the output contract. That is the whole reason
+     `_SellSurface` exists — see its docstring. Adding a way to sell means one
+     more construction there, not four more branches here."""
++    reply_format = reply_format is True and not kind and not sell.live
+     questions = _questions_still_needed(f, asked)
+     # One flag for "answer identity questions honestly": Twin's scoped text path
+     # and the FASTT path with Twin context share the same identity wording.
+@@ -6874,6 +6884,9 @@
+     elif life_tip:
+         need_block = ("YOUR GOAL THIS MESSAGE: answer him, then the ask "
+                       "below. No get-to-know question this turn — it can wait.")
++    elif reply_format:
++        need_block = "Answer what he said. Ask for clarification only if it is needed to answer accurately."
++        presented = []
+     elif opener is not None:
+         # The gather is done, so this turn works in one gen_info opener — a question
+         # mined from something he actually said — instead of the generic banter
+@@ -6916,7 +6929,7 @@
+         if name_dodged else "")
+ 
+     style_extra = ((STYLE_3LINE,) * 2 + (STYLE_BRIEF,) * 2) if style_on else ()
+-    style = random.choice(_STYLE_VARIANTS + style_extra)
++    style = REPLY_FORMAT_INSTRUCTION if reply_format else random.choice(_STYLE_VARIANTS + style_extra)
+     # A "solo" sticker roll owns the per-message STYLE slot — a bullet buried
+     # mid-prompt loses to "YOUR GOAL THIS MESSAGE"/the style line (verified
+     # live: 5/5 solo rolls yielded plain text until the directive moved here).
+@@ -7055,7 +7068,9 @@
+         f"{register_intro}"
+         "- Short and casual — lowercase, u/ur. React to what he said first.\n"
+         "- VARY it — never reuse an opener, phrase, or emoji from this chat.\n"
+-        "- At most ONE question, never one he already answered. No paragraphs.\n"
++        + ("- Ask a follow-up only when useful; never repeat an answered question.\n" if reply_format else
++           "- At most ONE question, never one he already answered. No paragraphs.\n")
++        +
+         f"{narration_rule}"
+         "- If he gets explicit early: playfully tease and slow it down — warm, "
+         "never preachy.\n"
+@@ -9560,7 +9575,8 @@
+                                               sell_signal=signal_on,
+                                               v=v,
+                                               twin_context=twin_ctx is not None,
+-                                              dated_memory=bool(getattr(twin_ctx,"dated_memory",False)))
++                                              dated_memory=bool(getattr(twin_ctx,"dated_memory",False)),
++                                              reply_format=cfg.get("_native_reply_format") is True)
+             if twin_ctx is not None and twin_ctx.finish is not None:
+                 msgs = twin_ctx.finish(msgs)
+             try:
+@@ -10063,11 +10079,17 @@
+             _ret_gap_s = ((datetime.utcnow() - _ret_anchor).total_seconds()
+                           if _ret_anchor is not None else 0.0)
+             _one_bubble = bool(return_single_s > 0 and _ret_gap_s >= return_single_s)
+-            parts = [_language.apply_word_restriction(p, fan_lang)[:_REPLY_MAX_CHARS]
+-                     for p in split_for_bubbles(raw, max_bubbles,
+-                                                rng=random.Random(f"split:{fan_id}:{raw}"),
+-                                                force_single=_one_bubble)
+-                     if p.strip()][:max_bubbles]
++            if cfg.get("_native_reply_format") is True and not kind and not sell.live:
++                # Preserve complete text; the existing transport limit refuses oversized output.
++                # The existing bubble loop still checks freshness before every send.
++                parts = [_language.apply_word_restriction(p, fan_lang)
++                         for p in split_for_bubbles(raw, 2, preserve_complete=True)]
++            else:
++                parts = [_language.apply_word_restriction(p, fan_lang)[:_REPLY_MAX_CHARS]
++                         for p in split_for_bubbles(raw, max_bubbles,
++                                                    rng=random.Random(f"split:{fan_id}:{raw}"),
++                                                    force_single=_one_bubble)
++                         if p.strip()][:max_bubbles]
+             parts = [p for p in parts if not _looks_like_echo(p, c.last_body)]
+             if style_on and parts:
+                 recent_out = [b for d, b in c.messages if d == "out"]
+--- a/service/automations/welcome_chatter_for_info.py
++++ b/service/automations/welcome_chatter_for_info.py
+@@ -427,7 +427,7 @@
+ 
+ 
+ def split_for_bubbles(text: str, max_bubbles: int = 2, rng=None,
+-                      force_single: bool = False) -> list[str]:
++                      force_single: bool = False, preserve_complete: bool = False) -> list[str]:
+     """Make one generated reply read like real texting, and NO em-dash ever survives
+     (every return path runs _strip_dash). Content is NEVER dropped:
+ 
+@@ -443,6 +443,14 @@
+     the reply (the senders use `Random(f"split:{fan_id}:{raw}")`) makes the split
+     stable — the same draft re-run after a retry bubbles the same way.
+     """
++    if preserve_complete:
++        # Optional native ordinary-chat mode. Keep deliberate paragraph breaks only;
++        # never truncate text, split sentences, or remove prices/links to meet a cap.
++        text = text.strip()
++        if not text:
++            return []
++        parts = [part.strip() for part in text.split("\n\n") if part.strip()]
++        return [_strip_dash(p) for p in (parts if len(parts) <= 2 else [text])]
+     _rng = rng if rng is not None else random
+     text = text.strip()
+     # ── ONE BUBBLE, whatever the reply weighs. The caller sets this when she is

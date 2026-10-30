@@ -64,3 +64,22 @@ def f(database):
     f.source()
     yield f
     store.dispose_pools()
+
+
+def test_pg_schema_rollback_retains_pending_target_and_receipt(f):
+    from sqlalchemy import create_engine
+    from test_native_reply_pacing import prepare
+    decision,_,_=prepare(f)
+    key=f.claim();attempt=f.attempt(key);f.sent(attempt,987)
+    before=f.sql('SELECT schedule_key,target_at,state FROM native_reply_pacing')
+    receipts=f.sql('SELECT attempt_id,state,provider_message_id FROM native_pilot_receipts')
+    assert receipts and before
+    pacing_schema.downgrade(f.path)
+    pacing_schema.upgrade(f.path)
+    assert f.sql('SELECT schedule_key,target_at,state FROM native_reply_pacing')==before
+    assert f.sql('SELECT attempt_id,state,provider_message_id FROM native_pilot_receipts')==receipts
+    engine=create_engine(f.path)
+    with Session(engine) as session,session.begin():pacing.invalidate_settings(session,L.ACCT)
+    assert f.sql('SELECT state FROM native_reply_pacing')[0][0]=='invalidated'
+    assert f.sql('SELECT attempt_id,state,provider_message_id FROM native_pilot_receipts')==receipts
+    engine.dispose()

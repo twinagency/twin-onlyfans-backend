@@ -20,7 +20,16 @@ class Provider:
 
     def remove_user_from_list(self, lid, fan):
         self.calls.append(("remove", lid, fan))
+        if fan not in self.members[lid]:
+            exc = RuntimeError("member not found")
+            exc.response = types.SimpleNamespace(status_code=404)
+            raise exc
         self.members[lid].discard(fan)
+
+    def get_list(self, lid):
+        if lid not in self.members:
+            raise RuntimeError("list missing")
+        return {"id": lid}
 
     def add_user_to_list(self, lid, fan):
         self.calls.append(("add", lid, fan))
@@ -87,6 +96,18 @@ def test_deleted_control_is_removed_from_managed_lists(tmp_path):
     mirror.sync_fan(provider, LISTS, 7, lambda _: None)
     assert provider.members[1] == set()
     assert list(mirror.changed({})) == []
+
+
+def test_missing_list_does_not_turn_404_into_success(tmp_path):
+    mirror = Mirror(tmp_path / "ledger.db", "of-1")
+    class Deleted(Provider):
+        def get_list(self, lid):
+            raise RuntimeError("list missing")
+    provider = Deleted()
+    with pytest.raises(RuntimeError, match="list missing"):
+        mirror.sync_fan(provider, LISTS, 7, lambda _: row())
+    assert list(mirror.changed({7: row()})) == [7]
+    assert all(call[0] != "add" for call in provider.calls)
 
 
 def test_cross_account_ledger_is_refused(tmp_path):

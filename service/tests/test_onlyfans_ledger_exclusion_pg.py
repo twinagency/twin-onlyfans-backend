@@ -202,15 +202,32 @@ def test_native_sales_and_media_delivery_refuse_only_the_unlinked_fan(database, 
 
 def test_migration_downgrade_drops_only_the_exclusion_table_and_upgrade_restores_it(database):
     from alembic import command
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from importlib.util import spec_from_file_location, module_from_spec
+    from pathlib import Path
     from db.schema import HEAD, _config, check_schema
     url, engine = database
     assert HEAD == "0101_contextual_offers"
     with engine.begin() as c:
-        command.downgrade(_config(c), "0097_release_controls")
-        assert not c.dialect.has_table(c, "of_ledger_exclusion")
-        assert c.execute(text("select version_num from alembic_version")).scalar() == "0097_release_controls"
-        assert c.dialect.has_table(c, "of_ledger_scan") and c.dialect.has_table(c, "of_launch_command")
-        command.upgrade(_config(c), HEAD)
+        # Later manual-media releases deliberately prohibit a whole-chain
+        # rollback below 0100. Prove that guard, without bypassing it.
+        with pytest.raises(RuntimeError, match="Preserve free-media"):
+            with c.begin_nested():
+                command.downgrade(_config(c), "0097_release_controls")
+        check_schema(c)
+        # Exercise 0098's own reversible table operation in isolation. It must
+        # not erase financial scans, command history, or contextual evidence.
+        path = Path(__file__).resolve().parents[1] / "db/migrations/versions/20261029_0100_ledger_exclusion.py"
+        spec = spec_from_file_location("exclusion_migration_fixture", path)
+        migration = module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        with Operations.context(MigrationContext.configure(c)):
+            migration.downgrade()
+            assert not c.dialect.has_table(c, "of_ledger_exclusion")
+            assert c.dialect.has_table(c, "of_ledger_scan") and c.dialect.has_table(c, "of_launch_command")
+            assert c.dialect.has_table(c, "of_contextual_offer")
+            migration.upgrade()
         check_schema(c)
         assert c.dialect.has_table(c, "of_ledger_exclusion")
 

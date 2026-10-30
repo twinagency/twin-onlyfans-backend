@@ -191,6 +191,9 @@ class Ledger:
             if initialize and not self.pg:
                 for statement in _SCHEMA:
                     con.execute(statement)
+                from .pacing import DDL, INDEX
+                con.execute(DDL)
+                con.execute(INDEX)
             yield con
 
     @staticmethod
@@ -374,7 +377,7 @@ class Ledger:
                 con, p["account_id"], p["fan_id"], i[0])}))
 
     def claim_input(self, *, pilot_id: str, owner_token: str, snapshot: SourceSnapshot,
-                    now: datetime | str) -> str:
+                    now: datetime | str, admission_check=None) -> str:
         """Claim before a model call; recovery requires explicit pre-wire proof."""
         if not isinstance(snapshot, SourceSnapshot):
             raise Refused("invalid-snapshot")
@@ -396,12 +399,16 @@ class Ledger:
                             (snapshot.source_hash, snapshot.created_at, snapshot.ingested_at, _json(snapshot.member_ids),
                              snapshot.earliest_created_at, now_s, now_s, prior["input_key"]))
                 self._requeues[prior["input_key"]] = int(str(prior["state"])[len(REQUEUED):] or 1)
+                if admission_check is not None:
+                    admission_check(con, prior["input_key"])
                 return prior["input_key"]
             key = _hash([pilot_id, snapshot.message_id])
             con.execute("INSERT INTO native_pilot_inputs(input_key,pilot_id,message_id,source_hash,created_at,ingested_at,"
                         "member_ids_json,earliest_created_at,state,claimed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'generating',?,?)",
                         (key, pilot_id, snapshot.message_id, snapshot.source_hash, snapshot.created_at,
                          snapshot.ingested_at, _json(snapshot.member_ids), snapshot.earliest_created_at, now_s, now_s))
+            if admission_check is not None:
+                admission_check(con, key)
             return key
 
     def reserve_model_call(self, *, pilot_id: str, owner_token: str, now: datetime | str, limit: int = 80) -> int:
@@ -460,7 +467,7 @@ class Ledger:
         return True
 
     def begin_attempt(self, *, pilot_id: str, owner_token: str, input_key: str,
-                      bubble_no: int, revision: int, now: datetime | str) -> Attempt:
+                      bubble_no: int, revision: int, now: datetime | str, authority_check=None) -> Attempt:
         """Atomic final source + authority check, budget charge, durable intent."""
         if not isinstance(bubble_no, int) or isinstance(bubble_no, bool) or not 1 <= bubble_no < 2**31:
             raise Refused("invalid-bubble")
@@ -470,6 +477,8 @@ class Ledger:
         with self._tx() as con:
             p = self._active(con, pilot_id, owner_token, now_s)
             canonical = self._canonical_guard(con, p, lock=True)
+            if authority_check is not None:
+                authority_check(con)
             if bubble_no > 10:
                 # Preserve the ten-bubble limit, excluding definitively refused attempts.
                 # Each retry still gets a distinct immutable attempt/receipt sequence number.
@@ -570,7 +579,7 @@ class Ledger:
                 "next_dispatch_at": None if due is None else _dt(due)}
 
     def validate_dispatch(self, *, pilot_id: str, owner_token: str, attempt_id: int,
-                          now: datetime | str) -> None:
+                          now: datetime | str, authority_check=None) -> None:
         """Read-only recheck after thread handoff, immediately BEFORE guarded_send.
 
         This admitted attempt is the sole permitted unsettled intent; its last
@@ -606,6 +615,8 @@ class Ledger:
             if a["state"] != "dispatching" or r["state"] != "dispatching":
                 raise Refused("attempt-not-dispatching")
             self._canonical_guard(con, p, own_attempt=attempt_id)
+            if authority_check is not None:
+                authority_check(con)
             if con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? AND fan_id=? "
                            "AND id<>? AND state IN ('dispatching','delivery_unknown') LIMIT 1",
                            (p["account_id"], p["fan_id"], attempt_id)).fetchone():

@@ -658,8 +658,25 @@ class Service:
     async def turn(self):
         pilot, ledger, args = self.pilot, self.ledger, self.args
         snap = ledger.snapshot(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
-        if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id) \
-                or (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < self.quiet_s:
+        if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id):
+            return await self.wait(self.poll_s)
+        from .pacing import Scheduler, Authority
+        scheduler = Scheduler(ledger, clock=runner.now)
+        policy = scheduler.policy(self.db, args.fan)
+        schedule = None
+        authority = Authority(ledger, self.db, args.fan, policy, clock=runner.now) if policy.pacing or policy.formatting else None
+        if policy.pacing:
+            try:
+                schedule = scheduler.pending(pilot, snap, policy)
+            except Refused as exc:
+                if exc.reason in ("source-changed", "input-already-claimed"):
+                    return await self.wait(self.poll_s)
+                raise
+            if runner.now() < scheduler.eligible_at(schedule, self.quiet_s):
+                # No engine context, claim, provider attempt or open transaction.
+                # A strict child returns immediately so another fan can run.
+                return await self.wait(self.poll_s)
+        elif (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds() < self.quiet_s:
             return await self.wait(self.poll_s)
         wait = self.cooldown_left()
         if wait > 0:
@@ -668,7 +685,12 @@ class Service:
             return await self.wait(min(wait + 0.5, self.poll_s * 10))
         try:
             sources = runner.read_sources(self.path, self.db, args.fan, getattr(snap, "member_ids", (snap.message_id,)))
-            key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now())
+            def admission(con, key):
+                authority.check(con)
+                if schedule is not None:
+                    scheduler.claim(con, schedule, key)
+            key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now(),
+                                     **({"admission_check":admission} if authority is not None else {}))
         except Refused as exc:
             if exc.reason in ("input-already-claimed", "source-changed"):
                 return await self.wait(self.poll_s)
@@ -679,10 +701,25 @@ class Service:
             # flagged so a human answers it, then hands back with the normal dashboard controls.
             await self.identity_handoff("fan-asked")
             ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+            if schedule is not None:
+                scheduler.settle(schedule)
             return
-        await self.execute(key, sources, source_id=snap.message_id)
+        if authority is None:
+            return await self.execute(key, sources, source_id=snap.message_id)
+        outcome = None
+        try:
+            outcome = await self.execute(key, sources, source_id=snap.message_id, reply_authority=authority)
+        finally:
+            if schedule is not None:
+                receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
+                scheduler.settle(schedule, retry=outcome in ("source-changed", "new-message-during-generation", "reply-policy-changed",
+                    "native-stale-input", "model-timeout", "model-http-failed", "model-response-failed", "provider-rate-limited")
+                    or bool(self.stop.is_set()))
+                evidence = scheduler.evidence(schedule, receipts)
+                if evidence:
+                    runner.emit(evidence)
 
-    async def execute(self, key, sources, *, source_id, job=None):
+    async def execute(self, key, sources, *, source_id, job=None, reply_authority=None):
         """Run FASTT's engine for one claimed input (fan message, or the nudge job ``job``) through the
         single-attempt boundary. Returns the failure reason, or None."""
         from .budget import DailyBudget
@@ -692,6 +729,7 @@ class Service:
         pilot, ledger, args = self.pilot, self.ledger, self.args
         self.turns_started += 1
         gateway = ServiceGateway(self, pilot, content=self.content, scope=self.scope)
+        gateway.reply_authority = reply_authority
         # A requeued input already owns bubble numbers (its refused attempts): continue after them.
         prior = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
         gateway.sources, gateway.input_key, gateway.bubble = sources, key, max((r["bubble_no"] for r in prior), default=0)
@@ -725,6 +763,8 @@ class Service:
                 raise Refused(gateway.stopped_reason or model.stopped_reason)
             if not isinstance(stats, dict) or stats.get("errors") or stats.get("cap_hit"):
                 raise Refused("native-turn-failed")
+            if reply_authority is not None and (stats.get("stale_drops") or {}).get("fan_spoke_again"):
+                raise Refused("native-stale-input")
         except Exception as exc:
             error = exc.reason if isinstance(exc, Refused) else (gateway.stopped_reason or model.stopped_reason or "native-turn-failed")
         finally:
@@ -748,6 +788,10 @@ class Service:
                 if gateway.not_sent is not None:
                     retry = ("provider", gateway.not_sent.retry_after) if gateway.not_sent.retry else None
                 elif error in MODEL_RETRY_REASONS:
+                    retry = ("model", None)
+                elif reply_authority is not None and error == "reply-policy-changed":
+                    # A disabled flag invalidates this draft. Only proven-unsent
+                    # input may enter baseline admission again, under its old budget.
                     retry = ("model", None)
             await self.after_failure(error, key, retry=retry)
             return error

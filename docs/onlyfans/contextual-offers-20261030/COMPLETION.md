@@ -1,5 +1,7 @@
 # Contextual offers release record
 
+> Superseded operational status: recent sync is repaired and Maile is in Preview. The independent reply-pacing release is now deployed. See [sync evidence](https://github.com/twinagency/twin-onlyfans-backend/pull/60) and [overlap/compatibility reconciliation](https://github.com/twinagency/twin-onlyfans-backend/pull/61). The image table below is a historical release record, not the current runtime.
+
 30 October 2026. This supersedes the pre-deployment status in RELEASE.md, live-baseline.json and validation.json.
 
 ## Actual status
@@ -69,6 +71,6 @@ Keep `fasttContextualSalesMode: "off"` through the existing audited configuratio
 
 Fresh baseline: `/var/lib/twin-release/contextual-offers-20261030-astra-6172d27/baseline-0b4e7ea`. Protected schema/config/control backups and exact original compose: `promotion-0b4e7ea/` in that same root. Parent images are protected by retained, non-running artifact containers against image pruning. The baseline compose SHA256 was `b0837e09491a16aaa418ff44f461e8e5bc840fbe8c27bb4d29ed0b4e4d8ac510`.
 
-Rollback: turn Off, stop/drain only `fastt-supervisor worker api` in project `twin-onlyfans` using `/etc/twin-onlyfans/media-agency-release-compose.json`; reconcile any uncertain attempts before retrying. With these consumers stopped, use the currently deployed API image and explicit DATABASE_URL selector to downgrade only to `0100_manual_free_media`. The downgrade retains contextual evidence. Restore `promotion-0b4e7ea/compose.before.json` to the exact compose path and `up -d --no-deps api worker fastt-supervisor`. Never start the disabled legacy fastt-runner service. Recheck schema, health, modes and Nicky's disconnected state. Do not downgrade if later schema advances exist. `deploy/contextual-offers-20261030/promote.py` contains the exercised migration, preflight and automatic failure-rollback mechanics.
+Current rollback: set Contextual offers Off through the audited settings API/editor and retain contextual evidence. Do not restore this release's whole compose or original API/sender images over the later pacing release. Use the current per-service baseline and narrow rollback in PR #61. The historical schema downgrade and full-image rollback were tested at this initial release, but are no longer a safe unattended rollback after subsequent changes. Never start the disabled legacy fastt-runner and never resend delivery-unknown attempts without reconciliation.
 
 Dashboard original baseline is `sha256:b3d710711da8566d1eae821d11ee38022f5b6833f68e8d1a9774c23bb0a8793a`, revision `d1723b44a1c4c1d0e89a934f3498e32f8c0b3aba`. Preserve each container's captured environment, network, ports and mounts when restoring. FLIRT's separate older release was not replaced; negotiated API fields preserve its configuration reads.

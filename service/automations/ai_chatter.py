@@ -9849,6 +9849,12 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 from .contextual_offers import plan_contextual
                 _contextual = await plan_contextual(lane, getattr(_cap, "contextual", None), c, f,
                                                    blocked=seller_off, voice=v.voice)
+            if _contextual is None and _cap is not None:
+                _authority = getattr(_cap, "contextual", None)
+                _explore = getattr(_authority, "reply_override", None)
+                if _explore:
+                    raw = _explore
+                    _authority.reply_override = None
             if _contextual is not None:
                 _context_plan, _context_permission, _context_decision = _contextual
                 _authority = _cap.contextual
@@ -9857,6 +9863,10 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 with _authority.arm(_context_plan.delivery, _context_permission,
                                     _context_decision.reason, _context_decision.supporting_message_ids):
                     _context_sent = await lane.deliver(client, _context_plan, dry_run=dry_run)
+                _authority.emit({"event":"contextual-opportunity",
+                                 "stage":"delivered" if _context_sent and not dry_run else "rejected",
+                                 "reason":"transport_accepted" if _context_sent and not dry_run else "not_delivered",
+                                 "fan":fan_id})
                 if _context_sent:
                     forced_this_tick += 1
                     sent += 1

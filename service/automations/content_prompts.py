@@ -394,6 +394,9 @@ class Hook:
     what: str                   # ≤60 chars, the hook in the model's own words
     bridge: str                 # her ONE line, already `bridge_ok`
     contract: Contract
+    action: str = "send_ppv"
+    reason: str = ""
+    supporting_message_ids: tuple[int, ...] = ()
 
 
 #: The three arms, in the order the prompt prefers them.
@@ -617,13 +620,8 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
         user += ("\n\nTHE VAULT'S OWN WORDS (use these for terms, most common "
                  "first):\n" + ", ".join(lexicon))
     if contextual_message is not None:
-        user += ("\n\nCONTEXTUAL FIRST OFFER: Only kind 2 SITUATION is permitted. "
-                 "Use a concrete activity/place in this exact current fan message. "
-                 "Generic friendliness, wealth, elapsed time, purchases or a missing sale are not reasons. "
-                 "No complaints, owed content, purchase problems or refusal. No invented personal plans. "
-                 "If relevant, include action=send_ppv, evidence_quote (verbatim from the current message), "
-                 "and supporting_message_ids containing only its id. Otherwise hook:false.\n"
-                 + json.dumps(contextual_message))
+        from .contextual_evidence import SYSTEM
+        user += "\n\nCURRENT CONVERSATION EVIDENCE:\n" + json.dumps(contextual_message)
     if ask_only:
         user += _ASK_ONLY
 
@@ -632,7 +630,7 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
             model=model,
             messages=[{"role": "system",
                        "content": _HOOK_SYSTEM["him" if str(voice or "").strip().lower()
-                                               == "him" else "her"]},
+                                               == "him" else "her"] if contextual_message is None else SYSTEM},
                       {"role": "user", "content": user}],
             purpose="content_resolver_hook",
             account_id=str(account_id), fan_id=int(fan_id),
@@ -647,12 +645,13 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
     if not p.get("hook"):
         return _no("no_hook")
 
+    evidence_ids = ()
     if contextual_message is not None:
-        quote = p.get("evidence_quote")
-        if (p.get("source") != "situation" or p.get("action") != "send_ppv"
-                or p.get("supporting_message_ids") != [contextual_message["id"]]
-                or type(quote) is not str or len(quote.strip()) < 3
-                or quote not in contextual_message["text"]):
+        from .contextual_evidence import evidence
+        evidence_ids = evidence(p, contextual_message)
+        log.info("contextual-evaluated account=%s fan=%s action=%s reason=%s",
+                 account_id, fan_id, p.get("action"), str(p.get("reason", ""))[:160])
+        if evidence_ids is None or p.get("action") not in ("explore", "send_ppv"):
             return _no("unsupported_contextual_evidence")
     bridge = " ".join(str(p.get("bridge") or "").split())
     if not _hook_upsell.bridge_ok(bridge):
@@ -682,8 +681,13 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
                 terms.append(word)
     excl = [str(x).strip() for x in (p.get("exclusions") or []) if str(x).strip()]
 
+    if contextual_message is not None and p.get("action") == "send_ppv" and (not subject or not terms):
+        return _no("missing_contextual_content_subject")
+
     hook = Hook(
         source=source, what=str(p.get("what") or "")[:60], bridge=bridge,
+        action=p.get("action", "send_ppv") if contextual_message is not None else "send_ppv",
+        reason=str(p.get("reason", ""))[:160], supporting_message_ids=evidence_ids,
         contract=Contract(
             is_ask=contextual_message is None, strict=contextual_message is not None, subject=subject,
             media_kind=(kind if kind in MEDIA_KINDS else None),

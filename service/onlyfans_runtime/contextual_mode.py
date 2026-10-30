@@ -13,3 +13,9 @@ def mode(settings):
         return value
     log.warning("invalid_contextual_sales_mode: treating saved value as off")
     return "off"
+
+def new_account_settings():
+    """Saved offer defaults; provisioning and new-fan automation stay disabled."""
+    return {KEY: "live", "pack_send_enabled": True, "pack_on_ask_enabled": True,
+            "qualification_gate_enabled": True, "fastt_vault_mode": True,
+            "fastt_text_only": False}

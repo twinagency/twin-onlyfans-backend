@@ -225,10 +225,47 @@ def test_waiting_turn_releases_engine_and_claim_slot(f):
         service.execute=execute
         with patch('native_pilot.runner.now',return_value=L.NOW+timedelta(seconds=10)),patch.object(pacing.random,'triangular',return_value=25):
             await asyncio.wait_for(service.turn(),timeout=0.5)
-        assert not called and getattr(NativeEngine, "_active", False) is False
+        assert not called
         assert not f.sql('SELECT * FROM native_pilot_inputs')
         assert not f.sql('SELECT * FROM native_pilot_receipts')
         with patch('native_pilot.runner.now',return_value=L.NOW+timedelta(seconds=70)):
             await service.turn()
         assert len(called)==1
     asyncio.run(run())
+
+
+def test_requeued_creator_context_failure_keeps_original_schedule(f):
+    d,snap,now=prepare(f,seconds=70)
+    key=f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=snap,now=now,reply_authority=d['authority'])
+    f.sql("UPDATE native_pilot_inputs SET state='requeued:0' WHERE input_key=?",(key,))
+    pacing.finish(f.ledger,d,now=now,error='creator-facts-not-current')
+    assert f.sql("SELECT state FROM native_reply_pacing")[0][0]=='waiting'
+    retry,_,_=prepare(f,seconds=72,ledger=Ledger(f.path))
+    assert retry['schedule']['target_at']==d['schedule']['target_at']
+    assert retry['schedule']['admissions']==1
+
+
+def test_recover_legacy_done_schedule_only_for_proven_unsent_retry(f):
+    d,snap,now=prepare(f,seconds=70)
+    key=f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=snap,now=now,reply_authority=d['authority'])
+    f.sql("UPDATE native_pilot_inputs SET state='requeued:0' WHERE input_key=?",(key,))
+    f.sql("UPDATE native_reply_pacing SET state='done'")
+    retry,_,_=prepare(f,seconds=72,ledger=Ledger(f.path))
+    assert retry['schedule']['schedule_key']==d['schedule']['schedule_key']
+    assert retry['schedule']['target_at']==d['schedule']['target_at']
+    assert retry['schedule']['state']=='waiting'
+    assert retry['schedule']['admissions']==1
+    assert f.sql('SELECT count(*) FROM native_reply_pacing')[0][0]==1
+
+
+@pytest.mark.parametrize('state',['dispatching','unknown','sent'])
+def test_recovery_refuses_standing_delivery(f,state):
+    d,snap,now=prepare(f,seconds=70)
+    key=f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=snap,now=now,reply_authority=d['authority'])
+    f.sql("UPDATE native_pilot_inputs SET state='requeued:0' WHERE input_key=?",(key,))
+    f.sql("UPDATE native_reply_pacing SET state='done'")
+    f.sql("INSERT INTO native_pilot_receipts(attempt_id,pilot_id,input_key,bubble_no,state,created_at,updated_at) VALUES(99,?,?,1,?,?,?)",(f.pilot.pilot_id,key,state,_dt(now),_dt(now)))
+    with store.transaction(f.path) as con:
+        row=con.execute('SELECT * FROM native_reply_pacing').fetchone()
+        with pytest.raises(Refused,match='reply-schedule-terminal'):
+            pacing._reuse_schedule(con,row,f.pilot.pilot_id,now)

@@ -587,7 +587,7 @@ def install_patches(stack: ExitStack, holder: dict):
         """Stand-in for NativeEngine: one synthetic model call, then one text bubble through the REAL gateway."""
 
         def __init__(self, account, fan, *, chat, send, emit, content, context, own_offers_only=False, followups=None,
-                     arm_unsend=None, unsent=None, card_of=None, unlinked_paid=None, unanswered_reply_ids=()):
+                     arm_unsend=None, unsent=None, card_of=None, unlinked_paid=None, unanswered_reply_ids=(), contextual=None):
             self.account, self.fan, self.send, self.chat = account, fan, send, chat
             self.unlinked_paid = unlinked_paid
 

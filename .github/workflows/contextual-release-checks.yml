@@ -1,0 +1,84 @@
+name: Contextual offers release checks
+on:
+  pull_request:
+    paths: ['service/**', '.github/workflows/contextual-release-checks.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [contextual, manual, ledger, ledger-upgrade, native]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-contextual-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PYTHONPATH: service:service/tests
+      PYTHON_DOTENV_DISABLED: '1'
+      ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:synthetic-contextual-only@127.0.0.1:5432/postgres
+      ONLYFANS_RELEASE_SERVICE_DIR: ${{ github.workspace }}/released/service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: 8a427a3969a1e0b3cc6eed020b3a037e34120b63
+          path: released
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-onlyfans-test.txt
+      - name: Bound database waits on the disposable test server
+        run: |
+          python - <<'PYTESTDB'
+          import psycopg2
+          c = psycopg2.connect(host='127.0.0.1', user='postgres', password='synthetic-contextual-only', dbname='postgres')
+          c.autocommit = True
+          with c.cursor() as q:
+              q.execute("ALTER SYSTEM SET lock_timeout = '15s'")
+              q.execute("ALTER SYSTEM SET statement_timeout = '60s'")
+              q.execute('SELECT pg_reload_conf()')
+          c.close()
+          PYTESTDB
+      - name: Contextual routing and durable guards
+        if: matrix.suite == 'contextual'
+        run: |
+          python -m pytest -q service/tests/test_contextual_offers.py
+          python service/tests/test_contextual_native_turn.py
+      - name: Contextual populated migration and audited settings
+        if: matrix.suite == 'contextual'
+        run: python -m pytest -q service/tests/test_contextual_release_pg.py service/tests/test_onlyfans_configuration_pg.py
+      - name: Manual free and paid media under takeover
+        if: matrix.suite == 'manual'
+        run: python -m pytest -q service/tests/test_manual_vault_composer_pg.py service/tests/test_onlyfans_manual_pg.py
+      - name: Purchase history and shared provider leases
+        if: matrix.suite == 'ledger'
+        run: >-
+          python -m pytest -q
+          service/tests/test_onlyfans_ledger_pg.py
+          service/tests/test_onlyfans_ledger_history_pg.py
+          service/tests/test_onlyfans_ledger_markers_pg.py
+          service/tests/test_onlyfans_ledger_exclusion_pg.py
+          service/tests/test_onlyfans_launch_provider_budget_pg.py
+      - name: Real sender load, takeover and schema compatibility
+        if: matrix.suite == 'native'
+        run: |
+          python service/tests/test_native_pilot_load_pg.py
+          python service/tests/test_native_pilot_storage_pg.py
+      - name: Reconstructed historical schema upgrade regressions
+        if: matrix.suite == 'ledger-upgrade'
+        run: >-
+          python -m pytest -q
+          service/tests/test_onlyfans_ledger_history_pg.py::test_additive_upgrade_from_91_retains_financial_evidence
+          service/tests/test_onlyfans_ledger_markers_pg.py::test_upgrade_invalidates_offset_claims_and_preserves_immutable_financial_rows
+          service/tests/test_onlyfans_ledger_exclusion_pg.py::test_migration_downgrade_drops_only_the_exclusion_table_and_upgrade_restores_it

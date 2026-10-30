@@ -44,6 +44,7 @@ direction and returns None on doubt — no hook is a good answer.
 from __future__ import annotations
 
 import logging
+import json
 import re
 import time
 from collections import Counter
@@ -567,7 +568,7 @@ _ASK_ONLY = ("\n\nIn this read only kind 1 (ASK) counts; answer hook:false for "
 
 async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
                     saved_effort: str | None = None, effort_pick: str = "auto",
-                    ask_only: bool = False) -> Hook | None:
+                    ask_only: bool = False, contextual_message: dict | None = None) -> Hook | None:
     """CALL 7 — is there a reason to sell him one more set right now?
 
     Returns a `Hook` whose contract the ask lane can plan on, or None. None is
@@ -615,6 +616,14 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
     if lexicon:
         user += ("\n\nTHE VAULT'S OWN WORDS (use these for terms, most common "
                  "first):\n" + ", ".join(lexicon))
+    if contextual_message is not None:
+        user += ("\n\nCONTEXTUAL FIRST OFFER: Only kind 2 SITUATION is permitted. "
+                 "Use a concrete activity/place in this exact current fan message. "
+                 "Generic friendliness, wealth, elapsed time, purchases or a missing sale are not reasons. "
+                 "No complaints, owed content, purchase problems or refusal. No invented personal plans. "
+                 "If relevant, include action=send_ppv, evidence_quote (verbatim from the current message), "
+                 "and supporting_message_ids containing only its id. Otherwise hook:false.\n"
+                 + json.dumps(contextual_message))
     if ask_only:
         user += _ASK_ONLY
 
@@ -638,6 +647,13 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
     if not p.get("hook"):
         return _no("no_hook")
 
+    if contextual_message is not None:
+        quote = p.get("evidence_quote")
+        if (p.get("source") != "situation" or p.get("action") != "send_ppv"
+                or p.get("supporting_message_ids") != [contextual_message["id"]]
+                or type(quote) is not str or len(quote.strip()) < 3
+                or quote not in contextual_message["text"]):
+            return _no("unsupported_contextual_evidence")
     bridge = " ".join(str(p.get("bridge") or "").split())
     if not _hook_upsell.bridge_ok(bridge):
         # Dropping it and shipping a bare claim is the other option, and it is
@@ -669,7 +685,7 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
     hook = Hook(
         source=source, what=str(p.get("what") or "")[:60], bridge=bridge,
         contract=Contract(
-            is_ask=True, strict=False, subject=subject,
+            is_ask=contextual_message is None, strict=contextual_message is not None, subject=subject,
             media_kind=(kind if kind in MEDIA_KINDS else None),
             terms=terms[:15], exclusions=excl[:6], quote=quote[:120],
             company=False),

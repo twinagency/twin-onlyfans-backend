@@ -79,6 +79,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from random import Random
 
 from ._common import norm_text, strip_emojis
@@ -86,6 +87,29 @@ from ._language import norm_lang
 from ._markers import protocol_marker_re
 
 log = logging.getLogger("of-relay.automation.sell_signal")
+
+
+@dataclass(frozen=True)
+class ContentDecision:
+    action: str = "chat"
+    trigger: str = "contextual_relevance"
+    supporting_message_ids: tuple[int, ...] = ()
+    reason: str = ""
+
+    def __post_init__(self):
+        if self.action not in ("chat", "suggest_content", "send_ppv"):
+            raise ValueError("invalid content action")
+        if self.trigger not in ("explicit_request", "affirmative_reply", "contextual_relevance", "confirmed_post_purchase"):
+            raise ValueError("invalid content trigger")
+
+
+# An inexpensive, deliberately narrow opportunity filter. The existing hook
+# reader and adversarial content resolver still decide whether it is relevant.
+# This avoids an extra model call for every friendly inbound message.
+def contextual_terms(text):
+    return tuple(dict.fromkeys(re.findall(
+        r"\b(?:shower|bath|gym|workout|beach|swimming|pool|bed|bedroom|cooking|kitchen)\b",
+        (text or "").lower())))
 
 # `Turn.wide_ask` values — also the `via=` in every log line this reader causes.
 # Three, not two, so the riskiest reader can be measured — and switched off — on

@@ -1,0 +1,215 @@
+{
+  "checkedAt": "2026-10-30T04:41:51.190863Z",
+  "instance": "i-09a9dd3bd749643a5",
+  "composeSha256": "b0837e09491a16aaa418ff44f461e8e5bc840fbe8c27bb4d29ed0b4e4d8ac510",
+  "observations": [
+    {
+      "kind": "checked",
+      "rows": [
+        {
+          "checked_at": "2026-10-30 04:41:51.190863+00:00"
+        }
+      ]
+    },
+    {
+      "kind": "accounts",
+      "rows": [
+        {
+          "id": "of-176774528",
+          "nickname": "Nicky Baby",
+          "enabled": false,
+          "status": "paused",
+          "last_error": "disconnected_by_owner"
+        },
+        {
+          "id": "of-210806616",
+          "nickname": "Katie Price",
+          "enabled": false,
+          "status": "paused",
+          "last_error": null
+        },
+        {
+          "id": "of-323358988",
+          "nickname": "Maile",
+          "enabled": true,
+          "status": "verified",
+          "last_error": null
+        },
+        {
+          "id": "of-87030857",
+          "nickname": "Alva Jay Free",
+          "enabled": true,
+          "status": "verified",
+          "last_error": null
+        },
+        {
+          "id": "of-99421145",
+          "nickname": "naomii",
+          "enabled": true,
+          "status": "verified",
+          "last_error": null
+        }
+      ]
+    },
+    {
+      "kind": "recent_scans",
+      "rows": [
+        {
+          "account_id": "of-176774528",
+          "status": "running",
+          "page_offset": 680,
+          "last_complete_at": "2026-10-29 14:17:50.781956",
+          "window_end": "2026-10-30 00:34:08.748564",
+          "last_error": "provider_read_deferred",
+          "updated_at": "2026-10-30 03:31:01.970584"
+        },
+        {
+          "account_id": "of-210806616",
+          "status": "running",
+          "page_offset": 10000,
+          "last_complete_at": null,
+          "window_end": "2026-10-29 18:34:26.491805",
+          "last_error": null,
+          "updated_at": "2026-10-30 00:29:49.491935"
+        },
+        {
+          "account_id": "of-323358988",
+          "status": "running",
+          "page_offset": 2460,
+          "last_complete_at": null,
+          "window_end": "2026-10-29 11:04:53.386468",
+          "last_error": "provider_read_deferred",
+          "updated_at": "2026-10-30 04:41:10.197973"
+        },
+        {
+          "account_id": "of-87030857",
+          "status": "running",
+          "page_offset": 2240,
+          "last_complete_at": null,
+          "window_end": "2026-10-29 11:51:04.639580",
+          "last_error": "provider_read_deferred",
+          "updated_at": "2026-10-30 04:41:14.253803"
+        },
+        {
+          "account_id": "of-99421145",
+          "status": "running",
+          "page_offset": 1960,
+          "last_complete_at": "2026-10-29 07:04:52.489361",
+          "window_end": "2026-10-29 11:42:23.114952",
+          "last_error": "provider_read_deferred",
+          "updated_at": "2026-10-30 04:41:34.373029"
+        }
+      ]
+    },
+    {
+      "kind": "history_scans",
+      "rows": [
+        {
+          "account_id": "of-176774528",
+          "status": "running",
+          "page_offset": 1100,
+          "last_complete_at": "2026-10-28 20:52:24.250796",
+          "last_error": "provider_read_deferred",
+          "updated_at": "2026-10-30 03:31:01.985831"
+        },
+        {
+          "account_id": "of-210806616",
+          "status": "held",
+          "page_offset": 40380,
+          "last_complete_at": null,
+          "last_error": "connection_changed",
+          "updated_at": "2026-10-30 00:29:53.201709"
+        },
+        {
+          "account_id": "of-323358988",
+          "status": "running",
+          "page_offset": 2900,
+          "last_complete_at": null,
+          "last_error": "provider_read_deferred",
+          "updated_at": "2026-10-30 04:41:10.231018"
+        },
+        {
+          "account_id": "of-87030857",
+          "status": "running",
+          "page_offset": 2560,
+          "last_complete_at": null,
+          "last_error": "provider_read_deferred",
+          "updated_at": "2026-10-30 04:41:30.334999"
+        },
+        {
+          "account_id": "of-99421145",
+          "status": "running",
+          "page_offset": 780,
+          "last_complete_at": "2026-10-28 20:46:45.126259",
+          "last_error": "provider_read_deferred",
+          "updated_at": "2026-10-30 04:41:34.388285"
+        }
+      ]
+    },
+    {
+      "kind": "contextual_mode",
+      "account": "of-210806616",
+      "stored": "missing (off)"
+    },
+    {
+      "kind": "contextual_mode",
+      "account": "of-87030857",
+      "stored": "missing (off)"
+    },
+    {
+      "kind": "contextual_mode",
+      "account": "of-176774528",
+      "stored": "missing (off)"
+    },
+    {
+      "kind": "contextual_mode",
+      "account": "of-323358988",
+      "stored": "missing (off)"
+    },
+    {
+      "kind": "contextual_mode",
+      "account": "of-99421145",
+      "stored": "missing (off)"
+    },
+    {
+      "kind": "image",
+      "container": "twin-onlyfans-api-1",
+      "id": "sha256:49cf1882099727ab3a6447f3df082c24343572ac4f800242f3f26362cd54b472",
+      "tag": "twin-crm-attribution-20261030:api",
+      "state": "running",
+      "restarts": 0
+    },
+    {
+      "kind": "image",
+      "container": "twin-onlyfans-fastt-supervisor-1",
+      "id": "sha256:deff89ed978f4e59236387abab1c4bde85aed0e649e0fe23f1a10b009ae47bf2",
+      "tag": "twin-crm-attribution-20261030:sender",
+      "state": "running",
+      "restarts": 0
+    },
+    {
+      "kind": "image",
+      "container": "twin-onlyfans-worker-1",
+      "id": "sha256:eb49d6dac1aafa4167a11625256ebaecfb06a5a4f7681c8e38b3049317a64579",
+      "tag": "twin-paid-media-repair-20261029:worker-candidate",
+      "state": "running",
+      "restarts": 0
+    },
+    {
+      "kind": "image",
+      "container": "next-app",
+      "id": "sha256:b3d710711da8566d1eae821d11ee38022f5b6833f68e8d1a9774c23bb0a8793a",
+      "tag": "323149985112.dkr.ecr.ap-southeast-2.amazonaws.com/twin-dashboard@sha256:b3d710711da8566d1eae821d11ee38022f5b6833f68e8d1a9774c23bb0a8793a",
+      "state": "running",
+      "restarts": 0
+    },
+    {
+      "kind": "image",
+      "container": "next-app-of",
+      "id": "sha256:b3d710711da8566d1eae821d11ee38022f5b6833f68e8d1a9774c23bb0a8793a",
+      "tag": "323149985112.dkr.ecr.ap-southeast-2.amazonaws.com/twin-dashboard@sha256:b3d710711da8566d1eae821d11ee38022f5b6833f68e8d1a9774c23bb0a8793a",
+      "state": "running",
+      "restarts": 0
+    }
+  ]
+}

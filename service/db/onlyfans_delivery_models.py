@@ -12,6 +12,22 @@ from sqlalchemy import (
 )
 
 from .models import Base
+from sqlalchemy.sql.elements import TextClause
+from sqlalchemy.ext.compiler import compiles
+
+
+class _MediaShape(TextClause):
+    """Same media invariant for production PostgreSQL and SQLite test stores."""
+    inherit_cache = True
+
+
+@compiles(_MediaShape, "sqlite")
+def _sqlite_media_shape(element, compiler, **kw):
+    predicate = "catalog_snapshot_json::jsonb @> \'{\"manual_vault\": true}\'::jsonb"
+    return element.text.replace(predicate,
+        "CASE WHEN json_valid(catalog_snapshot_json) THEN "
+        "json_type(catalog_snapshot_json, \'$.manual_vault\') = \'true\' ELSE 0 END")
+
 
 REVISION = "0072_onlyfans_text_delivery"
 INFO = {"onlyfans_since": REVISION}
@@ -158,7 +174,7 @@ class OfTextIntent(Base):
         CheckConstraint("origin IN ('automated','manual','campaign','engagement')", name="origin"),
         CheckConstraint("status IN ('queued','dispatching','accepted','not_accepted','unknown','cancelled','refused')", name="status"),
         CheckConstraint("provider_message_id IS NULL OR provider_message_id > 0", name="provider_message_id"),
-        CheckConstraint("(catalog_item_id IS NULL AND media_json = '[]' AND preview_json = '[]' AND price_cents = 0 AND catalog_snapshot_json IS NULL AND offer_id IS NULL) OR (catalog_item_id IS NOT NULL AND media_json <> '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents >= 300 AND price_cents <= 20000) OR (origin = 'manual' AND catalog_item_id IS NOT NULL AND media_json <> '[]' AND preview_json = '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents = 0 AND offer_id IS NULL AND catalog_snapshot_json::jsonb @> '{\"manual_vault\": true}'::jsonb)",
+        CheckConstraint(_MediaShape("(catalog_item_id IS NULL AND media_json = '[]' AND preview_json = '[]' AND price_cents = 0 AND catalog_snapshot_json IS NULL AND offer_id IS NULL) OR (catalog_item_id IS NOT NULL AND media_json <> '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents >= 300 AND price_cents <= 20000) OR (origin = 'manual' AND catalog_item_id IS NOT NULL AND media_json <> '[]' AND preview_json = '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents = 0 AND offer_id IS NULL AND catalog_snapshot_json::jsonb @> '{\"manual_vault\": true}'::jsonb)"),
                         name="media_shape", info={"onlyfans_since": "0077_native_media_sales"}),
         Index("ix_of_text_intent_queued", "account_id", "status", "created_at", "intent_id"),
         Index("ix_of_text_intent_unresolved", "account_id", "status", "deadline",

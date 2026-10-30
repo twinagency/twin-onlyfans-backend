@@ -98,6 +98,8 @@ class _TextClient:
             self.engine._refuse("native-send-interrupted")
         if kwargs:
             self.engine._card_sent = True      # a priced card (media + price) reached the wire
+            if getattr(self.engine, "contextual", None) is not None and self.engine.contextual.armed is not None:
+                self.engine._contextual_card_sent = True
         return result
 
     def mark_chat_read(self, fan_id):
@@ -180,7 +182,7 @@ class NativeEngine:
 
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
-                 unanswered_reply_ids=(), unlinked_paid=None):
+                 unanswered_reply_ids=(), unlinked_paid=None, contextual=None):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
@@ -193,6 +195,7 @@ class NativeEngine:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("invalid-pilot-model")
         self.model = model
+        self.contextual = contextual
         self.content = content
         # Optional Twin approved-context source for the single prompt hook.
         self.context = context
@@ -251,7 +254,10 @@ class NativeEngine:
         self._account(account_id)
         result = dict(native)
         sales_enabled = result.pop("_native_on_request_sales_enabled", False) is True
+        from onlyfans_runtime.contextual_mode import KEY, mode
+        contextual_mode = mode(result)
         result.update(TEXT_ONLY)
+        result[KEY] = contextual_mode if getattr(self, "contextual", None) is not None and sales_enabled else "off"
         if self.followups is not None:
             result.update(copy.deepcopy(FOLLOWUPS))
             minutes = result.get("nudge_after_minutes")
@@ -275,8 +281,19 @@ class NativeEngine:
             allowed = native.get("fastt_post_buy_upsell") is True
             result.update(enabled=allowed, post_buy_rung_enabled=allowed, fastt_vault_post_buy=allowed,
                           pack_send_enabled=allowed, pack_on_ask_enabled=allowed)
-        elif self._job == DISCOUNT_KIND:
-            result["enabled"] = native.get("fastt_discount_resend") is True
+        elif self._job in (DISCOUNT_KIND, NUDGE_KIND):
+            result["enabled"] = (native.get("fastt_discount_resend") is True if self._job == DISCOUNT_KIND else result["enabled"])
+            from twin_bridge import store
+            from .contextual import ignored_contextual
+            path = getattr(self.content, "path", None)
+            if path is not None:
+                try:
+                    with store.readonly(path) as con:
+                        if store.has_table(con, "of_contextual_offer") and ignored_contextual(con, self.account_id, self.fan_id):
+                            result["enabled"] = False
+                except Exception:
+                    # A queued follow-up cannot race past unreadable origin metadata.
+                    result["enabled"] = False
         if await self._fan_unlinked_paid():
             # Every priced-card writer (model >>OFFER, vault ask lane, post-buy rung, discounted resend) is
             # switched off for this fan only; plain chat is untouched.
@@ -544,6 +561,7 @@ class NativeEngine:
         self._running = True
         self._violation = None
         self._card_sent = self._nudge_queued = False
+        self._contextual_card_sent = False
         try:
             await self._no_obligations()
             result = await self.native.run(self.account_id, payload if payload is not None else {
@@ -570,7 +588,7 @@ class NativeEngine:
         ``enqueue_job`` gate); FASTT's own ``_run_nudge`` then handles it, and the service drops it if the offer
         is settled or the fan spoke first. Best effort, like the stock schedule; never twice for one turn."""
         if (self.followups is None or not getattr(self.content, "vault_mode", False) or not self._card_sent
-                or self._nudge_queued or self._nudge_min <= 0):
+                or self._nudge_queued or getattr(self, "_contextual_card_sent", False) or self._nudge_min <= 0):
             return
         try:
             await self.enqueue_job(self.account_id, "ai_chatter", payload={"nudge_fan_ids": [self.fan_id]},

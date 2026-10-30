@@ -95,6 +95,7 @@ and that refusal is the honest answer.
 from __future__ import annotations
 
 import dataclasses
+import asyncio
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Awaitable, Callable
@@ -230,6 +231,8 @@ class Turn:
     # It is also the `via=` on every line this turn logs, and what tells `qualify`
     # his one-word answer is substantive. Defaults None: today's verdict.
     wide_ask: str | None = None
+    trigger: str | None = None
+    supporting_message_ids: tuple[int, ...] = ()
 
 
 def _via(turn: Turn) -> str:
@@ -506,6 +509,16 @@ class SellLane:
         self.on = armed and (permission_key is None
                              or bool(cfg.get(permission_key)))
 
+    def contextual_authority(self, fan_id, turn):
+        from telegram_runtime.capabilities import active_telegram_capabilities
+        cap = active_telegram_capabilities()
+        authority = getattr(cap, "contextual", None)
+        if (authority is None or getattr(cap, "account_id", None) != self.account_id
+                or getattr(cap, "fan_id", None) != fan_id
+                or turn.supporting_message_ids != (authority.source_message_id,)):
+            return None
+        return authority
+
     # ── read-only predicates ────────────────────────────────────────
 
     def is_ask(self, turn: Turn) -> bool:
@@ -633,7 +646,8 @@ class SellLane:
         early = money_brake(self.cfg, paid7, len(open_offers), unlocked, True)
         if not early:
             return early
-        caps_ok = await _offer_caps_ok(self.account_id, fan_id, self.cfg)
+        caps_ok = await _offer_caps_ok(self.account_id, fan_id, self.cfg,
+                                       requested=turn.trigger != "contextual_relevance" and self.is_ask(turn))
         return money_brake(self.cfg, paid7, len(open_offers), unlocked, caps_ok)
 
     async def qualify(self, fan_id: int, turn: Turn, *,
@@ -668,7 +682,8 @@ class SellLane:
                    fan: Fan | None = None, blocked: bool = False,
                    counters: AskCounters | None = None,
                    human_ask_at: datetime | None = None,
-                   contract: "Callable[[], Awaitable[Contract | None]] | None" = None
+                   contract: "Callable[[], Awaitable[Contract | None]] | None" = None,
+                   resolution=None
                    ) -> SellPlan:
         """Everything `sell` does EXCEPT the wire. Charges nothing, sends nothing.
 
@@ -714,7 +729,8 @@ class SellLane:
             # and neither works alone.
             d, refused = await pack_sender.plan_ask_delivery(
                 self.account_id, fan_id, ctr, cfg=self.cfg,
-                item_tag=pack_sender.HOOK_CATEGORY)
+                item_tag=(pack_sender.ASK_ITEM_TAG if turn.trigger == "contextual_relevance" else pack_sender.HOOK_CATEGORY),
+                resolution=resolution)
         else:
             d, refused = await pack_sender.plan_on_ask(self.account_id, fan_id,
                                                        cfg=self.cfg)
@@ -748,6 +764,14 @@ class SellLane:
             return plan.result
         if plan.delivery is None:                      # unreachable by `plan()`
             return SellResult.refused(R_DISABLED)
+        if plan.turn.trigger == "contextual_relevance":
+            authority = self.contextual_authority(plan.fan_id, plan.turn)
+            if authority is None or authority.armed is None:
+                return SellResult.refused(R_NOT_ARMED)
+            try:
+                await asyncio.to_thread(authority.check, "live")
+            except Exception:
+                return SellResult.refused("contextual_authority_changed")
         from . import pack_sender
         res = SellResult.from_pack(await pack_sender.deliver(
             client, plan.delivery, voice_line=voice_line, dry_run=dry_run))
@@ -769,7 +793,16 @@ class SellLane:
         """Permission → he asked → memo → brakes → gate. The refusal, or None."""
         if not self.on:
             return SellResult.refused(R_DISABLED)
-        if not self.is_ask(turn):
+        if turn.trigger == "contextual_relevance":
+            from onlyfans_runtime.contextual_mode import mode
+            authority = self.contextual_authority(fan_id, turn)
+            if mode(self.cfg) != "live" or authority is None:
+                return SellResult.refused(R_NOT_ARMED)
+            try:
+                await asyncio.to_thread(authority.check, "live")
+            except Exception:
+                return SellResult.refused("contextual_authority_changed")
+        elif not self.is_ask(turn):
             return SellResult.refused(R_NOT_ARMED)
         memo = _memo_get(self.account_id, fan_id, turn.at)
         if memo is not None:

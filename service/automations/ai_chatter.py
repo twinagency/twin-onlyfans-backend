@@ -2842,13 +2842,13 @@ async def _offerable_for_fan(account_id: str, fan_id: int,
     return out
 
 
-async def _offer_caps_ok(account_id: str, fan_id: int, cfg: dict) -> bool:
+async def _offer_caps_ok(account_id: str, fan_id: int, cfg: dict, *, requested: bool = False) -> bool:
     async with get_session() as s:
-        result = await s.run_sync(_offer_caps_ok_in_session, account_id, fan_id, cfg)
+        result = await s.run_sync(_offer_caps_ok_in_session, account_id, fan_id, cfg, requested=requested)
         return result
 
 
-def _offer_caps_ok_in_session(s, account_id: str, fan_id: int, cfg: dict, *, now: datetime | None = None) -> bool:
+def _offer_caps_ok_in_session(s, account_id: str, fan_id: int, cfg: dict, *, now: datetime | None = None, requested: bool = False) -> bool:
     """Pacing guards: enough fan messages since the LAST offer, and not too many
     non-converted offers (expired/cancelled) inside 24h. Delivered offers never
     count against the cap — a purchase invites the next step."""
@@ -2909,11 +2909,19 @@ def _offer_caps_ok_in_session(s, account_id: str, fan_id: int, cfg: dict, *, now
             CatalogItem.account_id == str(account_id),
             CATALOG_IS_SINGLE,
             pack_sender.tags_carry(pack_sender.HOOK_CATEGORY)))
+    _pacing = _not_hook
+    if requested:
+        from sqlalchemy import inspect
+        if inspect(s.connection()).has_table("of_contextual_offer"):
+            from db.onlyfans_contextual_models import OfContextualOffer
+            _pacing = _pacing & or_(ContentOffer.offer_message_id.is_(None), ContentOffer.offer_message_id.not_in(select(OfContextualOffer.message_id).where(
+                OfContextualOffer.account_id == str(account_id), OfContextualOffer.fan_id == int(fan_id),
+                OfContextualOffer.message_id.is_not(None))))
     last_at = (s.execute(
         select(func.max(ContentOffer.offered_at)).where(
             ContentOffer.account_id == str(account_id),
             ContentOffer.fan_id == int(fan_id),
-            _not_hook)
+            _pacing)
     )).scalar_one_or_none()
     if last_at is not None and min_msgs > 0:
         n = (s.execute(
@@ -9808,6 +9816,36 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                  offer_item.id)
                         offer_item = None
                         offer_id = None
+
+            if (_pack_plan is not None and _pack_plan.result is not None
+                    and _pack_plan.result.reason == "item_already_pending"):
+                raw = "That one is already in the card above."
+                offer_item = offer_id = None
+                _trigger = None
+
+            # Contextual traffic is a distinct trigger, never an invented ask.
+            # Resolve only on the current inbound, after explicit requests win.
+            _contextual = None
+            _cap = active_telegram_capabilities()
+            if (not vault_ask and not _pack_plan and offer_item is None
+                    and kind not in _TURNS_NOT_SELLING
+                    and forced_this_tick < _MAX_FORCED_ASKS_PER_TICK):
+                from .contextual_offers import plan_contextual
+                _contextual = await plan_contextual(lane, getattr(_cap, "contextual", None), c, f,
+                                                   blocked=seller_off, voice=v.voice)
+            if _contextual is not None:
+                _context_plan, _context_permission, _context_decision = _contextual
+                _authority = _cap.contextual
+                # The paid card is this turn's one response. The generated normal
+                # draft stays untouched in shadow and is not also sent in live.
+                with _authority.arm(_context_plan.delivery, _context_permission,
+                                    _context_decision.reason, _context_decision.supporting_message_ids):
+                    _context_sent = await lane.deliver(client, _context_plan, dry_run=dry_run)
+                if _context_sent:
+                    forced_this_tick += 1
+                    sent += 1
+                    await _mark_reply_sent(account_id, fan_id, now)
+                    continue
 
             if (_trigger and (gate_ok or (_trigger == "ask" and ask_override))
                     and not seller_off

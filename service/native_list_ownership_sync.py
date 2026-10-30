@@ -116,7 +116,16 @@ class Mirror:
         # leaves pending and gets retried; it never reports a completed handover.
         for state, lid in lists.items():
             if state != desired:
-                client.remove_user_from_list(lid, fan)
+                try:
+                    client.remove_user_from_list(lid, fan)
+                except Exception as exc:
+                    if getattr(getattr(exc, "response", None), "status_code", None) != 404:
+                        raise
+                    # OF returns 404 when the fan is already absent. Verify the
+                    # list itself still exists before treating that as success.
+                    present = client.get_list(lid)
+                    if str(present.get("id")) != str(lid):
+                        raise ValueError("managed list missing") from None
         # A control transition during removals gets a fresh decision next pass.
         if assignment(current(fan)) != desired:
             return False

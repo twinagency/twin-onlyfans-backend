@@ -121,6 +121,37 @@ def _measurements(con, account, fan, since, now):
     return min(20.0, statistics.median(durations)) if durations else 0.0, active
 
 
+def ledger_pilot(con, row):
+    linked = con.execute("SELECT pilot_id FROM native_pilot_inputs WHERE input_key=?",
+                         (row['input_key'],)).fetchone()
+    return linked['pilot_id'] if linked else None
+
+
+def _retry_pending(con, row, pilot_id):
+    if not row['input_key']:
+        return False
+    pending = con.execute("SELECT state FROM native_pilot_inputs WHERE input_key=? AND pilot_id=?",
+                          (row['input_key'], pilot_id)).fetchone()
+    if not pending or not pending['state'].startswith('requeued:'):
+        return False
+    standing = con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? "
+                           "AND state<>'not_sent' LIMIT 1", (row['input_key'],)).fetchone()
+    return standing is None
+
+
+def _reuse_schedule(con, row, pilot_id, now):
+    # Recover only same-generation, durably requeued inputs with no standing send.
+    # Keep the original target and admissions so recovery cannot extend the budget.
+    if row['state'] == 'done' and _retry_pending(con, row, pilot_id):
+        con.execute("UPDATE native_reply_pacing SET state='waiting',updated_at=? "
+                    "WHERE schedule_key=? AND state='done'", (_dt(now), row['schedule_key']))
+        row = con.execute("SELECT * FROM native_reply_pacing WHERE schedule_key=?",
+                          (row['schedule_key'],)).fetchone()
+    if row['state'] != 'waiting':
+        raise Refused('reply-schedule-terminal')
+    return row
+
+
 def prepare(ledger, pilot, snapshot, *, now, quiet_s=7.0, rng=None):
     """Choose once, then return a due time without claiming inputs or holding locks."""
     now = datetime.fromisoformat(_dt(now))
@@ -180,10 +211,11 @@ def prepare(ledger, pilot, snapshot, *, now, quiet_s=7.0, rng=None):
             target = _dt(datetime.fromisoformat(received)+timedelta(seconds=delay))
             con.execute("INSERT INTO native_reply_pacing(schedule_key,account_id,fan_id,generation,anchor_id,"
                 "first_received_at,provider_created_at,target_at,delay_seconds,active_exchange,state,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,'waiting',?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,'waiting',?,?) ON CONFLICT(schedule_key) DO NOTHING",
                 (key,p['account_id'],p['fan_id'],expected['generation'],first['message_id'],received,
                  _dt(first['created_at']),target,delay,int(active),_dt(now),_dt(now)))
             row = con.execute("SELECT * FROM native_reply_pacing WHERE schedule_key=?", (key,)).fetchone()
+        row = _reuse_schedule(con, row, pilot.pilot_id, now)
         row = dict(row)
         first = datetime.fromisoformat(row['first_received_at'])
         latest = max(datetime.fromisoformat(_dt(s['ingested_at'])) for s in sources)
@@ -215,6 +247,10 @@ def finish(ledger, decision, *, now, error=None, sent=False):
     if retryable and not sent:
         return
     with ledger._tx() as con:
+        row = con.execute("SELECT * FROM native_reply_pacing WHERE schedule_key=?",
+                          (decision['schedule']['schedule_key'],)).fetchone()
+        if not sent and row is not None and _retry_pending(con, row, ledger_pilot(con, row)):
+            return
         con.execute("UPDATE native_reply_pacing SET state='done',updated_at=? WHERE schedule_key=? AND state='waiting'",
                     (_dt(now),decision['schedule']['schedule_key']))
 
@@ -252,3 +288,4 @@ def delivery_event(expected, schedule, *, receipt_at, wire_at, provider_created_
             "provider_created_to_receipt_s":(receipt_at-origin).total_seconds(),
             "intake_lag_s":(first-origin).total_seconds(),"target_miss_s":miss,
             "timing":"late" if miss>0 else "early" if miss<0 else "on-target"}
+

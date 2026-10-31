@@ -18,6 +18,8 @@ from .store import Refused, utcnow
 LEASE_SECONDS = 45
 CAPACITY = 10
 RECENT_RESERVE = 2
+LIVE_REPLY_RESERVE = 4        # extra tokens kept for live work while replies wait
+BACKGROUND_KINDS = {"discovery", "history", "offer_refresh", "posts", "vault"}   # ledger (money) and recent (intake) are not background
 KINDS = {"recent", "discovery", "history", "ledger", "offer_refresh", "posts", "vault", "connection_check"}
 
 
@@ -67,6 +69,21 @@ def _valid(store, s, tenant, account, revision, now, kind):
     return runtime
 
 
+def _replies_waiting(s, account, now):
+    """True when the engine's work board shows fans waiting for / receiving a reply (updated in the last 2 minutes).
+
+    Best effort and fail-open: no board (older engine, other schema) means no opinion. Read-only."""
+    try:
+        from sqlalchemy import text
+        with s.begin_nested():          # a missing table must not poison the caller's transaction
+            row = s.execute(text("SELECT 1 FROM fastt_runtime.engine_work WHERE account_id=:a "
+                                 "AND state IN ('waiting','quiet','preparing','sending') AND updated_at>:since LIMIT 1"),
+                            {"a": account, "since": (now - timedelta(minutes=2)).isoformat(sep=" ", timespec="microseconds")}).first()
+        return row is not None
+    except Exception:
+        return False
+
+
 def acquire(store, tenant, account, *, connection_revision, kind, now=None):
     if (os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker" or kind not in KINDS
             or type(connection_revision) is not int or connection_revision<1):
@@ -94,6 +111,11 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
         # maintenance token for ledger/content work as well as the recent head
         # reserve; the outer scheduler rotates those maintenance lanes.
         reserve = 0 if kind == "recent" else RECENT_RESERVE + (kind == 'history')
+        if kind in BACKGROUND_KINDS and _replies_waiting(s, account, now):
+            # Live replies are waiting (the FASTT engine's work board): history import, the exporter, discovery, offer
+            # refresh, posts and vault analysis yield. They keep a trickle (a read per ~5 s as the bucket refills), they
+            # are never starved outright.
+            reserve += LIVE_REPLY_RESERVE
         if available <= reserve:
             raise ReadDeferred(now + timedelta(seconds=1), "provider read budget exhausted")
         if refill:

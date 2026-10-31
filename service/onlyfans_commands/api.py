@@ -72,6 +72,8 @@ async def control(request: Request, account_id: str, conversation_id: str):
         manual = type(body) is dict and body.get("action") == "manual_message"
         resolution = type(body) is dict and body.get("action") == "resolve_delivery_evidence"
         keys = {"action", "expectedRevision", "commandKey", "actor"} | ({"body"} if manual else {"attemptId", "providerMessageId", "decision"} if resolution else set())
+        if manual and "media" in body:
+            keys.add("media")
         if manual and "catalogItemId" in body:
             keys.add("catalogItemId")
         if not manual and len(raw) > 4096:
@@ -86,9 +88,17 @@ async def control(request: Request, account_id: str, conversation_id: str):
         if resolution and (body['decision']!='delivered' or type(body['attemptId']) is not str
                 or not re.fullmatch(r'[A-Za-z0-9-]{1,128}',body['attemptId'])
                 or type(body['providerMessageId']) is not int or not 0<body['providerMessageId']<2**63):raise ValueError()
-        if manual and (type(body["body"]) is not str or not body["body"].strip() or "\x00" in body["body"]
+        if manual and (type(body["body"]) is not str or (not body["body"].strip() and "media" not in body) or "\x00" in body["body"]
                 or len(body["body"].encode()) > 4000):
             raise ValueError()
+        if manual and "media" in body:
+            from onlyfans_runtime.manual_media import normalize
+            if body.get("catalogItemId") is not None:
+                raise ValueError()
+            try:
+                body["media"] = normalize(body["media"])
+            except Refused:
+                raise ValueError()
         if manual and body.get("catalogItemId") is not None and (
                 type(body["catalogItemId"]) is not int or not 0 < body["catalogItemId"] < 2**31):
             raise ValueError()
@@ -111,7 +121,7 @@ async def control(request: Request, account_id: str, conversation_id: str):
             from onlyfans_runtime.text_delivery import TextAuthority
             intent = await asyncio.to_thread(TextAuthority(store).prepare, tenant, account_id, fan,
                 command_key=key, expected_revision=revision, body=body["body"], origin="manual", actor=actor,
-                catalog_item_id=body.get("catalogItemId"))
+                catalog_item_id=body.get("catalogItemId"), manual_media=body.get("media"))
             return response({"ok": True, "applied": True, "commandKey": key, "accountId": account_id,
                 "conversationId": conversation_id, "action": action, "recordedRevision": revision,
                 "intentId": intent, "outcome": "queued"})

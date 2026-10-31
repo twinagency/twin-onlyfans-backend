@@ -39,10 +39,18 @@ from unittest.mock import patch
 
 SERVICE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE))
+
+# Engine v2 enforces a 20 s account send interval floor. These older suites drive a virtual clock with
+# 1 s throttles; the floor is a code constant, so they lower it here (production cannot).
+import native_pilot.tuning as _tuning  # noqa: E402
+_tuning.MIN_SEND_INTERVAL_FLOOR_S = 0.0
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # The existing suite explicitly exercises compatibility with the legacy shared cap.
 os.environ.setdefault("FASTT_FAN_DAILY_REPLY_LIMIT", "0")
+# This suite asserts the serial order (oldest inbound first, one turn at a time). Engine v2 prepares replies concurrently by
+# default; the concurrent behaviour is covered by test_fastt_engine_v2.py, so here the bound is 1.
+os.environ.setdefault("FASTT_PREPARE_CONCURRENCY", "1")
 
 CHECKS = 0
 PID_SUFFIX = "svc-synthetic"
@@ -405,6 +413,7 @@ async def loop_level(backend, root):
     from twin_bridge import coordination
 
     logging.disable(logging.CRITICAL)
+    service.MODEL_RETRY_LIMIT = 1   # engine v2 default is 12 (never drop a reply); this suite asserts the bounded variant
     A, F = L.ACCT, L.FAN
     events = []
     clock = Clock(datetime.now(timezone.utc).replace(tzinfo=None, microsecond=123000))
@@ -660,13 +669,14 @@ async def loop_level(backend, root):
                 task, patcher = start(client)
                 await until(lambda: kinds("ready"), "ready", events)
                 fan_says(f)
-                await until(lambda: kinds("turn-abandoned") or kinds("stopped") or kinds("turn-requeued"), label + " stop outcome", events)
+                await until(lambda: kinds("turn-abandoned") or kinds("stopped") or kinds("turn-requeued") or kinds("turn-released"), label + " stop outcome", events)
                 check(http.posts == [], label + ": nothing reached the wire")
                 check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 4, label + ": no allowance unit stays spent")
                 check(f.sql("SELECT state FROM native_pilots")[0][0] == "active", label + ": a stop at the wire is not an unknown send")
                 check(not f.sql("SELECT 1 FROM native_pilot_receipts WHERE state='delivery_unknown'"))
                 if trip < 3:
-                    check(kinds("turn-abandoned")[0]["reason"] == "fan-restricted")
+                    # Engine v2: a stop seen before admission RELEASES the claim (no draft kept, answered after the hold) instead of abandoning it.
+                    check((kinds("turn-released") or kinds("turn-abandoned"))[0]["reason"] == "fan-restricted")
                     check(not f.sql("SELECT 1 FROM native_pilot_receipts"), label + ": no attempt was admitted")
                 else:
                     check(f.sql("SELECT state FROM native_pilot_receipts")[0][0] == "not_sent")
@@ -703,8 +713,8 @@ async def loop_level(backend, root):
             task, patcher = start(client)
             await until(lambda: kinds("ready"), "ready", events)
             fan_says(f)
-            await until(lambda: kinds("turn-abandoned"), "abandoned while pacing", events)
-            check(kinds("turn-abandoned")[0]["reason"] == "fan-paused")
+            await until(lambda: kinds("turn-abandoned") or kinds("turn-released"), "abandoned while pacing", events)
+            check((kinds("turn-released") or kinds("turn-abandoned"))[0]["reason"] == "fan-paused")
             # Without the check in pace() this turn waits out the (here: days long) throttle and ends
             # "allowance-wait-timeout"; with it the pause is seen on the 3rd one second step.
             check(calls["n"] == 3, "the hold is re-read on every pacing step")
@@ -837,6 +847,8 @@ async def loop_level(backend, root):
         f, http, client = make("loop-model-bound", limit=100, used=4, throttle=1)
         FakeEngine.fail_models = 2
         events.clear()
+        model_bound = patch.object(service, "MODEL_RETRY_LIMIT", 1)   # engine v2 default is 12; the bound itself is still honoured
+        model_bound.start()
         task, patcher = start(client)
         await until(lambda: kinds("ready"), "ready", events)
         fan_says(f)
@@ -848,6 +860,7 @@ async def loop_level(backend, root):
         fan_says(f, "next message")
         await replied(f, http, 1, "the fan is answered on his next message")
         await stop(task, patcher)
+        model_bound.stop()
 
         f, http, client = make("loop-model-after-send", limit=100, used=4, throttle=1)
         FakeEngine.texts, FakeEngine.die_after_first = ["first bubble", "second bubble"], True

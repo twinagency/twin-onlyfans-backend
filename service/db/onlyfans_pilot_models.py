@@ -399,3 +399,43 @@ class NativePilotReceipt(Base):
     evidence_json = Column(Text)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
+
+
+class EngineRunnerLease(Base):
+    """One live FASTT engine process per OnlyFans account (additive; engine v2).
+
+    ``expires_at`` is a naive-UTC ISO text the engine compares lexically, like the other runtime
+    tables. A crashed process simply stops renewing; the next starter takes the lease over once it
+    has expired (``generation`` increases on every takeover). No fan-level authority lives here:
+    the per-fan pilot lease and conversation owner token stay the send authority.
+    """
+    __tablename__ = "engine_runner_lease"
+    account_id = Column(String, primary_key=True)
+    owner_token = Column(String, nullable=False)
+    holder = Column(String, nullable=False)
+    generation = Column(Integer, nullable=False, server_default=text("1"))
+    acquired_at = Column(String, nullable=False)
+    heartbeat_at = Column(String, nullable=False)
+    expires_at = Column(String, nullable=False)
+
+
+class EngineWork(Base):
+    """Read model of what the engine is doing per fan, with an explicit reason (additive; engine v2).
+
+    Not an authority: the ledger (native_pilot_inputs / receipts) decides what may be sent. This
+    table only makes waiting visible: ``state`` is one of waiting, quiet, preparing, sending,
+    held, blocked; ``reason`` is a fixed public reason string; ``waiting_since`` is when the
+    oldest unanswered fan message of the current burst was ingested. A row is deleted when the fan
+    is answered or no longer waiting.
+    """
+    __tablename__ = "engine_work"
+    __table_args__ = (Index("ix_engine_work_account_state", "account_id", "state"),)
+    account_id = Column(String, primary_key=True)
+    fan_id = Column(BigInteger, primary_key=True)
+    state = Column(String, nullable=False)
+    reason = Column(String)
+    message_id = Column(BigInteger)
+    waiting_since = Column(String)
+    state_since = Column(String, nullable=False)
+    attempts = Column(Integer, nullable=False, server_default=text("0"))
+    updated_at = Column(String, nullable=False)

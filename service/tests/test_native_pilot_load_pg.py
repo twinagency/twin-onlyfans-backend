@@ -22,6 +22,11 @@ from pathlib import Path
 
 SERVICE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE))
+
+# Engine v2 enforces a 20 s account send interval floor. These older suites drive a virtual clock with
+# 1 s throttles; the floor is a code constant, so they lower it here (production cannot).
+import native_pilot.tuning as _tuning  # noqa: E402
+_tuning.MIN_SEND_INTERVAL_FLOOR_S = 0.0
 sys.path.insert(0, str(SERVICE / "native_pilot" / "tools"))
 
 CHECKS = 0

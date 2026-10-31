@@ -31,7 +31,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-# One lock for every coordination / pilot-ledger write transaction.
+# The coordination / pilot-ledger write lock. Engine v2 makes it two-level so one account's writes no longer queue behind
+# another account's: an UNSCOPED transaction (everything written before v2, and any writer that does not know its
+# account) takes the exclusive lock on PG_LOCK_KEY and so still excludes every other writer, exactly as before. A
+# transaction SCOPED to one account (the engine's per-account Ledger) takes PG_LOCK_KEY in SHARED mode plus an exclusive
+# lock on (PG_LOCK_KEY, hash(account)): it excludes other writers of the same account and every unscoped writer, but
+# runs in parallel with other accounts. Lock order is always shared-global then account, so there is no cycle.
 PG_LOCK_KEY = 7811092
 RUNTIME_SCHEMA = "fastt_runtime"
 _PG_OPTIONS = f"-c timezone=UTC -c lock_timeout=5000 -c search_path={RUNTIME_SCHEMA},public"
@@ -129,16 +134,21 @@ class _Result:
 class PgConnection:
     """The small slice of the sqlite3.Connection surface the coordination code uses."""
 
-    def __init__(self, raw):
+    def __init__(self, raw, scope=None):
         self._raw = raw
         self.in_transaction = False
+        self.scope = scope
 
     def execute(self, sql: str, params=()):
         word = " ".join(sql.split()).upper()
         if word == "BEGIN IMMEDIATE":
             cur = self._raw.cursor()
             try:
-                cur.execute("SELECT pg_advisory_xact_lock(%s)", (PG_LOCK_KEY,))
+                if self.scope:
+                    cur.execute("SELECT pg_advisory_xact_lock_shared(%s)", (PG_LOCK_KEY,))
+                    cur.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))", (PG_LOCK_KEY, self.scope))
+                else:
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (PG_LOCK_KEY,))
             finally:
                 cur.close()
             self.in_transaction = True
@@ -210,8 +220,8 @@ def dispose_pools() -> None:
         eng.dispose()
 
 
-def connect_pg(url: str) -> PgConnection:
-    return PgConnection(_engine(url).raw_connection())
+def connect_pg(url: str, scope: str | None = None) -> PgConnection:
+    return PgConnection(_engine(url).raw_connection(), scope)
 
 
 def connect_sqlite(path, *, mode: str = "rw", timeout: float = 5.0) -> sqlite3.Connection:
@@ -261,9 +271,11 @@ def insert_id(con, sql: str, params=()) -> int:
 
 
 @contextmanager
-def transaction(target):
-    """Serialised write transaction (BEGIN IMMEDIATE); commits on success."""
-    con = connect_pg(target) if is_pg(target) else connect_sqlite(target)
+def transaction(target, scope: str | None = None):
+    """Serialised write transaction (BEGIN IMMEDIATE); commits on success.
+
+    ``scope`` (PostgreSQL only) names the one account every statement of this transaction touches; see PG_LOCK_KEY."""
+    con = connect_pg(target, scope) if is_pg(target) else connect_sqlite(target)
     try:
         con.execute("BEGIN IMMEDIATE")
         yield con

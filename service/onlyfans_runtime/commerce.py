@@ -92,6 +92,33 @@ def held(s, account_id, fan_id=None):
             ((OfLedgerScan.status == "held") | (OfLedgerScan.last_complete_at.is_(None)))).limit(1)) is not None)
 
 
+def manual_held(s, account_id, fan_id):
+    """Hold operator-selected media only for this fan's unresolved payment evidence.
+
+    A human chooses the files and price. Unfinished account-wide archive coverage
+    does not prevent that action; it remains required for automated catalogue
+    selling. Known ownership is checked separately at prepare and dispatch.
+    """
+    from db.onlyfans_ledger_models import OfLedgerEvidence
+    from .launch_operations_models import OfLedgerResolution
+    from db.onlyfans_models import OfRuntime
+    _id(fan_id)
+    return (s.scalar(select(OfCommerceEvidence.evidence_hash).where(
+        OfCommerceEvidence.account_id == account_id,
+        OfCommerceEvidence.fan_id == fan_id,
+        OfCommerceEvidence.status == "conflict").limit(1)) is not None
+        or s.scalar(select(OfLedgerEvidence.evidence_hash).where(
+            OfLedgerEvidence.account_id == account_id,
+            OfLedgerEvidence.fan_id == fan_id,
+            OfLedgerEvidence.outcome == "conflict",
+            ~select(OfLedgerResolution.evidence_hash).join(
+                OfRuntime, OfRuntime.account_id == OfLedgerResolution.account_id).where(
+                    OfLedgerResolution.account_id == OfLedgerEvidence.account_id,
+                    OfLedgerResolution.evidence_hash == OfLedgerEvidence.evidence_hash,
+                    OfLedgerResolution.binding_id == OfRuntime.binding_id).exists()).limit(1)) is not None
+        or s.scalar(_unlinked_paid(account_id, fan_id)) is not None)
+
+
 class CommerceIntake:
     def __init__(self, store):
         if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":

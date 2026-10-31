@@ -41,11 +41,31 @@ def purchase_fresh(scan, connection, now):
     completed = stamp(scan["last_complete_at"])
     window_end = stamp(scan["window_end"])
     receipt = {**dict(scan), "last_complete_at":completed, "last_full_at":stamp(scan["last_full_at"])}
-    return (scan["status"] != "held" and not scan["last_error"]
+    return (scan["status"] != "held" and scan["last_error"] in (None, "", "provider_read_deferred")
             and coverage_proven(SimpleNamespace(**receipt))
             and completed is not None and window_end is not None
             and timedelta(0) <= now - completed <= PURCHASE_FRESHNESS
             and timedelta(0) <= now - window_end <= PURCHASE_FRESHNESS)
+
+
+def purchase_freshness_detail(scan, connection, now):
+    """Diagnostic only; purchase_fresh remains the delivery authority."""
+    from onlyfans_runtime.ledger import coverage_proven
+    if not scan or not connection:
+        return {"cause": "missing-coverage"}
+    if any(scan[k] != connection[k] for k in ("binding_id", "connection_revision", "owner_id")):
+        return {"cause": "connection-mismatch"}
+    if scan["last_error"]:
+        return {"cause": "provider-backoff" if "deferred" in scan["last_error"] or "rate" in scan["last_error"] else "provider-error",
+                "provider_reason": scan["last_error"]}
+    if scan["status"] == "held":
+        return {"cause": "provider-held"}
+    completed, cutoff = stamp(scan["last_complete_at"]), stamp(scan["window_end"])
+    receipt = {**dict(scan), "last_complete_at": completed, "last_full_at": stamp(scan["last_full_at"])}
+    if not coverage_proven(SimpleNamespace(**receipt)) or completed is None or cutoff is None:
+        return {"cause": "missing-coverage"}
+    return {"cause": "coverage-age", "coverage_age_seconds": (now-cutoff).total_seconds(),
+            "completed_age_seconds": (now-completed).total_seconds()}
 
 
 def confirmed_message(con, account, fan, origin):
@@ -169,6 +189,8 @@ class ContextualAuthority:
             raise Refused("contextual-purchase-unlinked")
         scan = con.execute("SELECT * FROM of_ledger_scan WHERE account_id=?", (self.account,)).fetchone()
         if not purchase_fresh(scan, connection, now):
+            self.emit({"event": "purchase-freshness-held", "account_id": self.account,
+                       "fan_id": self.fan, **purchase_freshness_detail(scan, connection, now)})
             raise Refused("contextual-purchase-state-stale")
         return current, runtime
 

@@ -791,7 +791,8 @@ class Ledger:
                         "WHERE account_id=? AND used_units<limit_units", (account,))
         return slot_id
 
-    def _release_concurrent(self, con, pilot_id: str, attempt_id: int, outcome: str, now_s: str) -> None:
+    def _release_concurrent(self, con, pilot_id: str, attempt_id: int, outcome: str, now_s: str,
+                            *, keep_conversation: bool = False) -> None:
         """Release the account slot and either free or hold this conversation."""
         if not self.allowance:
             return
@@ -801,6 +802,8 @@ class Ledger:
             return
         con.execute("DELETE FROM engine_dispatch_slot WHERE attempt_id=? AND account_id=?",
                     (str(attempt_id), p["account_id"]))
+        if keep_conversation:
+            return
         lease = con.execute("SELECT * FROM engine_conversation_lease WHERE tenant_id=? AND account_id=? AND fan_id=?",
                             (self.tenant_id, p["account_id"], p["fan_id"])).fetchone()
         if lease is None or lease["attempt_id"] not in (str(attempt_id), attempt_id):
@@ -1119,7 +1122,10 @@ class Ledger:
             con.execute("UPDATE twin_bridge_send_attempts SET state='sent',provider_message_id=?,evidence_json=?,updated_at=? WHERE id=?",
                         (provider_message_id, evidence_s, now_s, attempt_id))
             self._after_wire(con, pilot_id, now_s)
-            self._release_concurrent(con, pilot_id, attempt_id, "sent", now_s)
+            # A reply may be several bubbles. Release this provider slot now,
+            # but keep the conversation lease until finish_input() so another
+            # sender cannot interleave between bubbles of one reply sequence.
+            self._release_concurrent(con, pilot_id, attempt_id, "sent", now_s, keep_conversation=True)
 
     def _after_wire(self, con, pilot_id: str, now_s: str) -> None:
         """The account's next send may start no earlier than ``interval`` after this POST FINISHED.
@@ -1214,7 +1220,13 @@ class Ledger:
             if self.allowance and not self.fan_daily_limit:
                 con.execute("UPDATE of_delivery_policy SET used_units=used_units-1 WHERE account_id=? AND used_units>0",
                             (p["account_id"],))
-            self._release_concurrent(con, pilot_id, attempt_id, "not_sent", now_s)
+            # A later bubble may fail after an earlier bubble was accepted.
+            # Keep the sequence's ownership until it is requeued or finished.
+            prior_sent = con.execute(
+                "SELECT 1 FROM native_pilot_receipts WHERE input_key=(SELECT input_key FROM native_pilot_receipts "
+                "WHERE attempt_id=?) AND state='sent' LIMIT 1", (attempt_id,)).fetchone() is not None
+            self._release_concurrent(con, pilot_id, attempt_id, "not_sent", now_s,
+                                     keep_conversation=prior_sent)
             return True
 
     def requeue_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str,
@@ -1400,13 +1412,70 @@ class Ledger:
                     "reserved=?,revision=revision+1,updated_at=? WHERE account_id=? AND fan_id=? "
                     "AND state IN ('attention','active')", (True, now_s, p["account_id"], p["fan_id"]))
 
-    def finish_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str) -> None:
+    def finish_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str,
+                     outcome: str = "complete") -> None:
+        if outcome not in ("complete", "failed", "no_reply"):
+            raise Refused("invalid-input-outcome")
         with self._tx() as con:
-            p = con.execute("SELECT owner_token FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            p = con.execute("SELECT owner_token,account_id,fan_id FROM native_pilots WHERE pilot_id=?",
+                            (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
-            con.execute("UPDATE native_pilot_inputs SET state='complete',updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
-                        (_dt(now), pilot_id, input_key))
+            now_s = _dt(now)
+            con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? "
+                        "WHERE pilot_id=? AND input_key=? AND state='generating'",
+                        (outcome, now_s, pilot_id, input_key))
+            self._finish_concurrent_lease(con, p, owner_token, now_s)
+
+    def _finish_concurrent_lease(self, con, p, owner_token: str, now_s: str) -> None:
+        """Release a completed reply sequence, never an unresolved one.
+
+        record_sent() deliberately keeps the per-conversation lease while the
+        remaining bubbles are produced. This is the one point that gives the
+        conversation back after the sequence has settled.
+        """
+        if not self.allowance:
+            return
+        from . import admission
+        row = self._policy_row(con, p["account_id"])
+        if row is None or not admission.is_concurrent(row):
+            return
+        lease = con.execute(
+            "SELECT * FROM engine_conversation_lease "
+            "WHERE tenant_id=? AND account_id=? AND fan_id=?",
+            (self.tenant_id, p["account_id"], p["fan_id"])).fetchone()
+        if (lease is None or lease["state"] != "held"
+                or lease["holder"] != owner_token):
+            return
+        gap = max(admission.conversation_gap_seconds(row), self.conversation_min_gap_s)
+        next_send = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=gap))
+        con.execute(
+            "UPDATE engine_conversation_lease SET state='released',holder='',owner_token='',"
+            "attempt_id=NULL,expires_at=?,next_send_at=?,updated_at=? "
+            "WHERE tenant_id=? AND account_id=? AND fan_id=? AND state='held' AND holder=?",
+            (now_s, next_send, now_s, self.tenant_id, p["account_id"], p["fan_id"], owner_token))
+
+    def unhandled_source_ids(self, *, pilot_id: str, source_ids) -> set[int]:
+        """Sources not examined by a completed input of this durable pilot.
+
+        Unanswered bursts retain historical context after a human handoff.
+        Completion proves the inbound identity guard already examined every
+        member. Generating, abandoned and requeued inputs are deliberately not
+        evidence of handling.
+        """
+        pending = {int(mid) for mid in source_ids}
+        if not pending:
+            return pending
+        with store.readonly(self.path) as con:
+            rows = con.execute("SELECT message_id,member_ids_json FROM native_pilot_inputs "
+                               "WHERE pilot_id=? AND state='complete'", (pilot_id,)).fetchall()
+        for row in rows:
+            members = json.loads(row["member_ids_json"] or "[]")
+            pending.difference_update(int(mid) for mid in members)
+            pending.discard(int(row["message_id"]))
+            if not pending:
+                break
+        return pending
 
     # ── runner-owned follow-ups (the stock nudge) ────────────────────────────
     # A follow-up has no fan message to answer: its "source" is the newest message of the chat, which

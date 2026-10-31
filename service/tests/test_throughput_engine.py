@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -132,7 +133,12 @@ async def s_daily_cap(sim):
 # ── B5: owed work that is not moving raises send-stall, then clears ────────────────────────────────────────────────
 async def s_stall(sim):
     await asyncio.sleep(3)
-    sim.fail_models = 1000                   # every model call times out: nothing can be sent
+    # A durable account cooldown holds every fan without consuming the
+    # one-model-retry budget: this is the engine-owned condition the stall
+    # alert is meant to surface.
+    until = (sim.clock() + timedelta(seconds=2000)).isoformat(sep=" ")
+    sim.sql("UPDATE of_delivery_policy SET provider_cooldown_until=?,next_dispatch_at=? WHERE account_id=?",
+            (until, until, A))
     for f in sim.accounts[A]:
         sim.fan_says(A, f, "hi")
     await asyncio.sleep(90)
@@ -142,7 +148,7 @@ async def s_stall(sim):
     check(ev and ev[0]["moving"] is False and ev[0]["oldest_wait_s"] > 120 and ev[0]["owed_past_threshold"] >= 1, f"stall event {ev[:1]}")
     row = sim.sql("SELECT state,count FROM engine_alert WHERE account_id=? AND kind='send-stall'", (A,))
     check(row and row[0][0] == "open", f"durable alert open {row}")
-    sim.fail_models = 0
+    sim.sql("UPDATE of_delivery_policy SET provider_cooldown_until=NULL,next_dispatch_at=NULL WHERE account_id=?", (A,))
     await asyncio.sleep(1500)
     check(sim.sends[A] == len(sim.accounts[A]), f"everyone was answered once the model recovered ({sim.sends[A]})")
     check(sim.kinds("send-stall-cleared", A), "cleared event")

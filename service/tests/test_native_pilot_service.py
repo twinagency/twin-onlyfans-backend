@@ -847,7 +847,7 @@ async def loop_level(backend, root):
         f, http, client = make("loop-model-bound", limit=100, used=4, throttle=1)
         FakeEngine.fail_models = 2
         events.clear()
-        model_bound = patch.object(service, "MODEL_RETRY_LIMIT", 1)   # engine v2 default is 12; the bound itself is still honoured
+        model_bound = patch.object(service, "MODEL_RETRY_LIMIT", 1)   # engine v2 default is 1; the bound itself is still honoured
         model_bound.start()
         task, patcher = start(client)
         await until(lambda: kinds("ready"), "ready", events)
@@ -856,7 +856,8 @@ async def loop_level(backend, root):
         check(len(kinds("turn-requeued")) == 1 and kinds("turn-abandoned")[0]["reason"] == "model-timeout")
         await settle_loop()
         check(http.posts == [] and FakeEngine.fail_models == 0, "exactly one retry, no more")
-        check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete")
+        check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "failed",
+              "a terminal model failure is recorded as failed, not as a completed reply")
         fan_says(f, "next message")
         await replied(f, http, 1, "the fan is answered on his next message")
         await stop(task, patcher)

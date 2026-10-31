@@ -1,7 +1,7 @@
-"""Migrations 0101_daily_send_cap and 0102_concurrent_delivery on a THROWAWAY PostgreSQL
+"""Migrations 0102_daily_send_cap and 0103_concurrent_delivery on a THROWAWAY PostgreSQL
 (ONLYFANS_TEST_PG_URL = admin URL of a disposable server; the script creates and drops its own database). Plain script.
 
-Proves: a fresh bootstrap reaches 0102 and passes check_schema; the daily and provider
+Proves: a fresh bootstrap reaches 0103 and passes check_schema; the daily and provider
 admission settings have their defaults and bounds; existing rows remain in legacy ``gap``
 mode; the lifetime limit_units 0..10000, queued_count 0..1000 and throttle_seconds
 1..86400 checks are untouched; downgrade/upgrade round-trips."""
@@ -32,7 +32,7 @@ engine = create_engine(admin.url.set(database=name).render_as_string(hide_passwo
 try:
     with engine.begin() as c:
         bootstrap(c)
-    check(HEAD == "0102_concurrent_delivery")
+    check(HEAD == "0103_concurrent_delivery")
     with engine.begin() as c:
         check_schema(c)
         c.execute(text("SET session_replication_role = replica"))        # throwaway DB: skip the FK chain to accounts/runtime

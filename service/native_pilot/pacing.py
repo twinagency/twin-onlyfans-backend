@@ -178,7 +178,12 @@ def prepare(ledger, pilot, snapshot, *, now, quiet_s=7.0, rng=None):
         if row is not None and row['input_key']:
             receipt = con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND state='sent' LIMIT 1",
                                   (row['input_key'],)).fetchone()
-            if receipt:
+            settled_unsent = con.execute(
+                "SELECT 1 FROM native_pilot_inputs i WHERE i.input_key=? "
+                "AND i.state IN ('no_reply','failed') AND NOT EXISTS "
+                "(SELECT 1 FROM native_pilot_receipts r WHERE r.input_key=i.input_key AND r.state<>'not_sent')",
+                (row['input_key'],)).fetchone()
+            if receipt or settled_unsent:
                 con.execute("UPDATE native_reply_pacing SET state='done',updated_at=? WHERE schedule_key=?",
                             (_dt(now),row['schedule_key']))
                 row = None
@@ -197,7 +202,10 @@ def prepare(ledger, pilot, snapshot, *, now, quiet_s=7.0, rng=None):
             covered = set()
             for old in con.execute("SELECT member_ids_json FROM native_pilot_inputs WHERE pilot_id=? "
                                    "AND (state='complete' OR EXISTS (SELECT 1 FROM native_pilot_receipts r "
-                                   "WHERE r.input_key=native_pilot_inputs.input_key AND r.state='sent'))", (pilot.pilot_id,)).fetchall():
+                                   "WHERE r.input_key=native_pilot_inputs.input_key AND r.state='sent') "
+                                   "OR (state IN ('no_reply','failed') AND NOT EXISTS "
+                                   "(SELECT 1 FROM native_pilot_receipts r WHERE "
+                                   "r.input_key=native_pilot_inputs.input_key AND r.state<>'not_sent')))", (pilot.pilot_id,)).fetchall():
                 covered.update(json.loads(old[0]))
             unhandled = [s for s in sources if s['message_id'] not in covered]
             if not unhandled:
@@ -231,9 +239,14 @@ def claimed(con, expected, input_key, now):
     key = expected.get('schedule_key')
     if not key:
         return
-    row = con.execute("SELECT admissions FROM native_reply_pacing WHERE schedule_key=?", (key,)).fetchone()
+    row = con.execute("SELECT * FROM native_reply_pacing WHERE schedule_key=?", (key,)).fetchone()
     if row['admissions'] >= MAX_ADMISSIONS:
-        raise Refused("reply-regeneration-budget-held")
+        # Only a durably requeued input with no standing send may recover.
+        # Wait before opening a fresh bounded batch; preserve the original target.
+        retry_at = datetime.fromisoformat(_dt(row['updated_at'])) + timedelta(seconds=30)
+        if datetime.fromisoformat(_dt(now)) < retry_at or not _retry_pending(con, row, ledger_pilot(con, row)):
+            raise Refused("reply-regeneration-budget-held")
+        con.execute("UPDATE native_reply_pacing SET admissions=0 WHERE schedule_key=?", (key,))
     con.execute("UPDATE native_reply_pacing SET admissions=admissions+1,input_key=?,updated_at=? WHERE schedule_key=?",
                 (input_key,_dt(now),key))
 

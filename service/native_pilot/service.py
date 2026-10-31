@@ -74,7 +74,7 @@ DESCRIBE_WAIT_S = 45.0       # a caption-less fan photo waits this long for its 
 CONNECTION_CHECK_S = 300.0
 TURN_MAX_S = 600.0
 PACE_MAX_S = 180.0
-MODEL_RETRY_REASONS = ("model-timeout", "model-http-failed", "model-response-failed", "media-claim-unbacked")
+MODEL_RETRY_REASONS = ("model-timeout", "model-http-transient", "model-transport-failed")
 # Reasons a reply ends WITHOUT any send standing and that are not the fan message's fault. The claim is given
 # back (Ledger.release_input) so the fan's latest state is answered from scratch once the cause clears; a draft
 # is never kept. value = seconds this fan is left alone before it is looked at again.
@@ -92,7 +92,7 @@ RELEASE_BACKOFF_S = {"new-message-during-generation": 1.0, "source-changed": 1.0
 ACCOUNT_BLOCK_PREFIXES = ("allowance-", "model-budget", "account-")
 # A reply the model could not produce (timeout, HTTP error such as a 402, budget exhausted) is kept PENDING with its
 # reason and retried with backoff; it is never dropped. Only an input older than the horizon is let go (surfaced).
-MODEL_RETRY_LIMIT = 12
+MODEL_RETRY_LIMIT = 1
 MODEL_BACKOFF_MIN_S = 15.0
 MODEL_BACKOFF_MAX_S = 900.0
 RATE_LIMIT_BACKOFF_S = 60.0   # a provider 429: wait this long (times the retry number) unless Retry-After says otherwise
@@ -1185,12 +1185,12 @@ class Service:
                 return await self.wait(self.poll_s)
             raise
         await self._note_unlabelled(snap)
-        from .identity import sincere_identity_question
-        if any(sincere_identity_question((src or {}).get("body")) for src in sources.values()):
+        questions = self.identity_questions(sources)
+        if questions:
             # Identity rule: the AI never answers "are you a bot / AI / real?". The chat is paused and
             # flagged so a human answers it, then hands back with the normal dashboard controls.
             from .identity import HUMAN_REQUESTED, wants_human
-            asked_for_human = any(wants_human((src or {}).get("body")) for src in sources.values())
+            asked_for_human = any(wants_human((src or {}).get("body")) for src in questions.values())
             await self.identity_handoff("fan-asked", attention=HUMAN_REQUESTED if asked_for_human else "identity-question")
             ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
             return
@@ -1267,6 +1267,9 @@ class Service:
                 raise Refused(gateway.stopped_reason or model.stopped_reason)
             if not isinstance(stats, dict) or stats.get("errors") or stats.get("cap_hit"):
                 raise Refused("native-turn-failed")
+            if job is None and not any(r["state"] == "sent" for r in
+                    ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)):
+                raise Refused("native-no-reply-empty-output" if (stats or {}).get("dropped_empty") else "native-no-reply")
         except Exception as exc:
             from .engine import PilotBoundaryError
             # A boundary refusal carries its fixed reason (identity held, media claim held, persona not approved, ...);
@@ -1389,7 +1392,7 @@ class Service:
         now = runner.now()
         with runner.readonly(self.path) as con:
             buys = postsale.purchases(con, self.db, now) if st["post_buy"] else []
-            cards = postsale.unpaid_cards(con, self.db, now, upsell.RESEND_AFTER_M) if st["discount"] else []
+            cards = postsale.unpaid_cards(con, self.db, now, 0) if st["discount"] else []
             ready = []
             for offer_id, fan, offered_at, price in cards:
                 if not self._postsale_in_scope(fan):
@@ -1536,6 +1539,14 @@ class Service:
             row = con.execute(f"SELECT 1 FROM messages WHERE account_id=? AND fan_id=? AND direction='out' "
                               f"AND price_cents>0 AND message_id IN ({marks}) LIMIT 1", (self.db, self.args.fan, *ids)).fetchone()
         return row is not None
+
+    def identity_questions(self, sources):
+        """Only new questions trigger a handoff; all sources remain model context."""
+        from .identity import sincere_identity_question
+        questions = {int(mid): src for mid, src in sources.items()
+                     if sincere_identity_question((src or {}).get("body"))}
+        pending = self.ledger.unhandled_source_ids(pilot_id=self.pilot_id, source_ids=questions)
+        return {mid: src for mid, src in questions.items() if mid in pending}
 
     async def identity_handoff(self, trigger, attention="identity-question"):
         """Pause the AI for this fan and flag the chat for a human (the identity rule, see identity.py).
@@ -1685,8 +1696,10 @@ class Service:
             runner.emit({"event": "stopped", "reason": state["reason"] or reason})
             await self.drop_pilot()
             raise Refused(state["reason"] or reason)
-        # Abandon this input only: it is never regenerated (no automatic retry).
-        ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+        # Preserve an unsent terminal outcome instead of calling it a completed reply.
+        # These states remain claimed, so no sent/unknown/failed input is replayed.
+        ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key,
+                            now=runner.now(), outcome="no_reply" if reason.startswith("native-no-reply") else "failed")
         runner.emit({"event": "turn-abandoned", "reason": reason, **({"fan_id": self.args.fan} if self.strict else {})})
         await self.wait(self.hold_s)
         if self.strict and reason.startswith("model-budget"):

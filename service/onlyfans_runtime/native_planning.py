@@ -269,7 +269,10 @@ class NativeTextPlanner:
             # Finish only this invocation's historical evidence if its binding
             # was revoked while the model was running. Never authorize new work
             # through a revoked binding or leave a completed draft generating.
-            runtime = s.scalar(select(OfRuntime).where(OfRuntime.account_id == claim.account_id).with_for_update())
+            # Shared runtime lock: model preparation for different fans may
+            # proceed together, while an operator control still waits for the
+            # short reservation/settlement transaction to finish.
+            runtime = s.scalar(select(OfRuntime).where(OfRuntime.account_id == claim.account_id).with_for_update(read=True))
             binding = s.scalar(select(OfCreatorBinding).where(
                 OfCreatorBinding.id == binding_id, OfCreatorBinding.account_id == claim.account_id,
                 OfCreatorBinding.tenant_id == tenant_id, OfCreatorBinding.channel == "onlyfans",

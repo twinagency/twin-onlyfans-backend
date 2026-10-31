@@ -144,7 +144,7 @@ def _generation(scan):
 
 
 def _cursor_scope(scan):
-    return hashlib.sha256(canonical([_generation(scan), scan.window_start, scan.window_end]).encode()).hexdigest()
+    return hashlib.sha256(canonical(["transaction-date-filters-v2", _generation(scan), scan.window_start, scan.window_end]).encode()).hexdigest()
 
 
 def _new_cursor(scan):

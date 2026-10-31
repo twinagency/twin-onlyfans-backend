@@ -435,7 +435,12 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 or start < datetime(1970, 1, 1)
                 or not timedelta(0) <= end - start <= timedelta(days=60000 if history else 90)):
             raise Refused("invalid bounded native ledger page")
-        params = {"limit": limit, "start": start.isoformat() + "Z", "end": end.isoformat() + "Z"}
+        # The provider ignores start/end on this endpoint. Its date filters use
+        # startDate/endDate at second precision; request a covering superset
+        # and let ledger._provider_page retain only the exact frozen window.
+        rounded_end = end.replace(microsecond=0) + timedelta(seconds=bool(end.microsecond))
+        params = {"limit": limit, "startDate": start.strftime("%Y-%m-%d %H:%M:%S"),
+                  "endDate": rounded_end.strftime("%Y-%m-%d %H:%M:%S")}
         if marker is None:
             params["offset"] = offset
         else:

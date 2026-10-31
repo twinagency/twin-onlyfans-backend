@@ -70,6 +70,9 @@ jobs:
           service/tests/test_onlyfans_ledger_markers_pg.py
           service/tests/test_onlyfans_ledger_exclusion_pg.py
           service/tests/test_onlyfans_launch_provider_budget_pg.py
+          service/tests/test_ledger_read_fairness_pg.py
+          service/tests/test_ledger_date_filters.py
+          service/tests/test_onlyfans_provider_adapters.py
       - name: Real sender load, takeover and schema compatibility
         if: matrix.suite == 'native'
         run: |

@@ -114,7 +114,7 @@ class NativeLoopbackConnector:
         if offset > 1_000_000:
             raise Refused("native discovery budget exhausted")
         creator = self.verify_identity()
-        path = API_PATH + "/chats?" + urlencode({"limit": limit, "order": "recent", "offset": offset, "skip_users": "all"})
+        path = API_PATH + "/chats?" + urlencode({"limit": limit, "order": "recent", "offset": offset})
         rows, more = self._page(load(self._call("GET", path), max_bytes=MAX_HISTORY_BYTES), limit)
         try:
             fans = [_id(row["withUser"]["id"]) for row in rows if type(row) is dict]

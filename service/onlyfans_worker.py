@@ -246,6 +246,7 @@ def main(argv=None):
     description_worker = None
     preview_worker = None
     folder_worker = None
+    inbox_worker = None
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
             previous[sig] = signal.signal(sig, lambda *_: stop.set())
@@ -304,6 +305,14 @@ def main(argv=None):
             from onlyfans_runtime.ledger_worker import LedgerWorker
             ledger_worker = LedgerWorker(store, tenant, stop, observe=_emit)
             ledger_worker.start()
+        # Live incoming messages must not wait for archive, media, ledger or AI.
+        # This independent lane discovers current/future verified accounts and
+        # imports paused accounts without activating any conversation or sender.
+        if os.environ.get("ONLYFANS_RECENT_INBOX_ENABLED", "1") == "1" and not args.once:
+            from onlyfans_runtime.inbox_worker import InboxWorker
+            inbox_worker = InboxWorker(Store(url, pool_size=8), tenant, stop, observe=_emit, owns_store=True)
+            store._independent_inbox = True
+            inbox_worker.start()
         # Launch features stay off unless explicitly enabled; engagement additionally needs saved per-account settings.
         worker_options = {name: True for name, flag in (("history_recovery", "ONLYFANS_HISTORY_RECOVERY_ENABLED"),
             ("history_memory", "ONLYFANS_HISTORY_MEMORY_ENABLED"), ("engagement", "ONLYFANS_ENGAGEMENT_ENABLED"))
@@ -323,6 +332,8 @@ def main(argv=None):
             folder_worker.join()
         if preview_worker is not None:
             preview_worker.join()
+        if inbox_worker is not None:
+            inbox_worker.join()
         if media_worker is not None:
             media_worker.join()
         if ledger_worker is not None:

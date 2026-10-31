@@ -141,11 +141,13 @@ def fan_history_current(s, account_id, fan_id):
     return row is not None and row.status == "complete" and quarantined is None and unapplied is None
 
 class Store:
-    def __init__(self, url: str):
+    def __init__(self, url: str, *, pool_size: int = 2):
+        if type(pool_size) is not int or not 1 <= pool_size <= 16:
+            raise Refused("invalid database pool bound")
         parsed = make_url(url)
         if parsed.get_backend_name() != "postgresql":
             raise Refused("durable intake requires PostgreSQL")
-        self.engine = create_engine(parsed.set(drivername="postgresql+psycopg2"), pool_size=2,
+        self.engine = create_engine(parsed.set(drivername="postgresql+psycopg2"), pool_size=pool_size,
                                     max_overflow=0, pool_timeout=3, pool_pre_ping=True,
                                     connect_args={"options": "-c timezone=UTC -c statement_timeout=10000 -c lock_timeout=3000"})
         from db.schema import check_schema

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from native_pilot.send_gate import SendGate
 from native_pilot import admission
+from native_pilot.ledger import Ledger
 from onlyfans_runtime import concurrent_admission
 
 
@@ -131,3 +133,34 @@ def test_send_gate_bounded_concurrency_and_order():
         assert order[0] == 3
 
     asyncio.run(run())
+
+
+def test_finish_lease_releases_after_rollback_to_gap():
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    con.execute(
+        "CREATE TABLE of_delivery_policy("
+        "account_id TEXT PRIMARY KEY, delivery_mode TEXT NOT NULL, "
+        "conversation_min_gap_seconds INTEGER NOT NULL)"
+    )
+    con.execute(
+        "CREATE TABLE engine_conversation_lease("
+        "tenant_id TEXT, account_id TEXT, fan_id INTEGER, holder TEXT, owner_token TEXT, "
+        "attempt_id TEXT, state TEXT, expires_at TEXT, next_send_at TEXT, updated_at TEXT)"
+    )
+    con.execute(
+        "INSERT INTO of_delivery_policy VALUES('a','gap',0)"
+    )
+    con.execute(
+        "INSERT INTO engine_conversation_lease VALUES("
+        "'t','a',1,'owner','owner','7','held','2099-01-01T00:00:00',NULL,'2026-01-01T00:00:00')"
+    )
+    ledger = Ledger(":memory:", allowance=True, tenant_id="t")
+    ledger._finish_concurrent_lease(
+        con, {"account_id": "a", "fan_id": 1}, "owner", "2026-01-01T00:00:01"
+    )
+    row = con.execute(
+        "SELECT state,holder,owner_token,attempt_id FROM engine_conversation_lease"
+    ).fetchone()
+    assert tuple(row) == ("released", "", "", None)
+    con.close()

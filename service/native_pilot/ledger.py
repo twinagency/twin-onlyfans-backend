@@ -1438,7 +1438,7 @@ class Ledger:
             return
         from . import admission
         row = self._policy_row(con, p["account_id"])
-        if row is None or not admission.is_concurrent(row):
+        if row is None:
             return
         lease = con.execute(
             "SELECT * FROM engine_conversation_lease "
@@ -1447,6 +1447,9 @@ class Ledger:
         if (lease is None or lease["state"] != "held"
                 or lease["holder"] != owner_token):
             return
+        # A mode rollback must not strand the lease of a sequence that was
+        # admitted in concurrent mode. Release the existing owner even when the
+        # current policy row is already back in gap mode.
         gap = max(admission.conversation_gap_seconds(row), self.conversation_min_gap_s)
         next_send = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=gap))
         con.execute(

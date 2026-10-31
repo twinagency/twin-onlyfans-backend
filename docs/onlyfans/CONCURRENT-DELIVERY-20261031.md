@@ -30,7 +30,7 @@ the default and still uses the old gate, gap, floor and behaviour.
 * `gap` (default) - existing single-send mode, existing `throttle_seconds` and 20 s floor.
 * `concurrent` - bounded concurrent mode described below.
 
-Migration `0102_concurrent_delivery` is now the normal `db.schema.HEAD`; bootstrap and
+Migration `0103_concurrent_delivery` is now the normal `db.schema.HEAD`; bootstrap and
 `alembic upgrade head` reach it. It adds:
 
 | column | meaning |
@@ -141,13 +141,13 @@ python -m pytest -q tests/test_concurrent_admission_units.py
 
 The legacy suites remain the rollback proof. PostgreSQL migration tests require
 `ONLYFANS_TEST_PG_URL` pointing at a disposable local PostgreSQL; no live database was
-used here. The updated `test_throughput_migration_pg.py` checks the `0102` head,
+used here. The updated `test_throughput_migration_pg.py` checks the `0103` head,
 constraints, legacy defaults and downgrade/upgrade round-trip, but was not executed in
 this Windows workspace because that disposable PostgreSQL URL was unavailable.
 
 ## Real-account canary
 
-1. Apply `0102_concurrent_delivery` and the runtime `engine_concurrency_upgrade.sql`.
+1. Apply `0103_concurrent_delivery` and the runtime `engine_concurrency_upgrade.sql`.
 2. Keep every account in `gap` and deploy the image.
 3. Pick one controlled account with no unresolved attempt or active intent.
 4. Set conservative values first: one request/s, burst 2, max 2, per-fan gap 0.

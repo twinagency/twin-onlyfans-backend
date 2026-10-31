@@ -18,7 +18,8 @@ def _scan_once(native, monkeypatch, now, *, more):
     monkeypatch.setattr(ledger, 'utcnow', lambda: now)
     monkeypatch.setattr(budget, 'utcnow', lambda: now)
     def page(self, **kw):
-        return payload([], more=more)
+        rows = [transaction(id='scan-seed', description='Tip from Synthetic Fan')] if more else []
+        return payload(rows, more=more)
     monkeypatch.setattr(NativeProviderConnector, 'transaction_page', page)
     assert ledger.process_ledger_pages(store, TENANT) == 1
     return store, account
@@ -37,25 +38,33 @@ def test_due_transactions_progress_between_repeated_message_reads(native, monkey
         pages.append(kw['offset'])
         return payload([transaction(id='fair-'+str(len(pages)),description='Tip from Synthetic Fan')],more=len(pages)<4)
     monkeypatch.setattr(NativeProviderConnector,'transaction_page',page)
+    # A live read may occupy the lease before ledger work exists; the ledger
+    # writes its deferral and keeps the cursor. Once that lease clears, the
+    # due ledger scan gets the next turn.
+    recent=budget.acquire(store,TENANT,account,connection_revision=1,kind='recent')
+    assert recent.until == clock[0]+timedelta(seconds=45)
+    assert ledger.process_ledger_pages(store,TENANT)==0
+    with Session(store.engine) as s:
+        scan=s.get(OfLedgerScan,account)
+        assert scan.next_poll_at <= clock[0]+timedelta(seconds=2)
+        assert scan.page_offset==0
+        assert s.get(OfProviderReadBudget,account).tokens >= 2
+    assert budget.release(store,TENANT,recent)
+    clock[0]+=timedelta(seconds=2)
+    with pytest.raises(budget.ReadDeferred,match='ledger turn due'):
+        budget.acquire(store,TENANT,account,connection_revision=1,kind='recent')
     for index in range(4):
-        recent=budget.acquire(store,TENANT,account,connection_revision=1,kind='recent')
-        assert recent.until == clock[0]+timedelta(seconds=45)
-        assert ledger.process_ledger_pages(store,TENANT)==0
+        assert ledger.process_ledger_pages(store,TENANT)==1
         with Session(store.engine) as s:
             scan=s.get(OfLedgerScan,account)
-            assert scan.next_poll_at <= clock[0]+timedelta(seconds=2)
-            assert scan.page_offset==index
-            assert s.get(OfProviderReadBudget,account).tokens >= 2
-        assert budget.release(store,TENANT,recent)
-        clock[0]+=timedelta(seconds=2)
-        with pytest.raises(budget.ReadDeferred,match='ledger turn due'):
-            budget.acquire(store,TENANT,account,connection_revision=1,kind='recent')
-        assert ledger.process_ledger_pages(store,TENANT)==1
-        # Transaction progress yields back to replies, including while another
-        # transaction page is due. No counter, cap or purchase state is reset.
+            assert scan.page_offset==index+1
+        # Transaction progress yields exactly one turn to live intake.
         recent=budget.acquire(store,TENANT,account,connection_revision=1,kind='recent')
         assert budget.release(store,TENANT,recent)
         clock[0]+=timedelta(seconds=2)
+        if index < 3:
+            with pytest.raises(budget.ReadDeferred,match='ledger turn due'):
+                budget.acquire(store,TENANT,account,connection_revision=1,kind='recent')
     assert pages==[0,1,2,3]
     with Session(store.engine) as s:
         scan=s.get(OfLedgerScan,account)

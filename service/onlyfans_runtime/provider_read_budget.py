@@ -132,6 +132,8 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
             or type(connection_revision) is not int or connection_revision<1):
         raise Refused("provider read worker authority required")
     now = now or utcnow()
+    deferred_at = None
+    claim = None
     with Session(store.engine) as s, s.begin():
         runtime = _valid(store, s, tenant, account, connection_revision, now, kind)
         row = s.get(OfProviderReadBudget, account, with_for_update=True)
@@ -153,26 +155,34 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
         if (kind not in {'ledger', 'connection_check'}
                 and _reserve_due_ledger_turn(
                     s, account, runtime, connection_revision, now, row.last_kind)):
-            raise ReadDeferred(now + timedelta(seconds=LEDGER_RETRY_SECONDS), 'provider ledger turn due')
-        refill = max(0, int((now - row.refilled_at).total_seconds()))
-        available = min(CAPACITY, row.tokens + refill)
-        # Deep archive recovery may be continuously due. Leave one additional
-        # maintenance token for ledger/content work as well as the recent head
-        # reserve; the outer scheduler rotates those maintenance lanes.
-        reserve = 0 if kind == "recent" else RECENT_RESERVE + (kind == 'history')
-        if kind in BACKGROUND_KINDS and _replies_waiting(s, account, now):
-            # Live replies are waiting (the FASTT engine's work board): history import, the exporter, discovery, offer
-            # refresh, posts and vault analysis yield. They keep a trickle (a read per ~5 s as the bucket refills), they
-            # are never starved outright.
-            reserve += LIVE_REPLY_RESERVE
-        if available <= reserve:
-            raise ReadDeferred(now + timedelta(seconds=1), "provider read budget exhausted")
-        if refill:
-            row.refilled_at += timedelta(seconds=refill)
-        row.tokens = available - 1
-        row.lease_token, row.lease_until = str(uuid.uuid4()), now + timedelta(seconds=LEASE_SECONDS)
-        row.last_kind = kind
-        return ReadClaim(account, runtime.binding_id, connection_revision, row.lease_token, row.lease_until,kind)
+            # Commit the scan reservation before refusing this read. Raising
+            # inside this transaction would roll the reservation back, which is
+            # exactly how an always-due ledger lost priority to inbox reads.
+            deferred_at = now + timedelta(seconds=LEDGER_RETRY_SECONDS)
+        else:
+            refill = max(0, int((now - row.refilled_at).total_seconds()))
+            available = min(CAPACITY, row.tokens + refill)
+            # Deep archive recovery may be continuously due. Leave one additional
+            # maintenance token for ledger/content work as well as the recent head
+            # reserve; the outer scheduler rotates those maintenance lanes.
+            reserve = 0 if kind == "recent" else RECENT_RESERVE + (kind == 'history')
+            if kind in BACKGROUND_KINDS and _replies_waiting(s, account, now):
+                # Live replies are waiting (the FASTT engine's work board): history import, the exporter, discovery, offer
+                # refresh, posts and vault analysis yield. They keep a trickle (a read per ~5 s as the bucket refills), they
+                # are never starved outright.
+                reserve += LIVE_REPLY_RESERVE
+            if available <= reserve:
+                raise ReadDeferred(now + timedelta(seconds=1), "provider read budget exhausted")
+            if refill:
+                row.refilled_at += timedelta(seconds=refill)
+            row.tokens = available - 1
+            row.lease_token, row.lease_until = str(uuid.uuid4()), now + timedelta(seconds=LEASE_SECONDS)
+            row.last_kind = kind
+            claim = ReadClaim(account, runtime.binding_id, connection_revision,
+                              row.lease_token, row.lease_until, kind)
+    if deferred_at is not None:
+        raise ReadDeferred(deferred_at, 'provider ledger turn due')
+    return claim
 
 
 def current_in_session(store, s, tenant, claim, *, now=None):

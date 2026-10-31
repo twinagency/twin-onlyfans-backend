@@ -7,6 +7,7 @@ from onlyfans_runtime.ledger import (
     RECENT_COVERAGE_FRESHNESS,
     RECENT_REFRESH_INTERVAL,
     Refused,
+    deferred_reason_code,
     recent_refresh_at,
 )
 
@@ -45,3 +46,14 @@ def test_provider_delay_beyond_the_interval_starts_immediately():
 def test_invalid_refresh_times_fail_closed(completed, cutoff):
     with pytest.raises(Refused, match="invalid ledger refresh timing"):
         recent_refresh_at(completed, cutoff)
+
+
+@pytest.mark.parametrize("reason,code", [
+    ("provider read lease occupied", "lease-occupied"),
+    ("provider read backoff", "provider-backoff"),
+    ("provider read budget exhausted", "budget-exhausted"),
+    ("provider ledger turn due", "ledger-turn-due"),
+    ("unrecognised provider detail", "deferred"),
+])
+def test_deferral_codes_are_stable_and_do_not_copy_provider_text(reason, code):
+    assert deferred_reason_code(reason) == code

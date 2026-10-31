@@ -19,9 +19,23 @@ async def plan_contextual(lane, authority, candidate, fan, *, blocked=False, voi
     or normal draft is changed here; off makes no contextual inference call.
     """
     current_mode = mode(lane.cfg)
+
+    account_id = getattr(lane, "account_id", None)
+
     def event(stage, reason, **extra):
         if authority is not None:
-            authority.emit({"event":"contextual-opportunity","stage":stage,"reason":reason,"mode":current_mode,"fan":fan.fan_id,**extra})
+            authority.emit({"event":"contextual-opportunity","stage":stage,"reason":reason,
+                            "mode":current_mode,"account_id":account_id,"fan_id":fan.fan_id,
+                            "source_message_id":getattr(authority,"source_message_id",None),**extra})
+
+    def rejected(code, **extra):
+        event("rejected", code, failure_code=code, **extra)
+
+    def refusal_code(reason):
+        if reason in ("contextual-purchase-state-stale", "contextual-purchase-unlinked"):
+            return "purchase_freshness_refused"
+        return "sales_eligibility_refused"
+
     if current_mode == "off" or authority is None or not lane.on or blocked:
         event("skipped", "disabled_blocked_or_stale_input")
         return None
@@ -35,7 +49,7 @@ async def plan_contextual(lane, authority, candidate, fan, *, blocked=False, voi
         turn = Turn(text=candidate.last_in_text, at=candidate.last_in_at,
                     trigger="contextual_relevance", supporting_message_ids=(candidate.last_in_mid,))
         if not await lane.may_sell(fan.fan_id, turn, fan=fan, blocked=blocked):
-            event("rejected", "sales_eligibility")
+            rejected("sales_eligibility_refused")
             return None
         # Confirm an account-owned description before paying for a relevance read.
         async with get_session() as s:
@@ -43,15 +57,23 @@ async def plan_contextual(lane, authority, candidate, fan, *, blocked=False, voi
                 VaultItem.account_id == lane.account_id, VaultItem.removed_at.is_(None),
                 VaultItem.search_text.is_not(None), VaultItem.search_text != "").limit(1))).first()
         if not available:
-            authority.emit({"event":"contextual-decision","action":"chat","reason":"no_supported_shelf", "mode":current_mode})
-            event("rejected", "no_described_content")
+            authority.emit({"event":"contextual-decision","action":"chat","reason":"no_supported_shelf",
+                            "mode":current_mode,"account_id":account_id,"fan_id":fan.fan_id})
+            rejected("no_matching_media", detail="no_described_content")
             return None
         from . import content_prompts, content_resolver, pack_sender
         event("evaluated", "conversation_evidence")
+        hook_rejections = []
+
+        def hook_rejected(code):
+            hook_rejections.append(code)
+            rejected(code)
+
         hook = await content_prompts.read_hook(lane.account_id, fan.fan_id, voice=voice,
-            contextual_message=context)
+            contextual_message=context, on_reject=hook_rejected)
         if hook is None:
-            event("rejected", "no_supported_interest_or_evaluation_failed")
+            if not hook_rejections:
+                rejected("evaluation_failure")
             return None
         if hook.action == "explore":
             if current_mode == "live":
@@ -64,15 +86,18 @@ async def plan_contextual(lane, authority, candidate, fan, *, blocked=False, voi
         resolution = await content_resolver.resolve(lane.account_id, fan.fan_id,
             count=pack_sender.MAX_ITEMS, seen=seen, contract=contract, require_curated=False)
         if not resolution.ok:
-            authority.emit({"event":"contextual-decision","action":"chat","reason":"no_verified_match", "mode":current_mode})
-            event("rejected", "no_verified_match")
+            authority.emit({"event":"contextual-decision","action":"chat","reason":"no_verified_match",
+                            "mode":current_mode,"account_id":account_id,"fan_id":fan.fan_id})
+            rejected("no_matching_media")
             return None
         decision = ContentDecision("send_ppv", "contextual_relevance", hook.supporting_message_ids, hook.reason or hook.what[:120])
         authority.emit({"event":"contextual-decision","mode":current_mode,"action":decision.action,
             "trigger":decision.trigger,"supporting_message_ids":list(decision.supporting_message_ids),
-            "reason":decision.reason,"matched_media_ids":list(resolution.media_ids),
+            "reason":"verified_contextual_match","matched_media_ids":list(resolution.media_ids),
+            "account_id":account_id,"fan_id":fan.fan_id,
             "pricing":"not_planned" if current_mode == "shadow" else "existing_fastt_rules"})
-        event("selected", decision.reason, action="send_ppv", supporting_message_ids=list(decision.supporting_message_ids))
+        event("selected", "contextual_match", action="send_ppv",
+              supporting_message_ids=list(decision.supporting_message_ids))
         if current_mode == "shadow":
             return None
 
@@ -81,13 +106,16 @@ async def plan_contextual(lane, authority, candidate, fan, *, blocked=False, voi
         plan = await lane.plan(fan.fan_id, turn, fan=fan, blocked=blocked,
                                contract=read_contract, resolution=resolution)
         if not plan:
-            event("rejected", getattr(getattr(plan, "result", None), "reason", "planning_failed"))
+            rejected("sales_eligibility_refused",
+                     detail=getattr(getattr(plan, "result", None), "reason", "planning_failed"))
         return (plan, permission, decision) if plan else None
     except Refused as exc:
-        event("rejected", exc.reason)
-        authority.emit({"event":"contextual-withheld","reason":exc.reason,"mode":current_mode})
+        code = refusal_code(exc.reason)
+        rejected(code, detail=exc.reason)
+        authority.emit({"event":"contextual-withheld","reason":exc.reason,
+                        "failure_code":code,"mode":current_mode})
         return None
     except Exception:
-        event("rejected", "contextual_evaluation_unavailable")
+        rejected("evaluation_internal_failure")
         authority.emit({"event":"contextual-withheld","reason":"contextual-evaluation-unavailable","mode":current_mode})
         return None

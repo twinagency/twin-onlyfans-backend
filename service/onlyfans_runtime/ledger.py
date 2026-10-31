@@ -50,6 +50,16 @@ def recent_refresh_at(completed_at, cutoff_at):
     return max(completed_at + timedelta(seconds=1), target)
 
 
+def deferred_reason_code(reason):
+    """Stable public cause for a provider-read deferral; never provider text."""
+    return {
+        "provider read lease occupied": "lease-occupied",
+        "provider read backoff": "provider-backoff",
+        "provider read budget exhausted": "budget-exhausted",
+        "provider ledger turn due": "ledger-turn-due",
+    }.get(str(reason or ""), "deferred")
+
+
 def timestamp(value):
     if type(value) is not str or len(value) > 64:
         raise NativeProtocolError("explicit transaction timestamp required")
@@ -455,7 +465,10 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
         except Exception as problem:
             from .provider_read_budget import ReadDeferred
             failure=problem
-            if isinstance(problem,ReadDeferred):deferred=problem.retry_at;error='provider_read_deferred'
+            if isinstance(problem,ReadDeferred):
+                deferred=problem.retry_at
+                error=('provider_read_deferred' if history else
+                       f"provider_read_deferred:{deferred_reason_code(str(problem))}")
             elif isinstance(problem,NativeProtocolError):error='provider_rate_limited' if hasattr(problem,'retry_after') else 'unsupported_ledger_response'
             else:error='ledger_read_failed'
         try:

@@ -68,7 +68,10 @@ def read_ledger(s, tenant, account, *, now=None):
     # An audited exclusion only lifts the account-wide commerce hold; the purchase is still unlinked, so the
     # dashboard keeps counting it (its field set is a fixed contract).
     conflicts, unlinked = core["conflictingEvidence"], core["unresolvedTransactions"] + core["excludedTransactions"]
-    error = None if scan is None or scan.last_error is None else scan.last_error if scan.last_error in ERRORS else "unknown_error"
+    raw_error = None if scan is None else scan.last_error
+    error = (None if raw_error is None else "provider_read_deferred"
+             if raw_error.startswith("provider_read_deferred:") else
+             raw_error if raw_error in ERRORS else "unknown_error")
     return {"schemaVersion": SCHEMA, "accountId": account,
         "status": "not_started" if scan is None else scan.status,
         "windowStart": scan and iso(scan.window_start), "windowEnd": scan and iso(scan.window_end),

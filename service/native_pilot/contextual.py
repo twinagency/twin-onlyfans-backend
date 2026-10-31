@@ -33,16 +33,27 @@ def stamp(value):
     return datetime.fromisoformat(value) if isinstance(value, str) else value
 
 
+def _scan_field(scan, key):
+    try:
+        return scan[key]
+    except (KeyError, IndexError, TypeError):
+        return getattr(scan, key, None)
+
+
 def purchase_fresh(scan, connection, now):
     from onlyfans_runtime.ledger import coverage_proven
     if not scan or not connection:
         return False
-    if any(scan[k] != connection[k] for k in ("binding_id", "connection_revision", "owner_id")):
+    if any(_scan_field(scan, k) != connection[k] for k in ("binding_id", "connection_revision", "owner_id")):
         return False
-    completed = stamp(scan["last_complete_at"])
-    window_end = stamp(scan["window_end"])
-    receipt = {**dict(scan), "last_complete_at":completed, "last_full_at":stamp(scan["last_full_at"])}
-    return (scan["status"] != "held" and scan["last_error"] in (None, "", "provider_read_deferred")
+    completed = stamp(_scan_field(scan, "last_complete_at"))
+    window_end = stamp(_scan_field(scan, "window_end"))
+    receipt = {**dict(scan), "last_complete_at":completed,
+               "last_full_at":stamp(_scan_field(scan, "last_full_at"))}
+    last_error = _scan_field(scan, "last_error") or ""
+    error_allowed = (last_error in (None, "", "provider_read_deferred")
+                     or last_error.startswith("provider_read_deferred:"))
+    return (_scan_field(scan, "status") != "held" and error_allowed
             and coverage_proven(SimpleNamespace(**receipt))
             and completed is not None and window_end is not None
             and timedelta(0) <= now - completed <= PURCHASE_FRESHNESS
@@ -56,13 +67,24 @@ def purchase_freshness_detail(scan, connection, now):
         return {"cause": "missing-coverage"}
     if any(scan[k] != connection[k] for k in ("binding_id", "connection_revision", "owner_id")):
         return {"cause": "connection-mismatch"}
-    if scan["last_error"]:
-        return {"cause": "provider-backoff" if "deferred" in scan["last_error"] or "rate" in scan["last_error"] else "provider-error",
-                "provider_reason": scan["last_error"]}
-    if scan["status"] == "held":
+    reason_value = _scan_field(scan, "last_error")
+    if reason_value:
+        reason = str(reason_value)
+        if reason.startswith("provider_read_deferred"):
+            detail = {"cause": "provider-deferred",
+                      "defer_reason": reason.split(":", 1)[1] if ":" in reason else "deferred"}
+            for key in ("next_poll_at", "window_end", "last_complete_at"):
+                value = stamp(_scan_field(scan, key))
+                if value is not None:
+                    detail[key] = value.isoformat()
+            return detail
+        return {"cause": "provider-backoff" if "rate" in reason else "provider-error",
+                "provider_reason": reason}
+    if _scan_field(scan, "status") == "held":
         return {"cause": "provider-held"}
-    completed, cutoff = stamp(scan["last_complete_at"]), stamp(scan["window_end"])
-    receipt = {**dict(scan), "last_complete_at": completed, "last_full_at": stamp(scan["last_full_at"])}
+    completed, cutoff = stamp(_scan_field(scan, "last_complete_at")), stamp(_scan_field(scan, "window_end"))
+    receipt = {**dict(scan), "last_complete_at": completed,
+               "last_full_at": stamp(_scan_field(scan, "last_full_at"))}
     if not coverage_proven(SimpleNamespace(**receipt)) or completed is None or cutoff is None:
         return {"cause": "missing-coverage"}
     return {"cause": "coverage-age", "coverage_age_seconds": (now-cutoff).total_seconds(),

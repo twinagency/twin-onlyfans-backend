@@ -571,7 +571,8 @@ _ASK_ONLY = ("\n\nIn this read only kind 1 (ASK) counts; answer hook:false for "
 
 async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
                     saved_effort: str | None = None, effort_pick: str = "auto",
-                    ask_only: bool = False, contextual_message: dict | None = None) -> Hook | None:
+                    ask_only: bool = False, contextual_message: dict | None = None,
+                    on_reject=None) -> Hook | None:
     """CALL 7 — is there a reason to sell him one more set right now?
 
     Returns a `Hook` whose contract the ask lane can plan on, or None. None is
@@ -586,14 +587,19 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
     what makes it honest. `company=False` for the same reason every other lane
     defaults it: company is opt-in, never a bonus.
     """
-    def _no(reason: str, **kw) -> None:
+    def _no(reason: str, code: str | None = None, **kw) -> None:
         log.info("hook read NONE account=%s fan=%s: %s%s", account_id, fan_id,
                  reason, "".join(f" {k}={v!r}" for k, v in kw.items()))
+        if contextual_message is not None and on_reject is not None:
+            try:
+                on_reject(code or "evaluation_failure")
+            except Exception:
+                pass                    # diagnostics can never break the reply
         return None
 
     lines = await _thread_lines(account_id, fan_id, _hook_upsell.N_MSGS, voice)
     if not lines:
-        return _no("empty_thread")
+        return _no("empty_thread", code="unsupported_conversation_evidence")
     sold = await _sold_lines(account_id, fan_id)
 
     model = await resolve_model(account_id, "content_resolver")
@@ -639,11 +645,15 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
         )
         p = res.parsed if isinstance(res.parsed, dict) else {}
     except Exception as e:  # noqa: BLE001
-        return _no("provider_error", detail=str(e)[:120])
+        return _no("provider_error", code="model_provider_failure",
+                   detail=str(e)[:120])
     if not p:
-        return _no("unparseable")
+        return _no("unparseable", code="invalid_model_output")
     if not p.get("hook"):
-        return _no("no_hook")
+        if contextual_message is None:
+            return _no("no_hook")
+        return _no("no_hook",
+                   code="no_interest" if p.get("action") == "chat" else "invalid_model_output")
 
     evidence_ids = ()
     if contextual_message is not None:
@@ -651,14 +661,21 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
         evidence_ids = evidence(p, contextual_message)
         log.info("contextual-evaluated account=%s fan=%s action=%s reason=%s",
                  account_id, fan_id, p.get("action"), str(p.get("reason", ""))[:160])
-        if evidence_ids is None or p.get("action") not in ("explore", "send_ppv"):
-            return _no("unsupported_contextual_evidence")
+        if p.get("action") not in ("explore", "send_ppv"):
+            return _no("invalid_contextual_action", code="invalid_model_output")
+        if evidence_ids is None:
+            return _no("unsupported_contextual_evidence",
+                       code="unsupported_conversation_evidence")
     bridge = " ".join(str(p.get("bridge") or "").split())
-    if not _hook_upsell.bridge_ok(bridge):
+    bridge_valid = (_hook_upsell.contextual_bridge_ok(bridge, p.get("action"))
+                    if contextual_message is not None else _hook_upsell.bridge_ok(bridge))
+    if not bridge_valid:
         # Dropping it and shipping a bare claim is the other option, and it is
         # worse: the bridge IS the hook. A line the composer would have silently
         # eaten means the read did not do the job it was paid for.
-        return _no("bad_bridge", bridge=bridge[:80])
+        return _no("bad_contextual_bridge" if contextual_message is not None else "bad_bridge",
+                   code="invalid_contextual_wording" if contextual_message is not None else None,
+                   bridge=bridge[:80])
 
     source = str(p.get("source") or "").strip().lower()
     if source not in HOOK_SOURCES:
@@ -682,7 +699,8 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
     excl = [str(x).strip() for x in (p.get("exclusions") or []) if str(x).strip()]
 
     if contextual_message is not None and p.get("action") == "send_ppv" and (not subject or not terms):
-        return _no("missing_contextual_content_subject")
+        return _no("missing_contextual_content_subject",
+                   code="invalid_model_output")
 
     hook = Hook(
         source=source, what=str(p.get("what") or "")[:60], bridge=bridge,

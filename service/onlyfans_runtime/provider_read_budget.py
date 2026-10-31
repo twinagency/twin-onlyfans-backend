@@ -113,7 +113,8 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
             scan = s.get(OfLedgerScan, account)
             if (scan is not None and scan.binding_id == runtime.binding_id
                     and scan.connection_revision == connection_revision
-                    and scan.status == 'running' and scan.last_error == 'provider_read_deferred'
+                    and scan.status == 'running' and scan.last_error is not None
+                    and scan.last_error.startswith('provider_read_deferred')
                     and scan.updated_at is not None and timedelta(0) <= now - scan.updated_at < timedelta(seconds=LEASE_SECONDS)
                     and scan.next_poll_at <= now + timedelta(seconds=LEDGER_RETRY_SECONDS)):
                 # Hand the next free slot to a recently waiting ledger reader.

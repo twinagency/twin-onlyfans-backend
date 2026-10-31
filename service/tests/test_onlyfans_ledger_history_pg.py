@@ -64,7 +64,8 @@ def test_verified_reconnect_revalidates_future_scan_without_reusing_old_coverage
         if read_fails:
             assert scan.status=="held" and scan.last_complete_at is None and scan.last_full_at is None
         else:
-            assert scan.status=="idle" and scan.last_complete_at and scan.last_full_at
+                assert scan.status=="idle" and scan.last_complete_at
+                assert bool(scan.last_full_at) is history
     store.close()
 
 

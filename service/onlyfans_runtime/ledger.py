@@ -32,6 +32,8 @@ MAX_MARKER_ROWS = 1000000000
 RECENT_REFRESH_INTERVAL = timedelta(seconds=300)
 RECENT_READ_ALLOWANCE = timedelta(seconds=45)
 RECENT_COVERAGE_FRESHNESS = RECENT_REFRESH_INTERVAL + RECENT_READ_ALLOWANCE
+RECENT_OVERLAP = RECENT_REFRESH_INTERVAL
+MAX_RECENT_WINDOW = timedelta(days=90)
 
 
 def recent_refresh_at(completed_at, cutoff_at):
@@ -48,6 +50,22 @@ def recent_refresh_at(completed_at, cutoff_at):
     observed_duration = completed_at - cutoff_at
     target = cutoff_at + RECENT_REFRESH_INTERVAL - observed_duration
     return max(completed_at + timedelta(seconds=1), target)
+
+
+def recent_window_start(now, last_complete_at):
+    """Start a recent refresh from the last proven cutoff, not seven days again.
+
+    The full-history lane remains responsible for old transactions and late
+    refunds. Re-reading the whole seven-day window on every recent refresh made
+    pagination consume the freshness window under normal provider latency.
+    """
+    if type(now) is not datetime or now.tzinfo is not None:
+        raise Refused("invalid ledger refresh timing")
+    floor = now - MAX_RECENT_WINDOW
+    if (type(last_complete_at) is not datetime or last_complete_at.tzinfo is not None
+            or last_complete_at > now):
+        return max(floor, now - timedelta(days=7))
+    return max(floor, last_complete_at - RECENT_OVERLAP)
 
 
 def deferred_reason_code(reason):
@@ -439,10 +457,11 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                 scan.last_complete_at = scan.last_full_at = scan.coverage_json = None
             if scan.status not in {"running", "held"} or not _current(runtime, connection, scan, now):
                 scan.binding_id, scan.connection_revision, scan.owner_id = runtime.binding_id, connection.revision, connection.owner_id
-                # Revisit the full supported history daily: a refund can arrive
-                # long after a sale leaves the frequent seven-day window.
-                days = 90 if scan.last_full_at is None or now - scan.last_full_at >= timedelta(days=1) else 7
-                scan.window_start = datetime(1970, 1, 1) if history else now - timedelta(days=days)
+                # Recent reads extend the last proven cutoff with a bounded
+                # overlap. The independent lifetime lane below remains the
+                # authority for older transactions and late refunds.
+                scan.window_start = (datetime(1970, 1, 1) if history
+                                     else recent_window_start(now, scan.last_complete_at))
                 scan.window_end, scan.page_offset, scan.last_page_hash = now, 0, None
                 scan.continuation_json = None
             cursor = _cursor(scan)
@@ -532,11 +551,17 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                     # Freshness describes the frozen provider query cutoff, not
                     # the later wall-clock time at which a long scan finished.
                     scan.status, scan.last_complete_at = "idle", end
-                    if history or end - start == timedelta(days=90):
+                    if history:
                         scan.last_full_at = end
                     scan.coverage_json = _coverage_receipt(scan)
                     if history:
                         scan.next_poll_at = now + timedelta(days=1)
+                        recent = s.get(OfLedgerScan, account)
+                        if (recent is not None
+                                and (recent.binding_id, recent.connection_revision, recent.owner_id)
+                                    == (scan.binding_id, scan.connection_revision, scan.owner_id)):
+                            recent.last_full_at = end
+                            recent.coverage_json = _coverage_receipt(recent)
                 processed += 1
         finally:
             from .worker import _release_provider

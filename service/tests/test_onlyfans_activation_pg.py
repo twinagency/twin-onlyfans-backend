@@ -393,6 +393,54 @@ def test_operating_limits_never_reset_usage_and_are_audited(account):
         limits(10001, "l2")
 
 
+def test_daily_cap_and_send_gap_floor_in_the_operating_limits(account, monkeypatch):
+    """Throughput work: the optional daily cap rides the same audited command; a send gap under the shared 10 s floor is
+    refused unless the explicit override is set; the lifetime limit keeps its 1..10000 meaning."""
+    store, acct, engine = account
+    activate(store, acct)
+    state = {"fp": None}
+
+    def call(label, **kw):
+        base = dict(limit_units=900, throttle_seconds=30, media_enabled=True)
+        return commands.set_operating_limits(store, TENANT, acct, command_key=key(label), actor=ACTOR, reason="Commercial limit",
+                                             expected_fingerprint=fingerprint(store, acct), **{**base, **kw})
+    done = call("d0")                                       # no daily argument: unchanged shape, cap stays NULL
+    assert "dailyLimitUnits" not in done
+    with Session(engine) as s:
+        assert s.get(OfDeliveryPolicy, acct).daily_limit_units is None
+    done = call("d1", daily_limit_units=4000)
+    assert done["dailyLimitUnits"] == 4000
+    with Session(engine) as s:
+        policy = s.get(OfDeliveryPolicy, acct)
+        assert (policy.daily_limit_units, policy.limit_units) == (4000, 900)
+        change_row = s.scalars(select(OfDeliveryPolicyChange).where(OfDeliveryPolicyChange.account_id == acct)
+                               .order_by(OfDeliveryPolicyChange.revision.desc())).first()
+        assert '"daily_limit_units": 4000' in change_row.after_json and '"daily_limit_units": null' in change_row.before_json
+    assert call("d2", throttle_seconds=45)["limitUnits"] == 900          # omitted daily = unchanged
+    with Session(engine) as s:
+        assert s.get(OfDeliveryPolicy, acct).daily_limit_units == 4000
+    assert call("d3", daily_limit_units=None)["dailyLimitUnits"] is None  # explicit None clears the cap
+    for bad in (-1, 20001, True, "5"):
+        with pytest.raises(Refused, match="invalid"):
+            call("bad" + str(bad), daily_limit_units=bad)
+    with pytest.raises(Refused, match="invalid"):
+        call("l-high", limit_units=10001)                                 # the lifetime meaning is unchanged
+    for floor_bad in (1, 9):
+        with pytest.raises(Refused, match="under the shared 10 second floor"):
+            call("gap" + str(floor_bad), throttle_seconds=floor_bad)
+    assert call("gap10", throttle_seconds=10)["throttleSeconds"] == 10
+    with Session(engine) as s:
+        assert s.get(OfDeliveryPolicy, acct).throttle_seconds == 10
+    monkeypatch.setenv("ONLYFANS_ALLOW_SEND_GAP_BELOW_FLOOR", "1")        # the explicit override
+    assert call("gap5", throttle_seconds=5)["throttleSeconds"] == 5
+    monkeypatch.delenv("ONLYFANS_ALLOW_SEND_GAP_BELOW_FLOOR")
+    # the activation path (connection command) refuses it too
+    with Session(store.engine) as s:
+        rev = s.get(OfProviderConnection, acct).revision
+    with pytest.raises(Refused, match="under the shared 10 second floor"):
+        change(store, acct, "activate", rev, key("act-low"), {**LIMITS, "throttleSeconds": 3})
+
+
 # ── permissions ──────────────────────────────────────────────────────────────────────────────────────────────
 
 AGENCY_ACTOR = "agency-user:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222"

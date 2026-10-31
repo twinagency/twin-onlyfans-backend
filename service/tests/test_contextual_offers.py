@@ -95,7 +95,7 @@ def test_missing_and_valid_modes():
     "UPDATE of_runtime SET enabled=0", "UPDATE of_provider_connection SET status='paused'",
     "UPDATE of_provider_connection SET binding_id='different'", "UPDATE of_provider_connection SET revision=3",
     "UPDATE of_provider_connection SET expires_at='2025-01-01'", "UPDATE of_ledger_scan SET last_complete_at=NULL",
-    "UPDATE of_ledger_scan SET last_error='provider_read_deferred'", "UPDATE of_ledger_scan SET status='held'",
+    "UPDATE of_ledger_scan SET status='held'",
     "UPDATE of_ledger_scan SET coverage_json='{}'", "UPDATE of_ledger_scan SET window_end='2026-10-29'",
     "UPDATE of_ledger_scan SET window_end='2026-10-30 05:00'",
 ])
@@ -114,6 +114,14 @@ def test_existing_sales_permission_still_required_and_hold_checked(db):
     with sqlite3.connect(db) as c:
         c.execute("UPDATE account_ai_config SET ai_chatter_config_json=?",(json.dumps({KEY:"live"}),))
     with pytest.raises(Refused,match="contextual-sales-disabled"):a.check()
+
+
+def test_recent_read_deferral_does_not_invalidate_fresh_coverage(db):
+    a=authority(db)
+    assert a.check()["mode"]=="live"
+    with sqlite3.connect(db) as c:
+        c.execute("UPDATE of_ledger_scan SET last_error='provider_read_deferred'")
+    assert a.check()["mode"]=="live"
 
 
 def test_reservation_survives_caption_price_change_replay_and_unknown(db):
@@ -219,11 +227,13 @@ def test_off_shadow_and_live_action_boundaries(current_mode):
     from automations import pack_sender, content_prompts, content_resolver
     from automations._sell_signal import ContentDecision
     contract=Contract(subject="gym",strict=True,terms=["gym"])
-    hook=SimpleNamespace(contract=contract,source="situation",what="fan is at gym")
+    hook=SimpleNamespace(contract=contract,source="situation",what="fan is at gym",
+                         action="send_ppv",reason="active gym interest",supporting_message_ids=(10,))
     a=SimpleNamespace(source_message_id=10,check=lambda _: {"mode":current_mode},emit=lambda e:events.append(e))
     lane=SimpleNamespace(cfg={KEY:current_mode},on=True,account_id=ACCOUNT,
                          may_sell=AsyncMock(return_value=True),plan=AsyncMock(return_value="plan"))
-    c=SimpleNamespace(last_in_text="I just got back from the gym",last_in_mid=10,last_in_at=NOW)
+    c=SimpleNamespace(last_in_text="I just got back from the gym",last_in_mid=10,last_in_at=NOW,
+                      messages=[("in","I just got back from the gym")],msg_ids=[10])
     events=[]
     @asynccontextmanager
     async def session():
@@ -234,10 +244,11 @@ def test_off_shadow_and_live_action_boundaries(current_mode):
          patch.object(pack_sender,"_bought_media",AsyncMock(return_value=set())):
         result=asyncio.run(plan_contextual(lane,a,c,SimpleNamespace(fan_id=FAN)))
     if current_mode=="off":
-        assert result is None and not read.called and not resolve.called and not events
+        assert result is None and not read.called and not resolve.called
+        assert [e["stage"] for e in events]==["skipped"]
     elif current_mode=="shadow":
         assert result is None and read.called and resolve.called and not lane.plan.called
-        assert events[-1]["matched_media_ids"]==[101,102]
+        assert next(e for e in events if "matched_media_ids" in e)["matched_media_ids"]==[101,102]
     else:
         assert result[0]=="plan" and result[2].action=="send_ppv" and lane.plan.called
 

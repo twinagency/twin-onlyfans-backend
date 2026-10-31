@@ -411,7 +411,7 @@ def test_purchases_and_cards(root):
     s = [(at(1), "can you do it cheaper?")]
     objected, blocked = _price_ask.objection_state(s)
     check(objected == at(1) and blocked is None, "price ask is an objection")
-    check(not _price_ask.beat_after(s, objected), "objection without a later message: no beat")
+    check(_price_ask.beat_after(s, objected), "one explicit request is enough")
     s = [(at(1), "can you do it cheaper?"), (at(3), "hello?")]
     objected, blocked = _price_ask.objection_state(s)
     check(objected == at(1) and _price_ask.beat_after(s, objected), "objection then later message: beat")
@@ -420,7 +420,7 @@ def test_purchases_and_cards(root):
     check(objected == at(1) and _price_ask.beat_after(s, objected), "a stated cap is an objection")
     s = [(at(1), "thats a bit steep"), (at(2), "ok"), (at(3), "can you do it cheaper?")]
     objected, blocked = _price_ask.objection_state(s)
-    check(objected == at(3) and not _price_ask.beat_after(s, objected), "the NEWEST objection counts: nothing after it")
+    check(objected == at(3) and _price_ask.beat_after(s, objected), "the NEWEST objection still qualifies")
     s = [(at(1), "no thanks"), (at(2), "can you do it cheaper?"), (at(3), "?")]
     objected, blocked = _price_ask.objection_state(s)
     check(blocked == _price_ask.BLOCK_DECLINED, "a decline anywhere blocks")
@@ -582,7 +582,7 @@ def test_scan(root):
 
         case("silence alone", [], want=False)
         case("unrelated chatter", [(5, "hey"), (9, "lol ok")], want=False)
-        case("objection, nothing after", [(5, "can you do it cheaper?")], want=False)
+        case("one objection is enough", [(5, "can you do it cheaper?")], want=True)
         case("objection then more", [(5, "can you do it cheaper?"), (9, "hello?")], want=True)
         case("stated cap then more", [(5, "can you do 15"), (9, "??")], want=True)
         case("message BEFORE the card does not count", [(-9, "can you do it cheaper?"), (-5, "hello?")], want=False)
@@ -593,7 +593,7 @@ def test_scan(root):
         check(sk[0]["offer_id"] == 1 and sk[0]["fan_id"] == FAN, sk)
         case("below the floor", [(5, "can you do it cheaper?"), (9, "hello?")], price=100, want=False, outcome="price-at-minimum")
         case("one cent over the floor", [(5, "can you do it cheaper?"), (9, "hello?")], price=301, want=True)
-        case("card too young", [(5, "can you do it cheaper?"), (9, "hello?")], want=False, offered_at=NOW - timedelta(minutes=60))
+        case("recent card, explicit request", [(5, "can you do it cheaper?"), (9, "hello?")], want=True, offered_at=NOW - timedelta(minutes=60))
         # the outcome is reported once per (kind, offer, reason)
         case("decline blocks (again)", [(5, "can you do it cheaper?"), (9, "no thanks")], want=False, outcome="fan-declined")
         svc.scan_postsale(); svc.scan_postsale()

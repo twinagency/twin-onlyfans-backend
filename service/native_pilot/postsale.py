@@ -91,10 +91,12 @@ def unlinked_paid_fans(con, account):
     return {int(fan) for fan, occurred in rows if since is None or _naive(occurred) >= since}
 
 
-def unpaid_cards(con, account, now, after_minutes):
+def unpaid_cards(con, account, now, after_minutes, *, include_contextual=False):
     """Vault cards still unpaid ``after_minutes`` after they were sent: ``[(offer_id, fan_id, offered_at, price_cents)]``.
 
-    Cards of a fan with an unlinked paid purchase are never returned (see ``unlinked_paid_fans``)."""
+    Cards of a fan with an unlinked paid purchase are never returned (see ``unlinked_paid_fans``).
+    Contextual cards are withheld by default; a caller that has independently
+    proved an explicit price request may include them."""
     clause, args = _lane_clause()
     rows = con.execute(
         "SELECT o.id,o.fan_id,o.offered_at,o.price_cents,o.offer_message_id FROM content_offers o "
@@ -106,22 +108,23 @@ def unpaid_cards(con, account, now, after_minutes):
     blocked = unlinked_paid_fans(con, account) if rows else set()
     seen_fans = set()
     for oid, fan, offered, price, _msg in rows:
-        # One request concerns the latest open card, not every older unpaid card.
+        if int(fan) in blocked:
+            continue
+        offered = _naive(offered)
+        if offered is None or offered > now - timedelta(minutes=after_minutes):
+            continue
+        # One request concerns the latest due card, not every older unpaid card.
         if int(fan) in seen_fans:
             continue
         seen_fans.add(int(fan))
-        if int(fan) in blocked:
-            continue
         from twin_bridge.store import has_table
-        if has_table(con, "of_contextual_offer") and con.execute(
+        if not include_contextual and has_table(con, "of_contextual_offer") and con.execute(
                 "SELECT 1 FROM of_contextual_offer WHERE account_id=? AND fan_id=? AND message_id=?",
                 (account, int(fan), _msg)).fetchone():
             # Silence never authorizes a discounted replacement for a contextual card.
             continue
-        offered = _naive(offered)
-        if offered is not None and offered <= now - timedelta(minutes=after_minutes):
-            out.append((int(oid), int(fan), offered, int(price or 0)))
-    return out
+        out.append((int(oid), int(fan), offered, int(price or 0)))
+    return sorted(out)
 
 
 def inbound_since(con, account, fan, since):

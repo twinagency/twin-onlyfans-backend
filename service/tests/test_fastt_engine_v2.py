@@ -345,7 +345,7 @@ async def s_budget(sim):
     await asyncio.sleep(1500)
     check(sim.sends[A] == 2 and sim.duplicates == 0, "both fans are answered once the budget allows")
     check(not [e for e in kinds(sim, "turn-abandoned")], "no input was abandoned")
-    sim.fail_models, sim.fail_reason = 2, "model-http-failed"          # e.g. HTTP 402 credits
+    sim.fail_models, sim.fail_reason = 1, "model-http-failed"          # e.g. HTTP 402 credits
     sim.fan_says(A, fs[0], "again")
     await asyncio.sleep(2500)
     check(sim.sends[A] == 3 and not kinds(sim, "turn-abandoned"), "an HTTP failure is also retried with backoff")

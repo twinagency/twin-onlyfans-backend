@@ -74,7 +74,10 @@ DESCRIBE_WAIT_S = 45.0       # a caption-less fan photo waits this long for its 
 CONNECTION_CHECK_S = 300.0
 TURN_MAX_S = 600.0
 PACE_MAX_S = 180.0
-MODEL_RETRY_REASONS = ("model-timeout", "model-http-transient", "model-transport-failed")
+MODEL_RETRY_REASONS = (
+    "model-timeout", "model-http-failed", "model-response-failed",
+    "model-http-transient", "model-transport-failed", "media-claim-unbacked",
+)
 # Reasons a reply ends WITHOUT any send standing and that are not the fan message's fault. The claim is given
 # back (Ledger.release_input) so the fan's latest state is answered from scratch once the cause clears; a draft
 # is never kept. value = seconds this fan is left alone before it is looked at again.
@@ -1392,7 +1395,8 @@ class Service:
         now = runner.now()
         with runner.readonly(self.path) as con:
             buys = postsale.purchases(con, self.db, now) if st["post_buy"] else []
-            cards = postsale.unpaid_cards(con, self.db, now, 0) if st["discount"] else []
+            # The scan proves an explicit price request below before queuing.
+            cards = postsale.unpaid_cards(con, self.db, now, 0, include_contextual=True) if st["discount"] else []
             ready = []
             for offer_id, fan, offered_at, price in cards:
                 if not self._postsale_in_scope(fan):

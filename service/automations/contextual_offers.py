@@ -19,12 +19,14 @@ async def plan_contextual(lane, authority, candidate, fan, *, blocked=False, voi
     or normal draft is changed here; off makes no contextual inference call.
     """
     current_mode = mode(lane.cfg)
-    context = recent_context(candidate, fan)
     def event(stage, reason, **extra):
         if authority is not None:
             authority.emit({"event":"contextual-opportunity","stage":stage,"reason":reason,"mode":current_mode,"fan":fan.fan_id,**extra})
-    if (current_mode == "off" or authority is None or not lane.on or blocked or context is None
-            or candidate.last_in_mid != authority.source_message_id):
+    if current_mode == "off" or authority is None or not lane.on or blocked:
+        event("skipped", "disabled_blocked_or_stale_input")
+        return None
+    context = recent_context(candidate, fan)
+    if context is None or candidate.last_in_mid != authority.source_message_id:
         event("skipped", "disabled_blocked_or_stale_input")
         return None
     try:

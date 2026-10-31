@@ -12,12 +12,13 @@ import json
 from types import SimpleNamespace
 
 from twin_bridge import store
+from onlyfans_runtime.ledger import RECENT_COVERAGE_FRESHNESS
 from .ledger import Refused
 from onlyfans_runtime.contextual_mode import KEY, mode
 
-# The current recent-ledger scheduler polls every 300 seconds; allow its single
-# 45-second provider read lease, never a historical-backfill completion time.
-PURCHASE_FRESHNESS = timedelta(seconds=300 + 45)
+# Shared with the recent-ledger scheduler. This is the same bounded freshness
+# contract, not a longer threshold used to hide stale provider coverage.
+PURCHASE_FRESHNESS = RECENT_COVERAGE_FRESHNESS
 
 
 def canonical(value):

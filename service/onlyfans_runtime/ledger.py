@@ -27,6 +27,27 @@ from .store import Refused, _id, utcnow
 PAGE_SIZE = 20
 MAX_OFFSET = 10000
 MAX_MARKER_ROWS = 1000000000
+# Recent coverage is refreshed on provider time, not worker completion time.
+# A normal page gets one provider lease of headroom before the old cutoff expires.
+RECENT_REFRESH_INTERVAL = timedelta(seconds=300)
+RECENT_READ_ALLOWANCE = timedelta(seconds=45)
+RECENT_COVERAGE_FRESHNESS = RECENT_REFRESH_INTERVAL + RECENT_READ_ALLOWANCE
+
+
+def recent_refresh_at(completed_at, cutoff_at):
+    """Start the next refresh early enough for this scan's observed duration.
+
+    The provider query cutoff is the truth. If a scan took most of its refresh
+    interval, the next request is already due and starts on the next worker
+    tick rather than another 300 seconds after completion.
+    """
+    if (type(completed_at) is not datetime or type(cutoff_at) is not datetime
+            or completed_at.tzinfo is not None or cutoff_at.tzinfo is not None
+            or completed_at < cutoff_at):
+        raise Refused("invalid ledger refresh timing")
+    observed_duration = completed_at - cutoff_at
+    target = cutoff_at + RECENT_REFRESH_INTERVAL - observed_duration
+    return max(completed_at + timedelta(seconds=1), target)
 
 
 def timestamp(value):
@@ -478,7 +499,8 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                     next_cursor.update(version=2, rows=position)
                 scan.last_page_hash = page_hash
                 scan.continuation_json = canonical(next_cursor)
-                scan.next_poll_at = now + timedelta(seconds=1 if more else 300)
+                scan.next_poll_at = (now + timedelta(seconds=1) if more
+                                     else recent_refresh_at(now, end))
                 if not more:
                     # Freshness describes the frozen provider query cutoff, not
                     # the later wall-clock time at which a long scan finished.
@@ -488,8 +510,6 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
                     scan.coverage_json = _coverage_receipt(scan)
                     if history:
                         scan.next_poll_at = now + timedelta(days=1)
-                    elif now - end > timedelta(minutes=5):
-                        scan.next_poll_at = now + timedelta(seconds=1)
                 processed += 1
         finally:
             from .worker import _release_provider

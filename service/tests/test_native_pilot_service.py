@@ -495,7 +495,7 @@ async def loop_level(backend, root):
                 return {"skipped_manual": 1}
             if FakeEngine.fail_models > 0:
                 FakeEngine.fail_models -= 1
-                self.chat.__self__.stopped_reason = "model-timeout"
+                self.chat.__self__.stopped_reason = getattr(FakeEngine, "failure_reason", "model-timeout")
                 return {"errors": 1}
             for i, text in enumerate(FakeEngine.texts):
                 if FakeEngine.die_after_first and i == 1:
@@ -882,6 +882,30 @@ async def loop_level(backend, root):
         check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete" and f.sql("SELECT count(*) FROM native_pilot_inputs")[0][0] == 1)
         check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5)
         await stop(task, patcher)
+
+
+        # A rejected prompt placeholder is regenerated once through the same durable retry path.
+        # Repeated placeholders remain unsent and exhaust the retry rather than spinning forever.
+        for failures in (1, 2):
+            f, http, client = make(f"loop-placeholder-{failures}", limit=100, used=4, throttle=1)
+            FakeEngine.fail_models = failures
+            events.clear()
+            with patch.object(FakeEngine, "failure_reason", "instruction-placeholder-held", create=True), \
+                    patch.object(service, "MODEL_RETRY_LIMIT", 1):
+                task, patcher = start(client)
+                await until(lambda: kinds("ready"), "ready", events)
+                fan_says(f)
+                if failures == 1:
+                    await replied(f, http, 1, "placeholder regenerated and answered once")
+                    check(not kinds("turn-abandoned"))
+                    check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete")
+                else:
+                    await until(lambda: kinds("turn-abandoned"), "repeated placeholder bounded", events)
+                    check(not http.posts, "placeholder text never reaches transport")
+                    check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "failed")
+                check([e["reason"] for e in kinds("turn-requeued")] == ["instruction-placeholder-held"])
+                check(FakeEngine.fail_models == 0)
+                await stop(task, patcher)
 
         f, http, client = make("loop-model-bound", limit=100, used=4, throttle=1)
         FakeEngine.fail_models = 2

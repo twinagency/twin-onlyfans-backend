@@ -469,13 +469,14 @@ def money_brake(cfg: dict, paid7: int, open_count: int, unlocked: bool, caps_ok:
     cap7 = int(cfg.get("spend_velocity_cap_7d_cents") or upsell.SPEND_VELOCITY_CAP_7D)
     if cap7 and paid7 >= cap7:
         return SellVerdict(False, R_SPEND_CAP_7D)
-    max_open = max(_MAX_OPEN_OFFERS, int(cfg.get("max_open_offers") or 0))
-    if open_count and unlocked:
-        open_count -= 1
-    if open_count >= max_open:
-        return SellVerdict(False, R_MAX_OPEN)
-    if not caps_ok:
-        return SellVerdict(False, R_CAPS)
+    if cfg.get("fastt_offer_fan_caps_enabled", True) is not False:
+        max_open = max(_MAX_OPEN_OFFERS, int(cfg.get("max_open_offers") or 0))
+        if open_count and unlocked:
+            open_count -= 1
+        if open_count >= max_open:
+            return SellVerdict(False, R_MAX_OPEN)
+        if not caps_ok:
+            return SellVerdict(False, R_CAPS)
     return SellVerdict(True, OK)
 
 
@@ -646,8 +647,10 @@ class SellLane:
         early = money_brake(self.cfg, paid7, len(open_offers), unlocked, True)
         if not early:
             return early
-        caps_ok = await _offer_caps_ok(self.account_id, fan_id, self.cfg,
-                                       requested=turn.trigger != "contextual_relevance" and self.is_ask(turn))
+        caps_ok = (self.cfg.get("fastt_offer_fan_caps_enabled", True) is False
+                   or await _offer_caps_ok(
+                       self.account_id, fan_id, self.cfg,
+                       requested=turn.trigger != "contextual_relevance" and self.is_ask(turn)))
         return money_brake(self.cfg, paid7, len(open_offers), unlocked, caps_ok)
 
     async def qualify(self, fan_id: int, turn: Turn, *,

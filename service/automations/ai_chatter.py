@@ -8017,6 +8017,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     # Max unpaid PPVs he may hold at once — configurable, but never below the default 2
     # (the whole point is that a second offer in a row is allowed).
     max_open_offers = max(_MAX_OPEN_OFFERS, int(cfg.get("max_open_offers") or 0))
+    fan_offer_caps_enabled = cfg.get("fastt_offer_fan_caps_enabled", True) is not False
     # …and the EFFECTIVE ceiling is ONE when the prompt does not sell. "A second offer
     # in a row is allowed" is a statement about a model that can pitch a second rung,
     # and with the catalogue out of the prompt there is no second rung to pitch — only
@@ -8941,7 +8942,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             if open_count and await _unlocked_since_open_offers(
                     account_id, fan_id, open_offers_f):
                 open_count -= 1
-            second_offer = pending is not None and open_count < open_offer_ceiling
+            second_offer = (pending is not None
+                            and (not fan_offer_caps_enabled or open_count < open_offer_ceiling))
             # Per-fan language: fans.language (manual pin or gen_info detection)
             # overrides the account default; unset → account default. Resolved HERE
             # (not at the prompt-build below) because the haggle detector needs it —
@@ -8984,7 +8986,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # ⚠️ WITH the catalogue in the prompt the ceiling is unchanged, and it has
             # to be: one pending PPV must NOT land here, because `_second_offer_block`
             # owns that state and is what allows a second rung before the cap.
-            elif pending is not None and open_count >= open_offer_ceiling:
+            elif (fan_offer_caps_enabled and pending is not None
+                  and open_count >= open_offer_ceiling):
                 # Max unpaid PPVs already on the table — stop pitching, just chat.
                 sell = _pending_block(pending, await _get_item(int(pending.item_id)))
             # ⚠️ THE CATALOGUE IS NOT THE PRECONDITION ON SELLING — HAVING SOMETHING
@@ -9004,7 +9007,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # false, so `sell` stays `_NO_SELL`). The condition is the disjunction
             # the branch body already tests, hoisted to where it costs nothing.
             elif ((catalog_items or v.sell_customs)
-                    and await _offer_caps_ok(account_id, fan_id, caps_cfg)):
+                    and (not fan_offer_caps_enabled
+                         or await _offer_caps_ok(account_id, fan_id, caps_cfg))):
                 offerable = await _offerable_for_fan(account_id, fan_id,
                                                      catalog_items)
                 # §6.2 — rolling 7-day spend brake. Past the account's cap he is not

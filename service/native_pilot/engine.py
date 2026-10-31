@@ -232,7 +232,6 @@ class NativeEngine:
         self._token = None
         self._running = False
         self._violation = None
-        self._offer_cfg = {"max_open_offers": 2, "max_offers_per_fan_per_day": 2}
         # --followups in vault mode: FASTT's own nudge delay and what this turn did (see _queue_card_nudge).
         self._nudge_min, self._card_sent, self._nudge_queued = 0, False, False
 
@@ -290,13 +289,13 @@ class NativeEngine:
             # requires the same explicit saved permission displayed by the editor.
             # Every other media writer stays off (TEXT_ONLY).
             result.update(pack_send_enabled=sales_enabled, pack_on_ask_enabled=sales_enabled, prompt_sell_catalog=False,
-                          ppv_caption_1to1=False, **offer_limits(native))
-            self._offer_cfg = {k: result[k] for k in ("max_open_offers", "max_offers_per_fan_per_day")}
+                          ppv_caption_1to1=False, fastt_offer_fan_caps_enabled=False,
+                          **offer_limits(native))
         elif self.content:
             # Explicit pilot configuration of the existing catalogue path;
             # the vault-wide resolver and all other media writers stay off.
-            result.update(prompt_sell_catalog=sales_enabled, ppv_caption_1to1=False, **offer_limits(native))
-            self._offer_cfg = {k: result[k] for k in ("max_open_offers", "max_offers_per_fan_per_day")}
+            result.update(prompt_sell_catalog=sales_enabled, ppv_caption_1to1=False,
+                          fastt_offer_fan_caps_enabled=False, **offer_limits(native))
         if self._job == POST_BUY_KIND:
             # FASTT's own post-buy bridge, then ONE follow-up card from the vault (ai_chatter._fire_post_buy_vault_rung),
             # for this job only: the rung switch stays off for every ordinary turn.
@@ -453,16 +452,9 @@ class NativeEngine:
                 return "media-already-pending"
         if not await native._offerable_for_fan(account, fan, [target]):
             return "item-already-purchased"
-        open_count = len(open_offers)
-        if open_count and await native._unlocked_since_open_offers(account, fan, open_offers):
-            open_count -= 1
-        cfg = self._offer_cfg
-        if open_count >= max(2, cfg["max_open_offers"]):
-            return "max-open-offers"
-        if not await native._offer_caps_ok(account, fan, {**cfg, "min_fan_msgs_between_offers": 0}):
-            return "daily-offer-cap"
-        if open_count and not await native._offer_caps_ok(account, fan, {**cfg, "min_fan_msgs_between_offers": 1}):
-            return "offer-pacing"
+        # Different unpaid items do not consume each other's eligibility. The
+        # same-item and shared-hero checks above are the repeat authority; the
+        # account send/delivery and fan-level sales brakes still run elsewhere.
         return None
 
     async def _fan_unlinked_paid(self):

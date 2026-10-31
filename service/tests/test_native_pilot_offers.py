@@ -1,11 +1,10 @@
-"""Offer caps, repeats and stop-after-card on the REAL native catalogue path (synthetic data, blocked sockets).
+"""Different-item eligibility, repeats and safety on the REAL native catalogue path.
 
-Proves, against FASTT's own ai_chatter rules (no selling rule is changed here):
-* two unpaid cards on the table: the next turn still gets an ordinary text reply, never a third card,
-  and the declined offer leaves a visible ``offer-declined`` runner event with its reason;
-* a third distinct card needs explicit ``fastt_max_open_offers`` / ``fastt_max_offers_per_day`` = 4;
-* the daily cap counts expired/cancelled offers of the last 24 hours and rolls over;
-* an item the fan bought, or whose card is still open, is never offered again.
+Proves, with synthetic data and blocked sockets:
+* earlier unpaid cards and prior same-day offers do not block a different item;
+* the same item, shared hero media, purchased media and unlinked purchases still refuse;
+* a refused marker becomes ordinary chat without a second card or send;
+* account/session/delivery protections remain outside these business caps.
 """
 import asyncio, json, logging, os, socket, sys, tempfile
 from pathlib import Path
@@ -110,30 +109,31 @@ async def exercise(tmp):
     def cards(out):
         return [k for _, k in out if k]
 
-    # 1. Two unpaid cards on the table: the third turn still chats, no third card, a visible reason.
+    # 1. Earlier unpaid cards do not consume a different item's eligibility.
     stats, out, declined = await turn(card(1))
     check(stats['replies_sent'] == 1 and len(cards(out)) == 1 and not declined, 'first card')
     stats, out, declined = await turn(card(2))
     check(len(cards(out)) == 1 and await offers() == [(1, 'open'), (2, 'open')], 'second card')
-    stats, out, declined = await turn(card(3, lead='haha you are funny'))
-    check(stats['replies_sent'] == 1 and [t for t, _ in out] == ['haha you are funny'] and not cards(out),
-          'cap: ordinary text reply goes out, price bubble binned, no card')
-    check(len(declined) == 1 and declined[0]['reason'] == 'max-open-offers' and declined[0]['item_id'] == 3
-          and declined[0]['regenerated'] is False, 'cap: visible reason on the runner event')
-    check(await offers() == [(1, 'open'), (2, 'open')], 'cap: no third offer row')
-    # A reply that is ONLY price talk used to be dropped (silence): one plain regeneration instead.
+    stats, out, declined = await turn(card(3))
+    check(len(cards(out)) == 1 and not declined, 'third different item is eligible while two are unpaid')
+    stats, out, declined = await turn(card(4))
+    check(len(cards(out)) == 1 and not declined, 'fourth different item is eligible while three are unpaid')
+    check(await offers() == [(1, 'open'), (2, 'open'), (3, 'open'), (4, 'open')],
+          'all four distinct cards remain open')
+    # Same-item duplicate prevention remains, including the price-only retry path.
     stats, out, declined = await turn(card(3, lead='$3 to unlock'), 'ok that is wild lol')
-    check(stats['replies_sent'] == 1 and [t for t, _ in out] == ['ok that is wild lol'] and not cards(out),
-          'cap: a price-only reply is regenerated as plain chat, not dropped')
+    check(stats['replies_sent'] == 1 and [t for t, _ in out] == ['that is wild lol'] and not cards(out),
+          'repeat: a price-only reply is regenerated as plain chat, not dropped')
     check(len(state['calls']) == 2 and state['calls'][1]['messages'][-1] == {'role': 'system', 'content': NO_OFFER_NOTE}
-          and NO_OFFER_NOTE not in json.dumps(state['calls'][0]['messages']), 'cap: one retry, with the no-offer note')
-    check(len(declined) == 1 and declined[0]['regenerated'] is True and len(await offers()) == 2, 'cap: retry is recorded')
+          and NO_OFFER_NOTE not in json.dumps(state['calls'][0]['messages']), 'repeat: one retry, with the no-offer note')
+    check(len(declined) == 1 and declined[0]['reason'] == 'item-already-pending'
+          and declined[0]['regenerated'] is True and len(await offers()) == 4, 'repeat: retry is recorded')
     # A turn whose model does not offer anything is untouched and silent about it.
     stats, out, declined = await turn('just chatting here')
     check(stats['replies_sent'] == 1 and not declined and not cards(out), 'no offer asked: nothing recorded')
 
-    # 2. Explicit limits only: fastt_max_open_offers / fastt_max_offers_per_day = 4 allow a third distinct item.
-    await reset({'fastt_max_open_offers': 4, 'fastt_max_offers_per_day': 4})
+    # 2. Legacy business caps are not the native OnlyFans eligibility authority.
+    await reset({'fastt_max_open_offers': 2, 'fastt_max_offers_per_day': 2})
     async with get_session() as s:
         s.add(item(5, 1005))
     manifest_raw = json.loads(manifest.read_text())
@@ -146,11 +146,10 @@ async def exercise(tmp):
         check(len(cards(out)) == 1 and not declined, f'limit 4: card {n}')
     check([s for _, s in await offers()] == ['open'] * 4, 'limit 4: four open cards')
     stats, out, declined = await turn(card(5, lead='ha yes'))
-    check(not cards(out) and stats['replies_sent'] == 1 and declined and declined[0]['reason'] == 'max-open-offers',
-          'limit 4: the fifth is held at the explicit limit, chat continues')
+    check(len(cards(out)) == 1 and stats['replies_sent'] == 1 and not declined,
+          'a fifth distinct item is eligible despite the legacy two-open/two-day values')
 
-    # 3. Daily cap counts expired/cancelled offers of the last 24h and rolls over. Stock offer
-    # spacing (min_fan_msgs_between_offers) is zeroed here so the daily cap is what is tested.
+    # 3. Expired/cancelled offers from the same day do not block a different item.
     await reset({'min_fan_msgs_between_offers': 0})
     async with get_session() as s:
         now = datetime.utcnow()
@@ -158,14 +157,9 @@ async def exercise(tmp):
             s.add(ContentOffer(account_id=ACCOUNT, fan_id=FAN, item_id=n, mode='ppv', price_cents=300, status='cancelled',
                                offered_at=now - timedelta(hours=1), updated_at=now))
     stats, out, declined = await turn(card(3, lead='lol stop'))
-    check(not cards(out) and stats['replies_sent'] == 1 and declined and declined[0]['reason'] == 'daily-offer-cap',
-          'daily cap: chat continues with a visible reason')
-    async with get_session() as s:
-        for o in (await s.execute(select(ContentOffer))).scalars():
-            o.offered_at = o.offered_at - timedelta(hours=25)
-    stats, out, declined = await turn(card(3))
-    check(len(cards(out)) == 1 and not declined, 'daily rollover: a card is allowed again')
-    check((3, 'open') in await offers(), 'daily rollover: the new offer is recorded')
+    check(len(cards(out)) == 1 and stats['replies_sent'] == 1 and not declined,
+          'same-day unused offers do not block a different item')
+    check((3, 'open') in await offers(), 'the different item offer is recorded')
 
     # 4. Repeats: never a card for a pending piece, identical pending media, or an item already bought.
     # Stock offer spacing is zeroed so the repeat rules are what is tested.

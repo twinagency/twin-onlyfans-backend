@@ -184,6 +184,8 @@ async def exercise():
                 cfg = await pilot.load_config(account, native_cfg)
                 check((cfg["max_open_offers"], cfg["max_offers_per_fan_per_day"]) == want,
                       f"offer limits {native_cfg}")
+                check(cfg["fastt_offer_fan_caps_enabled"] is False,
+                      f"native different-item cap exemption {native_cfg}")
             pilot.content = None
             for wrong in ({"account_id": "999", "fan_id": fan, "model": MODEL},
                           {"account_id": account, "fan_id": fan+1, "model": MODEL},

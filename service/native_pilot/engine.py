@@ -585,3 +585,4 @@ class NativeEngine:
             reset_telegram_capabilities(token)
             NativeEngine._active = False
         return False
+

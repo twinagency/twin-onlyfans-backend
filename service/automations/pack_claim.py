@@ -58,11 +58,15 @@ _VOICE_BAN = re.compile(r"[0-9$€£]|\bpics?\b|\bphotos?\b|\bvideos?\b|\bset\b"
 # branch may name the media format in a question, but no branch may tell him
 # when a send will arrive or that one is already on its way.
 _DELIVERY_PROMISE = re.compile(
-    r"(?:\bi(?:'ll|ll| will|'m|m| am)(?:\s+going\s+to|\s+gonna)?"
-    r"\s+(?:send|deliver|drop|post|share)\b"
-    r"|\byou(?:'ll|ll| will)\s+(?:get|receive|have)\b"
+    r"(?:"
+    r"\bi(?:'ll| will)\s+(?:be\s+)?(?:send|deliver|drop|post|share|get|have)\b"
+    r"|\bi(?:'m| am)\s+(?:going\s+to\s+|gonna\s+|sending|delivering|dropping|posting|sharing)\b"
+    r"|\bi\s+(?:can|could)\s+(?:send|deliver|drop|post|share)\b"
+    r"|\byou(?:'ll| will)\s+(?:get|receive|have)\b"
+    r"|\bit(?:'ll| will)\s+be\s+in\s+(?:your|ur)\s+(?:inbox|dms?|messages)\b"
     r"|\b(?:send|sending|deliver|delivering|drop|dropping|post|posting)\b"
-    r"[^.!?]{0,48}\b(?:tonight|tomorrow|later|soon)\b)",
+    r"[^.!?]{0,48}\b(?:tonight|tomorrow|later|soon)\b"
+    r")",
     re.I,
 )
 
@@ -315,8 +319,14 @@ def voice_line_ok(text: str | None) -> bool:
     return bool(line) and not _voice_line_unsafe(line)
 
 
+def has_delivery_promise(text: str | None) -> bool:
+    """True when fan-visible text promises a future or current delivery."""
+    line = " ".join(str(text or "").split()).replace("\u2019", "'").replace("\u2018", "'")
+    return bool(_DELIVERY_PROMISE.search(line))
+
+
 def _voice_line_unsafe(line: str) -> bool:
-    return bool(_VOICE_BAN.search(line) or _DELIVERY_PROMISE.search(line))
+    return bool(_VOICE_BAN.search(line) or has_delivery_promise(line))
 
 
 def compose_caption(claim: Claim, voice_line: str | None) -> str:

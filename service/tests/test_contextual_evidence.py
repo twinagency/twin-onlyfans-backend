@@ -105,6 +105,32 @@ def test_shared_caption_validator_rejects_delivery_promises(line):
  assert compose_caption(Claim("3 pics",3),line)=="3 pics"
 
 
+@pytest.mark.parametrize("line",[
+ "I will send you a video tonight, okay?",
+ "I\u2019ll deliver it tomorrow",
+ "I'm going to send you one later",
+ "I am sending it now",
+ "you will receive it soon",
+ "it'll be in your inbox tonight",
+])
+def test_final_text_boundary_rejects_future_delivery_promises(line):
+ from native_pilot.media_claims import claims_media_sent
+ assert claims_media_sent(line)
+
+
+@pytest.mark.parametrize("line,promise,media",[
+ ("want me to send you a photo?",False,False),
+ ("do you want a video tonight?",False,False),
+ ("i sent you a video",False,True),
+ ("i'm sending you a video now",True,True),
+])
+def test_delivery_promise_guard_keeps_questions_and_past_claims_distinct(line,promise,media):
+ from automations.pack_claim import has_delivery_promise
+ from native_pilot.media_claims import claims_media_sent
+ assert has_delivery_promise(line) is promise
+ assert claims_media_sent(line) is media
+
+
 @pytest.mark.parametrize("change,expected",[
  ("no_interest","no_interest"),
  ("invalid_output","invalid_model_output"),

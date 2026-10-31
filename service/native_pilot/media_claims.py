@@ -34,3 +34,23 @@ def claims_media_sent(text: str | None) -> bool:
     if not text:
         return False
     return any(rule.search(text) for rule in _RULES)
+
+
+# A bubble that echoes a prompt instruction/template instead of a message ("<p>2-4 word reaction here</p>",
+# "[your line here]", "{{name}}") is never sent: the bubble is held and the turn is regenerated once, exactly like
+# an unbacked media claim. "<3" and ordinary text never match: a tag needs a letter after "<".
+PLACEHOLDER_HELD = "instruction-placeholder-held"
+_PLACEHOLDER_RULES = (
+    re.compile(r"</?\s*[a-z][a-z0-9]*(?:\s[^<>]*)?/?>", re.I),
+    re.compile(r"\b\d+\s*-\s*\d+\s+words?\b.*\bhere\b", re.I),
+    re.compile(r"\b(?:word\s+reaction|your\s+(?:line|message|reply|text|name)|insert\s+\w+)\s+here\b", re.I),
+    re.compile(r"\[[^\]\n]{0,40}\bhere\]", re.I),
+    re.compile(r"\{\{[^}\n]{1,40}\}\}"),
+)
+
+
+def echoes_instruction(text: str | None) -> bool:
+    """True when ``text`` looks like a copied prompt placeholder rather than a message to a fan."""
+    if not text:
+        return False
+    return any(rule.search(text) for rule in _PLACEHOLDER_RULES)

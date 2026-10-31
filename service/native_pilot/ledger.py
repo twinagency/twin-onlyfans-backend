@@ -564,10 +564,6 @@ class Ledger:
         now_s = _dt(now)
         with self._tx() as con:
             p = self._active(con, pilot_id, owner_token, now_s)
-            canonical = self._canonical_guard(con, p, lock=True)
-            if reply_authority is not None:
-                from .pacing import guard
-                guard(con, reply_authority, now_s)
             if bubble_no > 10:
                 # Preserve the ten-bubble limit, excluding definitively refused attempts.
                 # Each retry still gets a distinct immutable attempt/receipt sequence number.
@@ -590,6 +586,16 @@ class Ledger:
                 raise Refused("source-changed")
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND bubble_no=?", (input_key, bubble_no)).fetchone():
                 raise Refused("attempt-already-exists")
+            # Do not hold the account runtime lock while the per-fan source
+            # query above runs. The final short section re-locks it, rechecks
+            # the pilot revision and performs only the atomic admission writes.
+            canonical = self._canonical_guard(con, p, lock=True)
+            if reply_authority is not None:
+                from .pacing import guard
+                guard(con, reply_authority, now_s)
+            p = self._active(con, pilot_id, owner_token, now_s)
+            if revision != p["revision"]:
+                raise Refused("revision-changed")
             if self.allowance:
                 from . import admission
                 policy = self._policy_row(con, p["account_id"])

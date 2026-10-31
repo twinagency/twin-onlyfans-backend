@@ -420,6 +420,18 @@ def process_ledger_pages(store, tenant, *, limit=1, stop=None, history=False):
             if scan is None:
                 scan = Scan(account_id=account, last_complete_at=None)
                 s.add(scan)
+            if (not history and scan.status == "running" and scan.window_end is not None
+                    and now - scan.window_end >= RECENT_COVERAGE_FRESHNESS):
+                # A partial page that outlived the freshness contract can never
+                # certify current purchases, even if it eventually finishes.
+                # Start a new provider window rather than extending the stale one.
+                scan.status = "idle"
+                scan.last_error = None
+                scan.lease_token = scan.lease_until = None
+                scan.next_poll_at = now
+                scan.page_offset = 0
+                scan.last_page_hash = None
+                scan.continuation_json = None
             if not _current(runtime, connection, scan, now):
                 scan.last_complete_at = scan.last_full_at = None
                 scan.coverage_json = None

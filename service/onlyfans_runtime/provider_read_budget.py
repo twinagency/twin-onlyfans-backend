@@ -101,11 +101,21 @@ def _reserve_due_ledger_turn(s, account, runtime, revision, now):
     if (scan is None or scan.binding_id != runtime.binding_id
             or scan.connection_revision != revision or scan.lease_token is not None):
         return False
+    due = scan.next_poll_at is not None and scan.next_poll_at <= now + timedelta(seconds=LEDGER_RETRY_SECONDS)
+    if not due:
+        return False
     fresh = (scan.updated_at is not None
              and timedelta(0) <= now - scan.updated_at < timedelta(seconds=LEASE_SECONDS))
-    if (scan.last_error is not None and scan.last_error.startswith("provider_read_deferred")
-            and fresh and scan.next_poll_at <= now + timedelta(seconds=LEDGER_RETRY_SECONDS)):
-        return True
+    if scan.status == "running":
+        # A multi-page scan is still the same due ledger turn. It has no domain
+        # lease between pages, so without this branch a recent-inbox read can
+        # take the provider lease before the next page starts.
+        if not fresh:
+            return False
+        if scan.last_error is None:
+            scan.last_error = LEDGER_TURN_RESERVED
+            scan.updated_at = now
+        return scan.last_error == LEDGER_TURN_RESERVED or scan.last_error.startswith("provider_read_deferred")
     if scan.status == "idle" and scan.next_poll_at <= now and scan.last_error is None:
         scan.last_error = LEDGER_TURN_RESERVED
         scan.updated_at = now

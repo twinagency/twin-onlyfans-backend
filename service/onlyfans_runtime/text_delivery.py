@@ -71,6 +71,14 @@ class NotAccepted:
     evidence_ref: str
 
 
+class ProviderThrottled(Exception):
+    """A definite 429 response; retry_after is the provider's value when supplied."""
+
+    def __init__(self, retry_after=None):
+        super().__init__("provider-rate-limited")
+        self.retry_after = retry_after
+
+
 class SyntheticTextTransport:
     """Explicit local failure-injection seam; it has no network implementation."""
 
@@ -187,6 +195,18 @@ class TextAuthority:
 
     @staticmethod
     def _media_current(s, row, policy, now):
+        if row.origin == "manual" and row.catalog_snapshot_json and json.loads(row.catalog_snapshot_json).get("manual_vault") is True:
+            from .manual_media import matches
+            runtime = s.get(OfRuntime, row.account_id)
+            if policy is None or not policy.media_enabled or not matches(s, runtime, row):
+                return False
+            if row.price_cents > 0:
+                from .media_delivery import assert_unowned
+                try:
+                    assert_unowned(s, row.account_id, row.fan_id, json.loads(row.catalog_snapshot_json), manual=True)
+                except (Refused, ValueError, TypeError):
+                    return False
+            return True
         if row.catalog_item_id is None:
             return row.media_json == "[]" and row.preview_json == "[]" and row.price_cents == 0 and row.catalog_snapshot_json is None
         if policy is None or not policy.media_enabled:
@@ -216,7 +236,8 @@ class TextAuthority:
             raise Refused("invalid delivery policy")
         with Session(self.engine) as s, s.begin():
             self.store._runtime(s, tenant_id, account_id)
-            policy = s.get(OfDeliveryPolicy, account_id)
+            policy = s.scalar(select(OfDeliveryPolicy).where(
+                OfDeliveryPolicy.account_id == account_id).with_for_update())
             if policy is None:
                 if expected_revision != 0:
                     raise Refused("policy revision conflict")
@@ -250,12 +271,33 @@ class TextAuthority:
             OfMessageDelivery.account_id == account_id, OfMessageDelivery.fan_id == fan_id,
             OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES)).limit(1)) is not None
 
-    def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None):
+    @staticmethod
+    def _manual_attachment(row):
+        """Derive the narrow archive exception from the saved immutable intent."""
+        if (row.origin != "manual" or type(row.price_cents) is not int
+                or not (row.price_cents == 0 or 300 <= row.price_cents <= 20000)
+                or row.catalog_item_id is None):
+            return False
+        try:
+            snapshot = json.loads(row.catalog_snapshot_json)
+            return (snapshot.get("manual_vault") is True
+                    and type(snapshot.get("price_cents")) is int
+                    and snapshot["price_cents"] == row.price_cents
+                    and bool(snapshot.get("media_ids")))
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+    def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None,
+                     manual_attachment=False):
         if policy is None or not policy.enabled or policy.transport_kind not in {"synthetic", "native"}:
             return "delivery_disabled"
         if not runtime.enabled:
             return "account_disabled"
-        if (runtime.recovery_needed or runtime.pending_events or runtime.last_sync_at is None
+        # Explicitly selected attachments are authored and priced by the operator.
+        # Purchase/ownership checks still run for paid media at every boundary.
+        # Text-only messages and automated origins retain their archive gates.
+        needs_history = not (origin == "manual" and manual_attachment)
+        if needs_history and (runtime.recovery_needed or runtime.pending_events or runtime.last_sync_at is None
                 or runtime.last_sync_at < now - timedelta(seconds=MAX_SYNC_AGE_SECONDS)
                 or runtime.last_sync_at > now + timedelta(minutes=5)):
             from .store import fan_history_current
@@ -265,7 +307,7 @@ class TextAuthority:
             human_on_fastt_fan = origin == "manual" and fan is not None and fastt_owned(runtime.account_id, fan.fan_id)
             if not (fan is not None and fan_history_current(s, runtime.account_id, fan.fan_id)) and not human_on_fastt_fan:
                 return "history_not_current"
-        if s.scalar(select(OfIngress.event_key).where(
+        if needs_history and s.scalar(select(OfIngress.event_key).where(
                 OfIngress.account_id == runtime.account_id, OfIngress.status == "quarantined").limit(1)) is not None:
             return "history_quarantined"
         if state is None or fan is None:
@@ -293,11 +335,14 @@ class TextAuthority:
 
     def prepare(self, tenant_id, account_id, fan_id, *, command_key, expected_revision,
                 body, origin, actor, work: Claim | None = None, ttl_seconds=300, native_plan_id=None,
-                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None):
+                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None, manual_media=None):
+        from onlyfans_read.agency_scope import current_scope, actor_allowed
+        if current_scope.get() is not None and (origin != "manual" or not actor_allowed(actor, capability="chat")):
+            raise Refused("manual messaging permission required")
         _id(fan_id)
         if (not isinstance(command_key, str) or not 1 <= len(command_key) <= 64
                 or type(expected_revision) is not int or expected_revision < 0
-                or not isinstance(body, str) or not body.strip() or len(body.encode()) > 20000
+                or not isinstance(body, str) or (not body.strip() and manual_media is None) or len(body.encode()) > 20000
                 or origin not in {"automated", "manual", "campaign", "engagement"}
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 600):
@@ -318,6 +363,11 @@ class TextAuthority:
                 raise Refused("automated media requires its native plan")
         if quoted_price_cents is not None and (catalog_item_id is None or native_plan_id is None):
             raise Refused("only a recorded native quote may change the sticker price")
+        if manual_media is not None:
+            from .manual_media import normalize
+            if origin != "manual" or catalog_item_id is not None or native_plan_id is not None:
+                raise Refused("invalid manual media selection")
+            manual_media = normalize(manual_media)
         request = dict(account_id=account_id, fan_id=fan_id, command_key=command_key,
                        expected_revision=expected_revision, body=body, origin=origin,
                        actor=actor, work=asdict(work) if work else None, ttl_seconds=ttl_seconds)
@@ -332,9 +382,11 @@ class TextAuthority:
         if catalog_item_id is not None:
             request["catalog_item_id"] = catalog_item_id
             request["quoted_price_cents"] = quoted_price_cents
+        if manual_media is not None:
+            request["manual_media"] = manual_media
         fingerprint = hashlib.sha256(_json(request).encode()).hexdigest()
         with Session(self.engine) as s, s.begin():
-            runtime = self.store._runtime(s, tenant_id, account_id)
+            runtime = self.store._delivery_runtime(s, tenant_id, account_id)
             now = self._db_now(s)
             prior = s.scalar(select(OfTextIntent).where(OfTextIntent.account_id == account_id,
                                                        OfTextIntent.command_key == command_key))
@@ -342,10 +394,15 @@ class TextAuthority:
                 if prior.command_hash != fingerprint:
                     raise Refused("idempotency key conflict")
                 return prior.intent_id
-            policy = s.get(OfDeliveryPolicy, account_id)
+            # Queued-count admission and policy checks are account-wide. Lock the
+            # policy row while preparing so parallel manual/campaign callers cannot
+            # lose a queued_count increment or admit past MAX_QUEUED.
+            policy = s.scalar(select(OfDeliveryPolicy).where(
+                OfDeliveryPolicy.account_id == account_id).with_for_update())
             state = s.get(OfConversationState, (account_id, fan_id))
             fan = s.get(Fan, (account_id, fan_id))
-            reason = self._eligibility(s, runtime, policy, state, fan, origin, now)
+            reason = self._eligibility(s, runtime, policy, state, fan, origin, now,
+                manual_attachment=manual_media is not None)
             if reason:
                 raise Refused(reason)
             from .handover import staff_owns_takeover
@@ -355,7 +412,8 @@ class TextAuthority:
                 raise Refused("control revision conflict")
             if policy.queued_count >= MAX_QUEUED:
                 raise Refused("delivery queue full")
-            if policy.active_intent_id:
+            from . import concurrent_admission
+            if policy.active_intent_id and not concurrent_admission.mode(policy) == "concurrent":
                 raise Refused("account delivery unresolved")
             recipient = None
             if origin == "campaign":
@@ -367,7 +425,15 @@ class TextAuthority:
                 # Same transaction as the intent below: validation and attach commit together.
                 engagement = self._engagement()
             terms = None
-            if catalog_item_id is not None:
+            if manual_media is not None:
+                if not policy.media_enabled:
+                    raise Refused("media delivery disabled")
+                from .manual_media import freeze
+                catalog_item_id, terms = freeze(s, runtime, manual_media)
+                if terms["price_cents"] > 0:
+                    from .media_delivery import assert_unowned
+                    assert_unowned(s, account_id, fan_id, terms, manual=True)
+            elif catalog_item_id is not None:
                 from .media_delivery import catalog_terms, assert_unowned
                 if not policy.media_enabled:
                     raise Refused("media delivery disabled")
@@ -450,14 +516,14 @@ class TextAuthority:
         if transport_generation is not None and (type(transport_generation) is not int or transport_generation < 0):
             raise Refused("invalid transport generation")
         with Session(self.engine) as s, s.begin():
-            runtime = self.store._runtime(s, tenant_id, account_id)
+            runtime = self.store._delivery_runtime(s, tenant_id, account_id)
             now = self._db_now(s)
             intent = self._intent(s, account_id, intent_id)
             if intent.status != "queued":
                 if intent.status == "dispatching" and intent.wire_version == 0:
-                    self._hold_unknown(s, intent, "legacy_dispatch_unverified")
+                    self._hold_unknown(s, intent, "legacy_dispatch_unverified", tenant_id)
                 return intent.status
-            policy = s.get(OfDeliveryPolicy, account_id)
+            policy = s.scalar(select(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == account_id).with_for_update())
             state = s.get(OfConversationState, (account_id, intent.fan_id))
             fan = s.get(Fan, (account_id, intent.fan_id))
             work = s.get(OfWork, (account_id, intent.fan_id)) if intent.work_generation is not None else None
@@ -482,17 +548,20 @@ class TextAuthority:
                 obsolete = not current(s, intent, runtime, now)
             if not obsolete and intent.origin == "engagement":
                 obsolete = not self._engagement().current(s, intent, runtime, now)
-            reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now)
+            reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now,
+                manual_attachment=self._manual_attachment(intent))
             if reason:
                 intent.status = "cancelled" if obsolete else "refused"
                 intent.reason, intent.updated_at = reason, now
                 if policy is not None:
                     policy.queued_count -= 1
                 return intent.status
-            if policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True):
+            from . import concurrent_admission
+            concurrent = concurrent_admission.mode(policy) == "concurrent"
+            if not concurrent and (policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True)):
                 intent.reason = "account_busy"
                 return "queued"
-            if policy.next_dispatch_at is not None and policy.next_dispatch_at > now:
+            if not concurrent and policy.next_dispatch_at is not None and policy.next_dispatch_at > now:
                 intent.reason = "account_throttled"
                 return "queued"
             if policy.used_units >= policy.limit_units:
@@ -500,10 +569,20 @@ class TextAuthority:
                 policy.queued_count -= 1
                 return intent.status
             token, attempt = str(uuid.uuid4()), str(uuid.uuid4())
+            if concurrent:
+                slot, reason = concurrent_admission.admit(
+                    s, tenant_id, policy, account_id=account_id, fan_id=intent.fan_id,
+                    holder=intent.intent_id, attempt_id=attempt, now=now,
+                    send_concurrency=concurrent_admission.process_send_concurrency(),
+                    dispatch_lease_s=concurrent_admission.process_dispatch_lease_s())
+                if reason:
+                    intent.reason = reason
+                    return "queued"
             policy.used_units += 1
             policy.queued_count -= 1
-            policy.active_intent_id = intent.intent_id
-            policy.next_dispatch_at = now + timedelta(seconds=policy.throttle_seconds)
+            if not concurrent:
+                policy.active_intent_id = intent.intent_id
+                policy.next_dispatch_at = now + timedelta(seconds=policy.throttle_seconds)
             intent.status, intent.reason, intent.updated_at = "dispatching", None, now
             intent.attempt_id, intent.dispatch_token = attempt, token
             intent.dispatched_at, intent.deadline = now, now + timedelta(seconds=DISPATCH_SECONDS)
@@ -523,13 +602,16 @@ class TextAuthority:
             raise Refused("invalid dispatch grant")
         _id(grant.fan_id)
         fields = ((grant.account_id, 128), (grant.intent_id, 36), (grant.attempt_id, 36),
-                  (grant.token, 36), (grant.body, 20000), (grant.payload_hash, 64))
+                  (grant.token, 36), (grant.payload_hash, 64))
         if (any(type(value) is not str or not 1 <= len(value.encode()) <= limit for value, limit in fields)
                 or len(grant.payload_hash) != 64 or any(c not in "0123456789abcdef" for c in grant.payload_hash)
                 or type(grant.origin) is not str or grant.origin not in {"automated", "manual", "campaign", "engagement"}
                 or type(grant.deadline) is not datetime or grant.deadline.tzinfo is not None
                 or type(grant.policy_revision) is not int or grant.policy_revision < 0
                 or type(grant.wire_version) is not int or grant.wire_version not in {0, 1}):
+            raise Refused("invalid dispatch grant")
+        if (type(grant.body) is not str or len(grant.body.encode()) > 20000
+                or (not grant.body.strip() and (grant.origin != "manual" or not grant.media_ids))):
             raise Refused("invalid dispatch grant")
         if (type(grant.media_ids) is not tuple or type(grant.preview_ids) is not tuple
                 or len(grant.media_ids) > 35
@@ -539,7 +621,7 @@ class TextAuthority:
                 or len(set(grant.preview_ids)) != len(grant.preview_ids)
                 or type(grant.price_cents) is not int
                 or (not grant.media_ids and (grant.preview_ids or grant.price_cents != 0))
-                or (grant.media_ids and not 300 <= grant.price_cents <= 20000)):
+                or (grant.media_ids and not (300 <= grant.price_cents <= 20000 or grant.origin == "manual" and grant.price_cents == 0))):
             raise Refused("invalid media dispatch grant")
 
     def check_dispatch_preflight(self, tenant_id, grant: Dispatch, *, transport_generation):
@@ -553,7 +635,7 @@ class TextAuthority:
         if type(transport_generation) is not int or transport_generation < 1:
             raise Refused("invalid transport generation")
         with Session(self.engine) as s, s.begin():
-            self.store._runtime(s, tenant_id, grant.account_id)
+            self.store._delivery_runtime(s, tenant_id, grant.account_id)
             row = self._intent(s, grant.account_id, grant.intent_id)
             now = self._db_now(s)
             if (self._grant(row) != grant or row.status != "dispatching" or row.wire_started_at is not None
@@ -575,9 +657,10 @@ class TextAuthority:
                 raise Refused("dispatch grant was already consumed or settled")
             now = self._db_now(s)
             if row.wire_version != 1 or row.deadline <= now or row.expires_at <= now:
-                self._hold_unknown(s, row, "legacy_dispatch_unverified" if row.wire_version != 1 else "dispatch_expired")
+                self._hold_unknown(s, row, "legacy_dispatch_unverified" if row.wire_version != 1 else "dispatch_expired",
+                                   tenant_id)
                 return None
-            policy = s.get(OfDeliveryPolicy, row.account_id)
+            policy = s.scalar(select(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == row.account_id).with_for_update())
             state = s.get(OfConversationState, (row.account_id, row.fan_id))
             fan = s.get(Fan, (row.account_id, row.fan_id))
             binding = s.get(OfCreatorBinding, row.binding_id)
@@ -602,9 +685,30 @@ class TextAuthority:
             if not obsolete and row.origin == "engagement":
                 obsolete = not self._engagement().current(s, row, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(
-                s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id)
-            if reason is None and (policy.active_intent_id != row.intent_id or not row.reservation_held
-                                   or state.unresolved_attempt_id != row.attempt_id):
+                s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id,
+                manual_attachment=self._manual_attachment(row))
+            from . import concurrent_admission
+            concurrent = concurrent_admission.mode(policy) == "concurrent"
+            if concurrent:
+                from native_pilot import admission
+                cooldown = admission.cooldown_at(policy)
+                if reason is None and concurrent_admission.is_after(cooldown, now):
+                    # A provider-wide cooldown can land after admission but before
+                    # the wire. Put this still-unsent intent back in the queue rather
+                    # than turning the cooldown into a permanent refusal.
+                    row.status, row.reason, row.updated_at = "queued", "account_throttled", now
+                    policy.queued_count += 1
+                    if row.reservation_held:
+                        policy.used_units -= 1
+                        row.reservation_held = False
+                    self._release_hold(s, row, tenant_id)
+                    return None
+                if not row.reservation_held or state.unresolved_attempt_id != row.attempt_id \
+                        or not concurrent_admission.check_holder(s, tenant_id, row.account_id, row.fan_id,
+                                                                  row.intent_id, now):
+                    reason = "attempt_ownership_changed"
+            elif (policy.active_intent_id != row.intent_id or not row.reservation_held
+                  or state.unresolved_attempt_id != row.attempt_id):
                 reason = "attempt_ownership_changed"
             if reason is None and policy.used_units > policy.limit_units:
                 reason = "cap_exhausted"
@@ -616,10 +720,11 @@ class TextAuthority:
                 if row.reservation_held:
                     policy.used_units -= 1
                     row.reservation_held = False
-                self._release_hold(s, row)
+                self._release_hold(s, row, tenant_id)
                 return None
             row.wire_started_at, row.updated_at = now, now
-            policy.next_dispatch_at = max(policy.next_dispatch_at or now, now + timedelta(seconds=policy.throttle_seconds))
+            if not concurrent:
+                policy.next_dispatch_at = max(policy.next_dispatch_at or now, now + timedelta(seconds=policy.throttle_seconds))
             return self._grant(row)
 
     @staticmethod
@@ -659,12 +764,19 @@ class TextAuthority:
         return stamp
 
     @staticmethod
-    def _hold_unknown(s, row, reason):
+    def _hold_unknown(s, row, reason, tenant_id=None):
         row.status, row.reason, row.updated_at = "unknown", reason, utcnow()
         state = s.get(OfConversationState, (row.account_id, row.fan_id))
         state.unresolved_attempt_id, state.requires_attention, state.updated_at = row.attempt_id, True, utcnow()
         policy = s.get(OfDeliveryPolicy, row.account_id)
-        policy.active_intent_id = row.intent_id
+        from . import concurrent_admission
+        if tenant_id is not None and concurrent_admission.mode(policy) == "concurrent":
+            gap = max(concurrent_admission.process_conversation_gap_s(),
+                      float(getattr(policy, "conversation_min_gap_seconds", 0) or 0))
+            concurrent_admission.release(s, tenant_id, row.account_id, row.fan_id, row.intent_id,
+                                         row.attempt_id, "unknown", utcnow(), gap)
+        else:
+            policy.active_intent_id = row.intent_id
 
     def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport"):
         if reason not in {"ambiguous_transport", "invalid_receipt", "dispatch_expired", "provider_identity_conflict"}:
@@ -672,7 +784,7 @@ class TextAuthority:
         with Session(self.engine) as s, s.begin():
             row = self._attempt(s, tenant_id, account_id, intent_id, dispatch_token)
             if row.status == "dispatching":
-                self._hold_unknown(s, row, reason)
+                self._hold_unknown(s, row, reason, tenant_id)
             return row.status
 
     def record_accepted(self, tenant_id, account_id, intent_id, dispatch_token, receipt):
@@ -689,7 +801,7 @@ class TextAuthority:
             except (Refused, TypeError, AttributeError):
                 if row.status == "accepted":
                     raise Refused("accepted receipt conflict")
-                self._hold_unknown(s, row, "invalid_receipt")
+                self._hold_unknown(s, row, "invalid_receipt", tenant_id)
                 return "unknown"
             if row.status == "accepted":
                 if row.receipt_json != encoded:
@@ -704,14 +816,26 @@ class TextAuthority:
                 OfTextIntent.intent_id != intent_id).limit(1))
             row.receipt_json, row.evidence_ref = encoded, receipt.evidence_ref
             if other is not None:
-                self._hold_unknown(s, row, "provider_identity_conflict")
+                self._hold_unknown(s, row, "provider_identity_conflict", tenant_id)
                 return "unknown"
             row.status, row.reason, row.updated_at = "accepted", None, utcnow()
             row.provider_message_id = receipt.message_id
             return "accepted"
 
-    def _release_hold(self, s, row):
+    def _release_hold(self, s, row, tenant_id=None):
         policy = s.get(OfDeliveryPolicy, row.account_id)
+        from . import concurrent_admission
+        if tenant_id is not None and concurrent_admission.mode(policy) == "concurrent":
+            gap = max(concurrent_admission.process_conversation_gap_s(),
+                      float(getattr(policy, "conversation_min_gap_seconds", 0) or 0))
+            concurrent_admission.release(s, tenant_id, row.account_id, row.fan_id, row.intent_id,
+                                         row.attempt_id, "accepted", utcnow(), gap)
+            state = s.get(OfConversationState, (row.account_id, row.fan_id))
+            if state is not None and state.unresolved_attempt_id == row.attempt_id:
+                state.unresolved_attempt_id = None
+                state.updated_at = utcnow()
+            Store.complete_takeover(s, row.account_id, row.fan_id)
+            return
         if row.wire_started_at is not None:
             floor = self._db_now(s) + timedelta(seconds=policy.throttle_seconds)
             policy.next_dispatch_at = max(policy.next_dispatch_at or floor, floor)
@@ -741,7 +865,7 @@ class TextAuthority:
             except (Refused, TypeError, AttributeError):
                 if row.status == "not_accepted":
                     raise Refused("rejection evidence conflict")
-                self._hold_unknown(s, row, "invalid_receipt")
+                self._hold_unknown(s, row, "invalid_receipt", tenant_id)
                 return "unknown"
             if row.status == "not_accepted":
                 if row.receipt_json != encoded:
@@ -750,10 +874,11 @@ class TextAuthority:
             row.status, row.reason, row.updated_at = "not_accepted", "proved_not_accepted", utcnow()
             row.receipt_json, row.evidence_ref = encoded, rejection.evidence_ref
             if row.reservation_held:
-                policy = s.get(OfDeliveryPolicy, account_id)
+                policy = s.scalar(select(OfDeliveryPolicy).where(
+                    OfDeliveryPolicy.account_id == account_id).with_for_update())
                 policy.used_units -= 1
                 row.reservation_held = False
-            self._release_hold(s, row)
+            self._release_hold(s, row, tenant_id)
             return row.status
 
     def materialize(self, tenant_id, account_id, intent_id):
@@ -821,7 +946,7 @@ class TextAuthority:
             if chat.last_message_at is None or (stamp, proof.message_id) > (chat.last_message_at, chat.last_message_id or 0):
                 chat.last_message_id, chat.last_message_at, chat.last_message_preview = proof.message_id, stamp, row.body[:500]
             row.projected_at, row.updated_at = utcnow(), utcnow()
-            self._release_hold(s, row)
+            self._release_hold(s, row, tenant_id)
             return True
 
     def dispatch(self, tenant_id, account_id, intent_id, transport):
@@ -852,7 +977,7 @@ class TextAuthority:
         if transport.account_id != account_id:
             raise Refused("transport scope mismatch")
         with Session(self.engine) as s:
-            self.store._runtime(s, tenant_id, account_id)
+            self.store._delivery_runtime(s, tenant_id, account_id)
             policy = s.get(OfDeliveryPolicy, account_id)
             expected = "native" if type(transport) in {NativeProviderConnector, FasttManualTransport} else "synthetic"
             if policy is None or policy.transport_kind != expected:
@@ -863,6 +988,30 @@ class TextAuthority:
         try:
             proof = transport.send(grant, authority=self, tenant_id=tenant_id)
         except Exception as exc:
+            auth_failed = ((isinstance(exc, Refused) and exc.reason == "account-auth-failed")
+                           or getattr(exc, "status_code", None) == 401
+                           or type(exc).__name__ == "NativeAuthenticationError")
+            throttled = (isinstance(exc, ProviderThrottled)
+                         or getattr(exc, "status_code", None) == 429)
+            if auth_failed or throttled:
+                retry_after = getattr(exc, "retry_after", None)
+                try:
+                    self._account_cooldown(
+                        tenant_id, account_id,
+                        seconds=300 if auth_failed else (retry_after if retry_after is not None else 10))
+                except Exception:
+                    pass
+                rejection = NotAccepted(
+                    account_id=grant.account_id, fan_id=grant.fan_id, intent_id=grant.intent_id,
+                    attempt_id=grant.attempt_id, payload_hash=grant.payload_hash,
+                    occurred_at=datetime.now(timezone.utc).isoformat(),
+                    evidence_ref=("fastt-auth-failed:" if auth_failed else "fastt-rate-limited:")
+                    + grant.attempt_id)
+                try:
+                    return self.record_not_accepted(
+                        tenant_id, account_id, intent_id, grant.token, rejection)
+                except Exception:
+                    pass
             # Type, message and frame locations only; never request bodies or credentials.
             import sys, traceback
             frames = ",".join(f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}" for f in traceback.extract_tb(exc.__traceback__)[-6:])
@@ -875,6 +1024,26 @@ class TextAuthority:
             self.materialize(tenant_id, account_id, intent_id)
         return result
 
+    def _account_cooldown(self, tenant_id, account_id, *, seconds):
+        """Stop this account's other text sends after a provider-wide refusal."""
+        with Session(self.engine) as s, s.begin():
+            self.store._runtime(s, tenant_id, account_id)
+            policy = s.scalar(select(OfDeliveryPolicy).where(
+                OfDeliveryPolicy.account_id == account_id).with_for_update())
+            if policy is None:
+                return
+            now = self._db_now(s)
+            # The provider's Retry-After is authoritative. Keep the same one-day
+            # ceiling as the native path instead of shortening a valid long wait.
+            until = now + timedelta(seconds=max(1, min(86400, int(seconds))))
+            from . import concurrent_admission
+            if concurrent_admission.mode(policy) == "concurrent":
+                current = getattr(policy, "provider_cooldown_until", None)
+                policy.provider_cooldown_until = max(current, until) if current is not None else until
+            else:
+                current = policy.next_dispatch_at
+                policy.next_dispatch_at = max(current, until) if current is not None else until
+
     def expire_dispatches(self, tenant_id, account_id, *, limit=100):
         if type(limit) is not int or not 1 <= limit <= 100:
             raise Refused("invalid recovery limit")
@@ -885,7 +1054,7 @@ class TextAuthority:
                 OfTextIntent.status == "dispatching", OfTextIntent.deadline <= now)
                 .order_by(OfTextIntent.deadline, OfTextIntent.intent_id).limit(limit)).all()
             for row in rows:
-                self._hold_unknown(s, row, "dispatch_expired")
+                self._hold_unknown(s, row, "dispatch_expired", tenant_id)
             return len(rows)
 
     def repair(self, tenant_id, account_id, *, limit=100):

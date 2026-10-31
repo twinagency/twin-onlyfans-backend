@@ -6,6 +6,7 @@ provider bulk endpoint, extra model call or legacy automation is invoked.
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 import re
 import uuid
 
@@ -340,12 +341,18 @@ class CampaignService:
         authority = TextAuthority(self.store)
         selected = []
         with Session(self.engine) as s, s.begin():
-            runtime = self.store._runtime(s, tenant_id, account_id)
+            runtime = self.store._delivery_runtime(s, tenant_id, account_id)
             now = authority._db_now(s)
             policy = s.get(OfDeliveryPolicy, account_id)
-            if (policy is None or not policy.enabled or not runtime.enabled or policy.active_intent_id
-                    or policy.queued_count or policy.used_units >= policy.limit_units
-                    or policy.next_dispatch_at is not None and policy.next_dispatch_at > now):
+            from . import concurrent_admission
+            from native_pilot import admission
+            concurrent = policy is not None and concurrent_admission.mode(policy) == "concurrent"
+            cooldown = admission.cooldown_at(policy) if policy is not None else None
+            if (policy is None or not policy.enabled or not runtime.enabled
+                    or policy.used_units >= policy.limit_units
+                    or (not concurrent and (policy.active_intent_id or policy.queued_count
+                                            or (policy.next_dispatch_at is not None and policy.next_dispatch_at > now)))
+                    or (concurrent and cooldown is not None and cooldown > now)):
                 return None
             candidates = s.execute(select(OfCampaign, OfCampaignRecipient).join(OfCampaignRecipient,
                 (OfCampaign.account_id == OfCampaignRecipient.account_id) &
@@ -381,20 +388,25 @@ class CampaignService:
                 selected.append(dict(campaign_id=campaign.campaign_id, fan_id=recipient.fan_id,
                     expected_revision=state.revision, body=campaign.body, actor=campaign.actor,
                     catalog_item_id=campaign.catalog_item_id))
+        queued = []
+        batch = 1 if not concurrent else max(1, min(16, int(os.environ.get("FASTT_CAMPAIGN_BATCH", "8") or 8)))
         for candidate in selected:
             fan_id = candidate.pop("fan_id")
             try:
                 # The existing owner revalidates history, budget, pause/cancel,
                 # no-contact and frozen terms. Campaign origin stays strict.
-                return authority.prepare(tenant_id, account_id, fan_id,
+                identity = authority.prepare(tenant_id, account_id, fan_id,
                     command_key=intent_key(candidate["campaign_id"], fan_id),
                     origin="campaign", ttl_seconds=300, **candidate)
+                queued.append(identity)
+                if len(queued) >= batch:
+                    break
             except Refused:
                 # Failed preparation committed no intent. Retain the same
                 # identity and move past this recipient rather than replaying
                 # the first blocked fan forever.
                 with Session(self.engine) as s, s.begin():
-                    self.store._runtime(s, tenant_id, account_id)
+                    self.store._delivery_runtime(s, tenant_id, account_id)
                     campaign = s.get(OfCampaign, (account_id, candidate["campaign_id"]))
                     recipient = s.get(OfCampaignRecipient,
                         (account_id, candidate["campaign_id"], fan_id))
@@ -403,4 +415,4 @@ class CampaignService:
                             and recipient.intent_id is None):
                         recipient.reason = "preparation_deferred"
                         recipient.updated_at = campaign.updated_at = authority._db_now(s)
-        return None
+        return queued[0] if queued else None

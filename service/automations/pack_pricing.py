@@ -602,7 +602,7 @@ async def negotiate_pack(account_id: str, fan_id: int, item: CatalogItem,
     """
     if ladder_on(cfg):
         settled = await _negotiate_on_ladder(account_id, fan_id, avail_ids,
-                                             min_items=min_items)
+                                             min_items=min_items, opening_price_cents=(cfg or {}).get("fastt_pack_open_price_cents"))
     else:
         settled = await _negotiate_legacy(account_id, fan_id, item, avail_ids)
     if settled is None:
@@ -645,7 +645,7 @@ async def negotiate_pack(account_id: str, fan_id: int, item: CatalogItem,
 
 async def _negotiate_on_ladder(account_id: str, fan_id: int,
                                avail_ids: list[int], *,
-                               min_items: int) -> tuple[int, list[int], int] | None:
+                               min_items: int, opening_price_cents: int | None = None) -> tuple[int, list[int], int] | None:
     """`(price, media, value)` off the rungs, or None meaning DO NOT OFFER.
 
     The three rules of `negotiate_pack`, over ONE `LadderCtx`. Every price here
@@ -658,6 +658,14 @@ async def _negotiate_on_ladder(account_id: str, fan_id: int,
     px = ladder_price(ctx, has_video=shelf_has_video, avail=avail)
     if px is None:
         return None
+    # The creator's opening quote applies only before a fan has paid and before
+    # an ignored offer softens it. Existing buyer progression and content checks
+    # continue to govern subsequent quotes.
+    if (ctx.max_paid_cents <= 0 and ctx.misses == 0
+            and type(opening_price_cents) is int
+            and PRICE_LADDER_CENTS[COLD_OPEN_RUNG - 1] < opening_price_cents
+            < PRICE_LADDER_CENTS[COLD_OPEN_RUNG + 1]):
+        px = min(px, opening_price_cents)
     log.info("pack ladder account=%s fan=%s px=%s max_paid=%s misses=%s "
              "shelf_video=%s avail=%s", account_id, fan_id, px,
              ctx.max_paid_cents, ctx.misses, shelf_has_video, avail)

@@ -427,7 +427,7 @@ def _dedupe_lead_reaction(parts: list[str], recent_out: list[str]) -> list[str]:
 
 
 def split_for_bubbles(text: str, max_bubbles: int = 2, rng=None,
-                      force_single: bool = False) -> list[str]:
+                      force_single: bool = False, preserve_complete: bool = False) -> list[str]:
     """Make one generated reply read like real texting, and NO em-dash ever survives
     (every return path runs _strip_dash). Content is NEVER dropped:
 
@@ -443,6 +443,14 @@ def split_for_bubbles(text: str, max_bubbles: int = 2, rng=None,
     the reply (the senders use `Random(f"split:{fan_id}:{raw}")`) makes the split
     stable — the same draft re-run after a retry bubbles the same way.
     """
+    if preserve_complete:
+        # Optional native ordinary-chat mode. Keep deliberate paragraph breaks only;
+        # never truncate text, split sentences, or remove prices/links to meet a cap.
+        text = text.strip()
+        if not text:
+            return []
+        parts = [part.strip() for part in text.split("\n\n") if part.strip()]
+        return [_strip_dash(p) for p in (parts if len(parts) <= 2 else [text])]
     _rng = rng if rng is not None else random
     text = text.strip()
     # ── ONE BUBBLE, whatever the reply weighs. The caller sets this when she is

@@ -1,0 +1,26 @@
+[
+  [
+    "\n    def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None):\n        if policy is None or not policy.enabled or policy.transport_kind not in {\"synthetic\", \"native\"}:\n",
+    "\n    @staticmethod\n    def _free_manual_attachment(row):\n        \"\"\"Derive the narrow archive exception from the saved immutable intent.\"\"\"\n        if row.origin != \"manual\" or row.price_cents != 0 or row.catalog_item_id is None:\n            return False\n        try:\n            snapshot = json.loads(row.catalog_snapshot_json)\n            return (snapshot.get(\"manual_vault\") is True\n                    and snapshot.get(\"price_cents\") == 0\n                    and bool(snapshot.get(\"media_ids\")))\n        except (ValueError, TypeError, AttributeError):\n            return False\n\n    def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None,\n                     free_manual_attachment=False):\n        if policy is None or not policy.enabled or policy.transport_kind not in {\"synthetic\", \"native\"}:\n"
+  ],
+  [
+    "            return \"account_disabled\"\n        if (runtime.recovery_needed or runtime.pending_events or runtime.last_sync_at is None\n                or runtime.last_sync_at < now - timedelta(seconds=MAX_SYNC_AGE_SECONDS)\n",
+    "            return \"account_disabled\"\n        # A chosen free attachment is authored by the operator, not generated\n        # from imported messages. Archive state cannot grant or revoke it.\n        # Paid offers and every automated origin retain their history gates.\n        needs_history = not (origin == \"manual\" and free_manual_attachment)\n        if needs_history and (runtime.recovery_needed or runtime.pending_events or runtime.last_sync_at is None\n                or runtime.last_sync_at < now - timedelta(seconds=MAX_SYNC_AGE_SECONDS)\n"
+  ],
+  [
+    "                return \"history_not_current\"\n        if s.scalar(select(OfIngress.event_key).where(\n                OfIngress.account_id == runtime.account_id, OfIngress.status == \"quarantined\").limit(1)) is not None:\n",
+    "                return \"history_not_current\"\n        if needs_history and s.scalar(select(OfIngress.event_key).where(\n                OfIngress.account_id == runtime.account_id, OfIngress.status == \"quarantined\").limit(1)) is not None:\n"
+  ],
+  [
+    "            fan = s.get(Fan, (account_id, fan_id))\n            reason = self._eligibility(s, runtime, policy, state, fan, origin, now)\n            if reason:\n",
+    "            fan = s.get(Fan, (account_id, fan_id))\n            reason = self._eligibility(s, runtime, policy, state, fan, origin, now,\n                free_manual_attachment=manual_media is not None and manual_media[\"priceCents\"] == 0)\n            if reason:\n"
+  ],
+  [
+    "                obsolete = not self._engagement().current(s, intent, runtime, now)\n            reason = \"snapshot_changed\" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now)\n            if reason:\n",
+    "                obsolete = not self._engagement().current(s, intent, runtime, now)\n            reason = \"snapshot_changed\" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now,\n                free_manual_attachment=self._free_manual_attachment(intent))\n            if reason:\n"
+  ],
+  [
+    "            reason = \"snapshot_changed\" if obsolete else self._eligibility(\n                s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id)\n            if reason is None and (policy.active_intent_id != row.intent_id or not row.reservation_held\n",
+    "            reason = \"snapshot_changed\" if obsolete else self._eligibility(\n                s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id,\n                free_manual_attachment=self._free_manual_attachment(row))\n            if reason is None and (policy.active_intent_id != row.intent_id or not row.reservation_held\n"
+  ]
+]

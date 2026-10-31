@@ -7,6 +7,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parent))
 import test_native_pilot_ledger as L
 from native_pilot.ledger import Ledger,Refused
 from twin_bridge import store
+import native_pilot.tuning as _tuning
+_tuning.MIN_SEND_INTERVAL_FLOOR_S=0.0  # engine v2 floor (20 s) is a code constant; this suite drives 0 s throttles
 os.environ['FASTT_FAN_DAILY_REPLY_LIMIT']='2000'
 def setup(root,name):
  f=L.Fixture(root,name);f.activate()

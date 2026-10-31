@@ -27,11 +27,11 @@ def media_ids(raw):
     return ids
 
 
-def catalog_terms(session, account_id, item_id, *, price_cents=None):
-    """Locked, bounded snapshot of an enabled single and its extant files."""
+def catalog_terms(session, account_id, item_id, *, price_cents=None, lock=True):
+    """Bounded terms; send paths lock, readiness uses its read-only snapshot."""
     _id(item_id)
-    item = session.scalar(select(CatalogItem).where(CatalogItem.account_id == account_id,
-        CatalogItem.id == item_id).with_for_update(read=True))
+    item_query = select(CatalogItem).where(CatalogItem.account_id == account_id, CatalogItem.id == item_id)
+    item = session.scalar(item_query.with_for_update(read=True) if lock else item_query)
     if (item is None or not item.enabled or item.script_id is not None or item.is_free_teaser
             or type(item.description_for_ai) is not str or not item.description_for_ai.strip()
             or len(item.description_for_ai.encode()) > 2000):
@@ -60,8 +60,9 @@ def catalog_terms(session, account_id, item_id, *, price_cents=None):
     if (type(previews) is not list or any(type(v) is not int or v not in ids for v in previews)
             or len(set(previews)) != len(previews) or set(previews) == set(ids)):
         raise Refused("invalid preview identities")
-    rows = session.scalars(select(VaultItem).where(VaultItem.account_id == account_id,
-        VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id).with_for_update(read=True)).all()
+    media_query = select(VaultItem).where(VaultItem.account_id == account_id,
+        VaultItem.media_id.in_(ids)).order_by(VaultItem.media_id)
+    rows = session.scalars(media_query.with_for_update(read=True) if lock else media_query).all()
     if len(rows) != len(ids) or any(r.removed_at is not None or r.kind not in {"image", "photo", "video"} for r in rows):
         raise Refused("catalogue media unavailable")
     snapshot = {"item": {key: getattr(item, key) for key in (
@@ -93,9 +94,10 @@ def terms_match(session, intent):
         return False
 
 
-def assert_unowned(session, account_id, fan_id, snapshot):
-    from .commerce import held
-    if held(session, account_id, fan_id):
+def assert_unowned(session, account_id, fan_id, snapshot, *, manual=False):
+    from .commerce import held, manual_held
+    payment_hold = manual_held if manual else held
+    if payment_hold(session, account_id, fan_id):
         raise Refused("commerce evidence needs review")
     from ownership import owned_media_in_session
     try:
@@ -116,6 +118,10 @@ def project(session, intent, message_id, stamp):
     if intent.offer_id is not None:
         raise Refused("media offer already projected without its receipt marker")
     snapshot = json.loads(intent.catalog_snapshot_json)
+    if intent.origin == "manual" and snapshot.get("manual_vault") is True and intent.price_cents == 0:
+        from .manual_media import project_free
+        project_free(session, intent, message_id, stamp)
+        return
     # Use saved terms, not a mutable or disabled catalogue's current values.
     if (snapshot["media_ids"] != json.loads(intent.media_json)
             or snapshot["preview_ids"] != json.loads(intent.preview_json)

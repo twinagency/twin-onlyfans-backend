@@ -70,9 +70,9 @@ def test_no_unproven_foreign_corrupt_hidden_or_removed_cache_is_exposed(database
     receipt=path.with_suffix(".native.json");proof=json.loads(receipt.read_text())
     receipt.write_text(json.dumps({**proof,"ownerId":OWNER+1}))
     with pytest.raises(Refused):read_preview(store,TENANT,account,"11")
-    receipt.write_text(json.dumps(proof));path.write_bytes(PNG+b"corrupt")
+    receipt.write_text(json.dumps(proof));path.with_suffix(".owned.jpg").write_bytes(PNG+b"corrupt")
     with pytest.raises(Refused):read_preview(store,TENANT,account,"11")
-    path.write_bytes(PNG)
+    path.with_suffix(".owned.jpg").write_bytes(PNG)
     with Session(store.engine) as s,s.begin():s.get(VaultItem,(account,11)).removed_at=utcnow()
     with pytest.raises(Refused):read_preview(store,TENANT,account,"11")
     store.close()
@@ -131,3 +131,18 @@ def test_cdn_get_has_no_credentials_retries_redirects_or_unbounded_body(monkeypa
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE","api");calls=fake_curl(monkeypatch)
     with pytest.raises(Refused):wire.still_bytes(URL)
     assert calls==[]
+
+
+
+def test_legacy_caption_cache_replacement_cannot_blank_verified_gallery(database,monkeypatch,tmp_path):
+    monkeypatch.setattr(images,"IMAGE_DIR",tmp_path)
+    monkeypatch.setenv("ONLYFANS_VAULT_PREVIEWS_ENABLED","1")
+    monkeypatch.setattr(NativeProviderConnector,"still_bytes",lambda *_:PNG)
+    store,account,_,_=sync(database,monkeypatch,[media()])
+    path=images.image_path(account,11)
+    path.write_bytes(PNG+b"legacy-caption-variant")
+    assert read_preview(store,TENANT,account,"11")== (PNG,"image/png")
+    # API reads stay read-only and also cannot expose a corrupted gallery copy.
+    path.with_suffix(".owned.jpg").write_bytes(PNG+b"corrupt")
+    with pytest.raises(Refused):read_preview(store,TENANT,account,"11")
+    store.close()

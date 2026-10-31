@@ -254,6 +254,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
         value = load(self._call("GET", API_PATH + "/users/me"))
         if type(value.get("id")) is not int or value["id"] != self._handle.owner_id:
             raise NativeAuthenticationError("native provider owner mismatch")
+        return value
 
     def _signed_request(self, method, path, body=b"", *, max_response_bytes=None,
                         accepted_statuses=(200,), with_status=False):
@@ -336,6 +337,17 @@ class NativeProviderConnector(NativeLoopbackConnector):
             {"limit":limit,"offset":offset,"sort":"desc","field":"recent","list":"all"})
         return self._call("GET", path)
 
+    def vault_media_by_id(self, media_id):
+        """One bounded read of a known imported asset; caller owns provenance."""
+        self._ready()
+        _id(media_id)
+        self.verify_identity()
+        status, raw = self._signed_request("GET", API_PATH + f"/vault/media/{media_id}",
+            max_response_bytes=self._vault_max_bytes, accepted_statuses=(200, 404), with_status=True)
+        if status == 404:
+            return None
+        return load(raw, max_bytes=self._vault_max_bytes)
+
     def posts_page(self, *, before_marker=None, limit=10):
         """One bounded page of this creator's own feed posts, newest first.
 
@@ -415,7 +427,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
     def transaction_page(self, *, offset, limit=20, start, end, history=False, marker=None):
         """Reuse the legacy ledger endpoint with frozen UTC bounds and no retries."""
         self._ready()
-        if (type(offset) is not int or not 0 <= offset <= (1000000000 if history is True else 10000)
+        if (type(offset) is not int or not 0 <= offset <= (1000000000 if history is True or marker is not None else 10000)
                 or type(limit) is not int or not 1 <= limit <= 20
                 or type(start) is not datetime or type(end) is not datetime
                 or start.tzinfo is not None or end.tzinfo is not None
@@ -423,7 +435,12 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 or start < datetime(1970, 1, 1)
                 or not timedelta(0) <= end - start <= timedelta(days=60000 if history else 90)):
             raise Refused("invalid bounded native ledger page")
-        params = {"limit": limit, "start": start.isoformat() + "Z", "end": end.isoformat() + "Z"}
+        # The provider ignores start/end on this endpoint. Its date filters use
+        # startDate/endDate at second precision; request a covering superset
+        # and let ledger._provider_page retain only the exact frozen window.
+        rounded_end = end.replace(microsecond=0) + timedelta(seconds=bool(end.microsecond))
+        params = {"limit": limit, "startDate": start.strftime("%Y-%m-%d %H:%M:%S"),
+                  "endDate": rounded_end.strftime("%Y-%m-%d %H:%M:%S")}
         if marker is None:
             params["offset"] = offset
         else:
@@ -452,3 +469,4 @@ class NativeProviderConnector(NativeLoopbackConnector):
         raw = self._call("POST", API_PATH + f"/chats/{current.fan_id}/messages", body)
         proof = acceptance(raw, current, owner_id=self._handle.owner_id, request_bytes=body)
         return replace(proof, evidence_ref=proof.evidence_ref.replace("native-local:", "native-https:", 1))
+

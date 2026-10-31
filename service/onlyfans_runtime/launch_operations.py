@@ -46,7 +46,7 @@ def read_scope(store, s, tenant, account):
         if binding is None:
             raise Refused("scope unavailable")
         tenant = binding.tenant_id
-    return store._runtime(s, tenant, account)
+    return store._runtime(s, tenant, account, lock=False)
 
 
 def _prior(s, runtime, command_key, kind, request_hash):
@@ -148,7 +148,7 @@ def _ledger_core(s, runtime, *, now=None):
     binding = s.get(OfCreatorBinding, runtime.binding_id)
     now = now or utcnow()
     connection = s.get(OfProviderConnection, runtime.account_id)
-    from .ledger import _current, coverage_proven
+    from .ledger import _current, coverage_proven, scan_position
     from .launch_ledger.dashboard import ERRORS, fingerprint
     connection_current = bool(current and _current(runtime, connection, scan, now))
     conflicts = select(OfLedgerEvidence.evidence_hash).where(OfLedgerEvidence.account_id == runtime.account_id,
@@ -160,7 +160,7 @@ def _ledger_core(s, runtime, *, now=None):
     conflict_count = s.scalar(select(func.count()).select_from(conflicts.subquery()))
     unlinked_all = select(func.count()).select_from(Transaction).where(Transaction.account_id == runtime.account_id,
         Transaction.source == "ledger", Transaction.kind == "ppv_message", Transaction.message_id.is_(None),
-        Transaction.ingested_at >= binding.created_at,
+        Transaction.occurred_at >= binding.created_at,
         Transaction.status.in_(("pending", "cleared", "refund_pending")))
     # An audited exclusion stops one unlinked purchase from holding the whole account. It stays
     # visible here, counted separately, and keeps holding its own fan (see commerce.held).
@@ -172,7 +172,7 @@ def _ledger_core(s, runtime, *, now=None):
     from .commerce import held
     value = {"bindingCurrent": current, "status": scan.status if current else "not_started",
         "windowStart": z(scan.window_start) if current else None, "windowEnd": z(scan.window_end) if current else None,
-        "pageOffset": scan.page_offset if current else None,
+        "pageOffset": scan_position(scan) if current else None,
         "lastCompleteAt": z(scan.last_complete_at) if current else None,
         "lastFullAt": z(scan.last_full_at) if current else None,
         "leaseUntil": z(scan.lease_until) if current else None,
@@ -194,6 +194,10 @@ def ledger_status(store, tenant, account, *, cursor=None, limit=25):
     if type(limit) is not int or not 1 <= limit <= 100:
         raise Refused("invalid ledger page limit")
     with Session(store.engine) as s, s.begin():
+        if s.bind.dialect.name == "postgresql":
+            # Scope and evidence share one snapshot across concurrent rebinding.
+            # Mutation and admission paths retain their existing runtime locks.
+            s.connection(execution_options={"isolation_level": "REPEATABLE READ"}).exec_driver_sql("SET TRANSACTION READ ONLY")
         runtime = read_scope(store, s, tenant, account)
         position = decode(cursor, "ledger-evidence", account, runtime.binding_id)
         binding = s.get(OfCreatorBinding, runtime.binding_id)
@@ -395,7 +399,61 @@ def exclude_unresolved_ledger(store, tenant, account, *, transaction_id, command
         return result
 
 
-def _readiness(s, runtime, *, credential_reader=None):
+READINESS_MEMORY_SAMPLE_LIMIT = 50
+
+
+def _readiness_memory_counts(s, account):
+    """Exact total plus a bounded source-validated memory observation.
+
+    Full-account body-hash joins exceed the read deadline on imported accounts.
+    An incomplete sample never establishes full memory coverage or readiness.
+    """
+    from .launch_history_memory.memory import ALGORITHM
+    from .launch_history_memory.models import MemoryReceipt
+    stored = None
+    if s.bind.dialect.name == "postgresql":
+        # A cold full-account count must not consume the entire evidence read.
+        # Query cancellation is isolated by a savepoint; other failures surface.
+        from sqlalchemy.exc import DBAPIError
+        previous_timeout = s.scalar(select(func.current_setting("statement_timeout")))
+        try:
+            with s.begin_nested():
+                s.connection().exec_driver_sql("SET LOCAL statement_timeout = '1500ms'")
+                stored = s.scalar(select(func.count()).select_from(Message).where(Message.account_id == account))
+        except DBAPIError as error:
+            if getattr(error.orig, "pgcode", None) != "57014":
+                raise
+        finally:
+            s.scalar(select(func.set_config("statement_timeout", previous_timeout, True)))
+    else:
+        stored = s.scalar(select(func.count()).select_from(Message).where(Message.account_id == account))
+    sample = select(Message.account_id, Message.fan_id, Message.message_id,
+        func.md5(Message.body).label("body_md5"), Message.direction, Message.created_at, Message.is_unsent
+    ).where(Message.account_id == account).order_by(Message.fan_id, Message.message_id
+    ).limit(READINESS_MEMORY_SAMPLE_LIMIT).subquery()
+    match = and_(
+        MemoryReceipt.account_id == sample.c.account_id,
+        MemoryReceipt.fan_id == sample.c.fan_id,
+        MemoryReceipt.message_id == sample.c.message_id,
+        MemoryReceipt.algorithm == ALGORITHM,
+        MemoryReceipt.body_md5 == sample.c.body_md5,
+        MemoryReceipt.source_direction == sample.c.direction,
+        MemoryReceipt.source_at == sample.c.created_at,
+        MemoryReceipt.source_unsent == sample.c.is_unsent)
+    if s.bind.dialect.name == "postgresql":
+        # LIMIT/OFFSET retains keyed receipt probes; a hash join would scan the
+        # entire imported receipt table despite the bounded message sample.
+        from sqlalchemy import true
+        receipt = select(MemoryReceipt.message_id).where(match).limit(1).offset(0).lateral()
+        processed = s.scalar(select(func.count()).select_from(sample.join(receipt, true())))
+    else:
+        processed = s.scalar(select(func.count()).select_from(sample).join(MemoryReceipt, match))
+    inspected = min(stored, READINESS_MEMORY_SAMPLE_LIMIT) if stored is not None else s.scalar(select(func.count()).select_from(sample))
+    return stored, processed if stored is not None and stored == inspected else None, {"inspectedMessages": inspected,
+        "processedCurrentMessages": processed, "complete": stored is not None and stored == inspected}
+
+
+def _readiness(s, runtime, *, credential_reader=None, lock_catalog=True):
     """Truthful readiness from current owners, with explicit capability limits."""
     from db.models import AccountAiConfig, CatalogItem, GrokDailyCost, OfConversationState
     from db.schema import HEAD, check_schema
@@ -442,17 +500,15 @@ def _readiness(s, runtime, *, credential_reader=None):
     archive_complete = bool(scan and scan.binding_id == runtime.binding_id and scan.status == "complete"
         and scan.known_fans_complete and not pending_archive)
     archive_running = worker_current and capabilities.get("history_recovery") is True
-    check("archive", "ready" if archive_complete else "running" if archive_running else "disabled",
-        None if archive_complete else "available_history_recovery_incomplete" if archive_running else "history_recovery_worker_disabled_or_unobserved",
-        "history_backfill" if archive_running else "worker_configuration", blocking=False,
+    check("archive", "ready" if archive_complete else "running" if archive_running else "disabled" if worker_current else "unknown",
+        None if archive_complete else "available_history_recovery_incomplete" if archive_running else "history_recovery_worker_disabled" if worker_current else "worker_observation_missing_or_stale",
+        "history_backfill" if archive_running else "worker_configuration" if worker_current else "worker_status", blocking=False,
         observed=scan.updated_at if scan else None)
-    stored = s.scalar(select(func.count()).select_from(Message).where(Message.account_id == account))
-    processed = s.scalar(select(func.count()).select_from(Message).join(MemoryReceipt, _receipt_matches())
-        .where(Message.account_id == account))
+    stored, processed, memory_sample = _readiness_memory_counts(s, account)
     memory_running = worker_current and capabilities.get("history_memory") is True
-    check("memory", "ready" if stored == processed else "running" if memory_running else "disabled",
-        None if stored == processed else "stored_memory_processing_incomplete" if memory_running else "history_memory_worker_disabled_or_unobserved",
-        "history_memory" if memory_running else "worker_configuration", blocking=False)
+    check("memory", "unknown" if processed is None else "ready" if stored == processed else "running" if memory_running else "disabled" if worker_current else "unknown",
+        "full_memory_coverage_not_verified_inline" if processed is None else None if stored == processed else "stored_memory_processing_incomplete" if memory_running else "history_memory_worker_disabled" if worker_current else "worker_observation_missing_or_stale",
+        "history_memory" if memory_running else "worker_configuration" if worker_current else "worker_status", blocking=False)
     ledger = _ledger_core(s, runtime)
     ledger_ready = ledger["fresh"] and not ledger["commerceHold"]
     check("ledger", "ready" if ledger_ready else "blocked", None if ledger_ready else "ledger_held_or_stale", "ledger")
@@ -502,7 +558,7 @@ def _readiness(s, runtime, *, credential_reader=None):
     usable = 0
     for item in items[:200]:
         try:
-            catalog_terms(s, account, item.id)
+            catalog_terms(s, account, item.id, lock=lock_catalog)
         except Refused:
             continue
         usable += 1
@@ -518,12 +574,12 @@ def _readiness(s, runtime, *, credential_reader=None):
     return {"readinessVersion": "of-launch-readiness.v1", "observedAt": z(now), "schemaRevision": HEAD,
         "readyToEnable": not any(c["blocking"] and c["status"] != "ready" for c in checks),
         "checks": checks, "accountControl": account_state(s, runtime),
-        "coverage": {"storedMessages": stored, "processedMessages": processed, "providerTotalMessages": None,
+        "coverage": {"storedMessages": stored, "storedCountStatus": "exact" if stored is not None else "unavailable", "processedMessages": processed, "memorySample": memory_sample, "providerTotalMessages": None,
             "archiveComplete": archive_complete, "pendingArchiveConversations": pending_archive},
         "catalogue": {"usableInspectedItems": usable, "inspectedItems": min(len(items), 200), "hasMore": len(items) > 200},
         "autonomy": {"accountEnabled": runtime.enabled, "deliveryEnabled": bool(policy and policy.enabled),
             "existingAutomatedConversations": automated,
-            "automateNewConversations": False,   # locked off: new fans are never auto-enabled (store.NEW_CONVERSATION_AUTOMATION_LOCKED)
+            "automateNewConversations": bool(connection and connection.automate_new_conversations and connection.automation_starts_at),   # explicit per-account setting, default off
             "engagementEnabled": engagement.enabled, "workerCapabilities": capabilities},
         "limits": ["Conservative English-pattern historical facts and lexical source retrieval.",
             "Provider history totals are unknown; stored processing is a separate measure."]}
@@ -531,5 +587,10 @@ def _readiness(s, runtime, *, credential_reader=None):
 
 def launch_readiness(store, tenant, account, *, credential_reader=None):
     with Session(store.engine) as s, s.begin():
+        if s.bind.dialect.name == "postgresql":
+            # Scope and evidence share one snapshot across concurrent rebinding.
+            # Mutation and admission paths retain their existing runtime locks.
+            s.connection(execution_options={"isolation_level": "REPEATABLE READ"}).exec_driver_sql("SET TRANSACTION READ ONLY")
         runtime = read_scope(store, s, tenant, account)
-        return _readiness(s, runtime, credential_reader=credential_reader)
+        s.info["onlyfans_read_snapshot"] = True
+        return _readiness(s, runtime, credential_reader=credential_reader, lock_catalog=False)

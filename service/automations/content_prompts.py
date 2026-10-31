@@ -44,6 +44,7 @@ direction and returns None on doubt — no hook is a good answer.
 from __future__ import annotations
 
 import logging
+import json
 import re
 import time
 from collections import Counter
@@ -393,6 +394,9 @@ class Hook:
     what: str                   # ≤60 chars, the hook in the model's own words
     bridge: str                 # her ONE line, already `bridge_ok`
     contract: Contract
+    action: str = "send_ppv"
+    reason: str = ""
+    supporting_message_ids: tuple[int, ...] = ()
 
 
 #: The three arms, in the order the prompt prefers them.
@@ -567,7 +571,7 @@ _ASK_ONLY = ("\n\nIn this read only kind 1 (ASK) counts; answer hook:false for "
 
 async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
                     saved_effort: str | None = None, effort_pick: str = "auto",
-                    ask_only: bool = False) -> Hook | None:
+                    ask_only: bool = False, contextual_message: dict | None = None) -> Hook | None:
     """CALL 7 — is there a reason to sell him one more set right now?
 
     Returns a `Hook` whose contract the ask lane can plan on, or None. None is
@@ -615,6 +619,9 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
     if lexicon:
         user += ("\n\nTHE VAULT'S OWN WORDS (use these for terms, most common "
                  "first):\n" + ", ".join(lexicon))
+    if contextual_message is not None:
+        from .contextual_evidence import SYSTEM
+        user += "\n\nCURRENT CONVERSATION EVIDENCE:\n" + json.dumps(contextual_message)
     if ask_only:
         user += _ASK_ONLY
 
@@ -623,7 +630,7 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
             model=model,
             messages=[{"role": "system",
                        "content": _HOOK_SYSTEM["him" if str(voice or "").strip().lower()
-                                               == "him" else "her"]},
+                                               == "him" else "her"] if contextual_message is None else SYSTEM},
                       {"role": "user", "content": user}],
             purpose="content_resolver_hook",
             account_id=str(account_id), fan_id=int(fan_id),
@@ -638,6 +645,14 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
     if not p.get("hook"):
         return _no("no_hook")
 
+    evidence_ids = ()
+    if contextual_message is not None:
+        from .contextual_evidence import evidence
+        evidence_ids = evidence(p, contextual_message)
+        log.info("contextual-evaluated account=%s fan=%s action=%s reason=%s",
+                 account_id, fan_id, p.get("action"), str(p.get("reason", ""))[:160])
+        if evidence_ids is None or p.get("action") not in ("explore", "send_ppv"):
+            return _no("unsupported_contextual_evidence")
     bridge = " ".join(str(p.get("bridge") or "").split())
     if not _hook_upsell.bridge_ok(bridge):
         # Dropping it and shipping a bare claim is the other option, and it is
@@ -666,10 +681,15 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
                 terms.append(word)
     excl = [str(x).strip() for x in (p.get("exclusions") or []) if str(x).strip()]
 
+    if contextual_message is not None and p.get("action") == "send_ppv" and (not subject or not terms):
+        return _no("missing_contextual_content_subject")
+
     hook = Hook(
         source=source, what=str(p.get("what") or "")[:60], bridge=bridge,
+        action=p.get("action", "send_ppv") if contextual_message is not None else "send_ppv",
+        reason=str(p.get("reason", ""))[:160], supporting_message_ids=evidence_ids,
         contract=Contract(
-            is_ask=True, strict=False, subject=subject,
+            is_ask=contextual_message is None, strict=contextual_message is not None, subject=subject,
             media_kind=(kind if kind in MEDIA_KINDS else None),
             terms=terms[:15], exclusions=excl[:6], quote=quote[:120],
             company=False),

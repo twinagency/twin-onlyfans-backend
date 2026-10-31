@@ -49,7 +49,7 @@ def test_new_head_imports_while_archive_cursors_and_send_settings_stay_unchanged
         assert not s.get(OfProviderConnection, account).automate_new_conversations
         assert s.scalar(select(func.count()).select_from(OfWork)) == 0
         assert s.get(OfProviderReadBudget, account).lease_token is None
-    assert calls == [None]
+    assert calls == [None, '50']
 
 
 def test_known_head_does_not_reread_messages_and_new_head_is_detected_on_next_interval(native, monkeypatch):
@@ -138,7 +138,7 @@ def test_enabled_read_step_imports_new_head_and_continues_older_scan(native,monk
     monkeypatch.setattr(reader,'chats',chats)
     monkeypatch.setattr(reader,'messages',messages)
     progress=read_step(store,TENANT,account,reader,connection_revision=1)
-    assert cursors==[None,'12000']
+    assert cursors==[None,'50','12000']
     assert (progress.discovery_pages,progress.recovery_pages)==(1,1)
     with Session(store.engine) as s:assert s.get(Chat,(account,901)).last_message_id==200
 
@@ -151,6 +151,55 @@ def test_failed_conversation_does_not_block_other_recent_fans(native,monkeypatch
         if kw['fan_id']==901:raise NativeProtocolError('synthetic malformed page')
         return MessagePage([incoming(201,902)],False)
     monkeypatch.setattr(reader,'messages',messages)
-    with pytest.raises(NativeProtocolError):poll_recent(store,TENANT,account,reader,connection_revision=1,clock=lambda:100)
-    with pytest.raises(NativeProtocolError):poll_recent(store,TENANT,account,reader,connection_revision=1,clock=lambda:101)
+    assert poll_recent(store,TENANT,account,reader,connection_revision=1,clock=lambda:100) == 1
+    assert poll_recent(store,TENANT,account,reader,connection_revision=1,clock=lambda:101) == 0
     with Session(store.engine) as s:assert s.get(Chat,(account,902)).last_message_id==201
+
+
+def test_broken_directory_page_cannot_prevent_new_message_import(native, monkeypatch):
+    store, account, reader = native
+    calls = []
+    from onlyfans_runtime.native_protocol import NativeProtocolError
+    def chats(**kw):
+        calls.append(('chats', kw['cursor']))
+        if kw['cursor'] is not None:
+            raise NativeProtocolError('synthetic unavailable old directory')
+        return ChatPage([901], '20', {901: 200})
+    def messages(**kw):
+        calls.append(('messages', kw['fan_id']))
+        return MessagePage([incoming()], False)
+    monkeypatch.setattr(reader, 'chats', chats)
+    monkeypatch.setattr(reader, 'messages', messages)
+    assert poll_recent(store, TENANT, account, reader, connection_revision=1, clock=lambda:100) == 1
+    assert calls[:2] == [('chats', None), ('messages', 901)]
+    with Session(store.engine) as s:
+        assert s.get(Message, (account, 901, 200)) is not None
+        assert not s.get(OfRuntime, account).enabled
+
+
+def test_new_head_promotes_fan_already_waiting_behind_archive():
+    from collections import deque
+    from onlyfans_runtime.recent_inbox import HeadState, _enqueue
+    state = HeadState(pending=deque([1, 2, 3]), heads={1:10, 2:20, 3:30})
+    _enqueue(state, [3], {3:31}, priority=True, now=100)
+    assert list(state.pending) == [3, 1, 2]
+    assert len(state.pending) == len(set(state.pending))
+
+
+def test_failing_fan_is_retried_when_a_new_message_arrives(native, monkeypatch):
+    from onlyfans_runtime.native_protocol import NativeProtocolError
+    store, account, reader = native
+    mid, calls = [200], []
+    monkeypatch.setattr(reader, 'chats', lambda **kw: ChatPage([901], None, {901:mid[0]}))
+    def messages(**kw):
+        calls.append(mid[0])
+        if mid[0] == 200:
+            raise NativeProtocolError('synthetic inaccessible conversation')
+        return MessagePage([incoming(mid[0])], False)
+    monkeypatch.setattr(reader, 'messages', messages)
+    assert poll_recent(store, TENANT, account, reader, connection_revision=1, clock=lambda:100) == 0
+    assert poll_recent(store, TENANT, account, reader, connection_revision=1, clock=lambda:111) == 0
+    assert calls == [200]
+    mid[0] = 201
+    assert poll_recent(store, TENANT, account, reader, connection_revision=1, clock=lambda:122) == 1
+    assert calls == [200, 201]

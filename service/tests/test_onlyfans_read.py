@@ -618,7 +618,7 @@ check("newest activity first",
       ["1001:5001", "1001:5002", "1001:5003"])
 FIRST = PAGE["page"]["items"][0]
 check("a summary carries the fan",
-      FIRST["fan"], {"fanId": "5001", "displayName": "Dave K", "shortRef": "5001"})
+      FIRST["fan"], {"fanId": "5001", "displayName": "Dave K", "shortRef": "5001", "username": "dave", "avatarUrl": None})
 check("and the priority the relay recorded", FIRST["priority"], "priority")
 check("and the control row's revision", FIRST["revision"], 4)
 check("and its mode and takeover state",
@@ -1184,6 +1184,9 @@ from db.models import (  # noqa: E402
 # does too, since the relay serves every request from one loop.
 from db.onlyfans_models import OfRuntime as _OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection as _OfProviderConnection
+from db.onlyfans_models import OfIngress, OfRecovery
+from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
+from db.onlyfans_ledger_models import OfLedgerHistory, OfLedgerScan
 _SCHEMA_ENGINE = _create_engine(os.environ["CHATTERLY_DB_URL"])
 _ModelsBase.metadata.create_all(
     _SCHEMA_ENGINE,
@@ -1199,6 +1202,7 @@ _ModelsBase.metadata.create_all(
         _OfState.__table__,
         _OfDelivery.__table__,
         _OfRuntime.__table__,
+        OfIngress.__table__, OfRecovery.__table__, OfDeliveryPolicy.__table__, OfTextIntent.__table__, OfLedgerHistory.__table__, OfLedgerScan.__table__,
         _OfProviderConnection.__table__,
     ],
 )

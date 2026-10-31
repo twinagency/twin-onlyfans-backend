@@ -110,7 +110,7 @@ def test_existing_overrides_clear_and_inherit_one_shared_creator_owner(database,
     store.close()
 
 
-def test_failed_or_regressed_refresh_never_freshens_cache_and_stale_ai_does_not_claim(database,monkeypatch):
+def test_failed_or_regressed_refresh_preserves_saved_facts_without_expiry(database,monkeypatch):
     store,_=start(database,monkeypatch);value=source();r,_=reader(monkeypatch,value)
     refresh(store,TENANT,ACCOUNT,r)
     old=get_configuration(store,TENANT,ACCOUNT)["sharedFacts"]["checkedAt"]
@@ -122,11 +122,9 @@ def test_failed_or_regressed_refresh_never_freshens_cache_and_stale_ai_does_not_
         cache.checked_at=utcnow()-timedelta(seconds=121)
     # Existing cache remains required even when the deployment flag is later off.
     monkeypatch.delenv("ONLYFANS_TWIN_FACTS_ENABLED",raising=False)
-    model=SyntheticNativeModel();result=worker(store,model=model).step()
-    assert result.claims==0 and result.held==1 and not model.calls
     with Session(database[1]) as s:
-        assert s.get(OfWork,(ACCOUNT,101)).status=="waiting"
-        assert s.scalar(select(func.count()).select_from(GrokCall))==0
+        facts,state=effective(s,s.get(AccountAiConfig,ACCOUNT))
+        assert state["state"]=="current" and facts["job"]=="Approved cover story"
     make_due(database[1])
     def fail(self,url):raise TimeoutError("private diagnostics must not appear")
     monkeypatch.setattr(TwinFactsReader,"_get_once",fail)
@@ -134,6 +132,7 @@ def test_failed_or_regressed_refresh_never_freshens_cache_and_stale_ai_does_not_
     with Session(database[1]) as s:
         cache=s.get(OfCreatorFactsSource,ACCOUNT)
         assert cache.last_error=="shared_creator_unavailable" and cache.checked_at<utcnow()-timedelta(seconds=120)
+        assert effective(s,s.get(AccountAiConfig,ACCOUNT))[1]["state"]=="current"
     store.close()
 
 
@@ -203,4 +202,21 @@ def test_identical_shared_facts_preserve_legacy_json_and_do_not_create_an_edit(d
         assert s.get(OfRuntime,ACCOUNT).configuration_revision==0
         assert s.scalar(select(func.count()).select_from(OfConfigurationChange))==0
     assert get_configuration(store,TENANT,ACCOUNT)["sharedFacts"]["state"]=="current"
+    store.close()
+
+
+def test_saved_facts_survive_six_months_and_keep_overrides(database,monkeypatch):
+    store=setup(database);r,_=reader(monkeypatch,source())
+    refresh(store,TENANT,ACCOUNT,r)
+    with Session(database[1]) as s,s.begin():
+        cache=s.get(OfCreatorFactsSource,ACCOUNT)
+        cache.checked_at=utcnow()-timedelta(days=400)
+        facts,state=effective(s,s.get(AccountAiConfig,ACCOUNT))
+        assert state["state"]=="current"
+        assert facts["job"]=="Approved cover story"
+        assert facts["home_city"]=="Synthetic Harbor"
+        cache.binding_id="different-binding"
+        with s.no_autoflush, pytest.raises(Refused,match="binding changed"):
+            effective(s,s.get(AccountAiConfig,ACCOUNT))
+        s.rollback()
     store.close()

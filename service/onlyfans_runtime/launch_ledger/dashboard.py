@@ -72,7 +72,7 @@ def read_ledger(s, tenant, account, *, now=None):
     return {"schemaVersion": SCHEMA, "accountId": account,
         "status": "not_started" if scan is None else scan.status,
         "windowStart": scan and iso(scan.window_start), "windowEnd": scan and iso(scan.window_end),
-        "pageOffset": scan and scan.page_offset,
+        "pageOffset": ledger.scan_position(scan) if scan else None,
         "lastCompleteAt": scan and iso(scan.last_complete_at), "lastFullAt": scan and iso(scan.last_full_at),
         "nextPollAt": scan and iso(scan.next_poll_at), "lastError": error,
         "leaseActive": bool(scan and scan.lease_until is not None and scan.lease_until > now),

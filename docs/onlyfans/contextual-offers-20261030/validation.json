@@ -1,0 +1,207 @@
+{
+  "newBehaviorTests": {
+    "command": "PYTHONPATH=service TWIN_FASTT_CONFIG_ISOLATED=1 DATABASE_URL=sqlite+aiosqlite:////tmp/contextual-review-final.db python -m pytest -q service/tests/test_contextual_offers.py --disable-warnings --tb=short",
+    "result": "...............................................                          [100%]\n47 passed, 2 warnings in 1.63s"
+  },
+  "syntheticNativeTurns": {
+    "command": "PYTHONPATH=service python service/tests/test_contextual_native_turn.py",
+    "result": {
+      "contextual_native_turn": [
+        {
+          "mode": "off",
+          "fixed_price_cents": null,
+          "sends": 1,
+          "paid_cards": 0,
+          "model_calls": [
+            "ai_chatter"
+          ]
+        },
+        {
+          "mode": "shadow",
+          "fixed_price_cents": null,
+          "sends": 1,
+          "paid_cards": 0,
+          "model_calls": [
+            "ai_chatter",
+            "content_resolver_hook",
+            "content_resolver_match",
+            "content_resolver_verify"
+          ]
+        },
+        {
+          "mode": "live",
+          "fixed_price_cents": null,
+          "sends": 1,
+          "paid_cards": 1,
+          "model_calls": [
+            "ai_chatter",
+            "content_resolver_hook",
+            "content_resolver_match",
+            "content_resolver_verify"
+          ]
+        },
+        {
+          "mode": "live",
+          "fixed_price_cents": 700,
+          "sends": 1,
+          "paid_cards": 1,
+          "model_calls": [
+            "ai_chatter",
+            "content_resolver_hook",
+            "content_resolver_match",
+            "content_resolver_verify"
+          ]
+        }
+      ]
+    }
+  },
+  "existingNativeRegressions": [
+    {
+      "test": "test_native_pilot_engine",
+      "exit": 0,
+      "tail": [
+        "77 checks; all cases passed"
+      ]
+    },
+    {
+      "test": "test_native_pilot_vault",
+      "exit": 0,
+      "tail": [
+        "{\"native_vault_mode_checks\": 56}"
+      ]
+    },
+    {
+      "test": "test_native_pilot_content",
+      "exit": 0,
+      "tail": [
+        "{\"native_single_card_real_shape\": true, \"provider_calls\": 1, \"model_calls\": 1}"
+      ]
+    },
+    {
+      "test": "test_native_pilot_postsale",
+      "exit": 0,
+      "tail": [
+        "349 checks; all cases passed"
+      ]
+    },
+    {
+      "test": "test_native_pilot_postsale_engine",
+      "exit": 0,
+      "tail": [
+        "278 checks passed",
+        "all cases passed"
+      ]
+    },
+    {
+      "test": "test_native_pilot_resolver_seam",
+      "exit": 0,
+      "tail": [
+        "{\"native_resolver_seam_checks\": 21}"
+      ]
+    },
+    {
+      "test": "test_native_pilot_ledger",
+      "exit": 0,
+      "tail": [
+        "native pilot ledger: 300 checks; all cases passed"
+      ]
+    },
+    {
+      "test": "test_native_pilot_runner",
+      "exit": 0,
+      "tail": [
+        "all cases passed (262 checks)"
+      ]
+    },
+    {
+      "test": "test_native_pilot_recovery",
+      "exit": 0,
+      "tail": []
+    },
+    {
+      "test": "test_native_pilot_receipt_recovery",
+      "exit": 0,
+      "tail": []
+    },
+    {
+      "test": "test_native_pilot_daily_allowance",
+      "exit": 0,
+      "tail": [
+        "PASS daily quota: 2000 boundary, concurrent admission, independent fan/creator, restart persistence, exact 24h expiry, refused/unknown accounting, legacy counters and disable"
+      ]
+    },
+    {
+      "test": "test_native_pilot_service",
+      "exit": 0,
+      "tail": [
+        "loop level ok 179",
+        "native pilot service: all cases passed (722 checks)"
+      ]
+    },
+    {
+      "test": "test_native_pilot_offers",
+      "exit": 0,
+      "tail": [
+        "31 checks; all cases passed"
+      ]
+    },
+    {
+      "test": "test_native_pilot_followups",
+      "exit": 0,
+      "tail": [
+        "45 checks; all cases passed"
+      ]
+    },
+    {
+      "test": "test_native_pilot_identity",
+      "exit": 0,
+      "tail": []
+    },
+    {
+      "test": "test_native_pilot_manifest",
+      "exit": 0,
+      "tail": [
+        "{\"blockers\": [{\"catalog_id\": 30, \"reason\": \"media-not-in-vault\"}], \"ok\": false}",
+        "native pilot manifest: 23 checks; all cases passed"
+      ]
+    },
+    {
+      "test": "test_native_pilot_model",
+      "exit": 0,
+      "tail": [
+        "",
+        "OK"
+      ]
+    },
+    {
+      "test": "test_profile_subject_attribution",
+      "exit": 0,
+      "tail": [
+        "",
+        "OK"
+      ]
+    }
+  ],
+  "dashboard": {
+    "contract": "scripts/check-contextual-offers.ts passed",
+    "editorTypeCheck": "ConfigurationEditor.tsx and its current dependency graph passed strict focused TypeScript 5.9.3 check",
+    "fullBuild": "not run",
+    "browser": "not run"
+  },
+  "notRun": [
+    "PostgreSQL configuration and API-permission integration",
+    "Manual free/paid media PostgreSQL integration",
+    "PostgreSQL ledger/history/load/fairness integration",
+    "Populated PostgreSQL schema upgrade/downgrade",
+    "Full repository Python suite and full application/dashboard build",
+    "Real provider send and purchase/unlock"
+  ],
+  "knownBaselineFailure": {
+    "test": "test_native_pilot_runtime.py under SQLite",
+    "result": "PostgreSQL-only JSONB CHECK DDL fails on both untouched baseline and candidate",
+    "postgresRuntimeAttempt": "Runtime lacks a usable mapped non-root UID for a disposable PostgreSQL server"
+  },
+  "productionMutations": false,
+  "realFanMessages": 0,
+  "realPurchases": 0
+}

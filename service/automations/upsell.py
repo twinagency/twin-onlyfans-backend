@@ -89,7 +89,7 @@ MAX_ASK_VS_HISTORY_MULT = 3.0   # never ask >3x the largest single PPV he has EV
 # 3x exceeds OF_PRICE_MAX_CENTS, so `ceiling < floor` for the whole catalog and the
 # fan is silently never offered anything again. The best buyers go dark first.
 ESCALATION_MULT = 1.75          # after a PAID rung. One constant, not a preset.
-DISCOUNT_BAND = (0.80, 0.90)    # of the price HE SAW — a cut of 10-20%, never more.
+DISCOUNT_BAND = (0.80, 0.85)    # Requested: 15% default, 20% maximum.
                                 # House policy (operator, 2026-08-01): the set price is
                                 # the price, with only an OCCASIONAL cut of up to 20%.
                                 # This band used to open at 0.60 (a 40% cut) on the
@@ -106,7 +106,7 @@ from ._price_limits import OF_PRICE_FLOOR_CENTS, OF_PRICE_MAX_CENTS
 # Pacing / anti-abuse. Hard constants: the churn path is ASKS, and a fan who buys
 # nothing never trips a spend cap — so the caps are on asks, not on dollars alone.
 RUNG_GAP_S = 180                 # minimum seconds between two rungs
-RESEND_AFTER_M = 90              # unpaid this long ⇒ one discount resend
+RESEND_AFTER_M = 0               # One explicit request is enough; no age gate.
 STOP_AFTER_UNPAID_RUNGS = 1      # then the ladder taps out. No begging.
 MAX_ASKS_PER_FAN_PER_DAY = 8     # the hot window CANNOT lift this
 DAILY_ASK_CEILING_CENTS = 25_000
@@ -709,14 +709,20 @@ def next_price(*, fan: FanState, band: tuple[int, int], last_paid_cents: int | N
         clamped_by=clamped_by, band_lo=lo, band_hi=hi)
 
 
-def discount_price(last_sent_cents: int, rng: Random, account_id: str) -> int:
-    """The one answer to an unpaid rung. Computed off the price HE ACTUALLY SAW (not a
-    pre-arm base he never saw), so a "discount" can never arrive ABOVE the original.
-    The arm is NOT re-applied here — one arm per (fan, media) event, ever."""
-    lo, hi = DISCOUNT_BAND
-    px = int(last_sent_cents * rng.uniform(lo, hi))
-    px = max(OF_PRICE_FLOOR_CENTS, min(px, last_sent_cents - 1))
-    return px
+def discount_price(last_sent_cents: int, rng: Random, account_id: str,
+                   *, discount_pct: float = 0.15, min_cents: int = OF_PRICE_FLOOR_CENTS) -> int:
+    """15% by default, at most 20% of the price actually shown; never below the floor."""
+    from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+    try:
+        pct = Decimal(str(discount_pct))
+        if not pct.is_finite():
+            raise InvalidOperation()
+    except (InvalidOperation, ValueError):
+        pct = Decimal("0.15")
+    pct = max(Decimal("0.15"), min(Decimal("0.20"), pct))
+    price = int((Decimal(last_sent_cents) * (1 - pct)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    # Round the 20% ceiling towards the original price, never beyond it.
+    return max(OF_PRICE_FLOOR_CENTS, int(min_cents), (last_sent_cents * 80 + 99) // 100, price)
 
 
 @dataclass(frozen=True)
@@ -732,35 +738,15 @@ class DiscountCtx:
 
 
 def may_discount(ctx: DiscountCtx) -> tuple[bool, str]:
-    """He must WORK for a cut, and only a VOICED affordability objection earns one.
-
-    95.8% of our historical cuts were unprompted and converted at HALF the rate
-    (20.7% vs 42.9%). The operator's "they'll learn to haggle" fear is measurably
-    backwards (discounted fans later haggle LESS) — so we do NOT penalise a haggle;
-    we gate on an ask and rate-limit the REINFORCER, not the price."""
+    """A single explicit request qualifies; silence, distress and repeat cuts do not."""
+    from ._price_ask import PRICE_ASK
     if ctx.spend_regret:
-        return False, "distress"           # a broke man is soft-stopped, never discounted
-    # 1. ASK REQUIRED — a voiced affordability objection (soft decline, stated cap, or a
-    #    haggle line). No voiced objection ⇒ no cut; the answer is a PIVOT to a cheaper item.
-    has_objection = bool(
-        classify_decline(ctx.last_inbound_text) == DECLINE_SOFT
-        or detect_stated_cap(ctx.last_inbound_text)
-        or ctx.objection_at is not None
-    )
-    if not has_objection:
+        return False, "distress"
+    if not (ctx.objection_at is not None or detect_stated_cap(ctx.last_inbound_text)
+            or PRICE_ASK.search(ctx.last_inbound_text or "")):
         return False, "unprompted"
-    # 2. THE BEAT — at least one fan turn since the objection. Never cut on the same
-    #    breath he asked. This IS "he must work for it"; the data says more earns nothing.
-    if ctx.objection_at is not None and ctx.last_inbound_at is not None \
-            and ctx.last_inbound_at <= ctx.objection_at:
-        return False, "same_turn"
-    # 3. ONE CUT PER ITEM.
     if ctx.discount_count_this_item >= 1:
         return False, "already_cut"
-    # 4. THE GOVERNOR — cap how RELIABLY an objection pays off (the reinforcer), without
-    #    a haggle penalty (which is backwards). >35% of asks ending in a cut ⇒ pivot.
-    if ctx.asks_last_30d >= 4 and ctx.cuts_last_30d / max(1, ctx.asks_last_30d) > 0.35:
-        return False, "governor"
     return True, "ok"
 
 
@@ -902,3 +888,4 @@ def session_expired(status: str, last_ask_at: datetime | None,
     if session_idle_at and (now - session_idle_at) > timedelta(minutes=SESSION_IDLE_M):
         return True
     return False
+

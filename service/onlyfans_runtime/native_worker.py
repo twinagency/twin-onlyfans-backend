@@ -126,15 +126,21 @@ class NativeWorker:
             policy=s.get(OfDeliveryPolicy,account.account_id)
             now=self.authority._db_now(s)
             from .store import fan_current_override
+            from . import concurrent_admission
+            from native_pilot import admission
             current=bool(not runtime.recovery_needed and runtime.last_sync_at is not None and
                 (now-runtime.last_sync_at).total_seconds()>=-300 and
                 (now-runtime.last_sync_at).total_seconds()<=MAX_SYNC_AGE_SECONDS)
+            concurrent = policy is not None and concurrent_admission.mode(policy) == "concurrent"
+            cooldown = admission.cooldown_at(policy) if policy is not None else None
             # Per-fan eligibility still requires that fan's own recovery (text_delivery).
             return bool(runtime.enabled and ((current and not runtime.pending_events)
                 or bool(fan_current_override(account.account_id)))
                 and policy is not None and policy.enabled and policy.transport_kind==kind
-                and policy.used_units<policy.limit_units and not policy.active_intent_id and policy.queued_count==0
-                and (policy.next_dispatch_at is None or policy.next_dispatch_at<=now)
+                and policy.used_units<policy.limit_units
+                and (concurrent or (not policy.active_intent_id and policy.queued_count==0
+                                    and (policy.next_dispatch_at is None or policy.next_dispatch_at<=now)))
+                and (not concurrent or cooldown is None or cooldown<=now)
                 and (not hasattr(account.transport,"policy_revision") or account.transport.policy_revision==policy.revision))
 
     def _heartbeat(self, account, *, failed=False):
@@ -165,6 +171,7 @@ class NativeWorker:
             row.binding_id=runtime.binding_id
             row.observed_at=utcnow()
             row.capabilities_json=canonical({"history_recovery":self.history_recovery,
+                "delivery_resolution":__import__('onlyfans_runtime.delivery_resolution',fromlist=['operational']).operational(),
                 "history_memory":self.history_memory,"engagement":self.engagement_service is not None,
                 "connection_revision":generation})
             row.last_error="cycle_failed" if failed else None
@@ -209,6 +216,18 @@ class NativeWorker:
                 recovery.step(self.tenant_id,account.account_id,account.reader,**scope)
             except Exception:report.held+=1
 
+    def _read_progress(self, account, **scope):
+        """A paced provider read retry leaves durable recovery checkpoints due."""
+        from .worker import read_step
+        from .provider_connector import NativeReadTransientError, NativeRateLimitError
+        try:
+            return read_step(self.store,self.tenant_id,account.account_id,account.reader,
+                recent_cutover=self.history_recovery,**scope)
+        except (NativeReadTransientError,NativeRateLimitError):
+            # The read owner already released its lease and saved provider
+            # backoff. Skip planning this turn; other accounts still get work.
+            return None
+
     def step(self,stop=None):
         """Bounded work, no waits; stop is cooperative between durable phases."""
         self._role()
@@ -216,6 +235,8 @@ class NativeWorker:
         if not self._lock.acquire(blocking=False):raise Refused("worker instance is already running")
         report=CycleReport()
         try:
+            from .delivery_resolution_jobs import poll
+            poll(self.store,self.tenant_id)
             count=min(self.accounts_per_cycle,len(self.accounts))
             selected=[self.accounts[(self._cursor+i)%len(self.accounts)] for i in range(count)]
             self._cursor=(self._cursor+count)%len(self.accounts)
@@ -224,9 +245,10 @@ class NativeWorker:
                 account_errors=report.errors
                 try:
                     if account.read_connection_revision is not None:
-                        from .worker import read_step
-                        progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,
-                            connection_revision=account.read_connection_revision,recent_cutover=self.history_recovery)
+                        progress=self._read_progress(account,connection_revision=account.read_connection_revision)
+                        if progress is None:
+                            report.held+=1
+                            continue
                         report.ingress+=progress.applied
                         # Inactive verified accounts import archive history too; no model, automation or send.
                         if not stop.is_set():self._history_turn(account,report,revision=account.read_connection_revision)
@@ -243,9 +265,10 @@ class NativeWorker:
                     if account.reader is None:
                         report.ingress+=self.store.drain(self.tenant_id,account.account_id)
                     else:
-                        from .worker import read_step
-                        progress=read_step(self.store,self.tenant_id,account.account_id,account.reader,
-                            recent_cutover=self.history_recovery)
+                        progress=self._read_progress(account)
+                        if progress is None:
+                            report.held+=1
+                            continue
                         report.ingress+=progress.applied
                     if stop.is_set():break
                     # After recent intake and before a new reply claim; yields to any claimed live work.

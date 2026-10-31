@@ -94,13 +94,14 @@ def _native_messages(context):
     messages, _ = native._build_messages(persona, fan, candidate, set(), history_tail=100,
                                          onlyfans_text_only=True, painful_on=False,
                                          onlyfans_memory=True, profile=profile,
+                                         dated_memory="learnedProfile" in context.get("historicalMemory", {}),
                                          onlyfans_sales=context.get("sales"),
                                          bot_accused=bot_accused, kind=kind,
                                          v=_voice.blocks(cfg.voice, sell_customs=False),
                                          lang=language)
     memory = context.get("historicalMemory")
     # Older source excerpts and operator overrides only; canonical facts already reach the composer above.
-    if memory and (memory["interactions"] or memory["overrides"]
+    if memory and (memory.get("learnedProfile") or memory["interactions"] or memory["overrides"]
                    or any(fact["source"] != "canonical" for fact in memory["facts"].values())):
         from .launch_history_memory.memory import augment_prompt
         messages = augment_prompt(messages, memory)
@@ -268,7 +269,10 @@ class NativeTextPlanner:
             # Finish only this invocation's historical evidence if its binding
             # was revoked while the model was running. Never authorize new work
             # through a revoked binding or leave a completed draft generating.
-            runtime = s.scalar(select(OfRuntime).where(OfRuntime.account_id == claim.account_id).with_for_update())
+            # Shared runtime lock: model preparation for different fans may
+            # proceed together, while an operator control still waits for the
+            # short reservation/settlement transaction to finish.
+            runtime = s.scalar(select(OfRuntime).where(OfRuntime.account_id == claim.account_id).with_for_update(read=True))
             binding = s.scalar(select(OfCreatorBinding).where(
                 OfCreatorBinding.id == binding_id, OfCreatorBinding.account_id == claim.account_id,
                 OfCreatorBinding.tenant_id == tenant_id, OfCreatorBinding.channel == "onlyfans",

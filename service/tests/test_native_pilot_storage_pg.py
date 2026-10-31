@@ -70,7 +70,7 @@ def check(value, label=""):
 
 TABLES = ("twin_bridge_inputs", "twin_bridge_turns", "twin_bridge_turn_members", "twin_bridge_conversations",
           "twin_bridge_send_attempts", "twin_bridge_writes", "native_pilots", "native_pilot_inputs",
-          "native_pilot_receipts", "native_pilot_followups")
+          "native_pilot_receipts", "native_pilot_followups", "engine_runner_lease", "engine_work", "engine_alert")
 
 
 def rows(sql, args=()):
@@ -183,7 +183,7 @@ class PgFixture(ledger_test.Fixture):
 RELEASE_SERVICE = os.environ.get(
     "ONLYFANS_RELEASE_SERVICE_DIR",
     "/tmp/claude-1000/-home-ronan-twin/1f28717a-be90-4d45-ac41-136eed78da59/scratchpad/rel/service")
-LIVE_REVISION = "0098_ledger_exclusion"
+LIVE_REVISION = "0103_concurrent_delivery"
 PREVIOUS_RELEASE_REVISION = "0091_launch_controls"
 
 

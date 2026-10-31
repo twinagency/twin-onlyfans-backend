@@ -127,6 +127,36 @@ _SCHEMA = (
         job_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, fan_id INTEGER NOT NULL, kind TEXT NOT NULL,
         payload_json TEXT NOT NULL, run_at TEXT NOT NULL, last_in_id INTEGER, last_in_at TEXT,
         state TEXT NOT NULL, reason TEXT, input_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
+    # Engine v2 (additive): the account runner lease and the per-fan work read model.
+    """CREATE TABLE IF NOT EXISTS engine_runner_lease (
+        account_id TEXT PRIMARY KEY, owner_token TEXT NOT NULL, holder TEXT NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 1, acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS engine_work (
+        account_id TEXT NOT NULL, fan_id INTEGER NOT NULL, state TEXT NOT NULL, reason TEXT,
+        message_id INTEGER, waiting_since TEXT, state_since TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(account_id,fan_id))""",
+    # Throughput work (additive): durable operator-visible conditions (provider throttle, send stall).
+    """CREATE TABLE IF NOT EXISTS engine_alert (
+        account_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, first_at TEXT NOT NULL, last_at TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 1, detail_json TEXT, PRIMARY KEY(account_id,kind))""",
+    # Concurrent delivery (additive): one durable owner per conversation, one counted slot per
+    # in-flight provider request, and the account token bucket. None of these grant authority by
+    # themselves; the pilot/conversation receipt checks still do.
+    """CREATE TABLE IF NOT EXISTS engine_conversation_lease (
+        tenant_id TEXT NOT NULL, account_id TEXT NOT NULL, fan_id INTEGER NOT NULL,
+        holder TEXT NOT NULL, owner_token TEXT NOT NULL, attempt_id TEXT, state TEXT NOT NULL,
+        acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+        next_send_at TEXT, updated_at TEXT NOT NULL,
+        PRIMARY KEY(tenant_id,account_id,fan_id))""",
+    """CREATE TABLE IF NOT EXISTS engine_dispatch_slot (
+        slot_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, account_id TEXT NOT NULL,
+        fan_id INTEGER NOT NULL, attempt_id TEXT, state TEXT NOT NULL,
+        admitted_at TEXT NOT NULL, expires_at TEXT NOT NULL)""",
+    """CREATE INDEX IF NOT EXISTS ix_engine_dispatch_slot_account
+        ON engine_dispatch_slot(account_id,state,expires_at)""",
+    """CREATE TABLE IF NOT EXISTS engine_provider_bucket (
+        account_id TEXT PRIMARY KEY, tokens TEXT NOT NULL, updated_at TEXT NOT NULL)""",
 )
 
 # Runner-owned follow-ups (see service.py --followups). The legacy scheduled_jobs table is never used.
@@ -154,11 +184,19 @@ SERVICE_BUDGET_CEILING = 10000
 REQUEUED = "requeued:"
 MAX_REQUEUES_MODEL = 1
 MAX_REQUEUES_PROVIDER = 2
+REQUEUE_HORIZON = timedelta(hours=24)
+# An outbound message with no automation kind and no employee is an UNKNOWN sender (a blast, a script, another tool). It
+# does not count as an answer to a fan's message (engine v2; FASTT_UNLABELLED_COUNTS_AS_ANSWER=1 restores the old reading).
+# Younger than the grace it still counts: our own just-sent reply is unlabelled until its attribution row is written.
+UNLABELLED_GRACE = timedelta(seconds=90)
 SERVICE_ID = re.compile(r"svc-[A-Za-z0-9_-]{1,92}")
 
 
 class Ledger:
-    def __init__(self, path: str | Path, *, allowance: bool = False):
+    def __init__(self, path: str | Path, *, allowance: bool = False, min_send_interval_s: float | None = None,
+                 lock_scope: str | None = None, per_account_send_gap: bool = False,
+                 tenant_id: str | None = None, send_concurrency: int = 4,
+                 conversation_min_gap_s: float = 0.0, dispatch_lease_s: float = 120.0):
         # A PostgreSQL target is the application URL (never printed or logged).
         self.path = path if store.is_pg(path) else Path(path)
         self.pg = store.is_pg(path)
@@ -166,6 +204,22 @@ class Ledger:
         # one unit of the account's EXISTING of_delivery_policy, in the same
         # transaction as the durable attempt. The bounded pilot never sets it.
         self.allowance = allowance
+        # Engine v2: the one account this Ledger writes for (the per-account engine process). PostgreSQL write
+        # transactions are then scoped to it (see twin_bridge.store.PG_LOCK_KEY) instead of one global lock.
+        self.lock_scope = lock_scope
+        # Engine v2: the account send interval is never below the floor (20 s), whatever the policy row says.
+        from . import tuning
+        # Per-account mode (FASTT_PER_ACCOUNT_SEND_GAP=1): the floor is the shared 10 s ceiling and the account's own
+        # policy value decides the gap (see onlyfans_runtime.send_gap). Off: the 20 s floor, exactly as before.
+        self.per_account_send_gap = bool(per_account_send_gap) and allowance
+        floor = tuning.SEND_GAP_HARD_FLOOR_S if self.per_account_send_gap else tuning.MIN_SEND_INTERVAL_FLOOR_S
+        self.min_send_interval_s = max(float(floor), float(min_send_interval_s or 0)) if allowance else 0.0
+        # Concurrent mode is selected by the account's policy row. These are the process-side
+        # ceilings; the durable row can only lower them.
+        self.tenant_id = str(tenant_id or os.environ.get("ONLYFANS_WORKER_TENANT") or "default")
+        self.send_concurrency = max(1, min(64, int(send_concurrency)))
+        self.conversation_min_gap_s = max(0.0, min(3600.0, float(conversation_min_gap_s)))
+        self.dispatch_lease_s = max(30.0, min(900.0, float(dispatch_lease_s)))
         self.fan_daily_limit = int(os.environ.get("FASTT_FAN_DAILY_REPLY_LIMIT", "2000")) if allowance else 0
         if not 0 <= self.fan_daily_limit <= 2000:
             raise ValueError("invalid-fan-daily-reply-limit")
@@ -176,6 +230,31 @@ class Ledger:
         # input_key -> how many times it has been requeued so far (set when a requeued input is re-claimed).
         self._requeues: dict[str, int] = {}
 
+    def unlabelled_clause(self, alias: str, now) -> tuple[str, tuple]:
+        """``(sql, params)``: a condition true for an outbound row that is NOT an answer (unknown sender, past the grace,
+        not one of our own receipts), to be used as ``AND NOT (<sql>)`` where "a later message answers the fan" is
+        decided. ``("", ())`` when the old reading is selected or the sender columns do not exist (older fixtures)."""
+        if os.environ.get("FASTT_UNLABELLED_COUNTS_AS_ANSWER") == "1":
+            return "", ()
+        if getattr(self, "_sender_cols", None) is None:
+            try:
+                with store.readonly(self.path) as con:
+                    if self.pg:
+                        names = {r[0] for r in con.execute("SELECT column_name FROM information_schema.columns "
+                                                           "WHERE table_schema='public' AND table_name='messages'")}
+                    else:
+                        names = {r[1] for r in con.execute("PRAGMA table_info(messages)")}
+                self._sender_cols = {"automation_kind", "sent_by_employee_id"} <= names
+            except Exception:
+                self._sender_cols = False
+        if not self._sender_cols:
+            return "", ()
+        cutoff = _dt(datetime.fromisoformat(_dt(now)) - UNLABELLED_GRACE)
+        a = alias
+        return (f"({a}.direction='out' AND {a}.automation_kind IS NULL AND {a}.sent_by_employee_id IS NULL "
+                f"AND CAST({a}.created_at AS TEXT)<? AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts ur "
+                f"WHERE ur.provider_message_id=CAST({a}.message_id AS TEXT)))", (cutoff,))
+
     def _check_target(self) -> None:
         # Never silently create an empty database at a misspelled production path.
         if not self.pg and not self.path.is_file():
@@ -184,7 +263,7 @@ class Ledger:
     @contextmanager
     def _tx(self, *, initialize: bool = False) -> Iterator[object]:
         self._check_target()
-        with store.transaction(self.path) as con:
+        with store.transaction(self.path, self.lock_scope) as con:
             if self.pg and con.execute("SELECT to_regnamespace('onlyfans_restore')").fetchone()[0]:
                 raise Refused("restore-quarantined")
             # PostgreSQL: fastt_runtime tables are created by store.ensure_runtime_schema (runner/control), not here.
@@ -287,7 +366,7 @@ class Ledger:
         return bool(row and isinstance(row[0], str) and row[0].strip())
 
     def _source(self, con, p, now: str,
-                exclude_input_key: str | None = None) -> SourceSnapshot | None:
+                exclude_input_key: str | None = None, ignore_newer_than: SourceSnapshot | None = None) -> SourceSnapshot | None:
         # Exclude this input's proven outputs, and completed replies whose recorded
         # input predates a newly arrived message. External/unknown sends still hold.
         latest_in = con.execute(
@@ -297,14 +376,23 @@ class Ledger:
         ignored = {int(r[0]) for r in overlap}
         covered = {int(mid) for r in overlap for mid in json.loads(r[1])}
         overlap_sql = ("AND m.message_id NOT IN (" + ",".join("?" for _ in ignored) + ") ") if ignored else ""
+        unl_sql, unl_args = self.unlabelled_clause("m", now)
         rows = con.execute("SELECT m.message_id,m.direction,m.body,m.media_ids,m.media_count,m.price_cents,"
                           "m.is_tip,m.is_unsent,m.created_at,m.ingested_at,m.raw_json FROM messages m "
                           "WHERE m.account_id=? AND m.fan_id=? AND NOT (m.direction='out' AND m.is_unsent) "
                           "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts r "
                           "WHERE r.pilot_id=? AND r.input_key=? AND r.state='sent' "
                           "AND r.provider_message_id=CAST(m.message_id AS TEXT)) "
-                          + overlap_sql + "ORDER BY m.created_at DESC,m.message_id DESC LIMIT 101",
-                          (p["account_id"], p["fan_id"], p["pilot_id"], exclude_input_key, *sorted(ignored))).fetchall()
+                          + overlap_sql + (f"AND NOT {unl_sql} " if unl_sql else "")
+                          + "ORDER BY m.created_at DESC,m.message_id DESC LIMIT 101",
+                          (p["account_id"], p["fan_id"], p["pilot_id"], exclude_input_key, *sorted(ignored), *unl_args)).fetchall()
+        if ignore_newer_than is not None:
+            # Hard-maximum burst: the reply was prepared for ``ignore_newer_than``; fan messages that arrived after its
+            # newest member (and only those, only inbound) do not invalidate it. They stay unanswered and are
+            # answered next (see overlap: a reply to an older input never consumes a later message).
+            anchor = (ignore_newer_than.created_at, ignore_newer_than.message_id)
+            while rows and rows[0]["direction"] == "in" and (_dt(rows[0]["created_at"]), rows[0]["message_id"]) > anchor:
+                rows = rows[1:]
         if not rows or rows[0]["direction"] != "in":
             return None
         members = []
@@ -374,7 +462,7 @@ class Ledger:
                 con, p["account_id"], p["fan_id"], i[0])}))
 
     def claim_input(self, *, pilot_id: str, owner_token: str, snapshot: SourceSnapshot,
-                    now: datetime | str) -> str:
+                    now: datetime | str, reply_authority=None) -> str:
         """Claim before a model call; recovery requires explicit pre-wire proof."""
         if not isinstance(snapshot, SourceSnapshot):
             raise Refused("invalid-snapshot")
@@ -395,9 +483,15 @@ class Ledger:
                             "earliest_created_at=?,state='generating',claimed_at=?,updated_at=? WHERE input_key=?",
                             (snapshot.source_hash, snapshot.created_at, snapshot.ingested_at, _json(snapshot.member_ids),
                              snapshot.earliest_created_at, now_s, now_s, prior["input_key"]))
+                if reply_authority is not None:
+                    from .pacing import claimed
+                    claimed(con, reply_authority, prior["input_key"], now_s)
                 self._requeues[prior["input_key"]] = int(str(prior["state"])[len(REQUEUED):] or 1)
                 return prior["input_key"]
             key = _hash([pilot_id, snapshot.message_id])
+            if reply_authority is not None:
+                from .pacing import claimed
+                claimed(con, reply_authority, key, now_s)
             con.execute("INSERT INTO native_pilot_inputs(input_key,pilot_id,message_id,source_hash,created_at,ingested_at,"
                         "member_ids_json,earliest_created_at,state,claimed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'generating',?,?)",
                         (key, pilot_id, snapshot.message_id, snapshot.source_hash, snapshot.created_at,
@@ -427,8 +521,16 @@ class Ledger:
             raise Refused("restore-quarantined")
         if not self.pg or not store.has_table(con, "public.of_runtime"):
             return False
+        # In concurrent mode delivery admission takes a shared runtime lock:
+        # different fans may overlap, while a control transition still takes the
+        # exclusive lock and waits for the short admission transaction to settle.
+        # Legacy gap mode retains the original exclusive lock.
+        from . import admission
+        policy = self._policy_row(con, pilot["account_id"])
+        concurrent = policy is not None and admission.is_concurrent(policy)
+        lock_sql = (" FOR SHARE" if concurrent else " FOR UPDATE") if lock else ""
         runtime = con.execute("SELECT enabled,binding_id FROM public.of_runtime WHERE account_id=?" +
-            (" FOR UPDATE" if lock else ""), (pilot["account_id"],)).fetchone()
+            lock_sql, (pilot["account_id"],)).fetchone()
         if runtime is None:
             return False
         binding = con.execute("SELECT account_id,channel,revoked_at FROM public.of_creator_bindings WHERE id=?",
@@ -460,7 +562,8 @@ class Ledger:
         return True
 
     def begin_attempt(self, *, pilot_id: str, owner_token: str, input_key: str,
-                      bubble_no: int, revision: int, now: datetime | str) -> Attempt:
+                      bubble_no: int, revision: int, now: datetime | str, tolerate_newer: bool = False,
+                      reply_authority=None) -> Attempt:
         """Atomic final source + authority check, budget charge, durable intent."""
         if not isinstance(bubble_no, int) or isinstance(bubble_no, bool) or not 1 <= bubble_no < 2**31:
             raise Refused("invalid-bubble")
@@ -469,7 +572,6 @@ class Ledger:
         now_s = _dt(now)
         with self._tx() as con:
             p = self._active(con, pilot_id, owner_token, now_s)
-            canonical = self._canonical_guard(con, p, lock=True)
             if bubble_no > 10:
                 # Preserve the ten-bubble limit, excluding definitively refused attempts.
                 # Each retry still gets a distinct immutable attempt/receipt sequence number.
@@ -487,16 +589,41 @@ class Ledger:
             if i["source_hash"].startswith(FOLLOWUP_MARK):
                 if not self._followup_unchanged(con, p, i):
                     raise Refused("source-changed")
-            elif self._source(con, p, now_s, exclude_input_key=input_key) != expected:
+            elif self._source(con, p, now_s, exclude_input_key=input_key,
+                              ignore_newer_than=expected if tolerate_newer else None) != expected:
                 raise Refused("source-changed")
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND bubble_no=?", (input_key, bubble_no)).fetchone():
                 raise Refused("attempt-already-exists")
+            # Do not hold the account runtime lock while the per-fan source
+            # query above runs. The final short section re-locks it, rechecks
+            # the pilot revision and performs only the atomic admission writes.
+            canonical = self._canonical_guard(con, p, lock=True)
+            if reply_authority is not None:
+                from .pacing import guard
+                guard(con, reply_authority, now_s)
+            p = self._active(con, pilot_id, owner_token, now_s)
+            if revision != p["revision"]:
+                raise Refused("revision-changed")
             if self.allowance:
-                self._consume_allowance(con, p["account_id"], now_s, fan_id=p["fan_id"], daily_limit=self.fan_daily_limit)
+                from . import admission
+                policy = self._policy_row(con, p["account_id"])
+                if admission.is_concurrent(policy):
+                    slot_id = self._consume_concurrent(con, p, now_s, input_key=input_key, bubble_no=bubble_no)
+                else:
+                    slot_id = None
+                    self._consume_allowance(con, p["account_id"], now_s, fan_id=p["fan_id"],
+                                            daily_limit=self.fan_daily_limit)
+            else:
+                slot_id = None
             tid = "native-pilot-" + _hash([pilot_id, input_key, bubble_no])
             aid = store.insert_id(con, "INSERT INTO twin_bridge_send_attempts(account_id,fan_id,turn_id,attempt_no,state,"
                                   "owner_token,revision,created_at,updated_at) VALUES(?,?,?,1,'dispatching',?,?,?,?)",
                                   (p["account_id"], p["fan_id"], tid, owner_token, revision, now_s, now_s))
+            if slot_id is not None:
+                con.execute("UPDATE engine_dispatch_slot SET attempt_id=? WHERE slot_id=?", (str(aid), slot_id))
+                con.execute("UPDATE engine_conversation_lease SET attempt_id=?,holder=?,updated_at=? "
+                            "WHERE tenant_id=? AND account_id=? AND fan_id=?",
+                            (str(aid), owner_token, now_s, self.tenant_id, p["account_id"], p["fan_id"]))
             con.execute("UPDATE twin_bridge_conversations SET send_budget_used=send_budget_used+1,updated_at=? "
                         "WHERE account_id=? AND fan_id=?", (now_s, p["account_id"], p["fan_id"]))
             con.execute("INSERT INTO native_pilot_receipts(attempt_id,pilot_id,input_key,bubble_no,state,created_at,updated_at) "
@@ -507,13 +634,45 @@ class Ledger:
                     (attempt_ref(aid),p["account_id"],p["fan_id"]))
             return Attempt(aid, p["account_id"], p["fan_id"], tid, 1, owner_token, revision)
 
+    def _gap(self, throttle_seconds) -> float:
+        """Seconds between two sends on the account for this policy row's throttle value."""
+        from onlyfans_runtime.send_gap import effective_gap
+        return effective_gap(throttle_seconds, self.min_send_interval_s, self.per_account_send_gap)
+
     @staticmethod
     def _policy_row(con, account: str):
-        return con.execute("SELECT enabled,limit_units,used_units,throttle_seconds,next_dispatch_at,active_intent_id "
-                           "FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()
+        # SELECT * so a store without the optional daily_limit_units column (older schema, fixtures) still reads.
+        return con.execute("SELECT * FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()
 
-    @classmethod
-    def _consume_allowance(cls, con, account: str, now_s: str, *, fan_id: int | None = None, daily_limit: int = 0) -> None:
+    @staticmethod
+    def _daily_cap(row) -> int | None:
+        """The account's optional daily send cap (``of_delivery_policy.daily_limit_units``); None = no daily cap."""
+        try:
+            value = row["daily_limit_units"]
+        except (KeyError, IndexError):
+            return None
+        return None if value is None else int(value)
+
+    @staticmethod
+    def _account_daily_used(con, account: str, now_s: str) -> int:
+        """Sends charged to the account in the rolling last 24 hours: the same states the per-fan quota counts
+        (dispatching, sent, delivery_unknown), so an unknown outcome stays charged and a definite non-delivery
+        (not_sent) gives its place back. A rolling window needs no reset job and cannot drift."""
+        cutoff = _dt(datetime.fromisoformat(now_s) - timedelta(hours=24))
+        total = con.execute(
+            "SELECT count(*) FROM native_pilot_receipts r JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
+            "WHERE a.account_id=? AND r.created_at>? AND r.created_at<=? "
+            "AND r.state IN ('dispatching','sent','delivery_unknown')", (account, cutoff, now_s)).fetchone()[0]
+        if store.has_table(con, "of_text_intent"):
+            total += con.execute(
+                "SELECT count(*) FROM of_text_intent WHERE account_id=? "
+                "AND status IN ('dispatching','accepted','unknown') "
+                "AND COALESCE(dispatched_at,created_at)>? "
+                "AND COALESCE(dispatched_at,created_at)<=?",
+                (account, cutoff, now_s)).fetchone()[0]
+        return total
+
+    def _consume_allowance(self, con, account: str, now_s: str, *, fan_id: int | None = None, daily_limit: int = 0) -> None:
         """Admit one send under the daily fan quota or legacy account allowance.
 
         Admission and receipt creation share a serialized transaction. Daily
@@ -521,21 +680,28 @@ class Ledger:
         Account throttle, active intents and in-flight FASTT attempts still fence
         both modes. Only definite non-delivery releases a quota place.
         """
-        row = cls._policy_row(con, account)
+        # The text path locks this same policy row. Taking it here makes the
+        # daily counter and token-bucket decision shared across native,
+        # manual and campaign senders rather than merely process-local.
+        row = con.execute("SELECT * FROM of_delivery_policy WHERE account_id=? FOR UPDATE",
+                          (account,)).fetchone() if self.pg else self._policy_row(con, account)
         if row is None:
             raise Refused("allowance-missing")
         if not row["enabled"]:
             raise Refused("allowance-disabled")
         daily = bool(daily_limit and fan_id is not None)
-        used = cls._fan_daily_used(con, account, fan_id, now_s) if daily else row["used_units"]
+        used = self._fan_daily_used(con, account, fan_id, now_s) if daily else row["used_units"]
         if used >= (daily_limit if daily else row["limit_units"]):
             raise Refused("allowance-exhausted")
+        cap = self._daily_cap(row)
+        if cap is not None and self._account_daily_used(con, account, now_s) >= cap:
+            raise Refused("allowance-daily-cap")
         if row["active_intent_id"] or con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? "
                 "AND state='dispatching' LIMIT 1", (account,)).fetchone():
             raise Refused("allowance-busy")
         if row["next_dispatch_at"] is not None and _dt(row["next_dispatch_at"]) > now_s:
             raise Refused("allowance-throttled")
-        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=row["throttle_seconds"]))
+        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=self._gap(row["throttle_seconds"])))
         charge = "used_units," if daily else "used_units+1,"
         ceiling = "" if daily else "AND used_units<limit_units "
         cur = con.execute("UPDATE of_delivery_policy SET used_units=" + charge + "next_dispatch_at=? "
@@ -544,6 +710,131 @@ class Ledger:
                           (due, account, row["used_units"]))
         if cur.rowcount != 1:
             raise Refused("allowance-changed")
+
+    # ── concurrent delivery (account-specific opt-in) ────────────────────────────────────────────────
+    def delivery_mode(self, account: str) -> str:
+        """Read the account's delivery mode without opening a write transaction."""
+        from . import admission
+        with store.readonly(self.path) as con:
+            row = self._policy_row(con, account)
+        return admission.delivery_mode(row)
+
+    @staticmethod
+    def _policy_value(row, name: str, default=None):
+        from . import admission
+        return admission.value(row, name, default)
+
+    def _consume_concurrent(self, con, p, now_s: str, *, input_key: str, bubble_no: int) -> str:
+        """Admit one provider request for one conversation under account budgets.
+
+        Serialised by the caller's per-account transaction. Different conversations can hold
+        different slots at the same time; the same conversation can hold at most one.
+        """
+        from . import admission
+        account, fan, owner = p["account_id"], p["fan_id"], p["owner_token"]
+        now_dt = datetime.fromisoformat(now_s)
+        row = con.execute("SELECT * FROM of_delivery_policy WHERE account_id=? FOR UPDATE",
+                          (account,)).fetchone() if self.pg else self._policy_row(con, account)
+        if row is None:
+            raise Refused("allowance-missing")
+        if not row["enabled"]:
+            raise Refused("allowance-disabled")
+        used = self._fan_daily_used(con, account, fan, now_s) if self.fan_daily_limit else row["used_units"]
+        if used >= (self.fan_daily_limit if self.fan_daily_limit else row["limit_units"]):
+            raise Refused("allowance-exhausted")
+        cap = self._daily_cap(row)
+        if cap is not None and self._account_daily_used(con, account, now_s) >= cap:
+            raise Refused("allowance-daily-cap")
+        cooldown = admission.cooldown_at(row)
+        if cooldown is not None and _dt(cooldown) > now_s:
+            raise Refused("allowance-throttled")
+        if con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? AND fan_id=? "
+                       "AND state IN ('dispatching','delivery_unknown') LIMIT 1", (account, fan)).fetchone():
+            raise Refused("delivery-unresolved")
+        lease = con.execute("SELECT * FROM engine_conversation_lease WHERE tenant_id=? AND account_id=? AND fan_id=?",
+                            (self.tenant_id, account, fan)).fetchone()
+        if lease is not None:
+            if lease["state"] == "unresolved":
+                raise Refused("delivery-unresolved")
+            if (lease["state"] == "held" and _dt(lease["expires_at"]) > now_s
+                    and lease["holder"] != owner):
+                raise Refused("conversation-busy")
+            if lease["next_send_at"] is not None and _dt(lease["next_send_at"]) > now_s:
+                raise Refused("conversation-throttled")
+        expires = _dt(now_dt + timedelta(seconds=self.dispatch_lease_s))
+        if lease is None:
+            con.execute("INSERT INTO engine_conversation_lease(tenant_id,account_id,fan_id,holder,owner_token,attempt_id,"
+                        "state,acquired_at,heartbeat_at,expires_at,next_send_at,updated_at) "
+                        "VALUES(?,?,?,?,?,NULL,'held',?,?,?,NULL,?)",
+                        (self.tenant_id, account, fan, owner, owner, now_s, now_s, expires, now_s))
+        else:
+            con.execute("UPDATE engine_conversation_lease SET holder=?,owner_token=?,attempt_id=NULL,state='held',"
+                        "acquired_at=?,heartbeat_at=?,expires_at=?,updated_at=? "
+                        "WHERE tenant_id=? AND account_id=? AND fan_id=?",
+                        (owner, owner, now_s, now_s, expires, now_s, self.tenant_id, account, fan))
+        con.execute("DELETE FROM engine_dispatch_slot WHERE account_id=? AND state='held' AND expires_at<=?",
+                    (account, now_s))
+        in_flight = con.execute("SELECT count(*) FROM engine_dispatch_slot WHERE account_id=? AND state='held' "
+                                "AND expires_at>?", (account, now_s)).fetchone()[0]
+        limit = admission.max_concurrent(row, self.send_concurrency)
+        if in_flight >= limit:
+            raise Refused("provider-concurrency-limit")
+        rate, capacity = admission.requests_per_second(row), admission.burst(row)
+        bucket = con.execute("SELECT tokens,updated_at FROM engine_provider_bucket WHERE account_id=?", (account,)).fetchone()
+        if bucket is None:
+            tokens = float(capacity)
+        else:
+            tokens = admission.refill(float(bucket["tokens"]), datetime.fromisoformat(_dt(bucket["updated_at"])),
+                                      now_dt, rate, capacity)
+        if tokens < 1.0:
+            raise Refused("allowance-throttled")
+        tokens -= 1.0
+        con.execute("INSERT INTO engine_provider_bucket(account_id,tokens,updated_at) VALUES(?,?,?) "
+                    "ON CONFLICT(account_id) DO UPDATE SET tokens=excluded.tokens,updated_at=excluded.updated_at",
+                    (account, str(tokens), now_s))
+        # A reply can contain several bubbles. ``now_s`` alone is not unique at
+        # second precision, so the input and bubble are part of the slot identity;
+        # otherwise a fast second bubble would collide with the first slot.
+        slot_id = "engine-slot-" + _hash(
+            [p["pilot_id"], p["account_id"], p["fan_id"], input_key, bubble_no, owner])
+        con.execute("INSERT INTO engine_dispatch_slot(slot_id,tenant_id,account_id,fan_id,attempt_id,state,admitted_at,expires_at) "
+                    "VALUES(?,?,?,?,NULL,'held',?,?)",
+                    (slot_id, self.tenant_id, account, fan, now_s, expires))
+        if not self.fan_daily_limit:
+            con.execute("UPDATE of_delivery_policy SET used_units=used_units+1,revision=revision "
+                        "WHERE account_id=? AND used_units<limit_units", (account,))
+        return slot_id
+
+    def _release_concurrent(self, con, pilot_id: str, attempt_id: int, outcome: str, now_s: str,
+                            *, keep_conversation: bool = False) -> None:
+        """Release the account slot and either free or hold this conversation."""
+        if not self.allowance:
+            return
+        from . import admission
+        p = con.execute("SELECT account_id,fan_id FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+        if p is None:
+            return
+        con.execute("DELETE FROM engine_dispatch_slot WHERE attempt_id=? AND account_id=?",
+                    (str(attempt_id), p["account_id"]))
+        if keep_conversation:
+            return
+        lease = con.execute("SELECT * FROM engine_conversation_lease WHERE tenant_id=? AND account_id=? AND fan_id=?",
+                            (self.tenant_id, p["account_id"], p["fan_id"])).fetchone()
+        if lease is None or lease["attempt_id"] not in (str(attempt_id), attempt_id):
+            return
+        row = self._policy_row(con, p["account_id"])
+        gap = admission.conversation_gap_seconds(row) if row is not None else self.conversation_min_gap_s
+        gap = max(gap, self.conversation_min_gap_s)
+        if outcome == "unresolved":
+            con.execute("UPDATE engine_conversation_lease SET state='unresolved',heartbeat_at=?,expires_at=?,updated_at=? "
+                        "WHERE tenant_id=? AND account_id=? AND fan_id=?",
+                        (now_s, _dt(datetime.fromisoformat(now_s) + timedelta(days=1)), now_s,
+                         self.tenant_id, p["account_id"], p["fan_id"]))
+            return
+        next_send = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=gap))
+        con.execute("UPDATE engine_conversation_lease SET state='released',holder='',owner_token='',attempt_id=NULL,"
+                    "expires_at=?,next_send_at=?,updated_at=? WHERE tenant_id=? AND account_id=? AND fan_id=?",
+                    (now_s, next_send, now_s, self.tenant_id, p["account_id"], p["fan_id"]))
 
     @staticmethod
     def _fan_daily_used(con, account: str, fan_id: int, now_s: str) -> int:
@@ -556,21 +847,191 @@ class Ledger:
             "AND r.state IN ('dispatching','sent','delivery_unknown')",
             (account, fan_id, cutoff, now_s)).fetchone()[0]
 
+    # ── operator-visible alerts and the provider-throttle backoff ──────────────────────────────────────────
+    ALERT_PROVIDER_THROTTLE = "provider-throttle"
+    ALERT_SEND_STALL = "send-stall"
+
+    def raise_alert(self, account: str, kind: str, now, detail: dict | None = None) -> bool:
+        """Open (or refresh) the account's alert of this kind. True when it was newly opened (or re-opened).
+
+        One row per (account, kind); ``count`` grows while the condition repeats. Best effort for the caller: it
+        raises like any ledger write, and the engine wraps it so an alert can never stop a reply."""
+        import json
+        now_s = _dt(now)
+        blob = json.dumps(detail or {}, sort_keys=True)[:2000]
+        with self._tx(initialize=True) as con:
+            row = con.execute("SELECT state,count FROM engine_alert WHERE account_id=? AND kind=?", (account, kind)).fetchone()
+            if row is None:
+                con.execute("INSERT INTO engine_alert(account_id,kind,state,first_at,last_at,count,detail_json) VALUES(?,?,'open',?,?,1,?)",
+                            (account, kind, now_s, now_s, blob))
+                return True
+            if row["state"] != "open":      # a cleared alert that happens again starts a new episode
+                con.execute("UPDATE engine_alert SET state='open',first_at=?,last_at=?,count=1,detail_json=? WHERE account_id=? AND kind=?",
+                            (now_s, now_s, blob, account, kind))
+                return True
+            con.execute("UPDATE engine_alert SET last_at=?,count=count+1,detail_json=? WHERE account_id=? AND kind=?",
+                        (now_s, blob, account, kind))
+            return False
+
+    def clear_alert(self, account: str, kind: str, now) -> bool:
+        """Mark an open alert cleared. True when one was open."""
+        with self._tx(initialize=True) as con:
+            cur = con.execute("UPDATE engine_alert SET state='cleared',last_at=? WHERE account_id=? AND kind=? AND state='open'",
+                              (_dt(now), account, kind))
+            return cur.rowcount == 1
+
+    def alerts(self, account: str | None = None, *, only_open: bool = True) -> list[dict]:
+        with store.readonly(self.path) as con:
+            if not store.has_table(con, "engine_alert"):
+                return []
+            sql = "SELECT account_id,kind,state,first_at,last_at,count,detail_json FROM engine_alert WHERE 1=1"
+            args: list = []
+            if account is not None:
+                sql += " AND account_id=?"; args.append(account)
+            if only_open:
+                sql += " AND state='open'"
+            return [dict(r) for r in con.execute(sql + " ORDER BY account_id,kind", tuple(args)).fetchall()]
+
+    def sent_since(self, account: str, since) -> int:
+        """How many sends of this account the ledger saw settle ``sent`` since ``since`` (0 = nothing moved)."""
+        since_s = _dt(since)
+        with store.readonly(self.path) as con:
+            return int(con.execute(
+                "SELECT count(*) FROM native_pilot_receipts r JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
+                "WHERE a.account_id=? AND r.state='sent' AND r.updated_at>?", (account, since_s)).fetchone()[0])
+
+    def throttle_backoff(self, account: str, now, *, retry_after=None) -> dict:
+        """Honour a provider 429 at account level.
+
+        Legacy mode returns the account to the 20 s default gap. Concurrent mode does not
+        invent a permanent gap: it records a durable cooldown (Retry-After when supplied)
+        that applies to every fan, and leaves the configured request rate intact.
+
+        Returns ``{"changed": bool, "before": int|None, "after": int|None, "alert": bool}``."""
+        import json
+        from onlyfans_runtime.send_gap import DEFAULT_S
+        from . import admission
+        default = int(DEFAULT_S)
+        now_s = _dt(now)
+        changed, before, revision = False, None, None
+        cooldown = None
+        audit_before = audit_after = None
+        audit_reason = "Provider rate limit (HTTP 429): send gap returned to the 20 s default"
+        with self._tx(initialize=True) as con:
+            row = self._policy_row(con, account)
+            if row is not None:
+                if admission.is_concurrent(row):
+                    # Retry-After is authoritative when present. The ten-second default is
+                    # only for a 429 that did not tell us when to retry.
+                    delay = max(0.0, min(86400.0, float(retry_after) if retry_after is not None else 10.0))
+                    cooldown = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=delay))
+                    before = admission.cooldown_at(row)
+                    audit_before = {"provider_cooldown_until": None if before is None else str(before)}
+                    audit_after = {"provider_cooldown_until": cooldown}
+                    audit_reason = "Provider rate limit (HTTP 429): account cooldown set from Retry-After"
+                    has_cooldown_column = True
+                    try:
+                        row["provider_cooldown_until"]
+                    except (KeyError, IndexError):
+                        has_cooldown_column = False
+                    if has_cooldown_column:
+                        cur = con.execute(
+                            "UPDATE of_delivery_policy SET provider_cooldown_until=CASE "
+                            "WHEN provider_cooldown_until IS NULL OR provider_cooldown_until<? THEN ? "
+                            "ELSE provider_cooldown_until END WHERE account_id=?",
+                            (cooldown, cooldown, account))
+                    else:
+                        cur = con.execute(
+                            "UPDATE of_delivery_policy SET next_dispatch_at=CASE "
+                            "WHEN next_dispatch_at IS NULL OR next_dispatch_at<? THEN ? ELSE next_dispatch_at END "
+                            " WHERE account_id=?", (cooldown, cooldown, account))
+                    changed = cur.rowcount == 1 and (before is None or _dt(before) < cooldown)
+                    after = admission.cooldown_at(
+                        con.execute("SELECT * FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone())
+                else:
+                    before = int(row["throttle_seconds"])
+                    audit_before = {"throttle_seconds": before}
+                    if before < default:
+                        cur = con.execute("UPDATE of_delivery_policy SET throttle_seconds=?,revision=revision+1 WHERE account_id=? AND throttle_seconds<?",
+                                          (default, account, default))
+                        changed = cur.rowcount == 1
+                        if changed:
+                            revision = con.execute("SELECT revision FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()[0]
+                    cooldown = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=default))
+                    audit_after = {"throttle_seconds": default if changed else before}
+        if not (row is not None and admission.is_concurrent(row)):
+            after = default if changed else before
+        if changed and revision is not None:
+            # Audit in its own transaction: a role that may not write the change log must not lose the backoff itself.
+            try:
+                with self._tx() as con:
+                    if store.has_table(con, "of_delivery_policy_change"):
+                        con.execute("INSERT INTO of_delivery_policy_change(account_id,revision,actor,reason,before_json,after_json,created_at) "
+                                    "VALUES(?,?,?,?,?,?,?)",
+                                    (account, revision, "fastt-engine-backoff", audit_reason,
+                                     json.dumps(audit_before, sort_keys=True),
+                                     json.dumps(audit_after, sort_keys=True), now_s))
+            except Exception:
+                pass
+        opened = self.raise_alert(account, self.ALERT_PROVIDER_THROTTLE, now,
+                                  {"throttle_before": before, "throttle_after": after,
+                                   "cooldown_until": cooldown, "retry_after": retry_after})
+        return {"changed": changed, "before": before, "after": after, "cooldown_until": cooldown, "alert": opened}
+
     def allowance_status(self, account: str, fan_id: int | None = None, *, now=None) -> dict | None:
         """Read-only copy of the account's delivery policy numbers (None when absent)."""
+        from . import admission
         with store.readonly(self.path) as con:
             row = self._policy_row(con, account)
             daily = bool(self.fan_daily_limit and fan_id is not None)
-            used = self._fan_daily_used(con, account, fan_id, _dt(now or datetime.utcnow())) if row is not None and daily else None
+            now_s = _dt(now or datetime.utcnow())
+            used = self._fan_daily_used(con, account, fan_id, now_s) if row is not None and daily else None
+            cap = self._daily_cap(row) if row is not None else None
+            cap_used = self._account_daily_used(con, account, now_s) if cap is not None else None
+            in_flight = None
+            conversation_next = None
+            provider_wait = None
+            if row is not None and admission.is_concurrent(row):
+                in_flight = int(con.execute(
+                    "SELECT count(*) FROM engine_dispatch_slot WHERE account_id=? AND state='held' AND expires_at>?",
+                    (account, now_s)).fetchone()[0])
+                bucket = con.execute(
+                    "SELECT tokens,updated_at FROM engine_provider_bucket WHERE account_id=?",
+                    (account,)).fetchone()
+                if bucket is not None:
+                    tokens = admission.refill(
+                        float(bucket["tokens"]), datetime.fromisoformat(_dt(bucket["updated_at"])),
+                        datetime.fromisoformat(now_s), admission.requests_per_second(row), admission.burst(row))
+                    provider_wait = admission.token_wait(tokens, admission.requests_per_second(row))
+                else:
+                    provider_wait = 0.0
+                if fan_id is not None:
+                    lease = con.execute(
+                        "SELECT next_send_at FROM engine_conversation_lease WHERE tenant_id=? AND account_id=? AND fan_id=?",
+                        (self.tenant_id, account, fan_id)).fetchone()
+                    conversation_next = None if lease is None else lease["next_send_at"]
         if row is None:
             return None
         due = row["next_dispatch_at"]
-        return {"enabled": bool(row["enabled"]), "limit": self.fan_daily_limit if daily else row["limit_units"], "used": used if daily else row["used_units"],
-                "throttle_seconds": row["throttle_seconds"], "busy": bool(row["active_intent_id"]),
+        mode = admission.delivery_mode(row)
+        cooldown = admission.cooldown_at(row)
+        return {"enabled": bool(row["enabled"]), "delivery_mode": mode,
+                "limit": self.fan_daily_limit if daily else row["limit_units"], "used": used if daily else row["used_units"],
+                "daily_limit": cap, "daily_used": cap_used,
+                "throttle_seconds": self._gap(row["throttle_seconds"]),
+                "provider_requests_per_second": admission.requests_per_second(row),
+                "provider_burst": admission.burst(row),
+                "max_concurrent": admission.max_concurrent(row, self.send_concurrency),
+                "in_flight": in_flight,
+                "provider_wait_s": provider_wait,
+                "conversation_next_send_at": None if conversation_next is None else _dt(conversation_next),
+                "busy": bool(row["active_intent_id"]),
+                "cooldown_until": None if cooldown is None else _dt(cooldown),
                 "next_dispatch_at": None if due is None else _dt(due)}
 
     def validate_dispatch(self, *, pilot_id: str, owner_token: str, attempt_id: int,
-                          now: datetime | str) -> None:
+                          now: datetime | str, tolerate_newer: bool = False,
+                          reply_authority=None) -> None:
         """Read-only recheck after thread handoff, immediately BEFORE guarded_send.
 
         This admitted attempt is the sole permitted unsettled intent; its last
@@ -606,6 +1067,15 @@ class Ledger:
             if a["state"] != "dispatching" or r["state"] != "dispatching":
                 raise Refused("attempt-not-dispatching")
             self._canonical_guard(con, p, own_attempt=attempt_id)
+            if reply_authority is not None:
+                from .pacing import guard
+                guard(con, reply_authority, now_s)
+            policy = self._policy_row(con, p["account_id"]) if self.allowance else None
+            if policy is not None:
+                from . import admission
+                cooldown = admission.cooldown_at(policy) if admission.is_concurrent(policy) else None
+                if cooldown is not None and _dt(cooldown) > now_s:
+                    raise Refused("allowance-throttled")
             if con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? AND fan_id=? "
                            "AND id<>? AND state IN ('dispatching','delivery_unknown') LIMIT 1",
                            (p["account_id"], p["fan_id"], attempt_id)).fetchone():
@@ -627,7 +1097,8 @@ class Ledger:
             if i["source_hash"].startswith(FOLLOWUP_MARK):
                 if not self._followup_unchanged(con, p, i):
                     raise Refused("source-changed")
-            elif self._source(con, p, now_s, exclude_input_key=r["input_key"]) != expected:
+            elif self._source(con, p, now_s, exclude_input_key=r["input_key"],
+                              ignore_newer_than=expected if tolerate_newer else None) != expected:
                 raise Refused("source-changed")
 
     def record_sent(self, *, pilot_id: str, owner_token: str, attempt_id: int,
@@ -664,6 +1135,31 @@ class Ledger:
                         "WHERE attempt_id=?", (provider_message_id, response_s, evidence_s, now_s, attempt_id))
             con.execute("UPDATE twin_bridge_send_attempts SET state='sent',provider_message_id=?,evidence_json=?,updated_at=? WHERE id=?",
                         (provider_message_id, evidence_s, now_s, attempt_id))
+            self._after_wire(con, pilot_id, now_s)
+            # A reply may be several bubbles. Release this provider slot now,
+            # but keep the conversation lease until finish_input() so another
+            # sender cannot interleave between bubbles of one reply sequence.
+            self._release_concurrent(con, pilot_id, attempt_id, "sent", now_s, keep_conversation=True)
+
+    def _after_wire(self, con, pilot_id: str, now_s: str) -> None:
+        """The account's next send may start no earlier than ``interval`` after this POST FINISHED.
+
+        Admission already set ``next_dispatch_at = admission + interval``; the POST itself takes a variable
+        time after admission, so the gap between two POSTs could be slightly under the interval. Moving the
+        gate forward from the confirmed (or unknown) outcome makes the interval a guarantee, not an
+        approximation. Only ever moves it forward."""
+        if not self.allowance:
+            return
+        from . import admission
+        p = con.execute("SELECT account_id FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+        row = self._policy_row(con, p["account_id"]) if p else None
+        if row is not None and admission.is_concurrent(row):
+            return
+        if row is None:
+            return
+        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=self._gap(row["throttle_seconds"])))
+        if row["next_dispatch_at"] is None or _dt(row["next_dispatch_at"]) < due:
+            con.execute("UPDATE of_delivery_policy SET next_dispatch_at=? WHERE account_id=?", (due, p["account_id"]))
 
     @staticmethod
     def _outcome_owner(con, pilot_id: str, owner_token: str, attempt_id: int) -> None:
@@ -706,6 +1202,8 @@ class Ledger:
             con.execute("UPDATE twin_bridge_send_attempts SET state='delivery_unknown',reason='native-pilot-unknown',updated_at=? WHERE id=?",
                         (now_s, attempt_id))
             self._stop(con, pilot_id, owner_token, "delivery-unknown", now_s, unknown=True)
+            self._after_wire(con, pilot_id, now_s)
+            self._release_concurrent(con, pilot_id, attempt_id, "unresolved", now_s)
 
     def record_not_sent(self, *, pilot_id: str, owner_token: str, attempt_id: int, now: datetime | str) -> bool:
         """Settle an admitted attempt that CERTAINLY never reached the wire (refused before the POST, or the
@@ -736,6 +1234,13 @@ class Ledger:
             if self.allowance and not self.fan_daily_limit:
                 con.execute("UPDATE of_delivery_policy SET used_units=used_units-1 WHERE account_id=? AND used_units>0",
                             (p["account_id"],))
+            # A later bubble may fail after an earlier bubble was accepted.
+            # Keep the sequence's ownership until it is requeued or finished.
+            prior_sent = con.execute(
+                "SELECT 1 FROM native_pilot_receipts WHERE input_key=(SELECT input_key FROM native_pilot_receipts "
+                "WHERE attempt_id=?) AND state='sent' LIMIT 1", (attempt_id,)).fetchone() is not None
+            self._release_concurrent(con, pilot_id, attempt_id, "not_sent", now_s,
+                                     keep_conversation=prior_sent)
             return True
 
     def requeue_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str,
@@ -755,10 +1260,12 @@ class Ledger:
             p = con.execute("SELECT owner_token,account_id FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
-            i = con.execute("SELECT state,source_hash FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
+            i = con.execute("SELECT state,source_hash,created_at FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
                             (pilot_id, input_key)).fetchone()
             if i is None or i["state"] != "generating" or i["source_hash"].startswith(FOLLOWUP_MARK):
                 return 0
+            if self.allowance and _dt(i["created_at"]) < _dt(datetime.fromisoformat(now_s) - REQUEUE_HORIZON):
+                return 0          # engine v2: a reply unanswerable for a day is let go (the caller surfaces it)
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND state<>'not_sent' LIMIT 1",
                            (input_key,)).fetchone():
                 return 0
@@ -772,20 +1279,220 @@ class Ledger:
                 policy = self._policy_row(con, account)
                 if policy is None:
                     raise Refused("allowance-missing")
-                current = policy["next_dispatch_at"]
+                from . import admission
+                concurrent = admission.is_concurrent(policy)
+                current = admission.cooldown_at(policy)
                 if current is None or _dt(current) < due:
-                    con.execute("UPDATE of_delivery_policy SET next_dispatch_at=? WHERE account_id=?", (due, account))
+                    if concurrent:
+                        try:
+                            policy["provider_cooldown_until"]
+                        except (KeyError, IndexError):
+                            con.execute("UPDATE of_delivery_policy SET next_dispatch_at=? WHERE account_id=?", (due, account))
+                        else:
+                            con.execute("UPDATE of_delivery_policy SET provider_cooldown_until=? WHERE account_id=?",
+                                        (due, account))
+                    else:
+                        con.execute("UPDATE of_delivery_policy SET next_dispatch_at=? WHERE account_id=?", (due, account))
             con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
                         (f"{REQUEUED}{used + 1}", now_s, pilot_id, input_key))
             return used + 1
 
-    def finish_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str) -> None:
+    def release_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str) -> bool:
+        """Give an UNSENT claim back without spending a retry: the fan's newest message becomes answerable again.
+
+        Used when a reply is cancelled for a reason that is not the message's fault (a human takeover or pause
+        landed, the account was held, the send queue timed out, a newer message made the draft stale). The
+        draft is never kept: after the hold clears the engine answers the fan's latest state from scratch.
+        Refused (False) for a follow-up input or once any send attempt other than a ``not_sent`` one stands."""
+        now_s = _dt(now)
         with self._tx() as con:
             p = con.execute("SELECT owner_token FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
-            con.execute("UPDATE native_pilot_inputs SET state='complete',updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
-                        (_dt(now), pilot_id, input_key))
+            i = con.execute("SELECT state,source_hash FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
+                            (pilot_id, input_key)).fetchone()
+            if i is None or i["state"] != "generating" or i["source_hash"].startswith(FOLLOWUP_MARK):
+                return False
+            if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND state<>'not_sent' LIMIT 1",
+                           (input_key,)).fetchone():
+                return False
+            con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
+                        (f"{REQUEUED}0", now_s, pilot_id, input_key))
+            return True
+
+    def unresolved_attempts(self, *, account_id: str, now: datetime | str, grace_s: float = 0.0, limit: int = 50) -> list[dict]:
+        """Admitted sends of this account whose outcome is not settled and whose owner is gone.
+
+        ``dispatching`` (the process died between admission and the answer) and ``delivery_unknown`` (a timeout
+        or unreadable reply). An attempt whose pilot lease is still live is the running process's own and is
+        left alone. Metadata only."""
+        now_s = _dt(now)
+        cutoff = _dt(datetime.fromisoformat(now_s) - timedelta(seconds=grace_s))
+        with store.readonly(self.path) as con:
+            rows = con.execute(
+                "SELECT r.pilot_id,r.attempt_id,r.state AS receipt_state,r.created_at,p.fan_id,p.state AS pilot_state,p.deadline "
+                "FROM native_pilot_receipts r JOIN native_pilots p ON p.pilot_id=r.pilot_id "
+                "JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
+                "WHERE p.account_id=? AND r.state IN ('dispatching','delivery_unknown') "
+                "AND a.state IN ('dispatching','delivery_unknown') AND r.created_at<=? "
+                "AND NOT (p.state='active' AND p.deadline>?) ORDER BY r.attempt_id LIMIT ?",
+                (account_id, cutoff, now_s, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def settle_by_proof(self, *, pilot_id: str, attempt_id: int, account_id: str, fan_id: int,
+                        provider_message_id: int, raw: dict, evidence_hash: str, now: datetime | str,
+                        resume: bool = True) -> bool:
+        """An admitted, unsettled send is PROVEN delivered by exactly one matching message in a completely read
+        provider history window (checked by the caller, see autoreconcile). The receipt and attempt become
+        ``sent`` with the proof recorded as ``reconciliation`` (actor ``engine-auto``).
+
+        Only ever converts toward ``sent``. With ``resume`` a conversation the unknown outcome had parked in
+        ``attention`` goes back to ``active`` (unowned; the next adoption gets a new fenced token), exactly the
+        state it had before the send. Returns False when already settled the same way."""
+        now_s = _dt(now)
+        with self._tx() as con:
+            p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            r = con.execute("SELECT * FROM native_pilot_receipts WHERE pilot_id=? AND attempt_id=?", (pilot_id, attempt_id)).fetchone()
+            a = con.execute("SELECT * FROM twin_bridge_send_attempts WHERE id=?", (attempt_id,)).fetchone()
+            if not p or not r or not a or (p["account_id"], p["fan_id"]) != (account_id, fan_id) \
+                    or (a["account_id"], a["fan_id"]) != (account_id, fan_id):
+                raise Refused("recovery-scope-mismatch")
+            if r["state"] == "sent" and a["state"] == "sent":
+                return False
+            if r["state"] not in ("dispatching", "delivery_unknown") or a["state"] not in ("dispatching", "delivery_unknown"):
+                raise Refused("recovery-attempt-settled")
+            if p["state"] == "active" and _dt(p["deadline"]) > now_s:
+                raise Refused("recovery-owner-live")
+            if con.execute("SELECT 1 FROM native_pilot_receipts x JOIN native_pilots q ON q.pilot_id=x.pilot_id "
+                           "WHERE q.account_id=? AND x.provider_message_id=? AND x.attempt_id<>? LIMIT 1",
+                           (account_id, str(provider_message_id), attempt_id)).fetchone():
+                raise Refused("provider-id-reused")
+            retained = json.loads(r["evidence_json"] or "{}")
+            retained["reconciliation"] = {"actor": "engine-auto", "evidence_hash": evidence_hash,
+                                          "provider_message_id": provider_message_id}
+            encoded = _json(retained)
+            con.execute("UPDATE native_pilot_receipts SET state='sent',provider_message_id=?,response_json=?,evidence_json=?,updated_at=? "
+                        "WHERE attempt_id=?", (str(provider_message_id), _json(raw), encoded, now_s, attempt_id))
+            con.execute("UPDATE twin_bridge_send_attempts SET state='sent',provider_message_id=?,evidence_json=?,updated_at=? WHERE id=?",
+                        (str(provider_message_id), encoded, now_s, attempt_id))
+            if p["state"] != "stopped":
+                # A crashed owner's pilot: stop it so adoption re-issues a fenced token and revision.
+                con.execute("UPDATE native_pilots SET state='stopped',reason='receipt-reconciled',updated_at=? WHERE pilot_id=?",
+                            (now_s, pilot_id))
+            self._resume_conversation(con, p, now_s) if resume else None
+            return True
+
+    def settle_absent(self, *, pilot_id: str, attempt_id: int, account_id: str, fan_id: int, now: datetime | str,
+                      resume: bool = True) -> bool:
+        """OPT-IN (FASTT_AUTO_RESOLVE_ABSENT): the caller read the provider history COMPLETELY back past the attempt
+        and found no matching message, long after the attempt. The attempt becomes ``refused`` / receipt
+        ``not_sent`` (budget and allowance units given back) so the fan can be answered again. Never converts a
+        ``sent`` attempt."""
+        now_s = _dt(now)
+        with self._tx() as con:
+            p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            r = con.execute("SELECT * FROM native_pilot_receipts WHERE pilot_id=? AND attempt_id=?", (pilot_id, attempt_id)).fetchone()
+            a = con.execute("SELECT * FROM twin_bridge_send_attempts WHERE id=?", (attempt_id,)).fetchone()
+            if not p or not r or not a or (p["account_id"], p["fan_id"]) != (account_id, fan_id) \
+                    or (a["account_id"], a["fan_id"]) != (account_id, fan_id):
+                raise Refused("recovery-scope-mismatch")
+            if r["state"] == "not_sent":
+                return False
+            if r["state"] not in ("dispatching", "delivery_unknown") or a["state"] not in ("dispatching", "delivery_unknown"):
+                raise Refused("recovery-attempt-settled")
+            if p["state"] == "active" and _dt(p["deadline"]) > now_s:
+                raise Refused("recovery-owner-live")
+            retained = json.loads(r["evidence_json"] or "{}")
+            retained["reconciliation"] = {"actor": "engine-auto", "outcome": "absent"}
+            con.execute("UPDATE native_pilot_receipts SET state='not_sent',evidence_json=?,updated_at=? WHERE attempt_id=?",
+                        (_json(retained), now_s, attempt_id))
+            con.execute("UPDATE twin_bridge_send_attempts SET state='refused',reason='engine-reconciled-absent',updated_at=? WHERE id=?",
+                        (now_s, attempt_id))
+            con.execute("UPDATE twin_bridge_conversations SET send_budget_used=send_budget_used-1,updated_at=? "
+                        "WHERE account_id=? AND fan_id=? AND send_budget_used>?", (now_s, account_id, fan_id, p["baseline_used"]))
+            # The fan's message was never answered: open its input again so it is answered from the latest state.
+            con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? WHERE input_key=? AND state IN ('stopped','generating') "
+                        "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts x WHERE x.input_key=native_pilot_inputs.input_key "
+                        "AND x.state IN ('sent','dispatching','delivery_unknown'))", (f"{REQUEUED}0", now_s, r["input_key"]))
+            if p["state"] != "stopped":
+                con.execute("UPDATE native_pilots SET state='stopped',reason='receipt-reconciled',updated_at=? WHERE pilot_id=?",
+                            (now_s, pilot_id))
+            self._resume_conversation(con, p, now_s) if resume else None
+            return True
+
+    @staticmethod
+    def _resume_conversation(con, p, now_s: str) -> None:
+        con.execute("UPDATE twin_bridge_conversations SET state='active',reason=NULL,owner_token=NULL,owner_expires_at=NULL,"
+                    "reserved=?,revision=revision+1,updated_at=? WHERE account_id=? AND fan_id=? "
+                    "AND state IN ('attention','active')", (True, now_s, p["account_id"], p["fan_id"]))
+
+    def finish_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str,
+                     outcome: str = "complete") -> None:
+        if outcome not in ("complete", "failed", "no_reply"):
+            raise Refused("invalid-input-outcome")
+        with self._tx() as con:
+            p = con.execute("SELECT owner_token,account_id,fan_id FROM native_pilots WHERE pilot_id=?",
+                            (pilot_id,)).fetchone()
+            if p is None or p["owner_token"] != owner_token:
+                raise Refused("pilot-owner-mismatch")
+            now_s = _dt(now)
+            con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? "
+                        "WHERE pilot_id=? AND input_key=? AND state='generating'",
+                        (outcome, now_s, pilot_id, input_key))
+            self._finish_concurrent_lease(con, p, owner_token, now_s)
+
+    def _finish_concurrent_lease(self, con, p, owner_token: str, now_s: str) -> None:
+        """Release a completed reply sequence, never an unresolved one.
+
+        record_sent() deliberately keeps the per-conversation lease while the
+        remaining bubbles are produced. This is the one point that gives the
+        conversation back after the sequence has settled.
+        """
+        if not self.allowance:
+            return
+        from . import admission
+        row = self._policy_row(con, p["account_id"])
+        if row is None:
+            return
+        lease = con.execute(
+            "SELECT * FROM engine_conversation_lease "
+            "WHERE tenant_id=? AND account_id=? AND fan_id=?",
+            (self.tenant_id, p["account_id"], p["fan_id"])).fetchone()
+        if (lease is None or lease["state"] != "held"
+                or lease["holder"] != owner_token):
+            return
+        # A mode rollback must not strand the lease of a sequence that was
+        # admitted in concurrent mode. Release the existing owner even when the
+        # current policy row is already back in gap mode.
+        gap = max(admission.conversation_gap_seconds(row), self.conversation_min_gap_s)
+        next_send = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=gap))
+        con.execute(
+            "UPDATE engine_conversation_lease SET state='released',holder='',owner_token='',"
+            "attempt_id=NULL,expires_at=?,next_send_at=?,updated_at=? "
+            "WHERE tenant_id=? AND account_id=? AND fan_id=? AND state='held' AND holder=?",
+            (now_s, next_send, now_s, self.tenant_id, p["account_id"], p["fan_id"], owner_token))
+
+    def unhandled_source_ids(self, *, pilot_id: str, source_ids) -> set[int]:
+        """Sources not examined by a completed input of this durable pilot.
+
+        Unanswered bursts retain historical context after a human handoff.
+        Completion proves the inbound identity guard already examined every
+        member. Generating, abandoned and requeued inputs are deliberately not
+        evidence of handling.
+        """
+        pending = {int(mid) for mid in source_ids}
+        if not pending:
+            return pending
+        with store.readonly(self.path) as con:
+            rows = con.execute("SELECT message_id,member_ids_json FROM native_pilot_inputs "
+                               "WHERE pilot_id=? AND state='complete'", (pilot_id,)).fetchall()
+        for row in rows:
+            members = json.loads(row["member_ids_json"] or "[]")
+            pending.difference_update(int(mid) for mid in members)
+            pending.discard(int(row["message_id"]))
+            if not pending:
+                break
+        return pending
 
     # ── runner-owned follow-ups (the stock nudge) ────────────────────────────
     # A follow-up has no fan message to answer: its "source" is the newest message of the chat, which

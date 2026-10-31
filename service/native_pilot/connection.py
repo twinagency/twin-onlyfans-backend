@@ -171,7 +171,8 @@ def build_client(conn: PilotConnection, *, timeout_s: int = 20):
     client = OFClient(copy.deepcopy(conn.capture), proxies=proxies,
                       proxy_label="twin-connection" if proxies else None, timeout_s=timeout_s)
     if str(client.account_id) != conn.scope.provider_id or str(client.user_id) != conn.scope.provider_id:
-        client.http.close()
+        from of_client import close_client_http
+        close_client_http(client)
         raise Refused("session-account-mismatch")
     client._x_hash = conn.x_hash
     return client

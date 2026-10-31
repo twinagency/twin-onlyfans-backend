@@ -138,14 +138,16 @@ async def list_conversations(
     cursor: str | None = Query(default=None),
     limit: int | None = Query(default=None),
     filter: str | None = Query(default=None),
+    query: str = Query(default="", max_length=200),
+    q: str | None = Query(default=None),
 ) -> JSONResponse:
     try:
         principal = await _authenticate(request)
-        if filter not in (None, "ai"):
+        if filter not in (None, "ai", "unread", "attention"):
             from .errors import BadRequest
             raise BadRequest("invalid_filter", "That conversation filter is not valid.")
         body = await service.list_conversations(
-            _repo(), principal, account_id=account_id, cursor=cursor, limit=limit, ai_only=filter == "ai"
+            _repo(), principal, account_id=account_id, cursor=cursor, limit=limit, ai_only=filter == "ai", query=query, search=q, filter=filter if filter in {"unread", "attention"} else None
         )
     except OnlyFansReadError as exc:
         return _refusal(exc)
@@ -232,12 +234,13 @@ async def earnings(request:Request):
     try:
         principal=await _authenticate(request)
         from .errors import BadRequest
-        if not {"start","end"}<=set(request.query_params) or set(request.query_params)-{"start","end","includePending","includeHistory"} or request.query_params.get("includePending","false") not in {"true","false"} or request.query_params.get("includeHistory","false") not in {"true","false"} or any(len(request.query_params.getlist(k))!=1 for k in request.query_params):
+        if not {"start","end"}<=set(request.query_params) or set(request.query_params)-{"start","end","includePending","includeHistory","accountIds"} or request.query_params.get("includePending","false") not in {"true","false"} or request.query_params.get("includeHistory","false") not in {"true","false"} or any(len(request.query_params.getlist(k))!=1 for k in request.query_params):
             raise BadRequest("invalid_earnings_window","Supply one explicit start and end timestamp.")
         from db.engine import get_session
-        from .earnings import read_earnings
+        from .earnings import read_earnings,parse_scope
+        scope=parse_scope(request.query_params.get("accountIds"))
         async with get_session() as session:
-            value=await read_earnings(session,tenant_id=principal.tenant_id,start=request.query_params["start"],end=request.query_params["end"],include_pending=request.query_params.get("includePending")=="true",include_history=request.query_params.get("includeHistory")=="true")
+            value=await read_earnings(session,tenant_id=principal.tenant_id,start=request.query_params["start"],end=request.query_params["end"],include_pending=request.query_params.get("includePending")=="true",include_history=request.query_params.get("includeHistory")=="true",account_ids=scope)
     except OnlyFansReadError as exc:return _refusal(exc)
     except Exception:return _refusal(Unavailable("earnings_unavailable","Recorded OnlyFans earnings could not be read."))
     return JSONResponse({"schemaVersion":SCHEMA_VERSION,"earnings":value},headers=_PRIVATE_HEADERS)

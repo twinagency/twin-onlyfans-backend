@@ -115,7 +115,7 @@ def next_queued_manual(store, tenant_id, account_id):
     """Oldest queued manual intent for an owned fan, or None."""
     from db.onlyfans_delivery_models import OfTextIntent
     with Session(store.engine) as s, s.begin():
-        store._runtime(s, tenant_id, account_id)
+        store._delivery_runtime(s, tenant_id, account_id)
         rows = s.execute(select(OfTextIntent.intent_id, OfTextIntent.fan_id).where(
             OfTextIntent.account_id == account_id, OfTextIntent.status == "queued",
             OfTextIntent.origin == "manual").order_by(OfTextIntent.created_at, OfTextIntent.intent_id).limit(50)).all()
@@ -137,7 +137,20 @@ def post_operator_once(client, grant, *, owner_id):
     import json
     from twin_bridge.platform import escape_plain_text, validate_created_message
     from .native_protocol import API_PATH, acceptance, message, request
-    from .text_delivery import Dispatch
+    from .text_delivery import Dispatch, ProviderThrottled
+
+    def provider_failure(exc):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 401:
+            raise Refused("account-auth-failed") from exc
+        if status == 429:
+            headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+            raw = headers.get("retry-after") or headers.get("Retry-After")
+            try:
+                after = max(0.0, min(86400.0, float(raw))) if raw is not None else None
+            except (TypeError, ValueError):
+                after = None
+            raise ProviderThrottled(after) from exc
     if type(grant) is not Dispatch or grant.origin not in {"manual", "campaign"}:
         raise NotSent()
     if grant.media_ids:
@@ -146,8 +159,12 @@ def post_operator_once(client, grant, *, owner_id):
             payload = json.loads(frozen)
         except (ValueError, TypeError):
             raise NotSent() from None
-        raw = client.post_json(f"{API_PATH}/chats/{grant.fan_id}/messages", json_body=payload,
-            proxy_tries=1, allow_redirects=False)
+        try:
+            raw = client.post_json(f"{API_PATH}/chats/{grant.fan_id}/messages", json_body=payload,
+                proxy_tries=1, allow_redirects=False)
+        except Exception as exc:
+            provider_failure(exc)
+            raise
         # Any malformed or contradictory response is UNKNOWN, never NotSent.
         acceptance(json.dumps(raw, ensure_ascii=False, allow_nan=False).encode(), grant,
             owner_id=owner_id, request_bytes=frozen)
@@ -155,7 +172,11 @@ def post_operator_once(client, grant, *, owner_id):
         if grant.price_cents or grant.preview_ids:
             raise NotSent()
         body = escape_plain_text(grant.body)
-        raw = client.send_text_once_body(grant.fan_id, body)
+        try:
+            raw = client.send_text_once_body(grant.fan_id, body)
+        except Exception as exc:
+            provider_failure(exc)
+            raise
         event = message(raw, owner_id=owner_id, fan_id=grant.fan_id)
         if (event.direction != "out" or event.body != grant.body or event.media_ids
                 or event.price_cents or raw.get("previews", []) != []
@@ -172,7 +193,7 @@ def dispatch_next_operator(authority, tenant_id, account_id, transport, *, campa
     cursors = scan_cursors if scan_cursors is not None else {}
     for origin in origins:
         with Session(authority.store.engine) as s, s.begin():
-            authority.store._runtime(s, tenant_id, account_id)
+            authority.store._delivery_runtime(s, tenant_id, account_id)
             key=(tenant_id, account_id, origin)
             query=select(OfTextIntent.intent_id, OfTextIntent.fan_id, OfTextIntent.created_at).where(
                 OfTextIntent.account_id == account_id, OfTextIntent.status == "queued",

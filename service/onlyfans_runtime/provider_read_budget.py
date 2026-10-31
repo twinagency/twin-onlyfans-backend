@@ -18,6 +18,9 @@ from .store import Refused, utcnow
 LEASE_SECONDS = 45
 CAPACITY = 10
 RECENT_RESERVE = 2
+LIVE_REPLY_RESERVE = 4        # extra tokens kept for live work while replies wait
+BACKGROUND_KINDS = {"discovery", "history", "offer_refresh", "posts", "vault"}   # ledger (money) and recent (intake) are not background
+LEDGER_RETRY_SECONDS = 2  # existing LedgerWorker tick cadence
 KINDS = {"recent", "discovery", "history", "ledger", "offer_refresh", "posts", "vault", "connection_check"}
 
 
@@ -67,6 +70,21 @@ def _valid(store, s, tenant, account, revision, now, kind):
     return runtime
 
 
+def _replies_waiting(s, account, now):
+    """True when the engine's work board shows fans waiting for / receiving a reply (updated in the last 2 minutes).
+
+    Best effort and fail-open: no board (older engine, other schema) means no opinion. Read-only."""
+    try:
+        from sqlalchemy import text
+        with s.begin_nested():          # a missing table must not poison the caller's transaction
+            row = s.execute(text("SELECT 1 FROM fastt_runtime.engine_work WHERE account_id=:a "
+                                 "AND state IN ('waiting','quiet','preparing','sending') AND updated_at>:since LIMIT 1"),
+                            {"a": account, "since": (now - timedelta(minutes=2)).isoformat(sep=" ", timespec="microseconds")}).first()
+        return row is not None
+    except Exception:
+        return False
+
+
 def acquire(store, tenant, account, *, connection_revision, kind, now=None):
     if (os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker" or kind not in KINDS
             or type(connection_revision) is not int or connection_revision<1):
@@ -85,15 +103,34 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
             row.binding_id, row.connection_revision = runtime.binding_id, connection_revision
             row.lease_token = row.lease_until = None
         if row.lease_token and row.lease_until > now:
-            raise ReadDeferred(row.lease_until, "provider read lease occupied")
+            # A successful read normally releases well before its crash lease
+            # expires. Recheck at the worker cadence, without stealing the lease.
+            raise ReadDeferred(min(row.lease_until, now + timedelta(seconds=LEDGER_RETRY_SECONDS)), "provider read lease occupied")
         if row.backoff_until and row.backoff_until > now:
             raise ReadDeferred(row.backoff_until, "provider read backoff")
+        if kind not in {'ledger', 'connection_check'} and row.last_kind not in {None, 'ledger'}:
+            from db.onlyfans_ledger_models import OfLedgerScan
+            scan = s.get(OfLedgerScan, account)
+            if (scan is not None and scan.binding_id == runtime.binding_id
+                    and scan.connection_revision == connection_revision
+                    and scan.status == 'running' and scan.last_error == 'provider_read_deferred'
+                    and scan.updated_at is not None and timedelta(0) <= now - scan.updated_at < timedelta(seconds=LEASE_SECONDS)
+                    and scan.next_poll_at <= now + timedelta(seconds=LEDGER_RETRY_SECONDS)):
+                # Hand the next free slot to a recently waiting ledger reader.
+                # A completed ledger claim restores intake's turn. A crashed
+                # ledger worker cannot keep this preference alive indefinitely.
+                raise ReadDeferred(now + timedelta(seconds=LEDGER_RETRY_SECONDS), 'provider ledger turn due')
         refill = max(0, int((now - row.refilled_at).total_seconds()))
         available = min(CAPACITY, row.tokens + refill)
         # Deep archive recovery may be continuously due. Leave one additional
         # maintenance token for ledger/content work as well as the recent head
         # reserve; the outer scheduler rotates those maintenance lanes.
         reserve = 0 if kind == "recent" else RECENT_RESERVE + (kind == 'history')
+        if kind in BACKGROUND_KINDS and _replies_waiting(s, account, now):
+            # Live replies are waiting (the FASTT engine's work board): history import, the exporter, discovery, offer
+            # refresh, posts and vault analysis yield. They keep a trickle (a read per ~5 s as the bucket refills), they
+            # are never starved outright.
+            reserve += LIVE_REPLY_RESERVE
         if available <= reserve:
             raise ReadDeferred(now + timedelta(seconds=1), "provider read budget exhausted")
         if refill:

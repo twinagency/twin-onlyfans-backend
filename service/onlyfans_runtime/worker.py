@@ -14,6 +14,8 @@ class ChatPage:
     fan_ids: list[int]
     next_cursor: str | None
     heads: dict[int, int] = field(default_factory=dict)
+    profiles: dict = field(default_factory=dict)
+    creator_profile: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +73,8 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
         raise Refused("reader scope mismatch")
     scope = {"connection_revision": connection_revision} if connection_revision is not None else {}
     applied = store.drain(tenant_id, account_id, **scope)
-    if os.environ.get("ONLYFANS_RECENT_INBOX_ENABLED") == "1":
+    if (os.environ.get("ONLYFANS_RECENT_INBOX_ENABLED") == "1"
+            and not getattr(store, "_independent_inbox", False)):
         from .recent_inbox import poll_recent
         applied += poll_recent(store, tenant_id, account_id, reader, connection_revision=connection_revision)
     discovered = recovered = 0
@@ -86,7 +89,7 @@ def read_step(store: Store, tenant_id: str, account_id: str, reader: BoundReader
                 # No database transaction remains open across this network boundary.
                 page = reader.chats(cursor=scan.cursor, limit=PAGE_LIMIT)
                 fenced={'provider_read_claim':budget} if budget is not None else {}
-                store.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor, **scope,**fenced)
+                store.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor, profiles=page.profiles, creator_profile=page.creator_profile, **scope,**fenced)
                 discovered = 1
             except Exception as failure:
                 error=failure

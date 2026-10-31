@@ -155,3 +155,56 @@ preflight). It runs until SIGTERM/SIGINT and is never started by itself.
   `nudge_after_minutes`) after a turn that put a priced card on the wire (`NativeEngine._queue_card_nudge`); FASTT's own
   `_run_nudge` handles it (any `status='open'` offer, including the `rung:vault-ask` row), the service drops it when the
   offer is settled or the fan spoke first.
+
+
+## Engine v2 (2026-10-30): concurrent preparation, one account gate, durable recovery
+
+All-fans mode (the supervisor's per-account child) now prepares up to `FASTT_PREPARE_CONCURRENCY` (default 4, 1..16) replies
+at once, still one task per fan (strict per-fan order), oldest unanswered message first. What did not change: one process per
+account, per-fan pilot + conversation owner token (the send authority), durable admission before every POST, unknown outcome
+stops the fan and is never resent, the legacy worker stays fenced by `ONLYFANS_FASTT_SCOPE`.
+
+| area | how |
+|---|---|
+| account owner | `engine_runner_lease` (additive table): one live engine per account, expires if the process dies; a second process waits as `runner-lease-held` instead of crashing |
+| send rate | `of_delivery_policy.next_dispatch_at` stays the one shared gate (human, campaign, AI, every process). Effective interval = `max(policy.throttle_seconds, FASTT_MIN_SEND_INTERVAL_S)`, the setting defaults to 20 and is clamped to >= 20. The gate also moves forward from the finished POST. A provider 429 / `Retry-After` moves it durably |
+| in-process order | `send_gate.SendGate`: concurrent replies queue for the wire oldest-message-first; waiters leave on takeover/stop/lease loss/timeout |
+| bursts | quiet window `FASTT_BURST_QUIET_S` (7 s) with a hard maximum `FASTT_BURST_MAX_WAIT_S` (45 s): past it the reply goes out even if the fan typed on while it was prepared (those later messages are answered next) |
+| stale / takeover | takeover, pause, restriction, account hold and credential change cancel queued and generating replies (the model call and the send queue check every second), re-checked at the wire; the claim is given back (`Ledger.release_input`), no draft is kept, the latest state is answered after hand-back |
+| lock scope | PostgreSQL ledger writes take a shared global lock plus an exclusive per-account lock (`twin_bridge.store.PG_LOCK_KEY`): accounts no longer queue behind each other; unscoped writers still exclude everyone |
+| model failures | timeout / HTTP error / budget refusal keep the reply pending with its reason and a backoff (budget: 5 min, whole account); only an input older than 24 h is let go |
+| unknown outcome | `autoreconcile`: exactly one matching message in a completely read provider history proves delivery (receipt becomes `sent`, fan resumes). Absence is never proof unless `FASTT_AUTO_RESOLVE_ABSENT_AFTER_S` (default off, min 120) is set |
+| visibility | `engine_work` (additive table): per fan state + fixed reason (`quiet`, `waiting concurrency-limit`, `held`, `blocked ...`, `preparing`, `sending`) and `waiting_since`; `engine-queue` events carry depth, oldest wait, in-flight, gate waiters |
+| text vs offers | an open/unpaid offer, a bad fan-memory read, or unavailable media never blocks an ordinary text reply; a text bubble claiming media was sent is held (`media-claim-unbacked`) and regenerated |
+| unknown senders | an outbound with no automation kind and no employee (a blast, another tool) younger than 90 s still counts, older ones do NOT count as an answer (`FASTT_UNLABELLED_COUNTS_AS_ANSWER=1` restores the old reading); surfaced as `unlabelled-outbound-not-an-answer` |
+| reply budget | `DailyBudget(background=True)` (the learner) may spend at most cap x (1 - `FASTT_REPLY_RESERVE_FRACTION`, default 0.4); replies can use the rest. The cap is not raised |
+
+SQL: `native_pilot/sql/engine_v2_upgrade.sql` / `engine_v2_rollback.sql` (the engine also creates the tables itself on start).
+Tests: `tests/test_fastt_engine_v2*.py`, `tests/test_fastt_reply_budget.py`; load: `tests/fastt_load.py <profile>`.
+
+
+## Concurrent delivery (2026-10-31, account-specific)
+
+The default remains the one-holder account gate above. Setting
+`of_delivery_policy.delivery_mode = 'concurrent'` for one account switches that account to:
+
+- `FASTT_SEND_CONCURRENCY` (default 4) process send slots, capped by the account's
+  `provider_max_concurrent`;
+- a durable token bucket (`provider_requests_per_second`, `provider_burst`);
+- a durable `engine_conversation_lease` keyed by tenant, account and fan, so only one
+  reply sequence advances per conversation;
+- `engine_dispatch_slot` rows counted against account concurrency, released on
+  `sent` / `not_sent`, and expired for a crashed holder while the attempt stays
+  unresolved;
+- `conversation_min_gap_seconds` for intentional per-fan pacing, independent of the
+  account request rate;
+- account-level `provider_cooldown_until` from an actual provider 429 / Retry-After.
+
+`Ledger._after_wire` does not impose an account gap in this mode, and admission no longer
+refuses because a different fan has a dispatching attempt. Daily fan quotas and the
+account daily cap remain atomic. Manual, campaign, engagement and follow-up text use the
+same policy row and tables through `onlyfans_runtime.concurrent_admission`.
+
+Rollout is one account at a time via `python -m native_pilot.control delivery-mode`.
+The legacy `gap` mode is unchanged. See `docs/onlyfans/CONCURRENT-DELIVERY-20261031.md`
+for settings, rollback and measured simulated limits.

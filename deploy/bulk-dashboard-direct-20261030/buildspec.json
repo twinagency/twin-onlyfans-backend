@@ -1,0 +1,59 @@
+{
+  "version": "0.2",
+  "env": {
+    "variables": {
+      "NEXT_TELEMETRY_DISABLED": "1",
+      "RELEASE_SHA": "2f98dd5a1f629db17e14bdf03cd960382d9cf432",
+      "RELEASE_IMAGE": "323149985112.dkr.ecr.ap-southeast-2.amazonaws.com/twin-onlyfans:dashboard-bulk-2f98dd5"
+    }
+  },
+  "phases": {
+    "install": {
+      "runtime-versions": {
+        "nodejs": 22
+      },
+      "commands": [
+        "cd \"$CODEBUILD_SRC_DIR\"/twinagency-twin-dashboard-*",
+        "apt-get update -qq && apt-get install -y -qq ffmpeg",
+        "npm ci"
+      ]
+    },
+    "pre_build": {
+      "commands": [
+        "npx tsc --noEmit",
+        "node scripts/check-onboarding-review.cjs",
+        "node scripts/check-moxy-post-submit-edit.cjs",
+        "node --import tsx scripts/check-twin-intake.ts",
+        "node deployment/creator-flow-live-check.test.cjs",
+        "node deployment/creator-flow-upload-memory.test.cjs",
+        "python3 -m py_compile deployment/creator-flow-live-check.py",
+        "node scripts/check-creator-switch-feedback.cjs",
+        "node --import tsx scripts/check-messages-read-parallelism.cjs",
+        "node --import tsx scripts/check-live-telegram.ts",
+        "node --import tsx scripts/check-agency-session.ts",
+        "node --import tsx scripts/check-dashboard-performance.cjs",
+        "node --import tsx scripts/check-owner-auth.ts",
+        "node scripts/check-agency-team.cjs",
+        "node --import tsx scripts/check-onlyfans-connection-status.ts",
+        "node --import tsx scripts/check-moxy-owner-access.ts",
+        "node --import tsx scripts/check-moxy-viewonly-forms.ts",
+        "node --import tsx scripts/check-sidebar-layout.tsx",
+        "npm run test:creator-upload",
+        "npm run test:offline"
+      ]
+    },
+    "build": {
+      "commands": [
+        "aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin 323149985112.dkr.ecr.ap-southeast-2.amazonaws.com",
+        "docker build --build-arg GIT_SHA=\"$RELEASE_SHA\" --label org.opencontainers.image.revision=\"$RELEASE_SHA\" -t \"$RELEASE_IMAGE\" .",
+        "docker run --rm --network none --entrypoint node \"$RELEASE_IMAGE\" -e 'const fs=require(\"fs\");const p=JSON.parse(fs.readFileSync(\".next/server/app-paths-manifest.json\"));if(!p[\"/api/onlyfans-controls/accounts/[accountId]/bulk/route\"])throw Error(\"bulk route missing\");console.log(\"BULK_ROUTE_BUILT\",process.env.GIT_SHA)'"
+      ]
+    },
+    "post_build": {
+      "commands": [
+        "test \"$CODEBUILD_BUILD_SUCCEEDING\" = \"1\"",
+        "docker push \"$RELEASE_IMAGE\""
+      ]
+    }
+  }
+}

@@ -124,7 +124,7 @@ def test_ledger_get_uses_selected_identity_frozen_utc_window_and_no_write(monkey
         parsed = urlsplit(path)
         assert parsed.path == "/api2/v2/payouts/transactions"
         assert parse_qs(parsed.query) == {"limit": ["20"], "offset": ["40"],
-            "start": ["2026-10-01T00:00:00Z"], "end": ["2026-10-08T00:00:00Z"]}
+            "startDate": ["2026-10-01 00:00:00"], "endDate": ["2026-10-08 00:00:00"]}
         return b'{"list":[],"hasMore":false}'
     monkeypatch.setattr(wire, "_call", call)
     assert wire.transaction_page(offset=40, start=datetime(2026,10,1), end=datetime(2026,10,8))

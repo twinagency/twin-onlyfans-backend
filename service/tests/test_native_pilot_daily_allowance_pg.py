@@ -12,6 +12,8 @@ from twin_bridge import store
 
 def test_daily_quota_concurrency_expiry_isolation_and_uncertain_accounting(monkeypatch):
     monkeypatch.setenv("FASTT_FAN_DAILY_REPLY_LIMIT", "2000")
+    import native_pilot.tuning as _tuning
+    monkeypatch.setattr(_tuning, "MIN_SEND_INTERVAL_FLOOR_S", 0.0)  # engine v2 floor is a code constant
     with empty_database() as (url, engine):
         now = datetime.utcnow()
         ns = now.isoformat(sep=" ", timespec="microseconds")

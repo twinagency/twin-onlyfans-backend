@@ -181,7 +181,7 @@ def test_history_page_is_still_verified_identity_bounded_and_get_only(monkeypatc
     def call(method,path,body=b""):
         assert seen==["identity"] and method=="GET" and body==b""
         assert urlsplit(path).path=="/api2/v2/payouts/transactions"
-        assert parse_qs(urlsplit(path).query)["start"]==["1970-01-01T00:00:00Z"]
+        assert parse_qs(urlsplit(path).query)["startDate"]==["1970-01-01 00:00:00"]
         return payload([])
     monkeypatch.setattr(wire,"_call",call)
     assert wire.transaction_page(offset=20000,start=datetime(1970,1,1),end=datetime(2026,10,26),history=True)
@@ -197,6 +197,7 @@ def test_additive_upgrade_from_91_retains_financial_evidence(database):
         conn.exec_driver_sql("ALTER TABLE of_ledger_scan DROP COLUMN continuation_json CASCADE, DROP COLUMN coverage_json CASCADE")
         from onlyfans_upgrade_fixture import restore_pre95_content_vault_shape
         restore_pre95_content_vault_shape(conn)
+        conn.exec_driver_sql("ALTER TABLE fans DROP COLUMN of_profile_checked_at CASCADE, DROP COLUMN of_profile_error")
         conn.exec_driver_sql("ALTER TABLE content_offers DROP COLUMN post_buy_started_at")
         conn.exec_driver_sql("UPDATE alembic_version SET version_num='0091_launch_controls'")
         check_schema(conn,expected="0091_launch_controls")

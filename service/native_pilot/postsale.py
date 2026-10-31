@@ -91,26 +91,40 @@ def unlinked_paid_fans(con, account):
     return {int(fan) for fan, occurred in rows if since is None or _naive(occurred) >= since}
 
 
-def unpaid_cards(con, account, now, after_minutes):
+def unpaid_cards(con, account, now, after_minutes, *, include_contextual=False):
     """Vault cards still unpaid ``after_minutes`` after they were sent: ``[(offer_id, fan_id, offered_at, price_cents)]``.
 
-    Cards of a fan with an unlinked paid purchase are never returned (see ``unlinked_paid_fans``)."""
+    Cards of a fan with an unlinked paid purchase are never returned (see ``unlinked_paid_fans``).
+    Contextual cards are withheld by default; a caller that has independently
+    proved an explicit price request may include them."""
     clause, args = _lane_clause()
     rows = con.execute(
         "SELECT o.id,o.fan_id,o.offered_at,o.price_cents,o.offer_message_id FROM content_offers o "
         "JOIN catalog_items c ON c.id=o.item_id AND c.account_id=o.account_id "
         "LEFT JOIN messages m ON m.account_id=o.account_id AND m.fan_id=o.fan_id AND m.message_id=o.offer_message_id "
         f"WHERE o.account_id=? AND o.status='open' AND o.mode='ppv' AND o.offer_message_id IS NOT NULL AND ({clause}) "
-        "AND NOT COALESCE(m.is_paid, FALSE) ORDER BY o.id LIMIT 200", (account, *args)).fetchall()
+        "AND NOT COALESCE(m.is_paid, FALSE) ORDER BY o.id DESC LIMIT 200", (account, *args)).fetchall()
     out = []
     blocked = unlinked_paid_fans(con, account) if rows else set()
+    seen_fans = set()
     for oid, fan, offered, price, _msg in rows:
         if int(fan) in blocked:
             continue
         offered = _naive(offered)
-        if offered is not None and offered <= now - timedelta(minutes=after_minutes):
-            out.append((int(oid), int(fan), offered, int(price or 0)))
-    return out
+        if offered is None or offered > now - timedelta(minutes=after_minutes):
+            continue
+        # One request concerns the latest due card, not every older unpaid card.
+        if int(fan) in seen_fans:
+            continue
+        seen_fans.add(int(fan))
+        from twin_bridge.store import has_table
+        if not include_contextual and has_table(con, "of_contextual_offer") and con.execute(
+                "SELECT 1 FROM of_contextual_offer WHERE account_id=? AND fan_id=? AND message_id=?",
+                (account, int(fan), _msg)).fetchone():
+            # Silence never authorizes a discounted replacement for a contextual card.
+            continue
+        out.append((int(oid), int(fan), offered, int(price or 0)))
+    return sorted(out)
 
 
 def inbound_since(con, account, fan, since):
@@ -123,3 +137,4 @@ def inbound_since(con, account, fan, since):
 def post_buy_run_at(account, fan, offer_id, now):
     """FASTT's own delay: ``uniform(90, 240)`` seconds, seeded exactly as ``ai_chatter`` seeds it."""
     return now + timedelta(seconds=random.Random(f"postbuy:{account}:{fan}:{offer_id}").uniform(*POST_BUY_WINDOW_S))
+

@@ -22,6 +22,11 @@ from pathlib import Path
 
 SERVICE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SERVICE))
+
+# Engine v2 enforces a 20 s account send interval floor. These older suites drive a virtual clock with
+# 1 s throttles; the floor is a code constant, so they lower it here (production cannot).
+import native_pilot.tuning as _tuning  # noqa: E402
+_tuning.MIN_SEND_INTERVAL_FLOOR_S = 0.0
 sys.path.insert(0, str(SERVICE / "native_pilot" / "tools"))
 
 CHECKS = 0
@@ -46,7 +51,7 @@ def main():
     check(r["scenario"] == "tiny" and not r["service_crashed"] and not r["helper_errors"], (r["service_crashed"], r["helper_errors"]))
     check(not any(k.startswith("held") and "service-error" in k for k in r["event_reasons"]), r["event_reasons"])
     check(len(r["accounts"]) == 2)
-    check(r["totals"]["replies"] >= 2, "the runner answered fans")
+    check(r["totals"]["replies"] >= 2, {"expected": "the runner answered fans", "events": r["event_reasons"], "accounts": r["accounts"], "control": r["control"]})
     for acct, a in r["accounts"].items():
         check(a["throttle_respected"], (acct, a.get("min_admission_gap_s")))
         check(a["inbound_messages"] > 0 and a["reply_latency_s"]["n"] >= 0)

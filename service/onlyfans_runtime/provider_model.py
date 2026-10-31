@@ -140,7 +140,7 @@ class NativeProviderModel:
                 or self._body is None or self._invoked
                 or hashlib.sha256(canonical(messages).encode()).hexdigest() != self._prompt_hash):
             raise LLMConfigError("invalid scoped native model reservation")
-        runtime = session.scalar(select(OfRuntime).where(OfRuntime.account_id == account_id).with_for_update())
+        runtime = session.scalar(select(OfRuntime).where(OfRuntime.account_id == account_id).with_for_update(read=True))
         if runtime is None:
             raise LLMConfigError("native model account is not registered")
         now = now.astimezone(timezone.utc).replace(tzinfo=None) if now.tzinfo is not None else now
@@ -185,7 +185,7 @@ class NativeProviderModel:
                 or type(call_id) is not int or call_id <= 0 or type(reserved_millicents) is not int
                 or not 1 <= reserved_millicents <= 100000000 or type(now) is not datetime):
             raise LLMConfigError("invalid scoped native model settlement")
-        session.scalar(select(OfRuntime.account_id).where(OfRuntime.account_id == account_id).with_for_update())
+        session.scalar(select(OfRuntime.account_id).where(OfRuntime.account_id == account_id).with_for_update(read=True))
         call = session.scalar(select(GrokCall).where(GrokCall.id == call_id, GrokCall.account_id == account_id).with_for_update())
         if (call is None or call.endpoint != self.endpoint or call.was_dry_run
                 or call.provider != self.provider or call.model != self.model_id):

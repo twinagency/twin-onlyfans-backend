@@ -1063,7 +1063,7 @@ _DEFAULTS: dict = {
     # cheaper" is a normal close). Floored at 2 in code — never below.
     "max_open_offers": 2,
     # When he haggles on the pending piece, re-price it this fraction cheaper (0.10 = 10%).
-    "haggle_discount_pct": 0.10,
+    "haggle_discount_pct": 0.15,
     # Resend a balked-on priced TEASER up to this fraction cheaper (capped at 0.20 = 20%).
     "teaser_discount_pct": 0.20,
     # Content-derived price bands + the post-purchase (hot-window) ladder.
@@ -2842,13 +2842,13 @@ async def _offerable_for_fan(account_id: str, fan_id: int,
     return out
 
 
-async def _offer_caps_ok(account_id: str, fan_id: int, cfg: dict) -> bool:
+async def _offer_caps_ok(account_id: str, fan_id: int, cfg: dict, *, requested: bool = False) -> bool:
     async with get_session() as s:
-        result = await s.run_sync(_offer_caps_ok_in_session, account_id, fan_id, cfg)
+        result = await s.run_sync(_offer_caps_ok_in_session, account_id, fan_id, cfg, requested=requested)
         return result
 
 
-def _offer_caps_ok_in_session(s, account_id: str, fan_id: int, cfg: dict, *, now: datetime | None = None) -> bool:
+def _offer_caps_ok_in_session(s, account_id: str, fan_id: int, cfg: dict, *, now: datetime | None = None, requested: bool = False) -> bool:
     """Pacing guards: enough fan messages since the LAST offer, and not too many
     non-converted offers (expired/cancelled) inside 24h. Delivered offers never
     count against the cap — a purchase invites the next step."""
@@ -2909,11 +2909,19 @@ def _offer_caps_ok_in_session(s, account_id: str, fan_id: int, cfg: dict, *, now
             CatalogItem.account_id == str(account_id),
             CATALOG_IS_SINGLE,
             pack_sender.tags_carry(pack_sender.HOOK_CATEGORY)))
+    _pacing = _not_hook
+    if requested:
+        from sqlalchemy import inspect
+        if inspect(s.connection()).has_table("of_contextual_offer"):
+            from db.onlyfans_contextual_models import OfContextualOffer
+            _pacing = _pacing & or_(ContentOffer.offer_message_id.is_(None), ContentOffer.offer_message_id.not_in(select(OfContextualOffer.message_id).where(
+                OfContextualOffer.account_id == str(account_id), OfContextualOffer.fan_id == int(fan_id),
+                OfContextualOffer.message_id.is_not(None))))
     last_at = (s.execute(
         select(func.max(ContentOffer.offered_at)).where(
             ContentOffer.account_id == str(account_id),
             ContentOffer.fan_id == int(fan_id),
-            _not_hook)
+            _pacing)
     )).scalar_one_or_none()
     if last_at is not None and min_msgs > 0:
         n = (s.execute(
@@ -3953,8 +3961,8 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
             vault.why = why
         return False
 
-    if not offer.offered_at or offer.offered_at > now - timedelta(minutes=upsell.RESEND_AFTER_M):
-        return _skip("too-early")
+    if not offer.offered_at or offer.offered_at > now:
+        return _skip("invalid-offer-time")
     # Only a PPV-carrying offer has a locked message to unsend-and-reprice; a
     # LEGACY tip-only row (mode "tip", pre-2026-08-19 — nothing creates one now)
     # has nothing to pull, and re-asking a fan who ignored a tip ask is begging.
@@ -4008,6 +4016,13 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         log.info("ai_chatter discount resend BLOCKED — he declined account=%s fan=%s",
                  account_id, fan_id)
         return _skip("fan-declined")
+    from . import _price_ask
+    # The request must follow THIS offer, not an earlier card.
+    if last_in_at is None or last_in_at < offer.offered_at:
+        return _skip("unprompted")
+    if (lad.objection_at is None or lad.objection_at < offer.offered_at) and not (
+            _price_ask.PRICE_ASK.search(last_text or "") or upsell.detect_stated_cap(last_text or "")):
+        return _skip("unprompted")
     cuts30, asks30 = await _cuts_asks_last_30d(account_id, fan_id, now)
     ok_disc, why_disc = upsell.may_discount(upsell.DiscountCtx(
         last_inbound_text=last_text or "",
@@ -4049,7 +4064,7 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         await _close_ladder(account_id, fan_id, upsell.STATUS_TAPPED)
         return _skip("already-owned")
     seen_cents = int((vault.price_cents if vault is not None else 0) or offer.price_cents or 0)
-    if seen_cents <= upsell.OF_PRICE_FLOOR_CENTS:
+    if seen_cents <= max(upsell.OF_PRICE_FLOOR_CENTS, int(cfg.get("discount_min_price_cents") or 0)):
         return _skip("price-at-minimum")   # nothing left to discount into
 
     if not await ax.acquire_fan_lease(account_id, fan_id, _PURPOSE):
@@ -4076,7 +4091,9 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         # This is the one priced site the main loop's re-clamp didn't cover.
         seen_cents = min(int(seen_cents), upsell.OF_PRICE_MAX_CENTS)
         px = max(upsell.OF_PRICE_FLOOR_CENTS,
-                 min(upsell.discount_price(seen_cents, rng, str(account_id)),
+                 min(upsell.discount_price(seen_cents, rng, str(account_id),
+                                       discount_pct=cfg.get("haggle_discount_pct", 0.15),
+                                       min_cents=int(cfg.get("discount_min_price_cents") or upsell.OF_PRICE_FLOOR_CENTS)),
                      upsell.OF_PRICE_MAX_CENTS))
         if vault is not None and px >= seen_cents:
             return _skip("price-at-minimum")   # a "discount" is strictly lower than what he saw, or it is not sent
@@ -4848,6 +4865,8 @@ async def _run_discount(account_id: str, payload: dict, cfg: dict) -> dict:
     objection_at, blocker = _price_ask.objection_state([(r[0], r[1] or "") for r in rows])
     if blocker:
         return _skipped(blocker)
+    if objection_at is None:
+        return _skipped("unprompted")
     if objection_at is not None:
         # What the reply loop stamps when it hears a voiced objection (gate on); here it is read off the thread.
         lad = (await _load_ladders(account_id, [fan_id])).get(fan_id)
@@ -6427,6 +6446,14 @@ def _turn_kind(*, bot_accused: bool, pic_desc: str, content_ask: bool,
     return ""
 
 
+REPLY_FORMAT_INSTRUCTION = (
+    "Answer the latest complete message in the creator's approved voice. Use the amount of detail the reply needs. "
+    "A brief acknowledgment or one short sentence is sufficient when it answers the turn. "
+    "Expand when the question needs explanation. Ask a follow-up only when it helps the conversation. "
+    "Do not pad the reply or split it merely to meet a format."
+)
+
+
 def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     history_tail: int = _HISTORY_TAIL,
                     # Arm G's three transforms. Defaults to OFF, so every
@@ -6492,6 +6519,10 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     # to be human and the self-invention allowance; selling blocks,
                     # offer contract and pacing are untouched.
                     twin_context: bool = False,
+                    dated_memory: bool = False,
+                    name_override: str | None = None,
+                    suppress_fields: frozenset = frozenset(),
+                    reply_format: bool = False,
                     ) -> tuple[list[dict], list[str]]:
     """Compose the (system, user) pair — welcome_chatter_for_info's girly info-gather prompt
     with one structural difference: `sell`. `_NO_SELL` (M2) → the no-offers line
@@ -6505,6 +6536,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     for the opening line and the output contract. That is the whole reason
     `_SellSurface` exists — see its docstring. Adding a way to sell means one
     more construction there, not four more branches here."""
+    reply_format = reply_format is True and not kind and not sell.live
     questions = _questions_still_needed(f, asked)
     # One flag for "answer identity questions honestly": Twin's scoped text path
     # and the FASTT path with Twin context share the same identity wording.
@@ -6518,13 +6550,25 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
 
     facts = []
     name = resolve_fan_name(f)
-    if name:
+    if name_override:
+        # He told us his name in this conversation (his latest word wins, a correction included): use it, not the account name.
+        facts.append(f"name/nickname: {name_override[:40]} (he said so himself; his account name is not his name)")
+    elif name:
         facts.append(f"name/nickname: {name.split('/')[0][:40]}")
-    for label, val in (("age", f.his_age), ("city", f.home_city),
-                       ("country", f.home_country), ("hobbies", f.hobbies),
-                       ("occupation", f.occupation), ("fetishes", f.fetishes)):
+    # Canonical columns stay in the prompt WITH learned memory (dated_memory): learned memories ride in the evidence block with
+    # their own status and conflicts, and "canonical facts outrank historical candidates". Only a field an operator cleared or
+    # replaced is withheld here (suppress_fields); the operator value arrives through the memory block.
+    for label, attr, val in (("age", "his_age", f.his_age), ("city", "home_city", f.home_city),
+                             ("country", "home_country", f.home_country), ("hobbies", "hobbies", f.hobbies),
+                             ("occupation", "occupation", f.occupation), ("fetishes", "fetishes", f.fetishes)):
+        if attr in suppress_fields:
+            continue
         if nonempty(val):
             facts.append(f"{label}: {str(val).strip()[:80]}")
+    if dated_memory:
+        # The gen_info prose bio is an older machine summary; with dated learned memories it would repeat or contradict
+        # them, so only the bio is dropped (the canonical columns above are kept).
+        profile = None
     # gen_info's rich profile — the bio + bullet notes a human chatter reads before
     # replying. This is what makes a bubble land as "she remembers me", not generic.
     if profile is not None:
@@ -6863,6 +6907,9 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     elif life_tip:
         need_block = ("YOUR GOAL THIS MESSAGE: answer him, then the ask "
                       "below. No get-to-know question this turn — it can wait.")
+    elif reply_format:
+        need_block = "Answer what he said. Ask for clarification only if it is needed to answer accurately."
+        presented = []
     elif opener is not None:
         # The gather is done, so this turn works in one gen_info opener — a question
         # mined from something he actually said — instead of the generic banter
@@ -6905,7 +6952,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         if name_dodged else "")
 
     style_extra = ((STYLE_3LINE,) * 2 + (STYLE_BRIEF,) * 2) if style_on else ()
-    style = random.choice(_STYLE_VARIANTS + style_extra)
+    style = REPLY_FORMAT_INSTRUCTION if reply_format else random.choice(_STYLE_VARIANTS + style_extra)
     # A "solo" sticker roll owns the per-message STYLE slot — a bullet buried
     # mid-prompt loses to "YOUR GOAL THIS MESSAGE"/the style line (verified
     # live: 5/5 solo rolls yielded plain text until the directive moved here).
@@ -7044,7 +7091,9 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         f"{register_intro}"
         "- Short and casual — lowercase, u/ur. React to what he said first.\n"
         "- VARY it — never reuse an opener, phrase, or emoji from this chat.\n"
-        "- At most ONE question, never one he already answered. No paragraphs.\n"
+        + ("- Ask a follow-up only when useful; never repeat an answered question.\n" if reply_format else
+           "- At most ONE question, never one he already answered. No paragraphs.\n")
+        +
         f"{narration_rule}"
         "- If he gets explicit early: playfully tease and slow it down — warm, "
         "never preachy.\n"
@@ -7976,7 +8025,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
     # the branches that read it.
     open_offer_ceiling = max_open_offers if prompt_sells else 1
     # How much cheaper the pending piece is re-priced when he haggles (0.10 = 10% off).
-    haggle_pct = float(cfg.get("haggle_discount_pct") or _HAGGLE_DISCOUNT_PCT)
+    haggle_pct = max(0.15, min(0.20, float(cfg.get("haggle_discount_pct") or 0.15)))
     # How much off a priced TEASER we RESEND when he balks on it (up to 0.20 = 20%).
     teaser_disc_pct = min(0.20, float(cfg.get("teaser_discount_pct") or _TEASER_DISCOUNT_PCT))
     # The floor: after this many of his messages with no ask on the table, ask anyway.
@@ -9548,7 +9597,11 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                               day=day,
                                               sell_signal=signal_on,
                                               v=v,
-                                              twin_context=twin_ctx is not None)
+                                              twin_context=twin_ctx is not None,
+                                              dated_memory=bool(getattr(twin_ctx,"dated_memory",False)),
+                                              name_override=getattr(twin_ctx, "name_override", None),
+                                              suppress_fields=getattr(twin_ctx, "suppress_fields", frozenset()),
+                                              reply_format=cfg.get("_native_reply_format") is True)
             if twin_ctx is not None and twin_ctx.finish is not None:
                 msgs = twin_ctx.finish(msgs)
             try:
@@ -9805,6 +9858,46 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         offer_item = None
                         offer_id = None
 
+            if (_pack_plan is not None and _pack_plan.result is not None
+                    and _pack_plan.result.reason == "item_already_pending"):
+                raw = "That one is already in the card above."
+                offer_item = offer_id = None
+                _trigger = None
+
+            # Contextual traffic is a distinct trigger, never an invented ask.
+            # Resolve only on the current inbound, after explicit requests win.
+            _contextual = None
+            _cap = active_telegram_capabilities()
+            if (not vault_ask and not _pack_plan and offer_item is None
+                    and kind not in _TURNS_NOT_SELLING
+                    and forced_this_tick < _MAX_FORCED_ASKS_PER_TICK):
+                from .contextual_offers import plan_contextual
+                _contextual = await plan_contextual(lane, getattr(_cap, "contextual", None), c, f,
+                                                   blocked=seller_off, voice=v.voice)
+            if _contextual is None and _cap is not None:
+                _authority = getattr(_cap, "contextual", None)
+                _explore = getattr(_authority, "reply_override", None)
+                if _explore:
+                    raw = _explore
+                    _authority.reply_override = None
+            if _contextual is not None:
+                _context_plan, _context_permission, _context_decision = _contextual
+                _authority = _cap.contextual
+                # The paid card is this turn's one response. The generated normal
+                # draft stays untouched in shadow and is not also sent in live.
+                with _authority.arm(_context_plan.delivery, _context_permission,
+                                    _context_decision.reason, _context_decision.supporting_message_ids):
+                    _context_sent = await lane.deliver(client, _context_plan, dry_run=dry_run)
+                _authority.emit({"event":"contextual-opportunity",
+                                 "stage":"delivered" if _context_sent and not dry_run else "rejected",
+                                 "reason":"transport_accepted" if _context_sent and not dry_run else "not_delivered",
+                                 "fan":fan_id})
+                if _context_sent:
+                    forced_this_tick += 1
+                    sent += 1
+                    await _mark_reply_sent(account_id, fan_id, now)
+                    continue
+
             if (_trigger and (gate_ok or (_trigger == "ask" and ask_override))
                     and not seller_off
                     and offer_item is None and offerable
@@ -10021,11 +10114,17 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             _ret_gap_s = ((datetime.utcnow() - _ret_anchor).total_seconds()
                           if _ret_anchor is not None else 0.0)
             _one_bubble = bool(return_single_s > 0 and _ret_gap_s >= return_single_s)
-            parts = [_language.apply_word_restriction(p, fan_lang)[:_REPLY_MAX_CHARS]
-                     for p in split_for_bubbles(raw, max_bubbles,
-                                                rng=random.Random(f"split:{fan_id}:{raw}"),
-                                                force_single=_one_bubble)
-                     if p.strip()][:max_bubbles]
+            if cfg.get("_native_reply_format") is True and not kind and not sell.live:
+                # Preserve complete text; the existing transport limit refuses oversized output.
+                # The existing bubble loop still checks freshness before every send.
+                parts = [_language.apply_word_restriction(p, fan_lang)
+                         for p in split_for_bubbles(raw, 2, preserve_complete=True)]
+            else:
+                parts = [_language.apply_word_restriction(p, fan_lang)[:_REPLY_MAX_CHARS]
+                         for p in split_for_bubbles(raw, max_bubbles,
+                                                    rng=random.Random(f"split:{fan_id}:{raw}"),
+                                                    force_single=_one_bubble)
+                         if p.strip()][:max_bubbles]
             parts = [p for p in parts if not _looks_like_echo(p, c.last_body)]
             if style_on and parts:
                 recent_out = [b for d, b in c.messages if d == "out"]
@@ -11094,3 +11193,4 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
         "dry_run": dry_run,
         "model": model,
     }
+

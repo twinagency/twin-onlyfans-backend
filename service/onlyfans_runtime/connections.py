@@ -56,8 +56,11 @@ def _audit(s,row,key,actor,action,fingerprint):
         action=action,request_hash=fingerprint,actor=actor,created_at=utcnow()))
 
 def _validate_identity(key,actor,revision):
+    from onlyfans_read.agency_scope import ACTOR_PATTERN
+    # Agency-user actors reach here only through the control-purpose activation command, which also checks
+    # the agency's manage permission and creator scope (Store._runtime) before any change.
     if (type(key) is not str or not re.fullmatch(r'[a-f0-9]{64}',key) or type(actor) is not str
-        or not re.fullmatch(r'(?:op-session|creator-session):[a-f0-9]{64}',actor) or type(revision) is not int or not 0<=revision<2**31-1):
+        or not re.fullmatch(rf'(?:op-session|creator-session):[a-f0-9]{{64}}|{ACTOR_PATTERN}',actor) or type(revision) is not int or not 0<=revision<2**31-1):
         raise Refused('invalid connection command')
 
 def provision_account(store,tenant,*,creator_id,creator_name,owner_id,handle,command_key,actor):
@@ -90,7 +93,9 @@ def provision_account(store,tenant,*,creator_id,creator_name,owner_id,handle,com
         s.add(OfCreatorBinding(id=binding_id,tenant_id=tenant,creator_id=creator_id,creator_name=creator_name,
             account_id=account,handle=handle,channel='onlyfans'));s.flush()
         s.add(OfRuntime(account_id=account,binding_id=binding_id,activated_at=utcnow(),enabled=False))
-        s.add(AccountAiConfig(account_id=account));s.flush()
+        from .contextual_mode import new_account_settings
+        s.add(AccountAiConfig(account_id=account,
+            ai_chatter_config_json=canonical(new_account_settings())));s.flush()
         s.add(OfConnectionChange(account_id=account,command_key=command_key,revision=0,action='provision',
             request_hash=fingerprint,actor=actor,created_at=utcnow()))
     return account
@@ -158,7 +163,7 @@ def get_connection(store,tenant,account,*,include_sync=False,include_runner=Fals
                 'lastCompleteSyncAt':runtime.last_sync_at.isoformat()+'Z' if runtime.last_sync_at else None}
         return result
 
-def personality_credential_status(s,account,binding_id,*,_unavailable_as_none=False):
+def personality_credential_status(s,account,binding_id,*,_unavailable_as_none=False,_lock_runtime=True):
     """Read non-secret readiness through the existing credential authority.
 
     The personality callback already runs inside its scoped transaction. Resolve
@@ -178,7 +183,7 @@ def personality_credential_status(s,account,binding_id,*,_unavailable_as_none=Fa
             or binding.revoked_at is not None or type(binding.tenant_id) is not str
             or not ID_PATTERN.fullmatch(binding.tenant_id)):
         raise Refused('scope unavailable')
-    runtime=Store._runtime(s,binding.tenant_id,account)
+    runtime=Store._runtime(s,binding.tenant_id,account,lock=_lock_runtime)
     if runtime.binding_id!=binding_id:raise Refused('scope unavailable')
     config=s.get(AccountAiConfig,account)
     try:selected=explicit_model(config,'ai_chatter',MODELS)
@@ -276,6 +281,7 @@ def save_connection(store,tenant,account,*,payload,expected_revision,command_key
         row.revision=revision;row.sealed_config=_seal(payload,tenant,account,runtime.binding_id,revision)
         row.expires_at=expires.astimezone(timezone.utc).replace(tzinfo=None);row.status='pending'
         row.verified_at=None;row.last_error=None;row.updated_at=utcnow();runtime.enabled=False;runtime.recovery_needed=True
+        row.automate_new_conversations=False;row.automation_starts_at=None
         if policy:policy.enabled=False;policy.revision+=1
         _audit(s,row,command_key,actor,action,fingerprint)
         from .launch_engagement.service import invalidate
@@ -291,13 +297,15 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
             or type(payload.get('automateNewConversations',False)) is not bool or type(payload['limitUnits']) is not int
             or not 1<=payload['limitUnits']<=10000 or type(payload['throttleSeconds']) is not int
             or not 1<=payload['throttleSeconds']<=86400 or type(payload['mediaEnabled']) is not bool):raise Refused('invalid delivery limits')
+        from .send_gap import below_floor
+        if below_floor(payload['throttleSeconds']):raise Refused('invalid delivery limits: send gap is under the shared 10 second floor')
     elif payload:raise Refused('invalid connection action payload')
     fingerprint=_request(action,payload,expected_revision)
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
         if row is not None and row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
-        if action=='activate' and payload.get('automateNewConversations',False) and NEW_CONVERSATION_AUTOMATION_LOCKED:
-            raise Refused('automatic enabling of new conversations is locked off; enable each fan explicitly')
+        if action=='activate' and payload.get('automateNewConversations',False):
+            raise Refused('use the future conversations setting; activation never arms it')
         prior=s.get(OfConnectionChange,(account,command_key))
         if prior:
             if prior.request_hash!=fingerprint or prior.actor!=actor:raise Refused('connection idempotency conflict')
@@ -318,10 +326,11 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
             after={name:getattr(policy,name) for name in before}
             s.add(OfDeliveryPolicyChange(account_id=account,revision=policy.revision,actor=actor,reason='Explicit dashboard account activation',before_json=canonical(before),after_json=canonical(after),created_at=utcnow()))
             runtime.enabled=True;runtime.recovery_needed=True
-            row.automate_new_conversations=False;row.automation_starts_at=None   # locked off, see store.NEW_CONVERSATION_AUTOMATION_LOCKED
+            row.automate_new_conversations=False;row.automation_starts_at=None   # activation never arms future conversations
         else:
             runtime.enabled=False
             if policy:policy.enabled=False;policy.revision+=1
+            row.automate_new_conversations=False;row.automation_starts_at=None   # re-arming is an explicit act
             row.status='paused' if action=='pause' else 'pending';row.last_error=None
             if action=='verify':row.verified_at=None
         # Re-encrypt with the new revision used by authenticated associated data.
@@ -333,6 +342,70 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
         revision=row.revision
     if action in {'verify','activate'}:store.begin_scan(tenant,account)
     return revision
+
+def set_model_credential(store,tenant,account,*,model,expected_revision,command_key,actor):
+    """Replace ONLY this account's own model credential inside its sealed connection.
+
+    The session, proxy, verification and activation state are untouched; the revision advances because the
+    sealed record is re-encrypted with it. A credential is never copied from another account: the value must be
+    supplied for this account and is validated against the registry before it is stored. Nothing is returned
+    that contains the key."""
+    from onlyfans_read.agency_scope import actor_allowed
+    if (type(command_key) is not str or not re.fullmatch(r'[a-f0-9]{64}',command_key) or not actor_allowed(actor)
+        or type(expected_revision) is not int or not 0<=expected_revision<2**31-1):raise Refused('invalid connection command')
+    if type(model) is not dict or set(model)!={'modelId','apiKey'}:raise Refused('invalid selected model credential')
+    fingerprint=_request('model',{'modelId':model.get('modelId'),'keyHash':hashlib.sha256(str(model.get('apiKey')).encode()).hexdigest()},expected_revision)
+    with Session(store.engine) as s,s.begin():
+        runtime=store._runtime(s,tenant,account);row=s.get(OfProviderConnection,account)
+        prior=s.get(OfConnectionChange,(account,command_key))
+        if prior:
+            if prior.request_hash!=fingerprint or prior.actor!=actor:raise Refused('connection idempotency conflict')
+            return prior.revision
+        if row is None or row.binding_id!=runtime.binding_id:raise Refused('scope unavailable')
+        if row.revision!=expected_revision:raise Refused('connection revision conflict')
+        clear=_open(row,tenant)
+        try:
+            from .provider_model import NativeProviderModel
+            NativeProviderModel(account_id=account,model_id=model['modelId'],api_key=model['apiKey'],
+                expires_at=row.expires_at.replace(tzinfo=timezone.utc))
+        except Exception:raise Refused('invalid selected model credential') from None
+        row.revision+=1
+        row.sealed_config=_seal({**clear,'model':{'modelId':model['modelId'],'apiKey':model['apiKey']}},tenant,account,runtime.binding_id,row.revision)
+        row.updated_at=utcnow()
+        _audit(s,row,command_key,actor,'model',fingerprint)
+        from .launch_engagement.service import invalidate
+        invalidate(s,runtime,reason='connection_changed',actor=actor)
+        return row.revision
+
+def check_model_credential(store,tenant,account,*,transport=None,timeout=8.0):
+    """Read-only key check against the provider's key endpoint. No tokens are generated and nothing is stored.
+
+    Returns {'state': 'usable'|'rejected'|'no_credit'|'unavailable'|'unsupported'|'missing', 'code', 'remaining'?}."""
+    import httpx
+    from llm_client import _resolve
+    with Session(store.engine) as s:
+        runtime=store._runtime(s,tenant,account,lock=False);row=s.get(OfProviderConnection,account)
+        if row is None or row.binding_id!=runtime.binding_id:return {'state':'missing','code':'not_connected'}
+        try:model=_open(row,tenant).get('model')
+        except Refused:return {'state':'missing','code':'stored_credentials_unavailable'}
+    if not isinstance(model,dict) or not model.get('apiKey'):return {'state':'missing','code':'model_credential_missing'}
+    try:_,provider=_resolve(model['modelId'])
+    except Exception:return {'state':'unsupported','code':'model_unknown'}
+    base=httpx.URL(provider.base_url.rstrip('/')+'/key')
+    if base.host!='openrouter.ai' or base.scheme!='https':return {'state':'unsupported','code':'provider_has_no_key_check'}
+    try:
+        client=httpx.Client(timeout=timeout,transport=transport,follow_redirects=False)
+        try:r=client.get(str(base),headers={'Authorization':'Bearer '+model['apiKey']})
+        finally:client.close()
+    except httpx.HTTPError:return {'state':'unavailable','code':'provider_unreachable'}
+    if r.status_code in (401,403):return {'state':'rejected','code':'provider_rejected_key'}
+    if r.status_code==402:return {'state':'no_credit','code':'provider_no_credit'}
+    if r.status_code!=200:return {'state':'unavailable','code':f'provider_http_{r.status_code}'}
+    try:
+        data=r.json().get('data',{});left=data.get('limit_remaining')
+    except Exception:return {'state':'unavailable','code':'provider_bad_response'}
+    if isinstance(left,(int,float)) and not isinstance(left,bool) and left<=0:return {'state':'no_credit','code':'provider_no_credit','remaining':0}
+    return {'state':'usable','code':None,'remaining':left if isinstance(left,(int,float)) and not isinstance(left,bool) else None}
 
 def load_worker_accounts(store,tenant,*,limit=32):
     """Backward-compatible first-cohort list; fleet workers retain the cursor."""

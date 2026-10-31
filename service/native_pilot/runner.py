@@ -46,7 +46,7 @@ def emit(event):
 readonly = store.readonly
 
 
-def check_local(path, account, fan, approved_item=None):
+def check_local(path, account, fan, approved_item=None, open_offer_blocks=True):
     """Inspect only the chosen account's configuration and delivery metadata."""
     with readonly(path) as con:
         if not con.execute("SELECT 1 FROM accounts WHERE id=?", (account,)).fetchone():
@@ -72,14 +72,19 @@ def check_local(path, account, fan, approved_item=None):
         ids = sorted({approved_item} if isinstance(approved_item, int) else set(approved_item or ()))
         approved = (" AND NOT (mode='ppv' AND status='open' AND item_id IN (%s))" % ",".join("?" * len(ids)),
                     tuple(ids)) if ids else ("", ())
-        if con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status IN ('open','paid','delivering')"
-                       + approved[0] + " LIMIT 1", (account, fan, *approved[1])).fetchone():
-            raise Refused("chat-offer-open")
-        if con.execute("SELECT 1 FROM pending_offer WHERE account_id=? AND fan_id=? LIMIT 1", (account, fan)).fetchone():
-            raise Refused("chat-offer-open")
+        # Engine v2: the persistent service passes open_offer_blocks=False. An unpaid (or paid, still being
+        # delivered) offer is settled by OnlyFans / Twin's paid-media path, not by this runner; it must not stop
+        # an ordinary text reply. The bounded pilot keeps the original refusal.
+        if open_offer_blocks:
+            if con.execute("SELECT 1 FROM content_offers WHERE account_id=? AND fan_id=? AND status IN ('open','paid','delivering')"
+                           + approved[0] + " LIMIT 1", (account, fan, *approved[1])).fetchone():
+                raise Refused("chat-offer-open")
+            if con.execute("SELECT 1 FROM pending_offer WHERE account_id=? AND fan_id=? LIMIT 1", (account, fan)).fetchone():
+                raise Refused("chat-offer-open")
         if con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? AND fan_id=? AND state IN ('dispatching','delivery_unknown') LIMIT 1", (account, fan)).fetchone():
             raise Refused("delivery-unresolved")
-        if con.execute("SELECT 1 FROM twin_bridge_turns WHERE account_id=? AND state NOT IN ('delivered','cancelled','parked') LIMIT 1", (account,)).fetchone():
+        if con.execute("SELECT 1 FROM twin_bridge_turns WHERE account_id=? AND fan_id=? "
+                       "AND state NOT IN ('delivered','cancelled','parked') LIMIT 1", (account, fan)).fetchone():
             raise Refused("twin-work-open")
         return {"creator_profile": "configured" if row and (row["persona"] or "").strip() else "native-default",
                 "account_id": account, "fan_id": fan}
@@ -128,7 +133,7 @@ def read_sources(path, account, fan, ids):
     return sources
 
 
-def check_provider_history(history, sources, confirmed_ids, *, account, fan, dashboard_handover=False):
+def check_provider_history(history, sources, confirmed_ids, *, account, fan, dashboard_handover=False, tolerate_newer=False):
     """Validate inputs; dashboard-managed chats use explicit control for handover."""
     from twin_bridge.contract import parse_canonical_timestamp
     from twin_bridge.delivery import external_outbound_ids
@@ -143,6 +148,8 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan, das
     outbound = set(external_outbound_ids(history, set(confirmed_ids), creator_id=account, fan_id=fan, since=since))
     if outbound and not dashboard_handover:
         raise Refused("external-outbound")
+    latest_source = max(datetime.fromisoformat(r["created_at"]) for r in sources.values())
+    latest_source = latest_source.replace(microsecond=latest_source.microsecond // 1000 * 1000)
     seen = set()
     for item in history:
         mid = item.get("id")
@@ -164,6 +171,8 @@ def check_provider_history(history, sources, confirmed_ids, *, account, fan, das
         if mid in confirmed_ids:
             continue
         if mid not in sources:
+            if tolerate_newer and not item.get("isFromMe") and stamp > latest_source:
+                continue        # hard-maximum burst: a later fan message does not stale the reply (answered next)
             raise Refused("new-message-during-generation")
         source_stamp = datetime.fromisoformat(sources[mid]["created_at"])
         source_stamp = source_stamp.replace(microsecond=source_stamp.microsecond // 1000 * 1000)
@@ -261,6 +270,10 @@ def _refusal(exc):
         except (TypeError, ValueError, AttributeError):
             pass
         return NotSent("provider-rate-limited", retry=True, retry_after=after)
+    if status == 401:
+        # The account session is no longer usable. Keep this account-wide: other
+        # fans must not each spend a request discovering the same expired login.
+        return NotSent("account-auth-failed")
     if 400 <= status < 500 and status != 408:
         return NotSent("provider-refused")
     return None
@@ -288,6 +301,7 @@ class Gateway:
         # here (never from the frozen Pilot) and a held fan can refuse a bubble.
         self.deadline = pilot.deadline
         self.hold_check = None
+        self.contextual = None
         self.not_sent = None   # the NotSent that ended a send (a retryable one lets the caller answer the input again)
         # Discounted resend (service.py arms these for exactly one job): the one unpaid card of this fan the job may
         # remove, and the ids whose removal the provider confirmed. The DELETE happens at the wire, inside the SAME
@@ -321,6 +335,10 @@ class Gateway:
             raise RuntimeError("unsend-unconfirmed")
         self.unsent_ids.add(message_id)
 
+    def abort_reason(self):
+        """Cheap, no-database reason a queued sender should leave the gate at once, else None."""
+        return self.stopped_reason
+
     async def pace(self):
         """Wait point before history/admission; the bounded pilot has no pacing."""
 
@@ -346,12 +364,44 @@ class Gateway:
             self.stopped_reason = "time-limit-reached"
         return bool(self.stopped_reason)
 
+    # Transient admission refusals raised before any attempt row exists: the account's gate was taken a moment
+    # earlier by another sender (another process, a human send) or the throttle moved. Nothing was written.
+    ADMISSION_RETRY = frozenset({"allowance-throttled", "allowance-busy", "allowance-changed",
+                                 "provider-concurrency-limit", "conversation-busy", "conversation-throttled"})
+    send_gate = None            # engine v2: the account's SendGate (service-owned); None = bounded pilot, no gate
+    send_wait_max_s = 900.0
+    tolerate_newer = False      # engine v2: set for a burst past the hard maximum wait (see Service.turn)
+    send_priority = None        # engine v2: sort key at the gate (age of the fan's first unanswered message, ISO text)
+    throttled_retries = 40
+    open_offer_blocks = True    # engine v2: the persistent service sets False (an open offer never stops a text reply)
+    eligibility_check = None    # engine v2: account-level hold (runtime/policy/credential), re-read at the wire
+
     async def _send(self, text, terms=None):
+        gate = self.send_gate
+        if gate is None:
+            return await self._send_inner(text, terms)
+        gate_key = self.pilot.fan_id
+        await gate.acquire(self.abort_reason, self.send_wait_max_s, priority=self.send_priority, key=gate_key)
+        try:
+            for tries in range(self.throttled_retries):
+                try:
+                    return await self._send_inner(text, terms)
+                except Refused as exc:
+                    if exc.reason not in self.ADMISSION_RETRY or self.stopped_reason:
+                        raise
+                    await asyncio.sleep(min(2.0, 0.25 * (tries + 1)))      # re-pace; the DB gate decides
+            self.stopped_reason = "allowance-wait-timeout"
+            raise Refused(self.stopped_reason)
+        finally:
+            gate.release(gate_key)
+
+    async def _send_inner(self, text, terms=None):
         from twin_bridge.coordination import authorize_dispatch, revoke_dispatch, guarded_send
         from twin_bridge.platform import escape_plain_text, validate_created_message
         from twin_bridge.normalize import html_to_text
 
         attempt = None
+        contextual_metadata = None
         settled = False
         unsend_id, self.unsend_id = self.unsend_id, None      # armed for THIS send only, never carried to another
         try:
@@ -361,7 +411,9 @@ class Gateway:
                 raise Refused("unsend-needs-card")
             if len(text.encode("utf-16-le")) // 2 > 4000:
                 raise Refused("output-too-long")
+            draft_ready_at = now()
             await self.pace()
+            throttle_done_at = now()
             if self.stopped():
                 raise Refused(self.stopped_reason)
             since = min(datetime.fromisoformat(r["created_at"]) for r in self.sources.values())
@@ -370,11 +422,16 @@ class Gateway:
             known = {int(r["provider_message_id"]) for r in receipts if r["state"] == "sent"}
             (check_followup_history if self.followup else check_provider_history)(
                 history, self.sources, known, account=self.scope.provider_id, fan=self.pilot.fan_id,
-                dashboard_handover=self.dashboard_handover)
+                dashboard_handover=self.dashboard_handover, **({"tolerate_newer": True} if self.tolerate_newer and not self.followup else {}))
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
-                            approved_item=self.content.catalog_ids if self.content else None)
+                            approved_item=self.content.catalog_ids if self.content else None,
+                            open_offer_blocks=self.open_offer_blocks)
             if self.hold_check is not None:
                 held = await asyncio.to_thread(self.hold_check)
+                if held:
+                    raise Refused(held)
+            if self.eligibility_check is not None:
+                held = await asyncio.to_thread(self.eligibility_check)
                 if held:
                     raise Refused(held)
             if self.content:
@@ -382,6 +439,9 @@ class Gateway:
                     self.content.check_catalog(con, self.pilot.account_id)
                     if terms:
                         terms = self.content.check_send(con, self.pilot.account_id, terms)
+                        from .contextual import refuse_repeat_media
+                        if unsend_id is None:
+                            refuse_repeat_media(con, self.pilot.account_id, self.pilot.fan_id, terms)
                 if terms:
                     for media_id in terms["media_ids"]:
                         asset = await asyncio.to_thread(self.client.vault_media_by_id, media_id)
@@ -389,10 +449,19 @@ class Gateway:
                                 or asset.get("canView") is not True):
                             raise Refused("content-asset-unavailable")
             self.bubble += 1
+            dispatch_kwargs = {}
+            if self.tolerate_newer and not self.followup:
+                dispatch_kwargs["tolerate_newer"] = True
+            if getattr(self, "reply_decision", None):
+                dispatch_kwargs["reply_authority"] = self.reply_decision["authority"]
             attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
-                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now())
+                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now(),
+                **dispatch_kwargs)
             from .recovery import freeze
             try:
+                if terms and getattr(self, "contextual", None) is not None and self.contextual.armed is not None:
+                    contextual_metadata = await asyncio.to_thread(self.contextual.reserve, terms, attempt.id)
+                    terms = {**terms, "contextual": contextual_metadata}
                 freeze(self.ledger, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                        attempt_id=attempt.id, body=text, terms=terms)
             except Exception:
@@ -401,6 +470,7 @@ class Gateway:
                 attempt_no=attempt.attempt_no, owner_token=self.pilot.owner_token, revision=self.pilot.revision)
 
             wire = [False]
+            wire_at = [None]
 
             def physical_post():
                 # Re-read stop/owner after the thread handoff, immediately at the wire.
@@ -415,8 +485,12 @@ class Gateway:
                         raise Refused("authority-lost-before-post")
                 if self.hold_check is not None and self.hold_check():
                     raise Refused("fan-held-before-post")
+                if contextual_metadata is not None:
+                    self.contextual.before_post(contextual_metadata)
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
-                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now())
+                    owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now(),
+                    **dispatch_kwargs)
+                wire_at[0] = now()
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
                     if unsend_id is not None:
                         wire[0] = True    # the DELETE may have reached OnlyFans from here on
@@ -457,11 +531,25 @@ class Gateway:
                 attempt_id=attempt.id, provider_message_id=validated.provider_message_id,
                 validated_response=raw, evidence={**validated.evidence, **({"content": content_evidence} if terms else {})}, now=now())
             settled = True
+            if contextual_metadata is not None:
+                self.contextual.outcome("sent", int(validated.provider_message_id))
+            decision = getattr(self, "reply_decision", None)
+            if decision and decision["schedule"] and not known:
+                from .pacing import delivery_event
+                try:
+                    emit(delivery_event(decision["authority"], decision["schedule"], receipt_at=now(),
+                                        wire_at=wire_at[0], provider_created_at=raw.get("createdAt"),
+                                        admitted_at=decision.get("admitted_at"), draft_ready_at=draft_ready_at,
+                                        throttle_done_at=throttle_done_at, eligible_at=decision["eligible_at"]))
+                except Exception:
+                    emit({"event": "reply-pacing-metric-error"})
             emit({"event": "sent", "engine": "fastt-native", "provider_message_id": validated.provider_message_id,
                   "pilot_sent": len([r for r in self.ledger.receipts(pilot_id=self.pilot.pilot_id) if r["state"] == "sent"]),
                   "limit": self.limit_label()})
             return raw
         except Exception as exc:
+            if attempt is None and self.send_gate is not None and isinstance(exc, Refused) and exc.reason in self.ADMISSION_RETRY:
+                raise
             self.stopped_reason = exc.reason if isinstance(exc, (Refused, NotSent)) else "send-check-failed"
             if attempt is not None and not settled:
                 certain = False
@@ -476,6 +564,9 @@ class Gateway:
                     self.ledger.record_unknown(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                                                attempt_id=attempt.id, now=now())
                     self.stopped_reason = "delivery-unknown"
+            if contextual_metadata is not None and not settled:
+                # A failed evidence write is not proof that nothing went out.
+                self.contextual.outcome("cancelled" if self.not_sent else "unknown")
             raise Refused(self.stopped_reason) from None
 
 
@@ -715,7 +806,8 @@ async def run(args):
         finally:
             try:
                 if client is not None:
-                    client.http.close()
+                    from of_client import close_client_http
+                    close_client_http(client)
             finally:
                 await engine.dispose()
 

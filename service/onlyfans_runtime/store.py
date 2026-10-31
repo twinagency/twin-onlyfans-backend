@@ -22,11 +22,14 @@ from db.models import Chat, Fan, Message, OfConversationState, OfCreatorBinding,
 from db.onlyfans_models import OfControlAudit, OfIngress, OfRecovery, OfRuntime, OfWork, OfScan
 from onlyfans_read.contract import UNRESOLVED_OUTCOMES, ID_PATTERN
 
-# Owner decision: a new fan is NEVER enabled automatically. The only way a conversation becomes
-# mode='automated' is an explicit per-fan dashboard command. Both automatic writers (worker intake in
-# ``_apply`` and FASTT ``admit_new_conversation``) check this constant; it is deliberately not an env
-# flag or a DB value, so no setting, stored row or deployment edit can re-arm them.
-NEW_CONVERSATION_AUTOMATION_LOCKED = True
+# A new fan is enabled automatically ONLY when an authorised administrator explicitly turned on "future
+# conversations" for that one account (``activation_commands.set_future_conversations``). The setting is
+# per-account, visible in the dashboard, and OFF by default. It is cleared whenever the connection is replaced,
+# verified again, paused or activated, so a newly connected or reconnected account never auto-enables anyone.
+# Both automatic writers (worker intake in ``_apply`` and FASTT ``admit_new_conversation``) still require the
+# connection to be verified, unexpired and bound, and only conversations that begin after the setting was
+# turned on. Kept as a constant so tests can pin the old fully-locked behaviour.
+NEW_CONVERSATION_AUTOMATION_LOCKED = False
 
 MAX_PENDING = 1000
 PAGE_LIMIT = 100
@@ -138,11 +141,13 @@ def fan_history_current(s, account_id, fan_id):
     return row is not None and row.status == "complete" and quarantined is None and unapplied is None
 
 class Store:
-    def __init__(self, url: str):
+    def __init__(self, url: str, *, pool_size: int = 2):
+        if type(pool_size) is not int or not 1 <= pool_size <= 16:
+            raise Refused("invalid database pool bound")
         parsed = make_url(url)
         if parsed.get_backend_name() != "postgresql":
             raise Refused("durable intake requires PostgreSQL")
-        self.engine = create_engine(parsed.set(drivername="postgresql+psycopg2"), pool_size=2,
+        self.engine = create_engine(parsed.set(drivername="postgresql+psycopg2"), pool_size=pool_size,
                                     max_overflow=0, pool_timeout=3, pool_pre_ping=True,
                                     connect_args={"options": "-c timezone=UTC -c statement_timeout=10000 -c lock_timeout=3000"})
         from db.schema import check_schema
@@ -157,22 +162,45 @@ class Store:
         self.engine.dispose()
 
     @staticmethod
-    def _runtime(s, tenant_id, account_id):
+    def _runtime(s, tenant_id, account_id, *, lock=True, shared=False):
         # Lock ordering is runtime -> binding -> conversation everywhere.
-        runtime = s.scalar(select(OfRuntime).where(OfRuntime.account_id == account_id).with_for_update())
+        runtime_query = select(OfRuntime).where(OfRuntime.account_id == account_id)
+        if lock:
+            runtime_query = runtime_query.with_for_update(read=True) if shared else runtime_query.with_for_update()
+        runtime = s.scalar(runtime_query)
         if runtime is None:
             raise Refused("scope unavailable")
-        binding = s.scalar(select(OfCreatorBinding).where(
+        binding_query = select(OfCreatorBinding).where(
             OfCreatorBinding.id == runtime.binding_id,
             OfCreatorBinding.account_id == account_id,
             OfCreatorBinding.tenant_id == tenant_id,
             OfCreatorBinding.channel == "onlyfans",
             OfCreatorBinding.revoked_at.is_(None),
-        ).with_for_update(read=True))
+        )
+        if lock:
+            binding_query = binding_query.with_for_update(read=True)
+        binding = s.scalar(binding_query)
         from onlyfans_read.agency_scope import creator_allowed
         if binding is None or not creator_allowed(binding.creator_id):
             raise Refused("scope unavailable")
         return runtime
+
+    @staticmethod
+    def _delivery_runtime(s, tenant_id, account_id):
+        """Fence delivery admission without serialising different fans.
+
+        Controls still take the exclusive runtime lock. In concurrent mode the
+        delivery paths take a shared runtime lock so they can overlap, while the
+        policy row remains the short atomic admission boundary. The mode is
+        read once before locking; a concurrent mode change still has to take the
+        exclusive runtime lock, so the selected lock mode cannot bypass a
+        control transition.
+        """
+        from db.onlyfans_delivery_models import OfDeliveryPolicy
+        mode = s.scalar(select(OfDeliveryPolicy.delivery_mode).where(
+            OfDeliveryPolicy.account_id == account_id))
+        shared = str(mode or "gap").strip().lower() == "concurrent"
+        return Store._runtime(s, tenant_id, account_id, shared=shared)
 
     @staticmethod
     def _read_connection(s, runtime, revision):
@@ -278,8 +306,8 @@ class Store:
             if s.get(Fan, (account, event.fan_id)) is None:
                 s.add(Fan(account_id=account, fan_id=event.fan_id))
                 s.flush()
-            same = (existing.direction == event.direction and existing.body == event.body and
-                    existing.price_cents == event.price_cents and json.loads(existing.media_ids or "[]") == list(event.media_ids))
+            from .history_repair import equivalent, saved_media
+            same = row.binding_id == runtime.binding_id and equivalent(existing, event, saved_media=saved_media(s,existing))
             row.status = "applied" if same else "quarantined"
             row.reason = None if same else "conflicting_message_identity"
             if not same:
@@ -374,8 +402,13 @@ class Store:
         runtime.pending_events -= 1
         s.flush()
 
-    def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None):
+    def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None, bulk=False):
+        from onlyfans_read.agency_scope import current_scope, actor_allowed
+        if current_scope.get() is not None and not actor_allowed(actor, capability="chat" if action in {"request_takeover", "release_takeover"} else "manage"):
+            raise Refused("management permission required")
         _id(fan_id)
+        if type(bulk) is not bool or bulk and action not in {"pause_automation", "resume_automation"}:
+            raise Refused("invalid bulk control")
         if mode not in {"automated", "human_controlled", "paused", "no_contact"}:
             raise Refused("invalid control mode")
         actions = {"pause_automation":"paused", "resume_automation":"automated", "mark_no_contact":"no_contact",
@@ -398,6 +431,22 @@ class Store:
             state = self._state(s, account_id, fan_id)
             if state.revision != expected_revision:
                 raise Refused("control revision conflict")
+            if bulk and state.takeover_state != "none":
+                raise Refused("bulk_human_control")
+            if bulk and action == "resume_automation":
+                if state.requires_attention:
+                    # Initial default-off imports carry this informational flag.
+                    # Explicit operator activation may resume an untouched chat;
+                    # actual holds below remain authoritative and attention is retained.
+                    untouched = state.revision == 0 and not s.scalar(select(OfControlAudit.command_key).where(
+                        OfControlAudit.account_id == account_id, OfControlAudit.fan_id == fan_id).limit(1))
+                    quarantined = s.scalar(select(OfIngress.event_key).where(
+                        OfIngress.account_id == account_id, OfIngress.fan_id == fan_id,
+                        OfIngress.status == "quarantined").limit(1))
+                    if not untouched or quarantined:
+                        raise Refused("bulk_human_review")
+                if s.get(Fan, (account_id, fan_id)).is_muted:
+                    raise Refused("bulk_contact_blocked")
             if state.mode == "no_contact" and mode != "no_contact" and not consent_ref:
                 raise Refused("recorded renewed consent is required")
             before_takeover = state.takeover_state
@@ -463,13 +512,13 @@ class Store:
         mode) changes nothing, so a paused / human / stopped fan is never enabled here. Returns
         True only when it wrote the initial ``automated`` state.
 
-        LOCKED OFF (``NEW_CONVERSATION_AUTOMATION_LOCKED``): always returns False and writes nothing; a
-        new fan stays without a control row (never served) until an operator enables it explicitly."""
+        With the lock constant set, always returns False and writes nothing. Otherwise only the explicit
+        per-account setting (default off) can enable a conversation here."""
         if NEW_CONVERSATION_AUTOMATION_LOCKED:
             return False
         from db.onlyfans_connection_models import OfProviderConnection
         with Session(self.engine) as s, s.begin():
-            runtime = self._runtime(s, tenant_id, account_id)
+            runtime = self._delivery_runtime(s, tenant_id, account_id)
             now = utcnow()
             if s.get(OfConversationState, (account_id, fan_id)) is not None or not runtime.enabled:
                 return False
@@ -503,7 +552,7 @@ class Store:
         _id(fan_id)
         from . import runtime_stop
         with Session(self.engine) as s, s.begin():
-            self._runtime(s, tenant_id, account_id)
+            self._delivery_runtime(s, tenant_id, account_id)
             if s.get(Fan, (account_id, fan_id)) is None:
                 raise Refused("conversation unavailable")
             state = self._state(s, account_id, fan_id)
@@ -834,7 +883,7 @@ class Store:
             scan.known_fan_after = ids[-1]
         scan.known_fans_complete = len(ids) < PAGE_LIMIT
 
-    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None, connection_revision=None,
+    def scan_page(self, tenant_id, claim: ScanClaim, fan_ids: list[int], *, next_cursor: str | None, connection_revision=None, profiles=None, creator_profile=None,
                   provider_read_claim=None):
         if len(fan_ids) > PAGE_LIMIT or len(set(fan_ids)) != len(fan_ids):
             raise Refused("invalid discovery page")
@@ -852,6 +901,9 @@ class Store:
                 raise Refused("stale discovery claim")
             if scan.page_count >= 10000:
                 raise Refused("discovery page budget exhausted")
+            if profiles:
+                from .profiles import apply_profiles
+                apply_profiles(s,runtime,fan_ids,profiles,creator_profile)
             for fan_id in fan_ids:
                 if s.get(OfRecovery, (claim.account_id, fan_id)) is None:
                     s.add(OfRecovery(account_id=claim.account_id, fan_id=fan_id))

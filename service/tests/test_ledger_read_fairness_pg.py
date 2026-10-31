@@ -70,3 +70,45 @@ def test_dead_ledger_worker_cannot_hold_replies_forever(native,monkeypatch):
     later=now+timedelta(seconds=46)
     reply=budget.acquire(store,TENANT,account,connection_revision=1,kind='recent',now=later)
     assert budget.release(store,TENANT,reply,now=later)
+
+
+def test_waiting_ledger_keeps_priority_even_after_a_ledger_page(native,monkeypatch):
+    store,account,_=native
+    now=utcnow()
+    monkeypatch.setattr(budget,'utcnow',lambda:now)
+    with Session(store.engine) as s,s.begin():
+        row=s.get(OfProviderReadBudget,account)
+        row.tokens,row.refilled_at=9,now
+        row.last_kind='ledger'
+        scan=s.get(OfLedgerScan,account)
+        scan.status='running'
+        scan.last_error='provider_read_deferred:lease-occupied'
+        scan.next_poll_at=now
+        scan.updated_at=now
+    with pytest.raises(budget.ReadDeferred,match='ledger turn due'):
+        budget.acquire(store,TENANT,account,connection_revision=1,kind='recent',now=now)
+    claim=budget.acquire(store,TENANT,account,connection_revision=1,kind='ledger',now=now)
+    assert budget.release(store,TENANT,claim,now=now)
+
+
+def test_due_refresh_reserves_ledger_turn_but_expires_if_worker_is_dead(native,monkeypatch):
+    store,account,_=native
+    now=utcnow()
+    monkeypatch.setattr(budget,'utcnow',lambda:now)
+    with Session(store.engine) as s,s.begin():
+        row=s.get(OfProviderReadBudget,account)
+        row.tokens,row.refilled_at=9,now
+        row.last_kind='recent'
+        scan=s.get(OfLedgerScan,account)
+        scan.status='idle'
+        scan.last_error=None
+        scan.next_poll_at=now-timedelta(seconds=1)
+        scan.updated_at=now-timedelta(seconds=300)
+    with pytest.raises(budget.ReadDeferred,match='ledger turn due'):
+        budget.acquire(store,TENANT,account,connection_revision=1,kind='recent',now=now)
+    with Session(store.engine) as s:
+        scan=s.get(OfLedgerScan,account)
+        assert scan.last_error==budget.LEDGER_TURN_RESERVED and scan.updated_at==now
+    later=now+timedelta(seconds=46)
+    claim=budget.acquire(store,TENANT,account,connection_revision=1,kind='recent',now=later)
+    assert budget.release(store,TENANT,claim,now=later)

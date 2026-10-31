@@ -52,6 +52,8 @@ def recent_refresh_at(completed_at, cutoff_at):
 
 def deferred_reason_code(reason):
     """Stable public cause for a provider-read deferral; never provider text."""
+    if str(reason or "").startswith("provider read lease occupied"):
+        return "lease-occupied"
     return {
         "provider read lease occupied": "lease-occupied",
         "provider read backoff": "provider-backoff",

@@ -22,6 +22,7 @@ LIVE_REPLY_RESERVE = 4        # extra tokens kept for live work while replies wa
 BACKGROUND_KINDS = {"discovery", "history", "offer_refresh", "posts", "vault"}   # ledger (money) and recent (intake) are not background
 LEDGER_RETRY_SECONDS = 2  # existing LedgerWorker tick cadence
 KINDS = {"recent", "discovery", "history", "ledger", "offer_refresh", "posts", "vault", "connection_check"}
+LEDGER_TURN_RESERVED = "provider_read_deferred:ledger-turn-reserved"
 
 
 class ReadDeferred(Refused):
@@ -85,6 +86,33 @@ def _replies_waiting(s, account, now):
         return False
 
 
+def _reserve_due_ledger_turn(s, account, runtime, revision, now):
+    """Keep other reads off a due financial refresh.
+
+    The worker and inbox schedulers are independent. A recent-inbox page can
+    take the single account lease just before the LedgerWorker tick, leaving
+    the ledger scan deferred even though every token is available. The first
+    non-ledger attempt at an idle, due refresh writes a durable reservation on
+    the scan. A dead ledger worker cannot monopolise intake: the reservation
+    expires with the same 45-second bound as the provider lease.
+    """
+    from db.onlyfans_ledger_models import OfLedgerScan
+    scan = s.get(OfLedgerScan, account)
+    if (scan is None or scan.binding_id != runtime.binding_id
+            or scan.connection_revision != revision or scan.lease_token is not None):
+        return False
+    fresh = (scan.updated_at is not None
+             and timedelta(0) <= now - scan.updated_at < timedelta(seconds=LEASE_SECONDS))
+    if (scan.last_error is not None and scan.last_error.startswith("provider_read_deferred")
+            and fresh and scan.next_poll_at <= now + timedelta(seconds=LEDGER_RETRY_SECONDS)):
+        return True
+    if scan.status == "idle" and scan.next_poll_at <= now and scan.last_error is None:
+        scan.last_error = LEDGER_TURN_RESERVED
+        scan.updated_at = now
+        return True
+    return False
+
+
 def acquire(store, tenant, account, *, connection_revision, kind, now=None):
     if (os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker" or kind not in KINDS
             or type(connection_revision) is not int or connection_revision<1):
@@ -108,19 +136,9 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
             raise ReadDeferred(min(row.lease_until, now + timedelta(seconds=LEDGER_RETRY_SECONDS)), "provider read lease occupied")
         if row.backoff_until and row.backoff_until > now:
             raise ReadDeferred(row.backoff_until, "provider read backoff")
-        if kind not in {'ledger', 'connection_check'} and row.last_kind not in {None, 'ledger'}:
-            from db.onlyfans_ledger_models import OfLedgerScan
-            scan = s.get(OfLedgerScan, account)
-            if (scan is not None and scan.binding_id == runtime.binding_id
-                    and scan.connection_revision == connection_revision
-                    and scan.status == 'running' and scan.last_error is not None
-                    and scan.last_error.startswith('provider_read_deferred')
-                    and scan.updated_at is not None and timedelta(0) <= now - scan.updated_at < timedelta(seconds=LEASE_SECONDS)
-                    and scan.next_poll_at <= now + timedelta(seconds=LEDGER_RETRY_SECONDS)):
-                # Hand the next free slot to a recently waiting ledger reader.
-                # A completed ledger claim restores intake's turn. A crashed
-                # ledger worker cannot keep this preference alive indefinitely.
-                raise ReadDeferred(now + timedelta(seconds=LEDGER_RETRY_SECONDS), 'provider ledger turn due')
+        if (kind not in {'ledger', 'connection_check'}
+                and _reserve_due_ledger_turn(s, account, runtime, connection_revision, now)):
+            raise ReadDeferred(now + timedelta(seconds=LEDGER_RETRY_SECONDS), 'provider ledger turn due')
         refill = max(0, int((now - row.refilled_at).total_seconds()))
         available = min(CAPACITY, row.tokens + refill)
         # Deep archive recovery may be continuously due. Leave one additional

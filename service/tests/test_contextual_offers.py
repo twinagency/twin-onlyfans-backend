@@ -366,7 +366,8 @@ def test_provider_lease_contention_is_not_token_exhaustion_and_never_overlaps(mo
         def __enter__(self):return self
         def __exit__(self,*args):return False
         def begin(self):return self
-        def get(self,*args,**kwargs):return row
+        def get(self,model,*args,**kwargs):
+            return row if getattr(model,"__name__","")=="OfProviderReadBudget" else None
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE","worker")
     monkeypatch.setattr(budget,"Session",Session)
     monkeypatch.setattr(budget,"_valid",lambda *args,**kwargs:runtime)

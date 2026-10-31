@@ -478,6 +478,7 @@ async def loop_level(backend, root):
 
         fail_models = 0        # the next N turns end in a model timeout before anything is sent
         die_after_first = False  # the model times out after the first bubble went out
+        skip_manual = False      # the turn sends nothing: a human chatted inside the cautious-resume window
 
         def __init__(self, account, fan, *, chat, send, emit, content, context, **_extra):
             self.send, self.fan, self.chat = send, fan, chat
@@ -490,6 +491,8 @@ async def loop_level(backend, root):
 
         async def run(self, run_id):
             f = holder["f"]
+            if FakeEngine.skip_manual:
+                return {"skipped_manual": 1}
             if FakeEngine.fail_models > 0:
                 FakeEngine.fail_models -= 1
                 self.chat.__self__.stopped_reason = "model-timeout"
@@ -830,6 +833,20 @@ async def loop_level(backend, root):
                 check([e["reason"] for e in kinds("turn-requeued")] == ["provider-rate-limited", "model-timeout"])
                 check(FakeEngine.fail_models == 0)
                 await stop(task, patcher)
+
+        # ── an external (untagged) message inside the cautious-resume window ends the turn with a NAMED reason ──
+        f, http, client = make("loop-external-hold", limit=100, used=4, throttle=1)
+        FakeEngine.skip_manual = True
+        events.clear()
+        task, patcher = start(client)
+        await until(lambda: kinds("ready"), "ready", events)
+        fan_says(f)
+        await until(lambda: kinds("external-message-hold"), "external hold is reported", events)
+        await until(lambda: kinds("turn-abandoned"), "external hold ends the turn", events)
+        check(kinds("turn-abandoned")[0]["reason"] == "native-no-reply-external-message")
+        check(not http.posts)
+        FakeEngine.skip_manual = False
+        await stop(task, patcher)
 
         # ── a model timeout/error abandons an input only after ONE requeue; never once a send attempt stands ──
         f, http, client = make("loop-model-retry", limit=100, used=4, throttle=1)

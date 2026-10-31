@@ -32,7 +32,13 @@ def _process_connection_enrollments(store, tenant, *, limit, stop):
 
 def _process_vault_jobs(store, tenant, *, limit, stop):
     from onlyfans_runtime.vault_management import process_vault_jobs
-    return process_vault_jobs(store, tenant, limit=limit, stop=stop)
+    # Each page still claims the shared read budget and stops when it is
+    # deferred, so a larger turn cannot exceed the per-account ceiling.
+    try:
+        per_turn = int(os.environ.get("ONLYFANS_VAULT_PAGES_PER_TURN", "1"))
+    except ValueError:
+        per_turn = 1
+    return process_vault_jobs(store, tenant, limit=max(limit, min(4, max(1, per_turn))), stop=stop)
 
 
 def _process_ledger_jobs(store, tenant, *, limit, stop):

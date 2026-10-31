@@ -24,6 +24,7 @@ this module imports no application code and opens nothing.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager

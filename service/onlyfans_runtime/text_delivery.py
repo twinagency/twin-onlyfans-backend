@@ -386,7 +386,7 @@ class TextAuthority:
             request["manual_media"] = manual_media
         fingerprint = hashlib.sha256(_json(request).encode()).hexdigest()
         with Session(self.engine) as s, s.begin():
-            runtime = self.store._runtime(s, tenant_id, account_id)
+            runtime = self.store._delivery_runtime(s, tenant_id, account_id)
             now = self._db_now(s)
             prior = s.scalar(select(OfTextIntent).where(OfTextIntent.account_id == account_id,
                                                        OfTextIntent.command_key == command_key))
@@ -516,7 +516,7 @@ class TextAuthority:
         if transport_generation is not None and (type(transport_generation) is not int or transport_generation < 0):
             raise Refused("invalid transport generation")
         with Session(self.engine) as s, s.begin():
-            runtime = self.store._runtime(s, tenant_id, account_id)
+            runtime = self.store._delivery_runtime(s, tenant_id, account_id)
             now = self._db_now(s)
             intent = self._intent(s, account_id, intent_id)
             if intent.status != "queued":
@@ -635,7 +635,7 @@ class TextAuthority:
         if type(transport_generation) is not int or transport_generation < 1:
             raise Refused("invalid transport generation")
         with Session(self.engine) as s, s.begin():
-            self.store._runtime(s, tenant_id, grant.account_id)
+            self.store._delivery_runtime(s, tenant_id, grant.account_id)
             row = self._intent(s, grant.account_id, grant.intent_id)
             now = self._db_now(s)
             if (self._grant(row) != grant or row.status != "dispatching" or row.wire_started_at is not None
@@ -977,7 +977,7 @@ class TextAuthority:
         if transport.account_id != account_id:
             raise Refused("transport scope mismatch")
         with Session(self.engine) as s:
-            self.store._runtime(s, tenant_id, account_id)
+            self.store._delivery_runtime(s, tenant_id, account_id)
             policy = s.get(OfDeliveryPolicy, account_id)
             expected = "native" if type(transport) in {NativeProviderConnector, FasttManualTransport} else "synthetic"
             if policy is None or policy.transport_kind != expected:

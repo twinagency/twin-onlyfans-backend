@@ -23,10 +23,14 @@ sys.path.insert(0, str(SERVICE))
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from db.models import Account, OfCreatorBinding
+from db.onlyfans_models import OfRuntime
 from db.schema import bootstrap
 from onlyfans_runtime import concurrent_admission
+from onlyfans_runtime.store import Store
 from twin_bridge import store
 
 ADMIN = os.environ.get("ONLYFANS_TEST_PG_URL")
@@ -152,6 +156,59 @@ def race_daily_cap():
     return results
 
 
+def runtime_lock_sharing():
+    """Concurrent mode permits shared delivery locks; gap mode stays exclusive."""
+    with engine.begin() as c:
+        c.execute(text(
+            "UPDATE of_delivery_policy SET delivery_mode='concurrent' WHERE account_id=:a"
+        ), {"a": ACCOUNT})
+    first, second = Session(engine), Session(engine)
+    try:
+        first.begin()
+        second.begin()
+        first.execute(text("SET LOCAL lock_timeout='500ms'"))
+        second.execute(text("SET LOCAL lock_timeout='500ms'"))
+        Store._delivery_runtime(first, TENANT, ACCOUNT)
+        Store._delivery_runtime(second, TENANT, ACCOUNT)
+        with engine.begin() as c:
+            c.execute(text("SET LOCAL lock_timeout='100ms'"))
+            try:
+                c.execute(text(
+                    "SELECT account_id FROM of_runtime WHERE account_id=:a FOR UPDATE"
+                ), {"a": ACCOUNT})
+                exclusive_blocked = False
+            except OperationalError:
+                exclusive_blocked = True
+    finally:
+        first.rollback()
+        second.rollback()
+        first.close()
+        second.close()
+
+    with engine.begin() as c:
+        c.execute(text(
+            "UPDATE of_delivery_policy SET delivery_mode='gap' WHERE account_id=:a"
+        ), {"a": ACCOUNT})
+    first, second = Session(engine), Session(engine)
+    try:
+        first.begin()
+        second.begin()
+        first.execute(text("SET LOCAL lock_timeout='500ms'"))
+        second.execute(text("SET LOCAL lock_timeout='100ms'"))
+        Store._delivery_runtime(first, TENANT, ACCOUNT)
+        try:
+            Store._delivery_runtime(second, TENANT, ACCOUNT)
+            gap_blocked = False
+        except OperationalError:
+            gap_blocked = True
+    finally:
+        first.rollback()
+        second.rollback()
+        first.close()
+        second.close()
+    return exclusive_blocked, gap_blocked
+
+
 def main():
     global engine
     admin = create_engine(
@@ -172,7 +229,24 @@ def main():
                 "conversation_min_gap_seconds,daily_limit_units) "
                 "VALUES(:a,true,10000,0,20,'concurrent',20.0,10,4,0,NULL)"
             ), {"a": ACCOUNT})
+            c.execute(Account.__table__.insert(), {"id": ACCOUNT, "nickname": "Synthetic"})
+            c.execute(OfCreatorBinding.__table__.insert(), {
+                "id": "binding", "tenant_id": TENANT, "creator_id": "creator-concurrent",
+                "creator_name": "Synthetic", "account_id": ACCOUNT, "handle": "synthetic",
+                "channel": "onlyfans",
+            })
+            c.execute(OfRuntime.__table__.insert(), {
+                "account_id": ACCOUNT, "binding_id": "binding", "enabled": True,
+                "activated_at": datetime.utcnow(),
+            })
         store.ensure_runtime_schema(SYNC_URL)
+
+        # Delivery admission uses shared runtime locks in concurrent mode, so
+        # independent fans do not queue behind each other. Gap mode retains the
+        # exclusive lock and its original single-send semantics.
+        exclusive_blocked, gap_blocked = runtime_lock_sharing()
+        check(exclusive_blocked, "concurrent delivery locks permit a competing shared holder")
+        check(gap_blocked, "gap delivery retains the exclusive runtime lock")
 
         # Two different fans hold separate dispatch slots and leases.
         clear_runtime()

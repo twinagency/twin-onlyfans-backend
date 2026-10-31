@@ -521,8 +521,16 @@ class Ledger:
             raise Refused("restore-quarantined")
         if not self.pg or not store.has_table(con, "public.of_runtime"):
             return False
+        # In concurrent mode delivery admission takes a shared runtime lock:
+        # different fans may overlap, while a control transition still takes the
+        # exclusive lock and waits for the short admission transaction to settle.
+        # Legacy gap mode retains the original exclusive lock.
+        from . import admission
+        policy = self._policy_row(con, pilot["account_id"])
+        concurrent = policy is not None and admission.is_concurrent(policy)
+        lock_sql = (" FOR SHARE" if concurrent else " FOR UPDATE") if lock else ""
         runtime = con.execute("SELECT enabled,binding_id FROM public.of_runtime WHERE account_id=?" +
-            (" FOR UPDATE" if lock else ""), (pilot["account_id"],)).fetchone()
+            lock_sql, (pilot["account_id"],)).fetchone()
         if runtime is None:
             return False
         binding = con.execute("SELECT account_id,channel,revoked_at FROM public.of_creator_bindings WHERE id=?",

@@ -162,10 +162,12 @@ class Store:
         self.engine.dispose()
 
     @staticmethod
-    def _runtime(s, tenant_id, account_id, *, lock=True):
+    def _runtime(s, tenant_id, account_id, *, lock=True, shared=False):
         # Lock ordering is runtime -> binding -> conversation everywhere.
         runtime_query = select(OfRuntime).where(OfRuntime.account_id == account_id)
-        runtime = s.scalar(runtime_query.with_for_update() if lock else runtime_query)
+        if lock:
+            runtime_query = runtime_query.with_for_update(read=True) if shared else runtime_query.with_for_update()
+        runtime = s.scalar(runtime_query)
         if runtime is None:
             raise Refused("scope unavailable")
         binding_query = select(OfCreatorBinding).where(
@@ -175,11 +177,30 @@ class Store:
             OfCreatorBinding.channel == "onlyfans",
             OfCreatorBinding.revoked_at.is_(None),
         )
-        binding = s.scalar(binding_query.with_for_update(read=True) if lock else binding_query)
+        if lock:
+            binding_query = binding_query.with_for_update(read=True)
+        binding = s.scalar(binding_query)
         from onlyfans_read.agency_scope import creator_allowed
         if binding is None or not creator_allowed(binding.creator_id):
             raise Refused("scope unavailable")
         return runtime
+
+    @staticmethod
+    def _delivery_runtime(s, tenant_id, account_id):
+        """Fence delivery admission without serialising different fans.
+
+        Controls still take the exclusive runtime lock. In concurrent mode the
+        delivery paths take a shared runtime lock so they can overlap, while the
+        policy row remains the short atomic admission boundary. The mode is
+        read once before locking; a concurrent mode change still has to take the
+        exclusive runtime lock, so the selected lock mode cannot bypass a
+        control transition.
+        """
+        from db.onlyfans_delivery_models import OfDeliveryPolicy
+        mode = s.scalar(select(OfDeliveryPolicy.delivery_mode).where(
+            OfDeliveryPolicy.account_id == account_id))
+        shared = str(mode or "gap").strip().lower() == "concurrent"
+        return Store._runtime(s, tenant_id, account_id, shared=shared)
 
     @staticmethod
     def _read_connection(s, runtime, revision):

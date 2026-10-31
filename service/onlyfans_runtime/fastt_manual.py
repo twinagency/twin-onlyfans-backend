@@ -115,7 +115,7 @@ def next_queued_manual(store, tenant_id, account_id):
     """Oldest queued manual intent for an owned fan, or None."""
     from db.onlyfans_delivery_models import OfTextIntent
     with Session(store.engine) as s, s.begin():
-        store._runtime(s, tenant_id, account_id)
+        store._delivery_runtime(s, tenant_id, account_id)
         rows = s.execute(select(OfTextIntent.intent_id, OfTextIntent.fan_id).where(
             OfTextIntent.account_id == account_id, OfTextIntent.status == "queued",
             OfTextIntent.origin == "manual").order_by(OfTextIntent.created_at, OfTextIntent.intent_id).limit(50)).all()
@@ -193,7 +193,7 @@ def dispatch_next_operator(authority, tenant_id, account_id, transport, *, campa
     cursors = scan_cursors if scan_cursors is not None else {}
     for origin in origins:
         with Session(authority.store.engine) as s, s.begin():
-            authority.store._runtime(s, tenant_id, account_id)
+            authority.store._delivery_runtime(s, tenant_id, account_id)
             key=(tenant_id, account_id, origin)
             query=select(OfTextIntent.intent_id, OfTextIntent.fan_id, OfTextIntent.created_at).where(
                 OfTextIntent.account_id == account_id, OfTextIntent.status == "queued",

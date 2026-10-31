@@ -341,7 +341,7 @@ class CampaignService:
         authority = TextAuthority(self.store)
         selected = []
         with Session(self.engine) as s, s.begin():
-            runtime = self.store._runtime(s, tenant_id, account_id)
+            runtime = self.store._delivery_runtime(s, tenant_id, account_id)
             now = authority._db_now(s)
             policy = s.get(OfDeliveryPolicy, account_id)
             from . import concurrent_admission
@@ -406,7 +406,7 @@ class CampaignService:
                 # identity and move past this recipient rather than replaying
                 # the first blocked fan forever.
                 with Session(self.engine) as s, s.begin():
-                    self.store._runtime(s, tenant_id, account_id)
+                    self.store._delivery_runtime(s, tenant_id, account_id)
                     campaign = s.get(OfCampaign, (account_id, candidate["campaign_id"]))
                     recipient = s.get(OfCampaignRecipient,
                         (account_id, candidate["campaign_id"], fan_id))

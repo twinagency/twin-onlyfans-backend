@@ -5,10 +5,12 @@ import pytest
 
 from onlyfans_runtime.ledger import (
     RECENT_COVERAGE_FRESHNESS,
+    RECENT_OVERLAP,
     RECENT_REFRESH_INTERVAL,
     Refused,
     deferred_reason_code,
     recent_refresh_at,
+    recent_window_start,
 )
 
 
@@ -38,6 +40,19 @@ def test_provider_delay_beyond_the_interval_starts_immediately():
     assert recent_refresh_at(completed, CUTOFF) == completed + timedelta(seconds=1)
 
 
+def test_recent_window_extends_the_last_proven_cutoff_with_bounded_overlap():
+    previous = CUTOFF - timedelta(minutes=6)
+    assert recent_window_start(CUTOFF, previous) == previous - RECENT_OVERLAP
+
+
+def test_first_recent_window_is_bounded_to_seven_days():
+    assert recent_window_start(CUTOFF, None) == CUTOFF - timedelta(days=7)
+
+
+def test_old_gap_is_bounded_to_the_supported_ninety_day_window():
+    assert recent_window_start(CUTOFF, CUTOFF - timedelta(days=200)) == CUTOFF - timedelta(days=90)
+
+
 @pytest.mark.parametrize("completed,cutoff", [
     (CUTOFF, CUTOFF.replace(tzinfo=None) + timedelta(seconds=1)),
     (CUTOFF - timedelta(seconds=1), CUTOFF),
@@ -50,6 +65,7 @@ def test_invalid_refresh_times_fail_closed(completed, cutoff):
 
 @pytest.mark.parametrize("reason,code", [
     ("provider read lease occupied", "lease-occupied"),
+    ("provider read lease occupied by recent", "lease-occupied"),
     ("provider read backoff", "provider-backoff"),
     ("provider read budget exhausted", "budget-exhausted"),
     ("provider ledger turn due", "ledger-turn-due"),

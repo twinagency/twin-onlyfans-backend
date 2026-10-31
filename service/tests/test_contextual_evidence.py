@@ -62,6 +62,14 @@ def test_contextual_explore_allows_media_format_clarification(monkeypatch):
  assert hook is not None and hook.action=="explore" and hook.bridge=="want a photo in blue?"
 
 
+def test_contextual_explore_rejects_future_delivery_promise(monkeypatch):
+    c=context();p=decision(c,"explore");p["bridge"]="I will send you a video tonight, okay?"
+    allow_hook(monkeypatch,p)
+    seen=[]
+    hook=asyncio.run(cp.read_hook("of-test",1,contextual_message=c,on_reject=seen.append))
+    assert hook is None and seen==["invalid_contextual_wording"]
+
+
 def test_existing_caption_and_contextual_send_still_reject_media_words():
  from automations import _hook_upsell
  assert not _hook_upsell.bridge_ok("want a photo in blue?")
@@ -73,10 +81,54 @@ def test_existing_caption_and_contextual_send_still_reject_media_words():
  "want two videos?",
  "want a cheaper photo?",
  "sending you a photo",
+ "I will send you a video tonight, okay?",
+ "I'll send it later",
+ "I'm sending it tonight",
+ "you'll get it tomorrow",
+ "send you one soon",
 ])
 def test_contextual_explore_keeps_claim_and_delivery_guards(bridge):
  from automations import _hook_upsell
  assert not _hook_upsell.contextual_bridge_ok(bridge,"explore")
+
+
+@pytest.mark.parametrize("line",[
+ "I will send you a video tonight, okay?",
+ "I'll send it later",
+ "I'm sending it tonight",
+ "you'll get it tomorrow",
+ "send you one soon",
+])
+def test_shared_caption_validator_rejects_delivery_promises(line):
+ from automations.pack_claim import compose_caption, voice_line_ok, Claim
+ assert not voice_line_ok(line)
+ assert compose_caption(Claim("3 pics",3),line)=="3 pics"
+
+
+@pytest.mark.parametrize("line",[
+ "I will send you a video tonight, okay?",
+ "I\u2019ll deliver it tomorrow",
+ "I'm going to send you one later",
+ "I am sending it now",
+ "you will receive it soon",
+ "it'll be in your inbox tonight",
+])
+def test_final_text_boundary_rejects_future_delivery_promises(line):
+ from native_pilot.media_claims import claims_media_sent
+ assert claims_media_sent(line)
+
+
+@pytest.mark.parametrize("line,promise,media",[
+ ("want me to send you a photo?",False,False),
+ ("do you want a video tonight?",False,False),
+ ("i sent you a video",False,True),
+ ("i'm sending you a video now",True,True),
+])
+def test_delivery_promise_guard_keeps_questions_and_past_claims_distinct(line,promise,media):
+ from automations.pack_claim import has_delivery_promise
+ from native_pilot.media_claims import claims_media_sent
+ assert has_delivery_promise(line) is promise
+ assert claims_media_sent(line) is media
 
 
 @pytest.mark.parametrize("change,expected",[

@@ -478,6 +478,7 @@ async def loop_level(backend, root):
 
         fail_models = 0        # the next N turns end in a model timeout before anything is sent
         die_after_first = False  # the model times out after the first bubble went out
+        skip_manual = False      # the turn sends nothing: a human chatted inside the cautious-resume window
 
         def __init__(self, account, fan, *, chat, send, emit, content, context, **_extra):
             self.send, self.fan, self.chat = send, fan, chat
@@ -490,9 +491,11 @@ async def loop_level(backend, root):
 
         async def run(self, run_id):
             f = holder["f"]
+            if FakeEngine.skip_manual:
+                return {"skipped_manual": 1}
             if FakeEngine.fail_models > 0:
                 FakeEngine.fail_models -= 1
-                self.chat.__self__.stopped_reason = "model-timeout"
+                self.chat.__self__.stopped_reason = getattr(FakeEngine, "failure_reason", "model-timeout")
                 return {"errors": 1}
             for i, text in enumerate(FakeEngine.texts):
                 if FakeEngine.die_after_first and i == 1:
@@ -831,6 +834,42 @@ async def loop_level(backend, root):
                 check(FakeEngine.fail_models == 0)
                 await stop(task, patcher)
 
+        # ── an external (untagged) message inside the cautious-resume window ends the turn with a NAMED reason ──
+        f, http, client = make("loop-external-hold", limit=100, used=4, throttle=1)
+        FakeEngine.skip_manual = True
+        events.clear()
+        task, patcher = start(client)
+        await until(lambda: kinds("ready"), "ready", events)
+        fan_says(f)
+        await until(lambda: kinds("external-message-hold"), "external hold is reported", events)
+        await until(lambda: kinds("turn-abandoned"), "external hold ends the turn", events)
+        check(kinds("turn-abandoned")[0]["reason"] == "native-no-reply-external-message")
+        check(not http.posts)
+        FakeEngine.skip_manual = False
+        await stop(task, patcher)
+
+        # ── an identity question hands the chat to a human AND closes the reply schedule (no spent schedule left behind) ──
+        from native_pilot import pacing as _pacing
+        from native_pilot.service import Service as _Service
+
+        async def _no_handoff(self, trigger, attention="identity-question"):
+            return None   # the control path needs the Twin tables; only the schedule close is under test here
+        f, http, client = make("loop-identity-closes-schedule", limit=100, used=4, throttle=1)
+        finished = []
+        decision = {"schedule": None, "authority": None, "eligible_at": clock()}
+        events.clear()
+        with patch.object(_pacing, "settings", lambda *a, **k: {_pacing.PACING: True}), \
+                patch.object(_pacing, "prepare", lambda *a, **k: dict(decision)), \
+                patch.object(_pacing, "finish", lambda ledger, d, **k: finished.append(k)), \
+                patch.object(_Service, "identity_handoff", _no_handoff):
+            task, patcher = start(client)
+            await until(lambda: kinds("ready"), "ready", events)
+            fan_says(f, "are you a bot?")
+            await until(lambda: finished, "the identity hand-off closes the pacing schedule", events)
+            check(finished[0].get("sent") is False and not finished[0].get("error"))
+            check(not http.posts)
+            await stop(task, patcher)
+
         # ── a model timeout/error abandons an input only after ONE requeue; never once a send attempt stands ──
         f, http, client = make("loop-model-retry", limit=100, used=4, throttle=1)
         FakeEngine.fail_models = 1
@@ -843,6 +882,30 @@ async def loop_level(backend, root):
         check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete" and f.sql("SELECT count(*) FROM native_pilot_inputs")[0][0] == 1)
         check(f.sql("SELECT used_units FROM of_delivery_policy")[0][0] == 5)
         await stop(task, patcher)
+
+
+        # A rejected prompt placeholder is regenerated once through the same durable retry path.
+        # Repeated placeholders remain unsent and exhaust the retry rather than spinning forever.
+        for failures in (1, 2):
+            f, http, client = make(f"loop-placeholder-{failures}", limit=100, used=4, throttle=1)
+            FakeEngine.fail_models = failures
+            events.clear()
+            with patch.object(FakeEngine, "failure_reason", "instruction-placeholder-held", create=True), \
+                    patch.object(service, "MODEL_RETRY_LIMIT", 1):
+                task, patcher = start(client)
+                await until(lambda: kinds("ready"), "ready", events)
+                fan_says(f)
+                if failures == 1:
+                    await replied(f, http, 1, "placeholder regenerated and answered once")
+                    check(not kinds("turn-abandoned"))
+                    check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "complete")
+                else:
+                    await until(lambda: kinds("turn-abandoned"), "repeated placeholder bounded", events)
+                    check(not http.posts, "placeholder text never reaches transport")
+                    check(f.sql("SELECT state FROM native_pilot_inputs")[0][0] == "failed")
+                check([e["reason"] for e in kinds("turn-requeued")] == ["instruction-placeholder-held"])
+                check(FakeEngine.fail_models == 0)
+                await stop(task, patcher)
 
         f, http, client = make("loop-model-bound", limit=100, used=4, throttle=1)
         FakeEngine.fail_models = 2

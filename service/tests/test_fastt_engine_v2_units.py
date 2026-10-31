@@ -184,6 +184,18 @@ def engine_guard_cases():
     else:
         raise AssertionError("claim must be held")
     check(sent == ["haha that is so cute"], "the false claim never reached the wire")
+    from native_pilot.media_claims import PLACEHOLDER_HELD, echoes_instruction
+    for bad in ("<p>2-4 word reaction here</p>", "[your line here]", "hey {{name}}", "<b>hi</b>", "2-4 word reaction here"):
+        check(echoes_instruction(bad), "placeholder detected: " + bad)
+        try:
+            client.send_message(7, bad)
+        except PilotBoundaryError as exc:
+            check(str(exc) == PLACEHOLDER_HELD)
+        else:
+            raise AssertionError("placeholder must be held: " + bad)
+    for good in ("i <3 that", "haha you're so cute :)", "wanna see more? 😏", "ok 5 min and i'm there", "a < b lol"):
+        check(not echoes_instruction(good), "ordinary text passes: " + good)
+    check(sent == ["haha that is so cute"], "no placeholder reached the wire")
 
 
 async def main():

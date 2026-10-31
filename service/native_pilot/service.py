@@ -77,11 +77,15 @@ PACE_MAX_S = 180.0
 MODEL_RETRY_REASONS = (
     "model-timeout", "model-http-failed", "model-response-failed",
     "model-http-transient", "model-transport-failed", "media-claim-unbacked",
+    "instruction-placeholder-held",
 )
 # Reasons a reply ends WITHOUT any send standing and that are not the fan message's fault. The claim is given
 # back (Ledger.release_input) so the fan's latest state is answered from scratch once the cause clears; a draft
 # is never kept. value = seconds this fan is left alone before it is looked at again.
 RELEASE_PREFIXES = ("fan-", "account-")
+# The turn made no send because a human (an external Infloww/OnlyFans-app message) chatted inside the cautious-resume
+# window. Still an outcome of "no_reply" (startswith native-no-reply), but now it names the cause.
+EXTERNAL_HOLD = "native-no-reply-external-message"
 RELEASE_BACKOFF_S = {"new-message-during-generation": 1.0, "source-changed": 1.0, "source-text-changed": 1.0,
                      "source-time-changed": 1.0, "source-invalidated": 1.0, "source-missing": 1.0,
                      "send-queue-timeout": 15.0, "allowance-wait-timeout": 15.0, "credential-change": 5.0,
@@ -1196,6 +1200,10 @@ class Service:
             asked_for_human = any(wants_human((src or {}).get("body")) for src in questions.values())
             await self.identity_handoff("fan-asked", attention=HUMAN_REQUESTED if asked_for_human else "identity-question")
             ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+            # The handoff answers nothing: close this schedule so the fan's next message gets a fresh admission budget
+            # instead of re-using this one (3 admissions, then reply-regeneration-budget-held on every later message).
+            if self.reply_decision:
+                pacing.finish(ledger, self.reply_decision, now=runner.now(), sent=False)
             return
         if self.reply_decision:
             self.reply_decision["admitted_at"] = runner.now()
@@ -1272,7 +1280,11 @@ class Service:
                 raise Refused("native-turn-failed")
             if job is None and not any(r["state"] == "sent" for r in
                     ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)):
-                raise Refused("native-no-reply-empty-output" if (stats or {}).get("dropped_empty") else "native-no-reply")
+                external = int((stats or {}).get("skipped_manual") or 0) > 0
+                if external:
+                    runner.emit({"event": "external-message-hold", "fan_id": args.fan})
+                raise Refused("native-no-reply-empty-output" if (stats or {}).get("dropped_empty")
+                              else EXTERNAL_HOLD if external else "native-no-reply")
         except Exception as exc:
             from .engine import PilotBoundaryError
             # A boundary refusal carries its fixed reason (identity held, media claim held, persona not approved, ...);

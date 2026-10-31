@@ -95,6 +95,10 @@ class _TextClient:
         if discloses_ai(text) or denies_automation(text):
             # Identity rule: a bubble saying it is an AI / bot / clone is never sent (nor resent).
             self.engine._refuse(IDENTITY_HELD)
+        from .media_claims import PLACEHOLDER_HELD, echoes_instruction
+        if echoes_instruction(text):
+            # A copied prompt placeholder ("<p>2-4 word reaction here</p>") is never sent: held, regenerated once.
+            self.engine._refuse(PLACEHOLDER_HELD)
         if not kwargs and not getattr(self.engine, "_card_sent", False):
             from .media_claims import MEDIA_CLAIM_HELD, claims_media_sent
             if claims_media_sent(text):

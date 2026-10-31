@@ -70,3 +70,66 @@ def test_bounded_history_does_not_treat_missing_message_as_rejection(tmp_path):
     history,complete=recovery.read_window(Client(),intent=intent)
     with pytest.raises(Refused,match="positive-recovery-proof-unavailable"):
         recovery.reconcile(led,**{**args,"history":history,"complete":complete})
+
+
+# ---- reconcile of an attempt whose payload was never frozen (frozen-dispatch-unavailable loop) ----
+import asyncio
+from types import SimpleNamespace
+from native_pilot import autoreconcile, runner
+
+
+def _unfrozen(tmp_path):
+    f,led,pilot,call,key,now=prepared(tmp_path)
+    a=led.begin_attempt(**call,input_key=key,bubble_no=1,revision=pilot.revision,now=now)
+    led.record_unknown(**call,attempt_id=a.id,now=now)  # no recovery.freeze: the POST was never authorised
+    return f,led,a,now
+
+
+def _reconcile(led,client,at,tmp=None):
+    svc=SimpleNamespace(tuning=SimpleNamespace(auto_reconcile=True,reconcile_wait_s=0,absent_after_s=0),
+        ledger=led,client=client,db=ACCT)
+    runner.now=lambda:at
+    return svc,asyncio.run(autoreconcile.reconcile_unresolved(svc))
+
+
+class _Client:
+    def __init__(self,rows):self.rows,self.reads,self.posts=rows,0,0
+    def get_messages(self,*a,**kw):
+        self.reads+=1
+        return {"list":self.rows,"hasMore":False}
+    def __getattr__(self,name):
+        if name.startswith(("send","post")):raise AssertionError("reconcile must never send: "+name)
+        raise AttributeError(name)
+
+
+def _out_raw(now):
+    return {"id":2001,"fromUser":{"id":int(ACCT)},"toUser":{"id":FAN},"createdAt":(now+timedelta(seconds=5)).isoformat()+"Z",
+        "text":"x","media":[],"mediaCount":0,"price":0,"previews":[],"lockedText":False,"responseType":"message"}
+
+
+def test_unfrozen_attempt_younger_than_threshold_is_left_alone_without_reading(tmp_path,monkeypatch):
+    f,led,a,now=_unfrozen(tmp_path);c=_Client([])
+    monkeypatch.setattr(runner,"now",runner.now)
+    _,out=_reconcile(led,c,now+timedelta(seconds=100))
+    assert out[0]["reason"]=="delivery-unresolved:frozen-dispatch-unavailable" and c.reads==0
+    assert f.sql("SELECT state FROM native_pilot_receipts WHERE attempt_id=?",(a.id,))[0][0]=="delivery_unknown"
+
+
+def test_unfrozen_attempt_with_complete_empty_window_settles_not_sent(tmp_path,monkeypatch):
+    f,led,a,now=_unfrozen(tmp_path);c=_Client([])
+    monkeypatch.setattr(runner,"now",runner.now)
+    _,out=_reconcile(led,c,now+timedelta(seconds=700))
+    assert out[0]["outcome"]=="not_sent" and out[0]["reason"]=="no-frozen-dispatch-no-outbound"
+    assert f.sql("SELECT state FROM native_pilot_receipts WHERE attempt_id=?",(a.id,))[0][0]=="not_sent"
+
+
+def test_unfrozen_attempt_with_creator_outbound_is_parked_in_attention_and_backs_off(tmp_path,monkeypatch):
+    f,led,a,now=_unfrozen(tmp_path);c=_Client([_out_raw(now)])
+    monkeypatch.setattr(runner,"now",runner.now)
+    svc,out=_reconcile(led,c,now+timedelta(seconds=700))
+    assert out[0]["reason"]=="delivery-unresolved:frozen-dispatch-outbound-present"
+    assert f.sql("SELECT state FROM native_pilot_receipts WHERE attempt_id=?",(a.id,))[0][0]=="delivery_unknown"
+    reads=c.reads
+    runner.now=lambda:now+timedelta(seconds=800)   # inside the 300 s backoff: no new provider read
+    asyncio.run(autoreconcile.reconcile_unresolved(svc))
+    assert c.reads==reads

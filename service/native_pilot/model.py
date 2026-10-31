@@ -24,14 +24,14 @@ from .scope import AccountScope
 
 MODEL = "deepseek/deepseek-v4.1-flash"
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-# FASTT's vault resolver JSON calls (contract read, shelf match/nearest, verify verdicts for up to
-# 24 items) can need more than the default 400-token cap; a truncated reply fails closed
-# ("model-output-incomplete"). Only these exact purposes get the larger bounded cap; every other
-# purpose, including ai_chatter replies, stays at ``max_tokens``.
+# FASTT's vault resolver JSON calls (contract read, contextual hook, shelf match/nearest, verify
+# verdicts for up to 24 items) can need more than the default 400-token cap; a truncated reply
+# fails closed ("model-output-incomplete"). Only these exact purposes get the larger bounded cap;
+# every other purpose, including ai_chatter replies, stays at ``max_tokens``.
 RESOLVER_MAX_TOKENS = 1200
 RESOLVER_PURPOSES = frozenset({
-    "content_resolver_contract", "content_resolver_match", "content_resolver_nearest",
-    "content_resolver_verify"})
+    "content_resolver_contract", "content_resolver_hook", "content_resolver_match",
+    "content_resolver_nearest", "content_resolver_verify"})
 
 MAX_RESPONSE_BYTES = 128 * 1024
 MAX_REQUEST_BYTES = 512 * 1024
@@ -39,6 +39,10 @@ MAX_REQUEST_BYTES = 512 * 1024
 
 class NativePilotModelError(RuntimeError):
     """A fixed public code, never a provider body, credential, or prompt."""
+
+    def __init__(self, code: str, *, diagnostics: dict[str, Any] | None = None):
+        super().__init__(code)
+        self.diagnostics = dict(diagnostics or {})
 
 
 def _strict_json(value: str | bytes) -> Any:
@@ -202,8 +206,10 @@ class NativePilotModel:
             except Exception as exc:
                 self._fail("model-budget-exhausted" if type(exc).__name__ == "LLMCapExceeded"
                            else "model-budget-refused")
-        self._event({"event": "model-start", "call": call_number,
-                     "provider": "openrouter", "model": self.API_MODEL})
+        event_base = {"call": call_number, "provider": "openrouter",
+                      "model": self.API_MODEL, "purpose": purpose,
+                      "max_output_tokens": max_tokens}
+        self._event({"event": "model-start", **event_base})
         started = time.monotonic()
         try:
             self._check()
@@ -232,23 +238,24 @@ class NativePilotModel:
         except asyncio.CancelledError:
             await self._hold(reservation)
             self.stopped_reason = self.stopped_reason or "model-cancelled"
-            self._event({"event": "model-failed", "call": call_number, "code": self.stopped_reason})
+            self._event({"event": "model-failed", **event_base, "code": self.stopped_reason})
             raise
         except NativePilotModelError as exc:
             await self._hold(reservation)
             code = str(exc)
             self.stopped_reason = self.stopped_reason or code
-            self._event({"event": "model-failed", "call": call_number, "code": code})
-            raise NativePilotModelError(code) from None
+            self._event({"event": "model-failed", **event_base, "code": code,
+                         **exc.diagnostics})
+            raise NativePilotModelError(code, diagnostics=exc.diagnostics) from None
         except (TimeoutError, httpx.TimeoutException):
             await self._hold(reservation)
             self.stopped_reason = "model-timeout"
-            self._event({"event": "model-failed", "call": call_number, "code": self.stopped_reason})
+            self._event({"event": "model-failed", **event_base, "code": self.stopped_reason})
             raise NativePilotModelError(self.stopped_reason) from None
         except Exception:
             await self._hold(reservation)
             self.stopped_reason = "model-response-failed"
-            self._event({"event": "model-failed", "call": call_number, "code": self.stopped_reason})
+            self._event({"event": "model-failed", **event_base, "code": self.stopped_reason})
             raise NativePilotModelError(self.stopped_reason) from None
         if reservation is not None:
             try:
@@ -259,12 +266,11 @@ class NativePilotModel:
                 # Spend that cannot be recorded stops the pilot; the reservation stays.
                 await self._hold(reservation)
                 self.stopped_reason = self.stopped_reason or "model-budget-settle-failed"
-                self._event({"event": "model-failed", "call": call_number, "code": self.stopped_reason})
+                self._event({"event": "model-failed", **event_base, "code": self.stopped_reason})
                 raise NativePilotModelError(self.stopped_reason) from None
         latency_ms = max(0, round((time.monotonic() - started) * 1000))
         result.latency_ms = latency_ms
-        self._event({"event": "model-complete", "call": call_number,
-                     "provider": "openrouter", "model": self.API_MODEL,
+        self._event({"event": "model-complete", **event_base,
                      "latency_ms": latency_ms, **metadata})
         return result
 
@@ -282,7 +288,18 @@ class NativePilotModel:
             raise NativePilotModelError("model-choice-invalid")
         choice = choices[0]
         if choice.get("finish_reason") != "stop":
-            raise NativePilotModelError("model-output-incomplete")
+            reason = choice.get("finish_reason")
+            usage = data.get("usage")
+            completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+            if type(completion_tokens) is not int or completion_tokens < 0:
+                completion_tokens = None
+            raise NativePilotModelError(
+                "model-output-incomplete",
+                diagnostics={
+                    "finish_reason": reason if reason in {"length", "content_filter", "tool_calls"} else "other",
+                    "completion_tokens": completion_tokens,
+                },
+            )
         message = choice.get("message")
         if not isinstance(message, dict) or message.get("role") != "assistant" or message.get("tool_calls") or message.get("refusal"):
             raise NativePilotModelError("model-message-invalid")

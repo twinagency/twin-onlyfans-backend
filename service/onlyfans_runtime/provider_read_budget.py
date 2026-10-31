@@ -22,6 +22,7 @@ LIVE_REPLY_RESERVE = 4        # extra tokens kept for live work while replies wa
 BACKGROUND_KINDS = {"discovery", "history", "offer_refresh", "posts", "vault"}   # ledger (money) and recent (intake) are not background
 LEDGER_RETRY_SECONDS = 2  # existing LedgerWorker tick cadence
 KINDS = {"recent", "discovery", "history", "ledger", "offer_refresh", "posts", "vault", "connection_check"}
+LEDGER_TURN_RESERVED = "provider_read_deferred:ledger-turn-reserved"
 
 
 class ReadDeferred(Refused):
@@ -85,11 +86,54 @@ def _replies_waiting(s, account, now):
         return False
 
 
+def _reserve_due_ledger_turn(s, account, runtime, revision, now, last_kind):
+    """Keep other reads off a due financial refresh.
+
+    The worker and inbox schedulers are independent. A recent-inbox page can
+    take the single account lease just before the LedgerWorker tick, leaving
+    the ledger scan deferred even though every token is available. The first
+    non-ledger attempt at an idle, due refresh writes a durable reservation on
+    the scan. A dead ledger worker cannot monopolise intake: the reservation
+    expires with the same 45-second bound as the provider lease.
+    """
+    from db.onlyfans_ledger_models import OfLedgerScan
+    scan = s.get(OfLedgerScan, account)
+    if (scan is None or scan.binding_id != runtime.binding_id
+            or scan.connection_revision != revision or scan.lease_token is not None):
+        return False
+    due = scan.next_poll_at is not None and scan.next_poll_at <= now + timedelta(seconds=LEDGER_RETRY_SECONDS)
+    if not due:
+        return False
+    fresh = (scan.updated_at is not None
+             and timedelta(0) <= now - scan.updated_at < timedelta(seconds=LEASE_SECONDS))
+    if scan.status == "running":
+        # A multi-page scan is still the same due ledger turn. It has no domain
+        # lease between pages, so without this branch a recent-inbox read can
+        # take the provider lease before the next page starts.
+        if not fresh:
+            return False
+        if scan.last_error is None:
+            # A completed ledger page yields one turn to live intake. The next
+            # recent read then restores priority for the following page.
+            if last_kind == "ledger":
+                return False
+            scan.last_error = LEDGER_TURN_RESERVED
+            scan.updated_at = now
+        return scan.last_error == LEDGER_TURN_RESERVED or scan.last_error.startswith("provider_read_deferred")
+    if scan.status == "idle" and scan.next_poll_at <= now and scan.last_error is None:
+        scan.last_error = LEDGER_TURN_RESERVED
+        scan.updated_at = now
+        return True
+    return False
+
+
 def acquire(store, tenant, account, *, connection_revision, kind, now=None):
     if (os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker" or kind not in KINDS
             or type(connection_revision) is not int or connection_revision<1):
         raise Refused("provider read worker authority required")
     now = now or utcnow()
+    deferred_at = None
+    claim = None
     with Session(store.engine) as s, s.begin():
         runtime = _valid(store, s, tenant, account, connection_revision, now, kind)
         row = s.get(OfProviderReadBudget, account, with_for_update=True)
@@ -108,38 +152,37 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
             raise ReadDeferred(min(row.lease_until, now + timedelta(seconds=LEDGER_RETRY_SECONDS)), "provider read lease occupied")
         if row.backoff_until and row.backoff_until > now:
             raise ReadDeferred(row.backoff_until, "provider read backoff")
-        if kind not in {'ledger', 'connection_check'} and row.last_kind not in {None, 'ledger'}:
-            from db.onlyfans_ledger_models import OfLedgerScan
-            scan = s.get(OfLedgerScan, account)
-            if (scan is not None and scan.binding_id == runtime.binding_id
-                    and scan.connection_revision == connection_revision
-                    and scan.status == 'running' and scan.last_error is not None
-                    and scan.last_error.startswith('provider_read_deferred')
-                    and scan.updated_at is not None and timedelta(0) <= now - scan.updated_at < timedelta(seconds=LEASE_SECONDS)
-                    and scan.next_poll_at <= now + timedelta(seconds=LEDGER_RETRY_SECONDS)):
-                # Hand the next free slot to a recently waiting ledger reader.
-                # A completed ledger claim restores intake's turn. A crashed
-                # ledger worker cannot keep this preference alive indefinitely.
-                raise ReadDeferred(now + timedelta(seconds=LEDGER_RETRY_SECONDS), 'provider ledger turn due')
-        refill = max(0, int((now - row.refilled_at).total_seconds()))
-        available = min(CAPACITY, row.tokens + refill)
-        # Deep archive recovery may be continuously due. Leave one additional
-        # maintenance token for ledger/content work as well as the recent head
-        # reserve; the outer scheduler rotates those maintenance lanes.
-        reserve = 0 if kind == "recent" else RECENT_RESERVE + (kind == 'history')
-        if kind in BACKGROUND_KINDS and _replies_waiting(s, account, now):
-            # Live replies are waiting (the FASTT engine's work board): history import, the exporter, discovery, offer
-            # refresh, posts and vault analysis yield. They keep a trickle (a read per ~5 s as the bucket refills), they
-            # are never starved outright.
-            reserve += LIVE_REPLY_RESERVE
-        if available <= reserve:
-            raise ReadDeferred(now + timedelta(seconds=1), "provider read budget exhausted")
-        if refill:
-            row.refilled_at += timedelta(seconds=refill)
-        row.tokens = available - 1
-        row.lease_token, row.lease_until = str(uuid.uuid4()), now + timedelta(seconds=LEASE_SECONDS)
-        row.last_kind = kind
-        return ReadClaim(account, runtime.binding_id, connection_revision, row.lease_token, row.lease_until,kind)
+        if (kind not in {'ledger', 'connection_check'}
+                and _reserve_due_ledger_turn(
+                    s, account, runtime, connection_revision, now, row.last_kind)):
+            # Commit the scan reservation before refusing this read. Raising
+            # inside this transaction would roll the reservation back, which is
+            # exactly how an always-due ledger lost priority to inbox reads.
+            deferred_at = now + timedelta(seconds=LEDGER_RETRY_SECONDS)
+        else:
+            refill = max(0, int((now - row.refilled_at).total_seconds()))
+            available = min(CAPACITY, row.tokens + refill)
+            # Deep archive recovery may be continuously due. Leave one additional
+            # maintenance token for ledger/content work as well as the recent head
+            # reserve; the outer scheduler rotates those maintenance lanes.
+            reserve = 0 if kind == "recent" else RECENT_RESERVE + (kind == 'history')
+            if kind in BACKGROUND_KINDS and _replies_waiting(s, account, now):
+                # Live replies are waiting (the FASTT engine's work board): history import, the exporter, discovery, offer
+                # refresh, posts and vault analysis yield. They keep a trickle (a read per ~5 s as the bucket refills), they
+                # are never starved outright.
+                reserve += LIVE_REPLY_RESERVE
+            if available <= reserve:
+                raise ReadDeferred(now + timedelta(seconds=1), "provider read budget exhausted")
+            if refill:
+                row.refilled_at += timedelta(seconds=refill)
+            row.tokens = available - 1
+            row.lease_token, row.lease_until = str(uuid.uuid4()), now + timedelta(seconds=LEASE_SECONDS)
+            row.last_kind = kind
+            claim = ReadClaim(account, runtime.binding_id, connection_revision,
+                              row.lease_token, row.lease_until, kind)
+    if deferred_at is not None:
+        raise ReadDeferred(deferred_at, 'provider ledger turn due')
+    return claim
 
 
 def current_in_session(store, s, tenant, claim, *, now=None):

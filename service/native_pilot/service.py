@@ -77,6 +77,7 @@ PACE_MAX_S = 180.0
 MODEL_RETRY_REASONS = (
     "model-timeout", "model-http-failed", "model-response-failed",
     "model-http-transient", "model-transport-failed", "media-claim-unbacked",
+    "instruction-placeholder-held",
 )
 # Reasons a reply ends WITHOUT any send standing and that are not the fan message's fault. The claim is given
 # back (Ledger.release_input) so the fan's latest state is answered from scratch once the cause clears; a draft

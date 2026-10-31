@@ -93,7 +93,9 @@ def provision_account(store,tenant,*,creator_id,creator_name,owner_id,handle,com
         s.add(OfCreatorBinding(id=binding_id,tenant_id=tenant,creator_id=creator_id,creator_name=creator_name,
             account_id=account,handle=handle,channel='onlyfans'));s.flush()
         s.add(OfRuntime(account_id=account,binding_id=binding_id,activated_at=utcnow(),enabled=False))
-        s.add(AccountAiConfig(account_id=account));s.flush()
+        from .contextual_mode import new_account_settings
+        s.add(AccountAiConfig(account_id=account,
+            ai_chatter_config_json=canonical(new_account_settings())));s.flush()
         s.add(OfConnectionChange(account_id=account,command_key=command_key,revision=0,action='provision',
             request_hash=fingerprint,actor=actor,created_at=utcnow()))
     return account

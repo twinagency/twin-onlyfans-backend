@@ -244,6 +244,32 @@ async def _bought_media(account_id: str, fan_id: int) -> set[int]:
     return {int(m) for m in rows}
 
 
+async def offered_media(account_id: str, fan_id: int) -> dict[int, int | None]:
+    """Media unavailable for a fresh card, including unprojected native receipts.
+
+    Keep this account/fan scoped and use the same origin evidence as the wire
+    guard. A changed price, caption or expired offer does not make media new.
+    """
+    from sqlalchemy import inspect
+    from db.onlyfans_contextual_models import OfContextualOffer
+    async with get_session() as s:
+        installed = await s.run_sync(lambda sync: inspect(sync.connection()).has_table("of_contextual_offer"))
+        if not installed:
+            return {}
+        rows = (await s.execute(select(VaultSend.media_id, VaultSend.message_id).where(
+            VaultSend.account_id == str(account_id), VaultSend.fan_id == int(fan_id),
+            VaultSend.price_cents > 0))).all()
+        result = {int(mid): message_id for mid, message_id in rows}
+        origins = (await s.execute(select(OfContextualOffer.snapshot_json, OfContextualOffer.message_id).where(
+            OfContextualOffer.account_id == str(account_id), OfContextualOffer.fan_id == int(fan_id),
+            OfContextualOffer.state != "cancelled"))).all()
+        for raw, message_id in origins:
+            snapshot = json.loads(raw)
+            for mid in set(snapshot["media_ids"]) - set(snapshot["preview_ids"]):
+                result.setdefault(int(mid), message_id)
+        return result
+
+
 # ── The product row ─────────────────────────────────────────────────
 
 #: The `LIKE` escape character used by `tags_carry`. Backslash, and the pattern
@@ -420,6 +446,8 @@ async def _available(account_id: str, fan_id: int, media_ids: list[int], *,
     under `feet` said nothing about who else was in it. TIER is last because it
     ORDERS rather than excludes — see `rank_by_tier`.
     """
+    prior = await offered_media(account_id, fan_id)
+    media_ids = [mid for mid in media_ids if mid not in prior]
     media_ids = await _live_of_kind(account_id, media_ids, media_kind)
     if not company:
         media_ids = await content_resolver.solo_only(account_id, media_ids)
@@ -695,25 +723,35 @@ async def plan_ask(account_id: str, fan_id: int,
     bought = await _bought_media(account_id, fan_id)
     # MAX_ITEMS wide: the resolver ranks, and composition decides how much of
     # that ranking the price actually buys.
+    prior = await offered_media(account_id, fan_id)
+    repeat_request = contract.is_ask and contract.same_item_requested
+    seen = bought if repeat_request else bought | set(prior)
     res = resolution
     if res is None:
         res = await content_resolver.resolve(
-            str(account_id), int(fan_id), count=MAX_ITEMS, seen=bought,
+            str(account_id), int(fan_id), count=MAX_ITEMS, seen=seen,
             contract=contract, require_curated=False)
     elif res.contract != contract:
         return replace(empty, refusal=REFUSE_RESOLVER, detail="resolution contract changed")
     if res.ok:
-        from sqlalchemy import inspect
-        async with get_session() as s:
-            installed = await s.run_sync(lambda sync: inspect(sync.connection()).has_table("of_contextual_offer"))
-            pending = (await s.execute(select(VaultSend.message_id).where(
-                VaultSend.account_id == str(account_id), VaultSend.fan_id == int(fan_id),
-                VaultSend.media_id.in_(res.media_ids), VaultSend.price_cents > 0,
-                VaultSend.was_purchased.is_not(True)).limit(1))).scalar_one_or_none() if installed else None
-        if pending is not None:
-            return replace(empty, refusal="item_already_pending", detail=str(pending))
+        if repeat_request:
+            pending = next((prior[mid] for mid in res.media_ids
+                            if mid in prior and mid not in bought and prior[mid] is not None), None)
+            if pending is not None:
+                return replace(empty, refusal="item_already_pending", detail=str(pending))
+            # A reference we cannot identify must not become a different sale.
+            return replace(empty, refusal=REFUSE_RESOLVER, detail="existing item not identified")
+        # A supplied resolution or a racing offer can still contain old ids.
+        # Re-resolve once against current exclusions, then filter defensively.
+        if any(mid in seen for mid in res.media_ids):
+            res = await content_resolver.resolve(
+                str(account_id), int(fan_id), count=MAX_ITEMS, seen=seen,
+                contract=contract, require_curated=False)
+        fresh = [mid for mid in res.media_ids if mid not in seen] if res.ok else []
+        if not fresh:
+            return replace(empty, refusal=REFUSE_RESOLVER, detail="no fresh matching media")
         return await _plan_ask_from(account_id, fan_id, contract,
-                                    res.media_ids, cfg, empty, _FITS,
+                                    fresh, cfg, empty, _FITS,
                                     item_tag=item_tag)
 
     # 🚨 "i don't have that, but this is close" — the 2026-08-11 operator ruling,
@@ -738,10 +776,11 @@ async def plan_ask(account_id: str, fan_id: int,
     # his OnlyFans account, and wrote "Goodbye, you stupid liar." For an exclusive
     # promise a substitute is not a recovery, it is a second deception, so a strict
     # ask still fails closed and the caller says something instead of sending it.
-    if contract.strict:
+    if contract.strict or repeat_request:
         return replace(empty, refusal=REFUSE_RESOLVER, detail=res.refusal or "")
     alts = res.alternatives or await content_resolver.last_resort(
-        str(account_id), int(fan_id), seen=bought, count=MAX_ITEMS)
+        str(account_id), int(fan_id), seen=seen, count=MAX_ITEMS)
+    alts = [mid for mid in alts if mid not in seen]
     if contract.strict or not alts:
         return replace(empty, refusal=REFUSE_RESOLVER, detail=res.refusal or "")
     log.info("substitute for %r account=%s fan=%s (%s, %s from last_resort)",
@@ -1091,7 +1130,7 @@ async def plan_on_ask(account_id: str, fan_id: int, *,
     # category exists (`feet`), so before 2026-08-11 a man asking for leather,
     # for booty, for "vids for purchase", or saying a bare "show me" was refused
     # here while the resolver was finding him good media two calls away.
-    if not contract.category:
+    if not contract.category or contract.same_item_requested:
         return await plan_ask_delivery(account_id, fan_id, contract, cfg=cfg)
 
     category = contract.category
@@ -1148,3 +1187,4 @@ async def send_pack_on_ask(client, account_id: str, fan_id: int, *,
     if d is None:
         return refused
     return await deliver(client, d, voice_line=voice_line, dry_run=dry_run)
+

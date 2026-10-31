@@ -50,6 +50,7 @@ def test_invalid_refresh_times_fail_closed(completed, cutoff):
 
 @pytest.mark.parametrize("reason,code", [
     ("provider read lease occupied", "lease-occupied"),
+    ("provider read lease occupied by recent", "lease-occupied"),
     ("provider read backoff", "provider-backoff"),
     ("provider read budget exhausted", "budget-exhausted"),
     ("provider ledger turn due", "ledger-turn-due"),

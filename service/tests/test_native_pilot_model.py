@@ -106,9 +106,12 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
     async def test_resolver_purposes_get_bounded_larger_output_cap(self):
         adapter = self.make(lambda _: httpx.Response(200, json=envelope('{"verdicts":{}}')))
         for purpose, cap in (("content_resolver_verify", 1200), ("content_resolver_contract", 1200),
-                             ("content_resolver_action", 400), ("content_resolver_hook", 400), ("ai_chatter", 400)):
+                             ("content_resolver_hook", 1200), ("content_resolver_action", 400),
+                             ("ai_chatter", 400)):
             await self.call(adapter, purpose=purpose, response_format={"type": "json_object"})
             self.assertEqual(json.loads(self.requests[-1].content)["max_tokens"], cap, purpose)
+            self.assertEqual(self.events[-1]["purpose"], purpose)
+            self.assertEqual(self.events[-1]["max_output_tokens"], cap)
 
     async def test_json_format_preserved_and_parsed(self):
         adapter = self.make(lambda _: httpx.Response(200, json=envelope('{"answer":"neutral"}')))
@@ -224,6 +227,28 @@ class ModelTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(NativePilotModelError):
                 await self.call(adapter)
             self.assertEqual(len(self.requests), 1)
+
+    async def test_incomplete_output_records_safe_finish_diagnostics(self):
+        data = envelope("partial")
+        data["choices"][0]["finish_reason"] = "length"
+        adapter = self.make(lambda _: httpx.Response(200, json=data))
+        with self.assertRaisesRegex(NativePilotModelError, "^model-output-incomplete$"):
+            await self.call(adapter, purpose="content_resolver_hook",
+                            response_format={"type": "json_object"})
+        failed = self.events[-1]
+        self.assertEqual(failed["event"], "model-failed")
+        self.assertEqual(failed["purpose"], "content_resolver_hook")
+        self.assertEqual(failed["max_output_tokens"], 1200)
+        self.assertEqual(failed["finish_reason"], "length")
+        self.assertEqual(failed["completion_tokens"], 7)
+        for prohibited in (SYNTHETIC_KEY, "partial", "Synthetic test input"):
+            self.assertNotIn(prohibited, repr(failed))
+
+        data["choices"][0].pop("finish_reason")
+        adapter = self.make(lambda _: httpx.Response(200, json=data))
+        with self.assertRaisesRegex(NativePilotModelError, "^model-output-incomplete$"):
+            await self.call(adapter, purpose="content_resolver_hook")
+        self.assertEqual(self.events[-1]["finish_reason"], "other")
 
     async def test_unknown_cost_is_not_reported_as_free(self):
         data = envelope(); del data["usage"]["cost"]

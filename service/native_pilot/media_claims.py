@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+from automations.pack_claim import has_delivery_promise
+
 _MEDIA = (r"(?:pic|pics|picture|pictures|photo|photos|selfie|selfies|video|videos|vid|vids|clip|clips|"
           r"voice\s*(?:note|message|memo)|nude|nudes|content|vault|gallery|something\s+(?:special|naughty|spicy|hot|fun))")
 _DET = r"(?:(?:a|an|the|my|some|that|those|these|this|another|ur|your|new)\s+)?(?:\w+\s+){0,2}?"
@@ -30,10 +32,14 @@ MEDIA_CLAIM_HELD = "media-claim-unbacked"
 
 
 def claims_media_sent(text: str | None) -> bool:
-    """True when ``text`` says media was sent / is being sent."""
+    """True when ``text`` says media was sent, is being sent, or will be sent.
+
+    The future-promise half shares the caption validator's one rule. That keeps
+    a bypassed or superseded hook decision from weakening the last text boundary.
+    """
     if not text:
         return False
-    return any(rule.search(text) for rule in _RULES)
+    return has_delivery_promise(text) or any(rule.search(text) for rule in _RULES)
 
 
 # A bubble that echoes a prompt instruction/template instead of a message ("<p>2-4 word reaction here</p>",
@@ -54,3 +60,4 @@ def echoes_instruction(text: str | None) -> bool:
     if not text:
         return False
     return any(rule.search(text) for rule in _PLACEHOLDER_RULES)
+

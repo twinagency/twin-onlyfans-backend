@@ -269,3 +269,39 @@ def test_recovery_refuses_standing_delivery(f,state):
         row=con.execute('SELECT * FROM native_reply_pacing').fetchone()
         with pytest.raises(Refused,match='reply-schedule-terminal'):
             pacing._reuse_schedule(con,row,f.pilot.pilot_id,now)
+
+
+# Regression: 31 Oct 2026 production. A restart (clean stop) ended a turn that had not sent anything. pacing.finish
+# closed the schedule as 'done' (the stop reason is not in its retryable list and the input was still 'generating'),
+# then release_service deleted the unsent input so it would be answered again after the restart. The closed schedule
+# plus the missing input left every later prepare() raising reply-schedule-terminal: the fan was never answered
+# (Amelia: 4 fans owed 4+ hours).
+def test_clean_stop_before_send_keeps_schedule_waiting_and_fan_is_answered_after_restart(f):
+    d,snap,now=prepare(f,seconds=70)
+    key=f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=snap,now=now,reply_authority=d['authority'])
+    pacing.finish(f.ledger,d,now=now,error='service-stopping',sent=False)
+    f.sql("DELETE FROM native_pilot_inputs WHERE input_key=?",(key,))   # what Ledger.release_service does to an unsent claim
+    assert f.sql("SELECT state FROM native_reply_pacing")[0][0]=='waiting'
+    retry,_,_=prepare(f,seconds=72,ledger=Ledger(f.path))
+    assert retry['schedule']['schedule_key']==d['schedule']['schedule_key']
+    assert retry['schedule']['target_at']==d['schedule']['target_at']
+
+
+def test_done_schedule_whose_unsent_input_was_dropped_is_recovered(f):
+    # The rows already stuck in production have exactly this shape: state done, input_key set, input row gone, no receipt.
+    d,snap,now=prepare(f,seconds=70)
+    key=f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=snap,now=now,reply_authority=d['authority'])
+    f.sql("UPDATE native_reply_pacing SET state='done'")
+    f.sql("DELETE FROM native_pilot_inputs WHERE input_key=?",(key,))
+    retry,_,_=prepare(f,seconds=72,ledger=Ledger(f.path))
+    assert retry['schedule']['schedule_key']==d['schedule']['schedule_key']
+    assert retry['schedule']['target_at']==d['schedule']['target_at']
+    assert retry['schedule']['state']=='waiting'
+    assert f.sql('SELECT count(*) FROM native_reply_pacing')[0][0]==1
+
+
+def test_sent_reply_still_closes_schedule(f):
+    d,snap,now=prepare(f,seconds=70)
+    f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=snap,now=now,reply_authority=d['authority'])
+    pacing.finish(f.ledger,d,now=now,error=None,sent=True)
+    assert f.sql("SELECT state FROM native_reply_pacing")[0][0]=='done'

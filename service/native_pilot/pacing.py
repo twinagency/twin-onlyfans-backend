@@ -128,15 +128,33 @@ def ledger_pilot(con, row):
 
 
 def _retry_pending(con, row, pilot_id):
+    """True when the input behind this schedule is still owed an answer: durably requeued, or dropped unsent.
+
+    A clean stop deletes an unsent claim (Ledger.release_service) so it is answered again after the restart; the
+    schedule must survive that, so a missing input row with no standing send counts as owed. Any send that is not
+    a ``not_sent`` refusal makes the input settled (never replayed)."""
     if not row['input_key']:
-        return False
-    pending = con.execute("SELECT state FROM native_pilot_inputs WHERE input_key=? AND pilot_id=?",
-                          (row['input_key'], pilot_id)).fetchone()
-    if not pending or not pending['state'].startswith('requeued:'):
         return False
     standing = con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? "
                            "AND state<>'not_sent' LIMIT 1", (row['input_key'],)).fetchone()
-    return standing is None
+    if standing is not None:
+        return False
+    pending = con.execute("SELECT state FROM native_pilot_inputs WHERE input_key=?"
+                          + (" AND pilot_id=?" if pilot_id else ""),
+                          (row['input_key'], pilot_id) if pilot_id else (row['input_key'],)).fetchone()
+    return pending is None or pending['state'].startswith('requeued:')
+
+
+def _input_aborted_unsent(con, row):
+    """The turn ended before anything was sent and its claim is still 'generating' (it is released or dropped
+    after this call, and the fan is answered again). The schedule must stay waiting for that retry."""
+    if not row['input_key']:
+        return False
+    state = con.execute("SELECT state FROM native_pilot_inputs WHERE input_key=?", (row['input_key'],)).fetchone()
+    if state is None or state['state'] != 'generating':
+        return False
+    return con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND state<>'not_sent' LIMIT 1",
+                       (row['input_key'],)).fetchone() is None
 
 
 def _reuse_schedule(con, row, pilot_id, now):
@@ -262,7 +280,8 @@ def finish(ledger, decision, *, now, error=None, sent=False):
     with ledger._tx() as con:
         row = con.execute("SELECT * FROM native_reply_pacing WHERE schedule_key=?",
                           (decision['schedule']['schedule_key'],)).fetchone()
-        if not sent and row is not None and _retry_pending(con, row, ledger_pilot(con, row)):
+        if not sent and row is not None and (_retry_pending(con, row, ledger_pilot(con, row))
+                                             or _input_aborted_unsent(con, row)):
             return
         con.execute("UPDATE native_reply_pacing SET state='done',updated_at=? WHERE schedule_key=? AND state='waiting'",
                     (_dt(now),decision['schedule']['schedule_key']))

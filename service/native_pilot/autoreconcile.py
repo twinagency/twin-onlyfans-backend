@@ -16,10 +16,44 @@ again until it is settled. Settling uses ONLY the provider's history, read compl
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import recovery, runner
 from .ledger import Refused, _dt
+
+# An attempt whose payload was never frozen was never authorised to POST (the process died, or freeze failed, between
+# begin_attempt and authorize_dispatch). It used to raise "frozen-dispatch-unavailable" every cycle forever.
+NO_INTENT_MIN_AGE_S = 600.0
+NO_INTENT_RECHECK_S = 300.0
+
+
+async def _unfrozen(service, row, result, now) -> bool:
+    """Settle or park an attempt with no frozen payload. Returns False while backing off (no provider read, no log).
+
+    Not-sent only when the provider history is read completely back past the attempt AND the creator has NO outbound
+    message of any kind since: a card sent by any path (including a legacy row) would show up there and block this.
+    Otherwise the fan is parked in the existing ``attention`` state and re-checked at most every NO_INTENT_RECHECK_S."""
+    from onlyfans_runtime.native_protocol import message
+    attempt = row["attempt_id"]
+    result["reason"] = "delivery-unresolved:frozen-dispatch-unavailable"
+    backoff = service.__dict__.setdefault("_unfrozen_next", {})
+    if backoff.get(attempt, now) > now:
+        return False
+    backoff[attempt] = now + timedelta(seconds=NO_INTENT_RECHECK_S)
+    if (now - datetime.fromisoformat(_dt(row["created_at"]))).total_seconds() < NO_INTENT_MIN_AGE_S:
+        return True
+    probe = {"account_id": service.db, "fan_id": row["fan_id"], "created_at": row["created_at"]}
+    history, complete = await asyncio.to_thread(recovery.read_window, service.client, intent=probe)
+    owner = int(recovery.AccountScope.parse(service.db).provider_id)
+    outbound = any(message(raw, owner_id=owner, fan_id=row["fan_id"], history=True).direction == "out" for raw in history)
+    if complete and not outbound:
+        await asyncio.to_thread(service.ledger.settle_absent, pilot_id=row["pilot_id"], attempt_id=attempt,
+                                account_id=service.db, fan_id=row["fan_id"], now=runner.now())
+        result.update(outcome="not_sent", reason="no-frozen-dispatch-no-outbound")
+    elif outbound:
+        result["reason"] = "delivery-unresolved:frozen-dispatch-outbound-present"
+        await asyncio.to_thread(service.ledger.flag_attention, account_id=service.db, fan_id=row["fan_id"], now=runner.now())
+    return True
 
 
 async def reconcile_unresolved(service) -> list[dict]:
@@ -34,8 +68,16 @@ async def reconcile_unresolved(service) -> list[dict]:
         fan, attempt, pilot = row["fan_id"], row["attempt_id"], row["pilot_id"]
         result = {"fan_id": fan, "attempt_id": attempt, "outcome": "unresolved", "reason": None}
         try:
-            intent = await asyncio.to_thread(recovery.snapshot, ledger, pilot_id=pilot, attempt_id=attempt,
-                                             account_id=service.db, fan_id=fan)
+            try:
+                intent = await asyncio.to_thread(recovery.snapshot, ledger, pilot_id=pilot, attempt_id=attempt,
+                                                 account_id=service.db, fan_id=fan)
+            except Refused as exc:
+                if exc.reason != "frozen-dispatch-unavailable":
+                    raise
+                if await _unfrozen(service, row, result, now):
+                    runner.emit({"event": "delivery-reconcile", **result})
+                out.append(result)
+                continue
             history, complete = await asyncio.to_thread(recovery.read_window, service.client, intent=intent)
             matches = []
             for raw in history:

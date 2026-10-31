@@ -1420,6 +1420,17 @@ class Ledger:
             self._resume_conversation(con, p, now_s) if resume else None
             return True
 
+    def flag_attention(self, *, account_id: str, fan_id: int, now: datetime | str,
+                       reason: str = "native-pilot-delivery-unresolved") -> bool:
+        """Park an unowned, active conversation in the existing ``attention`` state. Idempotent. Never sends."""
+        now_s = _dt(now)
+        with self._tx() as con:
+            cur = con.execute("UPDATE twin_bridge_conversations SET state='attention',reason=?,owner_token=NULL,"
+                              "owner_expires_at=NULL,revision=revision+1,updated_at=? WHERE account_id=? AND fan_id=? "
+                              "AND state='active' AND (owner_expires_at IS NULL OR owner_expires_at<=?)",
+                              (reason, now_s, account_id, fan_id, now_s))
+            return cur.rowcount > 0
+
     @staticmethod
     def _resume_conversation(con, p, now_s: str) -> None:
         con.execute("UPDATE twin_bridge_conversations SET state='active',reason=NULL,owner_token=NULL,owner_expires_at=NULL,"

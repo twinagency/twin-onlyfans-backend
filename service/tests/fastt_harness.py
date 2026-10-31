@@ -67,7 +67,10 @@ CREATE TABLE of_creator_bindings(id TEXT PRIMARY KEY,account_id TEXT,channel TEX
 CREATE TABLE of_provider_connection(account_id TEXT PRIMARY KEY,binding_id TEXT,owner_id TEXT,status TEXT,verified_at TEXT,
  last_error TEXT,expires_at TEXT,revision INTEGER);
 CREATE TABLE of_delivery_policy(account_id TEXT PRIMARY KEY,enabled INTEGER,limit_units INTEGER,
- used_units INTEGER,throttle_seconds INTEGER,next_dispatch_at TEXT,active_intent_id TEXT);
+ used_units INTEGER,throttle_seconds INTEGER,next_dispatch_at TEXT,active_intent_id TEXT,
+ revision INTEGER NOT NULL DEFAULT 0,daily_limit_units INTEGER,queued_count INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE of_delivery_policy_change(account_id TEXT,revision INTEGER,actor TEXT,reason TEXT,before_json TEXT,
+ after_json TEXT,created_at TEXT,PRIMARY KEY(account_id,revision));
 """
 
 
@@ -236,7 +239,8 @@ class Sim:
                 con.execute("INSERT INTO of_creator_bindings VALUES(?,?,'onlyfans',NULL,'sim')", ("b-" + acct, acct))
                 con.execute("INSERT INTO of_provider_connection VALUES(?,?,?,'verified','2026-10-01 00:00:00',NULL,'2099-01-01 00:00:00',1)",
                             (acct, "b-" + acct, acct))
-                con.execute("INSERT INTO of_delivery_policy VALUES(?,1,100000000,0,?,NULL,NULL)", (acct, self.throttle))
+                con.execute("INSERT INTO of_delivery_policy(account_id,enabled,limit_units,used_units,throttle_seconds,next_dispatch_at,"
+                            "active_intent_id) VALUES(?,1,100000000,0,?,NULL,NULL)", (acct, self.throttle))
                 con.executemany("INSERT INTO twin_bridge_conversations VALUES(?,?,'active',NULL,4,NULL,NULL,1,3,3,?)",
                                 [(acct, f, "2026-10-16T12:00:00") for f in fans])
                 con.executemany("INSERT INTO of_conversation_state VALUES(?,?,'automated','none')", [(acct, f) for f in fans])

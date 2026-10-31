@@ -15,6 +15,9 @@ import os
 from dataclasses import dataclass, field
 
 MIN_SEND_INTERVAL_FLOOR_S = 20.0
+# Shared ceiling (rule 1): with FASTT_PER_ACCOUNT_SEND_GAP=1 an account's own policy value may set a gap down to this and
+# no lower. Off (default) nothing changes: the 20 s floor above binds every account.
+SEND_GAP_HARD_FLOOR_S = 10.0
 
 # name: (env, default, low, high)
 _SPEC = {
@@ -30,8 +33,44 @@ _SPEC = {
     "drain_grace_s": ("FASTT_DRAIN_GRACE_S", 90.0, 5.0, 600.0),
     "reconcile_wait_s": ("FASTT_RECONCILE_WAIT_S", 30.0, 5.0, 600.0),
     "auto_reconcile": ("FASTT_AUTO_RECONCILE", 1, 0, 1),
+    "stall_alert_s": ("FASTT_STALL_ALERT_S", 600.0, 60.0, 86400.0),      # oldest owed reply waiting this long = a stall alert
+    "per_account_send_gap": ("FASTT_PER_ACCOUNT_SEND_GAP", 0, 0, 1),     # 1 = each account's own throttle_seconds (>= 10) sets its gap
     "absent_after_s": ("FASTT_AUTO_RESOLVE_ABSENT_AFTER_S", 0.0, 0.0, 86400.0),   # 0 = never infer non-delivery
 }
+
+
+ACCOUNT_TUNABLE = ("concurrency", "quiet_s", "burst_max_wait_s")
+
+
+def _account_overrides(env, account, clamped) -> dict:
+    """The ``FASTT_ACCOUNT_TUNING`` entry for ``account`` limited to the per-account knobs; {} when absent or invalid."""
+    import json
+    raw = env.get("FASTT_ACCOUNT_TUNING")
+    if not raw or account is None:
+        return {}
+    try:
+        table = json.loads(raw)
+        if type(table) is not dict:
+            raise ValueError
+    except ValueError:
+        clamped.append(("FASTT_ACCOUNT_TUNING", "invalid"))
+        return {}
+    acct = str(account)
+    entry = table.get(acct)
+    if entry is None:
+        entry = table.get(acct[3:] if acct.startswith("of-") else "of-" + acct)
+    if entry is None:
+        return {}
+    if type(entry) is not dict:
+        clamped.append(("FASTT_ACCOUNT_TUNING", "invalid"))
+        return {}
+    out = {}
+    for key, value in entry.items():
+        if key in ACCOUNT_TUNABLE:
+            out[key] = value
+        else:
+            clamped.append(("FASTT_ACCOUNT_TUNING." + str(key)[:40], "ignored"))
+    return out
 
 
 @dataclass(frozen=True)
@@ -48,19 +87,29 @@ class Tuning:
     drain_grace_s: float = 90.0
     reconcile_wait_s: float = 30.0
     auto_reconcile: int = 1
+    per_account_send_gap: int = 0
+    stall_alert_s: float = 600.0
     absent_after_s: float = 0.0
     clamped: tuple = field(default=(), compare=False)
 
     @classmethod
-    def from_env(cls, env=None, **override) -> "Tuning":
+    def from_env(cls, env=None, account=None, **override) -> "Tuning":
+        """``account``: the account id this process serves (``of-123`` or ``123``). ``FASTT_ACCOUNT_TUNING`` is a JSON
+        map ``{"<account>": {"concurrency": 8, "quiet_s": 3, "burst_max_wait_s": 20}}`` that sets those three knobs for
+        that account only (precedence: explicit argument > account entry > global env > default), through the same
+        bounds as the global env. Unset (the default) = every account runs the global values."""
         env = os.environ if env is None else env
         values, clamped = {}, []
+        per_account = _account_overrides(env, account, clamped)
         for name, (var, default, lo, hi) in _SPEC.items():
             if name == "min_send_interval_s":
                 # Read the floor at call time. It is a module constant, not a setting: no environment value,
                 # config row or argument can go below it (only a test may patch the constant itself).
-                default = lo = MIN_SEND_INTERVAL_FLOOR_S
-            raw = override.get(name, env.get(var))
+                # Per-account mode: the account's own policy value decides, so this only RAISES the gap and its
+                # floor is the shared 10 s ceiling instead of the 20 s default.
+                gap_per_account = str(override.get("per_account_send_gap", env.get("FASTT_PER_ACCOUNT_SEND_GAP", "0"))).strip() == "1"
+                default = lo = SEND_GAP_HARD_FLOOR_S if gap_per_account else MIN_SEND_INTERVAL_FLOOR_S
+            raw = override.get(name, per_account.get(name, env.get(var)))
             if raw is None or raw == "":
                 values[name] = default
                 continue

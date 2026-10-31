@@ -136,6 +136,10 @@ _SCHEMA = (
         account_id TEXT NOT NULL, fan_id INTEGER NOT NULL, state TEXT NOT NULL, reason TEXT,
         message_id INTEGER, waiting_since TEXT, state_since TEXT NOT NULL,
         attempts INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(account_id,fan_id))""",
+    # Throughput work (additive): durable operator-visible conditions (provider throttle, send stall).
+    """CREATE TABLE IF NOT EXISTS engine_alert (
+        account_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, first_at TEXT NOT NULL, last_at TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 1, detail_json TEXT, PRIMARY KEY(account_id,kind))""",
 )
 
 # Runner-owned follow-ups (see service.py --followups). The legacy scheduled_jobs table is never used.
@@ -173,7 +177,7 @@ SERVICE_ID = re.compile(r"svc-[A-Za-z0-9_-]{1,92}")
 
 class Ledger:
     def __init__(self, path: str | Path, *, allowance: bool = False, min_send_interval_s: float | None = None,
-                 lock_scope: str | None = None):
+                 lock_scope: str | None = None, per_account_send_gap: bool = False):
         # A PostgreSQL target is the application URL (never printed or logged).
         self.path = path if store.is_pg(path) else Path(path)
         self.pg = store.is_pg(path)
@@ -186,8 +190,11 @@ class Ledger:
         self.lock_scope = lock_scope
         # Engine v2: the account send interval is never below the floor (20 s), whatever the policy row says.
         from . import tuning
-        self.min_send_interval_s = max(float(tuning.MIN_SEND_INTERVAL_FLOOR_S),
-                                       float(min_send_interval_s or 0)) if allowance else 0.0
+        # Per-account mode (FASTT_PER_ACCOUNT_SEND_GAP=1): the floor is the shared 10 s ceiling and the account's own
+        # policy value decides the gap (see onlyfans_runtime.send_gap). Off: the 20 s floor, exactly as before.
+        self.per_account_send_gap = bool(per_account_send_gap) and allowance
+        floor = tuning.SEND_GAP_HARD_FLOOR_S if self.per_account_send_gap else tuning.MIN_SEND_INTERVAL_FLOOR_S
+        self.min_send_interval_s = max(float(floor), float(min_send_interval_s or 0)) if allowance else 0.0
         self.fan_daily_limit = int(os.environ.get("FASTT_FAN_DAILY_REPLY_LIMIT", "2000")) if allowance else 0
         if not 0 <= self.fan_daily_limit <= 2000:
             raise ValueError("invalid-fan-daily-reply-limit")
@@ -564,10 +571,35 @@ class Ledger:
                     (attempt_ref(aid),p["account_id"],p["fan_id"]))
             return Attempt(aid, p["account_id"], p["fan_id"], tid, 1, owner_token, revision)
 
+    def _gap(self, throttle_seconds) -> float:
+        """Seconds between two sends on the account for this policy row's throttle value."""
+        from onlyfans_runtime.send_gap import effective_gap
+        return effective_gap(throttle_seconds, self.min_send_interval_s, self.per_account_send_gap)
+
     @staticmethod
     def _policy_row(con, account: str):
-        return con.execute("SELECT enabled,limit_units,used_units,throttle_seconds,next_dispatch_at,active_intent_id "
-                           "FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()
+        # SELECT * so a store without the optional daily_limit_units column (older schema, fixtures) still reads.
+        return con.execute("SELECT * FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()
+
+    @staticmethod
+    def _daily_cap(row) -> int | None:
+        """The account's optional daily send cap (``of_delivery_policy.daily_limit_units``); None = no daily cap."""
+        try:
+            value = row["daily_limit_units"]
+        except (KeyError, IndexError):
+            return None
+        return None if value is None else int(value)
+
+    @staticmethod
+    def _account_daily_used(con, account: str, now_s: str) -> int:
+        """Sends charged to the account in the rolling last 24 hours: the same states the per-fan quota counts
+        (dispatching, sent, delivery_unknown), so an unknown outcome stays charged and a definite non-delivery
+        (not_sent) gives its place back. A rolling window needs no reset job and cannot drift."""
+        cutoff = _dt(datetime.fromisoformat(now_s) - timedelta(hours=24))
+        return con.execute(
+            "SELECT count(*) FROM native_pilot_receipts r JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
+            "WHERE a.account_id=? AND r.created_at>? AND r.created_at<=? "
+            "AND r.state IN ('dispatching','sent','delivery_unknown')", (account, cutoff, now_s)).fetchone()[0]
 
     def _consume_allowance(self, con, account: str, now_s: str, *, fan_id: int | None = None, daily_limit: int = 0) -> None:
         """Admit one send under the daily fan quota or legacy account allowance.
@@ -586,12 +618,15 @@ class Ledger:
         used = self._fan_daily_used(con, account, fan_id, now_s) if daily else row["used_units"]
         if used >= (daily_limit if daily else row["limit_units"]):
             raise Refused("allowance-exhausted")
+        cap = self._daily_cap(row)
+        if cap is not None and self._account_daily_used(con, account, now_s) >= cap:
+            raise Refused("allowance-daily-cap")
         if row["active_intent_id"] or con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? "
                 "AND state='dispatching' LIMIT 1", (account,)).fetchone():
             raise Refused("allowance-busy")
         if row["next_dispatch_at"] is not None and _dt(row["next_dispatch_at"]) > now_s:
             raise Refused("allowance-throttled")
-        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=max(row["throttle_seconds"], self.min_send_interval_s)))
+        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=self._gap(row["throttle_seconds"])))
         charge = "used_units," if daily else "used_units+1,"
         ceiling = "" if daily else "AND used_units<limit_units "
         cur = con.execute("UPDATE of_delivery_policy SET used_units=" + charge + "next_dispatch_at=? "
@@ -612,17 +647,111 @@ class Ledger:
             "AND r.state IN ('dispatching','sent','delivery_unknown')",
             (account, fan_id, cutoff, now_s)).fetchone()[0]
 
+    # ── operator-visible alerts and the provider-throttle backoff ──────────────────────────────────────────
+    ALERT_PROVIDER_THROTTLE = "provider-throttle"
+    ALERT_SEND_STALL = "send-stall"
+
+    def raise_alert(self, account: str, kind: str, now, detail: dict | None = None) -> bool:
+        """Open (or refresh) the account's alert of this kind. True when it was newly opened (or re-opened).
+
+        One row per (account, kind); ``count`` grows while the condition repeats. Best effort for the caller: it
+        raises like any ledger write, and the engine wraps it so an alert can never stop a reply."""
+        import json
+        now_s = _dt(now)
+        blob = json.dumps(detail or {}, sort_keys=True)[:2000]
+        with self._tx(initialize=True) as con:
+            row = con.execute("SELECT state,count FROM engine_alert WHERE account_id=? AND kind=?", (account, kind)).fetchone()
+            if row is None:
+                con.execute("INSERT INTO engine_alert(account_id,kind,state,first_at,last_at,count,detail_json) VALUES(?,?,'open',?,?,1,?)",
+                            (account, kind, now_s, now_s, blob))
+                return True
+            if row["state"] != "open":      # a cleared alert that happens again starts a new episode
+                con.execute("UPDATE engine_alert SET state='open',first_at=?,last_at=?,count=1,detail_json=? WHERE account_id=? AND kind=?",
+                            (now_s, now_s, blob, account, kind))
+                return True
+            con.execute("UPDATE engine_alert SET last_at=?,count=count+1,detail_json=? WHERE account_id=? AND kind=?",
+                        (now_s, blob, account, kind))
+            return False
+
+    def clear_alert(self, account: str, kind: str, now) -> bool:
+        """Mark an open alert cleared. True when one was open."""
+        with self._tx(initialize=True) as con:
+            cur = con.execute("UPDATE engine_alert SET state='cleared',last_at=? WHERE account_id=? AND kind=? AND state='open'",
+                              (_dt(now), account, kind))
+            return cur.rowcount == 1
+
+    def alerts(self, account: str | None = None, *, only_open: bool = True) -> list[dict]:
+        with store.readonly(self.path) as con:
+            if not store.has_table(con, "engine_alert"):
+                return []
+            sql = "SELECT account_id,kind,state,first_at,last_at,count,detail_json FROM engine_alert WHERE 1=1"
+            args: list = []
+            if account is not None:
+                sql += " AND account_id=?"; args.append(account)
+            if only_open:
+                sql += " AND state='open'"
+            return [dict(r) for r in con.execute(sql + " ORDER BY account_id,kind", tuple(args)).fetchall()]
+
+    def sent_since(self, account: str, since) -> int:
+        """How many sends of this account the ledger saw settle ``sent`` since ``since`` (0 = nothing moved)."""
+        since_s = _dt(since)
+        with store.readonly(self.path) as con:
+            return int(con.execute(
+                "SELECT count(*) FROM native_pilot_receipts r JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
+                "WHERE a.account_id=? AND r.state='sent' AND r.updated_at>?", (account, since_s)).fetchone()[0])
+
+    def throttle_backoff(self, account: str, now, *, retry_after=None) -> dict:
+        """The provider answered a send with HTTP 429 (shared ceiling, rule 2): return the account to the 20 s default
+        gap if it was set lower, and leave a durable alert. Idempotent: a second 429 changes nothing more than the alert
+        count. Nothing in the engine ever lowers a throttle again; only an operator command can.
+
+        Returns ``{"changed": bool, "before": int|None, "after": int|None, "alert": bool}``."""
+        import json
+        from onlyfans_runtime.send_gap import DEFAULT_S
+        default = int(DEFAULT_S)
+        now_s = _dt(now)
+        changed, before, revision = False, None, None
+        with self._tx(initialize=True) as con:
+            row = self._policy_row(con, account)
+            if row is not None:
+                before = int(row["throttle_seconds"])
+                if before < default:
+                    cur = con.execute("UPDATE of_delivery_policy SET throttle_seconds=?,revision=revision+1 WHERE account_id=? AND throttle_seconds<?",
+                                      (default, account, default))
+                    changed = cur.rowcount == 1
+                    if changed:
+                        revision = con.execute("SELECT revision FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()[0]
+        after = default if changed else before
+        if changed:
+            # Audit in its own transaction: a role that may not write the change log must not lose the backoff itself.
+            try:
+                with self._tx() as con:
+                    if store.has_table(con, "of_delivery_policy_change"):
+                        con.execute("INSERT INTO of_delivery_policy_change(account_id,revision,actor,reason,before_json,after_json,created_at) "
+                                    "VALUES(?,?,?,?,?,?,?)",
+                                    (account, revision, "fastt-engine-backoff", "Provider rate limit (HTTP 429): send gap returned to the 20 s default",
+                                     json.dumps({"throttle_seconds": before}), json.dumps({"throttle_seconds": after}), now_s))
+            except Exception:
+                pass
+        opened = self.raise_alert(account, self.ALERT_PROVIDER_THROTTLE, now,
+                                  {"throttle_before": before, "throttle_after": after, "retry_after": retry_after})
+        return {"changed": changed, "before": before, "after": after, "alert": opened}
+
     def allowance_status(self, account: str, fan_id: int | None = None, *, now=None) -> dict | None:
         """Read-only copy of the account's delivery policy numbers (None when absent)."""
         with store.readonly(self.path) as con:
             row = self._policy_row(con, account)
             daily = bool(self.fan_daily_limit and fan_id is not None)
-            used = self._fan_daily_used(con, account, fan_id, _dt(now or datetime.utcnow())) if row is not None and daily else None
+            now_s = _dt(now or datetime.utcnow())
+            used = self._fan_daily_used(con, account, fan_id, now_s) if row is not None and daily else None
+            cap = self._daily_cap(row) if row is not None else None
+            cap_used = self._account_daily_used(con, account, now_s) if cap is not None else None
         if row is None:
             return None
         due = row["next_dispatch_at"]
         return {"enabled": bool(row["enabled"]), "limit": self.fan_daily_limit if daily else row["limit_units"], "used": used if daily else row["used_units"],
-                "throttle_seconds": max(row["throttle_seconds"], self.min_send_interval_s),
+                "daily_limit": cap, "daily_used": cap_used,
+                "throttle_seconds": self._gap(row["throttle_seconds"]),
                 "busy": bool(row["active_intent_id"]),
                 "next_dispatch_at": None if due is None else _dt(due)}
 
@@ -737,7 +866,7 @@ class Ledger:
         row = self._policy_row(con, p["account_id"]) if p else None
         if row is None:
             return
-        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=max(row["throttle_seconds"], self.min_send_interval_s)))
+        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=self._gap(row["throttle_seconds"])))
         if row["next_dispatch_at"] is None or _dt(row["next_dispatch_at"]) < due:
             con.execute("UPDATE of_delivery_policy SET next_dispatch_at=? WHERE account_id=?", (due, p["account_id"]))
 

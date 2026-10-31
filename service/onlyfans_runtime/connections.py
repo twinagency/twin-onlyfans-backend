@@ -295,6 +295,8 @@ def change_connection(store,tenant,account,*,action,payload,expected_revision,co
             or type(payload.get('automateNewConversations',False)) is not bool or type(payload['limitUnits']) is not int
             or not 1<=payload['limitUnits']<=10000 or type(payload['throttleSeconds']) is not int
             or not 1<=payload['throttleSeconds']<=86400 or type(payload['mediaEnabled']) is not bool):raise Refused('invalid delivery limits')
+        from .send_gap import below_floor
+        if below_floor(payload['throttleSeconds']):raise Refused('invalid delivery limits: send gap is under the shared 10 second floor')
     elif payload:raise Refused('invalid connection action payload')
     fingerprint=_request(action,payload,expected_revision)
     with Session(store.engine) as s,s.begin():

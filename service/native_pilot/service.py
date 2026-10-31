@@ -87,7 +87,7 @@ RELEASE_BACKOFF_S = {"new-message-during-generation": 1.0, "source-changed": 1.0
                      "creator-persona-not-approved": 60.0, "creator-facts-not-current": 60.0,
                      "twin-context-unavailable": 30.0, "service-stopping": 1.0,
                      # account-wide limits: the message stays pending with the reason, the whole account waits
-                     "allowance-disabled": 30.0, "allowance-exhausted": 30.0, "allowance-missing": 30.0,
+                     "allowance-disabled": 30.0, "allowance-exhausted": 30.0, "allowance-missing": 30.0, "allowance-daily-cap": 60.0,
                      "account-credential-changed": 2.0}
 ACCOUNT_BLOCK_PREFIXES = ("allowance-", "model-budget")
 # A reply the model could not produce (timeout, HTTP error such as a 402, budget exhausted) is kept PENDING with its
@@ -206,7 +206,7 @@ class ServiceGateway(runner.Gateway):
         return bool(self.stopped_reason)
 
     def limit_label(self):
-        policy = self.ledger.allowance_status(self.pilot.account_id, self.pilot.fan_id)
+        policy = self.ledger.allowance_status(self.pilot.account_id, self.pilot.fan_id, now=runner.now())
         return None if policy is None else policy["limit"] - policy["used"]
 
     async def _send(self, text, terms=None):
@@ -227,13 +227,15 @@ class ServiceGateway(runner.Gateway):
                 held = await asyncio.to_thread(self.hold_check)
                 if held:
                     raise Refused(held)
-            policy = self.ledger.allowance_status(self.pilot.account_id, self.pilot.fan_id)
+            policy = self.ledger.allowance_status(self.pilot.account_id, self.pilot.fan_id, now=runner.now())
             if policy is None:
                 raise Refused("allowance-missing")
             if not policy["enabled"]:
                 raise Refused("allowance-disabled")
             if policy["used"] >= policy["limit"]:
                 raise Refused("allowance-exhausted")
+            if policy.get("daily_limit") is not None and policy["daily_used"] >= policy["daily_limit"]:
+                raise Refused("allowance-daily-cap")
             wait = 1.0 if policy["busy"] else 0.0
             if policy["next_dispatch_at"]:
                 wait = max(wait, (datetime.fromisoformat(policy["next_dispatch_at"]) - runner.now()).total_seconds())
@@ -262,7 +264,7 @@ class Service:
         self.db = self.scope.db_id
         self.stop = stop or asyncio.Event()
         self.ttl_s, self.renew_s, self.poll_s, self.hold_s = ttl_s, renew_s, poll_s, hold_s
-        self.tuning = tuning or Tuning.from_env()
+        self.tuning = tuning or Tuning.from_env(account=self.db)
         self.quiet_s = self.tuning.quiet_s if quiet_s is None else quiet_s
         self.connection_check_s = connection_check_s
         # Engine v2 (all-fans runner): bounded concurrent turns, one FIFO send gate per account, durable work board.
@@ -275,6 +277,9 @@ class Service:
         self.account_block = None      # (reason, until): an account-wide limit (allowance / model budget) holds new turns
         self.next_lease_renew = 0.0
         self.next_queue_event = 0.0
+        self.next_stall_check = 0.0
+        self._stall_reported = 0.0
+        self.stalled = False           # an alert is open: owed replies have waited past tuning.stall_alert_s
         self.phase = "preparing"
         self.tolerate_newer = False    # this turn answers a burst past the hard maximum wait: later fan messages do not stale it
         self.priority = None           # ISO text: when this fan's first unanswered message was ingested (send-queue order)
@@ -831,6 +836,75 @@ class Service:
                             "oldest_wait_s": round(oldest_s, 1), "concurrency": self.tuning.concurrency}
         runner.emit({"event": "engine-queue", **self.queue_stats})
 
+    @classmethod
+    def owed_hold(cls, reason) -> bool:
+        """A fan held for a reason that is the ENGINE's to resolve (a failed model call waiting to be retried, a provider
+        cooldown, a transient error) is still owed a reply, so it counts toward a stall. A fan held for a person's decision
+        (takeover, pause, restriction, not owned, an unsettled or unknown delivery) is not."""
+        reason = str(reason or "")
+        return not (reason.startswith(("fan-", "delivery-", "canonical-")) or reason in cls.SLOW_HOLDS)
+
+    async def stall_check(self, ready, waiting, blocked, now):
+        """B5: tell someone when work is owed and not moving.
+
+        "Owed" = fans the engine itself should answer now (ready or in their quiet window, not in a fan hold such as a
+        takeover or an unsettled send), measured from the first unanswered message of the burst. When the oldest has
+        waited past ``stall_alert_s`` (default 10 min) the engine emits ``send-stall`` (once per change of state) and
+        keeps an ``engine_alert`` row open; ``moving`` says whether anything was sent in the same window (a slow but
+        moving queue is a backlog, nothing sent is a stall). The row is cleared when no owed reply is past the threshold.
+        Cheap: evaluated at most once per ``status_every_s``; a failure here never touches a reply."""
+        mono = time.monotonic()
+        if mono < self.next_stall_check:
+            return
+        self.next_stall_check = mono + self.tuning.status_every_s
+        threshold = self.tuning.stall_alert_s
+        # Candidates: fans the engine is about to start (ready / quiet window) and fans it has set aside for a reason that
+        # is its own to resolve (a failed model call waiting for its retry, a provider cooldown). Fans held for a person's
+        # decision are not owed. Ages run from the first unanswered message of the burst.
+        aged = [(( now - datetime.fromisoformat(first)).total_seconds(), fan, mid)
+                for fan, mid, first in ready + waiting
+                if first is not None and not ((h := self.fan_holds.get(fan)) and now < h[0] and not self.owed_hold(h[1]))]
+        held = [fan for fan, (until, reason) in self.fan_holds.items() if now < until and self.owed_hold(reason)
+                and fan not in {f for _a, f, _m in aged}]
+        try:
+            if held:
+                bursts = await asyncio.to_thread(self.burst_state, held[:200])
+                aged += [((now - datetime.fromisoformat(first)).total_seconds(), fan, None) for fan, (_n, first) in bursts.items()]
+            aged.sort(reverse=True)
+            # A message the engine already worked and deliberately did not answer stays "unanswered" forever (it is never
+            # regenerated): it is not owed. Look at the oldest few only; this runs at most every status_every_s.
+            owed = []
+            for age, fan, mid in aged:
+                if age <= threshold:
+                    break
+                if mid is not None and await asyncio.to_thread(self.already_claimed, fan, mid):
+                    continue
+                owed.append(age)
+                if len(owed) >= 50:
+                    break
+            oldest, count = (owed[0] if owed else 0.0), len(owed)
+        except Exception as exc:
+            runner.emit({"event": "send-stall-check-failed", "reason": type(exc).__name__})
+            return
+        try:
+            if oldest <= threshold:
+                if self.stalled:
+                    self.stalled = False
+                    await asyncio.to_thread(self.ledger.clear_alert, self.db, Ledger.ALERT_SEND_STALL, now)
+                    runner.emit({"event": "send-stall-cleared", "account": self.db})
+                return
+            sent_recently = await asyncio.to_thread(self.ledger.sent_since, self.db, now - timedelta(seconds=threshold))
+            detail = {"oldest_wait_s": round(oldest, 1), "owed_past_threshold": count, "moving": bool(sent_recently),
+                      "in_flight": len(self.tasks), "send_waiting": self.send_gate.waiting, "blocked": blocked or None,
+                      "threshold_s": threshold}
+            opened = await asyncio.to_thread(self.ledger.raise_alert, self.db, Ledger.ALERT_SEND_STALL, now, detail)
+            self.stalled = True
+            if opened or mono >= self._stall_reported:
+                self._stall_reported = mono + 300.0          # a still-stalled account repeats the event every 5 minutes
+                runner.emit({"event": "send-stall", "account": self.db, **detail})
+        except Exception as exc:
+            runner.emit({"event": "send-stall-check-failed", "reason": type(exc).__name__})
+
     async def tick_all(self):
         self.renew_runner_lease()
         if self.runner_lost:
@@ -867,7 +941,7 @@ class Service:
             # Backpressure: replies prepared now would only wait for the send gate. When the projected wait (the
             # account's next allowed send, e.g. a provider 429 cooldown, plus the replies already queued) is beyond
             # the horizon, start nothing new; the messages stay in the database and are answered when it clears.
-            policy = await asyncio.to_thread(self.ledger.allowance_status, self.db, None)
+            policy = await asyncio.to_thread(self.ledger.allowance_status, self.db, None, now=now)
             gate_in = 0.0
             if policy and policy["next_dispatch_at"]:
                 gate_in = max(0.0, (datetime.fromisoformat(policy["next_dispatch_at"]) - now).total_seconds())
@@ -875,6 +949,8 @@ class Service:
             horizon = interval * (self.tuning.concurrency + 1) + 30
             if gate_in + self.send_gate.waiting * interval > horizon:
                 blocked = "send-backlog" if gate_in <= horizon else "provider-cooldown"
+            if policy and policy.get("daily_limit") is not None and policy["daily_used"] >= policy["daily_limit"]:
+                blocked = "allowance-daily-cap"       # the account's daily cap: start nothing, spend no model call on a reply that cannot go
         started = 0
         for fan, mid, first in ready:
             if self.stop.is_set():
@@ -906,6 +982,7 @@ class Service:
             for fan in self.tasks:
                 self._status(fan, "sending" if getattr(self.children.get(fan), "phase", "") == "sending" else "preparing")
         self.queue_event(ready, waiting, oldest)
+        await self.stall_check(ready, waiting, blocked, now)
         try:
             await asyncio.to_thread(self._twin_controls, controlled)
         except Exception as exc:
@@ -1006,10 +1083,12 @@ class Service:
         held = await asyncio.to_thread(fan_hold_reason, self.path, self.db, self.args.fan, *self.strict_arg)
         if held:
             raise Refused(held)
-        policy = self.ledger.allowance_status(self.db, self.args.fan)
+        policy = self.ledger.allowance_status(self.db, self.args.fan, now=runner.now())
         if policy is None or not policy["enabled"] or policy["used"] >= policy["limit"]:
             raise Refused("allowance-disabled" if policy is not None and not policy["enabled"]
                           else "allowance-exhausted" if policy else "allowance-missing")
+        if policy.get("daily_limit") is not None and policy["daily_used"] >= policy["daily_limit"]:
+            raise Refused("allowance-daily-cap")       # the account's daily cap: no model call is spent on a reply that cannot be sent
         self.note(None)
         if job is not None:
             return await self.followup_turn(job)
@@ -1463,6 +1542,16 @@ class Service:
             via = "runtime-stop-only:" + (str(exc)[:60] or type(exc).__name__)
         runner.emit({"event": "stopped-after-card", "account_id": self.db, "fan_id": self.args.fan, "via": via})
 
+    async def provider_throttled(self, retry_after):
+        """The provider refused a send with HTTP 429 (shared ceiling, rule 2): the account goes back to the 20 s default gap
+        and an alert is left (a durable ``engine_alert`` row plus a ``provider-throttled`` event). Nothing raises: this
+        must never cost the reply that is already being deferred, and nothing ever lowers the gap again by itself."""
+        try:
+            info = await asyncio.to_thread(self.ledger.throttle_backoff, self.db, runner.now(), retry_after=retry_after)
+        except Exception as exc:
+            info = {"changed": False, "before": None, "after": None, "alert": False, "error": type(exc).__name__}
+        runner.emit({"event": "provider-throttled", "account": self.db, "retry_after": retry_after, **info})
+
     async def after_failure(self, reason, key, retry=None):
         """A failed turn: stop for the fan if the ledger says so, else abandon only this input.
 
@@ -1489,6 +1578,8 @@ class Service:
             count = ledger.requeue_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now(),
                                          max_requeues=retry_limit,
                                          not_before=runner.now() + timedelta(seconds=backoff) if provider_defer else None)
+            if provider_defer:
+                await self.provider_throttled(after)
             if count:
                 runner.emit({"event": "turn-requeued", "reason": reason, "retry": count, "backoff_s": backoff,
                              **({"fan_id": self.args.fan} if self.strict else {})})
@@ -1517,7 +1608,8 @@ class Service:
             raise Refused("pilot-store-required")
         runner.require_store_schema(self.path)
         self.ledger = Ledger(self.path, allowance=True, min_send_interval_s=self.tuning.min_send_interval_s,
-                             lock_scope=self.db if self.all_fans else None)
+                             lock_scope=self.db if self.all_fans else None,
+                             per_account_send_gap=bool(self.tuning.per_account_send_gap))
         for var, why in self.tuning.clamped:
             runner.emit({"event": "setting-clamped", "setting": var, "why": why})
         if self.all_fans:

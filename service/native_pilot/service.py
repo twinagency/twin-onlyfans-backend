@@ -897,7 +897,11 @@ class Service:
             detail = {"oldest_wait_s": round(oldest, 1), "owed_past_threshold": count, "moving": bool(sent_recently),
                       "in_flight": len(self.tasks), "send_waiting": self.send_gate.waiting, "blocked": blocked or None,
                       "threshold_s": threshold}
-            opened = await asyncio.to_thread(self.ledger.raise_alert, self.db, Ledger.ALERT_SEND_STALL, now, detail)
+            try:
+                opened = await asyncio.to_thread(self.ledger.raise_alert, self.db, Ledger.ALERT_SEND_STALL, now, detail)
+            except Exception as exc:        # the event below is the signal even when the durable row cannot be written
+                opened = not self.stalled
+                detail["alert_row"] = type(exc).__name__
             self.stalled = True
             if opened or mono >= self._stall_reported:
                 self._stall_reported = mono + 300.0          # a still-stalled account repeats the event every 5 minutes

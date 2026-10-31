@@ -80,7 +80,41 @@ async def scenario(sim):
     return {"sends": sim.sends[A], "latency": stats(lat)}
 
 
+async def faults(sim):
+    """A provider 429 on one reply and model timeouts on others, mid-burst: nobody else stalls, nothing is lost."""
+    fs = sim.accounts[A]
+    p = sim.providers[A]
+    await asyncio.sleep(3)
+    sim.fail_models = 3                                  # three model calls time out
+    p.faults.append(("429", 30))                         # the first POST is refused with 429 / Retry-After 30
+    for fan in fs:
+        sim.fan_says(A, fan, "hi")
+    await asyncio.sleep(120)
+    refused_at = p.post_log[0][0]
+    check(sim.kinds("provider-throttled", A), "the 429 was seen")
+    handed = fs[5]
+    sim.human_says(A, handed, "hey it's me")             # a human answers one fan while the burst is running
+    sim.takeover(A, handed)
+    await asyncio.sleep(len(fs) * 25 + 600)
+    answered = {f for _t, f, _b in p.post_log}
+    check(sim.duplicates == 0 and sim.cross_account == 0, f"no duplicate or cross-fan send {sim.failures[:3]}")
+    check(sim.takeover_violations == 0 and handed not in {f for t, f, _b in p.post_log if t > sim.takeovers[(A, handed)][-1][0]},
+          "the human's fan got no AI send after takeover")
+    check(set(fs) - answered <= {handed}, f"everyone else was answered ({len(set(fs) - answered)} missing)")
+    accepted = [t for t, _f, _b in p.post_log][1:]
+    gaps = [(b - a).total_seconds() for a, b in zip(accepted, accepted[1:])]
+    check(gaps and max(gaps) <= 30, f"after the cooldown the queue kept moving, largest gap {max(gaps):.0f}s (one 429 / 3 model timeouts stalled nobody)")
+    check((accepted[0] - refused_at).total_seconds() <= 30 + 25, "the first accepted send came within the Retry-After plus a gap")
+    reasons = [e["reason"] for e in sim.kinds("turn-requeued", A)]
+    check("provider-rate-limited" in reasons and "model-timeout" in reasons, "both failures were requeued, not dropped")
+    check(not sim.kinds("turn-abandoned", A), "nothing abandoned")
+
+
 def main():
+    root = tempfile.mkdtemp(dir="/dev/shm" if Path("/dev/shm").is_dir() else None)
+    H.run_sim(faults, root=root, accounts={A: [2000 + i for i in range(60)]}, concurrency=4, model_latency=lambda rng: 3.0, bubbles=ONE,
+              throttle=GAP, min_interval=GAP, tuning_extra={"per_account_send_gap": 1})
+    print("  ok   faults (60 fans: a 429 and 3 model timeouts mid-burst, a human takeover)", flush=True)
     root = tempfile.mkdtemp(dir="/dev/shm" if Path("/dev/shm").is_dir() else None)
     fans = [1000 + i for i in range(N)]
     H.run_sim(scenario, root=root, accounts={A: fans}, concurrency=4, model_latency=lambda rng: 3.0, bubbles=ONE, throttle=GAP,

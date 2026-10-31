@@ -848,6 +848,28 @@ async def loop_level(backend, root):
         FakeEngine.skip_manual = False
         await stop(task, patcher)
 
+        # ── an identity question hands the chat to a human AND closes the reply schedule (no spent schedule left behind) ──
+        from native_pilot import pacing as _pacing
+        from native_pilot.service import Service as _Service
+
+        async def _no_handoff(self, trigger, attention="identity-question"):
+            return None   # the control path needs the Twin tables; only the schedule close is under test here
+        f, http, client = make("loop-identity-closes-schedule", limit=100, used=4, throttle=1)
+        finished = []
+        decision = {"schedule": None, "authority": None, "eligible_at": clock()}
+        events.clear()
+        with patch.object(_pacing, "settings", lambda *a, **k: {_pacing.PACING: True}), \
+                patch.object(_pacing, "prepare", lambda *a, **k: dict(decision)), \
+                patch.object(_pacing, "finish", lambda ledger, d, **k: finished.append(k)), \
+                patch.object(_Service, "identity_handoff", _no_handoff):
+            task, patcher = start(client)
+            await until(lambda: kinds("ready"), "ready", events)
+            fan_says(f, "are you a bot?")
+            await until(lambda: finished, "the identity hand-off closes the pacing schedule", events)
+            check(finished[0].get("sent") is False and not finished[0].get("error"))
+            check(not http.posts)
+            await stop(task, patcher)
+
         # ── a model timeout/error abandons an input only after ONE requeue; never once a send attempt stands ──
         f, http, client = make("loop-model-retry", limit=100, used=4, throttle=1)
         FakeEngine.fail_models = 1

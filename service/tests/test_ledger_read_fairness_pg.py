@@ -173,3 +173,25 @@ def test_stale_partial_purchase_window_restarts_before_another_page(native,monke
         scan=s.get(OfLedgerScan,account)
         assert scan.status=='idle' and scan.last_complete_at==now and scan.window_end==now
         assert ledger.coverage_proven(scan)
+
+
+def test_recent_refresh_extends_last_proven_cutoff_instead_of_rescanning_week(native,monkeypatch):
+    now=utcnow()
+    store,account=_scan_once(native,monkeypatch,now,more=False)
+    prior=now-timedelta(minutes=6)
+    with Session(store.engine) as s,s.begin():
+        scan=s.get(OfLedgerScan,account)
+        scan.status='idle'
+        scan.last_complete_at=prior
+        scan.window_end=prior
+        scan.window_start=prior-timedelta(days=7)
+        scan.next_poll_at=now
+        scan.updated_at=now
+        scan.coverage_json=ledger._coverage_receipt(scan)
+    seen=[]
+    def page(self,**kw):
+        seen.append((kw['start'],kw['end']))
+        return payload([],more=False)
+    monkeypatch.setattr(NativeProviderConnector,'transaction_page',page)
+    assert ledger.process_ledger_pages(store,TENANT)==1
+    assert seen==[(prior-ledger.RECENT_OVERLAP,now)]

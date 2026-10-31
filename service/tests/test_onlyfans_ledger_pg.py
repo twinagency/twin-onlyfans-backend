@@ -359,19 +359,20 @@ def test_long_scan_records_its_provider_cutoff_instead_of_claiming_newer_coverag
     import onlyfans_runtime.store as store_module
     store, account, _ = verified(database, monkeypatch)
     cutoff = utcnow()
+    finished = cutoff + timedelta(minutes=20)
     monkeypatch.setattr(ledger, "utcnow", lambda: cutoff)
     def read(self, **kwargs):
         assert kwargs["end"] == cutoff
-        monkeypatch.setattr(ledger, "utcnow", lambda: cutoff+timedelta(minutes=20))
+        monkeypatch.setattr(ledger, "utcnow", lambda: finished)
         return payload([])
     monkeypatch.setattr(NativeProviderConnector, "transaction_page", read)
     assert process_ledger_pages(store, TENANT) == 1
     with Session(database[1]) as s:
         scan = s.get(OfLedgerScan, account)
-        assert scan.last_complete_at == cutoff and scan.last_full_at == cutoff
+        assert scan.last_complete_at == cutoff and scan.last_full_at is None
         # The scan took far longer than one refresh interval, so the next
         # provider query is already due instead of another five minutes later.
-        assert scan.next_poll_at <= utcnow()+timedelta(seconds=2)
+        assert scan.next_poll_at <= finished+timedelta(seconds=2)
     store.close()
 
 

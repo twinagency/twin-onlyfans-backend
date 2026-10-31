@@ -9,8 +9,8 @@ class OfContextualOffer(Base):
         CheckConstraint("state IN ('reserved','sent','unknown','purchased','cancelled')", name="ck_contextual_state"),
         UniqueConstraint("account_id", "fan_id", "source_message_id", name="uq_contextual_turn"),
         Index("uq_contextual_unresolved", "account_id", "fan_id", unique=True,
-              postgresql_where=text("state IN ('reserved','sent','unknown')"),
-              sqlite_where=text("state IN ('reserved','sent','unknown')")),
+              postgresql_where=text("state IN ('reserved','unknown')"),
+              sqlite_where=text("state IN ('reserved','unknown')")),
         {"info":{"onlyfans_since":"0101_contextual_offers"}},
     )
     account_id = Column(String, ForeignKey("accounts.id", ondelete="RESTRICT"), primary_key=True)
@@ -24,3 +24,4 @@ class OfContextualOffer(Base):
     message_id = Column(BigInteger)
     state = Column(String(16), nullable=False)
     created_at = Column(DateTime, nullable=False)
+

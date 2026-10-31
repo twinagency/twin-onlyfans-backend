@@ -161,7 +161,7 @@ def test_ignored_card_not_cleared_by_expiry_chatter_or_offer_send(db):
         c.execute("INSERT INTO content_offers VALUES(?,?,?,?,?)",(ACCOUNT,FAN,500,"expired",None))
         c.execute("INSERT INTO messages VALUES(?,?,?,?)",(ACCOUNT,FAN,500,False))
     with store.readonly(db) as c:assert ignored_contextual(c,ACCOUNT,FAN)
-    with pytest.raises(Refused):authority(db,11).check()
+    assert authority(db,11).check()["mode"] == "live"
     with sqlite3.connect(db) as c:
         c.execute("UPDATE content_offers SET status='delivered',resolved_by='ppv_ledger'")
     with store.readonly(db) as c:assert ignored_contextual(c,ACCOUNT,FAN) # still no confirmed payment flag
@@ -195,6 +195,34 @@ def test_parallel_workers_reserve_at_most_one_card(db):
             except Refused:return False
     with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(attempt,range(10,14)))
     assert sum(results)==1
+
+
+def test_different_contextual_card_allowed_after_confirmed_unpaid_card(db):
+    a=authority(db);permission=a.check()
+    with a.arm(delivery(),permission,"gym",(10,)):a.reserve(terms(),1)
+    a.outcome("sent",500)
+    b=authority(db,11);permission=b.check()
+    with b.arm(delivery((103,)),permission,"different relevant content",(11,)):
+        b.reserve(terms((103,)),2)
+    b.outcome("sent",501)
+    with store.readonly(db) as c:
+        assert c.execute("SELECT count(*) FROM of_contextual_offer WHERE state='sent'").fetchone()[0] == 2
+        assert ignored_contextual(c,ACCOUNT,FAN) # no fake purchase or cancellation
+        with pytest.raises(Refused,match="item-already-pending"):
+            refuse_repeat_media(c,ACCOUNT,FAN,terms((101,),800))
+    with pytest.raises(Refused,match="contextual-turn-already-decided"):
+        authority(db,11).check()
+
+
+def test_unknown_delivery_still_blocks_even_different_media(db):
+    a=authority(db);permission=a.check()
+    with a.arm(delivery(),permission,"gym",(10,)):a.reserve(terms(),1)
+    a.outcome("unknown")
+    b=authority(db,11)
+    with pytest.raises(Refused,match="contextual-offer-unresolved"):b.check()
+    with b.arm(delivery((103,)),permission,"different",(11,)):
+        with pytest.raises(Refused,match="contextual-offer-unresolved"):
+            b.reserve(terms((103,)),2)
 
 
 def test_same_or_owned_media_blocked_different_explicit_item_allowed(db):
@@ -396,7 +424,7 @@ def test_crash_after_receipt_retention_keeps_hold_until_matching_purchase(db):
         c.execute("INSERT INTO native_pilots VALUES('pilot',?,?)",(ACCOUNT,FAN))
         c.execute("INSERT INTO native_pilot_receipts VALUES(42,'pilot','sent','500',?)",
                   (json.dumps({"dispatch_intent":{"content":{"contextual":metadata}}}),))
-    with pytest.raises(Refused):authority(db,11).check() # receipt alone is not payment
+    assert authority(db,11).check()["mode"] == "live" # positive receipt resolves delivery, not ownership
     with sqlite3.connect(db) as c:
         c.execute("INSERT INTO content_offers VALUES(?,?,?,?,?)",(ACCOUNT,FAN,500,"delivered","ppv_ledger"))
         c.execute("INSERT INTO messages VALUES(?,?,?,1)",(ACCOUNT,FAN,500))
@@ -415,3 +443,4 @@ def test_explicit_same_item_cannot_duplicate_a_card_after_projection_crash(db):
         with pytest.raises(Refused,match="item-already-pending"):
             refuse_repeat_media(con,ACCOUNT,FAN,terms((101,),800))
         refuse_repeat_media(con,ACCOUNT,FAN,terms((103,),800))
+

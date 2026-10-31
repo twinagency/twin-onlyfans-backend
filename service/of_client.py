@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor as _Pool
 from pathlib import Path
@@ -203,6 +204,17 @@ class OFAPIError(Exception):
 
 
 
+def close_client_http(client) -> None:
+    """Close a client's current session or, for OFClient, all thread sessions."""
+    closer = getattr(client, "close_http_sessions", None)
+    if callable(closer):
+        closer()
+        return
+    http = getattr(client, "http", None)
+    if http is not None:
+        http.close()
+
+
 # The release-form arrays, which OF's composer always emits together. A send
 # body either declares all three itself (the 1:1 chat send) or none of them.
 _RF_KEYS = ("rfTag", "rfGuest", "rfPartner")
@@ -278,22 +290,81 @@ class OFClient:
         # distinct so the server can rename / re-key without touching OFClient).
         self.account_id = str(h["user_id"])
 
-        # curl_cffi.requests.Session takes impersonate at construction; every
-        # subsequent .get()/.post() uses that TLS profile + matching default headers.
-        self.http = requests.Session(impersonate=IMPERSONATE)
-        if proxies:
-            self.http.proxies.update(proxies)
-
-        # Replay every cookie Playwright captured (auth_id, sess, fp, etc.)
-        for c in session_dict.get("cookies", []):
-            self.http.cookies.set(
-                c["name"], c["value"],
-                domain=c.get("domain"),
-                path=c.get("path", "/"),
-            )
+        # curl_cffi.requests.Session is not documented as thread-safe. Concurrent fans
+        # share this one account client (same login, same sticky proxy) but each worker
+        # thread gets its own Session, seeded with the captured cookies. That keeps the
+        # TLS impersonation and auth identity shared without serialising every POST.
+        self._http_local = threading.local()
+        self._http_sessions = set()
+        self._http_sessions_lock = threading.Lock()
+        self._http_proxies = dict(proxies or {})
+        self._http_cookies = tuple(session_dict.get("cookies", []))
 
         # Fetched lazily on first signed call (it's a single GET to the CDN).
         self._x_hash: str | None = None
+
+    def _new_http_session(self):
+        session = requests.Session(impersonate=IMPERSONATE)
+        if getattr(self, "_http_proxies", None):
+            session.proxies.update(self._http_proxies)
+        for cookie in getattr(self, "_http_cookies", ()):
+            session.cookies.set(
+                cookie["name"], cookie["value"],
+                domain=cookie.get("domain"),
+                path=cookie.get("path", "/"),
+            )
+        sessions = getattr(self, "_http_sessions", None)
+        lock = getattr(self, "_http_sessions_lock", None)
+        if sessions is not None and lock is not None:
+            with lock:
+                sessions.add(session)
+        return session
+
+    @property
+    def http(self):
+        override = getattr(self, "_http_override", None)
+        if override is not None:
+            return override
+        if not hasattr(self, "_http_local"):
+            self._http_local = threading.local()
+        session = getattr(self._http_local, "session", None)
+        if session is None:
+            session = self._new_http_session()
+            self._http_local.session = session
+        return session
+
+    @http.setter
+    def http(self, session):
+        # Explicit injection (tests / a caller-owned transport) is one shared object
+        # and must remain visible across the worker thread that performs the POST.
+        self._http_override = session
+        if not hasattr(self, "_http_local"):
+            self._http_local = threading.local()
+        self._http_local.session = session
+        sessions = getattr(self, "_http_sessions", None)
+        lock = getattr(self, "_http_sessions_lock", None)
+        if sessions is not None and lock is not None:
+            with lock:
+                sessions.add(session)
+
+    def close_http_sessions(self):
+        """Close every per-thread session this account client opened."""
+        sessions = getattr(self, "_http_sessions", None)
+        lock = getattr(self, "_http_sessions_lock", None)
+        if sessions is not None and lock is not None:
+            with lock:
+                opened, self._http_sessions = list(sessions), set()
+        else:
+            opened = []
+            current = getattr(getattr(self, "_http_local", None), "session", None)
+            if current is not None:
+                opened.append(current)
+        for session in opened:
+            try:
+                session.close()
+            except Exception:
+                pass
+        self._http_local = threading.local()
 
     # ── Constructors ────────────────────────────────────────────
 

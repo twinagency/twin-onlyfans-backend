@@ -126,15 +126,21 @@ class NativeWorker:
             policy=s.get(OfDeliveryPolicy,account.account_id)
             now=self.authority._db_now(s)
             from .store import fan_current_override
+            from . import concurrent_admission
+            from native_pilot import admission
             current=bool(not runtime.recovery_needed and runtime.last_sync_at is not None and
                 (now-runtime.last_sync_at).total_seconds()>=-300 and
                 (now-runtime.last_sync_at).total_seconds()<=MAX_SYNC_AGE_SECONDS)
+            concurrent = policy is not None and concurrent_admission.mode(policy) == "concurrent"
+            cooldown = admission.cooldown_at(policy) if policy is not None else None
             # Per-fan eligibility still requires that fan's own recovery (text_delivery).
             return bool(runtime.enabled and ((current and not runtime.pending_events)
                 or bool(fan_current_override(account.account_id)))
                 and policy is not None and policy.enabled and policy.transport_kind==kind
-                and policy.used_units<policy.limit_units and not policy.active_intent_id and policy.queued_count==0
-                and (policy.next_dispatch_at is None or policy.next_dispatch_at<=now)
+                and policy.used_units<policy.limit_units
+                and (concurrent or (not policy.active_intent_id and policy.queued_count==0
+                                    and (policy.next_dispatch_at is None or policy.next_dispatch_at<=now)))
+                and (not concurrent or cooldown is None or cooldown<=now)
                 and (not hasattr(account.transport,"policy_revision") or account.transport.policy_revision==policy.revision))
 
     def _heartbeat(self, account, *, failed=False):

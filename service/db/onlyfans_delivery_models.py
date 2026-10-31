@@ -7,7 +7,7 @@ commerce evidence audits the existing canonical financial/ownership owners.
 """
 from sqlalchemy import (
     BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey,
-    ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint,
+    Float, ForeignKeyConstraint, Index, Integer, String, Text, UniqueConstraint,
     false, text,
 )
 
@@ -121,6 +121,16 @@ class OfDeliveryPolicy(Base):
         CheckConstraint("throttle_seconds >= 1 AND throttle_seconds <= 86400", name="throttle_seconds"),
         CheckConstraint("daily_limit_units IS NULL OR (daily_limit_units >= 0 AND daily_limit_units <= 20000)",
                         name="daily_limit_units", info={"onlyfans_since": "0101_daily_send_cap"}),
+        CheckConstraint("delivery_mode IN ('gap','concurrent')", name="delivery_mode",
+                        info={"onlyfans_since": "0102_concurrent_delivery"}),
+        CheckConstraint("provider_requests_per_second > 0 AND provider_requests_per_second <= 100",
+                        name="provider_requests_per_second", info={"onlyfans_since": "0102_concurrent_delivery"}),
+        CheckConstraint("provider_burst >= 1 AND provider_burst <= 200", name="provider_burst",
+                        info={"onlyfans_since": "0102_concurrent_delivery"}),
+        CheckConstraint("provider_max_concurrent >= 1 AND provider_max_concurrent <= 64",
+                        name="provider_max_concurrent", info={"onlyfans_since": "0102_concurrent_delivery"}),
+        CheckConstraint("conversation_min_gap_seconds >= 0 AND conversation_min_gap_seconds <= 3600",
+                        name="conversation_min_gap_seconds", info={"onlyfans_since": "0102_concurrent_delivery"}),
         {"info": INFO},
     )
     account_id = Column(String, ForeignKey("of_runtime.account_id", ondelete="RESTRICT"), primary_key=True)
@@ -138,6 +148,19 @@ class OfDeliveryPolicy(Base):
     # Optional per-account DAILY send cap (rolling 24 hours of the FASTT engine's receipts). NULL = no daily cap, which
     # is exactly the behaviour before this column existed. It sits beside, and never replaces, the lifetime limit_units.
     daily_limit_units = Column(Integer, nullable=True, info={"onlyfans_since": "0101_daily_send_cap"})
+    # Concurrent mode is an account-specific opt-in. "gap" keeps the old single-send gate and throttle;
+    # "concurrent" uses the provider token bucket, bounded concurrency and per-fan ownership below.
+    delivery_mode = Column(String(16), nullable=False, server_default=text("'gap'"),
+                           info={"onlyfans_since": "0102_concurrent_delivery"})
+    provider_requests_per_second = Column(Float, nullable=False, server_default=text("1.0"),
+                                          info={"onlyfans_since": "0102_concurrent_delivery"})
+    provider_burst = Column(Integer, nullable=False, server_default=text("5"),
+                            info={"onlyfans_since": "0102_concurrent_delivery"})
+    provider_max_concurrent = Column(Integer, nullable=False, server_default=text("4"),
+                                     info={"onlyfans_since": "0102_concurrent_delivery"})
+    conversation_min_gap_seconds = Column(Integer, nullable=False, server_default=text("0"),
+                                          info={"onlyfans_since": "0102_concurrent_delivery"})
+    provider_cooldown_until = Column(DateTime, nullable=True, info={"onlyfans_since": "0102_concurrent_delivery"})
 
 
 class OfDeliveryPolicyChange(Base):

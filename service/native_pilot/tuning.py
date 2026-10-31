@@ -22,6 +22,7 @@ SEND_GAP_HARD_FLOOR_S = 10.0
 # name: (env, default, low, high)
 _SPEC = {
     "concurrency": ("FASTT_PREPARE_CONCURRENCY", 4, 1, 16),
+    "send_concurrency": ("FASTT_SEND_CONCURRENCY", 4, 1, 32),
     "quiet_s": ("FASTT_BURST_QUIET_S", 7.0, 1.0, 60.0),
     "burst_max_wait_s": ("FASTT_BURST_MAX_WAIT_S", 45.0, 5.0, 300.0),
     "min_send_interval_s": ("FASTT_MIN_SEND_INTERVAL_S", None, None, 3600.0),   # default and low bound: the floor, read at call time
@@ -36,6 +37,8 @@ _SPEC = {
     "stall_alert_s": ("FASTT_STALL_ALERT_S", 600.0, 60.0, 86400.0),      # oldest owed reply waiting this long = a stall alert
     "per_account_send_gap": ("FASTT_PER_ACCOUNT_SEND_GAP", 0, 0, 1),     # 1 = each account's own throttle_seconds (>= 10) sets its gap
     "absent_after_s": ("FASTT_AUTO_RESOLVE_ABSENT_AFTER_S", 0.0, 0.0, 86400.0),   # 0 = never infer non-delivery
+    "conversation_min_gap_s": ("FASTT_CONVERSATION_MIN_GAP_S", 0.0, 0.0, 3600.0),
+    "dispatch_lease_s": ("FASTT_DISPATCH_LEASE_S", 120.0, 30.0, 900.0),
 }
 
 
@@ -76,6 +79,7 @@ def _account_overrides(env, account, clamped) -> dict:
 @dataclass(frozen=True)
 class Tuning:
     concurrency: int = 4
+    send_concurrency: int = 4
     quiet_s: float = 7.0
     burst_max_wait_s: float = 45.0
     min_send_interval_s: float = MIN_SEND_INTERVAL_FLOOR_S
@@ -90,6 +94,8 @@ class Tuning:
     per_account_send_gap: int = 0
     stall_alert_s: float = 600.0
     absent_after_s: float = 0.0
+    conversation_min_gap_s: float = 0.0
+    dispatch_lease_s: float = 120.0
     clamped: tuple = field(default=(), compare=False)
 
     @classmethod

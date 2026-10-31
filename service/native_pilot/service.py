@@ -88,8 +88,8 @@ RELEASE_BACKOFF_S = {"new-message-during-generation": 1.0, "source-changed": 1.0
                      "twin-context-unavailable": 30.0, "service-stopping": 1.0,
                      # account-wide limits: the message stays pending with the reason, the whole account waits
                      "allowance-disabled": 30.0, "allowance-exhausted": 30.0, "allowance-missing": 30.0, "allowance-daily-cap": 60.0,
-                     "account-credential-changed": 2.0}
-ACCOUNT_BLOCK_PREFIXES = ("allowance-", "model-budget")
+                     "account-credential-changed": 2.0, "account-auth-failed": 300.0}
+ACCOUNT_BLOCK_PREFIXES = ("allowance-", "model-budget", "account-")
 # A reply the model could not produce (timeout, HTTP error such as a 402, budget exhausted) is kept PENDING with its
 # reason and retried with backoff; it is never dropped. Only an input older than the horizon is let go (surfaced).
 MODEL_RETRY_LIMIT = 12
@@ -236,9 +236,16 @@ class ServiceGateway(runner.Gateway):
                 raise Refused("allowance-exhausted")
             if policy.get("daily_limit") is not None and policy["daily_used"] >= policy["daily_limit"]:
                 raise Refused("allowance-daily-cap")
-            wait = 1.0 if policy["busy"] else 0.0
-            if policy["next_dispatch_at"]:
-                wait = max(wait, (datetime.fromisoformat(policy["next_dispatch_at"]) - runner.now()).total_seconds())
+            wait = 0.0
+            if policy.get("delivery_mode") == "concurrent":
+                for stamp in (policy.get("cooldown_until"), policy.get("conversation_next_send_at")):
+                    if stamp:
+                        wait = max(wait, (datetime.fromisoformat(stamp) - runner.now()).total_seconds())
+                wait = max(wait, float(policy.get("provider_wait_s") or 0.0))
+            else:
+                wait = 1.0 if policy["busy"] else 0.0
+                if policy["next_dispatch_at"]:
+                    wait = max(wait, (datetime.fromisoformat(policy["next_dispatch_at"]) - runner.now()).total_seconds())
             if wait <= 0:
                 return
             if waited >= self.send_wait_max_s:
@@ -267,8 +274,9 @@ class Service:
         self.tuning = tuning or Tuning.from_env(account=self.db)
         self.quiet_s = self.tuning.quiet_s if quiet_s is None else quiet_s
         self.connection_check_s = connection_check_s
-        # Engine v2 (all-fans runner): bounded concurrent turns, one FIFO send gate per account, durable work board.
-        self.send_gate = SendGate()
+        # Engine v2 (all-fans runner): bounded concurrent turns, one send gate per account, durable work board.
+        # The limit starts at one (legacy) and is raised in run() only when the account policy says concurrent.
+        self.send_gate = SendGate(max_concurrency=1)
         self.cancel_reason = None      # set on a per-fan child: its in-flight reply must stop (takeover, pause, credential change)
         self.runner_lost = False       # the account runner lease was lost: nothing may be sent by this process
         self.tasks: dict[int, asyncio.Task] = {}
@@ -298,6 +306,7 @@ class Service:
         self.prior_catalog = None
         self.catalog_owner = self
         self.next_conn_check = 0.0
+        self._session_lock = None
         self.started_at = None
         self.turns_started = 0
         self._outcomes = set()     # (kind, offer, reason) already reported by scan_postsale
@@ -334,29 +343,46 @@ class Service:
     # ── session ───────────────────────────────────────────────────────────
     async def ensure_session(self):
         from . import attribution, connection
+        if self.catalog_owner is not self:
+            # All-fans children share the parent's one account session. Refreshing
+            # from each child would build and close several clients at once.
+            owner = self.catalog_owner
+            await owner.ensure_session()
+            self.client, self.conn, self.sentinels = owner.client, owner.conn, owner.sentinels
+            self.next_conn_check = owner.next_conn_check
+            return
         soon = self.conn is not None and self.conn.expires_at.replace(tzinfo=None) <= runner.now() + timedelta(seconds=60)
         if self.client is not None and not soon and time.monotonic() < self.next_conn_check:
             return
-        conn = await connection.load_verified_connection(self.scope)
-        if self.client is None or conn.revision != self.conn.revision or conn.expires_at != self.conn.expires_at:
-            if self.client is not None and self.tasks:
-                # Credential change: nothing prepared with the old session may go out with the new one, and the old
-                # client is only closed after every send on it has settled.
-                await self.quiesce("credential-change")
-            client = await asyncio.to_thread(connection.build_client, conn)
-            me = await asyncio.to_thread(client.me)
-            if str(me.get("id")) != self.scope.provider_id or str(me.get("username", "")).lstrip("@").casefold() != self.args.handle.casefold():
-                client.http.close()
-                raise Refused("live-account-mismatch")
-            sentinels = await attribution.require_sentinels()
-            old, self.client, self.sentinels = self.client, client, sentinels
-            if self.intake is not None:
-                await self.intake.stop()
-            self.start_intake(conn)
-            if old is not None:
-                old.http.close()
-        self.conn = conn
-        self.next_conn_check = time.monotonic() + self.connection_check_s
+        if self._session_lock is None:
+            self._session_lock = asyncio.Lock()
+        async with self._session_lock:
+            # Another child may have refreshed while this child waited for the lock.
+            soon = self.conn is not None and self.conn.expires_at.replace(tzinfo=None) <= runner.now() + timedelta(seconds=60)
+            if self.client is not None and not soon and time.monotonic() < self.next_conn_check:
+                return
+            conn = await connection.load_verified_connection(self.scope)
+            if self.client is None or conn.revision != self.conn.revision or conn.expires_at != self.conn.expires_at:
+                if self.client is not None and self.tasks:
+                    # Credential change: nothing prepared with the old session may go out with the new one, and the old
+                    # client is only closed after every send on it has settled.
+                    await self.quiesce("credential-change")
+                client = await asyncio.to_thread(connection.build_client, conn)
+                me = await asyncio.to_thread(client.me)
+                if str(me.get("id")) != self.scope.provider_id or str(me.get("username", "")).lstrip("@").casefold() != self.args.handle.casefold():
+                    from of_client import close_client_http
+                    close_client_http(client)
+                    raise Refused("live-account-mismatch")
+                sentinels = await attribution.require_sentinels()
+                old, self.client, self.sentinels = self.client, client, sentinels
+                if self.intake is not None:
+                    await self.intake.stop()
+                self.start_intake(conn)
+                if old is not None:
+                    from of_client import close_client_http
+                    close_client_http(old)
+            self.conn = conn
+            self.next_conn_check = time.monotonic() + self.connection_check_s
 
     def start_intake(self, conn=None):
         from .intake import Intake
@@ -946,13 +972,23 @@ class Service:
             # account's next allowed send, e.g. a provider 429 cooldown, plus the replies already queued) is beyond
             # the horizon, start nothing new; the messages stay in the database and are answered when it clears.
             policy = await asyncio.to_thread(self.ledger.allowance_status, self.db, None, now=now)
+            self.send_gate.set_limit(
+                self.tuning.send_concurrency
+                if policy and policy.get("delivery_mode") == "concurrent" else 1)
             gate_in = 0.0
-            if policy and policy["next_dispatch_at"]:
-                gate_in = max(0.0, (datetime.fromisoformat(policy["next_dispatch_at"]) - now).total_seconds())
-            interval = max(self.tuning.min_send_interval_s, (policy or {}).get("throttle_seconds") or 0)
-            horizon = interval * (self.tuning.concurrency + 1) + 30
-            if gate_in + self.send_gate.waiting * interval > horizon:
-                blocked = "send-backlog" if gate_in <= horizon else "provider-cooldown"
+            if policy and policy.get("delivery_mode") == "concurrent":
+                stamp = policy.get("cooldown_until")
+                if stamp:
+                    gate_in = max(0.0, (datetime.fromisoformat(stamp) - now).total_seconds())
+                if gate_in > 0:
+                    blocked = "provider-cooldown"
+            else:
+                if policy and policy["next_dispatch_at"]:
+                    gate_in = max(0.0, (datetime.fromisoformat(policy["next_dispatch_at"]) - now).total_seconds())
+                interval = max(self.tuning.min_send_interval_s, (policy or {}).get("throttle_seconds") or 0)
+                horizon = interval * (self.tuning.concurrency + 1) + 30
+                if gate_in + self.send_gate.waiting * interval > horizon:
+                    blocked = "send-backlog" if gate_in <= horizon else "provider-cooldown"
             if policy and policy.get("daily_limit") is not None and policy["daily_used"] >= policy["daily_limit"]:
                 blocked = "allowance-daily-cap"       # the account's daily cap: start nothing, spend no model call on a reply that cannot go
         started = 0
@@ -1023,10 +1059,16 @@ class Service:
             raise
         await self.reconcile_pass()
         policy = None if self.all_fans else self.ledger.allowance_status(self.db, self.args.fan)
-        if policy and policy["next_dispatch_at"] and not self.all_fans:
+        if policy is not None:
+            self.send_gate.set_limit(
+                self.tuning.send_concurrency if policy.get("delivery_mode") == "concurrent" else 1)
+        gate_stamp = None
+        if policy:
+            gate_stamp = policy.get("cooldown_until") if policy.get("delivery_mode") == "concurrent" else policy["next_dispatch_at"]
+        if gate_stamp and not self.all_fans:
             # (All-fans mode keeps preparing replies while the send gate is closed: only the projected send
             # backlog limits new work, see tick_all. Single-fan mode keeps the original behaviour.)
-            wait = (datetime.fromisoformat(policy["next_dispatch_at"]) - runner.now()).total_seconds()
+            wait = (datetime.fromisoformat(gate_stamp) - runner.now()).total_seconds()
             if wait > 0:
                 # The shared send gate includes a provider cooldown, durably retained after restart.
                 # Do not spend model calls or probe another fan through the same limited connection.
@@ -1231,7 +1273,10 @@ class Service:
             retry = None
             if job is None:
                 if gateway.not_sent is not None:
-                    retry = ("provider", gateway.not_sent.retry_after) if gateway.not_sent.retry else None
+                    if gateway.not_sent.reason.startswith("account-"):
+                        retry = ("account", None)
+                    else:
+                        retry = ("provider", gateway.not_sent.retry_after) if gateway.not_sent.retry else None
                 elif error in MODEL_RETRY_REASONS:
                     retry = ("model", None)
                 elif error.startswith("model-budget"):
@@ -1547,9 +1592,13 @@ class Service:
         runner.emit({"event": "stopped-after-card", "account_id": self.db, "fan_id": self.args.fan, "via": via})
 
     async def provider_throttled(self, retry_after):
-        """The provider refused a send with HTTP 429 (shared ceiling, rule 2): the account goes back to the 20 s default gap
-        and an alert is left (a durable ``engine_alert`` row plus a ``provider-throttled`` event). Nothing raises: this
-        must never cost the reply that is already being deferred, and nothing ever lowers the gap again by itself."""
+        """Apply a provider 429 at account level.
+
+        Legacy mode returns to the 20 s default gap. Concurrent mode records the
+        provider's ``Retry-After`` as a durable account cooldown and keeps the
+        configured request rate. Either way an alert and event are left, and a
+        failure here never costs the reply that is already being deferred.
+        """
         try:
             info = await asyncio.to_thread(self.ledger.throttle_backoff, self.db, runner.now(), retry_after=retry_after)
         except Exception as exc:
@@ -1562,15 +1611,20 @@ class Service:
         Model failures retain their one-retry bound. A definite provider 429 keeps an unsent message pending
         with a persistent account cooldown. Unknown, dispatching and partly sent inputs are never replayed."""
         pilot, ledger = self.pilot, self.ledger
+        if reason.startswith("account-"):
+            self.account_block_reason = reason
+            runner.emit({"event": "account-blocked", "reason": reason,
+                         **({"fan_id": self.args.fan} if self.strict else {})})
         if retry is not None and ledger.status(pilot.pilot_id)["state"] == "active":
             kind, after = retry
             provider_defer = kind == "provider" and reason == "provider-rate-limited"
+            account_defer = kind == "account"
             prior = ledger._requeues.get(key, 0)
             backoff = (max(5.0, after) if after is not None else min(RATE_LIMIT_BACKOFF_S * (prior + 1), RATE_LIMIT_BACKOFF_MAX_S)) \
-                if provider_defer else self.hold_s
+                if provider_defer else (300.0 if account_defer else self.hold_s)
             # Provider refusals must not consume the separate one-model-retry budget.
             provider_attempts = sum(r["state"] == "not_sent" for r in ledger.receipts(pilot_id=pilot.pilot_id, input_key=key))
-            retry_limit = (None if provider_defer or kind == "budget" else MAX_REQUEUES_PROVIDER if kind == "provider"
+            retry_limit = (None if provider_defer or account_defer or kind == "budget" else MAX_REQUEUES_PROVIDER if kind == "provider"
                            else MODEL_RETRY_LIMIT + provider_attempts)
             if kind == "budget":
                 backoff = BUDGET_HOLD_S
@@ -1581,7 +1635,8 @@ class Service:
                     backoff, retry_limit = 5.0, 2 + provider_attempts
             count = ledger.requeue_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now(),
                                          max_requeues=retry_limit,
-                                         not_before=runner.now() + timedelta(seconds=backoff) if provider_defer else None)
+                                         not_before=runner.now() + timedelta(seconds=backoff)
+                                         if provider_defer or account_defer else None)
             if provider_defer:
                 await self.provider_throttled(after)
             if count:
@@ -1613,7 +1668,12 @@ class Service:
         runner.require_store_schema(self.path)
         self.ledger = Ledger(self.path, allowance=True, min_send_interval_s=self.tuning.min_send_interval_s,
                              lock_scope=self.db if self.all_fans else None,
-                             per_account_send_gap=bool(self.tuning.per_account_send_gap))
+                             per_account_send_gap=bool(self.tuning.per_account_send_gap),
+                             tenant_id=os.environ.get("ONLYFANS_WORKER_TENANT") or "default",
+                             send_concurrency=self.tuning.send_concurrency,
+                             conversation_min_gap_s=self.tuning.conversation_min_gap_s,
+                             dispatch_lease_s=self.tuning.dispatch_lease_s)
+        self.send_gate.set_limit(self.tuning.send_concurrency if self.ledger.delivery_mode(self.db) == "concurrent" else 1)
         for var, why in self.tuning.clamped:
             runner.emit({"event": "setting-clamped", "setting": var, "why": why})
         if self.all_fans:
@@ -1656,7 +1716,9 @@ class Service:
         be larger than the concurrency bound or the sender that would free the queue could never get a thread."""
         from concurrent.futures import ThreadPoolExecutor
         asyncio.get_running_loop().set_default_executor(
-            ThreadPoolExecutor(max_workers=self.tuning.concurrency * 3 + 12, thread_name_prefix="fastt"))
+            ThreadPoolExecutor(max_workers=max(self.tuning.concurrency * 3 + 12,
+                                               self.tuning.send_concurrency * 2 + 12),
+                               thread_name_prefix="fastt"))
 
     async def _take_runner_lease(self):
         """One live engine process per account. While another holder's lease is live this process waits (it does
@@ -1718,7 +1780,8 @@ class Service:
             finally:
                 try:
                     if self.client is not None:
-                        self.client.http.close()
+                        from of_client import close_client_http
+                        close_client_http(self.client)
                 finally:
                     await engine.dispose()
 
@@ -1748,7 +1811,8 @@ async def preflight(args):
                      "attribution": {"automation": found.automation is not None, "human": found.human is not None}})
     finally:
         if client is not None:
-            client.http.close()
+            from of_client import close_client_http
+            close_client_http(client)
         await engine.dispose()
 
 
@@ -1758,17 +1822,28 @@ async def serve(args, **kwargs):
     service = Service(args, **kwargs)
     loop = asyncio.get_running_loop()
     installed = []
+    previous = []
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
             loop.add_signal_handler(sig, service.stop.set)
             installed.append(sig)
         except (NotImplementedError, RuntimeError):
-            pass
+            # Windows' Proactor loop has no add_signal_handler; a plain handler still
+            # makes shutdown cooperative for the supervised process and tests.
+            try:
+                previous.append((sig, signal.signal(sig, lambda *_a: service.stop.set())))
+            except (ValueError, OSError):
+                pass
     try:
         await service.run()
     finally:
         for sig in installed:
             loop.remove_signal_handler(sig)
+        for sig, handler in previous:
+            try:
+                signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass
 
 
 def build_parser():

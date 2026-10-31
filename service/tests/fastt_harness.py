@@ -20,6 +20,8 @@ import random
 import sqlite3
 import statistics
 import sys
+import threading
+import time as _harness_time
 import types
 from contextlib import closing
 from datetime import datetime, timedelta
@@ -56,6 +58,8 @@ CREATE TABLE automation_rules(account_id TEXT,is_enabled INTEGER);
 CREATE TABLE scheduled_jobs(account_id TEXT,status TEXT,kind TEXT);
 CREATE TABLE account_ai_config(account_id TEXT,persona TEXT,chatter_config_json TEXT);
 CREATE TABLE content_offers(account_id TEXT,fan_id INTEGER,status TEXT,mode TEXT,item_id INTEGER);
+CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,preview_media_ids TEXT,
+ price_cents INTEGER,is_free_teaser INTEGER,enabled INTEGER,pricing_mode TEXT);
 CREATE TABLE pending_offer(account_id TEXT,fan_id INTEGER);
 CREATE TABLE automation_runs(id INTEGER PRIMARY KEY,account_id TEXT,kind TEXT,started_at TEXT,
  completed_at TEXT,status TEXT,stats_json TEXT,error_text TEXT);
@@ -68,7 +72,10 @@ CREATE TABLE of_provider_connection(account_id TEXT PRIMARY KEY,binding_id TEXT,
  last_error TEXT,expires_at TEXT,revision INTEGER);
 CREATE TABLE of_delivery_policy(account_id TEXT PRIMARY KEY,enabled INTEGER,limit_units INTEGER,
  used_units INTEGER,throttle_seconds INTEGER,next_dispatch_at TEXT,active_intent_id TEXT,
- revision INTEGER NOT NULL DEFAULT 0,daily_limit_units INTEGER,queued_count INTEGER NOT NULL DEFAULT 0);
+ revision INTEGER NOT NULL DEFAULT 0,daily_limit_units INTEGER,queued_count INTEGER NOT NULL DEFAULT 0,
+ delivery_mode TEXT NOT NULL DEFAULT 'gap',provider_requests_per_second REAL NOT NULL DEFAULT 1.0,
+ provider_burst INTEGER NOT NULL DEFAULT 5,provider_max_concurrent INTEGER NOT NULL DEFAULT 4,
+ conversation_min_gap_seconds INTEGER NOT NULL DEFAULT 0,provider_cooldown_until TEXT);
 CREATE TABLE of_delivery_policy_change(account_id TEXT,revision INTEGER,actor TEXT,reason TEXT,before_json TEXT,
  after_json TEXT,created_at TEXT,PRIMARY KEY(account_id,revision));
 """
@@ -105,6 +112,10 @@ class Provider:
         self.min_gap = None
         self.faults: list = []          # scripted answers for the next POSTs: ("429", retry_after) | ("timeout_lost",) | ("timeout_delivered",)
         self.rate_violations = 0
+        self.request_times: list = []
+        self.active = 0
+        self.max_active = 0
+        self._active_lock = threading.Lock()
         self.stale_credential_posts = 0
         self.post_log: list[tuple] = []
 
@@ -130,13 +141,23 @@ class FakeClient:
         page = rows[:limit]
         return {"list": [dict(m) for m in page], "hasMore": len(rows) > limit}
 
-    def send_text_once_body(self, fan, body):
+    def _post(self, fan, text, *, price=0, media=None, previews=None, locked_text=False):
         sim, p = self.sim, self.sim.providers[self.acct]
         now = sim.clock()
-        p.post_log.append((now, fan, body))
+        with p._active_lock:
+            p.active += 1
+            p.max_active = max(p.max_active, p.active)
+            p.request_times.append(now)
+        try:
+            if sim.provider_latency:
+                _harness_time.sleep(sim.provider_latency)
+        finally:
+            with p._active_lock:
+                p.active -= 1
+        p.post_log.append((now, fan, text))
         if self.generation != sim.generation[self.acct]:
             p.stale_credential_posts += 1
-        if p.last_post_at is not None:
+        if sim.delivery_mode != "concurrent" and p.last_post_at is not None:
             gap = (now - p.last_post_at).total_seconds()
             p.min_gap = gap if p.min_gap is None else min(p.min_gap, gap)
             if gap < sim.min_interval - 0.001:
@@ -148,15 +169,35 @@ class FakeClient:
             p.last_post_at = None if sim.rate_limited_posts_do_not_count else p.last_post_at
             p.posts -= 1
             raise ProviderHTTPError(429, {"retry-after": str(fault[1])} if fault[1] is not None else {})
+        if fault and fault[0] == "401":
+            p.posts -= 1
+            raise ProviderHTTPError(401, {})
         if fault and fault[0] == "timeout_lost":
             raise TimeoutError("read timeout")
-        text = body
-        msg = sim.new_provider_message(self.acct, fan, "out", text, now)
+        msg = sim.new_provider_message(self.acct, fan, "out", text, now, price=price, media=media,
+                                       previews=previews, locked_text=locked_text)
         p.add(int(fan), msg)
         sim.on_post(self.acct, int(fan), msg, now)
         if fault and fault[0] == "timeout_delivered":
             raise TimeoutError("read timeout after delivery")
         return dict(msg)
+
+    def send_text_once_body(self, fan, body):
+        return self._post(fan, body)
+
+    def post_json(self, url, json_body=None, **_):
+        body = json_body or {}
+        media_ids = body.get("mediaFiles") or []
+        media = [{"id": int(mid), "type": self.sim.media_types.get(int(mid), "photo")}
+                 for mid in media_ids]
+        return self._post(int(url.rstrip("/").split("/")[-2]), body.get("text", ""),
+                          price=body.get("price", 0), media=media,
+                          previews=body.get("previews") or [],
+                          locked_text=body.get("lockedText", False))
+
+    def vault_media_by_id(self, media_id):
+        return {"id": int(media_id), "type": self.sim.media_types.get(int(media_id), "photo"),
+                "canView": True}
 
 
 class FakeSocket:
@@ -181,7 +222,9 @@ _account_var: contextvars.ContextVar = contextvars.ContextVar("sim_account", def
 class Sim:
     def __init__(self, root, accounts: dict[str, list[int]], *, concurrency=4, model_latency=None, rng=None,
                  min_interval=20, quiet_s=7.0, burst_max_wait_s=45.0, bubbles=None, tuning_extra=None,
-                 throttle=20, poll_s=2.0, rate_limited_posts_do_not_count=False, db_dir=None):
+                 throttle=20, poll_s=2.0, rate_limited_posts_do_not_count=False, db_dir=None,
+                 delivery_mode="gap", provider_rate=1.0, provider_burst=5, provider_max_concurrent=4,
+                 conversation_gap=0, provider_latency=0.0, content_manifest=None):
         from native_pilot.tuning import Tuning
         self.root = Path(root)
         self.accounts = accounts
@@ -189,6 +232,15 @@ class Sim:
         self.model_latency = model_latency or (lambda rng: rng.lognormvariate(1.8, 0.6))
         self.bubbles = bubbles or (lambda rng: 1 if rng.random() < .8 else 2)
         self.min_interval = min_interval
+        self.delivery_mode = delivery_mode
+        self.provider_rate = float(provider_rate)
+        self.provider_burst = int(provider_burst)
+        self.provider_max_concurrent = int(provider_max_concurrent)
+        self.conversation_gap = int(conversation_gap)
+        self.provider_latency = float(provider_latency)
+        self.content_manifest = content_manifest
+        self.paid_fans: set[int] = set()
+        self.media_types: dict[int, str] = {}
         self.rate_limited_posts_do_not_count = rate_limited_posts_do_not_count
         self.tuning = Tuning.from_env({}, concurrency=concurrency, quiet_s=quiet_s, burst_max_wait_s=burst_max_wait_s,
                                       **(tuning_extra or {}))
@@ -239,11 +291,25 @@ class Sim:
                 con.execute("INSERT INTO of_creator_bindings VALUES(?,?,'onlyfans',NULL,'sim')", ("b-" + acct, acct))
                 con.execute("INSERT INTO of_provider_connection VALUES(?,?,?,'verified','2026-10-01 00:00:00',NULL,'2099-01-01 00:00:00',1)",
                             (acct, "b-" + acct, acct))
-                con.execute("INSERT INTO of_delivery_policy(account_id,enabled,limit_units,used_units,throttle_seconds,next_dispatch_at,"
-                            "active_intent_id) VALUES(?,1,100000000,0,?,NULL,NULL)", (acct, self.throttle))
+                con.execute("INSERT INTO of_delivery_policy(account_id,enabled,limit_units,used_units,throttle_seconds,"
+                            "next_dispatch_at,active_intent_id,delivery_mode,provider_requests_per_second,provider_burst,"
+                            "provider_max_concurrent,conversation_min_gap_seconds) "
+                            "VALUES(?,1,100000000,0,?,NULL,NULL,?,?,?,?,?)",
+                            (acct, self.throttle, self.delivery_mode, self.provider_rate, self.provider_burst,
+                             self.provider_max_concurrent, self.conversation_gap))
                 con.executemany("INSERT INTO twin_bridge_conversations VALUES(?,?,'active',NULL,4,NULL,NULL,1,3,3,?)",
                                 [(acct, f, "2026-10-16T12:00:00") for f in fans])
                 con.executemany("INSERT INTO of_conversation_state VALUES(?,?,'automated','none')", [(acct, f) for f in fans])
+            if self.content_manifest:
+                manifest = json.loads(Path(self.content_manifest).read_text(encoding="utf-8"))
+                account = manifest["account_id"]
+                for item in manifest["items"]:
+                    con.execute(
+                        "INSERT INTO catalog_items VALUES(?,?,?,?,?,?,0,1,'fixed')",
+                        (item["catalog_id"], account, item["kind"],
+                         json.dumps([m["id"] for m in item["media"]]),
+                         json.dumps(item["preview_ids"]), item["price_cents"]))
+                    self.media_types.update({int(m["id"]): m["type"] for m in item["media"]})
         os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///" + self.path.as_posix()
 
     def sql(self, sql, args=()):
@@ -255,12 +321,16 @@ class Sim:
         self._mid[acct] = self._mid.get(acct, 1_000_000) + 1
         return self._mid[acct]
 
-    def new_provider_message(self, acct, fan, direction, text, when):
+    def new_provider_message(self, acct, fan, direction, text, when, *, price=0, media=None,
+                             previews=None, locked_text=False):
         mid = self.next_id(acct, fan)
         stamp = when.replace(microsecond=(when.microsecond // 1000) * 1000)
         created = stamp.isoformat(timespec="milliseconds") + "Z"
-        base = {"id": mid, "text": text, "createdAt": created, "price": 0, "media": [], "mediaCount": 0, "previews": [],
-                "lockedText": False, "responseType": "message"}
+        media = [dict(m) for m in (media or [])]
+        previews = list(previews or [])
+        base = {"id": mid, "text": text, "createdAt": created, "price": price, "media": media,
+                "mediaCount": len(media), "previews": previews, "lockedText": locked_text,
+                "responseType": "message"}
         if direction == "in":
             return {**base, "isFromMe": False, "fromUser": {"id": int(fan)}, "toUser": {"id": int(acct)}, "withUser": {"id": int(fan)}}
         return {**base, "isFromMe": True, "fromUser": {"id": int(acct)}, "toUser": {"id": int(fan)}, "withUser": {"id": int(fan)}}
@@ -434,7 +504,7 @@ class Sim:
         from native_pilot import service
         self.sockets.setdefault(acct, asyncio.Queue())
         args = argparse.Namespace(account=acct, fan=None, all_fans=True, handle="sim", enable_send=True,
-                                  twin_context=False, content_manifest=None, service_id=None, followups=False,
+                                  twin_context=False, content_manifest=self.content_manifest, service_id=None, followups=False,
                                   vault_mode=False)
         svc = service.Service(args, stop=asyncio.Event(), tuning=self.tuning, ttl_s=120, renew_s=30, poll_s=self.poll_s,
                               hold_s=15, connection_check_s=300, intake_factory=self.intake_factory(acct))
@@ -476,7 +546,8 @@ class Sim:
             p = self.providers[acct]
             out[acct] = {"sends": self.sends[acct], "latency_s": stats(self.latencies[acct]),
                          "min_gap_s": None if p.min_gap is None else round(p.min_gap, 2),
-                         "rate_violations": p.rate_violations, "sends_per_hour": round(self.sends[acct] * 3600 / duration_s, 1)}
+                         "rate_violations": p.rate_violations, "max_provider_inflight": p.max_active,
+                         "sends_per_hour": round(self.sends[acct] * 3600 / duration_s, 1)}
         return out
 
 
@@ -489,6 +560,7 @@ def _engine_factory(sim):
     class FakeEngine:
         def __init__(self, account, fan, *, chat, send, emit, content=None, context=None, **_extra):
             self.send, self.fan, self.chat, self.account = send, fan, chat, account
+            self.content = content
 
         def __enter__(self):
             return self
@@ -522,19 +594,34 @@ def _engine_factory(sim):
                 text = f"re:{acct}:{fan}:{newest}:{i}"
                 if sim.text_override is not None:
                     text = sim.text_override(acct, fan, newest, i) or text
+                paid = self.content is not None and fan in sim.paid_fans and hasattr(self.content, "terms")
+                terms = {}
+                if paid:
+                    item = self.content.item
+                    terms = {
+                        "price": item["price_cents"] / 100,
+                        "locked_text": False,
+                        "media_files": list(item["media_ids"]),
+                        "previews": list(item["preview_ids"]),
+                    }
                 from native_pilot.media_claims import MEDIA_CLAIM_HELD, claims_media_sent
                 if claims_media_sent(text):
                     # what the real boundary does (engine._TextClient): hold the bubble, end the turn with the reason
                     from native_pilot.engine import PilotBoundaryError
                     raise PilotBoundaryError(MEDIA_CLAIM_HELD)
                 try:
-                    raw = await vtime.to_thread_blocking(self.send, fan, text, {})
-                except Exception:
+                    raw = await vtime.to_thread_blocking(self.send, fan, text, terms)
+                except Exception as exc:
+                    sim.failures.append(f"engine-send {type(exc).__name__}: {exc}")
                     return {"errors": 1}
                 sim.sql("INSERT OR IGNORE INTO messages(account_id,fan_id,message_id,direction,body,media_ids,media_count,"
                         "price_cents,is_tip,is_unsent,created_at,ingested_at,raw_json,automation_kind,sent_by_employee_id) "
-                        "VALUES(?,?,?,'out',?,'[]',0,0,0,0,?,?,'{}','ai_chatter',5)",
-                        (acct, fan, raw["id"], raw["text"], raw["createdAt"].replace("T", " ").replace("Z", ""),
+                         "VALUES(?,?,?,'out',?,?,?,?,0,0,?,?,'{}','ai_chatter',5)",
+                        (acct, fan, raw["id"], raw["text"],
+                         json.dumps(item["media_ids"] if paid else []),
+                         len(item["media_ids"]) if paid else 0,
+                         item["price_cents"] if paid else 0,
+                         raw["createdAt"].replace("T", " ").replace("Z", ""),
                          sim.clock().isoformat(sep=" ")))
             return {}
     return FakeEngine

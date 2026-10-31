@@ -71,6 +71,14 @@ class NotAccepted:
     evidence_ref: str
 
 
+class ProviderThrottled(Exception):
+    """A definite 429 response; retry_after is the provider's value when supplied."""
+
+    def __init__(self, retry_after=None):
+        super().__init__("provider-rate-limited")
+        self.retry_after = retry_after
+
+
 class SyntheticTextTransport:
     """Explicit local failure-injection seam; it has no network implementation."""
 
@@ -228,7 +236,8 @@ class TextAuthority:
             raise Refused("invalid delivery policy")
         with Session(self.engine) as s, s.begin():
             self.store._runtime(s, tenant_id, account_id)
-            policy = s.get(OfDeliveryPolicy, account_id)
+            policy = s.scalar(select(OfDeliveryPolicy).where(
+                OfDeliveryPolicy.account_id == account_id).with_for_update())
             if policy is None:
                 if expected_revision != 0:
                     raise Refused("policy revision conflict")
@@ -364,7 +373,11 @@ class TextAuthority:
                 if prior.command_hash != fingerprint:
                     raise Refused("idempotency key conflict")
                 return prior.intent_id
-            policy = s.get(OfDeliveryPolicy, account_id)
+            # Queued-count admission and policy checks are account-wide. Lock the
+            # policy row while preparing so parallel manual/campaign callers cannot
+            # lose a queued_count increment or admit past MAX_QUEUED.
+            policy = s.scalar(select(OfDeliveryPolicy).where(
+                OfDeliveryPolicy.account_id == account_id).with_for_update())
             state = s.get(OfConversationState, (account_id, fan_id))
             fan = s.get(Fan, (account_id, fan_id))
             reason = self._eligibility(s, runtime, policy, state, fan, origin, now)
@@ -377,7 +390,8 @@ class TextAuthority:
                 raise Refused("control revision conflict")
             if policy.queued_count >= MAX_QUEUED:
                 raise Refused("delivery queue full")
-            if policy.active_intent_id:
+            from . import concurrent_admission
+            if policy.active_intent_id and not concurrent_admission.mode(policy) == "concurrent":
                 raise Refused("account delivery unresolved")
             recipient = None
             if origin == "campaign":
@@ -485,9 +499,9 @@ class TextAuthority:
             intent = self._intent(s, account_id, intent_id)
             if intent.status != "queued":
                 if intent.status == "dispatching" and intent.wire_version == 0:
-                    self._hold_unknown(s, intent, "legacy_dispatch_unverified")
+                    self._hold_unknown(s, intent, "legacy_dispatch_unverified", tenant_id)
                 return intent.status
-            policy = s.get(OfDeliveryPolicy, account_id)
+            policy = s.scalar(select(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == account_id).with_for_update())
             state = s.get(OfConversationState, (account_id, intent.fan_id))
             fan = s.get(Fan, (account_id, intent.fan_id))
             work = s.get(OfWork, (account_id, intent.fan_id)) if intent.work_generation is not None else None
@@ -519,10 +533,12 @@ class TextAuthority:
                 if policy is not None:
                     policy.queued_count -= 1
                 return intent.status
-            if policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True):
+            from . import concurrent_admission
+            concurrent = concurrent_admission.mode(policy) == "concurrent"
+            if not concurrent and (policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True)):
                 intent.reason = "account_busy"
                 return "queued"
-            if policy.next_dispatch_at is not None and policy.next_dispatch_at > now:
+            if not concurrent and policy.next_dispatch_at is not None and policy.next_dispatch_at > now:
                 intent.reason = "account_throttled"
                 return "queued"
             if policy.used_units >= policy.limit_units:
@@ -530,10 +546,20 @@ class TextAuthority:
                 policy.queued_count -= 1
                 return intent.status
             token, attempt = str(uuid.uuid4()), str(uuid.uuid4())
+            if concurrent:
+                slot, reason = concurrent_admission.admit(
+                    s, tenant_id, policy, account_id=account_id, fan_id=intent.fan_id,
+                    holder=intent.intent_id, attempt_id=attempt, now=now,
+                    send_concurrency=concurrent_admission.process_send_concurrency(),
+                    dispatch_lease_s=concurrent_admission.process_dispatch_lease_s())
+                if reason:
+                    intent.reason = reason
+                    return "queued"
             policy.used_units += 1
             policy.queued_count -= 1
-            policy.active_intent_id = intent.intent_id
-            policy.next_dispatch_at = now + timedelta(seconds=policy.throttle_seconds)
+            if not concurrent:
+                policy.active_intent_id = intent.intent_id
+                policy.next_dispatch_at = now + timedelta(seconds=policy.throttle_seconds)
             intent.status, intent.reason, intent.updated_at = "dispatching", None, now
             intent.attempt_id, intent.dispatch_token = attempt, token
             intent.dispatched_at, intent.deadline = now, now + timedelta(seconds=DISPATCH_SECONDS)
@@ -608,9 +634,10 @@ class TextAuthority:
                 raise Refused("dispatch grant was already consumed or settled")
             now = self._db_now(s)
             if row.wire_version != 1 or row.deadline <= now or row.expires_at <= now:
-                self._hold_unknown(s, row, "legacy_dispatch_unverified" if row.wire_version != 1 else "dispatch_expired")
+                self._hold_unknown(s, row, "legacy_dispatch_unverified" if row.wire_version != 1 else "dispatch_expired",
+                                   tenant_id)
                 return None
-            policy = s.get(OfDeliveryPolicy, row.account_id)
+            policy = s.scalar(select(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == row.account_id).with_for_update())
             state = s.get(OfConversationState, (row.account_id, row.fan_id))
             fan = s.get(Fan, (row.account_id, row.fan_id))
             binding = s.get(OfCreatorBinding, row.binding_id)
@@ -636,8 +663,28 @@ class TextAuthority:
                 obsolete = not self._engagement().current(s, row, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(
                 s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id)
-            if reason is None and (policy.active_intent_id != row.intent_id or not row.reservation_held
-                                   or state.unresolved_attempt_id != row.attempt_id):
+            from . import concurrent_admission
+            concurrent = concurrent_admission.mode(policy) == "concurrent"
+            if concurrent:
+                from native_pilot import admission
+                cooldown = admission.cooldown_at(policy)
+                if reason is None and concurrent_admission.is_after(cooldown, now):
+                    # A provider-wide cooldown can land after admission but before
+                    # the wire. Put this still-unsent intent back in the queue rather
+                    # than turning the cooldown into a permanent refusal.
+                    row.status, row.reason, row.updated_at = "queued", "account_throttled", now
+                    policy.queued_count += 1
+                    if row.reservation_held:
+                        policy.used_units -= 1
+                        row.reservation_held = False
+                    self._release_hold(s, row, tenant_id)
+                    return None
+                if not row.reservation_held or state.unresolved_attempt_id != row.attempt_id \
+                        or not concurrent_admission.check_holder(s, tenant_id, row.account_id, row.fan_id,
+                                                                  row.intent_id, now):
+                    reason = "attempt_ownership_changed"
+            elif (policy.active_intent_id != row.intent_id or not row.reservation_held
+                  or state.unresolved_attempt_id != row.attempt_id):
                 reason = "attempt_ownership_changed"
             if reason is None and policy.used_units > policy.limit_units:
                 reason = "cap_exhausted"
@@ -649,10 +696,11 @@ class TextAuthority:
                 if row.reservation_held:
                     policy.used_units -= 1
                     row.reservation_held = False
-                self._release_hold(s, row)
+                self._release_hold(s, row, tenant_id)
                 return None
             row.wire_started_at, row.updated_at = now, now
-            policy.next_dispatch_at = max(policy.next_dispatch_at or now, now + timedelta(seconds=policy.throttle_seconds))
+            if not concurrent:
+                policy.next_dispatch_at = max(policy.next_dispatch_at or now, now + timedelta(seconds=policy.throttle_seconds))
             return self._grant(row)
 
     @staticmethod
@@ -692,12 +740,19 @@ class TextAuthority:
         return stamp
 
     @staticmethod
-    def _hold_unknown(s, row, reason):
+    def _hold_unknown(s, row, reason, tenant_id=None):
         row.status, row.reason, row.updated_at = "unknown", reason, utcnow()
         state = s.get(OfConversationState, (row.account_id, row.fan_id))
         state.unresolved_attempt_id, state.requires_attention, state.updated_at = row.attempt_id, True, utcnow()
         policy = s.get(OfDeliveryPolicy, row.account_id)
-        policy.active_intent_id = row.intent_id
+        from . import concurrent_admission
+        if tenant_id is not None and concurrent_admission.mode(policy) == "concurrent":
+            gap = max(concurrent_admission.process_conversation_gap_s(),
+                      float(getattr(policy, "conversation_min_gap_seconds", 0) or 0))
+            concurrent_admission.release(s, tenant_id, row.account_id, row.fan_id, row.intent_id,
+                                         row.attempt_id, "unknown", utcnow(), gap)
+        else:
+            policy.active_intent_id = row.intent_id
 
     def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport"):
         if reason not in {"ambiguous_transport", "invalid_receipt", "dispatch_expired", "provider_identity_conflict"}:
@@ -705,7 +760,7 @@ class TextAuthority:
         with Session(self.engine) as s, s.begin():
             row = self._attempt(s, tenant_id, account_id, intent_id, dispatch_token)
             if row.status == "dispatching":
-                self._hold_unknown(s, row, reason)
+                self._hold_unknown(s, row, reason, tenant_id)
             return row.status
 
     def record_accepted(self, tenant_id, account_id, intent_id, dispatch_token, receipt):
@@ -722,7 +777,7 @@ class TextAuthority:
             except (Refused, TypeError, AttributeError):
                 if row.status == "accepted":
                     raise Refused("accepted receipt conflict")
-                self._hold_unknown(s, row, "invalid_receipt")
+                self._hold_unknown(s, row, "invalid_receipt", tenant_id)
                 return "unknown"
             if row.status == "accepted":
                 if row.receipt_json != encoded:
@@ -737,14 +792,26 @@ class TextAuthority:
                 OfTextIntent.intent_id != intent_id).limit(1))
             row.receipt_json, row.evidence_ref = encoded, receipt.evidence_ref
             if other is not None:
-                self._hold_unknown(s, row, "provider_identity_conflict")
+                self._hold_unknown(s, row, "provider_identity_conflict", tenant_id)
                 return "unknown"
             row.status, row.reason, row.updated_at = "accepted", None, utcnow()
             row.provider_message_id = receipt.message_id
             return "accepted"
 
-    def _release_hold(self, s, row):
+    def _release_hold(self, s, row, tenant_id=None):
         policy = s.get(OfDeliveryPolicy, row.account_id)
+        from . import concurrent_admission
+        if tenant_id is not None and concurrent_admission.mode(policy) == "concurrent":
+            gap = max(concurrent_admission.process_conversation_gap_s(),
+                      float(getattr(policy, "conversation_min_gap_seconds", 0) or 0))
+            concurrent_admission.release(s, tenant_id, row.account_id, row.fan_id, row.intent_id,
+                                         row.attempt_id, "accepted", utcnow(), gap)
+            state = s.get(OfConversationState, (row.account_id, row.fan_id))
+            if state is not None and state.unresolved_attempt_id == row.attempt_id:
+                state.unresolved_attempt_id = None
+                state.updated_at = utcnow()
+            Store.complete_takeover(s, row.account_id, row.fan_id)
+            return
         if row.wire_started_at is not None:
             floor = self._db_now(s) + timedelta(seconds=policy.throttle_seconds)
             policy.next_dispatch_at = max(policy.next_dispatch_at or floor, floor)
@@ -774,7 +841,7 @@ class TextAuthority:
             except (Refused, TypeError, AttributeError):
                 if row.status == "not_accepted":
                     raise Refused("rejection evidence conflict")
-                self._hold_unknown(s, row, "invalid_receipt")
+                self._hold_unknown(s, row, "invalid_receipt", tenant_id)
                 return "unknown"
             if row.status == "not_accepted":
                 if row.receipt_json != encoded:
@@ -783,10 +850,11 @@ class TextAuthority:
             row.status, row.reason, row.updated_at = "not_accepted", "proved_not_accepted", utcnow()
             row.receipt_json, row.evidence_ref = encoded, rejection.evidence_ref
             if row.reservation_held:
-                policy = s.get(OfDeliveryPolicy, account_id)
+                policy = s.scalar(select(OfDeliveryPolicy).where(
+                    OfDeliveryPolicy.account_id == account_id).with_for_update())
                 policy.used_units -= 1
                 row.reservation_held = False
-            self._release_hold(s, row)
+            self._release_hold(s, row, tenant_id)
             return row.status
 
     def materialize(self, tenant_id, account_id, intent_id):
@@ -854,7 +922,7 @@ class TextAuthority:
             if chat.last_message_at is None or (stamp, proof.message_id) > (chat.last_message_at, chat.last_message_id or 0):
                 chat.last_message_id, chat.last_message_at, chat.last_message_preview = proof.message_id, stamp, row.body[:500]
             row.projected_at, row.updated_at = utcnow(), utcnow()
-            self._release_hold(s, row)
+            self._release_hold(s, row, tenant_id)
             return True
 
     def dispatch(self, tenant_id, account_id, intent_id, transport):
@@ -896,6 +964,30 @@ class TextAuthority:
         try:
             proof = transport.send(grant, authority=self, tenant_id=tenant_id)
         except Exception as exc:
+            auth_failed = ((isinstance(exc, Refused) and exc.reason == "account-auth-failed")
+                           or getattr(exc, "status_code", None) == 401
+                           or type(exc).__name__ == "NativeAuthenticationError")
+            throttled = (isinstance(exc, ProviderThrottled)
+                         or getattr(exc, "status_code", None) == 429)
+            if auth_failed or throttled:
+                retry_after = getattr(exc, "retry_after", None)
+                try:
+                    self._account_cooldown(
+                        tenant_id, account_id,
+                        seconds=300 if auth_failed else (retry_after if retry_after is not None else 10))
+                except Exception:
+                    pass
+                rejection = NotAccepted(
+                    account_id=grant.account_id, fan_id=grant.fan_id, intent_id=grant.intent_id,
+                    attempt_id=grant.attempt_id, payload_hash=grant.payload_hash,
+                    occurred_at=datetime.now(timezone.utc).isoformat(),
+                    evidence_ref=("fastt-auth-failed:" if auth_failed else "fastt-rate-limited:")
+                    + grant.attempt_id)
+                try:
+                    return self.record_not_accepted(
+                        tenant_id, account_id, intent_id, grant.token, rejection)
+                except Exception:
+                    pass
             # Type, message and frame locations only; never request bodies or credentials.
             import sys, traceback
             frames = ",".join(f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}" for f in traceback.extract_tb(exc.__traceback__)[-6:])
@@ -908,6 +1000,26 @@ class TextAuthority:
             self.materialize(tenant_id, account_id, intent_id)
         return result
 
+    def _account_cooldown(self, tenant_id, account_id, *, seconds):
+        """Stop this account's other text sends after a provider-wide refusal."""
+        with Session(self.engine) as s, s.begin():
+            self.store._runtime(s, tenant_id, account_id)
+            policy = s.scalar(select(OfDeliveryPolicy).where(
+                OfDeliveryPolicy.account_id == account_id).with_for_update())
+            if policy is None:
+                return
+            now = self._db_now(s)
+            # The provider's Retry-After is authoritative. Keep the same one-day
+            # ceiling as the native path instead of shortening a valid long wait.
+            until = now + timedelta(seconds=max(1, min(86400, int(seconds))))
+            from . import concurrent_admission
+            if concurrent_admission.mode(policy) == "concurrent":
+                current = getattr(policy, "provider_cooldown_until", None)
+                policy.provider_cooldown_until = max(current, until) if current is not None else until
+            else:
+                current = policy.next_dispatch_at
+                policy.next_dispatch_at = max(current, until) if current is not None else until
+
     def expire_dispatches(self, tenant_id, account_id, *, limit=100):
         if type(limit) is not int or not 1 <= limit <= 100:
             raise Refused("invalid recovery limit")
@@ -918,7 +1030,7 @@ class TextAuthority:
                 OfTextIntent.status == "dispatching", OfTextIntent.deadline <= now)
                 .order_by(OfTextIntent.deadline, OfTextIntent.intent_id).limit(limit)).all()
             for row in rows:
-                self._hold_unknown(s, row, "dispatch_expired")
+                self._hold_unknown(s, row, "dispatch_expired", tenant_id)
             return len(rows)
 
     def repair(self, tenant_id, account_id, *, limit=100):

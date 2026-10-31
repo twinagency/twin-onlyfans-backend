@@ -204,7 +204,9 @@ def _engine(url: str):
         eng = _ENGINES.get(url)
         if eng is None:
             from sqlalchemy import create_engine
-            eng = create_engine(url, pool_size=2, max_overflow=4, pool_pre_ping=True,
+            pool_size = max(2, int(os.environ.get("FASTT_DB_POOL_SIZE", "8") or 8))
+            max_overflow = max(1, int(os.environ.get("FASTT_DB_MAX_OVERFLOW", "16") or 16))
+            eng = create_engine(url, pool_size=pool_size, max_overflow=max_overflow, pool_pre_ping=True,
                                 connect_args={"options": _PG_OPTIONS})
             _ENGINES[url] = eng
         return eng
@@ -243,7 +245,7 @@ _ENSURED: set[str] = set()
 
 
 def ensure_runtime_schema(target) -> None:
-    """Create the ``fastt_runtime`` schema and its nine tables on PostgreSQL, idempotently.
+    """Create the ``fastt_runtime`` schema and all runtime tables on PostgreSQL, idempotently.
 
     No-op for SQLite (those tables are created by ``Ledger``/``init_db`` in the same
     file). Additive only (CREATE ... IF NOT EXISTS semantics, advisory-locked); it never

@@ -566,7 +566,7 @@ async def loop_level(backend, root):
             return task, patcher
 
         async def stop(task, patcher):
-            os.kill(os.getpid(), signal.SIGTERM)
+            signal.raise_signal(signal.SIGTERM)
             await asyncio.wait_for(task, 20)
             patcher.stop()
 
@@ -1329,7 +1329,7 @@ async def multi_level(backend, root):
             return task, patcher
 
         async def stop(task, patcher):
-            os.kill(os.getpid(), signal.SIGTERM)
+            signal.raise_signal(signal.SIGTERM)
             await asyncio.wait_for(task, 20)
             patcher.stop()
 
@@ -1952,7 +1952,7 @@ async def followup_loop_level(backend, root):
             return task, patcher
 
         async def stop(task, patcher):
-            os.kill(os.getpid(), signal.SIGTERM)
+            signal.raise_signal(signal.SIGTERM)
             await asyncio.wait_for(task, 20)
             patcher.stop()
 

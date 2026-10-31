@@ -181,3 +181,30 @@ stops the fan and is never resent, the legacy worker stays fenced by `ONLYFANS_F
 
 SQL: `native_pilot/sql/engine_v2_upgrade.sql` / `engine_v2_rollback.sql` (the engine also creates the tables itself on start).
 Tests: `tests/test_fastt_engine_v2*.py`, `tests/test_fastt_reply_budget.py`; load: `tests/fastt_load.py <profile>`.
+
+
+## Concurrent delivery (2026-10-31, account-specific)
+
+The default remains the one-holder account gate above. Setting
+`of_delivery_policy.delivery_mode = 'concurrent'` for one account switches that account to:
+
+- `FASTT_SEND_CONCURRENCY` (default 4) process send slots, capped by the account's
+  `provider_max_concurrent`;
+- a durable token bucket (`provider_requests_per_second`, `provider_burst`);
+- a durable `engine_conversation_lease` keyed by tenant, account and fan, so only one
+  reply sequence advances per conversation;
+- `engine_dispatch_slot` rows counted against account concurrency, released on
+  `sent` / `not_sent`, and expired for a crashed holder while the attempt stays
+  unresolved;
+- `conversation_min_gap_seconds` for intentional per-fan pacing, independent of the
+  account request rate;
+- account-level `provider_cooldown_until` from an actual provider 429 / Retry-After.
+
+`Ledger._after_wire` does not impose an account gap in this mode, and admission no longer
+refuses because a different fan has a dispatching attempt. Daily fan quotas and the
+account daily cap remain atomic. Manual, campaign, engagement and follow-up text use the
+same policy row and tables through `onlyfans_runtime.concurrent_admission`.
+
+Rollout is one account at a time via `python -m native_pilot.control delivery-mode`.
+The legacy `gap` mode is unchanged. See `docs/onlyfans/CONCURRENT-DELIVERY-20261031.md`
+for settings, rollback and measured simulated limits.

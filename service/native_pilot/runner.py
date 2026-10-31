@@ -83,7 +83,8 @@ def check_local(path, account, fan, approved_item=None, open_offer_blocks=True):
                 raise Refused("chat-offer-open")
         if con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? AND fan_id=? AND state IN ('dispatching','delivery_unknown') LIMIT 1", (account, fan)).fetchone():
             raise Refused("delivery-unresolved")
-        if con.execute("SELECT 1 FROM twin_bridge_turns WHERE account_id=? AND state NOT IN ('delivered','cancelled','parked') LIMIT 1", (account,)).fetchone():
+        if con.execute("SELECT 1 FROM twin_bridge_turns WHERE account_id=? AND fan_id=? "
+                       "AND state NOT IN ('delivered','cancelled','parked') LIMIT 1", (account, fan)).fetchone():
             raise Refused("twin-work-open")
         return {"creator_profile": "configured" if row and (row["persona"] or "").strip() else "native-default",
                 "account_id": account, "fan_id": fan}
@@ -269,6 +270,10 @@ def _refusal(exc):
         except (TypeError, ValueError, AttributeError):
             pass
         return NotSent("provider-rate-limited", retry=True, retry_after=after)
+    if status == 401:
+        # The account session is no longer usable. Keep this account-wide: other
+        # fans must not each spend a request discovering the same expired login.
+        return NotSent("account-auth-failed")
     if 400 <= status < 500 and status != 408:
         return NotSent("provider-refused")
     return None
@@ -360,7 +365,8 @@ class Gateway:
 
     # Transient admission refusals raised before any attempt row exists: the account's gate was taken a moment
     # earlier by another sender (another process, a human send) or the throttle moved. Nothing was written.
-    ADMISSION_RETRY = frozenset({"allowance-throttled", "allowance-busy", "allowance-changed"})
+    ADMISSION_RETRY = frozenset({"allowance-throttled", "allowance-busy", "allowance-changed",
+                                 "provider-concurrency-limit", "conversation-busy", "conversation-throttled"})
     send_gate = None            # engine v2: the account's SendGate (service-owned); None = bounded pilot, no gate
     send_wait_max_s = 900.0
     tolerate_newer = False      # engine v2: set for a burst past the hard maximum wait (see Service.turn)
@@ -373,7 +379,8 @@ class Gateway:
         gate = self.send_gate
         if gate is None:
             return await self._send_inner(text, terms)
-        await gate.acquire(self.abort_reason, self.send_wait_max_s, priority=self.send_priority)
+        gate_key = self.pilot.fan_id
+        await gate.acquire(self.abort_reason, self.send_wait_max_s, priority=self.send_priority, key=gate_key)
         try:
             for tries in range(self.throttled_retries):
                 try:
@@ -385,7 +392,7 @@ class Gateway:
             self.stopped_reason = "allowance-wait-timeout"
             raise Refused(self.stopped_reason)
         finally:
-            gate.release()
+            gate.release(gate_key)
 
     async def _send_inner(self, text, terms=None):
         from twin_bridge.coordination import authorize_dispatch, revoke_dispatch, guarded_send
@@ -765,7 +772,8 @@ async def run(args):
         finally:
             try:
                 if client is not None:
-                    client.http.close()
+                    from of_client import close_client_http
+                    close_client_http(client)
             finally:
                 await engine.dispose()
 

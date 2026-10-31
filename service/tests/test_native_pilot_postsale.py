@@ -791,7 +791,7 @@ def test_gateway_unit():
     else:
         raise AssertionError("transport error swallowed")
     # how _send classifies those failures
-    for status, reason in ((400, "provider-refused"), (401, "provider-refused"), (403, "provider-refused"), (410, "provider-refused"),
+    for status, reason in ((400, "provider-refused"), (401, "account-auth-failed"), (403, "provider-refused"), (410, "provider-refused"),
                            (422, "provider-refused"), (429, "provider-rate-limited")):
         ns = runner._refusal(HttpError(status))
         check(ns is not None and ns.reason == reason, (status, ns))

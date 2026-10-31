@@ -73,7 +73,10 @@ engine: AsyncEngine = create_async_engine(
     echo=os.environ.get("DB_ECHO") == "1",
     connect_args=_connect_args,
     future=True,
-    **({"pool_size": 4, "max_overflow": 0, "pool_timeout": 3, "pool_pre_ping": True} if ONLYFANS_PROCESS_ROLE else {}),
+    **({"pool_size": max(4, int(os.environ.get("FASTT_ASYNC_POOL_SIZE", "12") or 12)),
+        "max_overflow": max(0, int(os.environ.get("FASTT_ASYNC_MAX_OVERFLOW", "8") or 8)),
+        "pool_timeout": max(3, int(os.environ.get("FASTT_ASYNC_POOL_TIMEOUT", "10") or 10)),
+        "pool_pre_ping": True} if ONLYFANS_PROCESS_ROLE else {}),
 )
 
 async_session_factory = async_sessionmaker(

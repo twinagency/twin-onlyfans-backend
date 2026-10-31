@@ -302,7 +302,20 @@ class SqlOnlyFansReadRepo:
                     return {v: dict(rows).get(v, 0) for v in values}
 
                 ingress = await counts(OfIngress, OfIngress.status, ("pending", "quarantined"))
-                work = await counts(OfWork, OfWork.status, ("waiting", "claimed", "blocked"))
+                work = await counts(OfWork, OfWork.status, ("waiting", "claimed"))
+                # A blocked row is only cleared by a new inbound while the fan is
+                # eligible, so for a paused / taken-over / muted / held fan it is
+                # stale bookkeeping, not backlog. Count it only for a fan that is
+                # currently eligible for automation. Read-only: no row is changed.
+                work["blocked"] = await s.scalar(select(func.count()).select_from(OfWork).join(
+                    OfConversationState, and_(OfConversationState.account_id == OfWork.account_id,
+                        OfConversationState.fan_id == OfWork.fan_id)
+                ).join(Fan, and_(Fan.account_id == OfWork.account_id, Fan.fan_id == OfWork.fan_id)).where(
+                    OfWork.account_id == account_id, OfWork.status == "blocked",
+                    OfConversationState.mode == "automated",
+                    OfConversationState.takeover_state == "none",
+                    OfConversationState.unresolved_attempt_id.is_(None),
+                    Fan.is_muted.is_(False)))
                 delivery = await counts(OfTextIntent, OfTextIntent.status, ("queued", "dispatching", "unknown"))
                 # Holds describe each conversation's current canonical input.
                 # Historical unknown/refused plans remain durable evidence, but

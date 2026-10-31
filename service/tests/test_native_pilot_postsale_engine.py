@@ -252,7 +252,7 @@ async def exercise(tmp):
 
     # ═══ 0. the building blocks themselves ═══════════════════════════════════════════════════════════════════
     lo, hi = upsell.DISCOUNT_BAND
-    check((lo, hi) == (0.80, 0.90) and upsell.OF_PRICE_FLOOR_CENTS == 300, 'FASTT discount band and $3 floor')
+    check((lo, hi) == (0.80, 0.85) and upsell.OF_PRICE_FLOOR_CENTS == 300, 'FASTT discount band and $3 floor')
     gw = make_gateway()
     for bad in (ORIG_MSG + 1, '5001', None, True):
         try:
@@ -348,12 +348,18 @@ async def exercise(tmp):
 
     await refused('B silence alone', 'unprompted')
     await refused('B chatter without a price objection', 'unprompted', setup=lambda: objection('hey babe', 'how are you'))
-    await refused('B objection and no beat', 'same_turn', setup=lambda: objection(then=None))
+    # A single request shortly after a fresh card qualifies immediately.
+    await reset()
+    oid = await put_card(price=670, minutes_ago=0.5)
+    await put_message(FAN, 'in', 'Can you please make it cheaper baby and I will buy it', 0)
+    stats, out, gw = await run_job({'discount_offer': oid})
+    check(stats.get('discount_resends') == 1 and len(out) == 1, ('immediate single request', stats))
+    check(out[0][1]['price'] == 5.70, ('15 percent rounded to cents', out))
     await refused('B distress', _price_ask.BLOCK_DISTRESS, setup=lambda: objection(then='my wife will kill me, spent too much'))
     await refused('B broke is a soft decline', _price_ask.BLOCK_DECLINED, setup=lambda: objection(then='im broke rn'))
     await refused('B not interested', _price_ask.BLOCK_DECLINED, setup=lambda: objection(then='not interested'))
     await refused('B no thanks first', _price_ask.BLOCK_DECLINED, setup=lambda: objection('no thanks', 'any deal?'))
-    await refused('B too early', 'too-early', setup=objection, minutes_ago=30)
+    await refused('B an older request cannot discount a new card', 'unprompted', setup=objection, minutes_ago=30)
     await refused('B no card evidence', 'card-evidence-missing', setup=objection, evidence=False)
     await refused('B $3 card', 'price-at-minimum', setup=objection, price=300, media=(2001, 2002), previews=())
     await refused('B under the minimum', 'price-at-minimum', setup=objection, price=250)
@@ -439,8 +445,7 @@ async def exercise(tmp):
                               base_cents=500, pre_clamp_cents=500, kind='discount' if n < 2 else 'rung',
                               sent_at=datetime.utcnow() - timedelta(days=3)))
     stats, out, gw = await run_job({'discount_offer': oid})
-    check(stats.get('discount_skip') == 'governor', ('C: governor', stats))
-    untouched('C governor')
+    check(stats.get('discount_resends') == 1, ('C: explicit request is not blocked by earlier unrelated discounts', stats))
     # a governor at the threshold (35% exactly) still allows it; old quotes (> 30 days) do not count
     await reset()
     oid = await put_card(price=500)
@@ -954,3 +959,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

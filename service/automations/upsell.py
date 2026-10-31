@@ -710,8 +710,13 @@ def next_price(*, fan: FanState, band: tuple[int, int], last_paid_cents: int | N
 
 
 def discount_price(last_sent_cents: int, rng: Random, account_id: str,
-                   *, discount_pct: float = 0.15, min_cents: int = OF_PRICE_FLOOR_CENTS) -> int:
-    """15% by default, at most 20% of the price actually shown; never below the floor."""
+                   *, discount_pct: float = 0.15, min_cents: int = OF_PRICE_FLOOR_CENTS,
+                   original_cents: int | None = None) -> int:
+    """Return a total cut from the ORIGINAL price, never from a prior cut.
+
+    The default is 15%. A qualifying follow-up negotiation may use 20% total;
+    the basis stays the original card price so the second cut cannot compound.
+    """
     from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
     try:
         pct = Decimal(str(discount_pct))
@@ -720,9 +725,10 @@ def discount_price(last_sent_cents: int, rng: Random, account_id: str,
     except (InvalidOperation, ValueError):
         pct = Decimal("0.15")
     pct = max(Decimal("0.15"), min(Decimal("0.20"), pct))
-    price = int((Decimal(last_sent_cents) * (1 - pct)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    basis = max(int(last_sent_cents), int(original_cents or last_sent_cents))
+    price = int((Decimal(basis) * (1 - pct)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     # Round the 20% ceiling towards the original price, never beyond it.
-    return max(OF_PRICE_FLOOR_CENTS, int(min_cents), (last_sent_cents * 80 + 99) // 100, price)
+    return max(OF_PRICE_FLOOR_CENTS, int(min_cents), (basis * 80 + 99) // 100, price)
 
 
 @dataclass(frozen=True)
@@ -732,6 +738,7 @@ class DiscountCtx:
     objection_at: datetime | None = None   # when a price objection last arrived
     last_inbound_at: datetime | None = None
     discount_count_this_item: int = 0      # cuts already given on THIS media
+    discount_original_cents: int | None = None  # the quote's pre-cut price
     cuts_last_30d: int = 0                 # the reinforcer governor numerator
     asks_last_30d: int = 0
     spend_regret: bool = False             # distress is NEVER a discount trigger
@@ -745,7 +752,9 @@ def may_discount(ctx: DiscountCtx) -> tuple[bool, str]:
     if not (ctx.objection_at is not None or detect_stated_cap(ctx.last_inbound_text)
             or PRICE_ASK.search(ctx.last_inbound_text or "")):
         return False, "unprompted"
-    if ctx.discount_count_this_item >= 1:
+    if ctx.discount_count_this_item >= 2:
+        return False, "already_cut"
+    if ctx.discount_count_this_item == 1 and not ctx.discount_original_cents:
         return False, "already_cut"
     return True, "ok"
 

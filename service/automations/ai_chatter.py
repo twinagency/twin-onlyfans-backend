@@ -3941,11 +3941,47 @@ class _VaultCard:
     why: str | None = None
 
 
+async def _discount_chain_state(account_id: str, cfg: dict,
+                                offer: ContentOffer) -> tuple[int, int | None]:
+    """Return the cuts already applied to this exact card and its original price.
+
+    A successful cut records a ``discount`` quote against the replacement's
+    message id. Reading that quote makes the second negotiation independent of
+    the fan-wide ladder counter and of whether the sender was the stock watcher
+    or the native runner. If that card is already at the 20% ceiling, a third
+    cut is refused even if a close/reopen reset the ladder in between.
+    """
+    if not offer.offer_message_id:
+        return 0, None
+    async with get_session() as s:
+        row = (await s.execute(
+            select(LadderQuote.base_cents, LadderQuote.price_cents).where(
+                LadderQuote.account_id == str(account_id),
+                LadderQuote.fan_id == int(offer.fan_id),
+                LadderQuote.kind == "discount",
+                LadderQuote.message_id == int(offer.offer_message_id))
+            .order_by(LadderQuote.id.desc()).limit(1))).first()
+    if row is None:
+        return 0, None
+    basis = int(row[0] or 0)
+    if basis <= upsell.OF_PRICE_FLOOR_CENTS:
+        return 2, basis or None
+    ceiling = upsell.discount_price(
+        basis, random.Random(f"discount-cap:{account_id}:{offer.fan_id}:{offer.item_id}"),
+        str(account_id), discount_pct=0.20, original_cents=basis,
+        min_cents=int(cfg.get("discount_min_price_cents") or upsell.OF_PRICE_FLOOR_CENTS))
+    return (2 if int(row[1] or 0) <= ceiling else 1), basis
+
+
 async def _maybe_discount_resend(client, account_id: str, cfg: dict,
                                  offer: ContentOffer, now: datetime, *,
                                  vault: "_VaultCard | None" = None) -> bool:
-    """The ONE answer to an unpaid rung: unsend it, re-send it cheaper, ONCE, then
-    tap out. Measured on the corpus, after an unpaid rung:
+    """The ONE answer to an unpaid rung: unsend it and re-send it cheaper.
+
+    The first qualifying negotiation takes 15% off; one further negotiation can
+    raise the total cut to 20% off the ORIGINAL price. No third cut, and no cut
+    is ever calculated from an already-reduced price. Measured on the corpus,
+    after an unpaid rung:
         repeat the same price → 6.8% paid   (the single WORST action measured)
         discount 0.75-0.9x    → 15.6%       ($5.43 EV — the best)
         halve                 → 19.7%       (converts, but gives it away: $2.62 EV)
@@ -3975,13 +4011,18 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
             return False
         # The gate-off native runner writes no ladder row until a fan's first buy or cut: a blank, never-saved one.
         lad = LadderState(account_id=str(account_id), fan_id=fan_id, status=upsell.STATUS_OPEN)
+    discount_count, discount_original_cents = await _discount_chain_state(
+        account_id, cfg, offer)
+    discount_continuation = discount_count == 1 and discount_original_cents is not None
     # ⚠️ THE BRAKE THE REPLY LOOP HONOURS AND THIS PATH USED TO IGNORE.
     # A SOFT decline ("im broke rn") sets offers_paused_until = +24h and KEEPS TALKING.
     # But this watcher only checked `status`, so 90 minutes after a man told us he had no
     # money we unsent his PPV and put a CHEAPER PAYWALL in front of him — the single
     # thing upsell.py's own docstring says we must never do. Caught by the simulator's
     # broke_guy persona; it is the one violation it found on the first clean run.
-    if lad.status in (upsell.STATUS_STOPPED, upsell.STATUS_TAPPED):
+    if lad.status == upsell.STATUS_STOPPED:
+        return _skip("selling-stopped")
+    if lad.status == upsell.STATUS_TAPPED and not discount_continuation:
         return _skip("selling-stopped")
     if lad.offers_paused_until and lad.offers_paused_until > datetime.utcnow():
         return _skip("selling-paused")
@@ -4028,7 +4069,8 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         last_inbound_text=last_text or "",
         objection_at=lad.objection_at,
         last_inbound_at=last_in_at,
-        discount_count_this_item=int(lad.discount_count or 0),
+        discount_count_this_item=discount_count,
+        discount_original_cents=discount_original_cents,
         cuts_last_30d=cuts30, asks_last_30d=asks30,
         spend_regret=upsell.detect_spend_regret(last_text)))
     if not ok_disc:
@@ -4042,8 +4084,9 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
     # post-unpaid action (15.6% paid, $5.43 EV — the highest of any) unreachable for
     # every fan it was designed for. `stop_after_unpaid_rungs` (§11 checkbox #3, default
     # 1) is the "second chance after a refusal" consent question the operator owns.
-    if int(lad.unpaid_rungs or 0) >= int(cfg.get("stop_after_unpaid_rungs")
-                                          or upsell.STOP_AFTER_UNPAID_RUNGS):
+    if (not discount_continuation
+            and int(lad.unpaid_rungs or 0) >= int(cfg.get("stop_after_unpaid_rungs")
+                                                  or upsell.STOP_AFTER_UNPAID_RUNGS)):
         return _skip("already-discounted")  # already discounted once. No begging.
     item = await _get_item(int(offer.item_id))
     if item is None:
@@ -4064,12 +4107,24 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         await _close_ladder(account_id, fan_id, upsell.STATUS_TAPPED)
         return _skip("already-owned")
     seen_cents = int((vault.price_cents if vault is not None else 0) or offer.price_cents or 0)
-    if seen_cents <= max(upsell.OF_PRICE_FLOOR_CENTS, int(cfg.get("discount_min_price_cents") or 0)):
+    seen_cents = min(seen_cents, upsell.OF_PRICE_MAX_CENTS)
+    basis_cents = min(max(seen_cents, int(discount_original_cents or seen_cents)),
+                      upsell.OF_PRICE_MAX_CENTS)
+    if basis_cents <= max(upsell.OF_PRICE_FLOOR_CENTS, int(cfg.get("discount_min_price_cents") or 0)):
         return _skip("price-at-minimum")   # nothing left to discount into
 
     if not await ax.acquire_fan_lease(account_id, fan_id, _PURPOSE):
         return _skip("fan-locked")         # someone else owns the fan this cycle
     try:
+        # Purchases can land while this card is being prepared. Re-read now,
+        # inside the fan lease and immediately before the original is replaced.
+        if (await _owned_or_seen_media(account_id, fan_id)) & set(hero):
+            await _resolve_offer(int(offer.id), status="cancelled", resolved_by="owned")
+            await _close_ladder(account_id, fan_id, upsell.STATUS_TAPPED)
+            return _skip("already-owned")
+        current_offer = await _load_offer(int(offer.id))
+        if current_offer is None or current_offer.status != "open":
+            return _skip("offer-resolved")
         if vault is None:
             try:
                 await asyncio.to_thread(client.unsend_message,
@@ -4089,10 +4144,11 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         # catalog item authored above ~$222 could otherwise produce a >$200 discount
         # (the offer row stores the unclamped catalog price when smart pricing is off).
         # This is the one priced site the main loop's re-clamp didn't cover.
-        seen_cents = min(int(seen_cents), upsell.OF_PRICE_MAX_CENTS)
         px = max(upsell.OF_PRICE_FLOOR_CENTS,
-                 min(upsell.discount_price(seen_cents, rng, str(account_id),
-                                       discount_pct=cfg.get("haggle_discount_pct", 0.15),
+                 min(upsell.discount_price(basis_cents, rng, str(account_id),
+                                       discount_pct=(0.20 if discount_continuation
+                                                     else cfg.get("haggle_discount_pct", 0.15)),
+                                       original_cents=basis_cents,
                                        min_cents=int(cfg.get("discount_min_price_cents") or upsell.OF_PRICE_FLOOR_CENTS)),
                      upsell.OF_PRICE_MAX_CENTS))
         if vault is not None and px >= seen_cents:
@@ -4165,13 +4221,13 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         # log or the "is discounting worth it" question can never be re-asked.
         await _record_quote(
             account_id, fan_id, item,
-            upsell.Quote(price_cents=px, base_cents=seen_cents, arm_mult=1.0,
+            upsell.Quote(price_cents=px, base_cents=basis_cents, arm_mult=1.0,
                          pre_clamp_cents=px, clamped_by=None,
-                         band_lo=upsell.OF_PRICE_FLOOR_CENTS, band_hi=seen_cents),
+                         band_lo=upsell.OF_PRICE_FLOOR_CENTS, band_hi=basis_cents),
             rung_index=int(lad.rung_index or 0), kind="discount",
             message_id=int(msg_id), media_key=upsell.media_key(media))
-        # One discount, then the ladder is done with him. It reopens only if HE
-        # buys (the watcher flips him hot) — never by us asking a third time.
+        # The first cut taps the ladder. A fresh price request can unlock the
+        # one remaining step to 20%; after that this media is done.
         await _save_ladder(account_id, fan_id, status=upsell.STATUS_TAPPED,
                            unpaid_rungs=int(lad.unpaid_rungs or 0) + 1,
                            discount_count=int(lad.discount_count or 0) + 1,

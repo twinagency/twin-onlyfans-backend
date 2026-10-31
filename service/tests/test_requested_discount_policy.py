@@ -27,6 +27,8 @@ class RequestedDiscountTests(unittest.TestCase):
             self.assertGreaterEqual(price, 536)
             self.assertLessEqual(price, 570)
         self.assertEqual(upsell.discount_price(670, Random(1), 'a', discount_pct=0.20), 536)
+        self.assertEqual(upsell.discount_price(
+            570, Random(1), 'a', discount_pct=0.20, original_cents=670), 536)
         self.assertEqual(upsell.discount_price(670, Random(1), 'a', min_cents=600), 600)
         self.assertEqual(upsell.discount_price(301, Random(1), 'a'), 300)
         self.assertEqual(upsell.discount_price(300, Random(1), 'a'), 300)
@@ -44,6 +46,12 @@ class RequestedDiscountTests(unittest.TestCase):
         self.assertEqual(upsell.may_discount(upsell.DiscountCtx()), (False, 'unprompted'))
         self.assertEqual(upsell.may_discount(upsell.DiscountCtx(
             objection_at=now, discount_count_this_item=1)), (False, 'already_cut'))
+        self.assertEqual(upsell.may_discount(upsell.DiscountCtx(
+            objection_at=now, discount_count_this_item=1,
+            discount_original_cents=1000)), (True, 'ok'))
+        self.assertEqual(upsell.may_discount(upsell.DiscountCtx(
+            objection_at=now, discount_count_this_item=2,
+            discount_original_cents=1000)), (False, 'already_cut'))
         self.assertEqual(upsell.may_discount(upsell.DiscountCtx(
             objection_at=now, spend_regret=True)), (False, 'distress'))
 

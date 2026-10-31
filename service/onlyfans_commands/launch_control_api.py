@@ -151,8 +151,8 @@ async def _activation(request, account, operation):
     try:
         if request.query_params:
             raise Refused("invalid query")
-        optional = extra if operation == "enable-existing" else ()
-        body = await _body(request, ("commandKey", "actor", "reason", "expectedFingerprint", *(() if optional else extra)), optional=optional)
+        optional = extra if operation == "enable-existing" else ("dailyLimitUnits",) if operation == "operating-limits" else ()
+        body = await _body(request, ("commandKey", "actor", "reason", "expectedFingerprint", *(() if operation == "enable-existing" else extra)), optional=optional)
         common = dict(command_key=body["commandKey"], actor=body["actor"], reason=body["reason"],
                       expected_fingerprint=body["expectedFingerprint"])
         reader = getattr(request.app.state, "personality_credential_status_reader", None)
@@ -169,7 +169,8 @@ async def _activation(request, account, operation):
         else:
             value = await asyncio.to_thread(commands.set_operating_limits, store, tenant, account,
                 limit_units=body["limitUnits"], throttle_seconds=body["throttleSeconds"],
-                media_enabled=body["mediaEnabled"], **common)
+                media_enabled=body["mediaEnabled"],
+                **({"daily_limit_units": body["dailyLimitUnits"]} if "dailyLimitUnits" in body else {}), **common)
     except commands.Blocked as exc:
         return response({"ok": False, "code": "prerequisites_unmet", "blockers": exc.blockers,
                          "error": "The account is not ready for this change. See the status checks."}, 409)

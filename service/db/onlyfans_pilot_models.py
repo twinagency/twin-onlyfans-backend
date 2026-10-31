@@ -439,3 +439,22 @@ class EngineWork(Base):
     state_since = Column(String, nullable=False)
     attempts = Column(Integer, nullable=False, server_default=text("0"))
     updated_at = Column(String, nullable=False)
+
+
+class EngineAlert(Base):
+    """A durable, operator-visible condition on one account (additive; throughput work).
+
+    ``kind`` is a fixed public code: ``provider-throttle`` (the provider answered a send with HTTP 429; the account's send
+    gap was returned to the 20 s default and nothing lowers it again by itself) or ``send-stall`` (queued replies whose
+    oldest has waited past the threshold while nothing was sent). One row per (account, kind): ``count`` grows while the
+    condition repeats, ``state`` is ``open`` or ``cleared``. Not an authority; deleting a row changes no send decision.
+    """
+    __tablename__ = "engine_alert"
+    account_id = Column(String, primary_key=True)
+    kind = Column(String, primary_key=True)
+    state = Column(String, nullable=False)
+    first_at = Column(String, nullable=False)
+    last_at = Column(String, nullable=False)
+    count = Column(Integer, nullable=False, server_default=text("1"))
+    detail_json = Column(Text)
+

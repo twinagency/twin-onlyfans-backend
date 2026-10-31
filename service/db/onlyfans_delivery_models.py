@@ -119,6 +119,8 @@ class OfDeliveryPolicy(Base):
         CheckConstraint("used_units >= 0", name="used_units"),
         CheckConstraint("queued_count >= 0 AND queued_count <= 1000", name="queued_count"),
         CheckConstraint("throttle_seconds >= 1 AND throttle_seconds <= 86400", name="throttle_seconds"),
+        CheckConstraint("daily_limit_units IS NULL OR (daily_limit_units >= 0 AND daily_limit_units <= 20000)",
+                        name="daily_limit_units", info={"onlyfans_since": "0101_daily_send_cap"}),
         {"info": INFO},
     )
     account_id = Column(String, ForeignKey("of_runtime.account_id", ondelete="RESTRICT"), primary_key=True)
@@ -133,6 +135,9 @@ class OfDeliveryPolicy(Base):
     active_intent_id = Column(String(36))
     media_enabled = Column(Boolean, nullable=False, server_default=false(),
                            info={"onlyfans_since": "0077_native_media_sales"})
+    # Optional per-account DAILY send cap (rolling 24 hours of the FASTT engine's receipts). NULL = no daily cap, which
+    # is exactly the behaviour before this column existed. It sits beside, and never replaces, the lifetime limit_units.
+    daily_limit_units = Column(Integer, nullable=True, info={"onlyfans_since": "0101_daily_send_cap"})
 
 
 class OfDeliveryPolicyChange(Base):

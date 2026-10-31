@@ -198,14 +198,27 @@ def set_future_conversations(store, tenant, account, *, enabled, command_key, ac
         return _record(s, runtime, command_key, "future_conversations", request_hash, actor, reason, before, result, now)
 
 
+KEEP_DAILY = object()      # set_operating_limits default: leave the account's daily send cap as it is
+
+
 def set_operating_limits(store, tenant, account, *, limit_units, throttle_seconds, media_enabled, command_key, actor,
-                         reason, expected_fingerprint):
-    """Deliberate commercial limits. Never resets used units, queue, holds or the send interval clock."""
+                         reason, expected_fingerprint, daily_limit_units=KEEP_DAILY):
+    """Deliberate commercial limits. Never resets used units, queue, holds or the send interval clock.
+
+    ``daily_limit_units``: omitted = unchanged; None = no daily cap; an int 0..20000 = the account's rolling
+    24-hour send cap (beside, never replacing, the lifetime ``limit_units``)."""
     command_identity(command_key, actor, reason, expected_fingerprint)
     if (type(limit_units) is not int or not 1 <= limit_units <= 10000 or type(throttle_seconds) is not int
             or not 1 <= throttle_seconds <= 86400 or type(media_enabled) is not bool):
         raise Refused("invalid delivery limits")
-    request_hash = digest(["operating_limits", limit_units, throttle_seconds, media_enabled, expected_fingerprint, actor, reason])
+    if daily_limit_units is not KEEP_DAILY and daily_limit_units is not None and (
+            type(daily_limit_units) is not int or not 0 <= daily_limit_units <= 20000):
+        raise Refused("invalid delivery limits")
+    from .send_gap import below_floor
+    if below_floor(throttle_seconds):
+        raise Refused("invalid delivery limits: send gap is under the shared 10 second floor")
+    request_hash = digest(["operating_limits", limit_units, throttle_seconds, media_enabled, expected_fingerprint, actor, reason]
+                          + ([] if daily_limit_units is KEEP_DAILY else ["daily", daily_limit_units]))
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
         prior = _prior(s, runtime, command_key, "operating_limits", request_hash)
@@ -220,18 +233,24 @@ def set_operating_limits(store, tenant, account, *, limit_units, throttle_second
             raise Refused("used allowance cannot be reset")
         from datetime import timedelta
         now = utcnow()
-        before = {name: getattr(policy, name) for name in ("enabled", "limit_units", "throttle_seconds", "transport_kind", "media_enabled")}
+        names = ("enabled", "limit_units", "throttle_seconds", "transport_kind", "media_enabled")
+        if daily_limit_units is not KEEP_DAILY:
+            names += ("daily_limit_units",)         # only audited when this command changes it: older audit rows keep their shape
+        before = {name: getattr(policy, name) for name in names}
         if throttle_seconds > policy.throttle_seconds and policy.next_dispatch_at is not None:
             policy.next_dispatch_at = max(policy.next_dispatch_at, now + timedelta(seconds=throttle_seconds))
         policy.revision += 1
         policy.limit_units, policy.throttle_seconds, policy.media_enabled = limit_units, throttle_seconds, media_enabled
+        if daily_limit_units is not KEEP_DAILY:
+            policy.daily_limit_units = daily_limit_units
         after = {name: getattr(policy, name) for name in before}
         s.add(OfDeliveryPolicyChange(account_id=account, revision=policy.revision, actor=actor,
                                      reason="Operating limits: " + reason[:480],
                                      before_json=json.dumps(before, sort_keys=True), after_json=json.dumps(after, sort_keys=True),
                                      created_at=now))
         result = {"recorded": True, "limitUnits": limit_units, "usedUnits": policy.used_units,
-                  "throttleSeconds": throttle_seconds, "mediaEnabled": media_enabled, "commandKey": command_key}
+                  "throttleSeconds": throttle_seconds, "mediaEnabled": media_enabled, "commandKey": command_key,
+                  **({"dailyLimitUnits": policy.daily_limit_units} if daily_limit_units is not KEEP_DAILY else {})}
         return _record(s, runtime, command_key, "operating_limits", request_hash, actor, reason, before, result, now)
 
 

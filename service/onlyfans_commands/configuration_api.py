@@ -61,6 +61,13 @@ async def get(request:Request,account_id:str):
         data=await asyncio.to_thread(get_configuration,store,tenant,account_id,include_activation=request.query_params.get("activation")=="1")
     except Refused:return refuse("not_available",404,"That creator configuration is not available.")
     except Exception:return refuse("configuration_unavailable",503,"Creator configuration could not be read.")
+    # Older deployed dashboards validate an exact v3 response shape. Negotiate
+    # this additive field, as activation already does, before exposing it.
+    if request.query_params.get("contextual") != "1":
+        data.pop("fasttContextualSalesMode", None)
+    if request.query_params.get("replyPolicy") != "1":
+        data.pop("nativeReplyPacingEnabled", None)
+        data.pop("nativeReplyFormatEnabled", None)
     return response({"ok":True,"accountId":account_id,"configuration":data})
 
 

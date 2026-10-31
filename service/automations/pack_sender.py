@@ -674,7 +674,7 @@ async def _plan_ask_from(account_id: str, fan_id: int,
 async def plan_ask(account_id: str, fan_id: int,
                    contract: content_resolver.Contract, *,
                    cfg: dict | None = None,
-                   item_tag: str = ASK_ITEM_TAG) -> PackPlan:
+                   item_tag: str = ASK_ITEM_TAG, resolution=None) -> PackPlan:
     """A priced pack drawn from the WHOLE VAULT, for an ask with no curated rung.
 
     The same spine as `plan_pack` — same price ladder, same value composition,
@@ -695,10 +695,23 @@ async def plan_ask(account_id: str, fan_id: int,
     bought = await _bought_media(account_id, fan_id)
     # MAX_ITEMS wide: the resolver ranks, and composition decides how much of
     # that ranking the price actually buys.
-    res = await content_resolver.resolve(
-        str(account_id), int(fan_id), count=MAX_ITEMS, seen=bought,
-        contract=contract, require_curated=False)
+    res = resolution
+    if res is None:
+        res = await content_resolver.resolve(
+            str(account_id), int(fan_id), count=MAX_ITEMS, seen=bought,
+            contract=contract, require_curated=False)
+    elif res.contract != contract:
+        return replace(empty, refusal=REFUSE_RESOLVER, detail="resolution contract changed")
     if res.ok:
+        from sqlalchemy import inspect
+        async with get_session() as s:
+            installed = await s.run_sync(lambda sync: inspect(sync.connection()).has_table("of_contextual_offer"))
+            pending = (await s.execute(select(VaultSend.message_id).where(
+                VaultSend.account_id == str(account_id), VaultSend.fan_id == int(fan_id),
+                VaultSend.media_id.in_(res.media_ids), VaultSend.price_cents > 0,
+                VaultSend.was_purchased.is_not(True)).limit(1))).scalar_one_or_none() if installed else None
+        if pending is not None:
+            return replace(empty, refusal="item_already_pending", detail=str(pending))
         return await _plan_ask_from(account_id, fan_id, contract,
                                     res.media_ids, cfg, empty, _FITS,
                                     item_tag=item_tag)
@@ -725,6 +738,8 @@ async def plan_ask(account_id: str, fan_id: int,
     # his OnlyFans account, and wrote "Goodbye, you stupid liar." For an exclusive
     # promise a substitute is not a recovery, it is a second deception, so a strict
     # ask still fails closed and the caller says something instead of sending it.
+    if contract.strict:
+        return replace(empty, refusal=REFUSE_RESOLVER, detail=res.refusal or "")
     alts = res.alternatives or await content_resolver.last_resort(
         str(account_id), int(fan_id), seen=bought, count=MAX_ITEMS)
     if contract.strict or not alts:
@@ -1010,7 +1025,7 @@ async def _has_bought_from(account_id: str, fan_id: int, category: str) -> bool:
 async def plan_ask_delivery(account_id: str, fan_id: int,
                             contract: content_resolver.Contract, *,
                             cfg: dict | None = None,
-                            item_tag: str = ASK_ITEM_TAG
+                            item_tag: str = ASK_ITEM_TAG, resolution=None
                             ) -> tuple[Delivery | None, dict]:
     """Decide a whole-vault ask. `(delivery, refusal)` — exactly one is truthy.
 
@@ -1022,7 +1037,7 @@ async def plan_ask_delivery(account_id: str, fan_id: int,
     if not cfg.get("pack_send_enabled"):
         return None, {"status": "refused", "reason": REFUSE_DISABLED}
     plan = await plan_ask(account_id, fan_id, contract, cfg=cfg,
-                          item_tag=item_tag)
+                          item_tag=item_tag, resolution=resolution)
     if not plan.ok:
         log.info("ask refused account=%s fan=%s subject=%r: %s %s",
                  account_id, fan_id, contract.subject, plan.refusal, plan.detail)

@@ -2,8 +2,8 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0101_daily_send_cap"
-down_revision = "0100_manual_free_media"
+revision = "0102_daily_send_cap"
+down_revision = "0101_contextual_offers"
 branch_labels = depends_on = None
 
 

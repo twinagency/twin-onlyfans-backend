@@ -271,12 +271,33 @@ class TextAuthority:
             OfMessageDelivery.account_id == account_id, OfMessageDelivery.fan_id == fan_id,
             OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES)).limit(1)) is not None
 
-    def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None):
+    @staticmethod
+    def _manual_attachment(row):
+        """Derive the narrow archive exception from the saved immutable intent."""
+        if (row.origin != "manual" or type(row.price_cents) is not int
+                or not (row.price_cents == 0 or 300 <= row.price_cents <= 20000)
+                or row.catalog_item_id is None):
+            return False
+        try:
+            snapshot = json.loads(row.catalog_snapshot_json)
+            return (snapshot.get("manual_vault") is True
+                    and type(snapshot.get("price_cents")) is int
+                    and snapshot["price_cents"] == row.price_cents
+                    and bool(snapshot.get("media_ids")))
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+    def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None,
+                     manual_attachment=False):
         if policy is None or not policy.enabled or policy.transport_kind not in {"synthetic", "native"}:
             return "delivery_disabled"
         if not runtime.enabled:
             return "account_disabled"
-        if (runtime.recovery_needed or runtime.pending_events or runtime.last_sync_at is None
+        # Explicitly selected attachments are authored and priced by the operator.
+        # Purchase/ownership checks still run for paid media at every boundary.
+        # Text-only messages and automated origins retain their archive gates.
+        needs_history = not (origin == "manual" and manual_attachment)
+        if needs_history and (runtime.recovery_needed or runtime.pending_events or runtime.last_sync_at is None
                 or runtime.last_sync_at < now - timedelta(seconds=MAX_SYNC_AGE_SECONDS)
                 or runtime.last_sync_at > now + timedelta(minutes=5)):
             from .store import fan_history_current
@@ -286,7 +307,7 @@ class TextAuthority:
             human_on_fastt_fan = origin == "manual" and fan is not None and fastt_owned(runtime.account_id, fan.fan_id)
             if not (fan is not None and fan_history_current(s, runtime.account_id, fan.fan_id)) and not human_on_fastt_fan:
                 return "history_not_current"
-        if s.scalar(select(OfIngress.event_key).where(
+        if needs_history and s.scalar(select(OfIngress.event_key).where(
                 OfIngress.account_id == runtime.account_id, OfIngress.status == "quarantined").limit(1)) is not None:
             return "history_quarantined"
         if state is None or fan is None:
@@ -380,7 +401,8 @@ class TextAuthority:
                 OfDeliveryPolicy.account_id == account_id).with_for_update())
             state = s.get(OfConversationState, (account_id, fan_id))
             fan = s.get(Fan, (account_id, fan_id))
-            reason = self._eligibility(s, runtime, policy, state, fan, origin, now)
+            reason = self._eligibility(s, runtime, policy, state, fan, origin, now,
+                manual_attachment=manual_media is not None)
             if reason:
                 raise Refused(reason)
             from .handover import staff_owns_takeover
@@ -526,7 +548,8 @@ class TextAuthority:
                 obsolete = not current(s, intent, runtime, now)
             if not obsolete and intent.origin == "engagement":
                 obsolete = not self._engagement().current(s, intent, runtime, now)
-            reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now)
+            reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now,
+                manual_attachment=self._manual_attachment(intent))
             if reason:
                 intent.status = "cancelled" if obsolete else "refused"
                 intent.reason, intent.updated_at = reason, now
@@ -662,7 +685,8 @@ class TextAuthority:
             if not obsolete and row.origin == "engagement":
                 obsolete = not self._engagement().current(s, row, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(
-                s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id)
+                s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id,
+                manual_attachment=self._manual_attachment(row))
             from . import concurrent_admission
             concurrent = concurrent_admission.mode(policy) == "concurrent"
             if concurrent:

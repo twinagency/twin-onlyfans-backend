@@ -13,6 +13,8 @@ from llm_models import MODELS
 from .native_context import canonical,approved_persona
 from .store import Refused,utcnow
 from .activation import activation_view
+from .contextual_mode import FIELD as CONTEXTUAL_FIELD, KEY as CONTEXTUAL_KEY, MODES, mode as contextual_mode
+from .reply_settings import SWITCHES as REPLY_SWITCHES, enabled as reply_enabled
 
 def fact_fields():
     from automations._persona_contract import PERSONA_FACT_FIELDS
@@ -25,7 +27,7 @@ class InvalidConfiguration(ValueError):
 
 SALES_FLAGS = ("pack_send_enabled", "pack_on_ask_enabled", "qualification_gate_enabled")
 # FASTT runner switches, same JSON blob; default OFF, only a literal boolean true is on.
-FASTT_SWITCHES = {"fasttDiscountResend": "fastt_discount_resend", "fasttPostBuyUpsell": "fastt_post_buy_upsell"}
+FASTT_SWITCHES = {"fasttDiscountResend": "fastt_discount_resend", "fasttPostBuyUpsell": "fastt_post_buy_upsell", **REPLY_SWITCHES}
 
 
 def sales_settings(row):
@@ -125,8 +127,9 @@ def editable(row,runtime,session,*,include_activation=False):
         "dailyCostCapCents":row.daily_cost_cap_cents, "reasoningEffort":row.reasoning_effort,
         "reasoningOptions":({key:list(model.effort_choices) for key,model in MODELS.items()} if options is None else {key:[] for key in options}),
         "salesConfigurationValid":sales_valid,
+        CONTEXTUAL_FIELD:contextual_mode(sales) if sales_valid else "off",
         "onRequestSalesEnabled":on_request_sales_enabled(sales, valid=sales_valid),
-        **{name:sales_valid and sales.get(key) is True for name,key in FASTT_SWITCHES.items()},
+        **{name:sales_valid and reply_enabled(sales,key) for name,key in FASTT_SWITCHES.items()},
         **({"activation": activation_view(session,row.account_id,sales,binding_id=runtime.binding_id,model_id=resolved)} if include_activation else {})}
 
 
@@ -139,9 +142,14 @@ def get_configuration(store,tenant_id,account_id,*,include_activation=False):
 
 
 def validate_patch(patch):
-    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort","fasttScope",*FASTT_SWITCHES}:
+    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort","fasttScope",CONTEXTUAL_FIELD,*FASTT_SWITCHES}:
         raise InvalidConfiguration("Only creator persona, facts, model, budget, reasoning and on-request sales settings may be edited here.")
     result={}
+    if CONTEXTUAL_FIELD in patch:
+        value = patch[CONTEXTUAL_FIELD]
+        if type(value) is not str or value not in MODES:
+            raise InvalidConfiguration("Contextual offers must be off, shadow, or live.")
+        result[CONTEXTUAL_FIELD] = value
     if "fasttScope" in patch:
         from .fastt_scope import normalize
         try: result["fasttScope"] = normalize(patch["fasttScope"])
@@ -259,9 +267,22 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
                     before["fasttSwitches"][key]={"present":key in sales,"value":sales.get(key)}
                     sales[key]=patch[name]
                     after["fasttSwitches"][key]={"present":True,"value":patch[name]}
+                    if name == "nativeReplyPacingEnabled" and before["fasttSwitches"][key]["value"] != patch[name]:
+                        from native_pilot.pacing import invalidate_settings
+                        invalidate_settings(s, account_id)
             if previous_switches!=canonical(sales):
                 changed=True
                 row.ai_chatter_config_json=canonical(sales)
+        if CONTEXTUAL_FIELD in patch:
+            sales, valid = sales_settings(row)
+            if not valid:
+                raise InvalidConfiguration("Saved sales configuration needs review before it can be edited.")
+            previous = {"present":CONTEXTUAL_KEY in sales,"value":sales.get(CONTEXTUAL_KEY)}
+            before[CONTEXTUAL_FIELD] = previous
+            sales[CONTEXTUAL_KEY] = patch[CONTEXTUAL_FIELD]
+            after[CONTEXTUAL_FIELD] = patch[CONTEXTUAL_FIELD]
+            changed = changed or previous["value"] != patch[CONTEXTUAL_FIELD]
+            row.ai_chatter_config_json = canonical(sales)
         if "persona" in patch:
             changed=changed or row.persona!=patch["persona"]
             before["persona"]=row.persona;after["persona"]=patch["persona"];row.persona=patch["persona"]

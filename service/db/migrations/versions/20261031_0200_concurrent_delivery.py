@@ -3,8 +3,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0102_concurrent_delivery"
-down_revision = "0101_daily_send_cap"
+revision = "0103_concurrent_delivery"
+down_revision = "0102_daily_send_cap"
 branch_labels = depends_on = None
 
 

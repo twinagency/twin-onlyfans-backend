@@ -205,6 +205,35 @@ def bridge_ok(text: str | None) -> bool:
     return voice_line_ok(text) and not BRIDGE_BAN.search(str(text or ""))
 
 
+CONTEXTUAL_MEDIA_WORD = re.compile(
+    r"\b(?:pics?|photos?|pictures?|images?|vids?|videos?|clips?)\b", re.I)
+CONTEXTUAL_QUANTITY = re.compile(
+    r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"couple|few|several|dozen|half)\b", re.I)
+CONTEXTUAL_PRICE = re.compile(
+    r"\b(?:free|discount|discounted|cheap|cheaper|price|pricing|deal|offer|"
+    r"coupon|money)\b", re.I)
+
+
+def contextual_bridge_ok(text: str | None, action: str | None) -> bool:
+    """Validate a contextual bridge against the action it is serving.
+
+    An EXPLORE line is a question about the format he wants, so generic media
+    nouns are legitimate there. Counts, prices and delivery claims are not: the
+    line may not create a claim the matched card has not established. A SEND
+    caption keeps the stricter non-contextual bridge rule unchanged.
+    """
+    line = " ".join(str(text or "").split())
+    if action != "explore":
+        return bridge_ok(line)
+    if not line.endswith("?"):
+        return False
+    if CONTEXTUAL_QUANTITY.search(line) or CONTEXTUAL_PRICE.search(line):
+        return False
+    without_media_format = CONTEXTUAL_MEDIA_WORD.sub(" ", line)
+    return voice_line_ok(without_media_format)
+
+
 def effort_for(choices, saved: str | None, pick: str = "auto") -> str:
     """The `reasoning_effort` for the hook read. `""` means "send no such field".
 

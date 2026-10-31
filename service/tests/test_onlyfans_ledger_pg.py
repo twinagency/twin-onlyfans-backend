@@ -369,7 +369,9 @@ def test_long_scan_records_its_provider_cutoff_instead_of_claiming_newer_coverag
     with Session(database[1]) as s:
         scan = s.get(OfLedgerScan, account)
         assert scan.last_complete_at == cutoff and scan.last_full_at == cutoff
-        assert scan.next_poll_at <= cutoff+timedelta(minutes=20, seconds=2)
+        # The scan took far longer than one refresh interval, so the next
+        # provider query is already due instead of another five minutes later.
+        assert scan.next_poll_at <= utcnow()+timedelta(seconds=2)
     store.close()
 
 

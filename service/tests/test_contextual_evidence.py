@@ -5,6 +5,15 @@ import pytest
 from automations.contextual_evidence import evidence,recent_context
 from automations import content_prompts as cp
 
+def allow_hook(monkeypatch,payload):
+ monkeypatch.setattr(cp,"_thread_lines",AsyncMock(return_value=["FAN: hello"]))
+ monkeypatch.setattr(cp,"_sold_lines",AsyncMock(return_value=[]))
+ monkeypatch.setattr(cp,"vault_lexicon",AsyncMock(return_value=["portrait","mirror"]))
+ monkeypatch.setattr(cp,"resolve_model",AsyncMock(return_value="test"))
+ monkeypatch.setattr(cp.llm_client,"effort_options",lambda _:[])
+ monkeypatch.setattr(cp._hook_upsell,"effort_for",lambda *a:None)
+ monkeypatch.setattr(cp,"runtime_chat",AsyncMock(return_value=NS(parsed=payload)))
+
 def context(text="That looks interesting, tell me more"):
  return {"id":3,"text":text,"messages":[{"id":1,"role":"fan","text":"hello"},{"id":2,"role":"creator","text":"Interested in a clip?"},{"id":3,"role":"fan","text":text}]}
 def decision(c,action="send_ppv"):
@@ -46,6 +55,52 @@ def test_hook_actions(monkeypatch,action):
  assert "Explicit buying words are NOT required" in call.call_args.kwargs["messages"][0]["content"]
  assert "Only kind 2 SITUATION" not in call.call_args.kwargs["messages"][1]["content"]
 
+def test_contextual_explore_allows_media_format_clarification(monkeypatch):
+ c=context();p=decision(c,"explore");p["bridge"]="want a photo in blue?"
+ allow_hook(monkeypatch,p)
+ hook=asyncio.run(cp.read_hook("of-test",1,contextual_message=c))
+ assert hook is not None and hook.action=="explore" and hook.bridge=="want a photo in blue?"
+
+
+def test_existing_caption_and_contextual_send_still_reject_media_words():
+ from automations import _hook_upsell
+ assert not _hook_upsell.bridge_ok("want a photo in blue?")
+ assert not _hook_upsell.contextual_bridge_ok("want a photo in blue?","send_ppv")
+
+
+@pytest.mark.parametrize("bridge",[
+ "want 3 photos?",
+ "want two videos?",
+ "want a cheaper photo?",
+ "sending you a photo",
+])
+def test_contextual_explore_keeps_claim_and_delivery_guards(bridge):
+ from automations import _hook_upsell
+ assert not _hook_upsell.contextual_bridge_ok(bridge,"explore")
+
+
+@pytest.mark.parametrize("change,expected",[
+ ("no_interest","no_interest"),
+ ("invalid_output","invalid_model_output"),
+ ("unsupported_evidence","unsupported_conversation_evidence"),
+ ("invalid_wording","invalid_contextual_wording"),
+])
+def test_contextual_rejection_codes_are_safe_and_specific(monkeypatch,change,expected):
+ c=context();p=decision(c,"explore")
+ if change=="no_interest":
+  p={"hook":False,"action":"chat"}
+ elif change=="invalid_output":
+  p={}
+ elif change=="unsupported_evidence":
+  p.update(supporting_message_ids=[2],evidence=[{"id":2,"quote":"Interested in a clip?"}])
+ elif change=="invalid_wording":
+  p["bridge"]="want 3 photos?"
+ allow_hook(monkeypatch,p)
+ seen=[]
+ hook=asyncio.run(cp.read_hook("of-test",1,contextual_message=c,on_reject=seen.append))
+ assert hook is None and seen==[expected]
+
+
 def test_provider_failure(monkeypatch):
  monkeypatch.setattr(cp,"_thread_lines",AsyncMock(return_value=["FAN: hi"]))
  monkeypatch.setattr(cp,"_sold_lines",AsyncMock(return_value=[]))
@@ -54,19 +109,24 @@ def test_provider_failure(monkeypatch):
  monkeypatch.setattr(cp.llm_client,"effort_options",lambda _:[])
  monkeypatch.setattr(cp._hook_upsell,"effort_for",lambda *a:None)
  monkeypatch.setattr(cp,"runtime_chat",AsyncMock(side_effect=RuntimeError("unavailable")))
- assert asyncio.run(cp.read_hook("of-test",1,contextual_message=context())) is None
+ seen=[]
+ assert asyncio.run(cp.read_hook("of-test",1,contextual_message=context(),on_reject=seen.append)) is None
+ assert seen==["model_provider_failure"]
 
 from contextlib import asynccontextmanager
 from automations import contextual_offers as co, content_resolver as cr, pack_sender as ps
 from automations.content_contract import Contract
 
-@pytest.mark.parametrize("case",["eligible","blocked","takeover","ignored","bought","missing","explore","duplicate","disabled","provider"])
+@pytest.mark.parametrize("case",["eligible","blocked","takeover","stale","ignored","bought","missing","explore","no_interest","duplicate","disabled","provider"])
 def test_planner_preserves_gates(monkeypatch,case):
  c=NS(messages=[("in","hello"),("out","hi"),("in","I would love something like that")],
       msg_ids=[1,2,3],last_in_mid=3,last_in_text="I would love something like that",last_in_at=None)
  fan=NS(fan_id=1)
  events=[]
  def check(mode):
+  if case=="stale":
+   from native_pilot.ledger import Refused
+   raise Refused("contextual-purchase-state-stale")
   if case in ("takeover","ignored","duplicate"):
    from native_pilot.ledger import Refused
    raise Refused(case)
@@ -76,7 +136,12 @@ def test_planner_preserves_gates(monkeypatch,case):
          on=True,may_sell=AsyncMock(return_value=True),plan=AsyncMock(return_value=NS(delivery="plan")))
  hook=cp.Hook("situation","portrait","what kind do you like?",Contract(terms=["portrait"]),
               action="explore" if case=="explore" else "send_ppv",reason="active_interest",supporting_message_ids=(3,))
- read=AsyncMock(side_effect=RuntimeError("unavailable")) if case=="provider" else AsyncMock(return_value=hook)
+ def no_interest(*args,**kwargs):
+  kwargs["on_reject"]("no_interest")
+  return None
+ if case=="provider":read=AsyncMock(side_effect=RuntimeError("unavailable"))
+ elif case=="no_interest":read=AsyncMock(side_effect=no_interest)
+ else:read=AsyncMock(return_value=hook)
  monkeypatch.setattr(cp,"read_hook",read)
  @asynccontextmanager
  async def session():
@@ -94,6 +159,18 @@ def test_planner_preserves_gates(monkeypatch,case):
   assert result is None and authority.reply_override==hook.bridge
   assert not resolver.called
  else:assert result is None
- if case in ("blocked","takeover","ignored","duplicate","missing","disabled"):
+ if case in ("blocked","takeover","stale","ignored","duplicate","missing","disabled"):
   assert not read.called
+ expected={
+  "takeover":"sales_eligibility_refused",
+  "stale":"purchase_freshness_refused",
+  "ignored":"sales_eligibility_refused",
+  "duplicate":"sales_eligibility_refused",
+  "missing":"no_matching_media",
+  "no_interest":"no_interest",
+  "provider":"evaluation_internal_failure",
+ }.get(case)
+ if expected:
+  assert next(e["failure_code"] for e in reversed(events)
+              if e.get("failure_code"))==expected
  assert events

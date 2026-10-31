@@ -13,7 +13,13 @@ from sqlalchemy import create_engine
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
-from native_pilot.contextual import ContextualAuthority, ignored_contextual, refuse_repeat_media, purchase_fresh
+from native_pilot.contextual import (
+    ContextualAuthority,
+    ignored_contextual,
+    purchase_fresh,
+    purchase_freshness_detail,
+    refuse_repeat_media,
+)
 from native_pilot.ledger import Refused
 from onlyfans_runtime.contextual_mode import KEY, mode
 from onlyfans_runtime.configuration import validate_patch, InvalidConfiguration, SALES_FLAGS
@@ -120,8 +126,16 @@ def test_recent_read_deferral_does_not_invalidate_fresh_coverage(db):
     a=authority(db)
     assert a.check()["mode"]=="live"
     with sqlite3.connect(db) as c:
-        c.execute("UPDATE of_ledger_scan SET last_error='provider_read_deferred'")
+        c.execute("UPDATE of_ledger_scan SET last_error='provider_read_deferred:provider-backoff'")
     assert a.check()["mode"]=="live"
+    scan={"binding_id":"binding","connection_revision":2,"owner_id":900001,
+          "last_error":"provider_read_deferred:provider-backoff",
+          "next_poll_at":NOW+timedelta(seconds=2),"window_end":NOW-timedelta(seconds=30),
+          "last_complete_at":NOW-timedelta(seconds=30)}
+    connection={"binding_id":"binding","connection_revision":2,"owner_id":900001}
+    detail=purchase_freshness_detail(scan,connection,NOW)
+    assert detail["cause"]=="provider-deferred"
+    assert detail["defer_reason"]=="provider-backoff"
 
 
 def test_reservation_survives_caption_price_change_replay_and_unknown(db):

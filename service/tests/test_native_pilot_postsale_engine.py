@@ -7,8 +7,8 @@ hook read would be a model call, and the wire (removal + replacement send) is th
 A  an eligible $5.00 vault card is replaced by a strictly cheaper card (10-20% band, >= $3), same media and previews
 B  silence alone, distress, decline, no beat, already-owned, a $3 card, too early, missing card evidence: skipped
    with the fixed reason, NOTHING sent and NOTHING unsent
-C  one discount per item (replay of the job, ladder discount_count, tapped ladder, unpaid-rung cap) and the
-   existing frequency governor
+C  the two-step item discount (15%, then 20% total from the original, never compounded), replay protection,
+   unpaid-rung cap, and the existing frequency governor
 D  a purchase landing while the discount is processed: the offer is no longer open, nothing sent or removed
 E  removal failure (non-404) -> no replacement; 404 -> already removed, replacement sent; uncertain removal -> no
    send; send failure after confirmed removal -> original cancelled 'discounted', never replayed
@@ -403,30 +403,62 @@ async def exercise(tmp):
                 check(str(exc) == 'forbidden-job-payload', ('B: forged id refused', payload))
     untouched('B bad ids')
 
-    # ═══ C. one discount per item, and the frequency governor ═══════════════════════════════════════════════
+    # ═══ C. two-step discount per item, then the frequency governor ══════════════════════════════════════════
     await reset()
-    oid = await put_card(price=500)
+    oid = await put_card(price=1000)
     await objection()
     stats, out, gw = await run_job({'discount_offer': oid})
     check(stats['discount_resends'] == 1, 'C: first cut')
+    first_price = round(out[0][1]['price'] * 100)
+    check(first_price == 850, ('C: first cut is 15 percent from the original', first_price))
     n_sent, n_del = len(sent), len(wire.deleted)
     stats, out, gw = await run_job({'discount_offer': oid})            # the same job again (restart / replay)
     check(stats.get('discount_skip') == 'offer_resolved' and len(sent) == n_sent and len(wire.deleted) == n_del,
           ('C: replaying the job cuts nothing more', stats))
     second = (await offers())[-1]
-    await put_message(FAN, 'in', 'cheaper please, any deal?', 40)
-    await put_message(FAN, 'in', 'hello?', 30)
     async with get_session() as s:                                  # make the replacement old enough to be a candidate
         o = await s.get(ContentOffer, second.id)
         o.offered_at = datetime.utcnow() - timedelta(minutes=100)
+    await put_message(FAN, 'in', 'can you do 20 percent off the original?', 40)
+    await put_message(FAN, 'in', 'come on, final offer?', 30)
+    stats, out, gw = await run_job(
+        {'discount_offer': second.id}, gw=make_gateway(expected=second.offer_message_id))
+    check(stats.get('discount_resends') == 1 and len(out) == 1,
+          ('C: a further explicit negotiation reaches the second cut', stats))
+    second_price = round(out[0][1]['price'] * 100)
+    check(second_price == 800, ('C: the second cut is 20 percent total, not compounded', second_price))
+    third = (await offers())[-1]
+    second_after = await offer(second.id)
+    check(second_after.status == 'cancelled' and third.price_cents == second_price == 800,
+          ('C: payable replacement matches the quoted 20 percent price', second_after.status,
+           third.price_cents, second_price))
+    async with get_session() as s:
+        quotes = (await s.execute(select(LadderQuote).where(
+            LadderQuote.kind == 'discount').order_by(LadderQuote.id))).scalars().all()
+    check([(q.base_cents, q.price_cents) for q in quotes] == [(1000, 850), (1000, 800)],
+          ('C: both cuts are measured from the original price',
+           [(q.base_cents, q.price_cents) for q in quotes]))
+    check((await ladder()).discount_count == 2, 'C: two cuts are recorded')
+    n_sent, n_del = len(sent), len(wire.deleted)
     stats, out, gw = await run_job({'discount_offer': second.id})
-    check(stats.get('discount_skip') in ('selling-stopped', 'already_cut', 'already-discounted') and len(sent) == n_sent,
-          ('C: the replacement is never discounted again (ladder tapped)', stats))
-    # even with the ladder reopened (he bought something and went hot), the item is cut once
+    check(stats.get('discount_skip') == 'offer_resolved' and len(sent) == n_sent and len(wire.deleted) == n_del,
+          ('C: replay after the second cut sends nothing', stats))
+    async with get_session() as s:
+        o = await s.get(ContentOffer, third.id)
+        o.offered_at = datetime.utcnow() - timedelta(minutes=100)
+    await put_message(FAN, 'in', 'one more discount?', 40)
+    await put_message(FAN, 'in', 'please?', 30)
+    stats, out, gw = await run_job(
+        {'discount_offer': third.id}, gw=make_gateway(expected=third.offer_message_id))
+    check(stats.get('discount_skip') in ('selling-stopped', 'already_cut') and len(sent) == n_sent
+          and len(wire.deleted) == n_del,
+          ('C: a third cut is refused without touching the card', stats))
+    # even with the ladder reopened, the item cannot be cut a third time
     await ai_chatter._save_ladder(ACCOUNT, FAN, status=upsell.STATUS_OPEN)
-    stats, out, gw = await run_job({'discount_offer': second.id})
+    stats, out, gw = await run_job(
+        {'discount_offer': third.id}, gw=make_gateway(expected=third.offer_message_id))
     check(stats.get('discount_skip') == 'already_cut' and len(sent) == n_sent and len(wire.deleted) == n_del,
-          ('C: discount_count stops a second cut on the item', stats))
+          ('C: the 20 percent ceiling stops a third cut on the item', stats))
     # unpaid-rung cap (stop_after_unpaid_rungs, default 1)
     await reset()
     oid = await put_card(price=500)

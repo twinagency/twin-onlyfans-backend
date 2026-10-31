@@ -62,6 +62,14 @@ def test_contextual_explore_allows_media_format_clarification(monkeypatch):
  assert hook is not None and hook.action=="explore" and hook.bridge=="want a photo in blue?"
 
 
+def test_contextual_explore_rejects_future_delivery_promise(monkeypatch):
+    c=context();p=decision(c,"explore");p["bridge"]="I will send you a video tonight, okay?"
+    allow_hook(monkeypatch,p)
+    seen=[]
+    hook=asyncio.run(cp.read_hook("of-test",1,contextual_message=c,on_reject=seen.append))
+    assert hook is None and seen==["invalid_contextual_wording"]
+
+
 def test_existing_caption_and_contextual_send_still_reject_media_words():
  from automations import _hook_upsell
  assert not _hook_upsell.bridge_ok("want a photo in blue?")
@@ -73,10 +81,28 @@ def test_existing_caption_and_contextual_send_still_reject_media_words():
  "want two videos?",
  "want a cheaper photo?",
  "sending you a photo",
+ "I will send you a video tonight, okay?",
+ "I'll send it later",
+ "I'm sending it tonight",
+ "you'll get it tomorrow",
+ "send you one soon",
 ])
 def test_contextual_explore_keeps_claim_and_delivery_guards(bridge):
  from automations import _hook_upsell
  assert not _hook_upsell.contextual_bridge_ok(bridge,"explore")
+
+
+@pytest.mark.parametrize("line",[
+ "I will send you a video tonight, okay?",
+ "I'll send it later",
+ "I'm sending it tonight",
+ "you'll get it tomorrow",
+ "send you one soon",
+])
+def test_shared_caption_validator_rejects_delivery_promises(line):
+ from automations.pack_claim import compose_caption, voice_line_ok, Claim
+ assert not voice_line_ok(line)
+ assert compose_caption(Claim("3 pics",3),line)=="3 pics"
 
 
 @pytest.mark.parametrize("change,expected",[

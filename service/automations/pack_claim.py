@@ -54,6 +54,18 @@ _MEDIA_NOUNS = frozenset({
 # above it is the contract, and a second claim underneath can contradict it.
 _VOICE_BAN = re.compile(r"[0-9$€£]|\bpics?\b|\bphotos?\b|\bvideos?\b|\bset\b", re.I)
 
+# A future/current delivery claim is equally unsafe. The contextual EXPLORE
+# branch may name the media format in a question, but no branch may tell him
+# when a send will arrive or that one is already on its way.
+_DELIVERY_PROMISE = re.compile(
+    r"(?:\bi(?:'ll|ll| will|'m|m| am)(?:\s+going\s+to|\s+gonna)?"
+    r"\s+(?:send|deliver|drop|post|share)\b"
+    r"|\byou(?:'ll|ll| will)\s+(?:get|receive|have)\b"
+    r"|\b(?:send|sending|deliver|delivering|drop|dropping|post|posting)\b"
+    r"[^.!?]{0,48}\b(?:tonight|tomorrow|later|soon)\b)",
+    re.I,
+)
+
 _REPLY_MAX_CHARS = 600        # OF truncates the chat-list preview past this
 
 # The kinds that are moving images. Defined HERE, in the dependency-free leaf,
@@ -229,7 +241,7 @@ def clean_action(text: str | None) -> str:
     """
     line = " ".join(str(text or "").split()).strip().strip('"').strip()
     line = line.rstrip(".!").strip().lower()
-    if not line or _VOICE_BAN.search(line):
+    if not line or _voice_line_unsafe(line):
         return ""
     if len(line) > _ACTION_MAX_CHARS:
         line = line[:_ACTION_MAX_CHARS].rsplit(" ", 1)[0].strip()
@@ -288,18 +300,23 @@ def product_description(category: str, rung: str) -> str:
 def voice_line_ok(text: str | None) -> bool:
     """Would `compose_caption` KEEP this line, or silently drop it?
 
-    The drop is the right behaviour — a voice line carrying a digit or a media
-    word states a second claim under the contract — but it is invisible to the
-    caller, so a lane that generates its line has no way to know it shipped a
-    bare clause instead. This is that question, asked in the one place the ban
-    lives. A caller that gets False falls back to a line it authored itself.
+    The drop is the right behaviour — a voice line carrying a digit, a media word
+    or a delivery promise states a second claim under the contract — but it is
+    invisible to the caller, so a lane that generates its line has no way to know
+    it shipped a bare clause instead. This is that question, asked in the one
+    place the ban lives. A caller that gets False falls back to a line it
+    authored itself.
 
     Deliberately NOT `clean_action`: that one is bounded for the CONTRACT (48
     chars, lowercased, repaired-or-dropped). A voice line is her reply to the
     thread and is bounded by `compose_caption`'s own remaining budget.
     """
     line = " ".join(str(text or "").split())
-    return bool(line) and not _VOICE_BAN.search(line)
+    return bool(line) and not _voice_line_unsafe(line)
+
+
+def _voice_line_unsafe(line: str) -> bool:
+    return bool(_VOICE_BAN.search(line) or _DELIVERY_PROMISE.search(line))
 
 
 def compose_caption(claim: Claim, voice_line: str | None) -> str:
@@ -310,11 +327,11 @@ def compose_caption(claim: Claim, voice_line: str | None) -> str:
     exactly the moment he decides whether to open it.
 
     The voice line is rejected — not trimmed — when it carries a digit, a
-    currency symbol or a content-claim word. The clause above it is the contract
-    and a second claim underneath can only contradict it.
+    currency symbol, a content-claim word or a delivery promise. The clause above
+    it is the contract and a second claim underneath can only contradict it.
     """
     line = " ".join(str(voice_line or "").split())
-    if not line or _VOICE_BAN.search(line):
+    if not line or _voice_line_unsafe(line):
         return claim.text
     budget = _REPLY_MAX_CHARS - len(claim.text) - 2
     if budget <= 0:

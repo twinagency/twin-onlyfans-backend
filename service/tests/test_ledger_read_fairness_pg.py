@@ -13,6 +13,17 @@ from onlyfans_runtime.provider_connector import NativeProviderConnector
 from onlyfans_runtime.store import utcnow
 
 
+def _scan_once(native, monkeypatch, now, *, more):
+    store, account, _ = native
+    monkeypatch.setattr(ledger, 'utcnow', lambda: now)
+    monkeypatch.setattr(budget, 'utcnow', lambda: now)
+    def page(self, **kw):
+        return payload([], more=more)
+    monkeypatch.setattr(NativeProviderConnector, 'transaction_page', page)
+    assert ledger.process_ledger_pages(store, TENANT) == 1
+    return store, account
+
+
 def test_due_transactions_progress_between_repeated_message_reads(native, monkeypatch):
     store, account, _ = native
     clock = [utcnow()]
@@ -58,13 +69,14 @@ def test_due_transactions_progress_between_repeated_message_reads(native, monkey
 
 
 def test_dead_ledger_worker_cannot_hold_replies_forever(native,monkeypatch):
-    store,account,_=native
     now=utcnow()
-    monkeypatch.setattr(ledger,'utcnow',lambda:now)
-    monkeypatch.setattr(budget,'utcnow',lambda:now)
-    claim=budget.acquire(store,TENANT,account,connection_revision=1,kind='recent')
-    assert ledger.process_ledger_pages(store,TENANT)==0
-    budget.release(store,TENANT,claim)
+    store,account=_scan_once(native,monkeypatch,now,more=False)
+    with Session(store.engine) as s,s.begin():
+        row=s.get(OfProviderReadBudget,account)
+        row.last_kind='recent'
+        scan=s.get(OfLedgerScan,account)
+        scan.next_poll_at=now
+        scan.updated_at=now
     with pytest.raises(budget.ReadDeferred,match='ledger turn due'):
         budget.acquire(store,TENANT,account,connection_revision=1,kind='recent')
     later=now+timedelta(seconds=46)
@@ -73,15 +85,11 @@ def test_dead_ledger_worker_cannot_hold_replies_forever(native,monkeypatch):
 
 
 def test_waiting_ledger_keeps_priority_even_after_a_ledger_page(native,monkeypatch):
-    store,account,_=native
     now=utcnow()
-    monkeypatch.setattr(budget,'utcnow',lambda:now)
+    store,account=_scan_once(native,monkeypatch,now,more=True)
     with Session(store.engine) as s,s.begin():
         row=s.get(OfProviderReadBudget,account)
-        row.tokens,row.refilled_at=9,now
-        row.last_kind='ledger'
         scan=s.get(OfLedgerScan,account)
-        scan.status='running'
         scan.last_error='provider_read_deferred:lease-occupied'
         scan.next_poll_at=now
         scan.updated_at=now
@@ -92,15 +100,12 @@ def test_waiting_ledger_keeps_priority_even_after_a_ledger_page(native,monkeypat
 
 
 def test_due_running_ledger_scan_keeps_priority_before_next_page(native,monkeypatch):
-    store,account,_=native
     now=utcnow()
-    monkeypatch.setattr(budget,'utcnow',lambda:now)
+    store,account=_scan_once(native,monkeypatch,now,more=True)
     with Session(store.engine) as s,s.begin():
         row=s.get(OfProviderReadBudget,account)
-        row.tokens,row.refilled_at=9,now
-        row.last_kind='ledger'
+        row.last_kind='recent'
         scan=s.get(OfLedgerScan,account)
-        scan.status='running'
         scan.last_error=None
         scan.next_poll_at=now
         scan.updated_at=now
@@ -117,15 +122,12 @@ def test_due_running_ledger_scan_keeps_priority_before_next_page(native,monkeypa
 
 
 def test_due_refresh_reserves_ledger_turn_but_expires_if_worker_is_dead(native,monkeypatch):
-    store,account,_=native
     now=utcnow()
-    monkeypatch.setattr(budget,'utcnow',lambda:now)
+    store,account=_scan_once(native,monkeypatch,now,more=False)
     with Session(store.engine) as s,s.begin():
         row=s.get(OfProviderReadBudget,account)
-        row.tokens,row.refilled_at=9,now
         row.last_kind='recent'
         scan=s.get(OfLedgerScan,account)
-        scan.status='idle'
         scan.last_error=None
         scan.next_poll_at=now-timedelta(seconds=1)
         scan.updated_at=now-timedelta(seconds=300)
@@ -140,17 +142,14 @@ def test_due_refresh_reserves_ledger_turn_but_expires_if_worker_is_dead(native,m
 
 
 def test_stale_partial_purchase_window_restarts_before_another_page(native,monkeypatch):
-    store,account,_=native
     now=utcnow()
-    monkeypatch.setattr(ledger,'utcnow',lambda:now)
+    store,account=_scan_once(native,monkeypatch,now,more=True)
     with Session(store.engine) as s,s.begin():
-        row=s.get(OfProviderReadBudget,account)
-        row.tokens,row.refilled_at=9,now
         scan=s.get(OfLedgerScan,account)
-        scan.status='running'
         scan.last_error='provider_read_deferred:lease-occupied'
         scan.window_start=now-timedelta(days=7)
         scan.window_end=now-ledger.RECENT_COVERAGE_FRESHNESS
+        scan.last_full_at=now-timedelta(hours=1)
         scan.page_offset=20
         scan.next_poll_at=now
         scan.updated_at=now

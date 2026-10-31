@@ -86,7 +86,7 @@ def _replies_waiting(s, account, now):
         return False
 
 
-def _reserve_due_ledger_turn(s, account, runtime, revision, now):
+def _reserve_due_ledger_turn(s, account, runtime, revision, now, last_kind):
     """Keep other reads off a due financial refresh.
 
     The worker and inbox schedulers are independent. A recent-inbox page can
@@ -113,6 +113,10 @@ def _reserve_due_ledger_turn(s, account, runtime, revision, now):
         if not fresh:
             return False
         if scan.last_error is None:
+            # A completed ledger page yields one turn to live intake. The next
+            # recent read then restores priority for the following page.
+            if last_kind == "ledger":
+                return False
             scan.last_error = LEDGER_TURN_RESERVED
             scan.updated_at = now
         return scan.last_error == LEDGER_TURN_RESERVED or scan.last_error.startswith("provider_read_deferred")
@@ -147,7 +151,8 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
         if row.backoff_until and row.backoff_until > now:
             raise ReadDeferred(row.backoff_until, "provider read backoff")
         if (kind not in {'ledger', 'connection_check'}
-                and _reserve_due_ledger_turn(s, account, runtime, connection_revision, now)):
+                and _reserve_due_ledger_turn(
+                    s, account, runtime, connection_revision, now, row.last_kind)):
             raise ReadDeferred(now + timedelta(seconds=LEDGER_RETRY_SECONDS), 'provider ledger turn due')
         refill = max(0, int((now - row.refilled_at).total_seconds()))
         available = min(CAPACITY, row.tokens + refill)

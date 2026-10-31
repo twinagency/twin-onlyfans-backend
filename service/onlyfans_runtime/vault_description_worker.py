@@ -87,6 +87,15 @@ class VaultDescriptionWorker:
 
     def run(self):
         cursor = None
+        streak_account, streak = None, 0
+        try:
+            batch = max(1, min(12, int(os.environ.get("ONLYFANS_VAULT_DESCRIPTION_BATCH", "4"))))
+        except ValueError:
+            batch = 4
+        try:
+            stay = max(1, min(20, int(os.environ.get("ONLYFANS_VAULT_DESCRIPTION_STAY", "1"))))
+        except ValueError:
+            stay = 1
         while not self.stop.is_set():
             try:
                 rows, scanned = accounts(self.store, self.tenant, cursor)
@@ -95,10 +104,15 @@ class VaultDescriptionWorker:
                     self.stop.wait(15)
                     continue
                 account, binding, revision = rows[0]
-                cursor = account
+                # Optional drain of one account for up to `stay` runs in a row (default 1 = plain
+                # round robin). The cursor is left alone so the next pass selects this account again.
+                streak = streak + 1 if account == streak_account else 1
+                streak_account = account
+                if not (stay > 1 and streak < stay):
+                    cursor = account
                 args = [sys.executable, "-m", "native_pilot.tools.describe_imported_vault",
                     "--tenant", self.tenant, "--account", account, "--binding", binding,
-                    "--revision", str(revision), "--limit", "4"]
+                    "--revision", str(revision), "--limit", str(batch)]
                 with self.lock:
                     if self.stop.is_set():
                         break

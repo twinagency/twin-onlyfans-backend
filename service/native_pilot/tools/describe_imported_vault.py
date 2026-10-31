@@ -232,8 +232,8 @@ def main(argv=None):
     parser.add_argument("--revision", required=True, type=int)
     parser.add_argument("--limit", type=int, default=4)
     args = parser.parse_args(argv)
-    if not 1 <= args.limit <= 4 or args.revision < 1:
-        parser.error("Use a current revision and a batch of 1..4")
+    if not 1 <= args.limit <= 12 or args.revision < 1:
+        parser.error("Use a current revision and a batch of 1..12")
     try:
         result = asyncio.run(run(args))
     except Exception:

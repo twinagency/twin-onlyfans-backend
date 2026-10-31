@@ -1,0 +1,10 @@
+{
+  "verified_at_utc": "2026-10-31T06:13:43.810075Z",
+  "account": "Maile",
+  "kind": "discount",
+  "base_price_cents": 670,
+  "discount_price_cents": 570,
+  "provider_message_id": "11868482364692",
+  "production_image": "twin-requested-discounts:20261031-9c026-v2",
+  "note": "Ladder quote records the confirmed discounted send. Full conversation bodies and prompts are excluded."
+}

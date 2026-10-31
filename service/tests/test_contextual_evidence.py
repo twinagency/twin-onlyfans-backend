@@ -118,6 +118,39 @@ def test_final_text_boundary_rejects_future_delivery_promises(line):
  assert claims_media_sent(line)
 
 
+@pytest.mark.parametrize("line",[
+ "I will get some sleep soon",
+ "I will have coffee tomorrow",
+ "I can share how my day went",
+ "I'm going to bed soon",
+ "I'm going to the gym later",
+ "I'll send my love tomorrow",
+ "you will have a great day",
+ "I will think about it tonight",
+ "I can share more about my day later",
+])
+def test_ordinary_replies_are_not_delivery_promises(line):
+ from automations.pack_claim import has_delivery_promise
+ from native_pilot.media_claims import claims_media_sent
+ assert not has_delivery_promise(line)
+ assert not claims_media_sent(line)
+
+
+@pytest.mark.parametrize("line",[
+ "I will send you a video tonight, okay?",
+ "I'll send you a spicy pic later",
+ "ill drop the vid tomorrow",
+ "I can send you a pic",
+ "you will get a video tonight",
+ "you'll get it soon",
+])
+def test_delivery_promises_with_media_are_still_blocked(line):
+ from automations.pack_claim import has_delivery_promise
+ from native_pilot.media_claims import claims_media_sent
+ assert has_delivery_promise(line)
+ assert claims_media_sent(line)
+
+
 @pytest.mark.parametrize("line,promise,media",[
  ("want me to send you a photo?",False,False),
  ("do you want a video tonight?",False,False),

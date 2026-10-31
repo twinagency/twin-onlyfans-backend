@@ -57,14 +57,33 @@ _VOICE_BAN = re.compile(r"[0-9$€£]|\bpics?\b|\bphotos?\b|\bvideos?\b|\bset\b"
 # A future/current delivery claim is equally unsafe. The contextual EXPLORE
 # branch may name the media format in a question, but no branch may tell him
 # when a send will arrive or that one is already on its way.
+#
+# A promise needs a DELIVERY MEANING: a delivery verb whose object is media or a
+# stand-in for it ("send you a video", "send it", "going to send you one").
+# Ordinary talk that merely shares the verb or the "I will / I'm going to"
+# frame is not a promise: "I will get some sleep soon", "I will have coffee
+# tomorrow", "I can share how my day went", "I'm going to bed".
+_MEDIA_OBJ = (r"(?:pics?|pictures?|photos?|selfies?|videos?|vids?|clips?|voice\s*(?:notes?|messages?|memos?)|"
+              r"nudes?|content|vault|gallery|something|(?:a\s+)?(?:taste|preview|surprise|treat))")
+_SEND_OBJ = rf"(?:{_MEDIA_OBJ}|it|them|one|ones|these|those)"
+_FILL = r"(?:\s+\w+){0,3}?"                     # "you a spicy" between the verb and its object
 _DELIVERY_PROMISE = re.compile(
     r"(?:"
-    r"\bi(?:'ll| will)\s+(?:be\s+)?(?:send|deliver|drop|post|share|get|have)\b"
-    r"|\bi(?:'m| am)\s+(?:going\s+to\s+|gonna\s+|sending|delivering|dropping|posting|sharing)\b"
-    r"|\bi\s+(?:can|could)\s+(?:send|deliver|drop|post|share)\b"
-    r"|\byou(?:'ll| will)\s+(?:get|receive|have)\b"
+    # "i'll / i will (be) send|deliver|drop|post <obj>", "i'll share <media>", "i'll get|have you <media>"
+    rf"\bi(?:'ll| will)\s+(?:be\s+)?(?:send|deliver|drop|post)\b{_FILL}\s+{_SEND_OBJ}\b"
+    rf"|\bi(?:'ll| will)\s+(?:be\s+)?share\b{_FILL}\s+{_MEDIA_OBJ}\b"
+    rf"|\bi(?:'ll| will)\s+(?:get|have)\s+(?:you|u|ya)\b{_FILL}\s+{_MEDIA_OBJ}\b"
+    # "i'm sending <obj>", "i am going to send <obj>", "i'm gonna drop <obj>"
+    rf"|\bi(?:'m| am)\s+(?:(?:going\s+to|gonna)\s+(?:send|deliver|drop|post|share)|sending|delivering|dropping|posting|sharing)\b{_FILL}\s+{_SEND_OBJ}\b"
+    # "i can / could send|deliver|drop|post|share <obj>"
+    rf"|\bi\s+(?:can|could)\s+(?:send|deliver|drop|post|share)\b{_FILL}\s+{_SEND_OBJ}\b"
+    # "you'll get|receive|have <media>", "you will receive it", "you'll get it tonight"
+    rf"|\byou(?:'ll| will)\s+(?:get|receive|have)\b{_FILL}\s+{_MEDIA_OBJ}\b"
+    r"|\byou(?:'ll| will)\s+receive\s+(?:it|them|one)\b"
+    r"|\byou(?:'ll| will)\s+get\s+(?:it|them)\s+(?:tonight|tomorrow|later|soon|shortly|now)\b"
     r"|\bit(?:'ll| will)\s+be\s+in\s+(?:your|ur)\s+(?:inbox|dms?|messages)\b"
-    r"|\b(?:send|sending|deliver|delivering|drop|dropping|post|posting)\b"
+    # "send|post|drop <obj> ... tonight|tomorrow|later|soon"
+    rf"|\b(?:send|sending|deliver|delivering|drop|dropping|post|posting)\b{_FILL}\s+{_SEND_OBJ}\b"
     r"[^.!?]{0,48}\b(?:tonight|tomorrow|later|soon)\b"
     r")",
     re.I,

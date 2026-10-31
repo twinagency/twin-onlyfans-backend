@@ -35,7 +35,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from .pack_claim import voice_line_ok
+from .pack_claim import has_delivery_promise, voice_line_ok
 
 #: fans.custom_fields slot. Its value:
 #:
@@ -229,6 +229,9 @@ def contextual_bridge_ok(text: str | None, action: str | None) -> bool:
     if not line.endswith("?"):
         return False
     if CONTEXTUAL_QUANTITY.search(line) or CONTEXTUAL_PRICE.search(line):
+        return False
+    # Judge a delivery promise on the whole line: stripping the media word below would remove the object it needs.
+    if has_delivery_promise(line):
         return False
     without_media_format = CONTEXTUAL_MEDIA_WORD.sub(" ", line)
     return voice_line_ok(without_media_format)

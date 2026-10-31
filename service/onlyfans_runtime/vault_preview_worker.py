@@ -35,6 +35,7 @@ class VaultPreviewWorker:
     def run(self):
         background_index = 0
         while not self.stop.is_set():
+            self.drain_queued()
             try:
                 scoped_accounts = accounts(self.store, self.tenant)
             except Exception:
@@ -56,6 +57,36 @@ class VaultPreviewWorker:
                 except Exception:
                     pass
             self.stop.wait(2)
+
+    def drain_queued(self):
+        """Warm pages the vault reader handed over (async flag); one page per account per pass."""
+        for account in vault_previews.queued_accounts():
+            if self.stop.is_set():
+                return
+            item = vault_previews.pop_page(account)
+            if item is None:
+                continue
+            try:
+                self.warm_queued(account, *item)
+            except Exception:
+                # Dropped pages are recovered by the background sweep.
+                self.observe({"schemaVersion": "of-vault-preview.v1", "state": "retry_pending"})
+
+    def warm_queued(self, account, binding, owner, revision, rows):
+        from .provider_connector import NativeProviderConnector, session_from_capture
+        with Session(self.store.engine) as session, session.begin():
+            runtime = self.store._runtime(session, self.tenant, account)
+            connection = _connection(session, runtime)
+            if (runtime.binding_id, connection.owner_id, connection.revision) != (binding, owner, revision):
+                return 0
+            clear = _open(connection, self.tenant)
+            snapshot = session_from_capture(account_id=account, owner_id=owner, policy_revision=1,
+                expires_at=connection.expires_at.replace(tzinfo=timezone.utc),
+                capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"])
+        client = NativeProviderConnector(snapshot, timeout_seconds=8)
+        transport = SimpleNamespace(account_id=account,
+            still_bytes=lambda url: client.still_bytes(url, timeout_seconds=8))
+        return vault_previews.warm_page(transport, rows, binding_id=binding, owner_id=owner, stop=self.stop)
 
     def warm(self, account, *, requested_only=False):
         from .provider_connector import NativeProviderConnector, session_from_capture

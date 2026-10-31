@@ -4,9 +4,11 @@ Only the worker fetches provider bytes. API reads require current canonical
 vault provenance and an owner/binding/hash receipt beside the existing image.
 No signed URL, credential, new media record, classifier or model is returned.
 """
+from collections import deque
 import hashlib
 import json
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import select
@@ -147,6 +149,47 @@ def warm_page(transport, rows, *, binding_id, owner_id, stop=None):
             return False
     with ThreadPoolExecutor(max_workers=3, thread_name_prefix="vault-still") as executor:
         return sum(executor.map(one, rows))
+
+
+# Process-local hand-off from the vault page reader to the preview worker. It
+# is a scheduling optimisation only: a lost entry (restart, overflow) is
+# recovered by the preview worker's ordinary background sweep, and the page
+# metadata is already committed without it. Entries carry the page rows that
+# were validated by parse_vault_page, so no extra provider API read is needed.
+QUEUE_PAGES_PER_ACCOUNT = 12
+_queue_lock = threading.Lock()
+_page_queue = {}
+
+
+def async_enabled():
+    return (os.environ.get("ONLYFANS_VAULT_PREVIEWS_ENABLED") == "1"
+            and os.environ.get("ONLYFANS_VAULT_PREVIEW_ASYNC") == "1")
+
+
+def enqueue_page(account, binding_id, owner_id, revision, rows):
+    """Queue one committed page for the preview worker; never blocks, never raises."""
+    if not rows or type(rows) is not list:
+        return False
+    with _queue_lock:
+        pages = _page_queue.setdefault(account, deque(maxlen=QUEUE_PAGES_PER_ACCOUNT))
+        pages.append((binding_id, owner_id, revision, list(rows)))
+    return True
+
+
+def queued_accounts():
+    with _queue_lock:
+        return [account for account, pages in _page_queue.items() if pages]
+
+
+def pop_page(account):
+    with _queue_lock:
+        pages = _page_queue.get(account)
+        if not pages:
+            return None
+        item = pages.popleft()
+        if not pages:
+            del _page_queue[account]
+        return item
 
 
 def asset_scope(session, store, tenant, account, media_id, *, allow_audio=False):

@@ -461,6 +461,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
         if stop is not None and stop.is_set():
             break
         error = budget = failure = deferred = None
+        warm_later = None
         try:
             from .provider_connector import NativeProviderConnector, NativeReadTransientError, NativeAuthenticationError, session_from_capture
             transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
@@ -471,8 +472,12 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             raw = transport.vault_page(offset=offset, limit=PAGE_SIZE)
             rows, more = parse_vault_page(raw, owner_id=owner)
             if os.environ.get("ONLYFANS_VAULT_PREVIEWS_ENABLED") == "1":
-                from .vault_previews import warm_page
-                warm_page(transport, rows, binding_id=binding, owner_id=owner, stop=stop)
+                from . import vault_previews
+                # With the async flag the page read returns at once: its stills
+                # are handed to the preview worker after the page commits, so
+                # slow CDN images no longer hold the shared read lease.
+                if not vault_previews.async_enabled():
+                    vault_previews.warm_page(transport, rows, binding_id=binding, owner_id=owner, stop=stop)
         except Exception as problem:
             from .provider_read_budget import ReadDeferred
             failure=problem
@@ -557,9 +562,14 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                     job.status = "pending"
                     job.last_error = None
                 processed += 1
+                warm_later = rows
         finally:
             from .worker import _release_provider
             _release_provider(store,tenant,budget,failure)
+        if warm_later:
+            from . import vault_previews
+            if vault_previews.async_enabled():
+                vault_previews.enqueue_page(account, binding, owner, connection_revision, warm_later)
     return processed
 
 

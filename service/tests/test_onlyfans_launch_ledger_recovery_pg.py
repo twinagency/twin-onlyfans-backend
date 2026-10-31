@@ -115,7 +115,7 @@ def test_invalid_older_tail_keeps_offset_40_atomic_and_unpaid(database, monkeypa
     store.close()
 
 
-def test_final_page_crossing_maximum_offset_is_held_without_money(database, monkeypatch):
+def test_final_page_crossing_legacy_offset_uses_verified_marker(database, monkeypatch):
     store, account, _ = verified(database, monkeypatch)
     start, end = frozen_scan(database[1], account, offset=ledger.MAX_OFFSET, status="running")
     calls = []
@@ -126,15 +126,16 @@ def test_final_page_crossing_maximum_offset_is_held_without_money(database, monk
             createdAt=(end - timedelta(minutes=1)).isoformat() + "Z")], more=False)
 
     monkeypatch.setattr(NativeProviderConnector, "transaction_page", read)
-    assert ledger.process_ledger_pages(store, TENANT) == 0
+    assert ledger.process_ledger_pages(store, TENANT) == 1
     assert calls == [{"offset": ledger.MAX_OFFSET, "limit": 20, "start": start, "end": end, "marker":"fixture-offset-"+str(ledger.MAX_OFFSET)}]
     with Session(database[1]) as s:
         scan = s.get(OfLedgerScan, account)
-        assert scan.status == "held" and scan.last_error == "unsupported_ledger_pagination"
-        assert scan.page_offset == ledger.MAX_OFFSET and scan.last_complete_at is None
+        assert scan.status == "idle" and scan.last_error is None
+        assert scan.page_offset == ledger.MAX_OFFSET and scan.last_complete_at == end
+        assert ledger.scan_position(scan) == ledger.MAX_OFFSET + 1
         assert scan.lease_token is None and scan.lease_until is None
-        assert s.scalar(select(func.count()).select_from(Transaction)) == 0
-        assert s.scalar(select(func.count()).select_from(OfLedgerEvidence)) == 0
+        assert s.scalar(select(func.count()).select_from(Transaction)) == 1
+        assert s.scalar(select(func.count()).select_from(OfLedgerEvidence)) == 1
     store.close()
 
 

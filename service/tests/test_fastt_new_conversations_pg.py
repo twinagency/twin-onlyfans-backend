@@ -1,9 +1,10 @@
 """Account-policy admission for FASTT intake, on disposable PostgreSQL only.
 
-OWNER DECISION: new fans are NEVER auto-enabled (``store.NEW_CONVERSATION_AUTOMATION_LOCKED``). The lock tests
-below run against a connection row that is still armed (as a pre-lock database could be) and must write
-nothing. The older admission tests run with the lock lifted (``unlocked``) so the guard conditions behind
-the lock stay covered and prove the lock tests are not passing for an unrelated reason.
+New fans are auto-enabled ONLY by the explicit per-account "future conversations" setting (default off, set by an
+administrator command). ``store.NEW_CONVERSATION_AUTOMATION_LOCKED`` remains as a deployment-level kill constant:
+the lock tests below pin it on (``locked``) against a connection row that is still armed and must write nothing.
+The admission tests run with it off (the default) so the guard conditions behind the setting stay covered and
+prove the lock tests are not passing for an unrelated reason.
 
 No provider, credentials or production account is used. The shared fixture creates
 and drops a uniquely named scratch database from ONLYFANS_TEST_PG_URL.
@@ -50,6 +51,11 @@ def prepared(database):
 
 
 @pytest.fixture
+def locked(monkeypatch):
+    monkeypatch.setattr(store_module, "NEW_CONVERSATION_AUTOMATION_LOCKED", True)
+
+
+@pytest.fixture
 def unlocked(monkeypatch):
     monkeypatch.setattr(store_module, "NEW_CONVERSATION_AUTOMATION_LOCKED", False)
 
@@ -65,7 +71,7 @@ def evidence(engine):
                              row.previous_revision, row.revision) for row in audits]
 
 
-def test_lock_is_on_and_a_still_armed_connection_never_enables_a_new_fan(prepared):
+def test_lock_is_on_and_a_still_armed_connection_never_enables_a_new_fan(prepared, locked):
     store, engine, _ = prepared
     assert store_module.NEW_CONVERSATION_AUTOMATION_LOCKED is True
     with Session(engine) as session:
@@ -83,7 +89,7 @@ def live_inbound(store, fan, mid):
     assert store.drain(TENANT, ACCOUNT) == 1
 
 
-def test_worker_intake_never_enables_a_brand_new_fan(prepared):
+def test_worker_intake_never_enables_a_brand_new_fan_while_locked(prepared, locked):
     store, engine, _ = prepared
     brand_new = NEW_FAN + 1
     live_inbound(store, brand_new, 7101)                                         # worker path (_apply)

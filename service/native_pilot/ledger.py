@@ -127,6 +127,15 @@ _SCHEMA = (
         job_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, fan_id INTEGER NOT NULL, kind TEXT NOT NULL,
         payload_json TEXT NOT NULL, run_at TEXT NOT NULL, last_in_id INTEGER, last_in_at TEXT,
         state TEXT NOT NULL, reason TEXT, input_key TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""",
+    # Engine v2 (additive): the account runner lease and the per-fan work read model.
+    """CREATE TABLE IF NOT EXISTS engine_runner_lease (
+        account_id TEXT PRIMARY KEY, owner_token TEXT NOT NULL, holder TEXT NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 1, acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS engine_work (
+        account_id TEXT NOT NULL, fan_id INTEGER NOT NULL, state TEXT NOT NULL, reason TEXT,
+        message_id INTEGER, waiting_since TEXT, state_since TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(account_id,fan_id))""",
 )
 
 # Runner-owned follow-ups (see service.py --followups). The legacy scheduled_jobs table is never used.
@@ -154,11 +163,17 @@ SERVICE_BUDGET_CEILING = 10000
 REQUEUED = "requeued:"
 MAX_REQUEUES_MODEL = 1
 MAX_REQUEUES_PROVIDER = 2
+REQUEUE_HORIZON = timedelta(hours=24)
+# An outbound message with no automation kind and no employee is an UNKNOWN sender (a blast, a script, another tool). It
+# does not count as an answer to a fan's message (engine v2; FASTT_UNLABELLED_COUNTS_AS_ANSWER=1 restores the old reading).
+# Younger than the grace it still counts: our own just-sent reply is unlabelled until its attribution row is written.
+UNLABELLED_GRACE = timedelta(seconds=90)
 SERVICE_ID = re.compile(r"svc-[A-Za-z0-9_-]{1,92}")
 
 
 class Ledger:
-    def __init__(self, path: str | Path, *, allowance: bool = False):
+    def __init__(self, path: str | Path, *, allowance: bool = False, min_send_interval_s: float | None = None,
+                 lock_scope: str | None = None):
         # A PostgreSQL target is the application URL (never printed or logged).
         self.path = path if store.is_pg(path) else Path(path)
         self.pg = store.is_pg(path)
@@ -166,6 +181,13 @@ class Ledger:
         # one unit of the account's EXISTING of_delivery_policy, in the same
         # transaction as the durable attempt. The bounded pilot never sets it.
         self.allowance = allowance
+        # Engine v2: the one account this Ledger writes for (the per-account engine process). PostgreSQL write
+        # transactions are then scoped to it (see twin_bridge.store.PG_LOCK_KEY) instead of one global lock.
+        self.lock_scope = lock_scope
+        # Engine v2: the account send interval is never below the floor (20 s), whatever the policy row says.
+        from . import tuning
+        self.min_send_interval_s = max(float(tuning.MIN_SEND_INTERVAL_FLOOR_S),
+                                       float(min_send_interval_s or 0)) if allowance else 0.0
         self.fan_daily_limit = int(os.environ.get("FASTT_FAN_DAILY_REPLY_LIMIT", "2000")) if allowance else 0
         if not 0 <= self.fan_daily_limit <= 2000:
             raise ValueError("invalid-fan-daily-reply-limit")
@@ -176,6 +198,31 @@ class Ledger:
         # input_key -> how many times it has been requeued so far (set when a requeued input is re-claimed).
         self._requeues: dict[str, int] = {}
 
+    def unlabelled_clause(self, alias: str, now) -> tuple[str, tuple]:
+        """``(sql, params)``: a condition true for an outbound row that is NOT an answer (unknown sender, past the grace,
+        not one of our own receipts), to be used as ``AND NOT (<sql>)`` where "a later message answers the fan" is
+        decided. ``("", ())`` when the old reading is selected or the sender columns do not exist (older fixtures)."""
+        if os.environ.get("FASTT_UNLABELLED_COUNTS_AS_ANSWER") == "1":
+            return "", ()
+        if getattr(self, "_sender_cols", None) is None:
+            try:
+                with store.readonly(self.path) as con:
+                    if self.pg:
+                        names = {r[0] for r in con.execute("SELECT column_name FROM information_schema.columns "
+                                                           "WHERE table_schema='public' AND table_name='messages'")}
+                    else:
+                        names = {r[1] for r in con.execute("PRAGMA table_info(messages)")}
+                self._sender_cols = {"automation_kind", "sent_by_employee_id"} <= names
+            except Exception:
+                self._sender_cols = False
+        if not self._sender_cols:
+            return "", ()
+        cutoff = _dt(datetime.fromisoformat(_dt(now)) - UNLABELLED_GRACE)
+        a = alias
+        return (f"({a}.direction='out' AND {a}.automation_kind IS NULL AND {a}.sent_by_employee_id IS NULL "
+                f"AND CAST({a}.created_at AS TEXT)<? AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts ur "
+                f"WHERE ur.provider_message_id=CAST({a}.message_id AS TEXT)))", (cutoff,))
+
     def _check_target(self) -> None:
         # Never silently create an empty database at a misspelled production path.
         if not self.pg and not self.path.is_file():
@@ -184,7 +231,7 @@ class Ledger:
     @contextmanager
     def _tx(self, *, initialize: bool = False) -> Iterator[object]:
         self._check_target()
-        with store.transaction(self.path) as con:
+        with store.transaction(self.path, self.lock_scope) as con:
             if self.pg and con.execute("SELECT to_regnamespace('onlyfans_restore')").fetchone()[0]:
                 raise Refused("restore-quarantined")
             # PostgreSQL: fastt_runtime tables are created by store.ensure_runtime_schema (runner/control), not here.
@@ -287,7 +334,7 @@ class Ledger:
         return bool(row and isinstance(row[0], str) and row[0].strip())
 
     def _source(self, con, p, now: str,
-                exclude_input_key: str | None = None) -> SourceSnapshot | None:
+                exclude_input_key: str | None = None, ignore_newer_than: SourceSnapshot | None = None) -> SourceSnapshot | None:
         # Exclude this input's proven outputs, and completed replies whose recorded
         # input predates a newly arrived message. External/unknown sends still hold.
         latest_in = con.execute(
@@ -297,14 +344,23 @@ class Ledger:
         ignored = {int(r[0]) for r in overlap}
         covered = {int(mid) for r in overlap for mid in json.loads(r[1])}
         overlap_sql = ("AND m.message_id NOT IN (" + ",".join("?" for _ in ignored) + ") ") if ignored else ""
+        unl_sql, unl_args = self.unlabelled_clause("m", now)
         rows = con.execute("SELECT m.message_id,m.direction,m.body,m.media_ids,m.media_count,m.price_cents,"
                           "m.is_tip,m.is_unsent,m.created_at,m.ingested_at,m.raw_json FROM messages m "
                           "WHERE m.account_id=? AND m.fan_id=? AND NOT (m.direction='out' AND m.is_unsent) "
                           "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts r "
                           "WHERE r.pilot_id=? AND r.input_key=? AND r.state='sent' "
                           "AND r.provider_message_id=CAST(m.message_id AS TEXT)) "
-                          + overlap_sql + "ORDER BY m.created_at DESC,m.message_id DESC LIMIT 101",
-                          (p["account_id"], p["fan_id"], p["pilot_id"], exclude_input_key, *sorted(ignored))).fetchall()
+                          + overlap_sql + (f"AND NOT {unl_sql} " if unl_sql else "")
+                          + "ORDER BY m.created_at DESC,m.message_id DESC LIMIT 101",
+                          (p["account_id"], p["fan_id"], p["pilot_id"], exclude_input_key, *sorted(ignored), *unl_args)).fetchall()
+        if ignore_newer_than is not None:
+            # Hard-maximum burst: the reply was prepared for ``ignore_newer_than``; fan messages that arrived after its
+            # newest member (and only those, only inbound) do not invalidate it. They stay unanswered and are
+            # answered next (see overlap: a reply to an older input never consumes a later message).
+            anchor = (ignore_newer_than.created_at, ignore_newer_than.message_id)
+            while rows and rows[0]["direction"] == "in" and (_dt(rows[0]["created_at"]), rows[0]["message_id"]) > anchor:
+                rows = rows[1:]
         if not rows or rows[0]["direction"] != "in":
             return None
         members = []
@@ -460,7 +516,7 @@ class Ledger:
         return True
 
     def begin_attempt(self, *, pilot_id: str, owner_token: str, input_key: str,
-                      bubble_no: int, revision: int, now: datetime | str) -> Attempt:
+                      bubble_no: int, revision: int, now: datetime | str, tolerate_newer: bool = False) -> Attempt:
         """Atomic final source + authority check, budget charge, durable intent."""
         if not isinstance(bubble_no, int) or isinstance(bubble_no, bool) or not 1 <= bubble_no < 2**31:
             raise Refused("invalid-bubble")
@@ -487,7 +543,8 @@ class Ledger:
             if i["source_hash"].startswith(FOLLOWUP_MARK):
                 if not self._followup_unchanged(con, p, i):
                     raise Refused("source-changed")
-            elif self._source(con, p, now_s, exclude_input_key=input_key) != expected:
+            elif self._source(con, p, now_s, exclude_input_key=input_key,
+                              ignore_newer_than=expected if tolerate_newer else None) != expected:
                 raise Refused("source-changed")
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND bubble_no=?", (input_key, bubble_no)).fetchone():
                 raise Refused("attempt-already-exists")
@@ -512,8 +569,7 @@ class Ledger:
         return con.execute("SELECT enabled,limit_units,used_units,throttle_seconds,next_dispatch_at,active_intent_id "
                            "FROM of_delivery_policy WHERE account_id=?", (account,)).fetchone()
 
-    @classmethod
-    def _consume_allowance(cls, con, account: str, now_s: str, *, fan_id: int | None = None, daily_limit: int = 0) -> None:
+    def _consume_allowance(self, con, account: str, now_s: str, *, fan_id: int | None = None, daily_limit: int = 0) -> None:
         """Admit one send under the daily fan quota or legacy account allowance.
 
         Admission and receipt creation share a serialized transaction. Daily
@@ -521,13 +577,13 @@ class Ledger:
         Account throttle, active intents and in-flight FASTT attempts still fence
         both modes. Only definite non-delivery releases a quota place.
         """
-        row = cls._policy_row(con, account)
+        row = self._policy_row(con, account)
         if row is None:
             raise Refused("allowance-missing")
         if not row["enabled"]:
             raise Refused("allowance-disabled")
         daily = bool(daily_limit and fan_id is not None)
-        used = cls._fan_daily_used(con, account, fan_id, now_s) if daily else row["used_units"]
+        used = self._fan_daily_used(con, account, fan_id, now_s) if daily else row["used_units"]
         if used >= (daily_limit if daily else row["limit_units"]):
             raise Refused("allowance-exhausted")
         if row["active_intent_id"] or con.execute("SELECT 1 FROM twin_bridge_send_attempts WHERE account_id=? "
@@ -535,7 +591,7 @@ class Ledger:
             raise Refused("allowance-busy")
         if row["next_dispatch_at"] is not None and _dt(row["next_dispatch_at"]) > now_s:
             raise Refused("allowance-throttled")
-        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=row["throttle_seconds"]))
+        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=max(row["throttle_seconds"], self.min_send_interval_s)))
         charge = "used_units," if daily else "used_units+1,"
         ceiling = "" if daily else "AND used_units<limit_units "
         cur = con.execute("UPDATE of_delivery_policy SET used_units=" + charge + "next_dispatch_at=? "
@@ -566,11 +622,12 @@ class Ledger:
             return None
         due = row["next_dispatch_at"]
         return {"enabled": bool(row["enabled"]), "limit": self.fan_daily_limit if daily else row["limit_units"], "used": used if daily else row["used_units"],
-                "throttle_seconds": row["throttle_seconds"], "busy": bool(row["active_intent_id"]),
+                "throttle_seconds": max(row["throttle_seconds"], self.min_send_interval_s),
+                "busy": bool(row["active_intent_id"]),
                 "next_dispatch_at": None if due is None else _dt(due)}
 
     def validate_dispatch(self, *, pilot_id: str, owner_token: str, attempt_id: int,
-                          now: datetime | str) -> None:
+                          now: datetime | str, tolerate_newer: bool = False) -> None:
         """Read-only recheck after thread handoff, immediately BEFORE guarded_send.
 
         This admitted attempt is the sole permitted unsettled intent; its last
@@ -627,7 +684,8 @@ class Ledger:
             if i["source_hash"].startswith(FOLLOWUP_MARK):
                 if not self._followup_unchanged(con, p, i):
                     raise Refused("source-changed")
-            elif self._source(con, p, now_s, exclude_input_key=r["input_key"]) != expected:
+            elif self._source(con, p, now_s, exclude_input_key=r["input_key"],
+                              ignore_newer_than=expected if tolerate_newer else None) != expected:
                 raise Refused("source-changed")
 
     def record_sent(self, *, pilot_id: str, owner_token: str, attempt_id: int,
@@ -664,6 +722,24 @@ class Ledger:
                         "WHERE attempt_id=?", (provider_message_id, response_s, evidence_s, now_s, attempt_id))
             con.execute("UPDATE twin_bridge_send_attempts SET state='sent',provider_message_id=?,evidence_json=?,updated_at=? WHERE id=?",
                         (provider_message_id, evidence_s, now_s, attempt_id))
+            self._after_wire(con, pilot_id, now_s)
+
+    def _after_wire(self, con, pilot_id: str, now_s: str) -> None:
+        """The account's next send may start no earlier than ``interval`` after this POST FINISHED.
+
+        Admission already set ``next_dispatch_at = admission + interval``; the POST itself takes a variable
+        time after admission, so the gap between two POSTs could be slightly under the interval. Moving the
+        gate forward from the confirmed (or unknown) outcome makes the interval a guarantee, not an
+        approximation. Only ever moves it forward."""
+        if not self.allowance:
+            return
+        p = con.execute("SELECT account_id FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+        row = self._policy_row(con, p["account_id"]) if p else None
+        if row is None:
+            return
+        due = _dt(datetime.fromisoformat(now_s) + timedelta(seconds=max(row["throttle_seconds"], self.min_send_interval_s)))
+        if row["next_dispatch_at"] is None or _dt(row["next_dispatch_at"]) < due:
+            con.execute("UPDATE of_delivery_policy SET next_dispatch_at=? WHERE account_id=?", (due, p["account_id"]))
 
     @staticmethod
     def _outcome_owner(con, pilot_id: str, owner_token: str, attempt_id: int) -> None:
@@ -706,6 +782,7 @@ class Ledger:
             con.execute("UPDATE twin_bridge_send_attempts SET state='delivery_unknown',reason='native-pilot-unknown',updated_at=? WHERE id=?",
                         (now_s, attempt_id))
             self._stop(con, pilot_id, owner_token, "delivery-unknown", now_s, unknown=True)
+            self._after_wire(con, pilot_id, now_s)
 
     def record_not_sent(self, *, pilot_id: str, owner_token: str, attempt_id: int, now: datetime | str) -> bool:
         """Settle an admitted attempt that CERTAINLY never reached the wire (refused before the POST, or the
@@ -755,10 +832,12 @@ class Ledger:
             p = con.execute("SELECT owner_token,account_id FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None or p["owner_token"] != owner_token:
                 raise Refused("pilot-owner-mismatch")
-            i = con.execute("SELECT state,source_hash FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
+            i = con.execute("SELECT state,source_hash,created_at FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
                             (pilot_id, input_key)).fetchone()
             if i is None or i["state"] != "generating" or i["source_hash"].startswith(FOLLOWUP_MARK):
                 return 0
+            if self.allowance and _dt(i["created_at"]) < _dt(datetime.fromisoformat(now_s) - REQUEUE_HORIZON):
+                return 0          # engine v2: a reply unanswerable for a day is let go (the caller surfaces it)
             if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND state<>'not_sent' LIMIT 1",
                            (input_key,)).fetchone():
                 return 0
@@ -778,6 +857,135 @@ class Ledger:
             con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
                         (f"{REQUEUED}{used + 1}", now_s, pilot_id, input_key))
             return used + 1
+
+    def release_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str) -> bool:
+        """Give an UNSENT claim back without spending a retry: the fan's newest message becomes answerable again.
+
+        Used when a reply is cancelled for a reason that is not the message's fault (a human takeover or pause
+        landed, the account was held, the send queue timed out, a newer message made the draft stale). The
+        draft is never kept: after the hold clears the engine answers the fan's latest state from scratch.
+        Refused (False) for a follow-up input or once any send attempt other than a ``not_sent`` one stands."""
+        now_s = _dt(now)
+        with self._tx() as con:
+            p = con.execute("SELECT owner_token FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            if p is None or p["owner_token"] != owner_token:
+                raise Refused("pilot-owner-mismatch")
+            i = con.execute("SELECT state,source_hash FROM native_pilot_inputs WHERE pilot_id=? AND input_key=?",
+                            (pilot_id, input_key)).fetchone()
+            if i is None or i["state"] != "generating" or i["source_hash"].startswith(FOLLOWUP_MARK):
+                return False
+            if con.execute("SELECT 1 FROM native_pilot_receipts WHERE input_key=? AND state<>'not_sent' LIMIT 1",
+                           (input_key,)).fetchone():
+                return False
+            con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? WHERE pilot_id=? AND input_key=? AND state='generating'",
+                        (f"{REQUEUED}0", now_s, pilot_id, input_key))
+            return True
+
+    def unresolved_attempts(self, *, account_id: str, now: datetime | str, grace_s: float = 0.0, limit: int = 50) -> list[dict]:
+        """Admitted sends of this account whose outcome is not settled and whose owner is gone.
+
+        ``dispatching`` (the process died between admission and the answer) and ``delivery_unknown`` (a timeout
+        or unreadable reply). An attempt whose pilot lease is still live is the running process's own and is
+        left alone. Metadata only."""
+        now_s = _dt(now)
+        cutoff = _dt(datetime.fromisoformat(now_s) - timedelta(seconds=grace_s))
+        with store.readonly(self.path) as con:
+            rows = con.execute(
+                "SELECT r.pilot_id,r.attempt_id,r.state AS receipt_state,r.created_at,p.fan_id,p.state AS pilot_state,p.deadline "
+                "FROM native_pilot_receipts r JOIN native_pilots p ON p.pilot_id=r.pilot_id "
+                "JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
+                "WHERE p.account_id=? AND r.state IN ('dispatching','delivery_unknown') "
+                "AND a.state IN ('dispatching','delivery_unknown') AND r.created_at<=? "
+                "AND NOT (p.state='active' AND p.deadline>?) ORDER BY r.attempt_id LIMIT ?",
+                (account_id, cutoff, now_s, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def settle_by_proof(self, *, pilot_id: str, attempt_id: int, account_id: str, fan_id: int,
+                        provider_message_id: int, raw: dict, evidence_hash: str, now: datetime | str,
+                        resume: bool = True) -> bool:
+        """An admitted, unsettled send is PROVEN delivered by exactly one matching message in a completely read
+        provider history window (checked by the caller, see autoreconcile). The receipt and attempt become
+        ``sent`` with the proof recorded as ``reconciliation`` (actor ``engine-auto``).
+
+        Only ever converts toward ``sent``. With ``resume`` a conversation the unknown outcome had parked in
+        ``attention`` goes back to ``active`` (unowned; the next adoption gets a new fenced token), exactly the
+        state it had before the send. Returns False when already settled the same way."""
+        now_s = _dt(now)
+        with self._tx() as con:
+            p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            r = con.execute("SELECT * FROM native_pilot_receipts WHERE pilot_id=? AND attempt_id=?", (pilot_id, attempt_id)).fetchone()
+            a = con.execute("SELECT * FROM twin_bridge_send_attempts WHERE id=?", (attempt_id,)).fetchone()
+            if not p or not r or not a or (p["account_id"], p["fan_id"]) != (account_id, fan_id) \
+                    or (a["account_id"], a["fan_id"]) != (account_id, fan_id):
+                raise Refused("recovery-scope-mismatch")
+            if r["state"] == "sent" and a["state"] == "sent":
+                return False
+            if r["state"] not in ("dispatching", "delivery_unknown") or a["state"] not in ("dispatching", "delivery_unknown"):
+                raise Refused("recovery-attempt-settled")
+            if p["state"] == "active" and _dt(p["deadline"]) > now_s:
+                raise Refused("recovery-owner-live")
+            if con.execute("SELECT 1 FROM native_pilot_receipts x JOIN native_pilots q ON q.pilot_id=x.pilot_id "
+                           "WHERE q.account_id=? AND x.provider_message_id=? AND x.attempt_id<>? LIMIT 1",
+                           (account_id, str(provider_message_id), attempt_id)).fetchone():
+                raise Refused("provider-id-reused")
+            retained = json.loads(r["evidence_json"] or "{}")
+            retained["reconciliation"] = {"actor": "engine-auto", "evidence_hash": evidence_hash,
+                                          "provider_message_id": provider_message_id}
+            encoded = _json(retained)
+            con.execute("UPDATE native_pilot_receipts SET state='sent',provider_message_id=?,response_json=?,evidence_json=?,updated_at=? "
+                        "WHERE attempt_id=?", (str(provider_message_id), _json(raw), encoded, now_s, attempt_id))
+            con.execute("UPDATE twin_bridge_send_attempts SET state='sent',provider_message_id=?,evidence_json=?,updated_at=? WHERE id=?",
+                        (str(provider_message_id), encoded, now_s, attempt_id))
+            if p["state"] != "stopped":
+                # A crashed owner's pilot: stop it so adoption re-issues a fenced token and revision.
+                con.execute("UPDATE native_pilots SET state='stopped',reason='receipt-reconciled',updated_at=? WHERE pilot_id=?",
+                            (now_s, pilot_id))
+            self._resume_conversation(con, p, now_s) if resume else None
+            return True
+
+    def settle_absent(self, *, pilot_id: str, attempt_id: int, account_id: str, fan_id: int, now: datetime | str,
+                      resume: bool = True) -> bool:
+        """OPT-IN (FASTT_AUTO_RESOLVE_ABSENT): the caller read the provider history COMPLETELY back past the attempt
+        and found no matching message, long after the attempt. The attempt becomes ``refused`` / receipt
+        ``not_sent`` (budget and allowance units given back) so the fan can be answered again. Never converts a
+        ``sent`` attempt."""
+        now_s = _dt(now)
+        with self._tx() as con:
+            p = con.execute("SELECT * FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
+            r = con.execute("SELECT * FROM native_pilot_receipts WHERE pilot_id=? AND attempt_id=?", (pilot_id, attempt_id)).fetchone()
+            a = con.execute("SELECT * FROM twin_bridge_send_attempts WHERE id=?", (attempt_id,)).fetchone()
+            if not p or not r or not a or (p["account_id"], p["fan_id"]) != (account_id, fan_id) \
+                    or (a["account_id"], a["fan_id"]) != (account_id, fan_id):
+                raise Refused("recovery-scope-mismatch")
+            if r["state"] == "not_sent":
+                return False
+            if r["state"] not in ("dispatching", "delivery_unknown") or a["state"] not in ("dispatching", "delivery_unknown"):
+                raise Refused("recovery-attempt-settled")
+            if p["state"] == "active" and _dt(p["deadline"]) > now_s:
+                raise Refused("recovery-owner-live")
+            retained = json.loads(r["evidence_json"] or "{}")
+            retained["reconciliation"] = {"actor": "engine-auto", "outcome": "absent"}
+            con.execute("UPDATE native_pilot_receipts SET state='not_sent',evidence_json=?,updated_at=? WHERE attempt_id=?",
+                        (_json(retained), now_s, attempt_id))
+            con.execute("UPDATE twin_bridge_send_attempts SET state='refused',reason='engine-reconciled-absent',updated_at=? WHERE id=?",
+                        (now_s, attempt_id))
+            con.execute("UPDATE twin_bridge_conversations SET send_budget_used=send_budget_used-1,updated_at=? "
+                        "WHERE account_id=? AND fan_id=? AND send_budget_used>?", (now_s, account_id, fan_id, p["baseline_used"]))
+            # The fan's message was never answered: open its input again so it is answered from the latest state.
+            con.execute("UPDATE native_pilot_inputs SET state=?,updated_at=? WHERE input_key=? AND state IN ('stopped','generating') "
+                        "AND NOT EXISTS (SELECT 1 FROM native_pilot_receipts x WHERE x.input_key=native_pilot_inputs.input_key "
+                        "AND x.state IN ('sent','dispatching','delivery_unknown'))", (f"{REQUEUED}0", now_s, r["input_key"]))
+            if p["state"] != "stopped":
+                con.execute("UPDATE native_pilots SET state='stopped',reason='receipt-reconciled',updated_at=? WHERE pilot_id=?",
+                            (now_s, pilot_id))
+            self._resume_conversation(con, p, now_s) if resume else None
+            return True
+
+    @staticmethod
+    def _resume_conversation(con, p, now_s: str) -> None:
+        con.execute("UPDATE twin_bridge_conversations SET state='active',reason=NULL,owner_token=NULL,owner_expires_at=NULL,"
+                    "reserved=?,revision=revision+1,updated_at=? WHERE account_id=? AND fan_id=? "
+                    "AND state IN ('attention','active')", (True, now_s, p["account_id"], p["fan_id"]))
 
     def finish_input(self, *, pilot_id: str, owner_token: str, input_key: str, now: datetime | str) -> None:
         with self._tx() as con:

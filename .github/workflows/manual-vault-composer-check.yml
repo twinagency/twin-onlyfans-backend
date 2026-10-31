@@ -1,0 +1,35 @@
+name: Manual vault composer verification
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/inbox-media-repair-20261029]
+permissions:
+  contents: read
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: synthetic-only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:synthetic-only@127.0.0.1/postgres
+      ONLYFANS_TEST_PG_URL: postgresql://postgres:synthetic-only@127.0.0.1/postgres
+      ONLYFANS_PROCESS_ROLE: api
+      TWIN_FASTT_CONFIG_ISOLATED: "1"
+      PYTHONPATH: service:service/tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-onlyfans-test.txt
+      - run: python -m compileall -q service/onlyfans_runtime/manual_media.py service/onlyfans_runtime/text_delivery.py service/onlyfans_commands/api.py
+      - run: pytest -q service/tests/test_manual_vault_composer_pg.py service/tests/test_onlyfans_media_pg.py service/tests/test_fastt_controls_pg.py

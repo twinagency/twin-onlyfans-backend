@@ -8,6 +8,7 @@ The runner owns fresh-input admission, transport, durable send cap and recovery.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 from datetime import timedelta
 from types import SimpleNamespace
@@ -49,6 +50,12 @@ FOLLOWUPS = {
 }
 
 
+# Engine v2: several fan turns run concurrently in one account process, each in its own asyncio task. The
+# capability binding was already a ContextVar; "one engine at a time" is now enforced per task context, not per
+# process. A task that tries to open a second engine inside itself is still refused.
+_ENGINE_IN_CONTEXT: contextvars.ContextVar = contextvars.ContextVar("fastt_native_engine_in_context", default=False)
+
+
 class PilotBoundaryError(RuntimeError):
     """Fixed public reason only: never embed message text or transport details."""
 
@@ -84,10 +91,15 @@ class _TextClient:
         if (type(fan_id) is not int or fan_id != self.engine.fan_id
                 or not isinstance(text, str) or not text.strip() or (kwargs and not self.engine.content)):
             self.engine._refuse("forbidden-platform-operation")
-        from .identity import IDENTITY_HELD, discloses_ai
-        if discloses_ai(text):
+        from .identity import IDENTITY_HELD, denies_automation, discloses_ai
+        if discloses_ai(text) or denies_automation(text):
             # Identity rule: a bubble saying it is an AI / bot / clone is never sent (nor resent).
             self.engine._refuse(IDENTITY_HELD)
+        if not kwargs and not getattr(self.engine, "_card_sent", False):
+            from .media_claims import MEDIA_CLAIM_HELD, claims_media_sent
+            if claims_media_sent(text):
+                # Never claim media was sent when none was: the bubble is held, the turn is regenerated once.
+                self.engine._refuse(MEDIA_CLAIM_HELD)
         if self.engine.content:
             self.engine.content.terms(kwargs)
         try:
@@ -176,11 +188,9 @@ class NativeEngine:
     or hidden process-global routing table exists.
     """
 
-    _active = False
-
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
-                 unanswered_reply_ids=(), unlinked_paid=None):
+                 unanswered_reply_ids=(), unlinked_paid=None, open_offers_ok=False):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
@@ -198,6 +208,10 @@ class NativeEngine:
         self.context = context
         # All-fans runner: another fan's open offer is that fan's business, not this turn's obligation.
         self.own_offers_only = bool(own_offers_only)
+        # Engine v2 (persistent service): an open offer is not an obligation for a TEXT reply. The unlock watcher is simply
+        # not run for it (it never ran with one open), and no new card is created because of it.
+        self.open_offers_ok = bool(open_offers_ok)
+        self._open_offer_seen = False
         # Runner-owned queue (followups.FollowupQueue) or None. None = every background job is suppressed.
         self.followups = followups
         self._chat = chat
@@ -245,6 +259,9 @@ class NativeEngine:
         async with get_session() as session:
             row = (await session.execute(query.limit(1))).first()
         if row is not None:
+            if self.open_offers_ok:
+                self._open_offer_seen = True
+                return
             self._refuse("open-offer-obligation")
 
     async def load_config(self, account_id, native):
@@ -475,6 +492,10 @@ class NativeEngine:
         ``purchased_at`` on a ledger-proven buy, bought-media stamps and a short fan lease."""
         self._account(account_id)
         await self._no_obligations()
+        if self._open_offer_seen:
+            self._emit({"event": "offers-resolve-skipped", "reason": "open-offer-present", "fan_id": self.fan_id})
+            return {"unlocked_tip": 0, "unlocked_ppv": 0, "offers_expired": 0, "offers_unsent": 0,
+                    "deliveries_failed": 0, "would_unlock": 0, "discount_resends": 0}
         safe = dict(cfg)
         safe.update(unsend_expired_offer=False, qualification_gate_enabled=False)
         stats = await self.native._resolve_open_offers_stock(
@@ -512,7 +533,7 @@ class NativeEngine:
         return None
 
     def __enter__(self):
-        if self._token is not None or NativeEngine._active:
+        if self._token is not None or _ENGINE_IN_CONTEXT.get():
             raise PilotBoundaryError("engine-already-active")
         # Lazy import: merely importing this module never loads repo .env,
         # opens a DB, constructs a platform client or resolves credentials.
@@ -520,11 +541,11 @@ class NativeEngine:
         from telegram_runtime.capabilities import set_telegram_capabilities
 
         self.native = native
-        NativeEngine._active = True
+        self._flag = _ENGINE_IN_CONTEXT.set(True)
         try:
             self._token = set_telegram_capabilities(self)
         except BaseException:
-            NativeEngine._active = False
+            _ENGINE_IN_CONTEXT.reset(self._flag)
             raise
         return self
 
@@ -583,5 +604,5 @@ class NativeEngine:
             from telegram_runtime.capabilities import reset_telegram_capabilities
             token, self._token = self._token, None
             reset_telegram_capabilities(token)
-            NativeEngine._active = False
+            _ENGINE_IN_CONTEXT.reset(self._flag)
         return False

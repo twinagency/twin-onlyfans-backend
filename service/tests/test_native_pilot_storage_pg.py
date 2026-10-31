@@ -70,7 +70,7 @@ def check(value, label=""):
 
 TABLES = ("twin_bridge_inputs", "twin_bridge_turns", "twin_bridge_turn_members", "twin_bridge_conversations",
           "twin_bridge_send_attempts", "twin_bridge_writes", "native_pilots", "native_pilot_inputs",
-          "native_pilot_receipts", "native_pilot_followups")
+          "native_pilot_receipts", "native_pilot_followups", "engine_runner_lease", "engine_work")
 
 
 def rows(sql, args=()):

@@ -27,10 +27,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import json
+import os
 from datetime import datetime, timezone
 from typing import Protocol
 
-from sqlalchemy import and_, or_, select, func, case, tuple_, cast, String
+from sqlalchemy import and_, or_, select, func, case, tuple_, cast, String, text as sql_text
 from sqlalchemy.exc import SQLAlchemyError
 
 from db.engine import get_session
@@ -49,7 +50,7 @@ from db.models import (
     parse_ts,
 )
 
-from db.onlyfans_models import OfRuntime, OfIngress
+from db.onlyfans_models import OfRuntime, OfIngress, OfControlAudit
 from db.onlyfans_connection_models import OfProviderConnection
 
 from .contract import UNRESOLVED_OUTCOMES, iso
@@ -143,6 +144,8 @@ class StateRow:
     updated_at: datetime | None
     attempt_outcome: str | None = None
     history_held: bool = False
+    #: The engine paused this chat because the fan asked for a person (identity guard), and it is still paused.
+    asked_for_person: bool = False
 
 
 @dataclass(frozen=True)
@@ -663,8 +666,13 @@ class SqlOnlyFansReadRepo:
             from .attempts import outcome
             held_fans=set((await session.scalars(select(OfIngress.fan_id).where(OfIngress.account_id==account_id,
                 OfIngress.fan_id.in_(fans),OfIngress.status=='quarantined').distinct())).all())
+            asked=set((await session.scalars(select(OfControlAudit.fan_id).join(OfConversationState,and_(
+                OfConversationState.account_id==OfControlAudit.account_id,OfConversationState.fan_id==OfControlAudit.fan_id,
+                OfConversationState.revision==OfControlAudit.revision)).where(OfControlAudit.account_id==account_id,
+                OfControlAudit.fan_id.in_(fans),OfControlAudit.action=='pause_automation',OfControlAudit.actor=='identity-guard',
+                OfConversationState.mode=='paused').distinct())).all())
             for fan, state in result.items():
-                if state:result[fan]=state=replace(state,history_held=fan in held_fans)
+                if state:result[fan]=state=replace(state,history_held=fan in held_fans,asked_for_person=fan in asked)
                 if state and state.unresolved_attempt_id:
                     value = await session.run_sync(lambda sync: outcome(sync, account_id, fan, state.unresolved_attempt_id))
                     result[fan] = replace(state, attempt_outcome=value)
@@ -721,8 +729,12 @@ class SqlOnlyFansReadRepo:
             from .attempts import outcome
             attempt_outcome = await session.run_sync(lambda sync: outcome(sync, account_id, fan_id, reference))
             history_held = await session.scalar(select(OfIngress.event_key).where(OfIngress.account_id==account_id,OfIngress.fan_id==fan_id,OfIngress.status=='quarantined').limit(1)) is not None
+            asked_for_person = row is not None and row[0] == "paused" and await session.scalar(select(OfControlAudit.command_key).where(
+                OfControlAudit.account_id==account_id,OfControlAudit.fan_id==fan_id,OfControlAudit.action=='pause_automation',
+                OfControlAudit.actor=='identity-guard',OfControlAudit.revision==int(row[1] or 0)).limit(1)) is not None
         return StateRow(
             history_held=history_held,
+            asked_for_person=bool(asked_for_person),
             attempt_outcome=attempt_outcome,
             mode=(row[0] or "paused") if row else "paused",
             revision=int(row[1] or 0) if row else 0,
@@ -826,6 +838,7 @@ class SqlOnlyFansReadRepo:
         renders the list it is given, and a row saying "unknown" would read as a
         corrected fact.
         """
+        learning = None
         try:
             async with get_session() as s:
                 await lock_read_scope(s, account_id)
@@ -842,6 +855,16 @@ class SqlOnlyFansReadRepo:
                         ).where(Fan.account_id == account_id, Fan.fan_id == fan_id)
                     )
                 ).first()
+                if os.environ.get("ONLYFANS_PROFILE_LEARNING_ENABLED") == "1":
+                    from onlyfans_runtime.profile_learning.storage import profile_view, coverage
+                    from db.onlyfans_models import OfRuntime
+                    from db.models import OfCreatorBinding
+                    runtime = await s.get(OfRuntime,account_id)
+                    binding = await s.get(OfCreatorBinding,runtime.binding_id) if runtime else None
+                    if binding is not None and binding.revoked_at is None:
+                        learning = await s.run_sync(lambda sync: profile_view(sync,binding.tenant_id,account_id,binding.id,fan_id))
+                        learning['coverage'] = await s.run_sync(lambda sync: coverage(sync,binding.tenant_id,account_id,binding.id))
+
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
         if row is None:
@@ -852,6 +875,22 @@ class SqlOnlyFansReadRepo:
             text = (value or "").strip() if isinstance(value, str) else value
             if text:
                 out.append(FactRow(label=label, value=str(text)))
+        if learning is not None:
+            # Undated legacy ages/locations must not contradict the dated profile.
+            protected=learning['manualCorrections']
+            label_fields={'Age':'his_age','Country':'home_country','City':'home_city'}
+            out=[r for r in out if r.label not in label_fields or label_fields[r.label] in protected]
+            out.append(FactRow(label="Conversation summary",value=learning['summary']))
+            out.append(FactRow(label="Profile learning",value=learning['state'] +
+                (" · "+learning['errorCode'] if learning['errorCode'] else "") +
+                (" · Updated "+learning['lastUpdated']+" UTC" if learning['lastUpdated'] else "")))
+            out.append(FactRow(label="History coverage",value=str(learning['processedMessages'])+
+                " messages processed · "+("Stored history analysed" if learning['storedHistoryProcessed'] else "Analysis pending")))
+            c=learning['coverage']
+            out.append(FactRow(label="Creator profile coverage",value=
+                f"{c['processedFans']}/{c['totalDiscoveredFans']} fans processed · {c['pendingProfiles']} pending · "
+                f"{c['deferredFailures']} deferred · queue lag {c['queueLagSeconds']}s · " +
+                ("Historical import incomplete" if c['historicalImportIncomplete'] else "Historical import complete")))
         return out
 
     async def owned_media(self, *, account_id: str, fan_id: int, limit: int) -> list[OwnedRow]:
@@ -949,3 +988,4 @@ def _message_media_kinds(raw, ids):
                 and m.get('type') in {'photo','image','gif','video','audio'}}
     except (ValueError, TypeError, AttributeError):
         return {}
+

@@ -94,9 +94,10 @@ def terms_match(session, intent):
         return False
 
 
-def assert_unowned(session, account_id, fan_id, snapshot):
-    from .commerce import held
-    if held(session, account_id, fan_id):
+def assert_unowned(session, account_id, fan_id, snapshot, *, manual=False):
+    from .commerce import held, manual_held
+    payment_hold = manual_held if manual else held
+    if payment_hold(session, account_id, fan_id):
         raise Refused("commerce evidence needs review")
     from ownership import owned_media_in_session
     try:
@@ -117,6 +118,10 @@ def project(session, intent, message_id, stamp):
     if intent.offer_id is not None:
         raise Refused("media offer already projected without its receipt marker")
     snapshot = json.loads(intent.catalog_snapshot_json)
+    if intent.origin == "manual" and snapshot.get("manual_vault") is True and intent.price_cents == 0:
+        from .manual_media import project_free
+        project_free(session, intent, message_id, stamp)
+        return
     # Use saved terms, not a mutable or disabled catalogue's current values.
     if (snapshot["media_ids"] != json.loads(intent.media_json)
             or snapshot["preview_ids"] != json.loads(intent.preview_json)

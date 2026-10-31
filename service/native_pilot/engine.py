@@ -629,3 +629,4 @@ class NativeEngine:
             reset_telegram_capabilities(token)
             _ENGINE_IN_CONTEXT.reset(self._flag)
         return False
+

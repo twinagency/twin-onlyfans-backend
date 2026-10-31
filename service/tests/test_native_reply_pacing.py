@@ -305,3 +305,26 @@ def test_sent_reply_still_closes_schedule(f):
     f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=snap,now=now,reply_authority=d['authority'])
     pacing.finish(f.ledger,d,now=now,error=None,sent=True)
     assert f.sql("SELECT state FROM native_reply_pacing")[0][0]=='done'
+
+
+def test_completed_unsent_input_does_not_leave_a_spent_schedule_holding_the_next_message(f):
+    # An identity hand-off completes the input without a send. The schedule used to stay waiting with its admissions
+    # spent, so every later message from that fan was held by reply-regeneration-budget-held.
+    d,snap,now=prepare(f,seconds=70)
+    key=f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=snap,now=now,reply_authority=d['authority'])
+    f.ledger.finish_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,input_key=key,now=now)
+    pacing.finish(f.ledger,d,now=now,sent=False)      # what the identity hand-off in service.turn now does
+    f.sql("UPDATE native_reply_pacing SET admissions=3")
+    f.source(101,created_at=_dt(now),ingested_at=_dt(now))
+    retry,new,_=prepare(f,seconds=80,ledger=Ledger(f.path))
+    assert retry['schedule']['schedule_key']!=d['schedule']['schedule_key']
+    f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=new,now=now+timedelta(seconds=10),
+                         reply_authority=retry['authority'])
+
+
+def test_sent_input_schedule_is_still_closed_and_unfinished_input_keeps_it(f):
+    d,snap,now=prepare(f,seconds=70)
+    f.ledger.claim_input(pilot_id=f.pilot.pilot_id,owner_token=L.OWNER,snapshot=snap,now=now,reply_authority=d['authority'])
+    # claimed, still generating, no receipt: not settled, the schedule is reused (target kept)
+    retry,_,_=prepare(f,seconds=72,ledger=Ledger(f.path))
+    assert retry['schedule']['schedule_key']==d['schedule']['schedule_key']

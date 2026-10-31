@@ -1199,6 +1199,10 @@ class Service:
             asked_for_human = any(wants_human((src or {}).get("body")) for src in questions.values())
             await self.identity_handoff("fan-asked", attention=HUMAN_REQUESTED if asked_for_human else "identity-question")
             ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+            # The handoff answers nothing: close this schedule so the fan's next message gets a fresh admission budget
+            # instead of re-using this one (3 admissions, then reply-regeneration-budget-held on every later message).
+            if self.reply_decision:
+                pacing.finish(ledger, self.reply_decision, now=runner.now(), sent=False)
             return
         if self.reply_decision:
             self.reply_decision["admitted_at"] = runner.now()

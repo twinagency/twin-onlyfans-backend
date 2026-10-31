@@ -40,6 +40,10 @@ MAX_REQUEST_BYTES = 512 * 1024
 class NativePilotModelError(RuntimeError):
     """A fixed public code, never a provider body, credential, or prompt."""
 
+    def __init__(self, code: str, *, diagnostics: dict[str, Any] | None = None):
+        super().__init__(code)
+        self.diagnostics = dict(diagnostics or {})
+
 
 def _strict_json(value: str | bytes) -> Any:
     def reject_constant(_: str) -> None:
@@ -240,8 +244,9 @@ class NativePilotModel:
             await self._hold(reservation)
             code = str(exc)
             self.stopped_reason = self.stopped_reason or code
-            self._event({"event": "model-failed", **event_base, "code": code})
-            raise NativePilotModelError(code) from None
+            self._event({"event": "model-failed", **event_base, "code": code,
+                         **exc.diagnostics})
+            raise NativePilotModelError(code, diagnostics=exc.diagnostics) from None
         except (TimeoutError, httpx.TimeoutException):
             await self._hold(reservation)
             self.stopped_reason = "model-timeout"
@@ -283,7 +288,18 @@ class NativePilotModel:
             raise NativePilotModelError("model-choice-invalid")
         choice = choices[0]
         if choice.get("finish_reason") != "stop":
-            raise NativePilotModelError("model-output-incomplete")
+            reason = choice.get("finish_reason")
+            usage = data.get("usage")
+            completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+            if type(completion_tokens) is not int or completion_tokens < 0:
+                completion_tokens = None
+            raise NativePilotModelError(
+                "model-output-incomplete",
+                diagnostics={
+                    "finish_reason": reason if reason in {"length", "content_filter", "tool_calls"} else "other",
+                    "completion_tokens": completion_tokens,
+                },
+            )
         message = choice.get("message")
         if not isinstance(message, dict) or message.get("role") != "assistant" or message.get("tool_calls") or message.get("refusal"):
             raise NativePilotModelError("model-message-invalid")

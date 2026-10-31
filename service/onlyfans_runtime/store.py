@@ -518,7 +518,7 @@ class Store:
             return False
         from db.onlyfans_connection_models import OfProviderConnection
         with Session(self.engine) as s, s.begin():
-            runtime = self._runtime(s, tenant_id, account_id)
+            runtime = self._delivery_runtime(s, tenant_id, account_id)
             now = utcnow()
             if s.get(OfConversationState, (account_id, fan_id)) is not None or not runtime.enabled:
                 return False
@@ -552,7 +552,7 @@ class Store:
         _id(fan_id)
         from . import runtime_stop
         with Session(self.engine) as s, s.begin():
-            self._runtime(s, tenant_id, account_id)
+            self._delivery_runtime(s, tenant_id, account_id)
             if s.get(Fan, (account_id, fan_id)) is None:
                 raise Refused("conversation unavailable")
             state = self._state(s, account_id, fan_id)

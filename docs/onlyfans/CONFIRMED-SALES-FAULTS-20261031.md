@@ -31,6 +31,9 @@ Offer-test SSM command:
 Post-deploy check SSM command:
 `7e283db3-3bd9-494e-bd53-8bfa97a9d544` (succeeded)
 
+Final stability SSM command:
+`ad50c111-7339-4110-8fa6-8b10405fcb0b` (succeeded)
+
 ## Root causes and repairs
 
 ### Purchase-refresh scheduling
@@ -180,6 +183,10 @@ After deployment:
   and conversation-gap settings.
 - No dispatching text, delivery-unknown text, held slots or conversation leases
   were created by the deployment check.
+- A live contextual decision on account `of-87030857` emitted failure code
+  `no_interest` with account, fan and source-message identifiers only. This
+  verifies the structured rejection path is active without exposing conversation
+  text or raw model output. It is not evidence of a contextual card send.
 
 ## Rollback
 

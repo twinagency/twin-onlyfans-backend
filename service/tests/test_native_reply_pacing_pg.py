@@ -13,6 +13,11 @@ from native_pilot import pacing, pacing_schema
 from twin_bridge import store
 import test_native_pilot_ledger as L
 from test_native_reply_pacing import (
+    test_clean_stop_before_send_keeps_schedule_waiting_and_fan_is_answered_after_restart,
+    test_done_schedule_whose_unsent_input_was_dropped_is_recovered,
+    test_sent_reply_still_closes_schedule,
+    test_completed_unsent_input_does_not_leave_a_spent_schedule_holding_the_next_message,
+    test_sent_input_schedule_is_still_closed_and_unfinished_input_keeps_it,
     test_one_target_survives_restart_and_changed_caption,
     test_burst_cannot_reset_target_or_debounce,
     test_two_workers_create_only_one_target,

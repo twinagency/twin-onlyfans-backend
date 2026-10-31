@@ -825,7 +825,7 @@ class Service:
         now = runner.now()
         with runner.readonly(self.path) as con:
             buys = postsale.purchases(con, self.db, now) if st["post_buy"] else []
-            cards = postsale.unpaid_cards(con, self.db, now, upsell.RESEND_AFTER_M) if st["discount"] else []
+            cards = postsale.unpaid_cards(con, self.db, now, 0) if st["discount"] else []
             ready = []
             for offer_id, fan, offered_at, price in cards:
                 if not self._postsale_in_scope(fan):
@@ -1252,3 +1252,4 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

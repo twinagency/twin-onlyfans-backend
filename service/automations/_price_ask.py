@@ -41,5 +41,6 @@ def objection_state(inbound: list[tuple[datetime, str]]) -> tuple[datetime | Non
 
 
 def beat_after(inbound: list[tuple[datetime, str]], objection_at: datetime | None) -> bool:
-    """True when the fan spoke again after the objection (FASTT: never cut on the same breath he asked)."""
-    return objection_at is not None and any(created > objection_at for created, _ in inbound)
+    """Compatibility name: the request itself qualifies; no second fan message is required."""
+    return objection_at is not None
+

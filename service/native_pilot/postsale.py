@@ -101,10 +101,15 @@ def unpaid_cards(con, account, now, after_minutes):
         "JOIN catalog_items c ON c.id=o.item_id AND c.account_id=o.account_id "
         "LEFT JOIN messages m ON m.account_id=o.account_id AND m.fan_id=o.fan_id AND m.message_id=o.offer_message_id "
         f"WHERE o.account_id=? AND o.status='open' AND o.mode='ppv' AND o.offer_message_id IS NOT NULL AND ({clause}) "
-        "AND NOT COALESCE(m.is_paid, FALSE) ORDER BY o.id LIMIT 200", (account, *args)).fetchall()
+        "AND NOT COALESCE(m.is_paid, FALSE) ORDER BY o.id DESC LIMIT 200", (account, *args)).fetchall()
     out = []
     blocked = unlinked_paid_fans(con, account) if rows else set()
+    seen_fans = set()
     for oid, fan, offered, price, _msg in rows:
+        # One request concerns the latest open card, not every older unpaid card.
+        if int(fan) in seen_fans:
+            continue
+        seen_fans.add(int(fan))
         if int(fan) in blocked:
             continue
         from twin_bridge.store import has_table
@@ -129,3 +134,4 @@ def inbound_since(con, account, fan, since):
 def post_buy_run_at(account, fan, offer_id, now):
     """FASTT's own delay: ``uniform(90, 240)`` seconds, seeded exactly as ``ai_chatter`` seeds it."""
     return now + timedelta(seconds=random.Random(f"postbuy:{account}:{fan}:{offer_id}").uniform(*POST_BUY_WINDOW_S))
+

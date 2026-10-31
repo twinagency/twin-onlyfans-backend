@@ -1,0 +1,523 @@
+TWIN TECHNOLOGIES
+
+
+
+ 01 / DEVELOPER CALL BRIEF
+
+
+ OnlyFans CRM Commercial readiness
+ 31 October 2026 · Brisbane time · Read-only production and source audit
+
+ Decision: not ready to promise the requested capacity. The system can send replies and paid
+ media today, but the running account-wide send gate mathematically prevents 10,000 chatting fans
+ per creator per day. A larger server alone cannot remove that limit.
+
+ Open the call with this
+ “We need to support creators with 100,000 fans and around 10,000 chatting each day. Different fans
+ must be handled concurrently, with an intentional delay of at least 25 seconds and a response within
+ three minutes. We also need reliable paid-media delivery, purchase recognition and human takeover.
+ Please explain the current bottlenecks, which are inherited from FASTT, which are our additions, and
+ prove the supported throughput on the actual production build.”
+
+ The seven decisions to get from the developer
+ • Account throughput: why is there a hard 20-second gap between sends across an entire creator
+   account, and what provider-tested limit can replace it?
+
+ • Parallel work: how will we move beyond four preparation tasks per account and the default
+   64-account supervisor limit?
+
+ • Timing: which timestamp starts the 25-180 second clock, and how are delayed, skipped and
+   unanswered turns measured?
+
+ • Content sales: can one controlled scenario prove conversation assessment, correct media and
+   price, provider receipt, payment, unlock and purchase memory?
+
+ • Imports: how will new messages, purchases, history and vault imports all progress without starving
+   one another?
+
+ • Operator control: can a chatter see exactly who AI owns, interrupt a pending send, and hand back
+   safely? What is actually enforced when Infloww is also used?
+
+ • Release ownership: who owns one reproducible source release, its regression checks, monitoring
+   and rollback?
+
+ A concrete example that exposes the problem
+ Twenty different fans message the same creator at once. At the current 20-second account-wide gap,
+ the twentieth first reply cannot start until at least 380 seconds after the first send. If the first reply
+ waits 25 seconds, the twentieth is no earlier than 405 seconds, or 6 minutes 45 seconds. That already
+ fails the three-minute requirement, without needing a 100,000-fan test.
+ Audit scope: inspected live AWS containers, resource settings, runtime source, database aggregates, recent logs,
+ stored test reports, relevant GitHub changes and upstream FASTT source. No settings were changed, no services
+ restarted, and no fan messages or purchases were sent. This is an evidence-based diagnosis, not load or security
+ certification.
+
+
+
+
+OnlyFans CRM · Commercial readiness · 31 Oct 2026                                                                   1
+TWIN TECHNOLOGIES
+
+
+
+ 02 / WORKLOAD AND ARCHITECTURE
+
+
+ Define the capacity correctly
+ Assumption for planning: 100,000 stored fans and 10,000 distinct chatting fans per creator per day.
+ Daily active fans are not the same as simultaneous requests. Reply turns, message bubbles, media
+ sends and peak arrivals must all be specified.
+
+   AI replies per active            Replies per               Average                100 creators: replies/day
+   fan/day                          creator/day               replies/second
+
+   1                                10,000                    0.116                  1 million
+
+   5                                50,000                    0.579                  5 million
+
+   10                               100,000                   1.157                  10 million
+
+   20                               200,000                   2.315                  20 million
+
+
+ Current theoretical ceiling: one send every 20 seconds = 3/minute = 180/hour = 4,320/day per
+ creator. This is an upper bound, not an achieved rate. Multiple bubbles, media cards, manual sends,
+ failures and other overhead can reduce useful reply capacity further.
+
+ At 10 replies per active fan, the average demand is about 23 times that ceiling. A planning burst of
+ five times the daily average is 5.79 reply turns/second per creator, or 579/second across 100
+ creators. The burst factor is a proposed test assumption, not measured customer behaviour.
+
+ What the running code does
+ • Generation: FASTT_PREPARE_CONCURRENCY defaults to 4 per account and is clamped to 16. Logs
+   confirm four in-flight tasks. Raising it alone does not remove the send gate.
+
+ • Sending: native_pilot/tuning.py enforces a 20-second floor. native_pilot/send_gate.py serializes the
+   wire path per account. The database shares next_dispatch_at with other sends.
+
+ • Accounts: the supervisor defaults to 64 eligible accounts, with a configurable ceiling of 256. A
+   default deployment cannot serve a 100-creator fleet without changes and resource validation.
+
+ • Budgets: the current AI sender uses a rolling 2,000-per-fan daily allowance. Do not confuse legacy
+   account limit_units fields with the effective AI limit. Model cost caps are a separate constraint.
+
+ Translate “no queues” into an enforceable requirement
+ Use concurrent work across independent fans, ordered work within each fan, and no sustained
+ backlog inside the agreed load envelope. A durable internal scheduler is still necessary for the
+ 25-second delay, restart recovery and duplicate protection. It must not make one fan wait for another
+ fan’s full conversation.
+
+ Retain creator-wide provider rate limits, but base them on verified throughput and provider
+ behaviour. No evidence found establishes the hard-coded 20-second rule as an OnlyFans-mandated
+ limit. Do not simply remove it and assume unlimited sends are safe.
+ Implementation options include a durable job store with short claims or a message broker partitioned by tenant +
+ creator + fan. AWS documents parallel FIFO processing across message groups; PostgreSQL documents SKIP LOCKED
+ for queue-like consumers. Neither mechanism bypasses OnlyFans or model-provider limits.
+
+
+
+
+OnlyFans CRM · Commercial readiness · 31 Oct 2026                                                                   2
+TWIN TECHNOLOGIES
+
+
+
+ 03 / PRODUCTION OBSERVATIONS
+
+
+ What is actually running
+   Area                     Observed state
+
+   Host                     m7i.2xlarge, 8 vCPU and about 32 GiB RAM. The older t3.large sizing is obsolete.
+
+   Services                 One API container, one sync worker, one sender supervisor and a local PostgreSQL
+                            database share this host with dashboards and other services.
+
+   Container limits         API: 0.5 CPU / 256 MiB / one Uvicorn worker. Sync worker: 1 CPU / 768 MiB. Sender: 2
+                            CPU / 2 GiB. Database: 2 CPU / 4 GiB, 150 connections.
+
+   Current activation       Maile, Alva and Naomi have enabled runtimes. Emma, Amelia and Cristina are
+                            connected but runtime-disabled. Katie and Nicky are paused/disconnected. This is not
+                            evidence of an activation bug.
+
+   Existing storage         Database estimates: about 118,000 fan rows, 52,000 chat rows and 967,000 messages
+                            across accounts. Stored rows do not demonstrate simultaneous chat capacity.
+
+   Host headroom            Snapshot showed about 26 GiB available memory and 45% root-disk use. Database CPU
+                            was about 1.55 cores of its 2-core container limit. A single sample is not a saturation
+                            study.
+
+
+
+ Completed turns since the current sender started
+ Window: 31 October, 07:20 AEST through approximately 09:44 AEST. First confirmed receipt per non-follow-up input,
+ measured from that input’s selected provider-message timestamp. Completed turns only; this excludes unanswered
+ work and is not a service-level pass rate.
+
+   Creator                 Turns        Median                  95th percentile              Longest
+
+   Maile                   26           52.8 sec                81.8 sec                     111.0 sec
+
+   Alva                    21           64.8 sec                89.8 sec                     232.2 sec
+
+
+ The three-minute maximum is not yet demonstrated: Alva had a completed turn above 180
+ seconds even in this small post-release sample. Over the broader 24-hour window, 70 Maile and 63
+ Alva turns had confirmed first receipts; the numbers are far below the proposed workload.
+
+ Timing needs one definition. Two recent replies were less than 25 seconds after a later bubble in a
+ grouped input, but at least 25 seconds after the earliest input. They are not proven violations of a
+ first-message timer. Measuring from the earliest grouped message also exposes older
+ history/backlog, including very old Maile inputs. Report new live turns, backlog recovery and
+ deliberate holds separately; do not silently discard any of them.
+
+ The existing load evidence is too small
+ The corrected stored synthetic burst test exercised five accounts with ten fans each, 50 replies total.
+ At a 20-second throttle, one account approached 180 seconds. A five-second test looked faster, but
+ used simulated model/provider responses and does not prove the current sender permits that interval
+ or that OnlyFans supports it. Initial failed harness runs were superseded by corrected reports; neither
+ set is a 10,000-fan capacity result.
+
+
+
+
+OnlyFans CRM · Commercial readiness · 31 Oct 2026                                                                    3
+TWIN TECHNOLOGIES
+
+
+
+ 04 / BUG ATTRIBUTION
+
+
+ Which layer caused which issue?
+ “FASTT” is used for both the original engine and Twin’s modified runner. Attribution below names the
+ layer supported by source or repair history. A repaired symptom is kept as a regression requirement,
+ not presented as an unfixed bug.
+
+   Finding                    Origin and evidence                        Current status / developer action
+
+   Unsolicited photo          Inherited FASTT. Upstream                  Repair present. Running source requires
+   ratings and point          ai_chatter.py explicitly requests          an explicit rating request and prioritizes
+   deductions                 ratings and deductions for ordinary        message/caption. Its hash matches the
+                              photos.                                    latest photo/caption release. Preserve this in
+                                                                         the consolidated release.
+
+   Photo or media             Mixed. Vision is inherited; admission      Caption fallback is deployed. Recent logs
+   receives no usable         and source validation are in Twin’s        still contain unsupported-media and
+   response                   native_pilot adapter.                      unsupported-paid input events. Define a
+                                                                         useful fallback or visible handoff for every
+                                                                         supported type, without inventing image
+                                                                         contents.
+
+   Manual free/paid           Twin integration. Archive/commerce         Recent evidence is positive: 35 accepted
+   media blocked by old       admission guards and API/sender drift      manual intents matched stored provider
+   history                    were repaired in PRs 62/64.                message text and price after trimming
+                                                                         whitespace. This does not reconstruct an
+                                                                         unsaved UI draft or test every attachment
+                                                                         path.
+
+   Replies blocked when       Twin integration. A 120-second             Reported deployed repair. Keep
+   saved creator facts        source freshness rule blocked              missing-source, binding and explicit-change
+   age                        unchanged facts; PR 67 changes             checks; include in regression testing.
+                              validity to explicit edits.
+
+   Old identity question      Twin replay/control adapter.               Repair exists. Test new identity questions
+   pauses a resumed           Completed input members were               separately from historical questions after
+   chat                       retriggered. PR 63 filters completed       human hand-back.
+                              triggers.
+
+   Narrow keyword gate        Twin contextual feature. PR 56             New evaluator is in live source. Successful
+   prevents proactive         added contextual_offers; PR 68             delivery from this new proactive path
+   offers                     replaces the keyword gate with             remains unproven by this audit.
+                              conversation assessment.
+
+   Account-wide               Twin production runner policy.             Current scale blocker. Establish a proven
+   20-second sends / four     Directly observed in tuning.py,            provider budget and redesign concurrency
+   preparation slots          send_gate.py and service.py.               around it. It is not established as an
+                                                                         unavoidable FASTT or OnlyFans limit.
+
+   Purchase and vault         Twin sync integration plus                 Imports are progressing, but history scans
+   imports defer/starve       provider dependencies. PR 60 fixes         remain incomplete and freshness still
+                              fairness/date parameters; PR 69 adds       occasionally blocks contextual sales.
+                              a bounded Emma import turn.                Generalize fairness and measure age per
+                                                                         lane.
+
+ Provider throttling, session expiry, model outages and proxy failures require their own category. They must be
+ distinguished from application defects by request, timing and receipt evidence. The audit does not establish an exact
+ safe OnlyFans request rate or every historical regression’s first introducing commit.
+
+
+
+
+OnlyFans CRM · Commercial readiness · 31 Oct 2026                                                                        4
+TWIN TECHNOLOGIES
+
+
+
+ 05 / CONTENT, PURCHASES AND MEMORY
+
+
+ Make media sales and onboarding
+ dependable
+ There is some paid delivery, but the entire sales loop is not proven
+ In the 24-hour receipt-matched subset, Maile had 109 sent messages including 3 paid media cards;
+ Alva had 93 messages including 1 paid card. No purchased marker was present on those four cards in
+ the inspected message rows. This is not a conversion-rate estimate or proof that no purchases
+ occurred elsewhere.
+
+ The new conversation evaluator is enabled and running. In a bounded two-hour log sample, 38
+ evaluations ended in the combined reason no_supported_interest_or_evaluation_failed; two
+ further opportunities were withheld for stale purchase state. No recent row was found in
+ of_contextual_offer. These observations do not prove that every rejected conversation should have
+ received an offer, but they do mean we cannot yet claim successful proactive selling from this path.
+
+ • Separate a legitimate “keep chatting” decision from provider errors, parsing failures, missing
+   evidence, unmatched content and stale payment data. The current combined reason hides the
+   distinction.
+
+ • Prove one controlled offer from engagement to matching content, correct price/caption, delivery
+   receipt, payment, unlock, owned-media exclusion and subsequent follow-up.
+
+ Description coverage remains incomplete
+ Counts below mean a nonempty description or video_description on an active vault item. They do not prove accuracy
+ or approval, and some metadata may exist elsewhere.
+
+   Creator                  Photos described / stored                    Videos described / stored
+
+   Maile                    367 / 524                                    4 / 26
+
+   Alva                     1,138 / 1,769                                17 / 812
+
+   Naomi                    1,895 / 3,020                                32 / 770
+
+   Emma                     0 / 420                                      0 / 16
+
+
+ • Import every eligible folder/page, verify media ownership and playable assets, describe content,
+   attach approved prices and boundaries, and measure sale-ready inventory. Import count alone is
+   not readiness.
+ • Preserve exact manually selected attachments, previews, caption and price. If the user requests a
+   different item, evaluate it independently; do not force purchase of the earlier card. Reuse an
+   existing card for the same item and stop chasing ignored offers.
+
+ • Do not announce that content has been sent until there is a confirmed provider result. On an
+   uncertain response, reconcile before any retry that might duplicate the paid offer.
+
+ Onboarding needs explicit completion gates
+ Emma’s vault is progressing, but every inspected launch-history scan still showed needed, with no
+ completion timestamp. Amelia and Cristina had not completed purchase scans. Show separate
+ progress and retryable reasons for connection, fans, history, vault, descriptions, purchases and
+ activation.
+
+ History-memory is active. A separate profile-learning pipeline is overdue; consolidate ownership and
+ expose freshness. Preserve the intentional new-fans-off rule.
+
+
+
+
+OnlyFans CRM · Commercial readiness · 31 Oct 2026                                                                    5
+TWIN TECHNOLOGIES
+
+
+
+ 06 / CONTROLS AND RELIABILITY
+
+
+ Agency operations must be safe and
+ observable
+ One effective owner per conversation
+ • Display AI active, waiting to send, human controlled, paused and failed with concrete reasons and
+   next actions. An “automated” flag alone does not show that a reply can currently be sent.
+
+ • Human takeover must cancel queued or generating AI work, check authority immediately before
+   transport, and preserve any send already accepted by the provider. Hand-back must not replay old
+   questions or duplicate pending cards.
+
+ • Native OnlyFans ownership-list syncing is a single-fan Maile pilot in PR 70. Its list membership
+   cannot prevent a chatter sending in Infloww. Verify external refresh, routing, handover delay and
+   the policy for conflicting sends before promising coexistence.
+
+ • Bulk enable/disable must be resumable, scoped, revision-checked and explicit about skipped fans.
+   Existing chats and newly arriving fans are different populations; honour the current new-fans-off
+   rule.
+
+ Handle failures without silence or duplicate sends
+ The live work board contained one Maile unresolved-delivery hold, frozen-dispatch-unavailable. A
+ two-hour sample logged that reconciliation reason 226 times. It also logged 1,146
+ reply-schedule-terminal holds and repeated hold/resume transitions. These are event counts, not
+ distinct fan failures. Trace the affected durable states, stop unproductive retries, and make
+ unresolved outcomes actionable.
+
+ • Every eligible turn needs a durable outcome: sent with provider ID, explicitly skipped, waiting with
+   deadline, human-owned, or failed with recovery. An empty live queue is not proof that every input
+   was answered.
+
+ • Retry model and network failures with bounded backoff and budgets. A timeout after a provider
+   accepted a card must not trigger a second sale. Use one-use intents, receipt reconciliation and
+   per-fan locking.
+ • Instrument provider arrival, ingestion, model start/end, eligibility time, wire start and receipt. Track
+   earliest unanswered age, deadline misses, lost inputs, duplicates, offer funnel, stale purchases and
+   recovery time per creator.
+
+ Scale the agency-facing system too
+ • Use server-side pagination and indexed search for 100,000-fan rosters. Test bulk actions, mobile
+   composer, attachments, price, captions and refresh at that size.
+
+ • Prove tenant/agency isolation across API routes, jobs, media URLs, caches, exports and staff
+   permissions. Verify that a staff member cannot read or operate another agency’s creator. No
+   cross-tenant breach is asserted by this audit.
+
+ • Separate model/provider limits, live reply resources, media analysis and bulk imports. Test global
+   token budgets and fair sharing so one large creator cannot consume the fleet.
+
+ • Treat host loss, database restore and service restart as release tests. Current core services share
+   one host; failover, off-host restore and recovery objectives were not demonstrated here.
+
+ Release blocker: production overlays must become one reviewed, reproducible release. Test exact
+ assembled images and preserve newer fixes during rollback. Existing fixture failures are not a green
+ acceptance result.
+
+
+
+
+OnlyFans CRM · Commercial readiness · 31 Oct 2026                                                             6
+TWIN TECHNOLOGIES
+
+
+
+ 07 / DEVELOPER ACCEPTANCE PLAN
+
+
+ What must pass before selling this
+ capacity
+ Proposed baseline: 100,000 stored fans per creator, 10,000 daily chatting fans, 10 reply turns per
+ active fan, measured with a five-times-average peak. Confirm the desired creator count, active hours
+ and extra message bubbles before committing to a commercial limit.
+
+   Test                       Required evidence / pass condition
+
+   Full-size dataset          1, 10 and 100 creators; up to 10 million fan records at fleet scale. Inbox, filters, bulk
+                              controls and imports remain responsive. Suggested UI target: p95 below 2 seconds for
+                              paginated inbox/search.
+
+   Concurrent live-turn       100,000 reply turns/day per creator, then five-times-average peaks. Use realistic
+   simulation                 model latency, token sizes, media preparation and provider responses. Test the actual
+                              assembled API, worker, sender and database.
+
+   Burst example              1,000 fans message one creator in the same minute while history and vault imports
+                              run. All eligible first replies must meet the 180-second deadline, with no duplicates or
+                              unaccounted inputs.
+
+   Timing                     Agree first unanswered message / grouped input clock. Enforce no earlier than 25
+                              seconds from the agreed anchor. Every in-scope response must be within 180 seconds
+                              in acceptance; measure p50, p95, p99, max and unanswered. Aim below the ceiling to
+                              leave headroom.
+
+   Isolation and takeover     A slow creator, human takeover, paused fan or changed account session must not stall
+                              other creators or leak content. Zero unauthorized or post-takeover sends in the test.
+
+   Sales lifecycle            Explicit request and proactive interest both tested; changed request, ignored offer,
+                              already-owned media, insufficient catalogue, manual caption/price, purchase/unlock
+                              and follow-up all verified.
+
+   Faults and recovery        Inject model timeout, invalid JSON, 429, expired session, proxy failure, lost receipt,
+                              duplicate/out-of-order event and crash during send. Verify durable recovery without
+                              duplicate charges or false sent status.
+
+   Duration and rollout       24-hour mixed-load soak including a deployment and restart. Then a controlled
+                              provider-backed canary to verify actual connection limits. Expand in measured cohorts
+                              with rollback and monitoring.
+
+
+
+ Priority and ownership
+ • P0, backend/runtime owner: reconcile the exact live source, settle the provider throughput
+   budget, remove the architectural account bottleneck through a tested design, and prove the 25-180
+   second target.
+
+ • P0, commerce/integration owner: prove contextual paid delivery, purchase/unlock
+   reconciliation, usable media coverage and trustworthy manual sends; resolve uncertain deliveries.
+
+ • P1, platform/data owner: fair imports, memory freshness, database/pool sizing, isolation,
+   monitoring, recovery and one repeatable release process.
+
+ • P1, frontend/agency operations owner: actionable statuses, dependable takeover, large-roster
+   performance, bulk progress and completed onboarding.
+ Define the supported load and alert on provider outages, disconnected accounts and human pauses. Extra servers
+ cannot guarantee provider availability. Use synthetic traffic for stress tests, not real fans.
+
+
+
+
+OnlyFans CRM · Commercial readiness · 31 Oct 2026                                                                        7
+TWIN TECHNOLOGIES
+
+
+
+ 08 / TECHNICAL HANDOFF
+
+
+ Evidence and limits
+ Pinned production observations
+ AWS instance i-09a9dd3bd749643a5, ap-southeast-2. Observations began at 31 October 2026, 09:36 AEST. Core
+ container restart counts were zero at inspection. Repository references describe source/repair evidence; deployment
+ assertions below come from direct running-container inspection.
+
+   Running component                  Image identifier
+
+   API                                a16a183e08ff53b4e45be76df9be61ee82515abf11378bd8903f14f130a2f228
+
+   Sync worker                        4b66e8cd5138283a52dda551733ec94bb571e396a0fb9ce6d6eca54cf8985beb
+
+   Sender supervisor                  da497c8ee087ea709d27cf53ab740b290ee270ba05baae5eb940acaea8d6248b
+
+   Twin / OnlyFans                    34dd3c4995040e7906506f8502618ac8e9f9ba6cb515a5f158576d29fcffb382
+   dashboards
+
+ Sender files ai_chatter.py, native_pilot/runner.py and native_pilot/ledger.py matched the SHA-256 hashes of the latest
+ caption-fallback release artifacts. Source paths: service/native_pilot/{tuning,send_gate,service,supervisor,pacing}.py;
+ service/onlyfans_runtime/provider_read_budget.py; service/automations/{contextual_offers,content_prompts}.py.
+
+ Source and repair references
+ FASTT upstream photo routing / prompt
+
+ Twin backend PR 60: purchase-read scheduling and date filters
+
+ PR 63: old identity question replay
+
+ PR 64: manually priced media history holds
+
+ PR 65 / dashboard 340: bulk AI controls
+
+ PR 67: persistent creator facts
+
+ PR 68: conversation offers and new creator defaults
+
+ PR 69: Emma import fairness
+
+ PR 70: native ownership-list pilot
+
+ AWS: parallel FIFO message groups
+
+ PostgreSQL: SELECT and SKIP LOCKED
+
+ Reproduce or extend the audit
+ Read-only SSM records include ff8d623e-52d4-429f-a9f1-5cf6fc426601 (host),
+ 078756fa-5201-437f-861f-9d103798e0d4 (configuration), f38f8ce5-f7cd-4e48-8ae5-20a2f4de0432 (receipts/media),
+ d0d5c9bc-473c-4fff-9a93-c2ed55f4e1bd (post-release samples), and c5d31e62-5acb-4adc-a6bc-a5b50883c6d7
+ (source hashes/logs). Queries used read-only transactions and bounded statement timeouts.
+
+ Stored capacity reports:
+ /var/lib/twin-release/fastt-capacity-20261029T140216Z/verified-harness-20261029T143129Z/. Latest inspected
+ photo/caption release: /var/lib/twin-release/caption-fallback-20261031/. Existing runner and vision reports passed 262
+ and 74 checks; a service-suite pace-stop fixture timeout remains in the stored reports, also recorded on prior
+ baselines. These are inspected historical test results, not tests newly run during this audit.
+
+ Not established: safe sustained OnlyFans send/read rate at the proposed load; a 100-creator full-stack load pass; a
+ completed proactive-sale purchase/unlock canary; exhaustive UI/security/restore coverage; or a
+ first-introducing-commit attribution for every historical issue. No full rebuild, production load test, live send or
+ purchase test was performed.
+
+
+
+
+OnlyFans CRM · Commercial readiness · 31 Oct 2026                                                                          8

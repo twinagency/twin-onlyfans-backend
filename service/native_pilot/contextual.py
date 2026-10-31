@@ -1,7 +1,7 @@
 """Contextual-origin metadata and guards around FASTT's existing sender.
 
 No platform client or scheduler lives here. Reservations survive crashes and
-price/caption edits. Only positive ledger evidence releases an ignored offer.
+price/caption edits. Confirmed unpaid cards exclude their media, not other items.
 """
 from __future__ import annotations
 
@@ -126,6 +126,13 @@ def ignored_contextual(con, account, fan):
     return False
 
 
+def pending_contextual_delivery(con, account, fan):
+    """Only delivery uncertainty blocks different content for the whole fan."""
+    rows = con.execute("SELECT * FROM of_contextual_offer WHERE account_id=? AND fan_id=? "
+                       "AND state IN ('reserved','sent','unknown')", (account, fan)).fetchall()
+    return any(not confirmed_message(con, account, fan, row) for row in rows)
+
+
 def refuse_repeat_media(con, account, fan, terms):
     """Canonical media identity wins over changed prices, captions or workers.
 
@@ -224,7 +231,7 @@ class ContextualAuthority:
                 raise Refused("contextual-fan-ineligible")
             with store.readonly(self.path) as con:
                 current, runtime = self._permission(con, now(), required)
-                if ignored_contextual(con, self.account, self.fan):
+                if pending_contextual_delivery(con, self.account, self.fan):
                     raise Refused("contextual-offer-unresolved")
                 if con.execute("SELECT 1 FROM of_contextual_offer WHERE account_id=? AND decision_key=?",
                                (self.account, self.decision_key)).fetchone():
@@ -264,14 +271,19 @@ class ContextualAuthority:
             if vault_revision(con,self.account,expected["media_ids"]) != expected["vault_revision"]:
                 raise Refused("contextual-content-changed")
             refuse_repeat_media(con,self.account,self.fan,terms)
-            # Preserve old evidence, releasing the unique unresolved slot only on a
-            # confirmed ledger match, atomically with the next reservation.
+            # Retain every old card and its media. Repair confirmed receipt
+            # projections before reserving the one in-flight delivery slot.
             for r in con.execute("SELECT * FROM of_contextual_offer WHERE account_id=? AND fan_id=? "
                                  "AND state IN ('reserved','sent','unknown')", (self.account,self.fan)).fetchall():
-                if not ignored_contextual(con,self.account,self.fan):
-                    con.execute("UPDATE of_contextual_offer SET state='purchased',message_id=? WHERE account_id=? AND decision_key=?",
-                                (confirmed_message(con,self.account,self.fan,r),self.account,r["decision_key"]))
-            if ignored_contextual(con,self.account,self.fan):
+                mid = confirmed_message(con,self.account,self.fan,r)
+                if mid:
+                    paid = con.execute("SELECT 1 FROM content_offers o JOIN messages m ON m.account_id=o.account_id "
+                        "AND m.fan_id=o.fan_id AND m.message_id=o.offer_message_id WHERE o.account_id=? AND o.fan_id=? "
+                        "AND o.offer_message_id=? AND o.status='delivered' AND o.resolved_by='ppv_ledger' "
+                        "AND m.is_paid=TRUE", (self.account,self.fan,mid)).fetchone()
+                    con.execute("UPDATE of_contextual_offer SET state=?,message_id=? WHERE account_id=? AND decision_key=?",
+                                ("purchased" if paid else "sent",mid,self.account,r["decision_key"]))
+            if pending_contextual_delivery(con,self.account,self.fan):
                 raise Refused("contextual-offer-unresolved")
             if con.execute("SELECT 1 FROM of_contextual_offer WHERE account_id=? AND decision_key=?",
                            (self.account,self.decision_key)).fetchone():
@@ -299,3 +311,4 @@ class ContextualAuthority:
         with store.transaction(self.path) as con:
             con.execute("UPDATE of_contextual_offer SET state=?,message_id=? WHERE account_id=? AND decision_key=? "
                         "AND state='reserved'", (state,message_id,self.account,self.decision_key))
+

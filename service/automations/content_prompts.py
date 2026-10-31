@@ -250,12 +250,18 @@ def _contract_system() -> str:
         "(\"that set\", \"it\", \"them\") against what SHE offered earlier.\n"
         "  Never carry a subject over from an old message when his latest one is "
         "small talk. If is_ask is false, subject MUST be null.\n\n"
+        "SAME ITEM — set same_item_requested true ONLY when his latest message "
+        "explicitly refers back to the same previously offered card or set. "
+        "A general availability request, 'show me something tonight, what do u "
+        "have for me', 'another set', a new subject, or merely the same category "
+        "is false. Never infer this from an unpaid card existing.\n\n"
         "COMPANY — did he ask for SOMEONE ELSE to be in it? Only true when he "
         "names another person: \"you and your friend\", \"a threesome\", \"with "
         "a guy\", \"two girls\". Him being in his own fantasy (\"me fucking "
         "you\") is NOT company — he is not in her vault. Default false.\n\n"
         "Reply as JSON:\n"
         '{"is_ask": true|false,\n'
+        ' "same_item_requested": true|false,\n'
         ' "company": true|false,\n'
         ' "subject": "<short noun, or null>",\n'
         f' "category": "<one of: {known}, or null if none fit>",\n'
@@ -364,6 +370,7 @@ async def read_contract(account_id: str, fan_id: int, *, n_msgs: int = 20,
         company=bool(p.get("company")) and is_ask,
         strict=bool(p.get("strict")), quote=str(p.get("quote") or "")[:120],
         exclusions=excl[:6], terms=terms,
+        same_item_requested=is_ask and p.get("same_item_requested") is True,
     )
 
 
@@ -1064,3 +1071,4 @@ async def _verify(account_id: str, fan_id: int, contract: Contract,
         if v is True:                    # anything but an explicit true is a reject
             kept.append(mid)
     return kept
+

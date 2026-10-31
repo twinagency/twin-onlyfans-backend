@@ -83,6 +83,7 @@ async def plan_contextual(lane, authority, candidate, fan, *, blocked=False, voi
         contract = replace(hook.contract, strict=True, is_ask=False)
         # Own/pending media is never a substitute for a missing contextual match.
         seen = await pack_sender._bought_media(lane.account_id, fan.fan_id)
+        seen |= set(await pack_sender.offered_media(lane.account_id, fan.fan_id))
         resolution = await content_resolver.resolve(lane.account_id, fan.fan_id,
             count=pack_sender.MAX_ITEMS, seen=seen, contract=contract, require_curated=False)
         if not resolution.ok:
@@ -119,3 +120,4 @@ async def plan_contextual(lane, authority, candidate, fan, *, blocked=False, voi
         rejected("evaluation_internal_failure")
         authority.emit({"event":"contextual-withheld","reason":"contextual-evaluation-unavailable","mode":current_mode})
         return None
+

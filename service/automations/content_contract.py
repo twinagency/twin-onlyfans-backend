@@ -86,6 +86,8 @@ class Contract:
     # "arches". A lexical scan on his word alone finds a fraction of the shelf,
     # and the model is far better at producing the vocabulary than a regex is.
     terms: list[str] = field(default_factory=list)
+    # Explicit reference to a previously offered item, never inferred from overlap.
+    same_item_requested: bool = False
 
     @property
     def asked(self) -> bool:
@@ -110,3 +112,4 @@ class Resolution:
 
 def _empty(contract: Contract, refusal: str, **kw) -> Resolution:
     return Resolution(media_ids=[], contract=contract, refusal=refusal, **kw)
+

@@ -49,3 +49,35 @@ Behaviour change to be aware of: with the default `standard` initiative, current
 ## Schema
 
 Migration `0107_active_selling_quote` (`db/migrations/versions/20261101_0400_active_selling_quote.py`), chained after `0106_read_lane_fairness`; idempotent via `sa.inspect` (columns, index, `checkfirst` tables). Adds tables `of_sales_decision`, `of_sales_invitation` and five nullable columns + partial unique index on `content_offers`. Downgrade is a no-op by design (sale evidence). `db/schema.py` HEAD/REVISION_RANK updated; HEAD asserts updated in four tests.
+
+## Tests (disposable PG container `ofpg-r5r6`, port 55440, removed afterwards)
+
+Command pattern, from `service/`: `PYTHONPATH=. python -m pytest -q -p no:cacheprovider -W ignore tests/<file>`; files pytest collects nothing from were run as scripts. PG env: `ONLYFANS_TEST_PG_URL` and `NATIVE_PILOT_TEST_PG_URL` -> the container.
+
+New, all pass:
+- `tests/test_active_selling.py` 42 passed (decision, controls, pacing, invitations, decision log/report)
+- `tests/test_active_selling_turn.py` 1 passed (script, real NativeEngine turn, 6 scenarios: standard card, lower initiative invitation, "yes" accepts that invitation, bare yes sells nothing, mode off writes nothing, shadow records only)
+- `tests/test_quote_lifecycle.py` 40 passed
+- `tests/test_first_offer_benchmark.py` 3 passed
+- Regressions-first-on-baseline logs were NOT produced (the new modules do not exist on the base, so those tests cannot run there).
+
+Existing suites touched or adjacent, pass: contextual_evidence 70, contextual_evidence_scope 17, contextual_offers 52, contextual_item_scope_migration, contextual_native_turn (script), contextual_release_pg, product_readiness 9, substitution_agreement 6, native_pilot_* (identity 25, model 15, receipt_recovery 17, recovery 9 and about 14 script suites), native_reply_format/pacing, r3_* and r3r7_inbound_intent, onlyfans_text_delivery_pg 42 (includes the new duplicate-obligation guard), onlyfans_migration_pg (runs the chain through 0107), throughput_migration_pg, ledger_exclusion_pg 9, read_lane_fairness_pg, ledger_read_fairness_pg 8, reply_configuration_pg 15, fixed_price_pg 11, launch_*_pg, native_pilot_attribution_pg, daily_allowance_pg, fastt_read_priority_pg, concurrent_admission_units 7, creator_opening_prices 24.
+
+Failures that are NOT from this branch (same result on `final-integ` or explained by the base):
+- `native_pilot_resolver_seam`, `native_pilot_postsale_engine`: stale fixtures at base 6aabad9 (missing content_hash); the later integration commits 4cda8bb/1f67b9f fix them; with those two test files copied in, both pass on this branch. Not cherry-picked here.
+- Identical failure on the integration tree: `native_pilot_context`, `native_pilot_reporting` (psycopg2 not async, env), `native_pilot_expiry`, `native_pilot_runner`, `native_pilot_postsale` (9 errors), `native_pilot_load_pg`, `onlyfans_native_planning_pg` (1: stale native planning claim), `r3r7_native_planning_pg` (6), `conversation_holds_pg` (1 of 39: two_workers), `onlyfans_native_upgrade_pg` (3), `onlyfans_release_package_pg` (1+3 errors, needs pg client binaries).
+- `native_pilot_storage_pg`: fails because the test pins LIVE_REVISION `0103`; stale at the base already.
+- `native_pilot_service_pg`: times out waiting for a first reply, same "native-turn-failed" signature as load_pg; baseline run NOT done.
+- Not run: `test_native_pilot_*` PG variants other than those listed; dashboard-side tests; full repo suite.
+
+## F-rows
+Contributes to, but does not fully close, anything: F01/F02/F06/F11/F15 (decision layer + invitations exist; real incident fixtures p62..p299 were NOT replayed), F03/F09 (duplicate-request guard, wording hold; senders not unified), F27 (case requirements helper only). None marked closed.
+
+## Open risks and decisions needed
+1. The quote is not yet the single price writer: the native dynamic quote (`native_sales.choice`) and upseller still compute amounts. Decision: route them through `quote.price()` (touches live pricing).
+2. Lifecycle states between awaiting_payment and provider_accepted are not written by the existing intent/attempt code; only `reconciled` is set at receipt projection.
+3. R3 `operator_case_port` still has no registered sink in production code; `open_custom_case` is not called by the engine.
+4. `lower` initiative invitation uses the hook's bridge line plus "want me to show you?"; wording quality untested with a real model.
+5. A recent decline of the same media now suppresses a contextual card (all non-off modes); confirm that is wanted.
+6. Migration 0107 adds a partial unique index on a shared table (`content_offers`); review lock time on the production row count before any release.
+7. The decision/invitation hooks add a few small DB reads per eligible turn when mode is shadow/live; not load-tested (R8).

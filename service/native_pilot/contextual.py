@@ -245,19 +245,51 @@ class ContextualAuthority:
     @contextmanager
     def arm(self, delivery, permission, reason, supporting_ids):
         p = delivery.plan
-        if p.account_id != self.account or p.fan_id != self.fan or supporting_ids != (self.source_message_id,):
+        if p.account_id != self.account or p.fan_id != self.fan:
             raise Refused("contextual-decision-scope")
         metadata = {"decision_key":self.decision_key,"source_message_id":self.source_message_id,
             "binding":permission["binding"],"revision":permission["revision"],
             "media_ids":list(p.attached),"preview_ids":list(p.previews),"price_cents":p.price_cents,
             "content_key":digest([self.account,sorted(p.media)]),"reason":reason[:120]}
         with store.readonly(self.path) as con:
+            self._validate_supporting_ids(con, supporting_ids)
+            metadata["supporting_message_ids"] = list(supporting_ids)
             metadata["vault_revision"] = vault_revision(con,self.account,p.attached)
         self.armed = metadata
         try:
             yield
         finally:
             self.armed = None
+
+    def _validate_supporting_ids(self, con, supporting_ids):
+        """Accept the reader's bounded fan evidence without widening turn ownership.
+
+        The current source alone retains its existing authority. Other evidence
+        must be re-established from this account/fan's recent canonical thread,
+        including an unanswered fan message after the latest creator response.
+        The gateway still owns its final input-freshness check before the post.
+        """
+        if (not isinstance(supporting_ids, tuple) or not 1 <= len(supporting_ids) <= 4
+                or any(type(mid) is not int or mid <= 0 for mid in supporting_ids)
+                or len(set(supporting_ids)) != len(supporting_ids)):
+            raise Refused("contextual-decision-scope")
+        if supporting_ids == (self.source_message_id,):
+            return
+        rows = con.execute(
+            "SELECT message_id,direction FROM messages WHERE account_id=? AND fan_id=? AND is_unsent=FALSE "
+            "ORDER BY created_at DESC,message_id DESC LIMIT 20",
+            (self.account, self.fan)).fetchall()
+        if (not rows or rows[0]["message_id"] != self.source_message_id
+                or rows[0]["direction"] != "in"):
+            raise Refused("contextual-decision-scope")
+        fan_ids = {row["message_id"] for row in rows if row["direction"] == "in"}
+        unanswered = set()
+        for row in rows:
+            if row["direction"] != "in":
+                break
+            unanswered.add(row["message_id"])
+        if not set(supporting_ids) <= fan_ids or not unanswered.intersection(supporting_ids):
+            raise Refused("contextual-decision-scope")
 
     def reserve(self, terms, attempt_id):
         from .runner import now
@@ -266,6 +298,7 @@ class ContextualAuthority:
             raise Refused("contextual-snapshot-changed")
         with store.transaction(self.path) as con:
             _, runtime = self._permission(con, now(), "live")
+            self._validate_supporting_ids(con, tuple(expected.get("supporting_message_ids", (self.source_message_id,))))
             if (runtime["configuration_revision"],runtime["binding_id"]) != (expected["revision"],expected["binding"]):
                 raise Refused("contextual-revision-changed")
             if vault_revision(con,self.account,expected["media_ids"]) != expected["vault_revision"]:
@@ -298,6 +331,7 @@ class ContextualAuthority:
         from .runner import now
         with store.readonly(self.path) as con:
             _, runtime = self._permission(con, now(), "live")
+            self._validate_supporting_ids(con, tuple(metadata.get("supporting_message_ids", (self.source_message_id,))))
             if (runtime["configuration_revision"],runtime["binding_id"]) != (metadata["revision"],metadata["binding"]):
                 raise Refused("contextual-revision-changed")
             row = con.execute("SELECT snapshot_json,state FROM of_contextual_offer WHERE account_id=? AND decision_key=?",
@@ -311,4 +345,5 @@ class ContextualAuthority:
         with store.transaction(self.path) as con:
             con.execute("UPDATE of_contextual_offer SET state=?,message_id=? WHERE account_id=? AND decision_key=? "
                         "AND state='reserved'", (state,message_id,self.account,self.decision_key))
+
 

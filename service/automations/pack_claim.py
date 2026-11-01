@@ -279,8 +279,8 @@ def substitute_clause(kinds: list[str], subject: str | None,
     "4 vids of joi", and `audit_ask` checks count, liveness and company — never
     whether the media matches the noun. So routing substitutes through the
     normal builder ships a lie that passes every existing gate, which is worse
-    than the silence it replaces. The difference is which side of "but" his noun
-    falls on: "not exactly joi but …" is a hedge, "4 vids of joi" is a promise.
+    than the silence it replaces. The fixed mismatch disclosure must remain
+    visible, without turning an internal classification into customer-facing text.
 
     `action` is what she is DOING in the media he is about to receive, derived
     from the vault's own descriptions (`content_resolver.action_phrase`) and
@@ -291,9 +291,13 @@ def substitute_clause(kinds: list[str], subject: str | None,
 
     Same `_media_phrase` as every other clause, so a mixed send says "3 pics +
     1 vid" and the count the audit checks is the count he receives.
+
+    `subject` remains part of the shared clause interface, but is not display
+    copy: the resolver may return shorthand or third-person descriptions. Only
+    the description-derived action and application-owned media count are rendered.
     """
     body, n = _media_phrase(kinds)
-    hedge = f"{_SUBSTITUTE_LEAD} {_his_noun(subject) or 'that'} but {_SUBSTITUTE_EMOJI}"
+    hedge = f"{_SUBSTITUTE_LEAD} what you asked for but {_SUBSTITUTE_EMOJI}"
     return Claim(f"{hedge} {clean_action(action) or 'my own take on it'} — {body}", n)
 
 
@@ -366,3 +370,4 @@ def compose_caption(claim: Claim, voice_line: str | None) -> str:
     if budget <= 0:
         return claim.text
     return f"{claim.text}\n\n{line[:budget]}"
+

@@ -374,6 +374,7 @@ class Gateway:
     send_priority = None        # engine v2: sort key at the gate (age of the fan's first unanswered message, ISO text)
     throttled_retries = 40
     open_offer_blocks = True    # engine v2: the persistent service sets False (an open offer never stops a text reply)
+    commercial_hold_check = None   # R1: the same policy for a priced card / follow-up (adds hardship + complaint cases)
     eligibility_check = None    # engine v2: account-level hold (runtime/policy/credential), re-read at the wire
 
     async def _send(self, text, terms=None):
@@ -394,6 +395,12 @@ class Gateway:
             raise Refused(self.stopped_reason)
         finally:
             gate.release(gate_key)
+
+    def _hold_for(self, terms):
+        """The hold check that applies to THIS send: a priced card or a follow-up is a commercial action."""
+        if (terms or self.followup) and self.commercial_hold_check is not None and self.hold_check is not None:
+            return self.commercial_hold_check
+        return self.hold_check
 
     async def _send_inner(self, text, terms=None):
         from twin_bridge.coordination import authorize_dispatch, revoke_dispatch, guarded_send
@@ -426,8 +433,9 @@ class Gateway:
             check_local(self.ledger.path, self.pilot.account_id, self.pilot.fan_id,
                             approved_item=self.content.catalog_ids if self.content else None,
                             open_offer_blocks=self.open_offer_blocks)
-            if self.hold_check is not None:
-                held = await asyncio.to_thread(self.hold_check)
+            check = self._hold_for(terms)
+            if check is not None:
+                held = await asyncio.to_thread(check)
                 if held:
                     raise Refused(held)
             if self.eligibility_check is not None:
@@ -483,7 +491,8 @@ class Gateway:
                             not row["owner_expires_at"] or now() >= datetime.fromisoformat(row["owner_expires_at"]) or
                             now() >= datetime.fromisoformat(self.deadline)):
                         raise Refused("authority-lost-before-post")
-                if self.hold_check is not None and self.hold_check():
+                check = self._hold_for(terms)
+                if check is not None and check():
                     raise Refused("fan-held-before-post")
                 if contextual_metadata is not None:
                     self.contextual.before_post(contextual_metadata)

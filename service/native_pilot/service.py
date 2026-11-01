@@ -110,32 +110,49 @@ COOLDOWN_WAIT_MAX_S = 120.0
 STOP_REASONS = ("manual_restrict", "of_restricted", "muted_creator")
 
 
+def _hold_decision(path, account: str, fan: int, strict: bool, action: str):
+    """Read the durable facts through the FASTT runner's connection and ask the ONE shared policy (R1)."""
+    from onlyfans_runtime import conversation_policy as policy, operator_cases
+    with runner.readonly(path) as con:
+        skip, critical, cases = operator_cases.policy_facts_sql(con, account, fan, store.has_table)
+        mode, takeover, unresolved = None, "none", False
+        if store.has_table(con, "of_conversation_state"):
+            try:
+                row = con.execute("SELECT mode,takeover_state,unresolved_attempt_id FROM of_conversation_state "
+                                  "WHERE account_id=? AND fan_id=?", (account, fan)).fetchone()
+            except Exception:                    # an older fixture without the column keeps its old meaning
+                row = con.execute("SELECT mode,takeover_state,NULL FROM of_conversation_state "
+                                  "WHERE account_id=? AND fan_id=?", (account, fan)).fetchone()
+            if row:
+                mode, takeover, unresolved = row[0], row[1], row[2] is not None
+        elif strict:
+            return policy.Decision(False, "not_enabled")
+    # A missing control row is not a stop (single-fan mode); the policy turns it into "never enabled" when strict.
+    return policy.decide(policy.Facts(mode=mode, takeover_state=takeover or "none", skip_reason=skip,
+                                      unresolved=unresolved, critical_flag=critical, cases=cases),
+                         "automated", action, strict=strict)
+
+
 def fan_hold_reason(path, account: str, fan: int, strict: bool = False):
     """The ONE predicate for "this fan must not be answered right now".
 
-    Reads the durable operator stop (``skip_list``) and the control projection
-    (``of_conversation_state``). Returns a fixed reason string, or None. Kept as a
-    single small function so the control wiring (s5) can replace or extend it.
-    A missing projection row is not a stop; the skip_list row is the stop. ``strict`` (all-fans
-    mode) inverts that for the projection: no row (or no table) means "never enabled" and holds.
+    A caller of the shared conversation policy (``onlyfans_runtime.conversation_policy``), the same function the worker
+    plane's ``TextAuthority._eligibility`` calls: it reads the durable operator stop (``skip_list``), the control
+    projection (``of_conversation_state``), unresolved delivery, a critical safety flag and the open operator cases,
+    and returns the historic fixed reason string, or None. ``strict`` (all-fans mode) treats no row as "never enabled".
+    Plain chat only; ``fan_commercial_hold_reason`` adds the commercial-scope holds (hardship, complaint).
     """
-    with runner.readonly(path) as con:
-        if store.has_table(con, "skip_list"):
-            row = con.execute("SELECT reason FROM skip_list WHERE account_id=? AND fan_id=?", (account, fan)).fetchone()
-            if row and row[0] in STOP_REASONS:
-                return "fan-restricted"
-        if store.has_table(con, "of_conversation_state"):
-            row = con.execute("SELECT mode,takeover_state FROM of_conversation_state WHERE account_id=? AND fan_id=?",
-                              (account, fan)).fetchone()
-            if strict and not row:
-                return "fan-not-enabled"
-            if row and row[0] != "automated":
-                return "fan-" + str(row[0]).replace("_", "-")
-            if row and row[1] not in (None, "none"):
-                return "fan-takeover"
-        elif strict:
-            return "fan-not-enabled"
-    return None
+    from onlyfans_runtime import conversation_policy as policy
+    return policy.fan_hold_code(_hold_decision(path, account, fan, strict, policy.CHAT))
+
+
+def fan_commercial_hold_reason(path, account: str, fan: int, strict: bool = False):
+    """Hold check for a priced card, an offer or a proactive follow-up: everything above plus commercial-scope cases."""
+    held = fan_hold_reason(path, account, fan, strict)
+    if held:
+        return held
+    from onlyfans_runtime import conversation_policy as policy
+    return policy.fan_hold_code(_hold_decision(path, account, fan, strict, policy.COMMERCIAL))
 
 
 async def ensure_fan_conversation(scope: AccountScope, fan: int):
@@ -161,6 +178,8 @@ class ServiceGateway(runner.Gateway):
         super().__init__(service.ledger, pilot, service.client, asyncio.get_running_loop(), **kwargs)
         self.service = service
         self.hold_check = lambda: fan_hold_reason(service.path, service.db, service.args.fan, *service.strict_arg)
+        # The same policy for a priced card / offer / follow-up: hardship and complaint stop selling, not chat.
+        self.commercial_hold_check = lambda: fan_commercial_hold_reason(service.path, service.db, service.args.fan, *service.strict_arg)
         self.dashboard_handover = bool(service.strict_arg)
         # Engine v2: the account's FIFO send gate, the account-level hold re-read at the wire, tunable waits.
         tuning = getattr(service, "tuning", None) or Tuning.from_env()
@@ -1205,6 +1224,14 @@ class Service:
             if self.reply_decision:
                 pacing.finish(ledger, self.reply_decision, now=runner.now(), sent=False)
             return
+        held = await self.safety_check()
+        if held:
+            # R1: a stop-contact / distress / consent concern is now an enforced hold (case + audited control). The AI
+            # answers nothing; a person owns the case. Same close-out as the identity hand-off above.
+            ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+            if self.reply_decision:
+                pacing.finish(ledger, self.reply_decision, now=runner.now(), sent=False)
+            return
         if self.reply_decision:
             self.reply_decision["admitted_at"] = runner.now()
         error = await self.execute(key, sources, source_id=snap.message_id)
@@ -1245,7 +1272,7 @@ class Service:
         gateway.sources, gateway.input_key, gateway.bubble = sources, key, max((r["bubble_no"] for r in prior), default=0)
         self.backoff_s = 0.0
         from .contextual import ContextualAuthority
-        contextual = ContextualAuthority(self.path, self.db, args.fan, source_id, emit=runner.emit, hold_check=gateway.hold_check) if job is None else None
+        contextual = ContextualAuthority(self.path, self.db, args.fan, source_id, emit=runner.emit, hold_check=gateway.commercial_hold_check) if job is None else None
         gateway.contextual = contextual
         gateway.followup = job is not None
         if job is not None and job["kind"] == DISCOUNT_KIND:
@@ -1564,6 +1591,29 @@ class Service:
         pending = self.ledger.unhandled_source_ids(pilot_id=self.pilot_id, source_ids=questions)
         return {mid: src for mid, src in questions.items() if mid in pending}
 
+    async def safety_check(self):
+        """Run the shared inbound detectors (``operator_cases.scan``) for this fan; True when a hold is now enforced.
+
+        ``shadow`` (the default per creator) records the verdict and returns False; ``live`` opens the operator case
+        and applies the audited control. Without the Twin control path (a SQLite fixture) there is nothing to scan.
+        """
+        url, tenant = os.environ.get("DATABASE_URL", ""), os.environ.get("ONLYFANS_WORKER_TENANT", "")
+        if not url or not tenant:
+            return False
+
+        def run():
+            from onlyfans_runtime import operator_cases
+            from onlyfans_runtime.store import Store
+            return operator_cases.scan(Store(url), tenant, self.db, self.args.fan)
+        try:
+            enforced = await asyncio.to_thread(run)
+        except Exception as exc:  # noqa: BLE001 - existing holds stay in force; detection never becomes a send path
+            runner.emit({"event": "safety-scan-failed", "fan_id": self.args.fan, "error": type(exc).__name__})
+            return False
+        if enforced:
+            runner.emit({"event": "safety-hold", "fan_id": self.args.fan, "categories": sorted(set(enforced))})
+        return bool(enforced)
+
     async def identity_handoff(self, trigger, attention="identity-question"):
         """Pause the AI for this fan and flag the chat for a human (the identity rule, see identity.py).
 
@@ -1600,6 +1650,10 @@ class Service:
                                      reason=HUMAN_REQUESTED_REASON if attention == "human-requested" else IDENTITY_REASON,
                                      action="pause_automation")
             await asyncio.to_thread(pause)
+            from onlyfans_runtime import operator_cases
+            await asyncio.to_thread(lambda: operator_cases.hold(
+                Store(url), tenant, self.db, fan, "identity", reason=attention[:64],
+                evidence={"trigger": trigger, "attention": attention}, origin="detector"))
         except Exception as exc:  # fail closed: the runtime stop is still written
             async with get_session() as session:
                 await session.run_sync(lambda s: runtime_stop.hold(s, self.db, fan, runner.now()))

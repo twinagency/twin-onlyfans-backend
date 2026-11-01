@@ -9,6 +9,7 @@ from dataclasses import asdict,dataclass
 import math
 import time
 import os
+import logging
 import threading
 
 from sqlalchemy import select
@@ -257,6 +258,11 @@ class NativeWorker:
                     # revoked; this path grants no new planning or send rights.
                     report.expired+=self.authority.expire_dispatches(self.tenant_id,account.account_id,limit=4)
                     report.repaired+=self.authority.repair(self.tenant_id,account.account_id,limit=4)
+                    # R1: persist escalation of overdue operator cases (a read of the queue never writes).
+                    try:
+                        from . import operator_cases
+                        operator_cases.sweep_overdue(self.store,self.tenant_id,account.account_id)
+                    except Exception:logging.getLogger("onlyfans.safety").exception("case sweep failed")
                     if self.facts_reader is not None:
                         from .creator_facts import refresh
                         try:refresh(self.store,self.tenant_id,account.account_id,self.facts_reader)

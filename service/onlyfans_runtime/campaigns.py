@@ -372,6 +372,17 @@ class CampaignService:
                 if state is None or fan is None or fan.is_muted or state.mode != "automated" or state.takeover_state != "none":
                     recipient.status, recipient.reason = "skipped", "contact_or_owner_unavailable"
                     continue
+                # R1: the one conversation-hold policy. A campaign is a commercial, proactive origin, so stop-contact,
+                # distress / consent, hardship, complaint and safety-flag holds skip the recipient (the wire check
+                # in TextAuthority repeats this at prepare, admit and consume_dispatch).
+                from . import conversation_policy as hold_policy, operator_cases
+                skip_reason, critical, cases = operator_cases.policy_facts(s, account_id, recipient.fan_id)
+                held = hold_policy.decide(hold_policy.Facts(mode=state.mode, takeover_state=state.takeover_state,
+                    muted=bool(fan.is_muted), skip_reason=skip_reason, critical_flag=critical, cases=cases),
+                    "campaign", hold_policy.COMMERCIAL)
+                if not held and held.reason in {"fan_restricted", "safety_hold"} or held.reason and held.reason.startswith("case_"):
+                    recipient.status, recipient.reason = "skipped", "conversation_hold"
+                    continue
                 if not _offer_current(s, campaign):
                     recipient.reason = "catalogue_snapshot_changed"
                     continue

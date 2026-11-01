@@ -198,6 +198,64 @@ async def control(request: Request, account_id: str, conversation_id: str):
                      "conversationId": conversation_id, "action": action, "recordedRevision": recorded})
 
 
+CASE_KEYS = {"action", "commandKey", "actor"}
+
+
+@router.post("/accounts/{account_id}/operator-cases/{case_id}")
+async def operator_case_action(request: Request, account_id: str, case_id: str):
+    """Acknowledge or resolve one conversation-hold case. Records the outcome only: resuming automation stays the
+    audited conversation control, and a send is never made here."""
+    config = configured()
+    if config is None:
+        return refused("controls_unavailable", 503, "Conversation controls are not configured.")
+    token, tenant = config
+    auth = request.headers.get("authorization", "").split()
+    if len(auth) != 2 or auth[0].lower() != "bearer" or not hmac.compare_digest(auth[1].encode(), token.encode()):
+        return refused("unauthorized", 401, "The control credential was not accepted.")
+    if request.headers.get(HEADER) != SCHEMA:
+        return refused("unsupported_schema", 400, "The control contract version is required.")
+    store = getattr(request.app.state, "control_store", None)
+    if store is None:
+        return refused("controls_unavailable", 503, "Conversation controls are not available.")
+    try:
+        if not ID_PATTERN.fullmatch(account_id) or not re.fullmatch(r"[0-9a-f-]{36}", case_id):
+            raise ValueError()
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            raise ValueError()
+        raw = bytearray()
+        async for part in request.stream():
+            if len(raw) + len(part) > 8192:
+                return refused("request_too_large", 413, "The control request is too large.")
+            raw.extend(part)
+        body = json.loads(raw, object_pairs_hook=unique_keys)
+        action = body.get("action") if type(body) is dict else None
+        allowed = CASE_KEYS | ({"resolution"} if action == "resolve" else {"owner"} if action == "acknowledge" and "owner" in body else set())
+        if (type(body) is not dict or set(body) != allowed or action not in {"acknowledge", "resolve"}
+                or type(body["commandKey"]) is not str or not re.fullmatch(r"[a-f0-9]{64}", body["commandKey"])
+                or not actor_allowed(body["actor"], capability="manage")
+                or (action == "resolve" and (type(body["resolution"]) is not str or not 1 <= len(body["resolution"].strip()) <= 2000))
+                or ("owner" in body and (type(body["owner"]) is not str or not 1 <= len(body["owner"]) <= 128))):
+            raise ValueError()
+    except (ValueError, TypeError, UnicodeError, RecursionError, KeyError):
+        return refused("invalid_request", 400, "That operator case request is invalid.")
+    from onlyfans_runtime import operator_cases
+    try:
+        if action == "acknowledge":
+            view = await asyncio.to_thread(operator_cases.acknowledge, store, tenant, account_id, case_id,
+                                           actor=body["actor"], owner=body.get("owner"))
+        else:
+            view = await asyncio.to_thread(operator_cases.resolve, store, tenant, account_id, case_id,
+                                           actor=body["actor"], resolution=body["resolution"])
+    except Refused as exc:
+        if str(exc) in {"scope unavailable", "case unavailable"}:
+            return refused("scope_unavailable", 404, "That case is not available.")
+        return refused("case_conflict", 409, "That case cannot take this action in its current state.")
+    except Exception:
+        log.exception("operator case action unavailable")
+        return refused("outcome_unconfirmed", 500, "The outcome is not confirmed. Refresh and retry.")
+    return response({"ok": True, "applied": True, "action": action, "case": view})
+
+
 LEDGER_RETRY_KEYS = {"commandKey", "expectedConnectionRevision", "expectedScanFingerprint"}
 LEDGER_RETRY_CODES = {"ledger busy": ("ledger_busy", "The ledger scan is running. Refresh before retrying."),
     "ledger not held": ("ledger_not_held", "The ledger scan is not held. Refresh the ledger status."),

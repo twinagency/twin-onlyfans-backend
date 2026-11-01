@@ -269,3 +269,33 @@ async def handover(request: Request, account_id: str, conversation_id: str):
     except Exception:
         return _refusal(Unavailable("handover_unavailable", "Conversation ownership could not be read."))
     return JSONResponse(body, headers=_PRIVATE_HEADERS)
+
+
+@router.get("/accounts/{account_id}/operator-cases")
+async def operator_cases_list(request: Request, account_id: str):
+    """Open conversation-hold cases for an account, most urgent first, with an overdue flag. Read only."""
+    try:
+        principal = await _authenticate(request)
+        account_id = service._require_id(account_id, what="account")
+        from .errors import BadRequest, Refused
+        from db.engine import get_session
+        from onlyfans_runtime import operator_cases
+        params = request.query_params
+        if set(params) - {"fan", "includeResolved"}:
+            raise BadRequest("invalid_cases_query", "Use only fan and includeResolved.")
+        fan = None
+        if "fan" in params:
+            if not params["fan"].isdigit() or not 0 < int(params["fan"]) < 2**63:
+                raise BadRequest("invalid_cases_query", "The fan filter is not valid.")
+            fan = int(params["fan"])
+        if await _repo().get_binding(tenant_id=principal.tenant_id, account_id=account_id) is None:
+            raise Refused("unknown_account")
+        async with get_session() as session:
+            cases = await session.run_sync(lambda s: operator_cases.list_cases(
+                s, account_id, fan_id=fan, include_resolved=params.get("includeResolved") == "true"))
+    except OnlyFansReadError as exc:
+        return _refusal(exc)
+    except Exception:
+        return _refusal(Unavailable("operator_cases_unavailable", "Operator cases could not be read."))
+    return JSONResponse({"schemaVersion": SCHEMA_VERSION, "accountId": account_id, "cases": cases,
+                         "overdue": sum(1 for c in cases if c["overdue"])}, headers=_PRIVATE_HEADERS)

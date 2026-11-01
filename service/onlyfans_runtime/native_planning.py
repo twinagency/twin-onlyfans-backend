@@ -176,6 +176,9 @@ class NativeTextPlanner:
             pass
         else:
             raise Refused("native preparation requires a synchronous worker")
+        # R1: judge the fan's recent messages with the shared detectors BEFORE any plan or model call. A live hold
+        # (or a stop that arrived since the last turn) makes the eligibility check below refuse; shadow only records.
+        self.authority._safety_scan(tenant_id, claim.account_id, claim.fan_id, "automated")
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant_id, claim.account_id)
             prior = s.scalar(select(OfNativePlan).where(OfNativePlan.account_id == claim.account_id,

@@ -13,6 +13,7 @@ REASONS = {
     'human_control_required': ('takeover_required', 'Take over this conversation before sending a manual reply.'),
     'takeover belongs to another team member': ('owner_changed', 'Another team member owns this conversation. Refresh reply ownership.'),
     'owner_changed': ('owner_changed', 'Reply ownership changed. Refresh reply ownership.'),
+    'operator case holds resumption': ('operator_case_open', 'An open safety case must be resolved by a person before automation can resume.'),
     'idempotency key conflict': ('command_conflict', 'This request key belongs to a different command. Review the existing outcome.'),
 }
 

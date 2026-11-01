@@ -449,6 +449,17 @@ class Store:
                     raise Refused("bulk_contact_blocked")
             if state.mode == "no_contact" and mode != "no_contact" and not consent_ref:
                 raise Refused("recorded renewed consent is required")
+            from . import operator_cases
+            if state.mode == "no_contact" and mode != "no_contact" and consent_ref:
+                # The audited way out of no-contact (recorded renewed consent) also closes the stop-contact case.
+                operator_cases.resolve_for_consent(s, account_id, fan_id, actor=actor, consent_ref=consent_ref, now=utcnow())
+            if mode == "automated" and state.mode != "automated" and operator_cases.blocking_open_case(s, account_id, fan_id):
+                # Distress, consent and stop-contact cases end only when a human resolves them (audited), never by a
+                # plain resume, a bulk resume, a hand-back, a teaser, a campaign or a fallback.
+                raise Refused("operator case holds resumption")
+            if mode == "automated" and state.mode != "automated":
+                # An identity / human-request case is answered by the human who then hands back: the hand-back closes it.
+                operator_cases.resolve_on_handback(s, account_id, fan_id, actor=actor, now=utcnow())
             before_takeover = state.takeover_state
             if action == "pause_automation" and state.mode != "automated":
                 raise Refused("replies are not automated")

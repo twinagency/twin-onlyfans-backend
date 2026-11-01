@@ -266,6 +266,30 @@ class TextAuthority:
             return policy.revision
 
     @staticmethod
+    def _action(row):
+        from .conversation_policy import action_of
+        return action_of(row.origin, row.catalog_item_id)
+
+    def _safety_scan(self, tenant_id, account_id, fan_id, origin):
+        """Run the shared inbound detectors for an automated / campaign / engagement send. Never raises into the send:
+        a scan failure leaves the existing holds in force and the policy check that follows is still authoritative."""
+        if origin == "manual":
+            return
+        from . import operator_cases
+        try:
+            operator_cases.scan(self.store, tenant_id, account_id, fan_id)
+        except Exception:                      # noqa: BLE001 - detection must never become a send path
+            import logging
+            logging.getLogger("onlyfans.safety").exception("safety scan failed")
+
+    def _safety_scan_intent(self, tenant_id, account_id, intent_id):
+        with Session(self.engine) as s:
+            row = s.get(OfTextIntent, (account_id, intent_id))
+            target = (row.fan_id, row.origin) if row is not None and row.status == "queued" else None
+        if target is not None:
+            self._safety_scan(tenant_id, account_id, *target)
+
+    @staticmethod
     def _retained_hold(s, account_id, fan_id):
         return Store._native_unresolved(s, account_id, fan_id) or s.scalar(select(OfMessageDelivery.message_id).where(
             OfMessageDelivery.account_id == account_id, OfMessageDelivery.fan_id == fan_id,
@@ -288,7 +312,7 @@ class TextAuthority:
             return False
 
     def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None,
-                     manual_attachment=False):
+                     manual_attachment=False, action=None):
         if policy is None or not policy.enabled or policy.transport_kind not in {"synthetic", "native"}:
             return "delivery_disabled"
         if not runtime.enabled:
@@ -310,19 +334,19 @@ class TextAuthority:
         if needs_history and s.scalar(select(OfIngress.event_key).where(
                 OfIngress.account_id == runtime.account_id, OfIngress.status == "quarantined").limit(1)) is not None:
             return "history_quarantined"
+        # The conversation-hold policy is ONE pure function shared with the FASTT runner plane (conversation_policy).
+        # Everything below this line is a caller of it: this method only reads the durable facts.
+        from . import conversation_policy as policy_module, operator_cases
         if state is None or fan is None:
             return "conversation_unavailable"
-        if fan.is_muted or state.mode in {"paused", "no_contact"}:
-            return "contact_blocked"
-        if state.takeover_state == "requested":
-            return "takeover_pending"
-        if origin in {"automated", "campaign", "engagement"} and (state.mode != "automated" or state.takeover_state != "none"):
-            return "owner_changed"
-        if origin == "manual" and (state.mode != "human_controlled" or state.takeover_state not in {"none", "effective"}):
-            return "human_control_required"
-        if (state.unresolved_attempt_id is not None and state.unresolved_attempt_id != own_attempt_id) or self._retained_hold(s, runtime.account_id, fan.fan_id):
-            return "unresolved_delivery"
-        return None
+        skip, critical, cases = operator_cases.policy_facts(s, runtime.account_id, fan.fan_id)
+        unresolved = ((state.unresolved_attempt_id is not None and state.unresolved_attempt_id != own_attempt_id)
+                      or self._retained_hold(s, runtime.account_id, fan.fan_id))
+        decision = policy_module.decide(
+            policy_module.Facts(mode=state.mode, takeover_state=state.takeover_state, muted=bool(fan.is_muted),
+                                skip_reason=skip, unresolved=unresolved, critical_flag=critical, cases=cases),
+            origin, action or policy_module.action_of(origin))
+        return decision.reason
 
     @staticmethod
     def _valid_work(work, row, state, now):
@@ -385,6 +409,9 @@ class TextAuthority:
         if manual_media is not None:
             request["manual_media"] = manual_media
         fingerprint = hashlib.sha256(_json(request).encode()).hexdigest()
+        # Plan-time safety scan (R1): a stop / distress / consent / complaint message is recorded (shadow) or enforced
+        # (live) BEFORE this transaction takes its locks, so the eligibility check below sees the hold.
+        self._safety_scan(tenant_id, account_id, fan_id, origin)
         with Session(self.engine) as s, s.begin():
             runtime = self.store._delivery_runtime(s, tenant_id, account_id)
             now = self._db_now(s)
@@ -401,8 +428,9 @@ class TextAuthority:
                 OfDeliveryPolicy.account_id == account_id).with_for_update())
             state = s.get(OfConversationState, (account_id, fan_id))
             fan = s.get(Fan, (account_id, fan_id))
+            from .conversation_policy import action_of
             reason = self._eligibility(s, runtime, policy, state, fan, origin, now,
-                manual_attachment=manual_media is not None)
+                manual_attachment=manual_media is not None, action=action_of(origin, catalog_item_id))
             if reason:
                 raise Refused(reason)
             from .handover import staff_owns_takeover
@@ -515,6 +543,7 @@ class TextAuthority:
         """Commit the one dispatch grant. Never reclaim dispatching/unknown."""
         if transport_generation is not None and (type(transport_generation) is not int or transport_generation < 0):
             raise Refused("invalid transport generation")
+        self._safety_scan_intent(tenant_id, account_id, intent_id)
         with Session(self.engine) as s, s.begin():
             runtime = self.store._delivery_runtime(s, tenant_id, account_id)
             now = self._db_now(s)
@@ -549,7 +578,7 @@ class TextAuthority:
             if not obsolete and intent.origin == "engagement":
                 obsolete = not self._engagement().current(s, intent, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now,
-                manual_attachment=self._manual_attachment(intent))
+                manual_attachment=self._manual_attachment(intent), action=self._action(intent))
             if reason:
                 intent.status = "cancelled" if obsolete else "refused"
                 intent.reason, intent.updated_at = reason, now
@@ -648,6 +677,8 @@ class TextAuthority:
         self._validate_grant(grant)
         if transport_generation is not None and (type(transport_generation) is not int or transport_generation < 0):
             raise Refused("invalid transport generation")
+        # Immediately-before-the-wire safety scan (R1): a stop request that landed after planning is judged now.
+        self._safety_scan(tenant_id, grant.account_id, grant.fan_id, grant.origin)
         with Session(self.engine) as s, s.begin():
             runtime = self._historical_runtime(s, tenant_id, grant.account_id)
             row = self._intent(s, grant.account_id, grant.intent_id)
@@ -686,7 +717,7 @@ class TextAuthority:
                 obsolete = not self._engagement().current(s, row, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(
                 s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id,
-                manual_attachment=self._manual_attachment(row))
+                manual_attachment=self._manual_attachment(row), action=self._action(row))
             from . import concurrent_admission
             concurrent = concurrent_admission.mode(policy) == "concurrent"
             if concurrent:

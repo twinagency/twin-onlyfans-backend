@@ -38,11 +38,13 @@ async def read_handover(session, account, fan, tenant_id=None):
     revision = state.revision if state else 0
     takeover = state.takeover_state if state else "none"
     owner = await session.run_sync(lambda s: takeover_owner(s, account, fan, state))
+    from . import operator_cases
+    cases = await session.run_sync(lambda s: operator_cases.list_cases(s, account, fan_id=fan))
     rows = (await session.scalars(select(OfControlAudit).where(
         OfControlAudit.account_id == account, OfControlAudit.fan_id == fan,
         OfControlAudit.revision <= revision).order_by(OfControlAudit.revision.desc()).limit(31))).all()
     return {"schemaVersion": "of-handover.v1", "accountId": account,
         "conversationId": conversation_id_for(account, fan), "revision": revision,
         "mode": state.mode if state else "paused", "takeoverState": takeover, "ownerActor": owner,
-        "hasMore": len(rows) > 30, "events": [{"action": row.action or "change_mode", "mode": row.mode,
+        "openCases": cases, "hasMore": len(rows) > 30, "events": [{"action": row.action or "change_mode", "mode": row.mode,
             "revision": row.revision, "actor": row.actor, "at": iso(row.created_at)} for row in rows[:30]]}

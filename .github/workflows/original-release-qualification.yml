@@ -9,6 +9,7 @@ on:
       - 'requirements*.txt'
       - '.github/workflows/original-release-qualification.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -38,6 +39,7 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}/scripts/onlyfans_test_network:service:service/tests
       ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:isolated-qualification-only@127.0.0.1:5432/postgres
       ONLYFANS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+      ONLYFANS_TEST_PG_EMPTY_TEMPLATE: '1'
       ONLYFANS_RELEASE_SERVICE_DIR: ${{ github.workspace }}/released/service
       ONLYFANS_COMPATIBLE_ROLLBACK_DIR: ${{ github.workspace }}/compatible-rollback
     steps:
@@ -57,6 +59,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Install pinned runtime and isolated verification dependencies
         env:
           # Dependency installation needs the package registry. Tests below use
@@ -72,6 +77,8 @@ jobs:
           mkdir -p qualification-evidence
           git rev-parse HEAD > qualification-evidence/source-commit.txt
           python --version > qualification-evidence/python.txt
+          node --version > qualification-evidence/node.txt
+          PGPASSWORD=isolated-qualification-only psql -h 127.0.0.1 -U postgres -d postgres -At -c 'SELECT version()' > qualification-evidence/postgres.txt
           python -m pip freeze > qualification-evidence/dependencies.txt
           python - <<'PY'
           import socket, sitecustomize

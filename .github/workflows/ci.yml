@@ -9,8 +9,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  original-qualification:
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/original-release-qualification.yml
+    permissions:
+      contents: read
+
   relay:
+    if: github.event_name != 'workflow_dispatch'
     name: relay (python)
     runs-on: ubuntu-latest
     steps:
@@ -34,6 +44,7 @@ jobs:
         run: ./venv/bin/python scripts/run-service-tests.py
 
   app:
+    if: github.event_name != 'workflow_dispatch'
     name: dashboard (next)
     runs-on: ubuntu-latest
     defaults:

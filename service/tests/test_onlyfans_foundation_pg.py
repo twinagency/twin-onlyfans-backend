@@ -20,19 +20,56 @@ from db.models import Account, Fan, Message, OfCreatorBinding, OfConversationSta
 from db.onlyfans_models import OfIngress, OfRuntime, OfWork, OfRecovery, OfControlAudit
 from onlyfans_runtime.store import Store, Event, Refused, utcnow
 
+_EMPTY_TEMPLATES = {}
+
+
+def _empty_template(admin, admin_url):
+    """Optional setup optimisation: clone a real, empty bootstrapped PG DB.
+
+    Every test still owns a distinct database. Migration/preservation tests
+    continue to execute their own actual DDL and populated upgrade assertions.
+    No runtime, authority, model or provider implementation is substituted.
+    """
+    key = (os.getpid(), admin_url)
+    if key in _EMPTY_TEMPLATES:
+        return _EMPTY_TEMPLATES[key]
+    name = "of_test_template_" + uuid.uuid4().hex
+    with admin.connect() as c:
+        c.exec_driver_sql(f'CREATE DATABASE "{name}" TEMPLATE template0 ENCODING \'UTF8\'')
+    engine = create_engine(admin.url.set(database=name), connect_args={"options": "-c timezone=UTC"})
+    try:
+        with engine.begin() as c:
+            bootstrap(c)
+    finally:
+        engine.dispose()
+    _EMPTY_TEMPLATES[key] = name
+    import atexit
+    def cleanup():
+        owner = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+        try:
+            with owner.connect() as c:
+                c.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        finally:
+            owner.dispose()
+    atexit.register(cleanup)
+    return name
+
 
 @pytest.fixture
 def database():
     admin_url = os.environ["ONLYFANS_TEST_PG_URL"]
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
     name = "of_test_" + uuid.uuid4().hex
+    template = (_empty_template(admin, admin_url)
+                if os.environ.get("ONLYFANS_TEST_PG_EMPTY_TEMPLATE") == "1" else None)
     with admin.connect() as c:
-        c.exec_driver_sql(f'CREATE DATABASE "{name}" TEMPLATE template0 ENCODING \'UTF8\'')
+        c.exec_driver_sql(f'CREATE DATABASE "{name}" TEMPLATE "{template or "template0"}" ENCODING \'UTF8\'')
     url = admin.url.set(database=name).render_as_string(hide_password=False)
     engine = create_engine(url, connect_args={"options": "-c timezone=UTC"})
     try:
-        with engine.begin() as c:
-            bootstrap(c)
+        if template is None:
+            with engine.begin() as c:
+                bootstrap(c)
         yield url, engine
     finally:
         engine.dispose()

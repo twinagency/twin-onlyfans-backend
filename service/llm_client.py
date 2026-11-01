@@ -194,7 +194,7 @@ def _resolve(model: str) -> tuple[LLMModel, LLMProvider]:
     return mdl, prov
 
 
-def _synthetic_scope(session, account_id, now):
+def _synthetic_scope(session, account_id, now, *, shared=False):
     """Internal PostgreSQL test seam; never resolves credentials or a URL."""
     if (os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker"
             or session.get_bind().dialect.name != "postgresql"
@@ -202,7 +202,7 @@ def _synthetic_scope(session, account_id, now):
         raise LLMConfigError("a scoped synthetic worker is required")
     from db.onlyfans_models import OfRuntime
     if session.scalar(select(OfRuntime.account_id).where(
-            OfRuntime.account_id == account_id).with_for_update()) is None:
+            OfRuntime.account_id == account_id).with_for_update(read=shared)) is None:
         raise LLMConfigError("the synthetic account is not registered")
     return now.astimezone(timezone.utc).replace(tzinfo=None) if now.tzinfo is not None else now
 
@@ -261,7 +261,11 @@ def reserve_scoped_synthetic_call(session, *, account_id, fan_id, model, message
 def settle_scoped_synthetic_call(session, *, account_id, call_id, reserved_millicents,
                                   actual_millicents, now):
     """Settle once on the original account/provider/UTC day; unknown retains the hold."""
-    now = _synthetic_scope(session, account_id, now)
+    # The planner already holds a shared runtime lock during settlement, just
+    # as the native provider does. Upgrading it under competing completions
+    # deadlocks. The existing call and daily-cost row locks serialize charges;
+    # reservation still takes the exclusive runtime lock before creating a day.
+    now = _synthetic_scope(session, account_id, now, shared=True)
     if (type(call_id) is not int or call_id <= 0 or type(reserved_millicents) is not int
             or not 1 <= reserved_millicents <= 100000000):
         raise LLMConfigError("invalid synthetic settlement reference")

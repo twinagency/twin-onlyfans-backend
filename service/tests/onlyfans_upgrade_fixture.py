@@ -4,6 +4,15 @@ from sqlalchemy import text
 
 def restore_pre95_content_vault_shape(connection):
     assert connection.scalar(text('select current_database()')).startswith('of_test_')
+    # The fixture starts at today's schema. Remove the later policy columns
+    # using their real shape downgrades before replaying the 0094 upgrade.
+    # Stamping alone leaves 0102/0103 columns behind and fails on duplicate DDL.
+    import importlib
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    with Operations.context(MigrationContext.configure(connection)):
+        for module in ('20261031_0200_concurrent_delivery', '20261031_0100_daily_send_cap'):
+            importlib.import_module('db.migrations.versions.'+module).downgrade()
     connection.exec_driver_sql('DROP TABLE of_ledger_exclusion')
     # These objects did not exist in revisions 0091–0094. Leaving them in a
     # fixture and changing only alembic_version is not a historical database.

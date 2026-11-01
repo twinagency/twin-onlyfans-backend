@@ -510,13 +510,15 @@ def test_explicit_resume_uses_actual_ready_owners_and_leaves_old_work_blocked(da
         assert next(c for c in readiness["checks"] if c["key"] == "personality")["status"] == "ready"
         assert readiness["autonomy"]["accountEnabled"] is False
         from db.onlyfans_creator_facts_models import OfCreatorFactsSource
-        from onlyfans_runtime.creator_facts import MAX_AGE_SECONDS
         with Session(store.engine) as s, s.begin():
             s.add(OfCreatorFactsSource(account_id=account, binding_id=binding_id,
                 source_json="{}", source_hash="a" * 64, overrides_json="{}",
-                checked_at=now - timedelta(seconds=MAX_AGE_SECONDS + 1)))
-        stale = launch_readiness(store, TENANT, account, credential_reader=credentials)
-        assert next(c for c in stale["checks"] if c["key"] == "personality")["blocker"] == "creator_facts_stale"
+                checked_at=now - timedelta(days=365)))
+        retained = launch_readiness(store, TENANT, account, credential_reader=credentials)
+        # Approved facts deliberately have no age expiry (the retained PR #67
+        # repair). Time alone must not invalidate the saved personality review.
+        assert next(c for c in retained["checks"] if c["key"] == "personality")["status"] == "ready"
+        assert retained["readyToEnable"] is True
         with Session(store.engine) as s, s.begin():
             s.get(OfCreatorFactsSource, account).checked_at = utcnow()
         readiness = launch_readiness(store, TENANT, account, credential_reader=credentials)

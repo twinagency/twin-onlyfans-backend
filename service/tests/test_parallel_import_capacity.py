@@ -135,7 +135,7 @@ def test_invalid_capacity_refuses(value,monkeypatch):
 
 def test_ninety_minute_requirements_count_work_not_assumed_messages():
     r=requirements(23897,2)
-    assert r['historyReads']==47794 and r['provisionedRps']==12
+    assert r['historyPages']==47794 and r['historyReads']==95588 and r['provisionedRps']==23
     assert not r['includesDiscoveryLedgerAndMemory']
 
 

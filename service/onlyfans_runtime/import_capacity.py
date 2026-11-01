@@ -43,12 +43,13 @@ def refill(tokens, at, now, policy):
     return min(policy.burst, tokens + earned), at + timedelta(seconds=earned / policy.rps)
 
 
-def requirements(fans, pages_per_fan, *, minutes=90, headroom=1.25):
+def requirements(fans, pages_per_fan, *, minutes=90, headroom=1.25, requests_per_page=2):
     """Conditional capacity arithmetic. Counts must come from measured workload."""
     import math
-    if fans < 0 or pages_per_fan <= 0 or minutes <= 0 or headroom < 1:
+    if fans < 0 or pages_per_fan <= 0 or minutes <= 0 or headroom < 1 or requests_per_page < 1:
         raise ValueError('invalid workload')
-    reads = math.ceil(fans * pages_per_fan)
-    return {'historyReads': reads, 'minimumRps': reads/(minutes*60),
+    pages = math.ceil(fans * pages_per_fan)
+    reads = math.ceil(pages * requests_per_page)
+    return {'historyPages': pages, 'historyReads': reads, 'minimumRps': reads/(minutes*60),
             'provisionedRps': math.ceil(reads/(minutes*60)*headroom),
             'includesDiscoveryLedgerAndMemory': False}

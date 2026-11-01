@@ -1023,7 +1023,7 @@ class TextAuthority:
         try:
             proof = transport.send(grant, authority=self, tenant_id=tenant_id)
         except Exception as exc:
-            auth_failed = ((isinstance(exc, Refused) and exc.reason == "account-auth-failed")
+            auth_failed = ((getattr(exc, "reason", None) == "account-auth-failed")
                            or getattr(exc, "status_code", None) == 401
                            or type(exc).__name__ == "NativeAuthenticationError")
             throttled = (isinstance(exc, ProviderThrottled)

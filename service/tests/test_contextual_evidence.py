@@ -216,7 +216,7 @@ def test_planner_preserves_gates(monkeypatch,case):
    from native_pilot.ledger import Refused
    raise Refused(case)
   return {}
- authority=NS(source_message_id=3,check=check,emit=events.append)
+ authority=NS(source_message_id=3,check=check,emit=events.append,reply_override=None)
  lane=NS(account_id="of-test",cfg={"fastt_contextual_sales_mode":"off" if case=="disabled" else "live"},
          on=True,may_sell=AsyncMock(return_value=True),plan=AsyncMock(return_value=NS(delivery="plan")))
  hook=cp.Hook("situation","portrait","what kind do you like?",Contract(terms=["portrait"]),
@@ -230,7 +230,9 @@ def test_planner_preserves_gates(monkeypatch,case):
  monkeypatch.setattr(cp,"read_hook",read)
  @asynccontextmanager
  async def session():
-  yield NS(execute=AsyncMock(return_value=NS(first=lambda:None if case=="missing" else (10,))))
+  items=[] if case=="missing" else [NS(media_id=12,account_id="of-test",removed_at=None,content_hash="v1",kind="photo",
+        description="portrait in soft window light",default_price_cents=1500)]
+  yield NS(execute=AsyncMock(return_value=NS(first=lambda:None if case=="missing" else (10,),scalars=lambda:NS(all=lambda:items))))
  monkeypatch.setattr(co,"get_session",session)
  monkeypatch.setattr(ps,"_bought_media",AsyncMock(return_value={10}))
  offered=AsyncMock(return_value=set())
@@ -240,7 +242,7 @@ def test_planner_preserves_gates(monkeypatch,case):
  result=asyncio.run(co.plan_contextual(lane,authority,c,fan,blocked=case=="blocked"))
  if case=="eligible":
   assert result and result[2].supporting_message_ids==(3,)
-  offered.assert_awaited_once_with("of-test",1)
+  assert offered.await_count==2 and all(c.args==("of-test",1) for c in offered.await_args_list)  # R4 shelf check + resolver
   assert resolver.call_args.kwargs["seen"]=={10}
   assert read.call_args.kwargs["contextual_message"]["messages"][-1]["id"]==3
  elif case=="explore":

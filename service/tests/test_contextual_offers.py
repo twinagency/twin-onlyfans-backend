@@ -279,7 +279,9 @@ def test_off_shadow_and_live_action_boundaries(current_mode):
     events=[]
     @asynccontextmanager
     async def session():
-        yield SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(first=lambda:(101,))))
+        items=[SimpleNamespace(media_id=101,account_id=ACCOUNT,removed_at=None,content_hash="v1",kind="photo",
+                               description="gym mirror selfie",default_price_cents=1500)]
+        yield SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(first=lambda:(101,),scalars=lambda:SimpleNamespace(all=lambda:items))))
     with patch("automations.contextual_offers.get_session",session), \
          patch.object(content_prompts,"read_hook",AsyncMock(return_value=hook)) as read, \
          patch.object(content_resolver,"resolve",AsyncMock(return_value=Resolution([101,102],contract))) as resolve, \
@@ -292,11 +294,13 @@ def test_off_shadow_and_live_action_boundaries(current_mode):
         assert [e["stage"] for e in events]==["skipped"]
     elif current_mode=="shadow":
         assert result is None and read.called and resolve.called and not lane.plan.called
-        offered.assert_awaited_once_with(ACCOUNT,FAN)
+        # R4: the shelf readiness check and the resolver each read the offered set for this fan.
+        assert offered.await_count==2 and all(c.args==(ACCOUNT,FAN) for c in offered.await_args_list)
         assert next(e for e in events if "matched_media_ids" in e)["matched_media_ids"]==[101,102]
     else:
         assert result[0]=="plan" and result[2].action=="send_ppv" and lane.plan.called
-        offered.assert_awaited_once_with(ACCOUNT,FAN)
+        # R4: the shelf readiness check and the resolver each read the offered set for this fan.
+        assert offered.await_count==2 and all(c.args==(ACCOUNT,FAN) for c in offered.await_args_list)
 
 
 def test_unrelated_chat_does_no_inference():
@@ -391,7 +395,8 @@ def test_migration_rollback_retains_delivery_evidence(tmp_path):
 def test_provider_lease_contention_is_not_token_exhaustion_and_never_overlaps(monkeypatch):
     from onlyfans_runtime import provider_read_budget as budget
     row=SimpleNamespace(account_id=ACCOUNT,binding_id="binding",connection_revision=2,
-        tokens=10,refilled_at=NOW,lease_token=None,lease_until=None,backoff_until=None,last_kind=None)
+        tokens=10,refilled_at=NOW,lease_token=None,lease_until=None,backoff_until=None,last_kind=None,
+        starved_kind=None,starved_since=None)
     runtime=SimpleNamespace(binding_id="binding")
     class Session:
         def __init__(self,*args,**kwargs):pass

@@ -85,6 +85,8 @@ _DELIVERY_PROMISE = re.compile(
     # "send|post|drop <obj> ... tonight|tomorrow|later|soon"
     rf"|\b(?:send|sending|deliver|delivering|drop|dropping|post|posting)\b{_FILL}\s+{_SEND_OBJ}\b"
     r"[^.!?]{0,48}\b(?:tonight|tomorrow|later|soon)\b"
+    # subjectless "sending you a photo", "dropping it now" at the start of a sentence
+    rf"|(?:^|[.!?]\s+)(?:sending|delivering|dropping|posting)\b{_FILL}\s+{_SEND_OBJ}\b"
     r")",
     re.I,
 )

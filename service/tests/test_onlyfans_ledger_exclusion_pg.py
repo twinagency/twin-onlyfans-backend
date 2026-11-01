@@ -208,7 +208,7 @@ def test_migration_downgrade_drops_only_the_exclusion_table_and_upgrade_restores
     from pathlib import Path
     from db.schema import HEAD, _config, check_schema
     url, engine = database
-    assert HEAD == "0103_concurrent_delivery"
+    assert HEAD == "0106_read_lane_fairness"
     with engine.begin() as c:
         # Later manual-media releases deliberately prohibit a whole-chain
         # rollback below 0100. Prove that guard, without bypassing it.

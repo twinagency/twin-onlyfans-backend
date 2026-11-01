@@ -197,7 +197,8 @@ def test_multipart_role_change_during_part_session_creation_blocks_put(client, m
     source = multipart_setup(value, monkeypatch, tmp_path, lambda **kw: signed_parts())
     probe.on_create = lambda: monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", role)
     refused(lambda: value.upload_media(source, check_dedupe=False))
-    assert len(probe.sessions) == 1
+    # one part session + the worker thread's own lazily built primary session (8b09952); no call is made
+    assert len(probe.sessions) == 2
     assert probe.calls == []
 
 
@@ -212,7 +213,8 @@ def test_multipart_retry_rechecks_role(client, monkeypatch, tmp_path, role):
 
     probe.on_put = first_put
     refused(lambda: value.upload_media(source, check_dedupe=False))
-    assert len(probe.sessions) == 1
+    # one part session + the worker thread's own lazily built primary session (8b09952); no call is made
+    assert len(probe.sessions) == 2
     assert len(probe.calls) == 1 and probe.calls[0][0] == "PUT"
 
 
@@ -245,7 +247,8 @@ def test_unset_role_preserves_legacy_fake_transport_behavior(client, monkeypatch
     source = multipart_setup(value, monkeypatch, tmp_path, lambda **kw: signed_parts())
     assert value.upload_media(source, check_dedupe=False)["ready"] is True
     assert [verb for verb, _ in probe.calls].count("PUT") == 3
-    assert len(probe.sessions) == 2  # one separate fake session per multipart part
+    # two part sessions + this thread's and the part worker's lazily built primary sessions (8b09952)
+    assert len(probe.sessions) == 4
 
 
 _IMPORT_CHECK = r"""
@@ -353,4 +356,5 @@ def test_raw_http_mutation_sinks_require_review():
         ("upload_media._put", "self.http.put"),
         ("upload_media._put_part", "sess.put"),
     }
-    assert sessions == {("__init__", "requests.Session"), ("_upload_part_session", "requests.Session")}
+    # 8b09952 moved primary-session construction from __init__ into the per-thread _new_http_session factory.
+    assert sessions == {("_new_http_session", "requests.Session"), ("_upload_part_session", "requests.Session")}

@@ -88,11 +88,23 @@ def test_populated_baseline_upgrade_preserves_evidence(database):
         c.exec_driver_sql("CREATE TABLE alembic_version(version_num varchar(32) PRIMARY KEY)")
         c.execute(text("INSERT INTO alembic_version VALUES (:revision)"), {"revision": BASELINE})
     with Session(engine) as s, s.begin():
-        s.add(Account(id="old", nickname="Retained")); s.flush()
-        s.add(Fan(account_id="old", fan_id=1)); s.flush()
-        s.add(Message(account_id="old", fan_id=1, message_id=9, direction="out", body="Retained history", created_at=utcnow())); s.flush()
-        # Populate the actual 0070 shape, without current ORM defaults for
-        # columns that do not exist until the later migration.
+        # Seed only the frozen 0070 columns. Today's ORM also writes columns
+        # introduced after 0070 (for example fans.of_profile_checked_at), so
+        # using it here fails before the populated upgrade is exercised.
+        s.execute(text("INSERT INTO accounts (id,nickname,is_active_default) VALUES ('old','Retained',true)"))
+        s.execute(text("""INSERT INTO fans (
+            account_id,fan_id,is_name_real,recent_events,likes_boobs,likes_ass,
+            family_names,pets,communication_style,tags,custom_fields,
+            lifetime_spend_cents,is_bot,turn_counter,is_followed,
+            deep_convo_state,deep_convo_skip_level,deep_convo_skip_remaining,source
+        ) VALUES (
+            'old',1,true,'[]',false,false,'{}','[]','{}','[]','{}',
+            0,false,0,false,'missing',0,0,'onlyfans'
+        )"""))
+        s.execute(text("""INSERT INTO messages (
+            account_id,fan_id,message_id,direction,sender_name,body,media_ids,
+            media_count,price_cents,is_tip,is_unsent,is_promise,created_at
+        ) VALUES ('old',1,9,'out','','Retained history','[]',0,0,false,false,false,CURRENT_TIMESTAMP)"""))
         s.execute(text("INSERT INTO of_conversation_state (account_id,fan_id,mode,revision,unresolved_attempt_id) VALUES ('old',1,'no_contact',4,'unknown-1')"))
         s.execute(text("INSERT INTO of_message_delivery (account_id,fan_id,message_id,outcome,attempt_id,evidence_ref) VALUES ('old',1,9,'unknown','unknown-1','retain')"))
     with engine.begin() as c:

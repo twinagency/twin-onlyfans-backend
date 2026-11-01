@@ -5,12 +5,25 @@ from unittest.mock import Mock, patch
 import threading
 import unittest
 
-from onlyfans_runtime.launch_history_memory.recovery import HistoryRecovery
+from onlyfans_runtime.launch_history_memory.recovery import HistoryRecovery, archive_equivalent
+from onlyfans_runtime.store import Event
 from onlyfans_runtime.native_worker import NativeWorker
 from onlyfans_runtime.provider_read_budget import ReadDeferred
 
 
 class HistoryCapacityTests(unittest.TestCase):
+    def test_archive_accepts_html_equivalence_but_preserves_content_and_timestamp_checks(self):
+        event=Event(7,99,'2026-10-31T18:44:12+00:00','in','hello',(),0).normalized()
+        message=SimpleNamespace(account_id='account',fan_id=7,message_id=99,direction='in',price_cents=0,
+            media_ids='[]',body='<p>hello</p>',created_at=datetime(2026,10,31,18,44,12))
+        self.assertTrue(archive_equivalent(Mock(),message,event))
+        message.body='<p>different</p>'
+        self.assertFalse(archive_equivalent(Mock(),message,event))
+        message.body='<p>hello</p>';message.created_at+=timedelta(seconds=1)
+        self.assertFalse(archive_equivalent(Mock(),message,event))
+        message.created_at-=timedelta(seconds=1);message.price_cents=100
+        self.assertFalse(archive_equivalent(Mock(),message,event))
+
     def setUp(self):
         self.recovery = HistoryRecovery(SimpleNamespace())
         self.reader = SimpleNamespace(account_id='account', messages=Mock(), chats=Mock())

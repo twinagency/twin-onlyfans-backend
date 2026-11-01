@@ -63,7 +63,7 @@ CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,p
 CREATE TABLE pending_offer(account_id TEXT,fan_id INTEGER);
 CREATE TABLE automation_runs(id INTEGER PRIMARY KEY,account_id TEXT,kind TEXT,started_at TEXT,
  completed_at TEXT,status TEXT,stats_json TEXT,error_text TEXT);
-CREATE TABLE skip_list(account_id TEXT,fan_id INTEGER,reason TEXT);
+CREATE TABLE skip_list(account_id TEXT,fan_id INTEGER,reason TEXT,added_at TEXT,PRIMARY KEY(account_id,fan_id));
 CREATE TABLE of_conversation_state(account_id TEXT,fan_id INTEGER,mode TEXT,takeover_state TEXT,
  PRIMARY KEY(account_id,fan_id));
 CREATE TABLE of_runtime(account_id TEXT PRIMARY KEY,enabled INTEGER,binding_id TEXT);

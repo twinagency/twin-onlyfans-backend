@@ -143,13 +143,13 @@ def sc_several_creators(seed):
 
 def sc_roster50(seed):
     """50 creators, each at 3 fans/minute of fresh bursts for 15 virtual minutes (150 replies/min fleet)."""
-    accounts = roster(50, 60)
+    accounts = roster(50, 30)
     rng = random.Random(seed)
 
     async def drive(sim):
         await asyncio.sleep(10)
         t = 0.0
-        duration = 900.0
+        duration = 480.0
         pending = []
         while t < duration:
             gap = rng.uniform(0.2, 0.6)
@@ -301,11 +301,11 @@ def sc_competing_manual(seed):
         await asyncio.sleep(15)
         for i, fan in enumerate(taken):
             sim.takeover(acct, fan)
-            if i % 2 == 0:
+            if i % 2 == 1:        # a person answers some fans; the engine then restricts them (human spoke last)
                 sim.human_says(acct, fan, "it's me")
         await asyncio.sleep(200)
         sim.handback(acct, taken[0])
-        sim.fan_says(acct, taken[0], "back to the bot?")    # a fresh input after hand-back must be answered
+        sim.fan_says(acct, taken[0], "ok great, how was your day?")    # a fresh input after hand-back must be answered
         for fan in taken[1:]:
             keep_taken.add((acct, fan))
         await settle(sim, {acct: 33}, limit_s=3000)

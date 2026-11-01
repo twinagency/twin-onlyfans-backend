@@ -1328,6 +1328,12 @@ class Service:
             error = exc.reason if isinstance(exc, Refused) else (
                 gateway.stopped_reason or model.stopped_reason
                 or (str(exc) if isinstance(exc, PilotBoundaryError) and str(exc) else "native-turn-failed"))
+            if error == "native-turn-failed" and getattr(self, "cancel_reason", None) and not gateway.stopped_reason:
+                # R8: a reply still waiting in the send queue when it is cancelled (credential change, lease loss, stop,
+                # takeover) leaves through SendGate.acquire, which does not set gateway.stopped_reason, so the cancel was
+                # reported as "native-turn-failed": the input was marked failed and the fan was never answered. Name the
+                # real cause; the existing release/backoff handling then gives the claim back (nothing is on the wire).
+                error = self.cancel_reason
         finally:
             runner.finish_native_run(self.path, run_id, stats, error)
             if isinstance(stats, dict):

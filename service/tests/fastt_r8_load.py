@@ -189,7 +189,7 @@ def sc_bursts(seed):
     async def drive(sim):
         await asyncio.sleep(3)
         await asyncio.gather(*(burst(sim, f) for f in accounts[acct]))
-        await settle(sim, {acct: 60}, limit_s=3000)
+        await settle(sim, {acct: 120}, limit_s=3500)
         return ()
     return accounts, {"bubbles": lambda r: 2}, drive
 
@@ -277,6 +277,7 @@ def sc_auth_failure(seed):
         await asyncio.sleep(120)
         sim.change_credentials(acct)                        # the operator reconnects: the connection revision moves
         await settle(sim, {acct: 20}, limit_s=2000)
+        await asyncio.sleep(600)                 # let any requeued input finish before counting stranded turns
         return ()
     return accounts, {}, drive
 

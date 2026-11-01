@@ -32,7 +32,8 @@ try:
  compose('up','-d','--no-deps','--no-build','--pull','never','worker')
  after=inspect(NAME)
  assert after['State']['Running'] and after['Image']==image
- assert after['Config']['Env']==before['Config']['Env'],'Environment changed'
+ env=lambda d:dict(v.split('=',1) for v in d['Config']['Env'])
+ assert env(after)==env(before),'Environment changed'
  for key in ['Cmd','Entrypoint','User','WorkingDir']:
   assert after['Config'].get(key)==before['Config'].get(key),key
  for key in ['NetworkMode','RestartPolicy','Memory','NanoCpus','Binds']:

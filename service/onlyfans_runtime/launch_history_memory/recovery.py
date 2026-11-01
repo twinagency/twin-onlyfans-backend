@@ -121,6 +121,14 @@ def affects_recent_context(session, account_id, fan_id, event):
     return boundary is None or (stamp, event.message_id) > tuple(boundary)
 
 
+def archive_equivalent(session, message, event):
+    """Use canonical intake's representation rules, retaining archive time proof."""
+    from onlyfans_runtime.history_repair import equivalent, saved_media
+    stamp = datetime.fromisoformat(event.created_at).replace(tzinfo=None)
+    return (message.created_at == stamp
+            and equivalent(message, event, saved_media=saved_media(session, message)))
+
+
 class HistoryRecovery:
     """Short transactions; at most one discovery and one archive page per step.
 
@@ -353,9 +361,7 @@ class HistoryRecovery:
                     raise Refused("future historical timestamp")
                 existing = session.get(Message, (claim.account_id, claim.fan_id, event.message_id))
                 stamp = datetime.fromisoformat(event.created_at).replace(tzinfo=None)
-                if existing is not None and (existing.direction != event.direction or existing.body != event.body
-                        or existing.price_cents != event.price_cents or existing.created_at != stamp
-                        or json.loads(existing.media_ids or "[]") != list(event.media_ids)):
+                if existing is not None and not archive_equivalent(session, existing, event):
                     # Preserve the shared fail-closed conflict behaviour without
                     # partially importing this page. Only the offending ingress
                     # becomes durable diagnostic evidence; cursor/counts stay put.

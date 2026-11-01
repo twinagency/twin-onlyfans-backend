@@ -1,0 +1,111 @@
+name: Original OnlyFans isolated release qualification
+
+on:
+  push:
+    branches: [codex/of-original-completion-20261102]
+    paths:
+      - 'service/**'
+      - 'scripts/**'
+      - 'requirements*.txt'
+      - '.github/workflows/original-release-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    name: PostgreSQL 16 / Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.13']
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: isolated-qualification-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PYTHON_DOTENV_DISABLED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      PYTHONPATH: ${{ github.workspace }}/scripts/onlyfans_test_network:service:service/tests
+      ONLYFANS_TEST_PG_URL: postgresql+psycopg2://postgres:isolated-qualification-only@127.0.0.1:5432/postgres
+      ONLYFANS_TEST_PG_BIN: /usr/lib/postgresql/16/bin
+      ONLYFANS_RELEASE_SERVICE_DIR: ${{ github.workspace }}/released/service
+      ONLYFANS_COMPATIBLE_ROLLBACK_DIR: ${{ github.workspace }}/compatible-rollback
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 8a427a3969a1e0b3cc6eed020b3a037e34120b63
+          path: released
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: d6811b124928f8167e6625ce9db5db81bf227fad
+          path: compatible-rollback
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install pinned runtime and isolated verification dependencies
+        env:
+          # Dependency installation needs the package registry. Tests below use
+          # the socket guard; no provider credentials are supplied to either step.
+          PYTHONPATH: ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg postgresql-client-16
+          python -m pip install -r requirements-onlyfans-test.txt
+          python -m pip check
+      - name: Verify isolation and retain exact environment
+        run: |
+          mkdir -p qualification-evidence
+          git rev-parse HEAD > qualification-evidence/source-commit.txt
+          python --version > qualification-evidence/python.txt
+          python -m pip freeze > qualification-evidence/dependencies.txt
+          python - <<'PY'
+          import socket, sitecustomize
+          from pathlib import Path
+          assert Path(sitecustomize.__file__).resolve() == Path('scripts/onlyfans_test_network/sitecustomize.py').resolve()
+          try:
+              socket.socket().connect(('192.0.2.1', 443))
+          except OSError as exc:
+              assert 'qualification denies' in str(exc)
+          else:
+              raise SystemExit('External socket isolation failed')
+          PY
+      - name: Run every service module with disposable PostgreSQL
+        run: >-
+          python scripts/run-service-tests.py --postgres --module-timeout 600
+          --report qualification-evidence/service-results.json
+          > qualification-evidence/service-tests.log 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: original-qualification-python-${{ matrix.python }}-${{ github.sha }}
+          path: qualification-evidence/
+          if-no-files-found: error
+
+  windows-runner:
+    name: Windows runner exit and marker contract
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Test the native Windows command runner
+        run: python service/tests/test_twin_bridge_runner.py

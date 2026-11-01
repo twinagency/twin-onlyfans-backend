@@ -90,7 +90,7 @@ async def exercise(case, tmp):
                 description = None
             session.add(VaultItem(account_id=ACCOUNT, media_id=mid,
                                   kind="video" if case == "mixed_media" and mid == 7003 else "photo",
-                                  description=description, search_text=description, created_at=now,
+                                  description=description, search_text=description, created_at=now, updated_at_of="2026-10-31T00:00:00+00:00",
                                   ai_fields_json=json.dumps({"people_count": 1, "partner_visible": False})))
         session.add(VaultItem(account_id=OTHER, media_id=7002, kind="photo",
                               description="OTHER_ACCOUNT_MEDIA_SECRET", created_at=now))
@@ -137,6 +137,10 @@ async def exercise(case, tmp):
 
     async def priced(account, fan, item, avail_ids, cfg, **kw):
         assert (account, fan) == (ACCOUNT, FAN)
+        if case == "partial_descriptions":
+            # R4 product readiness: an undescribed item is never offered.
+            assert 7004 not in avail_ids and {7001, 7002, 7003} <= set(avail_ids)
+            return SimpleNamespace(media=[m for m in SELECTED if m != 7004], price_cents=500, value_cents=500, refusal=None)
         assert set(SELECTED) <= set(avail_ids)
         return SimpleNamespace(media=list(SELECTED), price_cents=500, value_cents=500, refusal=None)
 
@@ -192,6 +196,16 @@ async def exercise(case, tmp):
                     delivery, refusal = await pack_sender.plan_ask_delivery(
                         ACCOUNT, FAN, contract, cfg=cfg,
                         item_tag=pack_sender.HOOK_CATEGORY if case == "hook_unchanged" else pack_sender.ASK_ITEM_TAG)
+                if case == "no_descriptions":
+                    # R4 product readiness: nothing described means nothing offerable (contract change, F05/F08).
+                    assert delivery is None and refusal["reason"] == pack_sender.REFUSE_TOO_THIN, refusal
+                    assert not sent and not calls
+                    return
+                if case == "partial_descriptions":
+                    assert delivery is not None, refusal
+                    assert 7004 not in delivery.plan.media and delivery.plan.claim.n == 3, delivery.plan
+                    assert not sent
+                    return
                 assert delivery is not None, refusal
                 assert delivery.plan.media == SELECTED and delivery.plan.price_cents == 500
                 assert delivery.plan.previews == [] and delivery.plan.claim.n == 4

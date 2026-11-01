@@ -1281,9 +1281,12 @@ class Service:
             # The one card this job may remove (re-read here, not trusted from the queue row).
             row = await asyncio.to_thread(self.offer_row, offer_of(job["kind"], job_payload(job)))
             gateway.expected_unsend = int(row["offer_message_id"]) if row and row["offer_message_id"] else None
+        from .turn_timing import TurnTiming
+        timing = TurnTiming(forward=runner.emit)
+        claimed_at = runner.now()
         model = NativePilotModel(
             api_key=self.conn.model_api_key, account_id=self.db, fan_id=args.fan, deadline=time.monotonic() + TURN_MAX_S,
-            should_stop=gateway.stopped, on_event=runner.emit,
+            should_stop=gateway.stopped, on_event=lambda event: timing.on_event(event, runner.now()),
             reserve_call=lambda: ledger.count_model_call(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now()),
             budget=DailyBudget(self.scope, self.conn.model_id, endpoint=ENDPOINT))
         runner.emit({"event": "generating", "source_message_id": str(source_id), "engine": "fastt-native"})
@@ -1328,6 +1331,17 @@ class Service:
                 runner.emit({"event": "turn-stats", "stats": {k: v for k, v in stats.items()
                     if v and isinstance(v, (int, float, str, bool, dict)) and k not in ("model", "mode")}})
         receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
+        try:
+            # R8 measurement only: one metadata event per turn; a failure here never changes the turn.
+            runner.emit(timing.record(
+                account=self.db, fan=args.fan, first_input_at=getattr(self, "priority", None), claimed_at=claimed_at,
+                generation_started_at=timing.first_model_start or claimed_at,
+                generation_done_at=timing.last_model_end or runner.now(), finished_at=runner.now(), receipts=receipts,
+                outcome=("job" if job is not None else "error:" + error if error else
+                         "sent" if any(r["state"] == "sent" for r in receipts) else "no-reply"),
+                requeues=ledger._requeues.get(key, 0)))
+        except Exception:
+            pass
         from .identity import IDENTITY_HELD
         if error == IDENTITY_HELD:
             await self.identity_handoff("reply-held")

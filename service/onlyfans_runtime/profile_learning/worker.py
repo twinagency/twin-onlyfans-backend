@@ -34,7 +34,8 @@ CONFIG_RETRY=timedelta(minutes=15)
 HOT,WARM,COLD=0,1,2
 # Account-level problems: one account-wide pause, not a per-fan retry storm.
 ACCOUNT_CODES={'model-credential-missing','model-credential-mismatch','model-credential-unavailable',
-    'profile-model-config-missing','profile-credential-changed','profile-connection-scope','profile-budget-exhausted'}
+    'profile-model-config-missing','profile-credential-changed','profile-connection-scope','profile-budget-exhausted',
+    'profile-model-request-failed','profile-model-usage-unavailable'}
 
 
 def scoped(store,s,tenant,account,binding):
@@ -392,6 +393,8 @@ async def step(store,tenant,stop,*,extractor=None):
         attempts=int(job.get('attempts',0))+1
         account_wide=code in ACCOUNT_CODES
         delay=CONFIG_RETRY if account_wide else timedelta(minutes=min(120,5*2**min(attempts,5)))
+        if attempts >= 3 and code.startswith('profile-model-'):
+            delay=max(delay,timedelta(days=1))  # at most three automatic attempts before daily review
         with Session(store.engine) as s,s.begin():
             s.execute(text(f'''UPDATE of_profile_learning SET error_code=:error,next_at=:due,
                 lease_token=NULL,lease_until=NULL,attempts=:attempts WHERE {SCOPE} AND lease_token=:token'''),
@@ -441,9 +444,14 @@ def main():
         tasks=[asyncio.create_task(consume()) for _ in range(concurrency)]
         last_maintenance=datetime.min
         last_seed=0.0
+        last_reconcile=0.0
         try:
             while not stop.is_set():
                 try:
+                    if time.monotonic()-last_reconcile>=300:
+                        from .accounting import reconcile_known
+                        last_reconcile=time.monotonic()
+                        await database_call(store,reconcile_known,store,tenant,limit=5)
                     if time.monotonic()-last_seed>=SEED_EVERY:
                         await database_call(store,seed,store,tenant);last_seed=time.monotonic()
                     if datetime.utcnow()-last_maintenance>timedelta(days=1):
@@ -463,4 +471,3 @@ def main():
 
 
 if __name__=='__main__': main()
-

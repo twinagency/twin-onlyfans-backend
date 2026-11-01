@@ -99,3 +99,6 @@ class OfProviderReadBudget(Base):
     refilled_at = Column(DateTime, nullable=False)
     backoff_until = Column(DateTime)
     last_kind = Column(String(32))
+    # R4: oldest background lane denied tokens (bounded-starvation turn); both NULL when nobody is starved.
+    starved_kind = Column(String(32))
+    starved_since = Column(DateTime)

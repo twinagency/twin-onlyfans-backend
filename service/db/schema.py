@@ -52,7 +52,8 @@ CONTEXTUAL_OFFERS = "0101_contextual_offers"
 DAILY_SEND_CAP = "0102_daily_send_cap"
 CONCURRENT_DELIVERY = "0103_concurrent_delivery"
 CONTEXTUAL_ITEM_SCOPE = "0104_contextual_item_scope"
-HEAD = CONTEXTUAL_ITEM_SCOPE
+READ_LANE_FAIRNESS = "0106_read_lane_fairness"
+HEAD = READ_LANE_FAIRNESS
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -61,6 +62,7 @@ REVISION_RANK[CONTEXTUAL_OFFERS] = 101
 REVISION_RANK[DAILY_SEND_CAP] = 102
 REVISION_RANK[CONCURRENT_DELIVERY] = 103
 REVISION_RANK[CONTEXTUAL_ITEM_SCOPE] = 104
+REVISION_RANK[READ_LANE_FAIRNESS] = 106
 
 
 class SchemaMismatch(RuntimeError):
@@ -80,6 +82,7 @@ def _metadata():
     from onlyfans_runtime import launch_operations_models  # noqa: F401
     from onlyfans_runtime.launch_ledger import models as _ledger_retry_models  # noqa: F401
     from . import onlyfans_contextual_models  # noqa: F401
+    from . import onlyfans_substitution_models  # noqa: F401
     return Base.metadata
 
 

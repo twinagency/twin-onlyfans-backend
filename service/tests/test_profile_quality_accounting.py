@@ -169,3 +169,14 @@ def test_existing_repair_preserves_receipts_budget_and_manual_notes(pg_store):
     with pg_store.engine.connect() as c:
         assert c.scalar(text('SELECT count(*) FROM of_profile_receipts'))==receipts
         assert c.execute(text('SELECT next_at,error_code,attempts,processed_messages FROM of_profile_learning WHERE fan_id=1')).first()==before
+
+
+@pytest.mark.parametrize('value',['Yes at work',"I'm working right now",'Currently working','Yeah just at work'])
+def test_temporary_work_variants_never_claim_an_occupation(value):
+    f={'field':'occupation','value':value,'quote':value,'at':'2026-01-01'}
+    assert quality_fact(f)['field']=='recent_topic'
+
+
+def test_concrete_occupation_is_preserved():
+    f={'field':'occupation','value':'electrician','quote':"I work as an electrician",'at':'2026-01-01'}
+    assert quality_fact(f)['field']=='occupation'

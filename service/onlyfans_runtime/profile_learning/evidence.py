@@ -106,8 +106,9 @@ def quality_fact(fact):
     if fact.get('manual') or fact.get('protected'): return fact
     if fact.get('field')=='name' and norm(fact.get('value','')) in {'bond james bond'}:
         return None
-    if fact.get('field')=='occupation' and norm(fact.get('value','')) in {
-            'work','at work','just at work','i am at work','im at work','i m at work','working','just working'}:
+    work_words=set(norm(fact.get('value','')).split())
+    if (fact.get('field')=='occupation' and work_words & {'work','working'}
+            and work_words <= set('yes yeah yep at work working i m am im just currently right now today still in the office on shift busy again'.split())):
         fact.update(field='recent_topic',kind='event',key='temporary work context',
             review_at=(day(fact.get('last_confirmed',fact.get('at')))+timedelta(days=1)).isoformat())
     meaning=answer_meaning(fact)

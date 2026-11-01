@@ -471,6 +471,11 @@ class TextAuthority:
                     raise Refused("media delivery disabled")
                 terms = catalog_terms(s, account_id, catalog_item_id, price_cents=quoted_price_cents)
                 assert_unowned(s, account_id, fan_id, terms)
+                if origin != "manual":
+                    # R6/F09: one payment obligation is requested once, whichever send path asks.
+                    from .quote import request_exists
+                    if request_exists(s, account_id, fan_id, terms):
+                        raise Refused("payment already requested for this obligation")
                 if origin == "automated":
                     from .native_sales import eligible, choice
                     if not eligible(s, account_id, fan_id, now)[0]:

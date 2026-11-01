@@ -480,7 +480,7 @@ def test_migration_adds_the_case_table_and_upgrades_cleanly_from_the_previous_he
     from alembic import command
     from db.schema import HEAD, _config, check_schema
     url, engine = database
-    assert HEAD == "0106_read_lane_fairness"
+    assert HEAD == "0107_active_selling_quote"
     with engine.begin() as c:
         check_schema(c)
         command.downgrade(_config(c), "0104_contextual_item_scope")

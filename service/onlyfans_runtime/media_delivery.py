@@ -136,6 +136,8 @@ def project(session, intent, message_id, stamp):
     session.add(offer)
     session.flush()
     intent.offer_id = offer.id
+    from .quote import attach_to_offer
+    attach_to_offer(session, offer, snapshot, account_id=intent.account_id, fan_id=intent.fan_id)
     from .native_sales import record_quote
     record_quote(session, intent, message_id, stamp)
     prior = session.scalars(select(VaultSend).where(VaultSend.account_id == intent.account_id,

@@ -206,3 +206,29 @@ def test_fastt_plane_reason_codes_are_unchanged():
     assert P.fan_hold_code(P.decide(P.Facts(mode=None), "automated", strict=True)) == "fan-not-enabled"
     assert P.fan_hold_code(P.decide(P.Facts(mode=None), "automated")) is None
     assert P.fan_hold_code(P.decide(F(cases=case("distress")), "automated")) == "fan-case-distress"
+
+
+# Eval-harness finding (EV-0350, EV-0352..0357): contractions were stripped as quotes and these phrases were missed.
+import pytest as _pytest
+
+@_pytest.mark.parametrize("text,category", [
+    ("I don't want to be here anymore", "distress"),
+    ("I don't see the point in living", "distress"),
+    ("I just took a lot of pills", "distress"),
+    ("i've hurt myself and i'm scared", "distress"),
+    ("i think I overdosed", "distress"),
+    ("wait, stop. I'm actually not okay with this", "consent"),
+    ("no, I don't want to do this anymore, I'm uncomfortable", "consent"),
+])
+def test_eval_safety_phrases_hold(text, category):
+    from native_pilot import safety_detect
+    assert category in [v.category for v in safety_detect.assess([text])]
+
+
+@_pytest.mark.parametrize("text", [
+    "stop teasing me", "i can't go on a date tonight", "i took a lot of pics today",
+    "she said 'stop texting me' lol", "i'm done with work for the night",
+])
+def test_eval_safety_nearby_legitimate(text):
+    from native_pilot import safety_detect
+    assert not [v for v in safety_detect.assess([text]) if v.category in ("distress", "consent", "stop_contact")]

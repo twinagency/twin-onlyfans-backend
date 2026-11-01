@@ -60,7 +60,8 @@ def _norm(text):
 
 
 # A phrase the fan merely quotes or reports is not a request: drop quoted spans and "you said ..." reports.
-_QUOTED = re.compile(r'"[^"]{1,200}"|\'[^\']{3,200}\'')
+# A single-quoted span must open and close on a word boundary: the apostrophes in "i've ... i'm" are not quotes.
+_QUOTED = re.compile(r'"[^"]{1,200}"|(?<!\w)\'[^\']{3,200}\'(?!\w)')
 _REPORTED = re.compile(r"\b(?:you|u|she|he|they|someone|everyone|my ex|my wife|my gf)\s+(?:said|says|told me|texted|wrote)\b[^.!?\n]{0,120}", re.I)
 _I_SAID_EARLIER = re.compile(r"\b(?:when|if|every time|whenever)\s+(?:i|you|u)\s+(?:said|say|tell)\b[^.!?\n]{0,80}", re.I)
 
@@ -110,10 +111,15 @@ _DISTRESS = (
     re.compile(r"\b(?:no\s+reason\s+to\s+live|not\s+worth\s+living|don'?t\s+want\s+to\s+live|dont\s+want\s+to\s+live)\b", re.I),
     re.compile(r"\b(?:nobody|no\s*one)\s+would\s+(?:even\s+)?(?:miss|care\s+if)\s+(?:me|i)\b", re.I),
     re.compile(r"\b(?:trying|going|gonna|about)\s+to\s+(?:jump|hang|overdose|od)\b", re.I),
+    re.compile(r"\b(?:do\s*n'?t|dont|do not)\s+(?:want|wanna)\s+(?:to\s+)?be\s+(?:here|alive|around)\s+(?:any\s*more|anymore|any\s+longer)\b", re.I),
+    re.compile(r"\b(?:do\s*n'?t|dont|can'?t|cant|do not)\s+see\s+(?:the|a|any)\s+point\s+(?:in|of)\s+(?:living|life|being\s+alive|going\s+on)\b|\bno\s+point\s+(?:in\s+)?(?:living|being\s+alive)\b", re.I),
+    re.compile(r"\b(?:took|taken|swallowed|downed)\s+(?:a\s+lot\s+of|lots\s+of|a\s+bunch\s+of|a\s+handful\s+of|too\s+many|a\s+(?:whole\s+)?bottle\s+of|all\s+(?:of\s+)?(?:my|the))\s+(?:pills|tablets|meds|medication|sleeping\s+pills|painkillers)\b", re.I),
+    re.compile(r"\b(?:i\s+(?:think\s+)?(?:i\s+)?|i'?ve\s+|i\s+have\s+|i\s+just\s+)(?:overdosed|od'?d|od'?ed)\b", re.I),
+    re.compile(r"\b(?:can'?t|cant|cannot)\s+go\s+on\s+(?:any\s*more|anymore|any\s+longer|like\s+this)\b", re.I),
 )
 _CONSENT_STRONG = (
     re.compile(r"\b(?:i\s+)?(?:do\s*n'?t|dont|did\s*n'?t|didn'?t|did not|do not|never)\s+consent(?:ed)?\b|\bwithdraw(?:ing)?\s+(?:my\s+)?consent\b|\bwithout\s+my\s+consent\b", re.I),
-    re.compile(r"\b(?:i(?:'m| am|m)|im|this\s+is|that\s+is|that'?s|it'?s)\s+(?:really\s+|very\s+|so\s+|feeling\s+)?(?:uncomfortable|not\s+comfortable|not\s+ok(?:ay)?\s+with)\b|\bmaking\s+me\s+(?:feel\s+)?(?:uncomfortable|unsafe|scared)\b", re.I),
+    re.compile(r"\b(?:i(?:'m| am|m)|im|this\s+is|that\s+is|that'?s|it'?s)\s+(?:(?:actually|honestly|just|really|very|so|feeling|kinda|getting)\s+){0,2}(?:uncomfortable|not\s+comfortable|not\s+ok(?:ay)?\s+with)\b|\bmaking\s+me\s+(?:feel\s+)?(?:uncomfortable|unsafe|scared)\b", re.I),
     re.compile(r"\byou(?:'re| are)\s+(?:scaring|pressuring|forcing)\s+me\b|\bi\s+feel\s+(?:pressured|forced|unsafe|scared|used)\b", re.I),
     re.compile(r"\bi\s+(?:do\s*n'?t|dont)\s+want\s+(?:to\s+do\s+)?this(?!\s+(?:to\s+)?stop)(?:\s+(?:any\s*more|anymore))?\b", re.I),
 )

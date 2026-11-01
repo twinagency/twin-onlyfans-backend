@@ -47,6 +47,8 @@ def scoped(store,s,tenant,account,binding):
 
 def seed(store,tenant):
     """Repeated bounded discovery reaches every fan, independent of AI/session state."""
+    batch=int(os.environ.get('ONLYFANS_PROFILE_SEED_BATCH','500'))
+    if not 1 <= batch <= 10000: raise ValueError('profile seed batch must be 1–10000')
     with Session(store.engine) as s,s.begin():
         s.execute(text('SELECT pg_advisory_xact_lock(hashtext(:k))'),{'k':'profile-seed:'+tenant})
         bindings=s.scalars(select(OfCreatorBinding).join(OfRuntime,
@@ -57,12 +59,12 @@ def seed(store,tenant):
             p={'tenant':tenant,'account':b.account_id,'binding':b.id}
             s.execute(text('INSERT INTO of_profile_accounts(tenant_id,account_id,binding_id) VALUES (:tenant,:account,:binding) ON CONFLICT DO NOTHING'),p)
             s.execute(text('''INSERT INTO of_profile_learning(tenant_id,account_id,binding_id,fan_id)
-                VALUES (:tenant,:account,:binding,0) ON CONFLICT DO NOTHING'''),p)
+                VALUES (:tenant,:account,:binding,0) ON CONFLICT DO NOTHING'''),{**p,'batch':batch})
             s.execute(text('''INSERT INTO of_profile_learning(tenant_id,account_id,binding_id,fan_id)
                 SELECT :tenant,f.account_id,:binding,f.fan_id FROM fans f WHERE f.account_id=:account
                 AND NOT EXISTS (SELECT 1 FROM of_profile_learning p WHERE p.tenant_id=:tenant
                 AND p.account_id=f.account_id AND p.binding_id=:binding AND p.fan_id=f.fan_id)
-                ORDER BY f.fan_id LIMIT 500 ON CONFLICT DO NOTHING'''),p)
+                ORDER BY f.fan_id LIMIT :batch ON CONFLICT DO NOTHING'''),{**p,'batch':batch})
             s.execute(text('''INSERT INTO fan_profiles(account_id,fan_id,message_count_at_gen,
                 total_spend_at_gen_cents,notes_applied_successfully)
                 SELECT p.account_id,p.fan_id,0,0,false FROM of_profile_learning p
@@ -343,23 +345,34 @@ def _persist(store,job,sources,progress,additions,more,count,call_id):
         return document
 
 
+async def database_call(store, fn, *args, **kwargs):
+    if store.engine.dialect.name == 'postgresql':
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    return fn(*args, **kwargs)
+
+
+def release_job(store, p, token):
+    with store.engine.begin() as c:
+        c.execute(text(f'UPDATE of_profile_learning SET lease_token=NULL,lease_until=NULL WHERE {SCOPE} AND lease_token=:token'),
+            {**p, 'token': token})
+
+
 async def step(store,tenant,stop,*,extractor=None):
     if extractor is None:
         from .model import extract
         extractor=extract
-    job=claim_job(store,tenant,stop)
+    job=await database_call(store,claim_job,store,tenant,stop)
     if not job: return False
     p={k:job[k] for k in ('tenant_id','account_id','binding_id','fan_id')}
     try:
-        sources,progress,more,count=source_page(store,job)
+        sources,progress,more,count=await database_call(store,source_page,store,job)
         additions=[];call_id=None
         if any(not v.get('context_only') for v in sources.values()):
             result,call_id=await extractor(store,tenant,job['account_id'],job['binding_id'],job['fan_id'],sources,creator=not bool(job['fan_id']))
             additions=validate(result,sources,creator=not bool(job['fan_id']))
-        document=_persist(store,job,sources,progress,additions,more,count,call_id)
-        if not job['fan_id']: publish_creator(store,job,document)
-        with store.engine.begin() as c:
-            c.execute(text(f'UPDATE of_profile_learning SET lease_token=NULL,lease_until=NULL WHERE {SCOPE} AND lease_token=:token'),{**p,'token':job['lease_token']})
+        document=await database_call(store,_persist,store,job,sources,progress,additions,more,count,call_id)
+        if not job['fan_id']: await database_call(store,publish_creator,store,job,document)
+        await database_call(store,release_job,store,p,job['lease_token'])
         return True
     except Exception as exc:
         from native_pilot.budget import BudgetRefused
@@ -412,28 +425,37 @@ def main():
     if os.environ.get('ONLYFANS_PROCESS_ROLE')!='worker' or not tenant or tenant=='deployment':
         raise SystemExit('Explicit worker role and tenant required')
     concurrency=int(os.environ.get('ONLYFANS_PROFILE_CONCURRENCY','2'))
-    if not 1<=concurrency<=4: raise SystemExit('Profile concurrency must be 1–4')
+    if not 1<=concurrency<=128: raise SystemExit('Profile concurrency must be 1–128')
     stop=threading.Event()
     for sig in (signal.SIGINT,signal.SIGTERM): signal.signal(sig,lambda *_:stop.set())
-    store=Store(os.environ['DATABASE_URL'])
+    store=Store(os.environ['DATABASE_URL'],pool_size=min(16,max(2,concurrency)))
     async def run():
+        async def consume():
+            while not stop.is_set():
+                try:
+                    worked=await step(store,tenant,stop)
+                except Exception as exc:
+                    print(json.dumps({'component':'profile-learning','state':'unavailable','kind':type(exc).__name__}),flush=True)
+                    worked=False
+                await asyncio.sleep(.01 if worked else 2)
+        tasks=[asyncio.create_task(consume()) for _ in range(concurrency)]
         last_maintenance=datetime.min
         last_seed=0.0
         try:
             while not stop.is_set():
                 try:
                     if time.monotonic()-last_seed>=SEED_EVERY:
-                        seed(store,tenant);last_seed=time.monotonic()
+                        await database_call(store,seed,store,tenant);last_seed=time.monotonic()
                     if datetime.utcnow()-last_maintenance>timedelta(days=1):
-                        daily_maintenance(store,tenant);last_maintenance=datetime.utcnow()
-                    try: silent=await asyncio.to_thread(finalize_silent,store,tenant,stop)
-                    except Exception as exc:
-                        print(json.dumps({'component':'profile-learning','state':'silent-batch-failed','kind':type(exc).__name__}),flush=True);silent=0
-                    worked=any(await asyncio.gather(*(step(store,tenant,stop) for _ in range(concurrency)))) or bool(silent)
+                        await database_call(store,daily_maintenance,store,tenant);last_maintenance=datetime.utcnow()
+                    await database_call(store,finalize_silent,store,tenant,stop)
                 except Exception as exc:
-                    print(json.dumps({'component':'profile-learning','state':'unavailable','kind':type(exc).__name__}),flush=True);worked=False
-                await asyncio.sleep(1 if worked else 30)
+                    print(json.dumps({'component':'profile-learning','state':'maintenance-deferred','kind':type(exc).__name__}),flush=True)
+                await asyncio.sleep(1)
         finally:
+            # Finish acquired jobs and their receipts before database shutdown.
+            stop.set()
+            await asyncio.gather(*tasks)
             from db.engine import engine
             await engine.dispose()
     try: asyncio.run(run())
@@ -441,3 +463,4 @@ def main():
 
 
 if __name__=='__main__': main()
+

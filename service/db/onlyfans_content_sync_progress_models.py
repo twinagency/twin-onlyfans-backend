@@ -86,7 +86,7 @@ class OfContentSyncOccurrence(Base):
 class OfProviderReadBudget(Base):
     __tablename__ = "of_provider_read_budget"
     __table_args__ = (
-        CheckConstraint("tokens >= 0 AND tokens <= 10", name="tokens"),
+        CheckConstraint("tokens >= 0 AND tokens <= 64", name="tokens"),
         CheckConstraint("(lease_token IS NULL) = (lease_until IS NULL)", name="lease"),
         {"info": INFO},
     )
@@ -98,4 +98,22 @@ class OfProviderReadBudget(Base):
     tokens = Column(Integer, nullable=False, default=10)
     refilled_at = Column(DateTime, nullable=False)
     backoff_until = Column(DateTime)
+    rate_ceiling = Column(Integer, info={"onlyfans_since":"0105_parallel_history_reads"})
+    rate_recover_at = Column(DateTime, info={"onlyfans_since":"0105_parallel_history_reads"})
     last_kind = Column(String(32))
+
+
+
+class OfProviderReadLease(Base):
+    """Independent read leases, serialized by the existing account budget row."""
+    __tablename__ = 'of_provider_read_lease'
+    __table_args__ = (
+        Index('ix_of_provider_read_lease_account_until', 'account_id', 'lease_until'),
+        {'info': {'onlyfans_since': '0105_parallel_history_reads'}},
+    )
+    token = Column(String(36), primary_key=True)
+    account_id = Column(String, ForeignKey('of_runtime.account_id', ondelete='RESTRICT'), nullable=False)
+    binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
+    connection_revision = Column(Integer, nullable=False)
+    kind = Column(String(32), nullable=False)
+    lease_until = Column(DateTime, nullable=False)

@@ -56,6 +56,7 @@ class OfHistoryCursor(RecoveryBase):
     __tablename__ = "of_launch_history_cursor"
     __table_args__ = (
         CheckConstraint("status IN ('needed','running','complete')", name="status"),
+        CheckConstraint("page_limit >= 5 AND page_limit <= 100", name="page_limit", info={"onlyfans_since":"0105_parallel_history_reads"}),
         CheckConstraint("pages_completed >= 0 AND messages_observed >= 0 AND messages_added >= 0",
                         name="counts"),
         Index("ix_launch_history_cursor_due", "account_id", "status", "retry_at", "generation", "fan_id"),
@@ -71,6 +72,7 @@ class OfHistoryCursor(RecoveryBase):
     start_before_id = Column(BigInteger)
     upper_bound = Column(BigInteger)
     before_id = Column(BigInteger)
+    page_limit = Column(Integer, nullable=False, server_default=text("20"), info={"onlyfans_since":"0105_parallel_history_reads"})
     pages_completed = Column(Integer, nullable=False, server_default=text("0"))
     messages_observed = Column(BigInteger, nullable=False, server_default=text("0"))
     messages_added = Column(BigInteger, nullable=False, server_default=text("0"))
@@ -92,6 +94,7 @@ class ArchiveClaim:
     token: str
     before_id: int | None
     connection_revision: int | None = None
+    page_limit: int = 20
 
 
 @dataclass(frozen=True)
@@ -313,7 +316,7 @@ class HistoryRecovery:
             self._binding(row, runtime)
             self._lease(row, now)
             return ArchiveClaim(account_id, runtime.binding_id, row.fan_id, row.generation,
-                                row.lease_token, row.before_id, connection_revision)
+                                row.lease_token, row.before_id, connection_revision, row.page_limit)
 
     def page(self, tenant_id, claim, events, *, has_more, observations=(), provider_read_claim=None):
         if type(claim) is not ArchiveClaim:
@@ -402,6 +405,7 @@ class HistoryRecovery:
                 row.before_id = ids[-1]
                 oldest = min(datetime.fromisoformat(event.created_at).replace(tzinfo=None) for event in normalized)
                 row.oldest_message_at = min(row.oldest_message_at or oldest, oldest)
+            row.page_limit = min(PAGE_LIMIT, max(5, claim.page_limit) * 2)
             row.pages_completed += 1
             row.messages_observed += len(normalized)
             row.messages_added += added
@@ -409,7 +413,7 @@ class HistoryRecovery:
             self._release(row, status="needed" if has_more else "complete")
             return "continue" if has_more else "complete"
 
-    def fail(self, tenant_id, claim, *, code="provider_read_failed", retry_at=None):
+    def fail(self, tenant_id, claim, *, code="provider_read_failed", retry_at=None, oversized=False):
         """Persist bounded retry metadata; never store provider error text/PII."""
         if type(claim) not in {ArchiveClaim, ArchiveScanClaim} or code not in ERROR_CODES:
             raise Refused("invalid historical failure")
@@ -418,6 +422,8 @@ class HistoryRecovery:
         with Session(self.store.engine) as session, session.begin():
             runtime = self._runtime(session, tenant_id, claim.account_id, claim.connection_revision)
             row = self._check_claim(session, runtime, claim)
+            if oversized and type(claim) is ArchiveClaim:
+                row.page_limit = max(5, claim.page_limit // 2)
             self._release(row, error=code)
             if retry_at is not None:
                 row.retry_at = max(row.retry_at, min(retry_at, utcnow() + timedelta(hours=1)))
@@ -497,7 +503,7 @@ class HistoryRecovery:
                     "completedAt": row.completed_at.isoformat() + "Z" if row and row.completed_at else None})
             return result
 
-    def step(self, tenant_id, account_id, reader, *, connection_revision=None):
+    def step(self, tenant_id, account_id, reader, *, connection_revision=None, archive_only=False):
         """Run after the live-input drain, with at most two injected reads.
 
         Caller coordinates provider scheduling with Claude's shared worker.
@@ -513,7 +519,7 @@ class HistoryRecovery:
         # Acquire provider capacity before consuming a fan's queue turn. A busy
         # reader must not increment generation and send this fan to the back of
         # tens of thousands of histories without reading a single message.
-        for discovery in (True, False):
+        for discovery in ((False,) if archive_only else (True, False)):
             budget = error = claim = None
             try:
                 budget = _provider_claim(self.store, tenant_id, account_id, reader,
@@ -524,10 +530,11 @@ class HistoryRecovery:
                     continue
                 try:
                     page = (reader.chats(cursor=claim.cursor, limit=PAGE_LIMIT) if discovery else
-                            reader.messages(fan_id=claim.fan_id, before_id=claim.before_id, limit=20))
+                            reader.messages(fan_id=claim.fan_id, before_id=claim.before_id, limit=claim.page_limit))
                 except Exception as failure:
                     self.fail(tenant_id, claim, code=failure_code(failure),
-                        retry_at=utcnow() + timedelta(seconds=getattr(failure, 'retry_after', RETRY_SECONDS)))
+                        retry_at=utcnow() + timedelta(seconds=getattr(failure, 'retry_after', RETRY_SECONDS)),
+                        oversized=str(failure) == 'native HTTPS response exceeded its byte budget')
                     raise
                 try:
                     fenced = {'provider_read_claim': budget} if budget is not None else {}
@@ -557,3 +564,4 @@ class HistoryRecovery:
         if scan_error is not None:
             raise scan_error
         return completed
+

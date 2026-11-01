@@ -305,6 +305,10 @@ def main(argv=None):
             from onlyfans_runtime.ledger_worker import LedgerWorker
             ledger_worker = LedgerWorker(store, tenant, stop, observe=_emit)
             ledger_worker.start()
+            # Provider-reported period totals so the Today cards load without waiting for the full history import.
+            if os.environ.get("ONLYFANS_EARNINGS_TOTALS_ENABLED", "1") == "1":
+                from onlyfans_runtime.earnings_totals import EarningsTotalsWorker
+                EarningsTotalsWorker(Store(url, pool_size=2), tenant, stop, observe=_emit).start()
         # Live incoming messages must not wait for archive, media, ledger or AI.
         # This independent lane discovers current/future verified accounts and
         # imports paused accounts without activating any conversation or sender.

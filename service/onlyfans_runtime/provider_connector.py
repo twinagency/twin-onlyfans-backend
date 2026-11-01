@@ -236,7 +236,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
             raise Refused("invalid native HTTPS target")
         # Only the narrow read and send paths used by this connector are legal.
         if method == "GET":
-            allowed = target.path in {API_PATH + "/users/me", API_PATH + "/chats", API_PATH + "/vault/media", API_PATH + "/payouts/transactions"} or re.fullmatch(
+            allowed = target.path in {API_PATH + "/users/me", API_PATH + "/chats", API_PATH + "/vault/media", API_PATH + "/payouts/transactions", API_PATH + "/earnings/chart"} or re.fullmatch(
                 re.escape(API_PATH) + r"/chats/[1-9][0-9]*/messages", target.path)
             if not allowed or body:
                 raise Refused("unsupported native HTTPS read")
@@ -451,6 +451,17 @@ class NativeProviderConnector(NativeLoopbackConnector):
         self.verify_identity()
         path = API_PATH + "/payouts/transactions?" + urlencode(params)
         return self._call("GET", path)
+
+    def earnings_chart(self, *, start, end):
+        """The creator's own Statistics > Earnings totals for one frozen UTC window (one read, no retries)."""
+        self._ready()
+        if (type(start) is not datetime or type(end) is not datetime or start.tzinfo is not None or end.tzinfo is not None
+                or start < datetime(2010, 1, 1) or not timedelta(0) < end - start <= timedelta(days=60000)):
+            raise Refused("invalid bounded native earnings window")
+        params = {"startDate": start.strftime("%Y-%m-%d %H:%M:%S"), "endDate": end.strftime("%Y-%m-%d %H:%M:%S"),
+                  "withTotal": "true", "filter[total_amount]": "total_amount"}
+        self.verify_identity()
+        return self._call("GET", API_PATH + "/earnings/chart?" + urlencode(params))
 
     def send(self, dispatch, *, authority, tenant_id):
         self._ready()

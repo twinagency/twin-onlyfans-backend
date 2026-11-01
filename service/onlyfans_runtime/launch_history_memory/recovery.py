@@ -56,7 +56,7 @@ class OfHistoryCursor(RecoveryBase):
     __tablename__ = "of_launch_history_cursor"
     __table_args__ = (
         CheckConstraint("status IN ('needed','running','complete')", name="status"),
-        CheckConstraint("page_limit >= 5 AND page_limit <= 100", name="page_limit", info={"onlyfans_since":"0105_parallel_history_reads"}),
+        CheckConstraint("page_limit >= 5 AND page_limit <= 100", name="page_limit", info={"onlyfans_since":"0106_parallel_history_reads"}),
         CheckConstraint("pages_completed >= 0 AND messages_observed >= 0 AND messages_added >= 0",
                         name="counts"),
         Index("ix_launch_history_cursor_due", "account_id", "status", "retry_at", "generation", "fan_id"),
@@ -72,7 +72,7 @@ class OfHistoryCursor(RecoveryBase):
     start_before_id = Column(BigInteger)
     upper_bound = Column(BigInteger)
     before_id = Column(BigInteger)
-    page_limit = Column(Integer, nullable=False, server_default=text("20"), info={"onlyfans_since":"0105_parallel_history_reads"})
+    page_limit = Column(Integer, nullable=False, server_default=text("20"), info={"onlyfans_since":"0106_parallel_history_reads"})
     pages_completed = Column(Integer, nullable=False, server_default=text("0"))
     messages_observed = Column(BigInteger, nullable=False, server_default=text("0"))
     messages_added = Column(BigInteger, nullable=False, server_default=text("0"))

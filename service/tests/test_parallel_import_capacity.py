@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from db.models import Account, OfCreatorBinding
+from db.models import Account, OfCreatorBinding, Base
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_content_sync_progress_models import OfProviderReadBudget, OfProviderReadLease
@@ -182,14 +182,14 @@ def test_postgresql_migration_roundtrip_preserves_cursors(store):
         c.exec_driver_sql('ALTER TABLE of_launch_history_cursor DROP COLUMN page_limit')
         c.exec_driver_sql('ALTER TABLE of_provider_read_budget DROP CONSTRAINT ck_of_provider_read_budget_tokens')
         c.exec_driver_sql('ALTER TABLE of_provider_read_budget ADD CONSTRAINT ck_of_provider_read_budget_tokens CHECK(tokens BETWEEN 0 AND 10)')
-        with Operations.context(MigrationContext.configure(c)):
+        with Operations.context(MigrationContext.configure(c, opts={"target_metadata": Base.metadata})):
             module.upgrade()
     claim=acquire(s,a)
     assert budget.current(s,'tenant',claim)
     with s.engine.begin() as c:
-        with Operations.context(MigrationContext.configure(c)):
+        with Operations.context(MigrationContext.configure(c, opts={"target_metadata": Base.metadata})):
             with pytest.raises(RuntimeError,match='Drain'):module.downgrade()
     budget.release(s,'tenant',claim)
     with s.engine.begin() as c:
-        with Operations.context(MigrationContext.configure(c)):
+        with Operations.context(MigrationContext.configure(c, opts={"target_metadata": Base.metadata})):
             module.downgrade()

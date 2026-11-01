@@ -98,8 +98,8 @@ class OfProviderReadBudget(Base):
     tokens = Column(Integer, nullable=False, default=10)
     refilled_at = Column(DateTime, nullable=False)
     backoff_until = Column(DateTime)
-    rate_ceiling = Column(Integer, info={"onlyfans_since":"0105_parallel_history_reads"})
-    rate_recover_at = Column(DateTime, info={"onlyfans_since":"0105_parallel_history_reads"})
+    rate_ceiling = Column(Integer, info={"onlyfans_since":"0106_parallel_history_reads"})
+    rate_recover_at = Column(DateTime, info={"onlyfans_since":"0106_parallel_history_reads"})
     last_kind = Column(String(32))
 
 
@@ -109,7 +109,7 @@ class OfProviderReadLease(Base):
     __tablename__ = 'of_provider_read_lease'
     __table_args__ = (
         Index('ix_of_provider_read_lease_account_until', 'account_id', 'lease_until'),
-        {'info': {'onlyfans_since': '0105_parallel_history_reads'}},
+        {'info': {'onlyfans_since': '0106_parallel_history_reads'}},
     )
     token = Column(String(36), primary_key=True)
     account_id = Column(String, ForeignKey('of_runtime.account_id', ondelete='RESTRICT'), nullable=False)

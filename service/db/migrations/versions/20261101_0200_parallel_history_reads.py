@@ -2,8 +2,8 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = '0105_parallel_history_reads'
-down_revision = '0104_contextual_item_scope'
+revision = '0106_parallel_history_reads'
+down_revision = '0105_earnings_totals'
 branch_labels = depends_on = None
 
 
@@ -11,9 +11,9 @@ def upgrade():
     op.add_column('of_provider_read_budget', sa.Column('rate_ceiling', sa.Integer()))
     op.add_column('of_provider_read_budget', sa.Column('rate_recover_at', sa.DateTime()))
     op.add_column('of_launch_history_cursor', sa.Column('page_limit', sa.Integer(), nullable=False, server_default='20'))
-    op.create_check_constraint('ck_of_launch_history_cursor_page_limit', 'of_launch_history_cursor', 'page_limit >= 5 AND page_limit <= 100')
-    op.drop_constraint('ck_of_provider_read_budget_tokens', 'of_provider_read_budget', type_='check')
-    op.create_check_constraint('ck_of_provider_read_budget_tokens', 'of_provider_read_budget', 'tokens >= 0 AND tokens <= 64')
+    op.create_check_constraint(op.f('ck_of_launch_history_cursor_page_limit'), 'of_launch_history_cursor', 'page_limit >= 5 AND page_limit <= 100')
+    op.drop_constraint(op.f('ck_of_provider_read_budget_tokens'), 'of_provider_read_budget', type_='check')
+    op.create_check_constraint(op.f('ck_of_provider_read_budget_tokens'), 'of_provider_read_budget', 'tokens >= 0 AND tokens <= 64')
     op.create_table('of_provider_read_lease',
         sa.Column('token', sa.String(36), primary_key=True),
         sa.Column('account_id', sa.String(), sa.ForeignKey('of_runtime.account_id', ondelete='RESTRICT'), nullable=False),
@@ -31,8 +31,8 @@ def downgrade():
     op.drop_table('of_provider_read_lease')
     op.drop_column('of_provider_read_budget', 'rate_ceiling')
     op.drop_column('of_provider_read_budget', 'rate_recover_at')
-    op.drop_constraint('ck_of_launch_history_cursor_page_limit', 'of_launch_history_cursor', type_='check')
+    op.drop_constraint(op.f('ck_of_launch_history_cursor_page_limit'), 'of_launch_history_cursor', type_='check')
     op.drop_column('of_launch_history_cursor', 'page_limit')
     op.execute('UPDATE of_provider_read_budget SET tokens=LEAST(tokens,10)')
-    op.drop_constraint('ck_of_provider_read_budget_tokens', 'of_provider_read_budget', type_='check')
-    op.create_check_constraint('ck_of_provider_read_budget_tokens', 'of_provider_read_budget', 'tokens >= 0 AND tokens <= 10')
+    op.drop_constraint(op.f('ck_of_provider_read_budget_tokens'), 'of_provider_read_budget', type_='check')
+    op.create_check_constraint(op.f('ck_of_provider_read_budget_tokens'), 'of_provider_read_budget', 'tokens >= 0 AND tokens <= 10')

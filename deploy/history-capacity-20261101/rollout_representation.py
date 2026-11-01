@@ -37,8 +37,11 @@ try:
  assert env(after)==env(before),'Environment changed'
  for key in ['Cmd','Entrypoint','User','WorkingDir']:
   assert after['Config'].get(key)==before['Config'].get(key),key
- for key in ['NetworkMode','RestartPolicy','Memory','NanoCpus','Binds']:
+ for key in ['NetworkMode','RestartPolicy','Memory','NanoCpus']:
   assert after['HostConfig'].get(key)==before['HostConfig'].get(key),key
+ assert sorted(after['HostConfig'].get('Binds') or [])==sorted(before['HostConfig'].get('Binds') or []),'Mount values changed'
+ mounts=lambda d:sorted((m['Type'],m['Source'],m['Destination'],m['RW']) for m in d['Mounts'])
+ assert mounts(after)==mounts(before),'Effective mounts changed'
  for rel in ['onlyfans_runtime/native_worker.py','onlyfans_runtime/launch_history_memory/recovery.py']:
   raw=run(['docker','exec',NAME,'cat','/app/service/'+rel])
   assert raw==(ROOT/'service'/rel).read_text(),'Source mismatch'

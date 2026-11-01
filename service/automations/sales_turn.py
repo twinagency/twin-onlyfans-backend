@@ -29,10 +29,11 @@ def active(cfg) -> bool:
     return contextual_mode(cfg or {}) in ("shadow", "live")
 
 
-async def ready_shelf(lane, fan_id: int) -> set[int]:
+async def ready_shelf(lane, fan_id: int, session=None) -> set[int]:
+    """``session`` lets a caller keep its own session factory (contextual_offers passes its module-level one)."""
     from .product_readiness import ready_ids
     from . import pack_sender
-    async with get_session() as s:
+    async with (session or get_session)() as s:
         rows = (await s.execute(select(VaultItem).where(
             VaultItem.account_id == lane.account_id, VaultItem.removed_at.is_(None),
             VaultItem.search_text.is_not(None), VaultItem.search_text != "")
@@ -44,10 +45,14 @@ async def ready_shelf(lane, fan_id: int) -> set[int]:
 
 
 async def counts(account_id: str, fan_id: int) -> Counts:
-    async with get_session() as s:
-        rows = (await s.execute(select(Message.direction, Message.price_cents, Message.body).where(
-            Message.account_id == str(account_id), Message.fan_id == int(fan_id), Message.is_unsent.is_(False))
-            .order_by(Message.message_id.desc()).limit(_WINDOW))).all()
+    """Best effort: a failed read is zero turns (no pacing pressure), never an error in the reply path."""
+    try:
+        async with get_session() as s:
+            rows = (await s.execute(select(Message.direction, Message.price_cents, Message.body).where(
+                Message.account_id == str(account_id), Message.fan_id == int(fan_id), Message.is_unsent.is_(False))
+                .order_by(Message.message_id.desc()).limit(_WINDOW))).all()
+    except Exception:
+        return Counts(0, 0, False)
     return count_since_last_card([(d, bool(p and p > 0 and d == "out"), b) for d, p, b in reversed(rows)])
 
 

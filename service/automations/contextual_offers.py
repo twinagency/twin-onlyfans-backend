@@ -113,7 +113,7 @@ async def _plan_contextual(lane, authority, candidate, fan, *, blocked=False, vo
         # Product readiness (not "search_text is non-empty": the import writes the bare kind word) decides whether
         # the account has anything it may offer before a relevance read is paid for.
         from . import pack_sender, sales_turn
-        shelf = await sales_turn.ready_shelf(lane, fan.fan_id)
+        shelf = await sales_turn.ready_shelf(lane, fan.fan_id, session=get_session)
         available = bool(shelf)
         if not available:
             authority.emit({"event":"contextual-decision","action":"chat","reason":"no_supported_shelf",

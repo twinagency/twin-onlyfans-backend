@@ -150,10 +150,13 @@ async def settle(account_id: str, fan_id: int) -> None:
 async def history(account_id: str, fan_id: int, media_ids=()) -> dict:
     """Recent invitation state for the planner: do not chase the same ignored/declined invitation."""
     want = {int(m) for m in media_ids}
-    async with get_session() as s:
-        rows = (await s.execute(select(OfSalesInvitation).where(
-            OfSalesInvitation.account_id == str(account_id), OfSalesInvitation.fan_id == int(fan_id))
-            .order_by(OfSalesInvitation.created_at.desc()).limit(20))).scalars().all()
+    try:
+        async with get_session() as s:
+            rows = (await s.execute(select(OfSalesInvitation).where(
+                OfSalesInvitation.account_id == str(account_id), OfSalesInvitation.fan_id == int(fan_id))
+                .order_by(OfSalesInvitation.created_at.desc()).limit(20))).scalars().all()
+    except Exception:
+        return {"open": 0, "ignored_same_item": False, "declined_same_item": False, "recent_total": 0}
     same = [r for r in rows if want and want & set(json.loads(r.media_ids_json))]
     return {"open": sum(r.state == OPEN for r in rows),
             "ignored_same_item": any(r.state == "ignored" for r in same),

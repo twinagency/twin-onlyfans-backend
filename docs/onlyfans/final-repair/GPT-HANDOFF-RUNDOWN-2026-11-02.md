@@ -88,3 +88,8 @@ What it is (`service/moxy_workflow/`):
 3. Check R4 shelf risk against live vault rows (read-only).
 4. Write R9 package; get D1/D4 from Ronan; run the real-model eval and score independently.
 5. Moxy: get the missing vault data, run shadow beside the current chat, compare, then decide on live.
+
+## 7. Other work this session (not in this repo)
+- SFW clone photos: Ronan asked for 3 safe-for-work photos per active clone in `~/Desktop/claudepic/<name>/`. Done for amber, brooke, riley, sania, johnnycoco (3 each); short: fitsid 2, dandangler 2, dreka 1, katie 1, kyla 1; none verified for Alanna, Allison, Autumn, Briana, Hazey, Mrs Callace, Olivia, Toochi, trashy, Zoey. Bri, Cat, Dakota, Tamara, Tru Kait were already supplied by Ronan. Finding: the photos table `is_nude`/`nsfw` flags are unreliable (many "non-nude" rows are explicit), so every kept image was checked by eye. Fix needed: reliable image safety labelling in the vault/analysis pipeline.
+- Moxy real configs (Cristina, Amelia, base playbook, README of blanks, sample runs) are in `~/Desktop/moxy-engine-config/` (copied from `~/twin/moxy-workflows/engine-config/`). They hold real creator details: do not commit them to this public repo.
+- Eval harness synthetic run output is in `~/twin/of-texting-handoff-2026-11-01/build/eval/runs/` (real ids: keep out of repo).

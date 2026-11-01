@@ -284,6 +284,8 @@ class SellResult:
     # had to re-derive it from the offer table. None on every refusal, and on a
     # dry run — nothing was sent, so there is no id to record.
     message_id: int | None = None
+    # The refusal's own detail (e.g. the id of the card that is already pending). "" when none.
+    detail: str = ""
 
     def __bool__(self) -> bool:
         return self.sold
@@ -298,7 +300,8 @@ class SellResult:
                    reason=str(res.get("reason") or res.get("status") or ""),
                    n=res.get("n"), price_cents=res.get("price_cents"),
                    category=res.get("category"),
-                   message_id=res.get("message_id"))
+                   message_id=res.get("message_id"),
+                   detail=str(res.get("detail") or ""))
 
 
 @dataclasses.dataclass(frozen=True)

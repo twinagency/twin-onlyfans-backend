@@ -413,7 +413,7 @@ async def _descriptions(account_id: str, media_ids: list[int]) -> list[tuple[int
 
 
 async def answer_line(account_id: str, fan_id: int, his_words: str,
-                      f: Fan | None = None) -> str:
+                      f: Fan | None = None, *, complete_answers: bool | None = None) -> str:
     """One short line answering HIS last message, for the voice half of a
     caption. "" when there is nothing usable to say.
 
@@ -441,8 +441,12 @@ async def answer_line(account_id: str, fan_id: int, his_words: str,
     try:
         model = await resolve_model(str(account_id), "content_resolver")
         voice = await load_voice_blocks(str(account_id))
+        if complete_answers is None:
+            # OnlyFans complete-answers scope (the native_reply_format capability): no least-words governor.
+            from telegram_runtime.capabilities import active_telegram_capabilities
+            complete_answers = getattr(active_telegram_capabilities(), "complete_answers", False) is True
         return await _answer_line(str(account_id), int(fan_id), words,
-                                  voice.painful_texting, model,
+                                  "" if complete_answers else voice.painful_texting, model,
                                   f=f, speaker=voice.voice)
     except Exception:  # noqa: BLE001
         log.warning("answer_line failed account=%s fan=%s", account_id, fan_id,

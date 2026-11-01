@@ -37,9 +37,14 @@ def test_format_changes_only_ordinary_scope():
     assert 'YOUR GOAL THIS MESSAGE: find out ONE' not in system
     assert 'Approved creator voice.' in system
     assert 'Ask for clarification only if it is needed' in system
-    # Transactional/required special-turn directions retain the original prompt.
+    # CONTRACT CHANGE (R2, documented in build/R2-REPORT.md): the switch now covers every route. Special turns keep
+    # their own mechanics (the beat), but gain the shared complete-answer rule and lose their brevity wording.
+    # With the switch OFF they are still byte-identical to baseline (test_r2_complete_answers.py pins that).
     for kind in (chat._TURN_CONTENT_ASK,chat._TURN_PIC_OFFER,chat._TURN_HOOK_UPSELL):
-        assert prompt(kind=kind)==prompt(kind=kind,reply_format=True)
+        off=prompt(kind=kind)[0][0]['content']
+        on=prompt(kind=kind,reply_format=True)[0][0]['content']
+        assert off!=on and 'ANSWER FIRST' in on and 'ANSWER FIRST' not in off
+        assert 'LEAST you can' not in on
 
 
 @pytest.mark.parametrize('reply',[

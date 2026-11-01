@@ -1,0 +1,132 @@
+{
+  "scope": "Read-only worker source hashes and authorised repository blob availability; no production source contents exported",
+  "deployed_worker_image": "sha256:f728669d70d9fcb89e34ced38e7efe808311293d0b175422b004a46114284fe5",
+  "labelled_base_commit": "17211a67906d32465209482ed6820545c8ceeff6",
+  "deployed_schema": "0106_parallel_history_reads",
+  "normalised_base_matches": 548,
+  "overlays": 24,
+  "repository_available": 19,
+  "repository_unavailable": 5,
+  "files": [
+    {
+      "path": "service/db/migrations/versions/20261101_0200_earnings_totals.py",
+      "normalised_git_blob": "26fe318fed720a9f67a33f5b6fbd4c2349e33215",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/db/migrations/versions/20261101_0200_parallel_history_reads.py",
+      "normalised_git_blob": "4b6b2ecab2c5a3d5db704e692162755fb616dea6",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/db/onlyfans_content_sync_progress_models.py",
+      "normalised_git_blob": "9ed8b789810176aa23aefd55f770651bd701a983",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/db/onlyfans_earnings_total_models.py",
+      "normalised_git_blob": "aa51dd4282b5e4f7c8f2aaceb1fb80ac3517d30b",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/db/schema.py",
+      "normalised_git_blob": "eee4a60b26ea82523ea15e87d539d2a93b3fd9a3",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/native_pilot/budget.py",
+      "normalised_git_blob": "6e4618d1f2cb08abf73a2b7eea7c3ca08ac1a13d",
+      "status": "not_available"
+    },
+    {
+      "path": "service/onlyfans_read/earnings.py",
+      "normalised_git_blob": "27cb1d895a1650dae67993ce22b9c162abf6b4f5",
+      "status": "not_available"
+    },
+    {
+      "path": "service/onlyfans_runtime/connections.py",
+      "normalised_git_blob": "1d226109fbaa6c1e7377874e1697b0cd6e6c9c17",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/earnings_totals.py",
+      "normalised_git_blob": "7d48c1db9829dd1c872f409f2514d25486e9a1c1",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/launch_history_memory/recovery.py",
+      "normalised_git_blob": "4e7ea9cb41d1c3de07563f26766b1a6bd2a65deb",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/offer_import_worker.py",
+      "normalised_git_blob": "c6931f143e8b990cf3d816dbc4615712e0d9945f",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/offer_post_source.py",
+      "normalised_git_blob": "308c33f841b69ba4f4490985d90bf823b264dbc7",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/profile_learning/accounting.py",
+      "normalised_git_blob": "aa9d215f60592ac9a7d95ec216a6acfb222f5cb2",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/profile_learning/evidence.py",
+      "normalised_git_blob": "b56b9dac61d523b53f39cf93f36b45da0a57b9cf",
+      "status": "not_available"
+    },
+    {
+      "path": "service/onlyfans_runtime/profile_learning/model.py",
+      "normalised_git_blob": "778f078ee0a5d4379f1cb62e2da63b572544d1ae",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/profile_learning/repair.py",
+      "normalised_git_blob": "9aa88605632aea559540e9ce9ba59b878ff79e9c",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/profile_learning/storage.py",
+      "normalised_git_blob": "50d1d25a8bc03549a22517574fba8498a99b35ec",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/profile_learning/worker.py",
+      "normalised_git_blob": "44f2d24e74adf31e5013013b6a7e9be09127251f",
+      "status": "not_available"
+    },
+    {
+      "path": "service/onlyfans_runtime/provider_connector.py",
+      "normalised_git_blob": "6c0d2dc5ee477435f0843181ebfc81caf57283db",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/provider_read_budget.py",
+      "normalised_git_blob": "7b1381b7cb9a2e1926391cd2a6ad7636585ab870",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/recent_inbox.py",
+      "normalised_git_blob": "921e18f872d45e8860cc11ab5f9e2c47c593baba",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/vault_preview_worker.py",
+      "normalised_git_blob": "db5ee5374db5162de9e828c2eaaa6b6864e21df4",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_runtime/worker.py",
+      "normalised_git_blob": "41ded8b5cf4edf4883094416eb6a0c1973d2545f",
+      "status": "available_in_authorized_repository"
+    },
+    {
+      "path": "service/onlyfans_worker.py",
+      "normalised_git_blob": "efe744bb11c737bb33b2a2071401a3fbb2d5e324",
+      "status": "not_available"
+    }
+  ]
+}

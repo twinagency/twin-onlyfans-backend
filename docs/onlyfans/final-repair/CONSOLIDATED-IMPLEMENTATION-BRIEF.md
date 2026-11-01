@@ -98,6 +98,8 @@ Classify promotional/business intent from current evidence, not creator identity
 
 Measure from earliest unanswered qualifying fan input to substantive response. Filler does not reset latency. Preserve oldest-need-first scheduling, cancellation recovery and existing bounded concurrency/leases. Test bursts, multiple creators, multi-bubble/media responses, restarts, 429s and uncertainty. The target of at least 95% of eligible turns within 180 seconds must be tied to a declared measured load. SQLite/synthetic results are not a production capacity guarantee.
 
+Recovered original acceptance detail: preserve configured ordinary timing of 25 seconds to 3 minutes during availability, without adding another artificial wait to overdue work or urgent handovers. Include 100 simultaneous fans on one creator, several active creators, a simulated 50-creator roster, backlogs, authentication failure and competing manual/campaign activity. Compare gap and concurrent modes before proposing a production switch. These are retained original requirements from revision 2 of the supplied consolidated execution brief, not newly expanded scope.
+
 ## R9: release and supervised pilot gates
 
 Offline regressions, adversarial transitions and full PostgreSQL checks precede release. New decisions begin in shadow only after separate operational approval. Retain the original two approved real-account delivery checks: exact assets, price, provider receipt and successful unlock. Then an explicitly approved, staffed single-creator pilot and creator-by-creator expansion.

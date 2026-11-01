@@ -53,7 +53,9 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
-          ref: d6811b124928f8167e6625ce9db5db81bf227fad
+          # Verified read-only API recovery source for the candidate's 0108
+          # schema. The older d6811b1 API rejects this revision at startup.
+          ref: fceb624b814435f36be33d0938c3a5b46494a8e5
           path: compatible-rollback
           persist-credentials: false
       - uses: actions/setup-python@v5

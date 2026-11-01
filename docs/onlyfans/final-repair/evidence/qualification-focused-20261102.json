@@ -1,0 +1,82 @@
+{
+  "candidate_commit": "546518171972784264908344ba5f9d0c6ea49993",
+  "whole_release_qualified": false,
+  "note": "Focused results only. Per-record source scopes are authoritative. The broad PostgreSQL run is incomplete and uses the preceding fceb624 snapshot.",
+  "focused": {
+    "native-service-scheduler-full.json": {
+      "base_commit": "79c124fda586977585f15333842cef7992af19a6",
+      "additional_change": "hold precheck before assigning a preparation slot",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "service/tests/test_native_pilot_service_pg.py"
+      ],
+      "returncode": 0,
+      "seconds": 316.8279999999795,
+      "sha256": {
+        "service/native_pilot/service.py": "72ddf88a826ca0e3ae01b946608964e6117dc390ed07c26b0a59117a6cdd4611",
+        "service/native_pilot/runner.py": "06b86129e54cf8b552178235e8a3c5939499ac84bc6e57dc7065496e11643c83",
+        "service/tests/test_native_pilot_service.py": "d617f169ee157636f9583865fe1ff70f8b85f68874055ba59dd91b90ea83416d"
+      },
+      "unchanged": true
+    },
+    "historical-and-prerequisites.json": [
+      {
+        "name": "historical-third",
+        "source": "fceb624 plus 0106 metadata and fixture repairs",
+        "command": [
+          "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+          "-m",
+          "pytest",
+          "-q",
+          "--tb=short",
+          "--basetemp=C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\repair-evidence\\historical-third-tmp",
+          "service/tests/test_onlyfans_live_controls_compat_pg.py",
+          "service/tests/test_onlyfans_foundation_pg.py::test_read_fairness_columns_remain_required_at_head"
+        ],
+        "returncode": 0,
+        "seconds": 229.7970000000205
+      },
+      {
+        "name": "frozen-ledger-date",
+        "source": "fceb624 exact Git snapshot",
+        "command": [
+          "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+          "-m",
+          "pytest",
+          "-q",
+          "--tb=short",
+          "service/tests/test_ledger_date_filters.py"
+        ],
+        "returncode": 0,
+        "seconds": 53.125
+      },
+      {
+        "name": "frozen-windows-runner",
+        "source": "fceb624 exact Git snapshot",
+        "command": [
+          "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+          "service/tests/test_twin_bridge_runner.py"
+        ],
+        "returncode": 0,
+        "seconds": 3.75
+      }
+    ],
+    "rollback-fceb.json": {
+      "candidate_commit": "546518171972784264908344ba5f9d0c6ea49993",
+      "rollback_source": "fceb624b814435f36be33d0938c3a5b46494a8e5",
+      "scope": "read-only API; all commands/background writers closed; existing preservation and account isolation assertions unchanged",
+      "historical_d681_remains_incompatible": true,
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "--basetemp=C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\repair-evidence\\rollback-fceb-tmp",
+        "service/tests/test_onlyfans_release_package_pg.py::test_schema_compatible_rollback_preserves_evidence_with_commands_closed"
+      ],
+      "returncode": 0,
+      "seconds": 57.85999999998603
+    }
+  }
+}

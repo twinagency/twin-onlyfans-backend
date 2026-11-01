@@ -1,0 +1,29 @@
+{
+  "distinct_cases": 200,
+  "creators": 7,
+  "chats": 119,
+  "source_prefix_preserved": true,
+  "future_replies_excluded": true,
+  "named_incidents_included": {
+    "distress_drowning": 1,
+    "explicit_stop": 1,
+    "essentials": 1,
+    "consent_pain": 2,
+    "repeated_nickname": 1
+  },
+  "known_limitations": [
+    "No approved operational world-state",
+    "No actual model calls",
+    "No independent quality scores",
+    "No whole-page promotional labels",
+    "Runtime prompt context caps still apply"
+  ],
+  "file_sha256": "32b4d65534e9839b8a8fd225f48ab64f607ad13a2190ce600ea3a4e03007223f",
+  "case_route_evaluations": 240,
+  "generations_planned": 3,
+  "one_repair_allowance_per_generation": true,
+  "conservative_approximate_total_usd": 1.74,
+  "shared_budget_usd": 2,
+  "actual_model_calls": 0,
+  "cost_estimate_is_not_a_hard_guarantee": true
+}

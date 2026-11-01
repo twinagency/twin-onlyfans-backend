@@ -1,0 +1,33 @@
+{
+  "source_commit": "fceb624b814435f36be33d0938c3a5b46494a8e5",
+  "reason": "switch to exact candidate 5465181 after qualified historical-schema repairs",
+  "completed_modules": 48,
+  "statuses": {
+    "pass": 47,
+    "fail": 1,
+    "timeout": 0,
+    "blocked": 0
+  },
+  "stopped_coordinator_ids": [
+    18180,
+    10616
+  ],
+  "prior_modules_allowed_to_finish": [
+    {
+      "ProcessId": 2084,
+      "ParentProcessId": 18180
+    },
+    {
+      "ProcessId": 2884,
+      "ParentProcessId": 18180
+    },
+    {
+      "ProcessId": 10976,
+      "ParentProcessId": 18180
+    }
+  ],
+  "postgres_server_untouched": true,
+  "utc": "2026-11-01T21:44:34.759051+00:00",
+  "failed_module": "test_onlyfans_content_sync_delivery_pg.py",
+  "failure_disposition": "Windows symlink privilege prerequisite; keep the module failed until run on the appropriate platform"
+}

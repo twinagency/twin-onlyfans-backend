@@ -1,0 +1,231 @@
+{
+  "source_commit": "546518171972784264908344ba5f9d0c6ea49993",
+  "source_tree": "4a8326b3aa8b9f4c67609b5f2c3704128c468f28",
+  "snapshot_utc": "2026-11-01T22:09:02.415322+00:00",
+  "status": "IN PROGRESS; not a complete acceptance result",
+  "expected_postgres_modules": 139,
+  "counts": {
+    "pass": 29
+  },
+  "environment": {
+    "commit": "546518171972784264908344ba5f9d0c6ea49993",
+    "remote_head_at_download": "546518171972784264908344ba5f9d0c6ea49993",
+    "file_count": 1925,
+    "archive_sha256": "a04b854adaaf57fdfc1031dbe518db5cd95ea90f391693728ee80e216c5431ba",
+    "all_blob_hashes_verified": true,
+    "directory": "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181",
+    "git_tree": "4a8326b3aa8b9f4c67609b5f2c3704128c468f28",
+    "started_utc": "2026-11-01T21:49:02.336959+00:00",
+    "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+    "pg": "PostgreSQL 16.15 task-owned loopback cluster",
+    "module_parallelism": 3,
+    "timing_modules": "sequential after ordinary modules",
+    "applicable_platform": "Windows; Unix-only checks are failures with platform cause, not passes",
+    "whole_release_qualified": false
+  },
+  "results": [
+    {
+      "module": "test_automatic_vault_descriptions_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 64.66,
+      "source_sha256": "988e4b96c7aeb2197d5c3e43c77aa7253bdeac8dfbc27da0b831e60ceb6b3e3c"
+    },
+    {
+      "module": "test_contextual_release_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 34.09,
+      "source_sha256": "08f6d5939fbbe8606dff284b04e8132ca63cf56457018f7eaede61e8f4576a01"
+    },
+    {
+      "module": "test_conversation_holds_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 430.34,
+      "source_sha256": "a3927d9959a7078eca6bbfce083723738c2736d9756bc8280a9e20932aac3261"
+    },
+    {
+      "module": "test_crm_control_contract_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 42.27,
+      "source_sha256": "b06e443c2cd10e4815065d4671a9c055800a5e06a89c7f804adc5bdc6379804e"
+    },
+    {
+      "module": "test_crm_history_repair_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 27.8,
+      "source_sha256": "c2d670fd03235fb74efb7183abd8aece966cf2aaedacab6e070d63606369ccfa"
+    },
+    {
+      "module": "test_crm_read_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 33.81,
+      "source_sha256": "07940a1b3b24e14d9edeab57f5fb4e1b2122d6ceeb6ce48341c49b25a8b58338"
+    },
+    {
+      "module": "test_crm_resolution_jobs_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 45,
+      "source_sha256": "dfab442f0360230c5597978a00904527fc0580527826bcdd19a43f6314990657"
+    },
+    {
+      "module": "test_default_attention_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 63.06,
+      "source_sha256": "8a339429e3037128e60c8d2f7213bf0d6dc45e623e060e92b123fa63533d0659"
+    },
+    {
+      "module": "test_fastt_activation_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 43.28,
+      "source_sha256": "def7a67b5e33b116e783bc5babef7892426c24282e6465fdab40408b396dc7d2"
+    },
+    {
+      "module": "test_fastt_controls_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 136.16,
+      "source_sha256": "2719d42bd36ff665078806e89da955bf0429e116de11ca62d3b09450e149c532"
+    },
+    {
+      "module": "test_fastt_engine_v2_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 11.83,
+      "source_sha256": "6e5a138e0a046214b096ef419e7ab2c23960051030a504f40bfac77f03bb523d"
+    },
+    {
+      "module": "test_fastt_new_conversations_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 186.02,
+      "source_sha256": "41fd8d5cb6aea38bdfa471127e6baaf4d86c2e8016f7c1fa6032192d07fb89fd"
+    },
+    {
+      "module": "test_fastt_read_priority_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 32.59,
+      "source_sha256": "1fb5662f955db57d5f1700d91e05206552d284579e155d56fb4262e835a91f12"
+    },
+    {
+      "module": "test_fastt_scope_manual_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 29.59,
+      "source_sha256": "0826c8e3d8ae9f154bfdff027967482b169d4054baa9cc8d479690200c09e97c"
+    },
+    {
+      "module": "test_history_html_archive_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 32.86,
+      "source_sha256": "4da38a4b87c196fa449241e22631eeff38e3e3b2f53e3d8bfe26cad5c95f005e"
+    },
+    {
+      "module": "test_iso45_isolation_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 84.92,
+      "source_sha256": "4fb00d1b0d9f46d0fdbdf79ef24b9b0e55e2889484f5b68e3ae9fe71e1ce99a1"
+    },
+    {
+      "module": "test_iso45_roles_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 98.56,
+      "source_sha256": "d57165427966482815eb9cf7e1463b9769903a3b897f62dc2d94b275e28c606e"
+    },
+    {
+      "module": "test_ledger_read_fairness_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 103.22,
+      "source_sha256": "707ec6781e5ddca65d47c4c03a6bc60166436a7293289b4b103345b620b7ebd0"
+    },
+    {
+      "module": "test_manual_attachment_history_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 387.58,
+      "source_sha256": "4fe48249ce19f08736a545fa2bbaaf1c9613eef659968e87c5a878d75b916034"
+    },
+    {
+      "module": "test_manual_vault_composer_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 109.16,
+      "source_sha256": "4d2f011b489d8729b481ebbaf06923144c4564391ab15bf58499492d99413b02"
+    },
+    {
+      "module": "test_native_pilot_attribution_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 39.31,
+      "source_sha256": "1391daed7a0573ba521b42ab2f7e2a9f78542cb283b8365bf1f100e2ea7b26e4"
+    },
+    {
+      "module": "test_native_pilot_daily_allowance_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 9.17,
+      "source_sha256": "92ddaa0a3aba95f73f2263cc9944e89b0eb8ac647067df2c380a0eed7943c71e"
+    },
+    {
+      "module": "test_native_pilot_service_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 360.52,
+      "source_sha256": "65646a7aaf5ac457bf83d1631242f452e97bc902bcf4a226af3ec4b191a78cb7"
+    },
+    {
+      "module": "test_native_pilot_storage_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 53.48,
+      "source_sha256": "894d95dc8eb788f4b87c7a23d188c67606fe32885ab4ce62a2acf093593c1317"
+    },
+    {
+      "module": "test_onlyfans_activation_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 259.27,
+      "source_sha256": "35f300bef461c34cea8c93d203d158aa0d1a75b0aa148034ffd37bbccb1c71f7"
+    },
+    {
+      "module": "test_onlyfans_agency_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 73.41,
+      "source_sha256": "7d8791b4eada27ad1accc8d422dd23e9f798c06e1b4d2125bfec0d21a8370ab4"
+    },
+    {
+      "module": "test_onlyfans_automatic_imports_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 117.39,
+      "source_sha256": "22c468ef7eb2c3980c31013729dde1f23a19c9f7e717e807b83c224849c4844f"
+    },
+    {
+      "module": "test_onlyfans_bulk_controls_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 52.7,
+      "source_sha256": "020203f38bcd2a48591f73900901fef1a0b8b1af3ecf5adc3754d77d1017c5e1"
+    },
+    {
+      "module": "test_onlyfans_campaign_reporting_pg.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 72.98,
+      "source_sha256": "11d4ed43b7ba6165c138853f4e8c0565906ab754311fa5f013f61ef760c94d2f"
+    }
+  ]
+}

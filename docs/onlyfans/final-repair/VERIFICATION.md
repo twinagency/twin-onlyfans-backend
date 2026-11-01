@@ -1,6 +1,6 @@
 > Current continuation: [QUALIFICATION-CHECKPOINT-20261102.md](QUALIFICATION-CHECKPOINT-20261102.md). PostgreSQL testing and repairs are underway; earlier environment/coverage totals below are historical and superseded. Release qualification remains open.
 
-> Latest qualification continuation (2 November 2026): [QUALIFICATION-20261102.md](QUALIFICATION-20261102.md). The real bridge helper is now recovered and a fresh pinned local run is complete. PostgreSQL, matching sibling, Windows, real-model and production gates remain open. Earlier evidence below is retained as history.
+> Historical qualification continuation (superseded by the checkpoint above): [QUALIFICATION-20261102.md](QUALIFICATION-20261102.md). The real bridge helper is now recovered and a fresh pinned local run is complete. PostgreSQL, matching sibling, Windows, real-model and production gates remain open. Earlier evidence below is retained as history.
 
 # Verification and limitations
 

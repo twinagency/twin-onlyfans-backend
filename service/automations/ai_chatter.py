@@ -6512,6 +6512,66 @@ REPLY_FORMAT_INSTRUCTION = (
 )
 
 
+REPAIR_NOTE = ("Your previous draft was not usable ({why}). Write the reply again: answer everything he asked in his "
+               "unanswered messages, in his language, and do not repeat a pet name, challenge, sign-off, closing "
+               "question or get-to-know question you already used or that he already answered. Reply with the message only.")
+REPLY_HELD = "reply-repeats-held"
+
+
+def _draft_problems(text: str, c: "_Cand", f: Fan, kind: str) -> list[str]:
+    """Meaning-level problems of a complete-answers draft (see _move_repeat). Pure."""
+    from . import _move_repeat
+    clean = re.sub(r"(?m)^\s*(?:>>OFFER.*|STICKER:.*)$", "", text).strip()
+    recent_out = [b for d, b in c.messages if d == "out"]
+    given = None
+    try:
+        from native_pilot.fan_name import given_name
+        given = given_name([b for d, b in c.messages if d == "in"])
+    except Exception:
+        pass
+    known = _ca.known_topics(f, name=resolve_fan_name(f), given=given)
+    run = _ca.unanswered_run(c.messages)
+    tags = _move_repeat.problems(clean, recent_out, known=known, fan_name=(resolve_fan_name(f) or "").split("/")[0])
+    why = _move_repeat.incomplete(clean, run, kind=kind)
+    if why:
+        tags.append(why)
+    if _move_repeat.language_mismatch(" ".join(run), clean):
+        tags.append("language")
+    return tags
+
+
+async def _complete_repair(raw: str, msgs: list, *, c: "_Cand", f: Fan, kind: str, model, account_id: str,
+                           fan_id: int) -> str:
+    """ONE bounded regeneration for an unusable draft, then trim, then hold. Never a loop, never silent."""
+    from . import _move_repeat
+    tags = _draft_problems(raw, c, f, kind)
+    if not tags:
+        return raw
+    log.info("ai_chatter complete-answers draft problems=%s account=%s fan=%s", tags, account_id, fan_id)
+    best = raw
+    try:
+        res = await _runtime_chat(model=model, purpose=_PURPOSE, account_id=account_id, fan_id=fan_id,
+                                  temperature=_REPLY_TEMPERATURE,
+                                  messages=msgs + [{"role": "system", "content": REPAIR_NOTE.format(why=", ".join(tags))}])
+        again = (res.content or "").strip()
+        if again:
+            best, tags = again, _draft_problems(again, c, f, kind)
+    except LLMCapExceeded:
+        raise
+    except Exception:
+        log.warning("ai_chatter repair call failed account=%s fan=%s", account_id, fan_id, exc_info=True)
+    if not tags:
+        return best
+    if set(tags) <= _move_repeat.TRIM:
+        cut = _move_repeat.trim(best, tags)
+        if cut and not _draft_problems(cut, c, f, kind):
+            return cut
+    hold = getattr(active_telegram_capabilities(), "hold_reply", None)
+    if callable(hold):
+        hold(REPLY_HELD)       # raises: the runner surfaces the turn (requires_attention); nothing is dropped silently
+    return best
+
+
 def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
                     history_tail: int = _HISTORY_TAIL,
                     # Arm G's three transforms. Defaults to OFF, so every
@@ -9719,6 +9779,13 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 continue
 
             raw = (res.content or "").strip()
+            if cfg.get("_native_reply_format") is True and raw:
+                try:
+                    raw = await _complete_repair(raw, msgs, c=c, f=f, kind=kind, model=model,
+                                                 account_id=account_id, fan_id=fan_id)
+                except LLMCapExceeded:
+                    cap_hit = True
+                    break
             # Offer marker: parse + ALWAYS strip protocol lines, then validate
             # the id against the code-side manifest (price/terms come from the
             # catalog row — the model never sets them).

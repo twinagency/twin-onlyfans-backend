@@ -136,6 +136,9 @@ async def _draft(context, messages, model, timeout):
     from native_pilot.identity import discloses_ai
     if discloses_ai(text):
         raise Refused("identity disclosure held")
+    from native_pilot.media_claims import echoes_instruction
+    if echoes_instruction(text):
+        raise Refused("instruction text held")
     sale = memory.pop("sale", None)
     if sale is not None:
         from .native_sales import caption
@@ -158,6 +161,8 @@ async def _draft(context, messages, model, timeout):
             raise Refused("unbacked native media caption")
         if len(text.encode()) > 20000:
             raise Refused("native media caption exceeds its byte budget")
+        if echoes_instruction(text.replace(generated, "")):
+            raise Refused("instruction text held")
     return text, memory, sale
 
 

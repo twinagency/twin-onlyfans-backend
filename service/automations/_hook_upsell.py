@@ -226,8 +226,8 @@ def contextual_bridge_ok(text: str | None, action: str | None) -> bool:
     line = " ".join(str(text or "").split())
     if action != "explore":
         return bridge_ok(line)
-    if not line.endswith("?"):
-        return False
+    # R2: an EXPLORE bridge is no longer forced to end in "?" (a statement that moves the chat on is fine); the
+    # claim, price and delivery-promise guards below are unchanged.
     if CONTEXTUAL_QUANTITY.search(line) or CONTEXTUAL_PRICE.search(line):
         return False
     # Judge a delivery promise on the whole line: stripping the media word below would remove the object it needs.

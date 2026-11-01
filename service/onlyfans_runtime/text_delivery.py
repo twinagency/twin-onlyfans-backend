@@ -347,6 +347,10 @@ class TextAuthority:
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 600):
             raise Refused("invalid text intent")
+        if origin in {"automated", "engagement"}:
+            from native_pilot.media_claims import echoes_instruction
+            if echoes_instruction(body):
+                raise Refused("instruction text held")
         if (origin == "campaign" and (campaign_id is None or work is not None or native_plan_id is not None)
                 or origin != "campaign" and campaign_id is not None):
             raise Refused("invalid campaign intent")

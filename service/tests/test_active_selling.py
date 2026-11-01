@@ -341,3 +341,26 @@ def test_report_separates_first_and_repeat_pacing(db):
     run(dec.record(ACC, FAN, 21, decide(I(direct_request=True, matched=True, prior_card=False))))
     r = run(dec.report(ACC))
     assert r["pacing"]["repeat"]["cards"] == 1 and r["pacing"]["first"]["cards"] == 1
+
+
+def test_payment_arriving_never_triggers_a_card_but_a_fresh_request_is_served_at_once():
+    for init in ("lower", "standard", "active"):
+        for g in (0, 1, 3, 8):
+            assert not decide(I(controls=C(init), prior_card=True, grouped_turns=g, evidence="none")).sends_card
+        assert decide(I(controls=C(init), prior_card=True, grouped_turns=0, direct_request=True, matched=True)).sends_card
+
+
+def test_repeat_pacing_reference_is_independent_of_first_offer_pacing():
+    kw = dict(evidence="background", grouped_turns=4)
+    first = decide(I(controls=C("standard", first=3, repeat=6), prior_card=False, **kw))
+    repeat = decide(I(controls=C("standard", first=3, repeat=6), prior_card=True, **kw))
+    assert first.pacing.phase == "first" and repeat.pacing.phase == "repeat"
+    assert first.action == "invite" and repeat.action == "answer"       # the repeat range has not been reached yet
+
+
+def test_invitation_line_is_an_offer_shaped_question():
+    from automations.contextual_offers import invitation_line
+    from automations._sell_signal import is_offer_shaped
+    for bridge in ("love a good workout", "that sounds fun.", "what kind do you like?"):
+        assert is_offer_shaped(invitation_line(bridge)) or "?" in bridge
+    assert invitation_line("love a good workout").endswith("want me to show you?")

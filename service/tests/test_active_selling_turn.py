@@ -176,6 +176,15 @@ async def exercise():
     await turn("900104", 910104, "off", 5001, 5, sent4, calls4, events4)
     assert not await rows(OfSalesDecision, "900104") and not await rows(OfSalesInvitation, "900104")
 
+    # 6. shadow with a lower initiative: the decision is recorded (mode shadow) but nothing is stored or sent.
+    sent5, calls5, events5 = [], [], []
+    await setup("900105", 910105, "shadow", {"fastt_commercial_initiative": "lower"})
+    await turn("900105", 910105, "shadow", 5001, 6, sent5, calls5, events5)
+    assert [t for t, _ in sent5] == ["How did your workout go?"], sent5
+    assert not await rows(OfSalesInvitation, "900105") and not await rows(ContentOffer, "900105")
+    shadow = await rows(OfSalesDecision, "900105")
+    assert [(d.action, d.mode) for d in shadow] == [("invite", "shadow")], shadow
+
     await engine.dispose()
     print(json.dumps({"active_selling_turn": "ok"}))
 

@@ -267,6 +267,7 @@ class Sim:
         self.wait_first: dict[str, list[float]] = {a: [] for a in accounts}
         self.bodies: dict[tuple, set] = {}
         self.sends = {a: 0 for a in accounts}
+        self.turn_log: list[tuple] = []         # R8: (account, fan, earliest-unresolved-input -> reply seconds, inputs covered)
         self.duplicates = 0
         self.cross_account = 0
         self.takeovers: dict[tuple, list] = {}                       # (acct,fan) -> [[start, end|None]]
@@ -360,6 +361,7 @@ class Sim:
         if covered is not None and covered in pend:
             self.latencies[acct].append((now - pend[covered]).total_seconds())
             self.wait_first[acct].append((now - min(pend.values())).total_seconds())
+            self.turn_log.append((acct, fan, (now - min(pend.values())).total_seconds(), len(pend)))
             for mid in [m for m in pend if m <= covered]:
                 del pend[mid]
                 self.unanswered_n[acct] -= 1

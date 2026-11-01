@@ -992,6 +992,10 @@ class Service:
                 waiting.append((fan, mid, first))
             else:
                 ready.append((fan, mid, first))
+        # R8: oldest NEED first. pending_fans orders by each fan's newest unanswered message, so a fan who kept typing
+        # (earliest unresolved input oldest, newest input latest) would start behind every quieter fan. The user-visible
+        # clock runs from the earliest unresolved input, so start in that order (stable for ties and unknown starts).
+        ready.sort(key=lambda r: (r[2] is None, r[2] or ""))
         # Start work, oldest first, up to the concurrency bound. The rest stays in the database (the durable queue).
         blocked = self.account_block and now < self.account_block[1] and self.account_block[0]
         if self.account_block and not blocked:

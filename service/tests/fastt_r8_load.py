@@ -313,7 +313,30 @@ def sc_competing_manual(seed):
     return accounts, {"takeovers_open": True}, drive
 
 
+def sc_chatty_oldest(seed):
+    """A backlog of 59 quiet fans plus ONE fan whose earliest need is the oldest and who keeps typing for ~60 s.
+    The user-visible clock of that fan must run from its first message, so it is served among the first, not last."""
+    acct = "111000"
+    accounts = {acct: fans(6000, 60)}
+    chatty = accounts[acct][0]
+
+    async def drive(sim):
+        await asyncio.sleep(3)
+        sim.fan_says(acct, chatty, "hey")        # the oldest unresolved input in the account
+        for fan in accounts[acct][1:]:
+            sim.fan_says(acct, fan, "hi")
+            await asyncio.sleep(0.05)
+        for _ in range(8):                        # keeps typing every 5 s: the quiet window never closes until the hard maximum
+            await asyncio.sleep(5)
+            sim.fan_says(acct, chatty, "more")
+        await settle(sim, {acct: 60}, limit_s=2500)
+        sim.chatty_wait = [w for a, f, w, n in sim.turn_log if f == chatty]
+        return ()
+    return accounts, {}, drive
+
+
 SCENARIOS = {
+    "chatty_oldest": sc_chatty_oldest,
     "one_creator_100": sc_one_creator_100, "several_creators": sc_several_creators, "roster50": sc_roster50,
     "bursts": sc_bursts, "multi_bubble": sc_multi_bubble, "media": sc_media, "backlog": sc_backlog,
     "provider_429": sc_429, "auth_failure": sc_auth_failure, "worker_restart": sc_restart,
@@ -339,6 +362,8 @@ def run_one(name, mode, seed=7, model_latency=None):
         stop.set()
         sampler.cancel()
         out.update(summarise(sim, name, mode, t0, excluded))
+        if getattr(sim, "chatty_wait", None):
+            out["chatty_fan_first_reply_s"] = [round(w, 1) for w in sim.chatty_wait]
         return out
 
     root = tempfile.mkdtemp(dir="/dev/shm" if Path("/dev/shm").is_dir() else None)

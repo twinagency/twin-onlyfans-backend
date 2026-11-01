@@ -1,0 +1,43 @@
+name: Parallel history capacity
+on:
+  push:
+    branches: [codex/parallel-history-capacity-20261101]
+  pull_request:
+    paths:
+      - 'service/onlyfans_runtime/import_capacity.py'
+      - 'service/onlyfans_runtime/parallel_history.py'
+      - 'service/onlyfans_runtime/provider_read_budget.py'
+      - 'service/tests/test_parallel*.py'
+permissions:
+  contents: read
+jobs:
+  capacity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: capacity-test-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PYTHONPATH: service
+      DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
+      TWIN_FASTT_CONFIG_ISOLATED: '1'
+      ONLYFANS_CAPACITY_TEST_URL: postgresql+psycopg2://postgres:capacity-test-only@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pytest 'sqlalchemy[asyncio]' psycopg2-binary asyncpg aiosqlite python-dotenv cryptography alembic httpx
+      - run: >-
+          python -m pytest -q --disable-warnings
+          service/tests/test_parallel_import_capacity.py
+          service/tests/test_parallel_history_scheduler.py
+          service/tests/test_profile_learning_queue.py
+          service/tests/test_profile_learning_evidence.py
+          service/tests/test_profile_learning_temporal.py
+          service/tests/test_profile_subject_attribution.py

@@ -67,6 +67,22 @@ async def extract(store, tenant, account, binding, fan, sources, *, creator=Fals
     # The creator call is audited against a real source fan, not a fabricated id.
     audit_fan = fan or next(iter(sources.values()))['fan']
     reservation = await budget.reserve(fan_id=audit_fan, request_bytes=len(raw), max_output_tokens=2400)
+    started = __import__('time').monotonic()
+    dispatched = False
+    audit = {'schema': 'profile-call-audit.v1', 'billing': 'reserved', 'http_status': None,
+             'generation_id': None, 'request_id': None, 'finish_reason': None}
+    def record(error=None):
+        with Session(store.engine) as s, s.begin():
+            call = s.get(GrokCall, reservation.call_id)
+            if call is None or call.account_id != account:
+                raise Refused('profile-call-scope')
+            call.latency_ms = int((__import__('time').monotonic()-started)*1000)
+            call.response_text = json.dumps(audit, ensure_ascii=True)
+            if error:
+                # Keep useful failure evidence without leaking authorization or raw request data.
+                detail = str(error)[:1000].replace(api_key, '[redacted]')
+                call.error_text = json.dumps({'type':type(error).__name__, 'reason':detail,
+                    'http_status':audit['http_status']}, ensure_ascii=True)
     try:
         with Session(store.engine) as s, s.begin():
             runtime = store._runtime(s, tenant, account, lock=False)
@@ -83,11 +99,13 @@ async def extract(store, tenant, account, binding, fan, sources, *, creator=Fals
             call.prompt_json = raw.decode()
         async with asyncio.timeout(45):
             async with httpx.AsyncClient(timeout=30, follow_redirects=False, trust_env=False) as client:
+                dispatched = True
                 async with client.stream('POST', endpoint, content=raw, headers={
                         'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json',
                         'Accept-Encoding': 'identity'}) as response:
-                    if response.status_code != 200:
-                        raise Refused('profile-model-request-failed')
+                    audit['http_status'] = response.status_code
+                    audit['request_id'] = response.headers.get('x-request-id', '')[:240] or None
+                    record()  # Persist headers even if reading the response subsequently fails.
                     chunks, size = [], 0
                     async for chunk in response.aiter_bytes():
                         size += len(chunk)
@@ -95,19 +113,54 @@ async def extract(store, tenant, account, binding, fan, sources, *, creator=Fals
                             raise Refused('profile-model-response-too-large')
                         chunks.append(chunk)
         result = json.loads(b''.join(chunks))
-        usage = result.get('usage', {})
-        settled = await budget.settle(reservation, cost_usd=None,
-            tokens_in=usage.get('prompt_tokens'), tokens_out=usage.get('completion_tokens'))
+        if type(result) is not dict:
+            raise Refused('profile-model-response-incomplete')
+        audit['generation_id'] = str(result.get('id') or '')[:240] or None
+        usage = result.get('usage') if type(result.get('usage')) is dict else {}
+        audit['usage'] = {k:usage[k] for k in ('prompt_tokens','completion_tokens','cost') if k in usage}
+        audit['provider_error'] = result.get('error') if type(result.get('error')) is dict else None
+        if audit['provider_error']:
+            audit['provider_error'] = {k:str(v)[:1000].replace(api_key,'[redacted]')
+                for k,v in audit['provider_error'].items() if k in {'code','message'}}
+        record()
+        # An HTTP failure alone never proves zero billing. Settle only reported usage/cost.
+        cost = usage.get('cost') if spec.provider == 'openrouter' else None
+        if audit['http_status'] == 200 or cost is not None or ('prompt_tokens' in usage and 'completion_tokens' in usage):
+            settled = await budget.settle(reservation, cost_usd=cost,
+                tokens_in=usage.get('prompt_tokens'), tokens_out=usage.get('completion_tokens'))
+            if settled is not None:
+                audit['billing'] = 'provider_reported_cost' if cost is not None else 'token_rate_estimate'
+                record()
+        else:
+            settled = None
+        if audit['http_status'] != 200:
+            raise Refused('profile-model-request-failed')
         if settled is None:
             raise Refused('profile-model-usage-unavailable')
         choice = result['choices'][0]
+        audit['finish_reason'] = choice.get('finish_reason')
+        record()
         if choice.get('finish_reason') != 'stop' or choice['message'].get('tool_calls'):
             raise Refused('profile-model-response-incomplete')
         content = choice['message']['content']
         with Session(store.engine) as s, s.begin():
             call = s.get(GrokCall, reservation.call_id)
             call.response_json = content
-        return json.loads(content), reservation.call_id
-    except BaseException:
-        await budget.hold(reservation)
+        parsed = json.loads(content)
+        audit['memory_response_parsed'] = True
+        record()
+        return parsed, reservation.call_id
+    except BaseException as exc:
+        # No HTTP dispatch is positive evidence of no provider charge. Release only that case.
+        try:
+            if not dispatched:
+                await budget.settle(reservation, cost_usd=0, tokens_in=0, tokens_out=0)
+                audit['billing'] = 'not_dispatched_zero_cost'
+            else:
+                await budget.hold(reservation)
+                if audit['billing'] == 'reserved': audit['billing'] = 'unreconciled'
+            record(exc)
+        except Exception:
+            # A database outage must not replace the original request failure.
+            __import__('logging').getLogger(__name__).exception('profile-call-audit-failed call_id=%s',reservation.call_id)
         raise

@@ -83,6 +83,42 @@ def _as_plan(fact):
     return fact
 
 
+def answer_meaning(fact):
+    """Normalize only a single explicit preference question plus yes/no evidence.
+
+    Other paraphrases continue to require an exact excerpt. Never infer identity
+    or a preference from a question alone, compound question or negative question.
+    """
+    answer=norm(fact.get('quote',''))
+    if fact.get('field') not in {'interests','preferences'} or answer not in {'yes','yeah','yep','no','nope'}:
+        return None
+    contexts=fact.get('context_evidence',[])
+    if not contexts: return None
+    question=contexts[-1]['quote'].strip()
+    match=re.fullmatch(r'do you (enjoy|like|love|prefer) ([^?!.]+)\??',question,re.I)
+    if not match or re.search(r'\b(?:or|and|not|never|don.t)\b',match[2],re.I): return None
+    verb,topic=match[1].lower(),match[2].strip()
+    return ((verb.capitalize()+'s ') if answer in {'yes','yeah','yep'} else 'Does not '+verb+' ')+topic
+
+
+def quality_fact(fact):
+    """Apply the same conservative repair to archived and newly extracted facts."""
+    if fact.get('manual') or fact.get('protected'): return fact
+    if fact.get('field')=='name' and norm(fact.get('value','')) in {'bond james bond'}:
+        return None
+    work_words=set(norm(fact.get('value','')).split())
+    if (fact.get('field')=='occupation' and work_words & {'work','working'}
+            and work_words <= set('yes yeah yep at work working i m am im just currently right now today still in the office on shift busy again'.split())):
+        fact.update(field='recent_topic',kind='event',key='temporary work context',
+            review_at=(day(fact.get('last_confirmed',fact.get('at')))+timedelta(days=1)).isoformat())
+    meaning=answer_meaning(fact)
+    if meaning:
+        fact.setdefault('original_value',fact['value'])
+        fact['value']=meaning
+        fact['key']=meaning  # Different confirmed interests must not collapse into one yes slot.
+    return fact
+
+
 def validate(result, sources, *, creator=False):
     if type(result) is not dict or set(result) != {'facts'} or type(result['facts']) is not list:
         raise ValueError('invalid profile response')
@@ -101,8 +137,7 @@ def validate(result, sources, *, creator=False):
         if not source or source.get('context_only') or fact['field'] not in (CREATOR_FIELDS if creator else FAN_FIELDS):
             continue
         if (not fact['value'].strip() or len(fact['value']) > 240 or not fact['quote'].strip()
-                or len(fact['quote']) > 600 or fact['quote'] not in source['text']
-                or fact['value'] not in fact['quote']):
+                or len(fact['quote']) > 600 or fact['quote'] not in source['text']):
             continue
         if source['direction'] != ('out' if creator else 'in'):
             continue
@@ -138,6 +173,9 @@ def validate(result, sources, *, creator=False):
         else:
             # Short replies must retain the question that disambiguates them.
             if norm(fact['quote']) in {'yes','no','yeah','yep','nope','same','always'} and not context_evidence:
+                continue
+            fact['context_evidence']=context_evidence
+            if fact['value'] not in fact['quote'] and fact['value'] != answer_meaning(fact):
                 continue
             if fact['field']=='age' and (not fact['value'].isascii() or not fact['value'].isdigit()
                                       or not 18 <= int(fact['value']) <= 120):
@@ -200,6 +238,7 @@ def validate(result, sources, *, creator=False):
             fact['evidence'] = [{'source':fact['source'],'quote':fact['quote'],'digest':fact['digest'],'at':at,
                                  'context_evidence':context_evidence}]
             _as_plan(fact)
+            if quality_fact(fact) is None: continue
             fact['memory_key']=_key(fact)
             accepted.append(fact)
     return accepted
@@ -211,6 +250,7 @@ def merge(previous, additions):
     for fact in previous+additions:
         # Backwards-compatible upgrading of the candidate's unstructured observations.
         f=deepcopy(fact)
+        if quality_fact(f) is None: continue
         _as_plan(f)
         f.setdefault('subject','fan'); f.setdefault('kind','changing' if f['field'] in CHANGING else
                      'request' if f['field']=='request' else 'event' if f['field'] in {'event','travel','recent_topic'} else 'persistent')
@@ -388,12 +428,16 @@ emotional-attachment inferences. Subscription,
 purchases and spend come only from canonical OnlyFans records, never conversation.
 Creator outgoing messages can be agency/automation authored: keep them unverified
 account claims, never approved biography. context_only sources cannot be primary evidence.
-Return exactly {"facts":[{"field":"permitted field","value":"short exact excerpt",
+Return exactly {"facts":[{"field":"permitted field","value":"concise meaningful exact excerpt or normalized preference answer",
 "source":"source id","quote":"exact supporting quote","subject":"fan or creator or relative",
 "kind":"persistent|changing|event|request","key":"stable concise topic with words from quote",
 "operation":"assert|correct|update|cancel|postpone|fulfill","date_text":"exact date phrase in quote or empty",
-"context_sources":[],"context_quotes":[]}]}. value must be verbatim in quote; quote
-verbatim in source. Up to 32 facts; [] is valid. For short answers quote the question
+"context_sources":[],"context_quotes":[]}]}. quote must be verbatim in source. value must be verbatim in quote except for a
+single yes/no answer to "Do you enjoy/like/love/prefer X?": use "Enjoys X" or
+"Does not enjoy X" (matching the verb), citing both messages. Never normalize a
+compound or negative question. "At work" is temporary recent_topic, not an
+occupation. A price inquiry is a request, not a permanent spending preference.
+Skip joke names and roleplay. Full sentences are preferable to isolated fragments. Up to 32 facts; [] is valid. For short answers quote the question
 as context. Resolve no dates yourself. Distinguish attending a wedding (event) from
 got married (relationship update). Use the SAME event key for cancellation/postponement
 and original plan (e.g. brother wedding). Explicit corrections supersede prior facts;

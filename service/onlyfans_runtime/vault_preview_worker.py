@@ -3,6 +3,7 @@
 Only existing verified provider sessions and the permanent ownership receipt
 writer are used. No full-video download, model call or provider write is performed.
 """
+from .provider_read_budget import is_rate_limit
 import json
 import os
 import threading
@@ -116,7 +117,7 @@ class VaultPreviewWorker:
                     raise
                 finally:
                     if claim is not None:
-                        release(self.store, self.tenant, claim, retry_after=getattr(error, "retry_after", None))
+                        release(self.store, self.tenant, claim, retry_after=getattr(error, "retry_after", None), rate_limited=is_rate_limit(error))
                 if (type(media) is not dict or media.get("id") != mid
                     or media.get("type") not in {"photo", "video", "gif"}
                     or media.get("isDeleted") is True or media.get("isHidden") is True

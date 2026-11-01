@@ -52,7 +52,9 @@ def _provider_claim(store, tenant, account, reader, connection_revision, kind):
 def _release_provider(store, tenant, claim, error=None):
     if claim is not None:
         from .provider_read_budget import release
-        release(store,tenant,claim,retry_after=getattr(error,'retry_after',None))
+        from .provider_connector import NativeRateLimitError
+        release(store,tenant,claim,retry_after=getattr(error,'retry_after',None),
+            rate_limited=isinstance(error,NativeRateLimitError))
 
 
 def _defer_recent_claim(store,tenant,claim,*,scan):

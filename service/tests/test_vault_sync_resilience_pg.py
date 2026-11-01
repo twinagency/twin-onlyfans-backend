@@ -68,3 +68,28 @@ def test_malformed_page_still_stops_atomically(database,monkeypatch):
         assert row.status=='failed' and row.page_offset==0 and row.last_error=='unsupported_vault_response'
         assert s.scalar(select(func.count()).select_from(VaultItem))==0
     store.close()
+
+
+def test_deferred_vault_job_records_specific_reason_owner_retry_and_progress(database,monkeypatch):
+    from onlyfans_runtime import provider_read_budget as budget
+    from onlyfans_runtime.vault_management import job_view
+    store,account,_=verified(database,monkeypatch)
+    job=queue(store,account)
+    monkeypatch.setattr(NativeProviderConnector,'vault_page',lambda *_,**__:page([media(1)],False))
+    held=budget.acquire(store,TENANT,account,connection_revision=1,kind='recent')   # a live read holds the lease
+    assert process_vault_jobs(store,TENANT)==0
+    with Session(store.engine) as s:
+        row=s.get(OfVaultSyncJob,(account,job['jobId']))
+        assert row.status=='running' and row.last_error=='provider_read_deferred:lease-occupied:recent'
+        view=job_view(row)
+        assert view['retryAt'] and view['pageOffset']==0 and view['pagesRead']==0 and view['updatedAt']
+        assert row.lease_until<=utcnow()+timedelta(seconds=3)       # retry deadline is the short lease cadence
+    budget.release(store,TENANT,held)
+    assert process_vault_jobs(store,TENANT)==0                      # still inside the 2 s retry deadline
+    monkeypatch.setattr('onlyfans_runtime.provider_read_budget.utcnow',lambda:utcnow()+timedelta(seconds=3))
+    monkeypatch.setattr('onlyfans_runtime.vault_management.utcnow',lambda:utcnow()+timedelta(seconds=3))
+    assert process_vault_jobs(store,TENANT)==1
+    with Session(store.engine) as s:
+        row=s.get(OfVaultSyncJob,(account,job['jobId']))
+        assert row.status=='complete' and row.last_error is None
+    store.close()

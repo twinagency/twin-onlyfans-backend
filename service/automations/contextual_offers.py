@@ -51,11 +51,21 @@ async def plan_contextual(lane, authority, candidate, fan, *, blocked=False, voi
         if not await lane.may_sell(fan.fan_id, turn, fan=fan, blocked=blocked):
             rejected("sales_eligibility_refused")
             return None
-        # Confirm an account-owned description before paying for a relevance read.
+        # Product readiness (not "search_text is non-empty": the import writes the bare kind word) decides whether
+        # the account has anything it may offer before a relevance read is paid for.
+        from .product_readiness import ready_ids
+        from . import pack_sender
         async with get_session() as s:
-            available = (await s.execute(select(VaultItem.media_id).where(
+            rows = (await s.execute(select(VaultItem).where(
                 VaultItem.account_id == lane.account_id, VaultItem.removed_at.is_(None),
-                VaultItem.search_text.is_not(None), VaultItem.search_text != "").limit(1))).first()
+                VaultItem.search_text.is_not(None), VaultItem.search_text != "")
+                .order_by(VaultItem.created_at.desc()).limit(400))).scalars().all()
+        shelf = ready_ids(rows, account_id=str(lane.account_id), cfg=lane.cfg,
+                          bought=await pack_sender._bought_media(lane.account_id, fan.fan_id),
+                          offered=set(await pack_sender.offered_media(lane.account_id, fan.fan_id)),
+                          limits=(lane.cfg or {}).get("limits") or (),
+                          price_source="pack_ladder")
+        available = bool(shelf)
         if not available:
             authority.emit({"event":"contextual-decision","action":"chat","reason":"no_supported_shelf",
                             "mode":current_mode,"account_id":account_id,"fan_id":fan.fan_id})

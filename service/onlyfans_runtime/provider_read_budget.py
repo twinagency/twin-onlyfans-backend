@@ -25,10 +25,28 @@ KINDS = {"recent", "discovery", "history", "ledger", "offer_refresh", "posts", "
 LEDGER_TURN_RESERVED = "provider_read_deferred:ledger-turn-reserved"
 
 
+STARVE_GRACE_SECONDS = 20     # a background lane denied tokens this long is owed one turn
+
+
 class ReadDeferred(Refused):
-    def __init__(self, retry_at, reason="provider read deferred"):
+    """``owner`` is the lane holding the lease when the cause is lease contention."""
+    def __init__(self, retry_at, reason="provider read deferred", owner=None):
         super().__init__(reason)
         self.retry_at = retry_at
+        self.owner = owner
+
+
+def _base_reserve(kind):
+    return 0 if kind == "recent" else RECENT_RESERVE + (kind == "history")
+
+
+def _starved_turn_due(row, now):
+    """The starved background kind owed a turn now, else None. Self-expiring (same 45 s bound as a lease)."""
+    since = row.starved_since
+    if not row.starved_kind or since is None:
+        return None
+    start = since + timedelta(seconds=STARVE_GRACE_SECONDS)
+    return row.starved_kind if start <= now < start + timedelta(seconds=LEASE_SECONDS) else None
 
 
 @dataclass(frozen=True)
@@ -133,6 +151,7 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
         raise Refused("provider read worker authority required")
     now = now or utcnow()
     deferred_at = None
+    deferred_reason = 'provider ledger turn due'
     claim = None
     with Session(store.engine) as s, s.begin():
         runtime = _valid(store, s, tenant, account, connection_revision, now, kind)
@@ -149,7 +168,8 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
         if row.lease_token and row.lease_until > now:
             # A successful read normally releases well before its crash lease
             # expires. Recheck at the worker cadence, without stealing the lease.
-            raise ReadDeferred(min(row.lease_until, now + timedelta(seconds=LEDGER_RETRY_SECONDS)), "provider read lease occupied")
+            raise ReadDeferred(min(row.lease_until, now + timedelta(seconds=LEDGER_RETRY_SECONDS)), "provider read lease occupied",
+                               owner=row.last_kind)
         if row.backoff_until and row.backoff_until > now:
             raise ReadDeferred(row.backoff_until, "provider read backoff")
         if (kind not in {'ledger', 'connection_check'}
@@ -165,23 +185,37 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
             # Deep archive recovery may be continuously due. Leave one additional
             # maintenance token for ledger/content work as well as the recent head
             # reserve; the outer scheduler rotates those maintenance lanes.
-            reserve = 0 if kind == "recent" else RECENT_RESERVE + (kind == 'history')
-            if kind in BACKGROUND_KINDS and _replies_waiting(s, account, now):
+            reserve = _base_reserve(kind)
+            owed = _starved_turn_due(row, now)
+            if kind in BACKGROUND_KINDS and kind != owed and _replies_waiting(s, account, now):
                 # Live replies are waiting (the FASTT engine's work board): history import, the exporter, discovery, offer
-                # refresh, posts and vault analysis yield. They keep a trickle (a read per ~5 s as the bucket refills), they
-                # are never starved outright.
+                # refresh, posts and vault analysis yield. A lane denied for STARVE_GRACE_SECONDS is owed one turn and
+                # pays no live-reply reserve, so saturating intake can no longer starve it outright.
                 reserve += LIVE_REPLY_RESERVE
+            if kind == "recent" and owed is not None:
+                # Intake leaves the starved lane the tokens it needs; the pause is a few seconds of refill, bounded by
+                # the 45 s self-expiry above, and ends the moment that lane acquires.
+                reserve = max(reserve, _base_reserve(owed) + 1)
             if available <= reserve:
-                raise ReadDeferred(now + timedelta(seconds=1), "provider read budget exhausted")
-            if refill:
-                row.refilled_at += timedelta(seconds=refill)
-            row.tokens = available - 1
-            row.lease_token, row.lease_until = str(uuid.uuid4()), now + timedelta(seconds=LEASE_SECONDS)
-            row.last_kind = kind
-            claim = ReadClaim(account, runtime.binding_id, connection_revision,
-                              row.lease_token, row.lease_until, kind)
+                if kind in BACKGROUND_KINDS and kind != owed:
+                    if (not row.starved_kind or row.starved_since is None
+                            or now >= row.starved_since + timedelta(seconds=STARVE_GRACE_SECONDS + LEASE_SECONDS)):
+                        row.starved_kind, row.starved_since = kind, now
+                deferred_at = now + timedelta(seconds=1)
+                deferred_reason = ("provider read reserved for starved lane" if kind == "recent" and owed is not None
+                                   else "provider read budget exhausted")
+            else:
+                if refill:
+                    row.refilled_at += timedelta(seconds=refill)
+                row.tokens = available - 1
+                row.lease_token, row.lease_until = str(uuid.uuid4()), now + timedelta(seconds=LEASE_SECONDS)
+                row.last_kind = kind
+                if kind == row.starved_kind:
+                    row.starved_kind = row.starved_since = None
+                claim = ReadClaim(account, runtime.binding_id, connection_revision,
+                                  row.lease_token, row.lease_until, kind)
     if deferred_at is not None:
-        raise ReadDeferred(deferred_at, 'provider ledger turn due')
+        raise ReadDeferred(deferred_at, deferred_reason)
     return claim
 
 

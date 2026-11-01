@@ -70,7 +70,7 @@ import vault_pack_picker
 from db.engine import get_session
 from db.models import CATALOG_IS_SINGLE, CatalogItem, VaultItem, VaultSend
 
-from . import content_resolver, pack_pricing
+from . import content_resolver, pack_pricing, substitution_agreement
 # The two outbound guards every OTHER lane already runs. This lane ran neither
 # until 2026-09-08; see the block in `_deliver` for why they belong at the wire.
 from ._common import apply_word_restriction, scan_offplatform
@@ -120,6 +120,7 @@ REFUSE_AUDIT = "audit_failed"
 REFUSE_LANGUAGE = "unsupported_language"
 REFUSE_NO_PRICE = pack_pricing.REFUSE_NO_PRICE
 REFUSE_RESOLVER = "resolver_refused"
+REFUSE_SUBSTITUTE_UNAGREED = "substitute_unagreed"   # F04: no stored agreement to this alternative
 
 # "This account's SHELF cannot serve this ask" — missing, spent/filtered thin,
 # failing its own audit, or unpriceable. None of these is a verdict about the
@@ -435,8 +436,26 @@ async def _price_and_compose(account_id: str, fan_id: int, avail_ids: list[int],
     return _Priced(pack.media, pack.price_cents, pack.value_cents, item.id)
 
 
+async def _ready_only(account_id: str, media_ids: list[int], cfg: dict | None) -> list[int]:
+    """Product readiness (`product_readiness`) is the one authority for 'may be offered'. Pack sends are priced by
+    the account ladder, so that is their price source; ownership/offer exclusions are applied by the caller."""
+    if not media_ids:
+        return media_ids
+    from .product_readiness import ready_ids
+    async with get_session() as s:
+        rows = (await s.execute(select(VaultItem).where(
+            VaultItem.account_id == str(account_id), VaultItem.media_id.in_(media_ids)))).scalars().all()
+    ok = ready_ids(rows, account_id=str(account_id), cfg=cfg, price_source="pack_ladder",
+                   limits=(cfg or {}).get("limits") or ())
+    dropped = [m for m in media_ids if m not in ok]
+    if dropped:
+        log.info("pick skipped %d not-ready media account=%s: %s", len(dropped), account_id, dropped[:4])
+    return [m for m in media_ids if m in ok]
+
+
 async def _available(account_id: str, fan_id: int, media_ids: list[int], *,
-                     company: bool, media_kind: str | None = None) -> list[int]:
+                     company: bool, media_kind: str | None = None,
+                     cfg: dict | None = None) -> list[int]:
     """The house rules every source obeys, in the order they must run.
 
     LIVENESS and KIND come off the same mirror row and are read together, first:
@@ -449,6 +468,7 @@ async def _available(account_id: str, fan_id: int, media_ids: list[int], *,
     prior = await offered_media(account_id, fan_id)
     media_ids = [mid for mid in media_ids if mid not in prior]
     media_ids = await _live_of_kind(account_id, media_ids, media_kind)
+    media_ids = await _ready_only(account_id, media_ids, cfg)
     if not company:
         media_ids = await content_resolver.solo_only(account_id, media_ids)
     _cap, max_tier = await spend_bounds(account_id, fan_id)
@@ -482,7 +502,7 @@ async def plan_pack(account_id: str, fan_id: int, category: str, rung: str, *,
     bought = await _bought_media(account_id, fan_id)
     avail_ids = await _available(account_id, fan_id,
                                  [m for m in shelf if m not in bought],
-                                 company=company, media_kind=media_kind)
+                                 company=company, media_kind=media_kind, cfg=cfg)
     if len(avail_ids) < MIN_ITEMS:
         return replace(empty, refusal=REFUSE_TOO_THIN,
                        detail=f"{len(avail_ids)} un-bought")
@@ -667,7 +687,7 @@ async def _plan_ask_from(account_id: str, fan_id: int,
     exactly why it is one parameter and not a second planner.
     """
     avail_ids = await _available(account_id, fan_id, media_ids,
-                                 company=contract.company)
+                                 company=contract.company, cfg=cfg)
     if len(avail_ids) < ending.min_items:
         return replace(empty, refusal=REFUSE_TOO_THIN,
                        detail=f"{len(avail_ids)} un-bought")
@@ -786,9 +806,17 @@ async def plan_ask(account_id: str, fan_id: int,
     log.info("substitute for %r account=%s fan=%s (%s, %s from last_resort)",
              contract.subject, account_id, fan_id, res.refusal,
              "0" if res.alternatives else len(alts))
-    return await _plan_ask_from(account_id, fan_id, contract,
+    plan = await _plan_ask_from(account_id, fan_id, contract,
                                 alts, cfg, empty, _SUBSTITUTE,
                                 item_tag=item_tag)
+    if plan.ok and plan.substitute:
+        # F04: a materially different alternative is proposed, not sold. Dispatch needs his stored agreement to
+        # THIS alternative on the current turn; otherwise the proposal is recorded and the caller must ask him.
+        if not await substitution_agreement.is_agreed(account_id, fan_id, plan.media):
+            await substitution_agreement.propose(account_id, fan_id, plan.media, subject=contract.subject)
+            return replace(empty, refusal=REFUSE_SUBSTITUTE_UNAGREED, detail=",".join(str(m) for m in plan.media),
+                           substitute=True)
+    return plan
 
 
 # ── The send ────────────────────────────────────────────────────────
@@ -946,6 +974,12 @@ async def _deliver(client, plan: PackPlan, *, voice_line: str | None,
                 "n": len(plan.media), "media": plan.media,
                 "previews": plan.previews, "caption": caption,
                 "item_id": plan.item_id, "category": plan.category}
+
+    if plan.substitute and not await substitution_agreement.is_agreed(account_id, fan_id, plan.media):
+        # Plan-time agreement can be a turn old by the time the wire is reached.
+        log.warning("substitute send REFUSED (no agreement) account=%s fan=%s", account_id, fan_id)
+        return {"status": "refused", "reason": REFUSE_SUBSTITUTE_UNAGREED,
+                "detail": ",".join(str(m) for m in plan.media)}
 
     bad = await reaudit()
     if bad:

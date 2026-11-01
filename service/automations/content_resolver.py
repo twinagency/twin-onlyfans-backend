@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import logging
 import re
+from types import SimpleNamespace
 
 from sqlalchemy import case, func, literal, or_, select
 
@@ -71,6 +72,7 @@ from jsonsafe import load_json
 
 from ._common import load_voice_blocks, resolve_model as _legacy_resolve_model
 from ._runtime_llm import runtime_resolve_model
+from .product_readiness import best_description
 # Re-exported, not merely used: `content_resolver.Contract` and
 # `content_resolver.NO_MATCH` are what ~80 call sites across pack_sender,
 # make_right, tip_reward and the suites already say. The split is an internal
@@ -244,14 +246,11 @@ async def _described_pool(account_id: str, seen: set[int],
     for mid, _kind, search_text, desc, vdesc in rows:
         if int(mid) in seen:
             continue
-        text = " ".join(str(search_text or desc or vdesc or "").split())
-        # 🚨 OF fills `search_text` with the bare KIND WORD for media it has no
-        # prose for: 699 audio rows on this roster read exactly "audio", and 26
-        # gifs read "gif". That is a placeholder, not a description — it tells
-        # the matcher nothing, and an unranked draw (`_alternatives`, or a
-        # generic "show me") would ship it blind. Undescribed is undescribed
-        # however the column is spelled.
-        if not text or text.lower() == str(_kind or "").lower():
+        # Product readiness owns what counts as a description: a bare kind word ("photo", "audio", "gif")
+        # is a placeholder, and a real description is used even when search_text holds the placeholder.
+        text = best_description(SimpleNamespace(search_text=search_text, description=desc, video_description=vdesc),
+                                prefer_search=True)
+        if not text:
             continue
         out.append((int(mid), text[:_DESC_LEN]))
         if len(out) >= _CANDIDATES_MAX:

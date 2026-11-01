@@ -129,12 +129,23 @@ def _connection(session, runtime):
     return row
 
 
+def deferred_error(problem):
+    """Specific, bounded defer reason: provider_read_deferred:<cause>[:<lease owner lane>]. Never provider text."""
+    from .ledger import deferred_reason_code
+    code = f"provider_read_deferred:{deferred_reason_code(str(problem))}"
+    owner = getattr(problem, "owner", None)
+    return (code + ":" + str(owner))[:64] if owner else code
+
+
 def job_view(row):
     def date(value):
         return value.isoformat() + "Z" if value else None
     return {"jobId": row.job_id, "commandKey": row.command_key, "status": row.status,
         "pagesRead": row.pages_read, "itemsSeen": row.items_seen, "lastError": row.last_error,
-        "requestedAt": date(row.requested_at), "updatedAt": date(row.updated_at), "completedAt": date(row.completed_at)}
+        "requestedAt": date(row.requested_at), "updatedAt": date(row.updated_at), "completedAt": date(row.completed_at),
+        # A deferred job reuses lease_until as its retry deadline; surface it so a stalled import is diagnosable.
+        "retryAt": date(row.lease_until) if str(row.last_error or "").startswith("provider_read_deferred") else None,
+        "pageOffset": row.page_offset}
 
 
 def request_sync(store, tenant, account, *, expected_connection_revision, command_key, actor):
@@ -476,7 +487,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
         except Exception as problem:
             from .provider_read_budget import ReadDeferred
             failure=problem
-            if isinstance(problem,ReadDeferred):deferred=problem.retry_at;error='provider_read_deferred'
+            if isinstance(problem,ReadDeferred):deferred=problem.retry_at;error=deferred_error(problem)
             elif isinstance(problem,NativeAuthenticationError):error='connection_unavailable'
             elif isinstance(problem,NativeReadTransientError):error='vault_read_failed'
             elif isinstance(problem,NativeProtocolError):error='provider_rate_limited' if hasattr(problem,'retry_after') else 'unsupported_vault_response'
@@ -500,7 +511,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 if deferred:
                     # Reuse the durable job lease as a bounded retry deadline. No
                     # provider result or cursor advancement is acknowledged.
-                    job.status='running';job.last_error='provider_read_deferred'
+                    job.status='running';job.last_error=error
                     job.lease_until=deferred;job.updated_at=utcnow()
                     continue
                 if failure is not None and hasattr(failure,'retry_after'):

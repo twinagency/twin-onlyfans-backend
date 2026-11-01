@@ -195,3 +195,21 @@ def test_recent_refresh_extends_last_proven_cutoff_instead_of_rescanning_week(na
     monkeypatch.setattr(NativeProviderConnector,'transaction_page',page)
     assert ledger.process_ledger_pages(store,TENANT)==1
     assert seen==[(prior-ledger.RECENT_OVERLAP,now)]
+
+
+def test_deferred_ledger_reservation_expires_unless_the_ledger_itself_renews_it(native, monkeypatch):
+    """R4 hypothesis H2 (self-renewing reservation): NOT reproduced. A deferred-state reservation only lasts
+    while the ledger worker keeps writing updated_at; with no retry it expires at the 45 s lease bound."""
+    now = utcnow()
+    store, account = _scan_once(native, monkeypatch, now, more=True)
+    with Session(store.engine) as s, s.begin():
+        s.get(OfProviderReadBudget, account).last_kind = 'recent'
+        scan = s.get(OfLedgerScan, account)
+        scan.last_error = 'provider_read_deferred:budget-exhausted'
+        scan.next_poll_at = now
+        scan.updated_at = now
+    with pytest.raises(budget.ReadDeferred, match='ledger turn due'):
+        budget.acquire(store, TENANT, account, connection_revision=1, kind='vault', now=now)
+    later = now + timedelta(seconds=46)          # nobody renewed updated_at
+    claim = budget.acquire(store, TENANT, account, connection_revision=1, kind='vault', now=later)
+    assert budget.release(store, TENANT, claim, now=later)

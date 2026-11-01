@@ -300,3 +300,65 @@ def test_hot_account_bounded_backpressure_recovers_missing_events_without_starvi
         "coldAccountProgressedBeforeHotRecovery": True, "recoveryTicks": pages,
         "elapsedSeconds": round(time.monotonic()-started, 3), "providerRequests": 0,
         "limits": "single hot account; bounded rehearsal, not a soak or full product capacity test"})
+
+
+def _fans(engine, account, ids):
+    with Session(engine) as s, s.begin():
+        for fan in ids:
+            s.add(Fan(account_id=account, fan_id=fan))
+        s.flush()
+        for fan in ids:
+            s.add(OfConversationState(account_id=account, fan_id=fan, mode="automated", revision=0))
+
+
+def test_r8_continuous_input_never_postpones_an_old_need_past_the_burst_ceiling(database):
+    """New input moves the quiet window but never beyond first_input_at + MAX_BURST_SECONDS; overdue work is due now."""
+    from onlyfans_runtime.store import MAX_BURST_SECONDS, QUIET_SECONDS
+    url, engine = database
+    store = seed(url, engine, "r8-burst")
+    assert store.record("tenant-a", "r8-burst", event(mid=1)) == "accepted"
+    store.drain("tenant-a", "r8-burst")
+    checks = []
+    for age, mid in ((3, 2), (MAX_BURST_SECONDS - 4, 3), (MAX_BURST_SECONDS + 20, 4)):
+        with engine.begin() as c:   # the burst's first input is `age` seconds old; every later message arrives now
+            c.execute(text("UPDATE of_work SET first_input_at = (now() AT TIME ZONE 'UTC') - make_interval(secs => :a)"), {"a": age})
+        assert store.record("tenant-a", "r8-burst", event(mid=mid)) == "accepted"
+        store.drain("tenant-a", "r8-burst")
+        with engine.connect() as c:
+            wait = float(c.scalar(text("SELECT EXTRACT(EPOCH FROM (due_at - (now() AT TIME ZONE 'UTC'))) FROM of_work")))
+            ceiling = float(c.scalar(text("SELECT EXTRACT(EPOCH FROM (first_input_at + make_interval(secs => :m) - (now() AT TIME ZONE 'UTC'))) FROM of_work"), {"m": MAX_BURST_SECONDS}))
+        assert wait <= ceiling + 0.5 and wait <= QUIET_SECONDS + 0.5, (age, wait, ceiling)
+        checks.append((age, round(wait, 1)))
+    assert checks[0][1] > 5 and checks[1][1] <= 4.5 and checks[2][1] < 0, checks   # quiet window, then ceiling, then overdue = due now
+    store.close()
+    report("r8-burst-ceiling", {"scope": "PG-backed Store intake; quiet window then hard ceiling then overdue", "waitSecondsByInputAge": checks})
+
+
+def test_r8_reinput_cannot_starve_other_fans_or_be_starved(database):
+    """One chatty fan whose every claim is invalidated by new input is served each round, and so are the others."""
+    url, engine = database
+    store = seed(url, engine, "r8-fair", fan=101)
+    _fans(engine, "r8-fair", [102, 103])
+    for fan in (101, 102, 103):
+        assert store.record("tenant-a", "r8-fair", event(mid=1, fan=fan)) == "accepted"
+    store.drain("tenant-a", "r8-fair")
+    served = []
+    for round_no in range(4):
+        if round_no:   # the other two fans write again; fan 101 already has the input that invalidated its last claim
+            for fan in (102, 103):
+                assert store.record("tenant-a", "r8-fair", event(mid=20 + round_no, fan=fan)) == "accepted"
+            store.drain("tenant-a", "r8-fair")
+        due(engine)
+        for _ in range(3):
+            claim = store.claim("tenant-a")
+            assert claim is not None, ("a due fan was not claimed", round_no, served)
+            served.append(claim.fan_id)
+            if claim.fan_id == 101:      # the chatty fan sends again while its draft is being prepared: lease is stale
+                assert store.record("tenant-a", "r8-fair", event(mid=10 + round_no, fan=101)) == "accepted"
+                store.drain("tenant-a", "r8-fair")
+                with pytest.raises(Exception):
+                    store.complete("tenant-a", claim)
+            else:
+                store.complete("tenant-a", claim)
+        assert sorted(served[-3:]) == [101, 102, 103], served
+    store.close()

@@ -992,6 +992,10 @@ class Service:
                 waiting.append((fan, mid, first))
             else:
                 ready.append((fan, mid, first))
+        # R8: oldest NEED first. pending_fans orders by each fan's newest unanswered message, so a fan who kept typing
+        # (earliest unresolved input oldest, newest input latest) would start behind every quieter fan. The user-visible
+        # clock runs from the earliest unresolved input, so start in that order (stable for ties and unknown starts).
+        ready.sort(key=lambda r: (r[2] is None, r[2] or ""))
         # Start work, oldest first, up to the concurrency bound. The rest stays in the database (the durable queue).
         blocked = self.account_block and now < self.account_block[1] and self.account_block[0]
         if self.account_block and not blocked:
@@ -1281,9 +1285,12 @@ class Service:
             # The one card this job may remove (re-read here, not trusted from the queue row).
             row = await asyncio.to_thread(self.offer_row, offer_of(job["kind"], job_payload(job)))
             gateway.expected_unsend = int(row["offer_message_id"]) if row and row["offer_message_id"] else None
+        from .turn_timing import TurnTiming
+        timing = TurnTiming(forward=runner.emit)
+        claimed_at = runner.now()
         model = NativePilotModel(
             api_key=self.conn.model_api_key, account_id=self.db, fan_id=args.fan, deadline=time.monotonic() + TURN_MAX_S,
-            should_stop=gateway.stopped, on_event=runner.emit,
+            should_stop=gateway.stopped, on_event=lambda event: timing.on_event(event, runner.now()),
             reserve_call=lambda: ledger.count_model_call(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now()),
             budget=DailyBudget(self.scope, self.conn.model_id, endpoint=ENDPOINT))
         runner.emit({"event": "generating", "source_message_id": str(source_id), "engine": "fastt-native"})
@@ -1321,6 +1328,12 @@ class Service:
             error = exc.reason if isinstance(exc, Refused) else (
                 gateway.stopped_reason or model.stopped_reason
                 or (str(exc) if isinstance(exc, PilotBoundaryError) and str(exc) else "native-turn-failed"))
+            if error == "native-turn-failed" and getattr(self, "cancel_reason", None) and not gateway.stopped_reason:
+                # R8: a reply still waiting in the send queue when it is cancelled (credential change, lease loss, stop,
+                # takeover) leaves through SendGate.acquire, which does not set gateway.stopped_reason, so the cancel was
+                # reported as "native-turn-failed": the input was marked failed and the fan was never answered. Name the
+                # real cause; the existing release/backoff handling then gives the claim back (nothing is on the wire).
+                error = self.cancel_reason
         finally:
             runner.finish_native_run(self.path, run_id, stats, error)
             if isinstance(stats, dict):
@@ -1328,6 +1341,17 @@ class Service:
                 runner.emit({"event": "turn-stats", "stats": {k: v for k, v in stats.items()
                     if v and isinstance(v, (int, float, str, bool, dict)) and k not in ("model", "mode")}})
         receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
+        try:
+            # R8 measurement only: one metadata event per turn; a failure here never changes the turn.
+            runner.emit(timing.record(
+                account=self.db, fan=args.fan, first_input_at=getattr(self, "priority", None), claimed_at=claimed_at,
+                generation_started_at=timing.first_model_start or claimed_at,
+                generation_done_at=timing.last_model_end or runner.now(), finished_at=runner.now(), receipts=receipts,
+                outcome=("job" if job is not None else "error:" + error if error else
+                         "sent" if any(r["state"] == "sent" for r in receipts) else "no-reply"),
+                requeues=ledger._requeues.get(key, 0)))
+        except Exception:
+            pass
         from .identity import IDENTITY_HELD
         if error == IDENTITY_HELD:
             await self.identity_handoff("reply-held")

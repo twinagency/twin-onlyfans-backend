@@ -63,7 +63,7 @@ CREATE TABLE catalog_items(id INTEGER,account_id TEXT,kind TEXT,media_ids TEXT,p
 CREATE TABLE pending_offer(account_id TEXT,fan_id INTEGER);
 CREATE TABLE automation_runs(id INTEGER PRIMARY KEY,account_id TEXT,kind TEXT,started_at TEXT,
  completed_at TEXT,status TEXT,stats_json TEXT,error_text TEXT);
-CREATE TABLE skip_list(account_id TEXT,fan_id INTEGER,reason TEXT);
+CREATE TABLE skip_list(account_id TEXT,fan_id INTEGER,reason TEXT,added_at TEXT,PRIMARY KEY(account_id,fan_id));
 CREATE TABLE of_conversation_state(account_id TEXT,fan_id INTEGER,mode TEXT,takeover_state TEXT,
  PRIMARY KEY(account_id,fan_id));
 CREATE TABLE of_runtime(account_id TEXT PRIMARY KEY,enabled INTEGER,binding_id TEXT);
@@ -267,6 +267,7 @@ class Sim:
         self.wait_first: dict[str, list[float]] = {a: [] for a in accounts}
         self.bodies: dict[tuple, set] = {}
         self.sends = {a: 0 for a in accounts}
+        self.turn_log: list[tuple] = []         # R8: (account, fan, earliest-unresolved-input -> reply seconds, inputs covered)
         self.duplicates = 0
         self.cross_account = 0
         self.takeovers: dict[tuple, list] = {}                       # (acct,fan) -> [[start, end|None]]
@@ -360,6 +361,7 @@ class Sim:
         if covered is not None and covered in pend:
             self.latencies[acct].append((now - pend[covered]).total_seconds())
             self.wait_first[acct].append((now - min(pend.values())).total_seconds())
+            self.turn_log.append((acct, fan, (now - min(pend.values())).total_seconds(), len(pend)))
             for mid in [m for m in pend if m <= covered]:
                 del pend[mid]
                 self.unanswered_n[acct] -= 1

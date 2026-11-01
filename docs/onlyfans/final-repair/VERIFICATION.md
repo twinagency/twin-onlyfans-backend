@@ -1,3 +1,5 @@
+> Latest qualification continuation (2 November 2026): [QUALIFICATION-20261102.md](QUALIFICATION-20261102.md). The real bridge helper is now recovered and a fresh pinned local run is complete. PostgreSQL, matching sibling, Windows, real-model and production gates remain open. Earlier evidence below is retained as history.
+
 # Verification and limitations
 
 The current candidate continues integration parent `a6b93bd227fec82589f955593811543889194613`. Test evidence applies to this source candidate, not deployed services. No production database, provider account or customer conversation was used.

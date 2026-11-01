@@ -1,0 +1,137 @@
+{
+  "source_commit": "bf16b6766bc70078e449c74c1fe07dbf34375f25",
+  "transport": "synthetic_model_and_http_only",
+  "scenarios": [
+    {
+      "case": "proactive_with_complete_answer",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "off",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "shadow",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "short_acceptance",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "immediate_direct_request",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "complaint",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "stale_purchase_coverage",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "missing_inventory",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "purchase_then_different_requested_item",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "opportunity_before_reference",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "opportunity_after_reference",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "no_opportunity_beyond_reference",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "boundary_explore_becomes_specific_invitation",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "one_necessary_clarification",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "second_extension_refused_and_recorded_for_review",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "invitation_hold_race",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "edit",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "human_takeover",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "budget",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "develop_then_fan_request",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "rejected_invitation",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "ignored_invitation",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "ambiguous_invitation_one_clarification_then_acceptance",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "shadow_preserves_separate_existing_direct_permission",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "affordable_stated_budget_preserves_eligible_offer",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "confirmed_native_pointer_allows_own_following_bubbles_without_releasing_lease",
+      "cards": 1,
+      "real_authority": true
+    }
+  ],
+  "count": 26
+}

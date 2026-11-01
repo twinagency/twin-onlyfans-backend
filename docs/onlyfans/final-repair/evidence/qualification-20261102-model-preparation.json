@@ -1,0 +1,25 @@
+{
+  "original_pages": 308,
+  "original_chats": 122,
+  "original_messages": 5127,
+  "exact_per_chat_counts_validated": true,
+  "distinct_cases": 200,
+  "distinct_chats_in_sample": 119,
+  "creator_count": 7,
+  "cohorts": {
+    "unverified_customer_or_business": 181,
+    "known_test": 13,
+    "suspected_test": 6
+  },
+  "sampling_tags": {
+    "question_correction": 67,
+    "budget_refusal": 10,
+    "nearby_ordinary_candidate": 95,
+    "product_price_delivery": 45,
+    "stop_consent_distress": 11,
+    "identity_handover": 13
+  },
+  "model_calls": 0,
+  "status": "DRAFT ONLY: human source/rubric review and approved world-state evidence pending; not counted as approved quality cases or passing generations",
+  "original_pdf_sha256": "42d7e75e546b5eff4d9fc2c40f4061085f436ba9195bf6174fa1eff21c2672b3"
+}

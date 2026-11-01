@@ -1,0 +1,64 @@
+=== test_ledger_date_filters.py ===
+.EE                                                                      [100%]
+==================================== ERRORS ====================================
+_ ERROR at setup of test_changed_provider_filter_restarts_cursor_without_erasing_or_double_counting_money[False] _
+
+    @pytest.fixture
+    def database():
+>       admin_url = os.environ["ONLYFANS_TEST_PG_URL"]
+E       KeyError: 'ONLYFANS_TEST_PG_URL'
+
+service/tests/test_onlyfans_foundation_pg.py:26: KeyError
+_ ERROR at setup of test_changed_provider_filter_restarts_cursor_without_erasing_or_double_counting_money[True] _
+
+    @pytest.fixture
+    def database():
+>       admin_url = os.environ["ONLYFANS_TEST_PG_URL"]
+E       KeyError: 'ONLYFANS_TEST_PG_URL'
+
+service/tests/test_onlyfans_foundation_pg.py:26: KeyError
+=============================== warnings summary ===============================
+../qualification-venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /workspace/scratch/9a82163d809e/qualification-venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+ERROR service/tests/test_ledger_date_filters.py::test_changed_provider_filter_restarts_cursor_without_erasing_or_double_counting_money[False]
+ERROR service/tests/test_ledger_date_filters.py::test_changed_provider_filter_restarts_cursor_without_erasing_or_double_counting_money[True]
+1 passed, 1 warning, 2 errors in 1.69s
+
+=== test_twin_bridge_contract.py ===
+
+cross-language contract smoke
+  FAIL Twin tooling unavailable; the cross-language check did not run
+
+1 FAILED
+   - Twin harness unavailable (helper=True, tsx=False); this check was NOT executed
+
+=== test_twin_bridge_roundtrip.py ===
+  FAIL Twin tooling unavailable; the round trip did not run
+
+1 FAILED
+   - Twin harness unavailable; the round trip did NOT run
+
+=== test_twin_bridge_runner.py ===
+-- R6: the runner trusts both the exit status and the marker --
+  ok   the Windows runner is present
+Traceback (most recent call last):
+  File "/workspace/scratch/9a82163d809e/backend/service/tests/test_twin_bridge_runner.py", line 112, in <module>
+    scenario("a passing suite", ["test_zzprobe_ok.py"], True, "1 passed, 0 failed")
+  File "/workspace/scratch/9a82163d809e/backend/service/tests/test_twin_bridge_runner.py", line 84, in scenario
+    calls = [invoke(probe_dir, [a] if a else []) for a in args]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/9a82163d809e/backend/service/tests/test_twin_bridge_runner.py", line 71, in invoke
+    proc = subprocess.run(
+           ^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/subprocess.py", line 548, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/subprocess.py", line 1026, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/subprocess.py", line 1955, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: 'cmd'

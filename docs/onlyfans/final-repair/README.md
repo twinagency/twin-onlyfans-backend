@@ -1,3 +1,5 @@
+> Latest qualification continuation (2 November 2026): [QUALIFICATION-20261102.md](QUALIFICATION-20261102.md). The real bridge helper is now recovered and a fresh pinned local run is complete. PostgreSQL, matching sibling, Windows, real-model and production gates remain open. Earlier evidence below is retained as history.
+
 # Original OnlyFans continuation: review package
 
 Review branch: `codex/of-original-completion-20261102`.

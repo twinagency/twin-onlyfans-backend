@@ -1,0 +1,27 @@
+{
+  "source_commit": "bf16b6766bc70078e449c74c1fe07dbf34375f25",
+  "helper_source_commit": "d2b5185014b569f0238a8ca217ee8ce19e7ca84f",
+  "helper_source_path": "docs/handover-local-20261028/inflowwkiller/service/tests/helpers/twin_bridge_server.mjs.source.txt",
+  "helper_blob": "2bb4df335165489289540cf8a2d3870313715a23",
+  "helper_sha256": "5de0dcd9630d5a7dc3d92a2da7ca00d0730d324993636f14f61d6e9b0e664ab3",
+  "github_runs": [
+    {
+      "run": 41328583562,
+      "commit": "eadd802ef29bde8015e0a056ce8d20c57fdf3d88",
+      "conclusion": "startup_failure",
+      "jobs": 0
+    },
+    {
+      "run": 41332145767,
+      "commit": "bf16b6766bc70078e449c74c1fe07dbf34375f25",
+      "conclusion": "startup_failure",
+      "jobs": 0
+    }
+  ],
+  "github_startup_root_cause": "Not exposed by accessible run/check APIs; workflow path BuildFailed, no jobs or commit check runs. A new test-only workflow reproduced failure before jobs.",
+  "archive_transfer": "Automatic approval review rejected continued transfer to connected Windows device because the private-source destination lacked explicit user authorization. Exact partial transfer was identified by its generated SHA-256 and removed; no candidate tests or database were started there.",
+  "production_writes": 0,
+  "customer_messages": 0,
+  "actual_model_calls": 0,
+  "latest_accessible_cloud_audit": "2026-11-01T11:00:22.812726Z; general operational report, not an OnlyFans API/worker/supervisor parity manifest"
+}

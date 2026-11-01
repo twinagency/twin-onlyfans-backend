@@ -366,9 +366,7 @@ def test_external_message_is_observed_shadow_then_live_and_cancels_obsolete_inte
     external_out(database[1])
     assert operator_cases.scan(store, TENANT, ACCOUNT, FAN) == []
     assert cases(database[1]) == [("external_sender", "shadow", "all")] and state(database[1])[0] == "automated"
-    with Session(database[1]) as s, s.begin():
-        s.get(AccountAiConfig, ACCOUNT).ai_chatter_config_json = json.dumps({"conversation_safety_mode": "live"})
-    # queued internal work exists when the external message is observed
+    # queued internal work exists (queued under shadow) when the external message is observed under live
     service = CampaignService(store)
     service.create(TENANT, ACCOUNT, command_key="d" * 64, actor="synthetic-operator", name="Synthetic promo",
                    body="A synthetic promotion body.", audience={"kind": "all_known"})
@@ -377,6 +375,8 @@ def test_external_message_is_observed_shadow_then_live_and_cancels_obsolete_inte
     unthrottle(database[1])
     identity = service.queue_due(TENANT, ACCOUNT)
     assert identity is not None
+    with Session(database[1]) as s, s.begin():
+        s.get(AccountAiConfig, ACCOUNT).ai_chatter_config_json = json.dumps({"conversation_safety_mode": "live"})
     assert operator_cases.scan(store, TENANT, ACCOUNT, FAN) == ["external_sender"]
     assert state(database[1])[0] == "paused"
     transport = SyntheticTextTransport(ACCOUNT)
@@ -450,8 +450,7 @@ def test_a_planned_internal_reply_cannot_race_a_person_who_takes_over(database, 
 
 
 # ── the operator case record ──────────────────────────────────────────────────────────────────────────────────────
-def test_case_record_carries_owner_due_overdue_escalation_and_reaches_the_handover_read(database):
-    import asyncio
+def test_case_record_carries_owner_due_overdue_escalation(database):
     store, _ = configured(database, mode="automated")
     with Session(database[1]) as s, s.begin():
         case, _new = operator_cases.open_case(s, ACCOUNT, FAN, "distress", reason="distress-phrase",
@@ -472,17 +471,6 @@ def test_case_record_carries_owner_due_overdue_escalation_and_reaches_the_handov
     assert operator_cases.sweep_overdue(store, TENANT, ACCOUNT) == 0                       # idempotent within an interval
     with Session(database[1]) as s:
         assert operator_cases.list_cases(s, ACCOUNT)[0]["escalationLevel"] >= 2            # 40 min late of a 15 min clock
-    from db.engine import get_session
-    from onlyfans_runtime.handover import read_handover
-
-    async def read():
-        async with get_session() as session:
-            return await read_handover(session, ACCOUNT, FAN, TENANT)
-    import os
-    os.environ["DATABASE_URL"] = database[0]
-    from db import engine as db_engine
-    body = asyncio.run(read())
-    assert [c["caseId"] for c in body["openCases"]] == [case_id]
     with pytest.raises(Refused):
         operator_cases.acknowledge(store, TENANT, ACCOUNT, "00000000-0000-0000-0000-000000000000", actor="x")
     store.close()

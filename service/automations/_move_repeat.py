@@ -102,10 +102,10 @@ def problems(candidate: str, recent_out, *, known: set[str] = frozenset(), fan_n
         tags.append("move_loop")
     # reworded repetition of an earlier bubble
     mine = _tokens(text)
-    if len(mine) >= 4:
+    if len(mine) >= 3:
         for b in prior:
             theirs = _tokens(b)
-            if len(theirs) >= 4 and len(mine & theirs) / len(mine | theirs) >= 0.6:
+            if len(theirs) >= 3 and len(mine & theirs) >= 3 and len(mine & theirs) / len(mine | theirs) >= 0.6:
                 tags.append("paraphrase")
                 break
     if BELITTLE.search(text):

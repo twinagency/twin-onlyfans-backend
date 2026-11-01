@@ -23,7 +23,7 @@ from .voice import MissingFact, money, render, violates_never_say
 # Scenarios after which a proactive offer would be tone-deaf.
 _NO_SELL_AFTER = {C.TOO_MANY_SALES, C.FEELINGS, C.REAL_RELATIONSHIP, C.DELAYED_REPLY, C.JEALOUS, C.EXCLUSIVE,
                   C.FAMILY_COMMENT, C.SECRECY, C.IDENTITY, C.PAST_PROMISE, C.BOUNDARY_PUSH, C.OTHER_CREATOR,
-                  C.CHARGEBACK, C.NO, C.PRICE_COMPARE, C.REMEMBER_PAST, C.IGNORED_QUESTION, C.CONFLICTING}
+                  C.CHARGEBACK, C.ALREADY_BOUGHT, C.NO, C.PRICE_COMPARE, C.REMEMBER_PAST, C.IGNORED_QUESTION, C.CONFLICTING}
 
 
 @dataclass
@@ -49,7 +49,7 @@ class Engine:
         gate = self._gate(st, now)
         if gate:
             return gate
-        hit = C.classify(text)
+        hit = C.classify(text, self.p)
         sc = hit.scenario
         if sc == C.ESCALATE:
             st.escalated = f"escalate:{hit.matched}"
@@ -141,6 +141,8 @@ class Engine:
         for label, minutes in self.p.throttle_labels.items():
             if label in labels and st.last_reply_at and not st.open_offer:
                 last = datetime.fromisoformat(st.last_reply_at)
+                if (last.tzinfo is None) != (now.tzinfo is None):
+                    last, now = last.replace(tzinfo=None), now.replace(tzinfo=None)
                 if now - last < timedelta(minutes=minutes):
                     return Decision("skip", "label", reason=f"{label} answered at most every {minutes} min")
         return None
@@ -162,7 +164,7 @@ class Engine:
 
     def _invite_next_vault(self, d, st) -> None:
         nxt = self._next_vault(st)
-        if not nxt or nxt[1].ppv_id in st.declined:
+        if not nxt or nxt[1].ppv_id in st.declined or nxt[1].ppv_id in st.purchased:
             return
         level, step = nxt
         if step.price_cents is None:
@@ -193,7 +195,7 @@ class Engine:
             if not allowed:
                 self._say(d, st, "vip_only_redirect")
                 d.notes.append(f"Fan asked for VIP-only/owned items {[i.key for i in items]}; redirected.")
-                if self.p.vault:
+                if self.p.vault and not st.open_offer and not st.invite and st.turns >= st.sales_paused_until_turn:
                     self._invite_next_vault(d, st)
                 return d
             item = allowed[0]
@@ -220,6 +222,10 @@ class Engine:
             return d
         if oid in st.purchased:
             self._say(d, st, "already_bought")
+            return d
+        if st.open_offer and st.open_offer.get("id") == oid:
+            self._say(d, st, template, item=label, price_cents=price_cents)   # reminder only: no second unpaid offer
+            d.notes.append(f"{oid} is already offered and unpaid: reminded the fan, did not open a second offer.")
             return d
         self._say(d, st, template, item=label, price_cents=price_cents)
         d.offer = {"kind": kind, "id": oid, "label": label, "price_cents": price_cents}

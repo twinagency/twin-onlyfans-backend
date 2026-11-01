@@ -6,6 +6,7 @@ import re
 
 EMOJI = {"heart": "❤️", "cry": "😭", "eyes": "👀", "kiss": "😘", "laugh": "😂", "shy": "🥺", "fire": "🔥"}
 _ELONGATED = re.compile(r"([a-z])\1{2,}", re.I)
+_VIP = re.compile(r"\bVIP(?=s?\b)")
 _DASHES = re.compile(r"\s*[—–]\s*")
 
 
@@ -47,7 +48,8 @@ def render(template: str, persona, *, seed: int = 0, item: str | None = None, pr
     out = re.sub(r"[ \t]{2,}", " ", out).strip()
     out = re.sub(r"\s+([,.!?])", r"\1", out)
     if v.lowercase:
-        out = out.lower() if not price_cents else re.sub(r"[A-Z]", lambda c: c.group(0).lower(), out)
+        out = _VIP.sub("\x00", out)
+        out = out.lower().replace("\x00", "VIP")
     return out
 
 

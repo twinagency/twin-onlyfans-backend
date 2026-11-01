@@ -48,15 +48,15 @@ def _rx(*patterns):
 _RULES: tuple[tuple[str, tuple[re.Pattern, ...]], ...] = (
     (ESCALATE, _rx(
         r"\b(?:leak|post|share|send)\w*\s+(?:your|ur)\s+(?:pics|nudes|content|videos?)\b.*\b(?:unless|if\s+you\s+don'?t|everywhere|online|family|friends)\b",
-        r"\b(?:i'?ll|i\s+will|gonna)\s+(?:leak|expose|dox|find)\s+(?:you|u|your|ur)\b",
+        r"\b(?:i'?ll|i\s+will|gonna|going\s+to|im\s+going\s+to|i'?m\s+going\s+to)\s+(?:leak|expose|dox|find)\s+(?:you|u|your|ur)\b",
         r"\b(?:i\s+know|found)\s+where\s+(?:you|u)\s+(?:live|work|stay)\b|\b(?:outside|near)\s+(?:your|ur)\s+(?:house|place|apartment|work|gym)\b",
         r"\bwere\s+(?:you|u)\s+at\b.*\b(?:today|yesterday|last\s+night)\b.*\b(?:i\s+saw|saw\s+you)\b",
         r"\b(?:kill|hurt|rape|beat)\s+(?:you|u|your|ur)\b",
         r"\b(?:kill(?:ing)?|hurt(?:ing)?)\s+myself\b|\bsuicid(?:e|al)\b|\bend\s+it\s+all\b|\btook\s+(?:a\s+lot\s+of|too\s+many)\s+pills\b",
-        r"\b(?:underage|under\s*18|minor|year\s*old\s+(?:girl|boy))\b|\b1[0-7]\s*(?:yo|y/o|years?\s+old)\b",
+        r"\b(?:underage|under\s*18|minors?(?!\s+(?:league|key|issue|thing|problem|injury|detail|change|inconvenience))|year\s*old\s+(?:girl|boy))\b|\b1[0-7]\s*(?:yo|y/o|years?\s+old)\b",
         r"\b(?:stupid|dumb|worthless|ugly)\s+(?:bitch|whore|slut|cunt)\b",
     )),
-    (CHARGEBACK, _rx(r"\b(?:charge\s*back|chargeback|dispute\s+(?:the|this|my)\s+(?:charge|payment)|report\s+(?:you|this)\s+to\s+(?:onlyfans|my\s+bank)|refund\s+(?:me|my)\b)")),
+    (CHARGEBACK, _rx(r"\b(?:charge\s*back|chargeback|dispute\s+(?:the|this|my)\s+(?:charge|payment)|report\s+(?:you|this)\s+to\s+(?:onlyfans|my\s+bank)|refunds?\b|money\s+back)")),
     (IDENTITY, _rx(
         r"\b(?:are|r)\s+(?:you|u)\s+(?:a\s+)?(?:bot|ai|robot|real|fake|chat\s*gpt|her\s+manager|a\s+(?:guy|man|team))\b",
         r"\bis\s+(?:this|it)\s+(?:really|actually)\s+(?:you|her)\b|\bwho\s+(?:am\s+i|is)\s+(?:really\s+)?(?:talking|texting)\s+(?:to|with)\b",
@@ -67,7 +67,7 @@ _RULES: tuple[tuple[str, tuple[re.Pattern, ...]], ...] = (
     (FAMILY_COMMENT, _rx(r"\b(?:your|ur)\s+(?:mom|mum|mother|sister|sis|dad|family)\b.*\b(?:hot|sexy|look\s+like|single|pics?|nudes?)\b")),
     (PAST_PROMISE, _rx(r"\b(?:you|u)\s+promised\b|\byou\s+said\s+i'?d\s+get\b")),
     (BOUNDARY_PUSH, _rx(r"\bjust\s+(?:this\s+)?once\b|\bmake\s+an?\s+exception\b|\bi\s+know\s+(?:you|u)\s+can\b|\bcome\s+on\s+please\b|\bwhy\s+not\s+just\b")),
-    (ALREADY_BOUGHT, _rx(r"\b(?:already|alr)\s+(?:bought|have|got|paid\s+for|unlocked)\b|\bselling\s+(?:me\s+)?(?:the\s+same|it)\s+again\b")),
+    (ALREADY_BOUGHT, _rx(r"\b(?:already|alr)\s+(?:buy|bought|purchased|paid|own|unlocked)\b|\b(?:already|alr)\s+(?:have|got)\s+(?:that|this|it|those|these)\b|\bselling\s+(?:me\s+)?(?:the\s+same|it)\s+again\b|\bsell\s+(?:it|this|that)\s+to\s+me\s+again\b")),
     (CUSTOM, _rx(r"\bcustom\b|\b(?:make|film|record)\s+(?:something|a\s+(?:video|vid|clip))\s+(?:just\s+)?for\s+me\b|\bspecific\s+idea\b|\bused\s+(?:panties|undies|underwear)\b")),
     (TOO_MANY_SALES, _rx(r"\b(?:always|every\s+time)\b.*\b(?:sell|selling|pitch)\b|\bstop\s+(?:selling|sending\s+(?:me\s+)?(?:ppv|offers|locked))\b|\bcan\s+we\s+just\s+talk\b")),
     (BORED_CONTENT, _rx(r"\b(?:content|pics|videos?)\b.*\b(?:repetitive|boring|the\s+same|same\s+old)\b|\bbored\s+of\s+(?:your|ur)\b")),
@@ -86,7 +86,7 @@ _RULES: tuple[tuple[str, tuple[re.Pattern, ...]], ...] = (
     (CONTENT_ASK, _rx(
         r"\b(?:send|show|see|got|have|want|wanna)\b[^.?!]{0,25}\b(?:pics?|photos?|videos?|vids?|clips?|content|more|something|boobs?|tits|booty|ass|feet|bikini|lingerie|nudes?)\b",
         r"\bwhat\s+(?:do\s+you|u)\s+have\b|\bppv\b|\bunlock\b")),
-    (YES, _rx(r"^\W*(?:yes+|yeah+|yea+|yep|sure|ok(?:ay)?|send\s+it|i'?m\s+in|deal|go\s+on|please|pls|👍|🔥|😍)\W*$")),
+    (YES, _rx(r"^\W*(?:yes+|yeah+|yea+|yep|sure|ok(?:ay)?|send\s+it|i'?m\s+in|deal|go\s+on|please|pls|👍|🔥|😍)(?:\W+(?:please|pls|babe|baby|sure|do|send\s+it))*\W*$")),
     (NO, _rx(r"^\W*(?:no+|nah+|nope|not\s+now|maybe\s+later|no\s+thanks?|can'?t\s+afford)\W*$")),
 )
 
@@ -97,7 +97,7 @@ class Classified:
     matched: str = ""
 
 
-def classify(text: str | None) -> Classified:
+def classify(text: str | None, persona=None) -> Classified:
     t = " ".join(str(text or "").replace("’", "'").split())
     if not t:
         return Classified(SMALL_TALK)
@@ -113,6 +113,10 @@ def classify(text: str | None) -> Classified:
             m = rule.search(t)
             if m:
                 return Classified(scenario, m.group(0)[:60])
+    if persona is not None:       # the fan simply names a priced item ("send nips"): that is a content ask
+        named = requested_items(t, persona)
+        if named:
+            return Classified(CONTENT_ASK, named[0].key)
     return Classified(SMALL_TALK)
 
 

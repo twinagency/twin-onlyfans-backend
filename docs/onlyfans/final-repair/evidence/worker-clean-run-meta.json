@@ -1,0 +1,44 @@
+{
+ "started_utc": "20261101T161844Z",
+ "seconds": 0.1,
+ "cases_file_sha256": "2a20db19272e5870101200b8a7f6769b5a4573475638333e9774af1028b88b99",
+ "cases": 16,
+ "generations_per_case": 5,
+ "transport": "synthetic",
+ "profile": "clean",
+ "route": "worker",
+ "base_seed": 0,
+ "model": "openrouter/deepseek-v4.1-flash",
+ "sampling_params": {
+  "temperature": 0.85,
+  "max_tokens": 400
+ },
+ "status_counts": {
+  "ok": 70,
+  "held_before_model": 10
+ },
+ "estimate_for_this_run": {
+  "cases": 16,
+  "generations": 5,
+  "calls_incl_repairs": 88,
+  "prompt_tokens_total": 143830,
+  "completion_tokens_total": 6160,
+  "mean_prompt_tokens": 1634,
+  "assumptions": {
+   "completion_tokens": 70,
+   "repair_rate": 0.1,
+   "cache_hit_rate": 0.0,
+   "token_count": "chars/4 approximation of the assembled prompt"
+  },
+  "price": {
+   "model": "openrouter/deepseek-v4.1-flash",
+   "in_per_1k_cents": 0.044,
+   "hit_per_1k_cents": 0.044,
+   "out_per_1k_cents": 0.132,
+   "source": "service/llm_models.py seed (comment: conservative full-input bound, UNVERIFIED for openrouter, cache saving not assumed)"
+  },
+  "usd_input": 0.06,
+  "usd_output": 0.01,
+  "usd": 0.07
+ }
+}

@@ -1,0 +1,1604 @@
+{
+  "transport": "synthetic_model_and_http_only",
+  "scenarios": [
+    {
+      "case": "proactive_with_complete_answer",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "off",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "shadow",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "short_acceptance",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "immediate_direct_request",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "complaint",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "stale_purchase_coverage",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "missing_inventory",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "purchase_then_different_requested_item",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "opportunity_before_reference",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "opportunity_after_reference",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "no_opportunity_beyond_reference",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "boundary_explore_becomes_specific_invitation",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "one_necessary_clarification",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "second_extension_refused_and_recorded_for_review",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "invitation_hold_race",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "edit",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "human_takeover",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "budget",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "develop_then_fan_request",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "rejected_invitation",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "ignored_invitation",
+      "cards": 0,
+      "real_authority": true
+    },
+    {
+      "case": "ambiguous_invitation_one_clarification_then_acceptance",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "shadow_preserves_separate_existing_direct_permission",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "affordable_stated_budget_preserves_eligible_offer",
+      "cards": 1,
+      "real_authority": true
+    },
+    {
+      "case": "confirmed_native_pointer_allows_own_following_bubbles_without_releasing_lease",
+      "cards": 1,
+      "real_authority": true
+    }
+  ],
+  "reports": {
+    "900501": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 2,
+      "by_outcome": {
+        "acted": 2
+      },
+      "by_action": {
+        "proactive_offer": 1,
+        "direct_offer": 1
+      },
+      "no_offer_reasons": {},
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 1,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 2,
+      "delivered_cards": 2,
+      "confirmed_purchases": 1,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "offered": 2
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "offered",
+            "raw_bubbles": 1,
+            "grouped_replies": 1,
+            "extension_used": false,
+            "reason": "confirmed_paid_card"
+          }
+        ],
+        "repeat": [
+          {
+            "status": "offered",
+            "raw_bubbles": 1,
+            "grouped_replies": 1,
+            "extension_used": false,
+            "reason": "confirmed_paid_card"
+          }
+        ]
+      }
+    },
+    "900502": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 0,
+      "by_outcome": {},
+      "by_action": {},
+      "no_offer_reasons": {},
+      "pacing": {
+        "first": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {},
+      "attempt_pacing": {
+        "first": [],
+        "repeat": []
+      }
+    },
+    "900503": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "proactive_offer": 1
+      },
+      "no_offer_reasons": {},
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 1,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {},
+      "attempt_pacing": {
+        "first": [],
+        "repeat": []
+      }
+    },
+    "900504": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 2,
+      "by_outcome": {
+        "acted": 2
+      },
+      "by_action": {
+        "invite": 1,
+        "direct_offer": 1
+      },
+      "no_offer_reasons": {
+        "current_interest_gentle": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 2,
+          "proposed_cards": 1,
+          "invitations": 1,
+          "grouped_turns": [
+            0,
+            1
+          ],
+          "raw_bubbles": [
+            0,
+            2
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {
+        "accepted": 1
+      },
+      "shadow_turns": 0,
+      "delivered_invitations": 1,
+      "undelivered_invitations": 0,
+      "planned_cards": 1,
+      "delivered_cards": 1,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "offered": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "offered",
+            "raw_bubbles": 3,
+            "grouped_replies": 2,
+            "extension_used": false,
+            "reason": "confirmed_paid_card"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900505": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "direct_offer": 1
+      },
+      "no_offer_reasons": {},
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 1,
+      "delivered_cards": 1,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "offered": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "offered",
+            "raw_bubbles": 1,
+            "grouped_replies": 1,
+            "extension_used": false,
+            "reason": "confirmed_paid_card"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900506": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "blocked": 1
+      },
+      "by_action": {
+        "answer": 1
+      },
+      "no_offer_reasons": {
+        "sales_eligibility_refused": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "active": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "active",
+            "raw_bubbles": 1,
+            "grouped_replies": 1,
+            "extension_used": false,
+            "reason": null
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900507": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "blocked": 1
+      },
+      "by_action": {
+        "answer": 1
+      },
+      "no_offer_reasons": {
+        "purchase_freshness_refused": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "active": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "active",
+            "raw_bubbles": 1,
+            "grouped_replies": 1,
+            "extension_used": false,
+            "reason": null
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900508": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "excluded": 1
+      },
+      "by_action": {
+        "answer": 1
+      },
+      "no_offer_reasons": {
+        "no_matching_media": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "active": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "active",
+            "raw_bubbles": 1,
+            "grouped_replies": 1,
+            "extension_used": false,
+            "reason": null
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900510": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "proactive_offer": 1
+      },
+      "no_offer_reasons": {},
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            1
+          ],
+          "raw_bubbles": [
+            1
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 1,
+      "delivered_cards": 1,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "offered": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "offered",
+            "raw_bubbles": 2,
+            "grouped_replies": 2,
+            "extension_used": false,
+            "reason": "confirmed_paid_card"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900511": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "proactive_offer": 1
+      },
+      "no_offer_reasons": {},
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            1
+          ],
+          "raw_bubbles": [
+            7
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 1,
+      "delivered_cards": 1,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "offered": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "offered",
+            "raw_bubbles": 8,
+            "grouped_replies": 2,
+            "extension_used": false,
+            "reason": "confirmed_paid_card"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900512": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "excluded": 1
+      },
+      "by_action": {
+        "answer": 1
+      },
+      "no_offer_reasons": {
+        "no_interest": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [
+            1
+          ],
+          "raw_bubbles": [
+            7
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "closed_no_offer": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "closed_no_offer",
+            "raw_bubbles": 8,
+            "grouped_replies": 2,
+            "extension_used": false,
+            "reason": "no_current_interest"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900513": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "invite": 1
+      },
+      "no_offer_reasons": {
+        "specific_item_invitation": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 1,
+          "grouped_turns": [
+            1
+          ],
+          "raw_bubbles": [
+            5
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {
+        "open": 1
+      },
+      "shadow_turns": 0,
+      "delivered_invitations": 1,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "awaiting_answer": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "awaiting_answer",
+            "raw_bubbles": 7,
+            "grouped_replies": 2,
+            "extension_used": false,
+            "reason": null
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900514": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "clarify": 1
+      },
+      "no_offer_reasons": {
+        "necessary_product_clarification": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [
+            1
+          ],
+          "raw_bubbles": [
+            5
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "clarification_pending": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "clarification_pending",
+            "raw_bubbles": 7,
+            "grouped_replies": 2,
+            "extension_used": true,
+            "reason": null
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900515": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "excluded": 1
+      },
+      "by_action": {
+        "answer": 1
+      },
+      "no_offer_reasons": {
+        "commercial-clarification-extension-exhausted": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [
+            1
+          ],
+          "raw_bubbles": [
+            6
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "closed_no_offer": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "closed_no_offer",
+            "raw_bubbles": 6,
+            "grouped_replies": 1,
+            "extension_used": true,
+            "reason": "review_required"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900516": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "invite": 1
+      },
+      "no_offer_reasons": {
+        "current_interest_gentle": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 1,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {
+        "open": 1
+      },
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 1,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "awaiting_answer": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "awaiting_answer",
+            "raw_bubbles": 0,
+            "grouped_replies": 0,
+            "extension_used": false,
+            "reason": null
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900517": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "blocked": 1
+      },
+      "by_action": {
+        "answer": 1
+      },
+      "no_offer_reasons": {
+        "evaluation_internal_failure": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "active": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "active",
+            "raw_bubbles": 0,
+            "grouped_replies": 0,
+            "extension_used": false,
+            "reason": null
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900518": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "blocked": 1
+      },
+      "by_action": {
+        "answer": 1
+      },
+      "no_offer_reasons": {
+        "sales_eligibility_refused": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "held": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "held",
+            "raw_bubbles": 0,
+            "grouped_replies": 0,
+            "extension_used": false,
+            "reason": "takeover"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900519": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "excluded": 1
+      },
+      "by_action": {
+        "clarify": 1
+      },
+      "no_offer_reasons": {
+        "quote_over_budget": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "closed_no_offer": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "closed_no_offer",
+            "raw_bubbles": 1,
+            "grouped_replies": 1,
+            "extension_used": false,
+            "reason": "unavailable"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900520": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 2,
+      "by_outcome": {
+        "acted": 2
+      },
+      "by_action": {
+        "develop": 1,
+        "direct_offer": 1
+      },
+      "no_offer_reasons": {
+        "explore_interest": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 2,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            0,
+            1
+          ],
+          "raw_bubbles": [
+            0,
+            2
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 1,
+      "delivered_cards": 1,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "offered": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "offered",
+            "raw_bubbles": 3,
+            "grouped_replies": 2,
+            "extension_used": false,
+            "reason": "confirmed_paid_card"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900521": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 2,
+      "by_outcome": {
+        "acted": 1,
+        "blocked": 1
+      },
+      "by_action": {
+        "invite": 1,
+        "answer": 1
+      },
+      "no_offer_reasons": {
+        "current_interest_gentle": 1,
+        "sales_eligibility_refused": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 2,
+          "proposed_cards": 0,
+          "invitations": 1,
+          "grouped_turns": [
+            0,
+            1
+          ],
+          "raw_bubbles": [
+            0,
+            2
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {
+        "declined": 1
+      },
+      "shadow_turns": 0,
+      "delivered_invitations": 1,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "closed_no_offer": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "closed_no_offer",
+            "raw_bubbles": 3,
+            "grouped_replies": 2,
+            "extension_used": false,
+            "reason": "refused_item"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900522": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 2,
+      "by_outcome": {
+        "acted": 1,
+        "excluded": 1
+      },
+      "by_action": {
+        "invite": 1,
+        "answer": 1
+      },
+      "no_offer_reasons": {
+        "current_interest_gentle": 1,
+        "no_interest": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 2,
+          "proposed_cards": 0,
+          "invitations": 1,
+          "grouped_turns": [
+            0,
+            1
+          ],
+          "raw_bubbles": [
+            0,
+            2
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {
+        "ignored": 1
+      },
+      "shadow_turns": 0,
+      "delivered_invitations": 1,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 0,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "closed_no_offer": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "closed_no_offer",
+            "raw_bubbles": 3,
+            "grouped_replies": 2,
+            "extension_used": false,
+            "reason": "no_current_interest"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900523": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 3,
+      "by_outcome": {
+        "acted": 3
+      },
+      "by_action": {
+        "invite": 1,
+        "clarify": 1,
+        "direct_offer": 1
+      },
+      "no_offer_reasons": {
+        "current_interest_gentle": 1,
+        "necessary_product_clarification": 1
+      },
+      "pacing": {
+        "first": {
+          "turns": 3,
+          "proposed_cards": 1,
+          "invitations": 1,
+          "grouped_turns": [
+            0,
+            1,
+            2
+          ],
+          "raw_bubbles": [
+            0,
+            2,
+            4
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {
+        "accepted": 1
+      },
+      "shadow_turns": 0,
+      "delivered_invitations": 1,
+      "undelivered_invitations": 0,
+      "planned_cards": 1,
+      "delivered_cards": 1,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "offered": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "offered",
+            "raw_bubbles": 5,
+            "grouped_replies": 3,
+            "extension_used": true,
+            "reason": "confirmed_paid_card"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900524": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "direct_offer": 1
+      },
+      "no_offer_reasons": {},
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 1,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 0,
+      "delivered_cards": 1,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {},
+      "attempt_pacing": {
+        "first": [],
+        "repeat": []
+      }
+    },
+    "900525": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "direct_offer": 1
+      },
+      "no_offer_reasons": {},
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 1,
+      "delivered_cards": 1,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "offered": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "offered",
+            "raw_bubbles": 1,
+            "grouped_replies": 1,
+            "extension_used": false,
+            "reason": "confirmed_paid_card"
+          }
+        ],
+        "repeat": []
+      }
+    },
+    "900526": {
+      "scope": {
+        "decisions_since": null,
+        "delivery_and_attempt_totals": "all_retained_history"
+      },
+      "turns_evaluated": 1,
+      "by_outcome": {
+        "acted": 1
+      },
+      "by_action": {
+        "proactive_offer": 1
+      },
+      "no_offer_reasons": {},
+      "pacing": {
+        "first": {
+          "turns": 1,
+          "proposed_cards": 1,
+          "invitations": 0,
+          "grouped_turns": [
+            0
+          ],
+          "raw_bubbles": [
+            0
+          ]
+        },
+        "repeat": {
+          "turns": 0,
+          "proposed_cards": 0,
+          "invitations": 0,
+          "grouped_turns": [],
+          "raw_bubbles": []
+        }
+      },
+      "invitations_by_state": {},
+      "shadow_turns": 0,
+      "delivered_invitations": 0,
+      "undelivered_invitations": 0,
+      "planned_cards": 1,
+      "delivered_cards": 1,
+      "confirmed_purchases": 0,
+      "failed_deliveries": 0,
+      "attempts_by_state": {
+        "offered": 1
+      },
+      "attempt_pacing": {
+        "first": [
+          {
+            "status": "offered",
+            "raw_bubbles": 1,
+            "grouped_replies": 1,
+            "extension_used": false,
+            "reason": "confirmed_paid_card"
+          }
+        ],
+        "repeat": []
+      }
+    }
+  }
+}

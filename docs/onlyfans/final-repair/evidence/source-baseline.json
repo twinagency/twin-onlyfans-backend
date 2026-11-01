@@ -1,0 +1,36 @@
+{
+  "integration_branch": "claude/of-final-integration-20261101",
+  "integration_commit": "a6b93bd227fec82589f955593811543889194613",
+  "integration_root_tree": "f73bf5b69596cd9e0e203cb88b7de6348fae7f16",
+  "source_continuation_commit": "6d53df81dd29e21c9df82195a64b46dfb7641bc5",
+  "source_continuation_tree": "cf3fcda823d8bfbcaf0fd90d38339cb4ab8e3a07",
+  "evaluation_harness_commit": "64b6e802dae357609868cf80cbda1d64ebf7a83d",
+  "supplied_files": [
+    {
+      "name": "GPT-HANDOFF-RUNDOWN-2026-11-02.txt",
+      "sha256": "dca6eed87183d2447f94b81f448c8658143ca368040019372c8f59a0076dfdc0"
+    },
+    {
+      "name": "ONLYFANS-DETAILED-IMPLEMENTATION-PLAN(1).txt",
+      "sha256": "74b26a62e756f1dbe68229aca0aede4e34ec6639d74638138ec900a089d42548"
+    }
+  ],
+  "excluded": "Moxy workflow branch and redesign",
+  "not_available": [
+    "private revised execution plan",
+    "private incident cases",
+    "original unpushed workstation worktree"
+  ],
+  "baseline_suite_failure_modules": [
+    "test_ledger_date_filters.py",
+    "test_native_pilot_expiry.py",
+    "test_onlyfans_egress_isolation.py",
+    "test_onlyfans_launch_integration.py",
+    "test_onlyfans_read.py",
+    "test_r2_complete_answers.py",
+    "test_twin_bridge_contract.py",
+    "test_twin_bridge_ownership.py",
+    "test_twin_bridge_roundtrip.py",
+    "test_twin_bridge_runner.py"
+  ]
+}

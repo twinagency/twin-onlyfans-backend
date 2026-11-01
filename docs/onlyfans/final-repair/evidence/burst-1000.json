@@ -1,0 +1,20 @@
+{
+  "module": "test_throughput_burst.py",
+  "exit_code": 0,
+  "checks": 22,
+  "fan_count": 1000,
+  "reply_count": 999,
+  "human_takeovers": 1,
+  "account_gap_seconds": 10,
+  "clock": "virtual; wall time reported separately",
+  "virtual_latency_seconds": {
+    "n": 999,
+    "median": 4971.0,
+    "p95": 9435.0,
+    "p99": 9832.0,
+    "max": 9932.0
+  },
+  "observed_output": "burst 1000 fans, 999 replies, latency s {'n': 999, 'median': 4971.0, 'p95': 9435.0, 'p99': 9832.0, 'max': 9932.0}, wall 165s",
+  "interpretation": "backpressure, duplicate, ownership and recovery safety; not the 180-second latency SLO at this load",
+  "source_sha256": "98423f82b63c3a0904f63b8bc95e1c0f1ed2aaddd65f61f2ff5abaed61168f9a"
+}

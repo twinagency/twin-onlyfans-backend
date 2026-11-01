@@ -1,0 +1,196 @@
+{
+ "generations": 80,
+ "cases": 16,
+ "auto_pass_all": {
+  "n": 80,
+  "pass": 24,
+  "rate": 0.3
+ },
+ "case_level_all_generations_pass": {
+  "n": 16,
+  "pass": 2,
+  "rate": 0.125
+ },
+ "hard_fail_generations": 0,
+ "hard_fail_by_category": {},
+ "by_category": {
+  "accept_invitation": {
+   "n": 5,
+   "pass": 3,
+   "rate": 0.6
+  },
+  "ambiguous_invitation": {
+   "n": 5,
+   "pass": 0,
+   "rate": 0.0
+  },
+  "budget": {
+   "n": 5,
+   "pass": 1,
+   "rate": 0.2
+  },
+  "complaint": {
+   "n": 5,
+   "pass": 1,
+   "rate": 0.2
+  },
+  "complete_answer": {
+   "n": 5,
+   "pass": 1,
+   "rate": 0.2
+  },
+  "current_interest": {
+   "n": 5,
+   "pass": 2,
+   "rate": 0.4
+  },
+  "different_item": {
+   "n": 5,
+   "pass": 0,
+   "rate": 0.0
+  },
+  "direct_offer": {
+   "n": 5,
+   "pass": 0,
+   "rate": 0.0
+  },
+  "identity": {
+   "n": 5,
+   "pass": 1,
+   "rate": 0.2
+  },
+  "ordinary": {
+   "n": 5,
+   "pass": 1,
+   "rate": 0.2
+  },
+  "preference": {
+   "n": 5,
+   "pass": 4,
+   "rate": 0.8
+  },
+  "product_question": {
+   "n": 5,
+   "pass": 0,
+   "rate": 0.0
+  },
+  "refusal": {
+   "n": 5,
+   "pass": 0,
+   "rate": 0.0
+  },
+  "stop_contact": {
+   "n": 10,
+   "pass": 10,
+   "rate": 1.0
+  },
+  "support": {
+   "n": 5,
+   "pass": 0,
+   "rate": 0.0
+  }
+ },
+ "by_f_row": {},
+ "by_source": {
+  "synthetic": {
+   "n": 80,
+   "pass": 24,
+   "rate": 0.3
+  }
+ },
+ "by_creator_style": {
+  "Amelia: short": {
+   "n": 80,
+   "pass": 24,
+   "rate": 0.3
+  }
+ },
+ "by_test_traffic": {
+  "non_test": {
+   "n": 80,
+   "pass": 24,
+   "rate": 0.3
+  }
+ },
+ "by_route_status": {
+  "held_after_model": {
+   "n": 50,
+   "pass": 0,
+   "rate": 0.0
+  },
+  "held_before_model": {
+   "n": 10,
+   "pass": 10,
+   "rate": 1.0
+  },
+  "ok": {
+   "n": 20,
+   "pass": 14,
+   "rate": 0.7
+  }
+ },
+ "hard_fails": [],
+ "note": "auto pass = no deterministic hard fail and no soft flag. A generation with a hard fail fails regardless. This is not the six-dimension quality score; that needs the rubric sheet scored by a human/GPT.",
+ "fault_injection": {
+  "endorse_essentials": {
+   "injected": 7,
+   "held": 7,
+   "sanitised": 0,
+   "escaped": 0
+  },
+  "instruction_leak": {
+   "injected": 2,
+   "held": 2,
+   "sanitised": 0,
+   "escaped": 0
+  },
+  "classifier_leak": {
+   "injected": 6,
+   "held": 6,
+   "sanitised": 0,
+   "escaped": 0
+  },
+  "em_dash": {
+   "injected": 6,
+   "held": 0,
+   "sanitised": 6,
+   "escaped": 0
+  },
+  "delivery_promise": {
+   "injected": 5,
+   "held": 5,
+   "sanitised": 0,
+   "escaped": 0
+  },
+  "invented_price": {
+   "injected": 9,
+   "held": 9,
+   "sanitised": 0,
+   "escaped": 0
+  },
+  "ai_disclosure": {
+   "injected": 5,
+   "held": 5,
+   "sanitised": 0,
+   "escaped": 0
+  },
+  "human_denial": {
+   "injected": 4,
+   "held": 4,
+   "sanitised": 0,
+   "escaped": 0
+  },
+  "brackets": {
+   "injected": 5,
+   "held": 5,
+   "sanitised": 0,
+   "escaped": 0
+  },
+  "unsolicited_rating": {
+   "injected": 7,
+   "held": 7,
+   "sanitised": 0,
+   "escaped": 0
+  }
+ }
+}

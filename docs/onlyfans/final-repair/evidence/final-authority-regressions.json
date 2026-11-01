@@ -1,0 +1,192 @@
+{
+  "reason": "final budget and settled-receipt integration repairs after broad sweep began",
+  "source_sha256": {
+    "scripts/run-service-tests.py": "4411b5e04316ddbb5731b684988cb343549621d7b44901ff1c951e9b530f03f6",
+    "service/automations/_objection.py": "0d512f78cef90cef70ca0e47923bcf8d773b7e65d8456d2224ea1c392fd7e949",
+    "service/automations/ai_chatter.py": "f459741ecd6161c66f9d0a79d79adf115c696b96e4e62f0af7d861874b78146a",
+    "service/automations/content_prompts.py": "2cdbbb77a4318b553f176a977afcdaf9e0b3a9915ed4885c6c81163a8083273b",
+    "service/automations/contextual_evidence.py": "4075f0c791aa133590bf43126697339bce47bddc20c7bea9d8b67c69a18d3104",
+    "service/automations/contextual_offers.py": "32b2de830ce789d39e59033702f74acf68692178166ae5db714092a784cdb36f",
+    "service/automations/sales_action.py": "f3a7d460eca6dc453c5857e93ac05ce9a1a21a182370e69c8d5741d3233c2e18",
+    "service/automations/sales_decisions.py": "002a2653d49b037ceae2d7800543d67ae1d1d8e772dc0e14075cd32c105aedb9",
+    "service/automations/sales_invitation.py": "3d77b3c5bec0539148cfe39b218c499fd6aac1f81b1c9330f0e81e7daea54e0d",
+    "service/automations/sales_turn.py": "a654baa66ef276a005c5cee039a73f70b6998ee556c32bd3f0c0b9cf643e4af5",
+    "service/automations/sell_lane.py": "2c2d574196b8e8868720a09d8ec9d3ece909742c47474becaff87d241adce43a",
+    "service/db/models.py": "f4dbbc0ac349d14f16c9ce431dd407cda25ee17c0516744b5f51a0f540298bd4",
+    "service/db/onlyfans_delivery_models.py": "e7a852a145fe906692005e9f652cda85ce95b1a2210c688709ee11f52d7781bc",
+    "service/db/onlyfans_sales_models.py": "349e2dc81ca50721705eec974b8f8fa5eb7907a08bd19394789a57393572f549",
+    "service/db/schema.py": "d8be60012e9eaa7307ca8062105e02dde9f9d0e6bc5929be4f135b0e0498c8c9",
+    "service/native_pilot/content.py": "58c15de207a61fdd7065586bc1594220d9629fc257445b80fefb1e364e260bab",
+    "service/native_pilot/contextual.py": "c9d395c164402f5d8718052323efcd0c7cfe21a24cb31b21b2e443d62b3d57e1",
+    "service/native_pilot/engine.py": "ce1a96de22f0adfb9020e8edb327d25dcb524023e88834ff86ad63fb5b93457b",
+    "service/native_pilot/ledger.py": "322c1515bafb39a1ffbc7ae07442f6adc17f38145d2cfb4e585ea1ab376b6f86",
+    "service/native_pilot/recovery.py": "a5ef40bb46e8a5f7ba74f52ad9d32a23736558844f007bdedafa60cc878613ff",
+    "service/native_pilot/runner.py": "ce1cdbfd9f609391f2d937eb92c52d5619d878d032107dcc41d26a6b025308bb",
+    "service/native_pilot/service.py": "03f48e393bca71d89c1976622671b100816b35555abdaa1a6a32bd19771e224b",
+    "service/onlyfans_runtime/commerce.py": "4f0a5beab92b8b4c9ba60a48225b7fde997c21d5acfb99cb91f622ecdaafe5fc",
+    "service/onlyfans_runtime/commercial_controls.py": "04a4d8286f44c97a14172654a4a719fb1968875d84bcd79711ec9213eab655fe",
+    "service/onlyfans_runtime/native_planning.py": "9d9f3932e1fa383c92c15040864b0e4cef947dab19411ee273bc138922598f54",
+    "service/onlyfans_runtime/native_sales.py": "b393a73e15745d0a543445dc994870fd44460f285f1eb5bab5625b5eb1deaf9a",
+    "service/onlyfans_runtime/operator_case_port.py": "048438dbf6c6cf1290fa0ab16f30753b50eda692632ac41ab9929f158bc83dad",
+    "service/onlyfans_runtime/quote.py": "20ac973ceb16b48fa6b97eebd7a83165f3391cbeb244c97d3555567142bc40af",
+    "service/onlyfans_runtime/text_delivery.py": "f4dad3bf6fea38fbf98156ae090f007b677a4dd88569d63acc6e598d9c1dd9bc",
+    "scripts/onlyfans_eval/__init__.py": "98c883eced552dfac1de7959b5e95b69aa1490468f66a06f9f65098be9e2c666",
+    "scripts/onlyfans_eval/assemble.py": "a2dd78ffd2a33fbb155ae48a4825ac7873b523b3e749b91b3a3a243e4d1297ca",
+    "scripts/onlyfans_eval/cost.py": "a2f33ae8da4660e2ce107691e7d369e9d7277e370fdf72ac4dd2ae2a9b73ed11",
+    "scripts/onlyfans_eval/guards.py": "517f3fc87b57810123247f2d3f2fcebb8f548c64d6220e9a7ed5299f16422920",
+    "scripts/onlyfans_eval/run.py": "7d7f035378c5386b46d28c70cce776ab1b0048cb05401095ffb62abc2a37bc70",
+    "scripts/onlyfans_eval/scorer.py": "5b9d48a37da3869f0a3de926f6d4d27cfd1c7ef0a141a5f364099eacedb8c46a",
+    "scripts/onlyfans_eval/transports.py": "16046d22e18795155643dd46e117902e865545db4688a9e052a9224a58359b0c",
+    "service/db/migrations/versions/20261102_0100_commercial_progress.py": "73a3f634981f6756cdafa3083adb7d7c032fc7a6e1c55df4b406296a3dfb6e03",
+    "service/onlyfans_runtime/commercial_progress.py": "36766a26fe10b219fa4855ab6b51371214eaa95d0b6f2783e186aba056de926e"
+  },
+  "results": [
+    {
+      "module": "test_commercial_progress.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 4.37,
+      "source_sha256": "ba8d6c90271fab7e9208c19b2fe22970f364f4e940893c74f7daa345c23540b6"
+    },
+    {
+      "module": "test_commercial_full_path.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 23.4,
+      "source_sha256": "4d773a8f6bdb4c04f98a225914de53a8f437d163b7c00ee6bfb4cbba508236e4"
+    },
+    {
+      "module": "test_contextual_offers.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.17,
+      "source_sha256": "c0428a2cf169715f650c84cdcf3f1922d505ac817c40f583856f7a7a0d6e24a4"
+    },
+    {
+      "module": "test_contextual_evidence_scope.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.57,
+      "source_sha256": "0717c51a8c8a133232291bb8e2dba9e957a2a1c24ce5af2361b6ef1ea791e3cf"
+    },
+    {
+      "module": "test_contextual_native_turn.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.8,
+      "source_sha256": "cb90994c14bc714a1bfe423576ab05dcf24f6cb9fab39f1d3adab8c1ade6bf18"
+    },
+    {
+      "module": "test_native_pilot_ledger.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.7,
+      "source_sha256": "735cd9e4d1009afabfdc8b556785a70dc15d64b3e6b922b3f8fab52a2f2e35ed"
+    },
+    {
+      "module": "test_native_pilot_runner.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 4.63,
+      "source_sha256": "56985c89ffeb4b622ae3fbea7f24aa5bb88b8529f853c00eb6bf92f80a7fe127"
+    },
+    {
+      "module": "test_fastt_conversation_holds.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.62,
+      "source_sha256": "55b3893944937692fbe4cc9ffd526d70d39af0717cdb7e8ec5b3f2018a23a74e"
+    },
+    {
+      "module": "test_native_pilot_expiry.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.93,
+      "source_sha256": "90cd333886503114f99837e4e71664b4a2305701c388d1add538a1bf4f2d5ed4"
+    },
+    {
+      "module": "test_native_pilot_postsale_engine.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 10.09,
+      "source_sha256": "52153f2e7ea36149a6fb8fd68232ed7e7d292e065daaf60cce782c7c1d7b4a93"
+    },
+    {
+      "module": "test_native_pilot_recovery.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.56,
+      "source_sha256": "91d3f3984a0558ccfc538166690d6aaa59fdf2d2c8a78d30f743326d6fa6b0a0"
+    },
+    {
+      "module": "test_native_pilot_receipt_recovery.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.77,
+      "source_sha256": "0d377ed34ecb0afdb6407ecafec343be4c3e0c81664aed25c352208b4d0979a7"
+    },
+    {
+      "module": "test_native_pilot_reporting.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.29,
+      "source_sha256": "dc9b479736e1d7660594c0f93bdcb9f7ad881340c5954d0db0a96fea5de9f764"
+    },
+    {
+      "module": "test_quote_lifecycle.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 4.92,
+      "source_sha256": "061f223da2278112ee864669f72791b827b8ddc9fc433fee30e193df23a4a235"
+    },
+    {
+      "module": "test_onlyfans_egress_isolation.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.5,
+      "source_sha256": "d7002c6b8ba593ed443dce990f68cefb20ec8050678c63176ca82f4835eaf222"
+    },
+    {
+      "module": "test_r2_complete_answers.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 4.39,
+      "source_sha256": "d58243297bf84be3bf7f490e82530007a816ee448d2c2a6b36fe907d222af6a9"
+    },
+    {
+      "module": "test_active_selling.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 7.89,
+      "source_sha256": "26d77be5a237d1275a6d20088039fbeaa85c3935ae5cd80049692bdf42566699"
+    },
+    {
+      "module": "test_active_selling_turn.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.96,
+      "source_sha256": "af0896248502db5f29fa0d494956c3ab4cc5e9126b668e81061380917b8e9e59"
+    },
+    {
+      "module": "test_native_reply_pacing.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.58,
+      "source_sha256": "6c698b4482961579b4430ab89beb5558bfd09d6f6788228601d955ec9145bc2c"
+    },
+    {
+      "module": "test_r3r7_inbound_intent.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.4,
+      "source_sha256": "3d41e9fcd2a9fd3424c627a326a54e84cc1d98717cbec5e3d359772bdce32572"
+    },
+    {
+      "module": "test_onlyfans_launch_integration.py",
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.11,
+      "source_sha256": "8c12957e9176c3d69a3dada0484b002780027dff1307931ac5a7b39fb97b7e64"
+    }
+  ]
+}

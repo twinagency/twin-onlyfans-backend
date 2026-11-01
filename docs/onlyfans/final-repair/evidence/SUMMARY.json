@@ -1,0 +1,36 @@
+{
+  "service_modules": {
+    "pass": 137,
+    "not_run": 139,
+    "fail": 4
+  },
+  "service_modules_total": 280,
+  "failed_module_classification": {
+    "test_ledger_date_filters.py": "two disposable-PostgreSQL fixture cases cannot start; one pure case passes",
+    "test_twin_bridge_contract.py": "missing committed helper and inaccessible sibling Twin/tsx harness",
+    "test_twin_bridge_roundtrip.py": "missing committed helper and inaccessible sibling Twin/tsx harness",
+    "test_twin_bridge_runner.py": "Windows cmd unavailable on Linux"
+  },
+  "supplemental_final_authority_modules": {
+    "pass": 21,
+    "fail": 0
+  },
+  "new_full_path_scenarios": 26,
+  "full_path_repetitions": 3,
+  "new_durable_progress_tests": 43,
+  "synthetic_harness_cases": 16,
+  "generations_per_case": 5,
+  "prompt_routes": 2,
+  "profiles": 2,
+  "synthetic_harness_total_generations": 320,
+  "independent_rubric_scoring": "not performed",
+  "private_transcript_regressions": "not available",
+  "live_checks": "not authorised or performed",
+  "deployment_ready": false,
+  "source_commit": "6d53df81dd29e21c9df82195a64b46dfb7641bc5",
+  "notes": [
+    "Broad sweep began before final receipt-pointer repair; 21 supplemental modules cover the final code and include production source hashes.",
+    "All 26 full-path scenarios passed three times on the final source.",
+    "139 excluded PostgreSQL modules are not passes. Four failed modules remain release gates."
+  ]
+}

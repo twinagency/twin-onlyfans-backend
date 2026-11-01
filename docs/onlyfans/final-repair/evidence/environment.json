@@ -1,0 +1,16 @@
+{
+  "python": "3.12.14",
+  "platform": "Linux",
+  "fastapi_import_version": "0.136.1",
+  "sqlalchemy": "2.0.35",
+  "pytest": "9.2.0",
+  "alembic": "1.13.3",
+  "aiosqlite": "0.20.0",
+  "postgresql": "not available: bundled initdb cannot run as root; environment cannot create a nonroot uid",
+  "provider_transport": "synthetic HTTP, sockets denied in new full-path suite",
+  "model_transport": "synthetic, no live model invoked",
+  "live_state": "not inspected or changed in this continuation",
+  "integration_parent": "a6b93bd227fec82589f955593811543889194613",
+  "evaluation_harness_source": "64b6e802dae357609868cf80cbda1d64ebf7a83d",
+  "candidate_branch": "codex/of-original-completion-20261102"
+}

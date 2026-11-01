@@ -1,0 +1,23 @@
+{
+  "kind": "repeated isolated transport fixtures, not real-model quality evaluation",
+  "source_sha256": "4d773a8f6bdb4c04f98a225914de53a8f437d163b7c00ee6bfb4cbba508236e4",
+  "runs": [
+    {
+      "run": 1,
+      "scenarios": 26,
+      "exit_code": 0
+    },
+    {
+      "run": 2,
+      "scenarios": 26,
+      "exit_code": 0,
+      "seconds": 23.08
+    },
+    {
+      "run": 3,
+      "scenarios": 26,
+      "exit_code": 0,
+      "seconds": 22.83
+    }
+  ]
+}

@@ -1,3 +1,9 @@
+# Continuation status
+
+The current review package is [README.md](README.md), with [verification](VERIFICATION.md) and [R9 gates](R9-REVIEW-AND-RELEASE-GATES.md). The verified integration parent is `a6b93bd227fec82589f955593811543889194613`; the older start point below is historical. No deployment or activation occurred in this continuation.
+
+---
+
 # OnlyFans final repair: progress record and status (1 Nov 2026)
 
 Integration branch: `claude/of-final-integration-20261101` (local only; nothing pushed, deployed, migrated or activated).

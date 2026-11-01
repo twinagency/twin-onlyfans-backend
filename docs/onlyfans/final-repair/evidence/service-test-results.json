@@ -1,0 +1,1687 @@
+{
+  "module_timeout_seconds": 120,
+  "results": [
+    {
+      "module": "test_active_selling.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 7.39,
+      "source_sha256": "e9b0fa21fb632cc76cb19a396023b0d9e30164df95e088a9248f22622341ce3d"
+    },
+    {
+      "module": "test_active_selling_turn.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.47,
+      "source_sha256": "af0896248502db5f29fa0d494956c3ab4cc5e9126b668e81061380917b8e9e59"
+    },
+    {
+      "module": "test_agency_launch_contracts.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.67,
+      "source_sha256": "b856e92bf89765215905aa9b786a0ac08b822a68ddf78d5be6e09a47d26fdc55"
+    },
+    {
+      "module": "test_automatic_vault_descriptions_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_commercial_full_path.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 15.11,
+      "source_sha256": "3a31b5b800f1cff4b02b1b72dbf2ac03a1ca71d44f0ad87fae36e14feb46154f"
+    },
+    {
+      "module": "test_commercial_progress.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.22,
+      "source_sha256": "b1d3c97e56b9fe44a9aee830e5164447bd4b50f94a4f6867ca4c6b8d3dfa83b5"
+    },
+    {
+      "module": "test_concurrent_admission_units.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.72,
+      "source_sha256": "e4f498ebcffef6d9a44d678e8e5e7ef5c05db5c4f6576def092394ffac615157"
+    },
+    {
+      "module": "test_concurrent_delivery.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 23.28,
+      "source_sha256": "fc546b78d9589eb37c4843c6e0574c51615926e0d3ed35b7027c4733ffbe7f39"
+    },
+    {
+      "module": "test_concurrent_delivery_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_configuration_negotiation.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "2108e61fed75bc0a8b092c059275d182cc9c9ed35be9e50a8c8d5d557321d03f"
+    },
+    {
+      "module": "test_contextual_evidence.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "09e48715cc0f610a0c80ee41fad177bf931546073386b76042f4e85bf69dcfde"
+    },
+    {
+      "module": "test_contextual_evidence_scope.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "0717c51a8c8a133232291bb8e2dba9e957a2a1c24ce5af2361b6ef1ea791e3cf"
+    },
+    {
+      "module": "test_contextual_item_scope_migration.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.62,
+      "source_sha256": "93d528f2194f249cd8a45824d15a972f5909f2a09d8f9ce6509089441984ddcc"
+    },
+    {
+      "module": "test_contextual_native_turn.py",
+      "status": "fail",
+      "exit_code": 1,
+      "seconds": 2.32,
+      "source_sha256": "ee239f64bb7a99a589b24708c9ac23383daa67091989809e213b1a32391e26cf"
+    },
+    {
+      "module": "test_contextual_offers.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.27,
+      "source_sha256": "c0428a2cf169715f650c84cdcf3f1922d505ac817c40f583856f7a7a0d6e24a4"
+    },
+    {
+      "module": "test_contextual_release_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_conversation_holds_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_conversation_policy.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.12,
+      "source_sha256": "cc805b72088593d1d768c759f99fb4263f62a5c993dc2ecb4856e4f56d69d72b"
+    },
+    {
+      "module": "test_creator_opening_prices.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.57,
+      "source_sha256": "498def01f19a901d99061df6885449228700bc72e68b0ba6e8bcb786e2edcc03"
+    },
+    {
+      "module": "test_crm_control_contract_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_crm_history_repair_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_crm_read_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_crm_resolution_jobs_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_crm_video_regressions.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.27,
+      "source_sha256": "f601d88e960d62be0c680977858166be707cae92885ece1fc8262700e3f92f31"
+    },
+    {
+      "module": "test_default_attention_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_fastt_activation.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.72,
+      "source_sha256": "1f83c63ed7d28c5f5b0ae1c739cd767158d9579d75b7b89a85c4ca53e6430831"
+    },
+    {
+      "module": "test_fastt_activation_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_fastt_controls_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_fastt_conversation_holds.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "55b3893944937692fbe4cc9ffd526d70d39af0717cdb7e8ec5b3f2018a23a74e"
+    },
+    {
+      "module": "test_fastt_engine_v2.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 21.69,
+      "source_sha256": "bb23689c9d7fc3be8710f323a96c3b4d81753ff955aa3c4e626161143b3c0e32"
+    },
+    {
+      "module": "test_fastt_engine_v2_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_fastt_engine_v2_units.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.87,
+      "source_sha256": "52fb66125d0099f5480fe9a258688a69936efe329589d02c7dfc682626bd90f7"
+    },
+    {
+      "module": "test_fastt_new_conversations_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_fastt_platform_scope.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.42,
+      "source_sha256": "251c011a56818b8680a1c2cd0801a5f4e76a2bf4bc5fe9d58b95637aaaafc059"
+    },
+    {
+      "module": "test_fastt_quality_guards.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.52,
+      "source_sha256": "a452b971130b887b2375aef14871534a6262a6dacf07b8e27dedb9a97fd0d2b9"
+    },
+    {
+      "module": "test_fastt_read_priority_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_fastt_reply_budget.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.07,
+      "source_sha256": "8d673d11c58b5aa3deb4af7f2cd5aaab26b02b91ac6269edf6a73fb59ce95dc5"
+    },
+    {
+      "module": "test_fastt_requested_caption.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 35.27,
+      "source_sha256": "e0abaddadb3dfb209c773189b6189248ad0d019816196e682f2a20b455296376"
+    },
+    {
+      "module": "test_fastt_scope_agreement.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.27,
+      "source_sha256": "f1748ca54ec3f682179416ad183fee8791afea0f5454cbed2b5e93daebcd1ca5"
+    },
+    {
+      "module": "test_fastt_scope_db.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.17,
+      "source_sha256": "9e1f92ea37867abe78bde5f2ca91b768643edd39c4fdae3ab73b9299e597fd7d"
+    },
+    {
+      "module": "test_fastt_scope_manual_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_fastt_scope_wide.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.17,
+      "source_sha256": "51356170bfce1a5147012f7734211025ef2d3f464a60660af8ffaad5e9dc94e0"
+    },
+    {
+      "module": "test_fastt_wire_stop.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.53,
+      "source_sha256": "e0a82e846245fa66c081b3701df9d6ecb90913d887fb06dc328adae903793498"
+    },
+    {
+      "module": "test_first_offer_benchmark.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.06,
+      "source_sha256": "7f0f024e4984139cfb6a7d3c052d3f1233a9fa02c4971786663c38a37443425c"
+    },
+    {
+      "module": "test_history_capacity_turns.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.12,
+      "source_sha256": "de674775777c0903424fe70902217b328fcb72c4c62b426219ba393ed87c32a8"
+    },
+    {
+      "module": "test_history_html_archive_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_history_legacy_breaks.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "f8fefe2a4d42bedee6148efda00866f2eb36bd92763a9b1f9a41d8d4072aa7f6"
+    },
+    {
+      "module": "test_iso45_isolation_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_iso45_roles_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_ledger_date_filters.py",
+      "status": "fail",
+      "exit_code": 1,
+      "seconds": 1.57,
+      "source_sha256": "a15bfca2534f60f67aa36a34f88aa83098e4fc8c52ef5f94b222d672030bd28f"
+    },
+    {
+      "module": "test_ledger_read_fairness_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_ledger_refresh_schedule.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "cecd7501e1e9a914e100046fab9cf0e8774f03bd610d0d4a313d500a7c1bac64"
+    },
+    {
+      "module": "test_manual_attachment_history_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_manual_vault_composer_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_native_pilot_attribution_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_native_pilot_caption_vault.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.22,
+      "source_sha256": "928e85c655f998ab76c6f671142447869ac0d7ef6805ff992b0017466ceb5a47"
+    },
+    {
+      "module": "test_native_pilot_content.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.72,
+      "source_sha256": "2ea480486c1c1c6e4f81e23bb1d41846595dace72689b99a5732b2e6514378d9"
+    },
+    {
+      "module": "test_native_pilot_context.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.43,
+      "source_sha256": "c1376a789927a27d4723a4cb1dc6eab3232a59a072f0925caba1ea6a9906237c"
+    },
+    {
+      "module": "test_native_pilot_daily_allowance.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.16,
+      "source_sha256": "dca0ef8edf7606bc3ae2a183d0904251889019d4fad5ffdd52a17975d00e9ebe"
+    },
+    {
+      "module": "test_native_pilot_daily_allowance_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_native_pilot_engine.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.93,
+      "source_sha256": "84ba294358a193371277b108b1050745f0d45566deb62aaa38379c60899a975c"
+    },
+    {
+      "module": "test_native_pilot_expiry.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.23,
+      "source_sha256": "90cd333886503114f99837e4e71664b4a2305701c388d1add538a1bf4f2d5ed4"
+    },
+    {
+      "module": "test_native_pilot_followups.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.48,
+      "source_sha256": "0012889f05272ab36c43ce57895e932e802f11f69c17f7a974be4b3f82593d60"
+    },
+    {
+      "module": "test_native_pilot_identity.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.02,
+      "source_sha256": "a5c280be3ee06d607cf2dd3859e976022c52e06806f697afa599b3cbdd85c433"
+    },
+    {
+      "module": "test_native_pilot_ledger.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.27,
+      "source_sha256": "735cd9e4d1009afabfdc8b556785a70dc15d64b3e6b922b3f8fab52a2f2e35ed"
+    },
+    {
+      "module": "test_native_pilot_load_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_native_pilot_manifest.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.11,
+      "source_sha256": "a232085d2f9453e66686995d4b72846a8509a19c5c40dcb4a70c895a5be72d2f"
+    },
+    {
+      "module": "test_native_pilot_model.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.77,
+      "source_sha256": "cabbfcdd47869931b0793edaad0ad434a8f63bad69a89115588c25d7231fc128"
+    },
+    {
+      "module": "test_native_pilot_offers.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 6.03,
+      "source_sha256": "270aaccfc494683447aa2930290a03a1c9ce8127d2072abcec7aaa02228c03d1"
+    },
+    {
+      "module": "test_native_pilot_overlap.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.97,
+      "source_sha256": "06705965316858f329c78009a688acf19b74139c939bcc782fbcdc67a24023e5"
+    },
+    {
+      "module": "test_native_pilot_postsale.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.07,
+      "source_sha256": "f060db45659c06fbd91db612d859056529607e8b3192aeef3d010a5d3be8a816"
+    },
+    {
+      "module": "test_native_pilot_postsale_engine.py",
+      "status": "fail",
+      "exit_code": 1,
+      "seconds": 9.4,
+      "source_sha256": "a853bb5ec877ad0aead98eff836dfd1f0e3097a3c0482d4a2ff10bca7f33e266"
+    },
+    {
+      "module": "test_native_pilot_receipt_recovery.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.07,
+      "source_sha256": "0d377ed34ecb0afdb6407ecafec343be4c3e0c81664aed25c352208b4d0979a7"
+    },
+    {
+      "module": "test_native_pilot_recovery.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.67,
+      "source_sha256": "91d3f3984a0558ccfc538166690d6aaa59fdf2d2c8a78d30f743326d6fa6b0a0"
+    },
+    {
+      "module": "test_native_pilot_reporting.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.93,
+      "source_sha256": "dc9b479736e1d7660594c0f93bdcb9f7ad881340c5954d0db0a96fea5de9f764"
+    },
+    {
+      "module": "test_native_pilot_resolver_seam.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.87,
+      "source_sha256": "a8eb551c01bc1dde01462442739de3fe467197c7ac4e2e9977b67bc04f2768ab"
+    },
+    {
+      "module": "test_native_pilot_runner.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 4.79,
+      "source_sha256": "56985c89ffeb4b622ae3fbea7f24aa5bb88b8529f853c00eb6bf92f80a7fe127"
+    },
+    {
+      "module": "test_native_pilot_runtime.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.17,
+      "source_sha256": "fb419c614a770c25a534abf36a874b41e601f4e33309b2f9e08531bb512b79d1"
+    },
+    {
+      "module": "test_native_pilot_service.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 60.3,
+      "source_sha256": "bce29c93c67656076d3137296b879c3f6c7af89e4ed84c67b9dd19de53cee51a"
+    },
+    {
+      "module": "test_native_pilot_service_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_native_pilot_storage_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_native_pilot_supervisor.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.22,
+      "source_sha256": "a2da664a7de2d75714f5523d49eacdea622ff39f2375bda951bb66779e87925d"
+    },
+    {
+      "module": "test_native_pilot_vault.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.62,
+      "source_sha256": "afecf1331bf64f073d91aecaa3b096a8d2727400d7ac759c5802616da76c358e"
+    },
+    {
+      "module": "test_native_pilot_vision.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.37,
+      "source_sha256": "5e5026288eb2a9ba0f53c062805230e4995338ab9d2f96b4425c5029174e9481"
+    },
+    {
+      "module": "test_native_reply_format.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.57,
+      "source_sha256": "026064935f5a04cc181f9d7630a1a8e972f27f01aee701a5b9e2022f1a726616"
+    },
+    {
+      "module": "test_native_reply_pacing.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.82,
+      "source_sha256": "6c698b4482961579b4430ab89beb5558bfd09d6f6788228601d955ec9145bc2c"
+    },
+    {
+      "module": "test_native_reply_pacing_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_offer_restriction_policy.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.57,
+      "source_sha256": "db4e632d390461524a6132d9d4ef6e5eb7f262478e4e2c1af56994656a91419c"
+    },
+    {
+      "module": "test_offer_selection_fresh.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.58,
+      "source_sha256": "a260eff368076a64781eff8deea00ad5c77b9e76452ae21d9ba227899adf39f2"
+    },
+    {
+      "module": "test_onlyfans_acceptance_tools.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.57,
+      "source_sha256": "21566adde7040f405f8cf8b61827b9344cd69a554bd2541b1b647b3d863fd810"
+    },
+    {
+      "module": "test_onlyfans_activation_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_agency_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_ai_filter.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.67,
+      "source_sha256": "88b63939b34b593413023f828b43760cc0b8b441334620c361e6bd74ee04525b"
+    },
+    {
+      "module": "test_onlyfans_automatic_imports_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_browser_capture.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "0d9971e0cc9417719d53722656f2765466a76214e28ff90678e22dd72c7a97db"
+    },
+    {
+      "module": "test_onlyfans_bulk_controls_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_campaign_media_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_campaign_reporting_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_campaigns_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_capacity_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_commerce_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_configuration_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_connection_renewal.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.27,
+      "source_sha256": "38c521fa182ec9736ba9627ff398d8919d37c1574d977fba0245b2f07064c9b3"
+    },
+    {
+      "module": "test_onlyfans_connection_renewal_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_connection_states_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_connections_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_content_carrier_authority_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_content_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_content_progress_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_content_sync_carrier.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.37,
+      "source_sha256": "b9a3aa249128e01d61fdec159769bd0269fdeda7028f1ea5d32fc2ebfde00080"
+    },
+    {
+      "module": "test_onlyfans_content_sync_delivery_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_content_sync_findings_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_content_sync_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_controls_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_creator_enrollments_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_creator_facts_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_dashboard_sessions_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_demo_assets.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.52,
+      "source_sha256": "aa5e859aefde0673b50d359fb4e83d9f62bf08bcb39f61331b216e62a41d506a"
+    },
+    {
+      "module": "test_onlyfans_earnings_breakdown_totals.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.07,
+      "source_sha256": "d2e383e688d868795d366b9c34427173a69c6aa84f5823dffe53b1ada03432e4"
+    },
+    {
+      "module": "test_onlyfans_earnings_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_earnings_scope.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.22,
+      "source_sha256": "a4e7787e9c1fe04c6a275f9961626ed06cf0deae212f7d066b76928aae4d98f6"
+    },
+    {
+      "module": "test_onlyfans_egress_isolation.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.57,
+      "source_sha256": "d7002c6b8ba593ed443dce990f68cefb20ec8050678c63176ca82f4835eaf222"
+    },
+    {
+      "module": "test_onlyfans_egress_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_eval_harness.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.02,
+      "source_sha256": "e831d1bf00bc7896402ecb53d8bc8c1abe2eaf4b363f0a3da7828098a29ef7e9"
+    },
+    {
+      "module": "test_onlyfans_fastt_campaign_controls_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_fastt_campaign_dispatch_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_fastt_models_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_fastt_operator.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.57,
+      "source_sha256": "a89596b4a7ca6c6583ce467b8e842ada92b96ec06ec265307a6db6e262201421"
+    },
+    {
+      "module": "test_onlyfans_fastt_operator_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_fastt_recovery_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_fastt_sales_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_fastt_takeover_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_fixed_price_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_fold_pending_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_foundation_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_history_diagnostics.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "262247e0ad9faa600bb2650408b6f5d9aae6ea827725b1f458e1855307f514b9"
+    },
+    {
+      "module": "test_onlyfans_http_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_inbox_batch_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_incoming_media.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.77,
+      "source_sha256": "2405200fe760b3bcd996393b8737572ec2c8b0d9d6efb8dd921e7197e8c6eef4"
+    },
+    {
+      "module": "test_onlyfans_independent_inbox_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_budget_configuration_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_controls_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_credential_status_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_engagement_contract.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.12,
+      "source_sha256": "2b073488d669b13ad10d37784ca995077d8a5bbcfe0ea7b6d5980ceebbd8f6f0"
+    },
+    {
+      "module": "test_onlyfans_launch_engagement_events_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_engagement_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.17,
+      "source_sha256": "9ee7bbfc09bec3e2e985c6bd53b687224a4f04d0eb7167e87c2117b54b176168"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_planning_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_recent_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_recovery_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_integration.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.62,
+      "source_sha256": "8c12957e9176c3d69a3dada0484b002780027dff1307931ac5a7b39fb97b7e64"
+    },
+    {
+      "module": "test_onlyfans_launch_integration_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_api_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_boundary.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.37,
+      "source_sha256": "147a7b2239e0ef9cb84342fadaec8ca3e60d440e3a954533fdd3301294e9ed22"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_contract.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.42,
+      "source_sha256": "a9317aa66ea047589367d409e790484126a924a308d7e4121d9b75bdec07ad30"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_diagnostics.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.02,
+      "source_sha256": "7f1a33e60ef462824cbcce92ef7dbf59489c5af7bd160726fdb2a6a7fca08b35"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_recovery_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_monitoring.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.41,
+      "source_sha256": "e11528e772e052be788ce361d95870b0d3b362d5fb521be5a40d14dbd2a0a4f3"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_api.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.07,
+      "source_sha256": "552203aa8a0ea455ae04efb11a85c4d656f7806bbc514239aba47954c93d84a1"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_credentials_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_importer.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.11,
+      "source_sha256": "d19dda800db87ebb9af139a1356fa2da6192b7b9dd7b461660f74395bcc185f2"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_policy.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.37,
+      "source_sha256": "76aa9b1e966e7592572265402209a1f96cc7e61471a9ab19ff9b939da327eec2"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_workflow.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.17,
+      "source_sha256": "447afc94b4873acf5c5ebdc679878e66336e543a5a4d30771471fdd2edbd44c8"
+    },
+    {
+      "module": "test_onlyfans_launch_provider_budget_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_provider_rate_limit.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "e02d7d5e6a371da4d46cde9771d015ec8e157e512aa130cc58a9cd5c83907841"
+    },
+    {
+      "module": "test_onlyfans_launch_reconciled_scope_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_review.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.47,
+      "source_sha256": "b50fad464b871ecaa49f197576c8ea3e65bdd1e8fd3f2212f09c42d8941c9ce0"
+    },
+    {
+      "module": "test_onlyfans_launch_schema_upgrade_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_launch_upload_permission.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.27,
+      "source_sha256": "44e67baee2eadbeeaa03313fb0ff722be1793c52f7efa8245fbd7dc525871f64"
+    },
+    {
+      "module": "test_onlyfans_launch_worker_health_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_ledger_exclusion_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_ledger_history_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_ledger_markers_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_ledger_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_live_controls_compat_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_loopback_transport_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_manual_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_media_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_media_upgrade_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_message_media.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.97,
+      "source_sha256": "6322718b5e7cafa639332cf0ce438b708d4840a9d1e0ebe6756079b1775e175d"
+    },
+    {
+      "module": "test_onlyfans_migration_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_native_budget_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_native_caption_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_native_connector_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_native_history.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.82,
+      "source_sha256": "58ba504ee1d20cca7cf4f66ae9f75d12cfd5d4695970119d4e2914af2bbb09ca"
+    },
+    {
+      "module": "test_onlyfans_native_history_links_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_native_loopback_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_native_memory_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_native_planning_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_native_protocol.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.52,
+      "source_sha256": "1f8a53753153fc1dc30a1149edf38460e08f16200fd5290667ca980eb69fb3a6"
+    },
+    {
+      "module": "test_onlyfans_native_upgrade_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_network_guard.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.03,
+      "source_sha256": "b740e5a632a7f49cb6bd88ca5ae4c7e42a2bc1865884380f23484162954d3050"
+    },
+    {
+      "module": "test_onlyfans_offer_import.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.12,
+      "source_sha256": "234224cc9b865ac850631a24dc2b467fe57ceb1628f8aeea322842dd0ecba469"
+    },
+    {
+      "module": "test_onlyfans_offer_import_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_offer_import_upgrade_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_offer_post_source_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_operations_timezone_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_paid_post_progress_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_post_buy_receipt_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_post_detail_adapter.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.42,
+      "source_sha256": "29593e8cf91db17189f6c989ac4733702f25a8ee14b14ecfdaf2143c2728a7ef"
+    },
+    {
+      "module": "test_onlyfans_protected_vault_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_provider_adapters.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.57,
+      "source_sha256": "f40e63a8f02ffc9e5d7cb7600085cf516405711d9564d7a1f4c8c9c88366a732"
+    },
+    {
+      "module": "test_onlyfans_provider_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_proxy_connection_scope_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_read.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.02,
+      "source_sha256": "8d8d0734d6f4e25e162bebb5162f5b451a431e282d2620fda35fea56e0e1d3e1"
+    },
+    {
+      "module": "test_onlyfans_readonly_inbox_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_recent_inbox_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_recorded_earnings_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_recovery_fairness_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_recovery_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_release_package_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_release_rehearsal_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_role_boundary.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.82,
+      "source_sha256": "ac3ef32cfd6e821315b193037b9f57e3d1c4138c7ae5b779d5b62f33626eb899"
+    },
+    {
+      "module": "test_onlyfans_send_recovery_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_sync_retry_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_text_delivery_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_thread_paging_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_vault_continuation_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_vault_editing_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_vault_folder_states.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.17,
+      "source_sha256": "d04877953e54e97f9154e1c53ba0daf34773a5170b1a1456a88243608763a92b"
+    },
+    {
+      "module": "test_onlyfans_vault_media_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_vault_offer_availability.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.82,
+      "source_sha256": "3ded55f03c20716d6c0b799cd38ea8844142ce373f6889a52d99d8f267e7e71b"
+    },
+    {
+      "module": "test_onlyfans_vault_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_vault_previews_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_vault_response_limits.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.97,
+      "source_sha256": "13cadbcf43d43e717a35b976a6b806b5b6810056a76ce0c81af470d18828361f"
+    },
+    {
+      "module": "test_onlyfans_vault_summary.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.92,
+      "source_sha256": "4769dff0d8a592727090d00e117cb9081738f99ac73fd046c9921809f4e23932"
+    },
+    {
+      "module": "test_onlyfans_worker_entry.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.32,
+      "source_sha256": "b4db1c29f43a465a760aaeebf9c95b84b3005f911cc9a2e3f3cdcadd4628b9a5"
+    },
+    {
+      "module": "test_onlyfans_worker_entry_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_worker_maintenance.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.42,
+      "source_sha256": "f50d67a366e4d27e030c11d7ae6720ebaf09b33eea8e1ecbeaf73041e9683e84"
+    },
+    {
+      "module": "test_onlyfans_worker_media_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_worker_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_onlyfans_workspace_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_paid_media_recovery_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_proactive_defaults.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.02,
+      "source_sha256": "7b2ffc9cb3d7125627c41fa396a9747bab8bf6384d49d1b3893c9c1eca088cb0"
+    },
+    {
+      "module": "test_product_readiness.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.03,
+      "source_sha256": "d34be87f0076e9c73bb91cbee8b8c5c40c9b411a72c3ae8ad96e3726b286378e"
+    },
+    {
+      "module": "test_profile_learning_evidence.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.36,
+      "source_sha256": "631defebc4524686ef92fa558a4763756fe93b9b0dab58d851d2f3dfd6acb051"
+    },
+    {
+      "module": "test_profile_learning_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_profile_learning_queue.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 4.28,
+      "source_sha256": "5b8f005b19c316c6449fc7bda7475d586f55a864c4f379fd03c2a810c7d53c5b"
+    },
+    {
+      "module": "test_profile_learning_temporal.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.37,
+      "source_sha256": "b0cda62de6badb35a90f2b43857953f15419c231690960c4c12057322e4be193"
+    },
+    {
+      "module": "test_profile_subject_attribution.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.06,
+      "source_sha256": "a8d185fe047201e75eb918c457d8915c0b1735590d7863ea6e0d5f9d33e05d3c"
+    },
+    {
+      "module": "test_quote_lifecycle.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 4.38,
+      "source_sha256": "061f223da2278112ee864669f72791b827b8ddc9fc433fee30e193df23a4a235"
+    },
+    {
+      "module": "test_r2_complete_answers.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.93,
+      "source_sha256": "d58243297bf84be3bf7f490e82530007a816ee448d2c2a6b36fe907d222af6a9"
+    },
+    {
+      "module": "test_r3_age_prompt_repro.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.02,
+      "source_sha256": "84c89bfaf71e762ba4805f74420fb23bb9d9588ccac06a03a1b1006872791b4b"
+    },
+    {
+      "module": "test_r3_facts_attachments.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.92,
+      "source_sha256": "ae8f0b8cd13b254ef316fcca47bb40efea52e85e48dbaa5b2d3d6f75f8f6f00b"
+    },
+    {
+      "module": "test_r3r7_inbound_intent.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.31,
+      "source_sha256": "3d41e9fcd2a9fd3424c627a326a54e84cc1d98717cbec5e3d359772bdce32572"
+    },
+    {
+      "module": "test_r3r7_native_planning_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_r8_cancelled_waiter_not_abandoned.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.11,
+      "source_sha256": "28d4c807c26dbb98dd680c38272d32b6f050b5c76df18226661c172c559da723"
+    },
+    {
+      "module": "test_r8_gap_vs_concurrent.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.11,
+      "source_sha256": "2eca634ca401bb97abd67bd4a938892b9da5c9fab24a797f6c7ed7546579c825"
+    },
+    {
+      "module": "test_r8_oldest_need_first.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.11,
+      "source_sha256": "f0a5e9dd6b21977a61c35e3a0259a9f71571c4353dc1faa7d8f0c8d82669f6f8"
+    },
+    {
+      "module": "test_read_lane_fairness_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_reply_configuration_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_requested_discount_policy.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.82,
+      "source_sha256": "07e1d79545e223d40ed6f5dbeab2aae0883ba160000bb8e8e3abcf6bd54d7076"
+    },
+    {
+      "module": "test_smart_lists_safety.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.22,
+      "source_sha256": "76d185e1e1e9962202531190ff855585ade550a2bab0ba663cd24e2df69582ca"
+    },
+    {
+      "module": "test_substitute_caption_subject.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.06,
+      "source_sha256": "a5d4f0f4c5a661dddfc1fb55ca211df5ca272ad1f311f94a4633b6c18c6f1bb0"
+    },
+    {
+      "module": "test_substitution_agreement.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 3.92,
+      "source_sha256": "61df0e78062df0c578a780d94cbb9a79534a7e59bf3336ccc97cf24ece164440"
+    },
+    {
+      "module": "test_throughput_burst.py",
+      "status": "timeout",
+      "exit_code": null,
+      "seconds": 120.01,
+      "source_sha256": "98423f82b63c3a0904f63b8bc95e1c0f1ed2aaddd65f61f2ff5abaed61168f9a"
+    },
+    {
+      "module": "test_throughput_daily_cap.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.16,
+      "source_sha256": "533245776da752d05697bb7cea95eccd520014985f7a87044f1bdb3ac980d742"
+    },
+    {
+      "module": "test_throughput_engine.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 11.05,
+      "source_sha256": "9a6d40466170a45736ef0cf0ada1cca1093707d6e0b2101a24231f195411735d"
+    },
+    {
+      "module": "test_throughput_migration_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_throughput_queue_cap_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_turn_timing.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.02,
+      "source_sha256": "4720461b808a0cf77274edbb405de309092f31af2e3dbe51ca5b526a95649c79"
+    },
+    {
+      "module": "test_twin_bridge_client.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.16,
+      "source_sha256": "ab07afd997ea862b723686068148e9417d6ea3331f8021e9bb92d4f74470f7da"
+    },
+    {
+      "module": "test_twin_bridge_contract.py",
+      "status": "fail",
+      "exit_code": 1,
+      "seconds": 0.16,
+      "source_sha256": "77dd592f378de154a3727fc08533080c05be84950929900ded4cd5650f1fae36"
+    },
+    {
+      "module": "test_twin_bridge_delivery.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 6.43,
+      "source_sha256": "21f5144276602f83b7112e147cfb73c78f16e2bba2155e22b05ac581eb4aaea6"
+    },
+    {
+      "module": "test_twin_bridge_history.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.67,
+      "source_sha256": "4974258b87bf9284b43ae87f03e4734546f737f295b14951b8493e4fedfc258b"
+    },
+    {
+      "module": "test_twin_bridge_intake.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 2.57,
+      "source_sha256": "68e9ee3a92d0cfea0c36a26d0b29516893abcf895fef48f5792bfa4b0bc59a01"
+    },
+    {
+      "module": "test_twin_bridge_ownership.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 46.14,
+      "source_sha256": "7b94c9a2b8f17eeaa7f8e6d72cc87a0889cc3f2ea594faa6f7e00448bf93a7f3"
+    },
+    {
+      "module": "test_twin_bridge_pilot.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 4.89,
+      "source_sha256": "080cc4032c01180aee9f486eaf066c1e43ec46bfbb560011c67d2920f72c9080"
+    },
+    {
+      "module": "test_twin_bridge_repeat.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.47,
+      "source_sha256": "9f4d9ff0e2cead00b5712810c302fc50b9be5d74e842e03134b8a31f6edd4954"
+    },
+    {
+      "module": "test_twin_bridge_repeat_runner.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.22,
+      "source_sha256": "73ab44eda6a6d82c7532bec558bb8c3046ccf12b26bbe88c65f2598a76ac3948"
+    },
+    {
+      "module": "test_twin_bridge_roundtrip.py",
+      "status": "fail",
+      "exit_code": 1,
+      "seconds": 0.82,
+      "source_sha256": "f4f2ff11012182dd5f7cecedae688d3c048fcd841c9323c72a1f5f23169ae497"
+    },
+    {
+      "module": "test_twin_bridge_runner.py",
+      "status": "fail",
+      "exit_code": 1,
+      "seconds": 0.04,
+      "source_sha256": "831a2253348126d999a5048e9687bb2f5aeabc0027310a87616e9af82845079d"
+    },
+    {
+      "module": "test_twin_bridge_turns.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.57,
+      "source_sha256": "4c6cfe6cff66adcce7b202ba53bac5655ab4b2f8b9bb1c589a459177963d10e6"
+    },
+    {
+      "module": "test_vault_auto_folders.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.37,
+      "source_sha256": "8cbad41afdf9afedaac4d1e6e16a814d1b4e390b9cfb1c9641f8b8ce7467b63d"
+    },
+    {
+      "module": "test_vault_auto_folders_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_vault_preview_worker_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_vault_sync_resilience.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 1.43,
+      "source_sha256": "4d777f6f3f9fc49fd2043cb58b055dc7a1661c392af87b17a5c2aab1a091d45b"
+    },
+    {
+      "module": "test_vault_sync_resilience_pg.py",
+      "status": "not_run",
+      "reason": "disposable_postgresql_required"
+    },
+    {
+      "module": "test_vault_upload.py",
+      "status": "pass",
+      "exit_code": 0,
+      "seconds": 0.21,
+      "source_sha256": "23d45bb14e8c9e24c762965cc89b4c592c47a5c03bd575728cf8d1e2ffda38bf"
+    }
+  ]
+}

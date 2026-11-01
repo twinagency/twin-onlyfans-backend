@@ -117,7 +117,7 @@ async def exercise(tmp):
                           (7003, 'feet up on the couch, soles to camera'), (7004, 'toes in the sand, bare feet'),
                           (7005, 'soles and arches, close up'), (7006, 'barefoot on the stairs, feet crossed'),
                           (7007, 'feet in white socks, soles up'), (7008, 'wet feet after a swim, soles')):
-            s.add(VaultItem(account_id=ACCOUNT, media_id=mid, kind='photo', description=text, search_text=text,
+            s.add(VaultItem(account_id=ACCOUNT, media_id=mid, kind='photo', updated_at_of='2026-10-31T00:00:00+00:00', description=text, search_text=text,
                             tags='[]', created_at=now0 - timedelta(days=1)))
 
     # ── the provider wire: the REAL Gateway removal code behind a fake client ──────────────────────────────────

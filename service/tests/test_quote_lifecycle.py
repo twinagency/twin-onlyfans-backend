@@ -53,6 +53,26 @@ def test_price_without_discount_policy_is_the_list_price():
     assert out.kind == "ok" and out.quote.price_cents == 1000 and out.quote.discount_pct == 0
 
 
+def test_frozen_manual_vault_quote_preserves_the_operator_price_and_obligation():
+    # Existing manual snapshots deliberately store no catalogue list price.
+    terms = {"manual_vault": True, "item": {"id": 17, "account_id": ACC},
+             "media_ids": [11, 12], "preview_ids": [12], "price_cents": 1234,
+             "files": [{"media_id": 11, "content_hash": "h1"},
+                       {"media_id": 12, "content_hash": "h2"}]}
+    quote = q.from_terms(terms, account_id=ACC, fan_id=FAN)
+    assert quote.list_cents == quote.price_cents == 1234
+    assert quote.assets == ASSETS
+    assert quote.obligation_id == q.obligation_id("locked_card", ACC, FAN, "item:17:11")
+    assert q.format_price(quote.price_cents) == "$12.34"
+
+
+def test_frozen_catalogue_quote_keeps_list_and_charged_prices_distinct():
+    terms = {"item": {"id": 17, "price_cents": 1400}, "media_ids": [11],
+             "preview_ids": [], "price_cents": 1234, "native_quote": {"reason": "approved"}}
+    quote = q.from_terms(terms, account_id=ACC, fan_id=FAN)
+    assert (quote.list_cents, quote.price_cents, quote.discount_reason) == (1400, 1234, "native_quote")
+
+
 def test_discount_applies_only_where_this_creator_enabled_it_and_policy_qualifies():
     cut = P(cfg=ON, discount_ctx=CTX)
     assert cut.kind == "ok" and cut.quote.price_cents == 850 and cut.quote.discount_pct == 15 and cut.quote.discount_reason == "first_cut"

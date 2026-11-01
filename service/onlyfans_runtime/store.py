@@ -623,6 +623,14 @@ class Store:
             if account_ids is not None:query = query.where(OfRuntime.account_id.in_(account_ids))
             while True:
                 account = s.scalar(query.order_by(OfRuntime.last_claim_at, OfRuntime.account_id).with_for_update(skip_locked=True, of=OfRuntime).limit(1))
+                if account is None and account_ids is not None and len(account_ids) == 1:
+                    # A scoped worker can otherwise yield on its only account
+                    # while its peer does preflight, then lock that peer out
+                    # during campaign fallback. Wait for that short transaction
+                    # under the engine's existing bounded lock timeout. Fleet
+                    # claims retain SKIP LOCKED and their cross-account fairness.
+                    account = s.scalar(query.order_by(OfRuntime.last_claim_at, OfRuntime.account_id)
+                                       .with_for_update(of=OfRuntime).limit(1))
                 if account is None:
                     return None
                 # Recheck binding under the lock so a concurrent revocation is ordered.

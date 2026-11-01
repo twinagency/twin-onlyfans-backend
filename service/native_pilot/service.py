@@ -112,7 +112,7 @@ COOLDOWN_WAIT_MAX_S = 120.0
 STOP_REASONS = ("manual_restrict", "of_restricted", "muted_creator")
 
 
-def _hold_decision(path, account: str, fan: int, strict: bool, action: str):
+def _hold_decision(path, account: str, fan: int, strict: bool, action: str, *, own_attempt=None):
     """Read the durable facts through the FASTT runner's connection and ask the ONE shared policy (R1)."""
     from onlyfans_runtime import conversation_policy as policy, operator_cases
     with runner.readonly(path) as con:
@@ -127,6 +127,13 @@ def _hold_decision(path, account: str, fan: int, strict: bool, action: str):
                                   "WHERE account_id=? AND fan_id=?", (account, fan)).fetchone()
             if row:
                 mode, takeover, unresolved = row[0], row[1], row[2] is not None
+                # The final wire check supplies this only after the ledger has
+                # validated its owner and receipt. Admission sets the pointer,
+                # so this attempt must not hold itself. Other pointers still hold.
+                if own_attempt is not None:
+                    from .reporting import attempt_ref
+                    if row[2] == attempt_ref(own_attempt):
+                        unresolved = False
                 if unresolved and store.has_table(con, "native_pilot_receipts") and store.has_table(con, "twin_bridge_send_attempts"):
                     from .ledger import settled_pointer
                     unresolved = not settled_pointer(con, account, fan, row[2])
@@ -138,7 +145,7 @@ def _hold_decision(path, account: str, fan: int, strict: bool, action: str):
                          "automated", action, strict=strict)
 
 
-def fan_hold_reason(path, account: str, fan: int, strict: bool = False):
+def fan_hold_reason(path, account: str, fan: int, strict: bool = False, *, own_attempt=None):
     """The ONE predicate for "this fan must not be answered right now".
 
     A caller of the shared conversation policy (``onlyfans_runtime.conversation_policy``), the same function the worker
@@ -148,16 +155,16 @@ def fan_hold_reason(path, account: str, fan: int, strict: bool = False):
     Plain chat only; ``fan_commercial_hold_reason`` adds the commercial-scope holds (hardship, complaint).
     """
     from onlyfans_runtime import conversation_policy as policy
-    return policy.fan_hold_code(_hold_decision(path, account, fan, strict, policy.CHAT))
+    return policy.fan_hold_code(_hold_decision(path, account, fan, strict, policy.CHAT, own_attempt=own_attempt))
 
 
-def fan_commercial_hold_reason(path, account: str, fan: int, strict: bool = False):
+def fan_commercial_hold_reason(path, account: str, fan: int, strict: bool = False, *, own_attempt=None):
     """Hold check for a priced card, an offer or a proactive follow-up: everything above plus commercial-scope cases."""
-    held = fan_hold_reason(path, account, fan, strict)
+    held = fan_hold_reason(path, account, fan, strict, own_attempt=own_attempt)
     if held:
         return held
     from onlyfans_runtime import conversation_policy as policy
-    return policy.fan_hold_code(_hold_decision(path, account, fan, strict, policy.COMMERCIAL))
+    return policy.fan_hold_code(_hold_decision(path, account, fan, strict, policy.COMMERCIAL, own_attempt=own_attempt))
 
 
 async def ensure_fan_conversation(scope: AccountScope, fan: int):
@@ -178,6 +185,12 @@ class Lease:
 
 class ServiceGateway(runner.Gateway):
     """The bounded gateway with the allowance as cap, a renewable deadline and pacing."""
+
+    def _dispatch_hold(self, terms, attempt):
+        predicate = (fan_commercial_hold_reason if self._hold_for(terms) is self.commercial_hold_check
+                     else fan_hold_reason)
+        service = self.service
+        return predicate(service.path, service.db, service.args.fan, *service.strict_arg, own_attempt=attempt.id)
 
     def __init__(self, service, pilot, **kwargs):
         super().__init__(service.ledger, pilot, service.client, asyncio.get_running_loop(), **kwargs)

@@ -207,6 +207,18 @@ def ledger_level(backend, root):
 
     # 2. The allowance is the cap: one unit per admission, throttle honoured, never exceeded.
     a1 = led.begin_attempt(**call, input_key=key, bubble_no=1, revision=p.revision, now=t)
+    if backend.pg:
+        from native_pilot.service import fan_hold_reason, fan_commercial_hold_reason
+        # The real admission writes its own unresolved pointer. It must allow
+        # this proved attempt while fencing new sends and every other attempt.
+        led.validate_dispatch(**call, attempt_id=a1.id, now=t)
+        check(fan_hold_reason(f.path, A, F, True) == "fan-unresolved-delivery")
+        check(fan_hold_reason(f.path, A, F, True, own_attempt=a1.id) is None)
+        check(fan_commercial_hold_reason(f.path, A, F, True, own_attempt=a1.id) is None)
+        check(fan_hold_reason(f.path, A, F, True, own_attempt=a1.id + 1) == "fan-unresolved-delivery")
+        backend.set_state(f, "paused")
+        check(fan_hold_reason(f.path, A, F, True, own_attempt=a1.id) == "fan-paused")
+        backend.set_state(f, "automated")
     used, nxt = f.sql("SELECT used_units,next_dispatch_at FROM of_delivery_policy")[0]
     check(used == 5 and ts(nxt) == t + timedelta(seconds=20))
     check(f.sql("SELECT send_budget_used FROM twin_bridge_conversations")[0][0] == 4)
@@ -656,9 +668,9 @@ async def loop_level(backend, root):
             f, http, client = make("loop-" + label, limit=100, used=4, throttle=1)
             calls = {"n": 0, "armed": False}
 
-            def stops_late(path, account, fan, calls=calls, trip=trip):
+            def stops_late(path, account, fan, calls=calls, trip=trip, **kwargs):
                 if not calls["armed"]:
-                    return original(path, account, fan)
+                    return original(path, account, fan, **kwargs)
                 calls["n"] += 1
                 return "fan-restricted" if calls["n"] >= trip else None
 

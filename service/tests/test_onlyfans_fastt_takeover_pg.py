@@ -156,7 +156,9 @@ def test_proven_first_bubble_does_not_block_a_distinct_second_attempt(database):
     try:
         first=ledger.begin_attempt(**args)
         ledger.record_not_sent(pilot_id=pilot.pilot_id,owner_token=OWNER,attempt_id=first.id,now=utcnow())
-        second=ledger.begin_attempt(**{**args,"bubble_no":2,"now":args["now"]+timedelta(seconds=2)})
+        # A proven non-send releases the obligation, not the account's retained
+        # twenty-second pacing floor. Check the next distinct attempt after it.
+        second=ledger.begin_attempt(**{**args,"bubble_no":2,"now":args["now"]+timedelta(seconds=21)})
         assert first.id != second.id and state(store)[1]==reporting.attempt_ref(second.id)
     finally:store.close()
 

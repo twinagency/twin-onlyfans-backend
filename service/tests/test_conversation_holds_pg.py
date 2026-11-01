@@ -407,11 +407,12 @@ def test_two_workers_cannot_both_win_one_turn(database, monkeypatch):
     second, model_b, wire_b = runtime(other)
     barrier = threading.Barrier(2)
     errors = []
+    reports = []
 
     def go(worker):
         try:
             barrier.wait(10)
-            worker.step()
+            reports.append(worker.step().public())
         except Exception as exc:        # noqa: BLE001
             errors.append(repr(exc))
 
@@ -420,7 +421,9 @@ def test_two_workers_cannot_both_win_one_turn(database, monkeypatch):
         t.start()
     for t in threads:
         t.join(60)
-    assert len(model_a.calls) + len(model_b.calls) == 1, errors
+    assert not any(t.is_alive() for t in threads), (errors, reports)
+    assert not errors, errors
+    assert len(model_a.calls) + len(model_b.calls) == 1, reports
     assert len(wire_a.calls) + len(wire_b.calls) == 1
     assert outbound(database[1]) == 1
     with Session(database[1]) as s:

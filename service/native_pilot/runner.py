@@ -402,6 +402,10 @@ class Gateway:
             return self.commercial_hold_check
         return self.hold_check
 
+    def _dispatch_hold(self, terms, attempt):
+        check = self._hold_for(terms)
+        return check() if check is not None else None
+
     async def _send_inner(self, text, terms=None):
         from twin_bridge.coordination import authorize_dispatch, revoke_dispatch, guarded_send
         from twin_bridge.platform import escape_plain_text, validate_created_message
@@ -503,14 +507,13 @@ class Gateway:
                             from .contextual import refuse_repeat_media
                             refuse_repeat_media(con, self.pilot.account_id, self.pilot.fan_id, terms,
                                                 own_attempt_id=attempt.id if contextual_metadata is not None else None)
-                check = self._hold_for(terms)
-                if check is not None and check():
-                    raise Refused("fan-held-before-post")
-                if contextual_metadata is not None:
-                    self.contextual.before_post(contextual_metadata)
                 self.ledger.validate_dispatch(pilot_id=self.pilot.pilot_id,
                     owner_token=self.pilot.owner_token, attempt_id=attempt.id, now=now(),
                     **dispatch_kwargs)
+                if self._dispatch_hold(terms, attempt):
+                    raise Refused("fan-held-before-post")
+                if contextual_metadata is not None:
+                    self.contextual.before_post(contextual_metadata)
                 wire_at[0] = now()
                 with guarded_send(self.pilot.account_id, self.pilot.fan_id, purpose="twin_bridge", dispatch_token=token):
                     if unsend_id is not None:

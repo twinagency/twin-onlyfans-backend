@@ -407,15 +407,19 @@ def open_custom_case(s, *, account_id: str, fan_id: int, available_verified: boo
 
 # ── adapters for the existing native catalogue delivery (no new sender) ───────────────────────────────────────────
 def from_terms(terms: dict, *, account_id: str, fan_id: int, currency: str = "USD") -> "Quote":
-    """The canonical Quote for a frozen catalogue snapshot (``media_delivery.catalog_terms`` output). The obligation
+    """The canonical Quote for a frozen catalogue or manual-vault snapshot. The obligation
     is the locked card for this item's exact hero media, so any send path reaches the same id."""
     hero = sorted(set(terms["media_ids"]) - set(terms["preview_ids"]))
     versions = {f["media_id"]: str(f.get("content_hash") or "") for f in terms.get("files", [])}
     nq = terms.get("native_quote") or {}
+    # Manual intents freeze the operator's exact price at the top level. Their
+    # item identity has no catalogue price, including already queued snapshots.
+    manual = terms.get("manual_vault") is True
+    listed = terms["price_cents"] if manual else terms["item"]["price_cents"]
     return Quote(obligation_id(("locked_card"), account_id, fan_id, "item:%s:%s" % (terms["item"]["id"], ",".join(map(str, hero)))),
                  "locked_card", int(terms["item"]["id"]), tuple((m, versions.get(m, "")) for m in terms["media_ids"]),
-                 int(terms["item"]["price_cents"]), int(terms["price_cents"]), currency.upper(),
-                 budget_cents=None, discount_reason=("native_quote" if nq else "catalogue_price"))
+                 int(listed), int(terms["price_cents"]), currency.upper(),
+                 budget_cents=None, discount_reason=("manual_price" if manual else "native_quote" if nq else "catalogue_price"))
 
 
 def request_exists(s, account_id: str, fan_id: int, terms: dict) -> bool:

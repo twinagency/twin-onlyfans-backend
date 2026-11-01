@@ -22,7 +22,7 @@ Worker/importer/learner: sha256:f728669d70d9fcb89e34ced38e7efe808311293d0b175422
 
 API: sha256:04532a2d90349893407c08c77a883a6cc62c9ed8386d4eb29b21ab3fc9ef9975
 
-All four services running with zero restarts after deployment. Reply supervisor remains stopped. Candidate source hashes matched committed source. A private profile projection snapshot preceded the repair. Twenty affected profiles were rebuilt across six stored accounts, including one paused account's stored data. This is a targeted repair count, not complete memory coverage.
+Initial deployment verification found all four services running with zero restarts. Reply supervisor remains stopped. Candidate source hashes matched committed source. A private profile projection snapshot preceded the repair. Twenty affected profiles were rebuilt across six stored accounts, including one paused account's stored data. This is a targeted repair count, not complete memory coverage.
 
 ## Validation
 
@@ -40,6 +40,8 @@ The six account ledgers immediately after adjustment were US$3.1704 each for Emm
 
 Validation: 15 tests passed against isolated PostgreSQL and pure allocation checks, covering a dry run, exact ledger/reservation balance, idempotency, retained unknown status, unchanged caps, rejected stale/wrong-scope evidence, credential revisions and changed snapshots. A private before-snapshot and fresh provider proofs were saved before the atomic update under both release locks. No application image or schema changed. The learner and reply controls retain their prior settings.
 
-First verification, 57 seconds after adjustment: 528 model calls completed across all six creators and no active profile-account holds remained. This is model-call progress, not a count of complete fan histories.
+First verification, 57 seconds after adjustment: 528 model calls completed across all six creators and no active profile-account holds remained. There were 2,926 additional incoming-message receipts versus the before-snapshot. A follow-up query proved every account ledger equalled the sum of its current call amounts. These are processing counters, not counts of complete fan histories.
+
+The learner was observed using 965.2 MiB of its 1 GiB limit. Its one prior restart occurred at 18:07 UTC, before the budget adjustment. The operational follow-up raises its live and saved Compose memory limit to 2 GiB, requires at least 3 GiB available host memory, and verifies the image and process start time are unchanged. See increase_learner_headroom.py and the private server-side headroom.json result.
 
 Full message history import remains incomplete. This release does not demonstrate 90-minute onboarding or perfect semantic memory. The normalization deliberately covers supported cases rather than arbitrary inferred rewrites.

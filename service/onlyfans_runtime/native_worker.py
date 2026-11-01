@@ -245,13 +245,16 @@ class NativeWorker:
                 account_errors=report.errors
                 try:
                     if account.read_connection_revision is not None:
+                        # The independent inbox owns fresh arrivals. Archive work
+                        # must receive its turn before legacy discovery, including
+                        # when that discovery is deferred or raises an error.
+                        if not stop.is_set():self._history_turn(account,report,revision=account.read_connection_revision)
                         progress=self._read_progress(account,connection_revision=account.read_connection_revision)
                         if progress is None:
                             report.held+=1
                             continue
                         report.ingress+=progress.applied
-                        # Inactive verified accounts import archive history too; no model, automation or send.
-                        if not stop.is_set():self._history_turn(account,report,revision=account.read_connection_revision)
+                        # Inactive verified accounts never enter planning or sending.
                         continue
                     # Historical acceptance is repaired even after a binding is
                     # revoked; this path grants no new planning or send rights.

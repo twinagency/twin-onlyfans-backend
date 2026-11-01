@@ -1,3 +1,5 @@
+> Current continuation: [QUALIFICATION-CHECKPOINT-20261102.md](QUALIFICATION-CHECKPOINT-20261102.md). PostgreSQL testing and repairs are underway; earlier environment/coverage totals below are historical and superseded. Release qualification remains open.
+
 # Original OnlyFans qualification continuation, 2 November 2026
 
 **Status: NOT release-qualified.** No merge, deployment, production migration, setting change, account activation, customer message or real-model call was performed. The separate Moxy redesign remains excluded.

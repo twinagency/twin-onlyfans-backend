@@ -92,9 +92,9 @@ def test_pause_account_a_leaves_account_b_able_to_send(two):
     # The admission step itself reads only its own account's row.
     with bridge.transaction(url) as con:
         with pytest.raises(Exception, match="allowance-disabled"):
-            Ledger._consume_allowance(con, A, "2030-01-01T00:00:00")
+            ledger._consume_allowance(con, A, "2030-01-01T00:00:00")
     with bridge.transaction(url) as con:
-        Ledger._consume_allowance(con, B, "2030-01-01T00:00:00")
+        ledger._consume_allowance(con, B, "2030-01-01T00:00:00")
     assert ledger.allowance_status(B)["used"] == 1 and ledger.allowance_status(A)["used"] == 0
     authority.configure(TENANT, A, expected_revision=2, enabled=True, limit_units=20, throttle_seconds=1,
                         actor="synthetic-operator", reason="resume account A")

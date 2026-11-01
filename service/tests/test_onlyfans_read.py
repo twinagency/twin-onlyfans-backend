@@ -1184,7 +1184,7 @@ from db.models import (  # noqa: E402
 # does too, since the relay serves every request from one loop.
 from db.onlyfans_models import OfRuntime as _OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection as _OfProviderConnection
-from db.onlyfans_models import OfIngress, OfRecovery
+from db.onlyfans_models import OfIngress, OfRecovery, OfControlAudit
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_ledger_models import OfLedgerHistory, OfLedgerScan
 _SCHEMA_ENGINE = _create_engine(os.environ["CHATTERLY_DB_URL"])
@@ -1203,6 +1203,7 @@ _ModelsBase.metadata.create_all(
         _OfDelivery.__table__,
         _OfRuntime.__table__,
         OfIngress.__table__, OfRecovery.__table__, OfDeliveryPolicy.__table__, OfTextIntent.__table__, OfLedgerHistory.__table__, OfLedgerScan.__table__,
+        OfControlAudit.__table__,
         _OfProviderConnection.__table__,
     ],
 )

@@ -1,5 +1,6 @@
 """Rehearse the actual default-off branch, backup, and forward merge in isolation."""
 from pathlib import Path
+import json
 
 import pytest
 from alembic import command
@@ -41,7 +42,19 @@ def test_genuine_source_merges_forward_preserving_choices_and_unknown(source):
                 "WHERE table_schema='public' AND table_name='of_conversation_state' AND column_name='mode'"))
         after = rows(engine)
         for name in ("accounts", "fans", "messages", "of_conversation_state", "of_message_delivery"):
-            assert before[name] == after[name]
+            # Additive migrations introduce nullable columns. Compare every
+            # original field and every row, rather than treating those added
+            # keys as a destructive data change. HEAD shape is checked above.
+            original, upgraded = before[name] or [], after[name] or []
+            assert len(original) == len(upgraded), name
+            if original:
+                columns = set(original[0])
+                assert all(columns <= set(row) for row in upgraded), name
+                projected = [{key: row[key] for key in columns} for row in upgraded]
+                assert sorted(json.dumps(row, sort_keys=True) for row in original) == sorted(
+                    json.dumps(row, sort_keys=True) for row in projected), name
+        assert all(row["of_profile_checked_at"] is None and row["of_profile_error"] is None
+                   for row in after["fans"])
         assert after["of_conversation_state"][0]["unresolved_attempt_id"] == "unknown-preupgrade"
 
 

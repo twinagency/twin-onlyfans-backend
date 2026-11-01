@@ -143,9 +143,21 @@ def populated_preupgrade_database():
             check_schema(c, expected=LEDGER_HISTORY)
             c.exec_driver_sql((Path(__file__).resolve().parents[1]/"managed_proxy/schema.sql").read_text())
         with Session(engine) as s, s.begin():
-            s.add(Account(id="preupgrade", nickname="Retained synthetic account")); s.flush()
-            s.add(Fan(account_id="preupgrade", fan_id=1)); s.flush()
-            s.add(Message(account_id="preupgrade", fan_id=1, message_id=9, direction="out", body="PREUPGRADE PRIVATE HISTORY", created_at=utcnow())); s.flush()
+            # Use the actual historical columns. Current ORM inserts include
+            # later fields and fail before this populated upgrade can run.
+            s.execute(text("INSERT INTO accounts (id,nickname,is_active_default) VALUES ('preupgrade','Retained synthetic account',false)"))
+            s.execute(text("""INSERT INTO fans (
+                account_id,fan_id,is_name_real,recent_events,likes_boobs,likes_ass,
+                family_names,pets,communication_style,tags,custom_fields,
+                lifetime_spend_cents,is_bot,turn_counter,is_followed,
+                deep_convo_state,deep_convo_skip_level,deep_convo_skip_remaining,source
+            ) VALUES ('preupgrade',1,true,'[]',false,false,'{}','[]','{}','[]','{}',
+                      0,false,0,false,'missing',0,0,'onlyfans')"""))
+            s.execute(text("""INSERT INTO messages (
+                account_id,fan_id,message_id,direction,sender_name,body,media_ids,
+                media_count,price_cents,is_tip,is_unsent,is_promise,created_at
+            ) VALUES ('preupgrade',1,9,'out','','PREUPGRADE PRIVATE HISTORY','[]',
+                      0,0,false,false,false,:now)"""), {"now": utcnow()})
             s.execute(text("INSERT INTO of_conversation_state (account_id,fan_id,mode,revision,unresolved_attempt_id) VALUES ('preupgrade',1,'no_contact',4,'unknown-preupgrade')"))
             s.execute(text("INSERT INTO of_message_delivery (account_id,fan_id,message_id,outcome,attempt_id,evidence_ref) VALUES ('preupgrade',1,9,'unknown','unknown-preupgrade','retained-evidence')"))
         nonce=bytes(range(12)); address="7"*64

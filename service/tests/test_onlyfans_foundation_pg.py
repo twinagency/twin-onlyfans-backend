@@ -116,6 +116,15 @@ def test_bootstrap_and_refusal_are_explicit(database):
         assert "body" not in {x["name"] for x in inspect(c).get_columns("messages")}, "readiness must not repair"
 
 
+@pytest.mark.parametrize("column", ["starved_kind", "starved_since"])
+def test_read_fairness_columns_remain_required_at_head(database, column):
+    _, engine = database
+    with engine.begin() as c:
+        c.exec_driver_sql(f"ALTER TABLE of_provider_read_budget DROP COLUMN {column}")
+        with pytest.raises(SchemaMismatch, match="of_provider_read_budget." + column):
+            check_schema(c)
+
+
 def test_populated_baseline_upgrade_preserves_evidence(database):
     url, engine = database
     # Rebuild this synthetic DB as the frozen published baseline, then populate it.

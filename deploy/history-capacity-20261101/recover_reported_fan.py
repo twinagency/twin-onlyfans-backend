@@ -1,5 +1,5 @@
 """Bounded repair of the user-reported conversation using existing import fences."""
-import os,json,time
+import os,json,time,hashlib
 from datetime import timezone
 from sqlalchemy import select,func
 from sqlalchemy.orm import Session
@@ -36,6 +36,15 @@ class ReportedFanRecovery(HistoryRecovery):
    return ArchiveClaim(account_id,runtime.binding_id,FAN,row.generation,row.lease_token,row.before_id,connection_revision)
 
 recovery=ReportedFanRecovery(store)
+from onlyfans_runtime.history_repair import inspect,repair
+snapshot=inspect(store,tenant,ACCOUNT,FAN)
+if snapshot['records'] and all(row['verified'] for row in snapshot['records']):
+ key=hashlib.sha256(('history-capacity-20261101:'+snapshot['fingerprint']).encode()).hexdigest()
+ result=repair(store,tenant,ACCOUNT,FAN,command_key=key,
+     actor='worker-import:'+hashlib.sha256(b'history-capacity-20261101').hexdigest(),
+     reason='User-requested history repair: verified HTML representation equivalence; retain canonical message and raw observation',
+     expected_fingerprint=snapshot['fingerprint'])
+ print(json.dumps({'representationRepair':result['repaired'],'retained':result['retained']}),flush=True)
 start=time.monotonic();steps=0
 try:
  while time.monotonic()-start<100 and steps<12:

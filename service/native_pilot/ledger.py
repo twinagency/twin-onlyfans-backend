@@ -192,6 +192,22 @@ UNLABELLED_GRACE = timedelta(seconds=90)
 SERVICE_ID = re.compile(r"svc-[A-Za-z0-9_-]{1,92}")
 
 
+def settled_pointer(con, account, fan, pointer, *, prefix=""):
+    """Interpret an existing native pointer from its two positive durable owners.
+
+    This does not clear the pointer or release any conversation lease. Other
+    writers remain fenced until the existing final reporting step reconciles it.
+    """
+    if not (isinstance(pointer, str) and pointer.startswith("fastt-pilot-")
+            and pointer[12:].isascii() and pointer[12:].isdigit()
+            and len(pointer[12:]) <= 19 and 0 < int(pointer[12:]) < 2**63):
+        return False
+    return con.execute("SELECT 1 FROM " + prefix + "twin_bridge_send_attempts a JOIN " + prefix +
+        "native_pilot_receipts r ON r.attempt_id=a.id WHERE a.id=? AND a.account_id=? AND a.fan_id=? AND "
+        "((a.state='sent' AND r.state='sent') OR (a.state='refused' AND r.state='not_sent'))",
+        (int(pointer[12:]), account, fan)).fetchone() is not None
+
+
 class Ledger:
     def __init__(self, path: str | Path, *, allowance: bool = False, min_send_interval_s: float | None = None,
                  lock_scope: str | None = None, per_account_send_gap: bool = False,
@@ -541,13 +557,7 @@ class Ledger:
         from .reporting import attempt_ref
         own = attempt_ref(own_attempt) if own_attempt is not None else None
         pointer = state["unresolved_attempt_id"] if state else None
-        settled = False
-        if (pointer and pointer.startswith("fastt-pilot-") and pointer[12:].isascii()
-                and pointer[12:].isdigit() and len(pointer[12:]) <= 19 and 0 < int(pointer[12:]) < 2**63):
-            settled = con.execute("SELECT 1 FROM twin_bridge_send_attempts a JOIN native_pilot_receipts r ON r.attempt_id=a.id "
-                "WHERE a.id=? AND a.account_id=? AND a.fan_id=? AND "
-                "((a.state='sent' AND r.state='sent') OR (a.state='refused' AND r.state='not_sent'))",
-                (int(pointer[12:]),pilot["account_id"],pilot["fan_id"])).fetchone() is not None
+        settled = settled_pointer(con, pilot["account_id"], pilot["fan_id"], pointer)
         if (not runtime["enabled"] or not binding or binding["account_id"] != pilot["account_id"]
                 or binding["channel"] != "onlyfans" or binding["revoked_at"] is not None
                 or not state or state["mode"] != "automated" or state["takeover_state"] != "none"
@@ -1122,6 +1132,16 @@ class Ledger:
         with self._tx() as con:
             self._outcome_owner(con, pilot_id, owner_token, attempt_id)
             r = con.execute("SELECT * FROM native_pilot_receipts WHERE attempt_id=?", (attempt_id,)).fetchone()
+            retained = json.loads(r["evidence_json"] or "{}")
+            if "dispatch_intent" in retained:
+                if "dispatch_intent" in evidence and evidence["dispatch_intent"] != retained["dispatch_intent"]:
+                    raise Refused("frozen-dispatch-conflict")
+                retained.update(evidence)
+                if retained.get("canonical_quote"):
+                    retained["quote_lifecycle"] = "provider_accepted"
+                evidence_s = _json(retained)
+                if len(evidence_s.encode("utf-8")) > 65536:
+                    raise Refused("oversize-receipt")
             if r["state"] == "sent":
                 if (r["provider_message_id"], r["response_json"], r["evidence_json"]) != (provider_message_id, response_s, evidence_s):
                     raise Refused("receipt-conflict")

@@ -53,10 +53,10 @@ def fake_model(calls):
 
 def plan_db(path):
     with sqlite3.connect(path) as con:
-        con.execute("CREATE TABLE vault_items(account_id TEXT,media_id INTEGER,kind TEXT,removed_at TEXT)")
+        con.execute("CREATE TABLE vault_items(account_id TEXT,media_id INTEGER,kind TEXT,removed_at TEXT,content_hash TEXT,updated_at_of TEXT,description TEXT,video_description TEXT,ai_fields_json TEXT,operator_overrides_json TEXT,locked_fields_json TEXT)")
         con.execute("CREATE TABLE catalog_items(id INTEGER,account_id TEXT,tags TEXT,enabled INTEGER)")
         con.execute("CREATE TABLE account_ai_config(account_id TEXT,ai_chatter_config_json TEXT)")
-        con.executemany("INSERT INTO vault_items VALUES(?,?,?,?)",
+        con.executemany("INSERT INTO vault_items(account_id,media_id,kind,removed_at) VALUES(?,?,?,?)",
                         [(ACCOUNT, m, "photo", None) for m in range(7001, 7008)])
         con.executemany("INSERT INTO catalog_items VALUES(?,?,?,?)",
                         [(1, ACCOUNT, '["rung:vault-ask"]', 0), (2, ACCOUNT, '["rung:vault-ask"]', 0)])
@@ -233,11 +233,14 @@ async def exercise(tmp):
           ("a new vault card was produced", cards))
     check(len(st) == 3 and st[2][2] == "open", ("the new card is the only open offer", st))
 
-    # Fresh cards (inside the TTL) are untouched, and the stock open-offer cap still holds them in place.
+    # Fresh cards remain open. The approved different-item cap removal means
+    # they no longer impose a fan-wide two-card ceiling on a fresh request.
     fresh = [(FAN, 1, timedelta(minutes=20), None), (FAN, 2, timedelta(minutes=10), None)]
     stats, cards = await turn(fresh)
-    check(await statuses() == [(FAN, 1, "open"), (FAN, 2, "open")], ("fresh cards untouched", await statuses()))
-    check(not [k for _, k in cards if k], "no third card on top of two fresh ones")
+    st = await statuses()
+    check(st[:2] == [(FAN, 1, "open"), (FAN, 2, "open")], ("fresh cards untouched", st))
+    check(len(st) == 3 and len([k for _, k in cards if k]) == 1,
+          "a different requested vault item remains eligible")
     await engine.dispose()
 
 

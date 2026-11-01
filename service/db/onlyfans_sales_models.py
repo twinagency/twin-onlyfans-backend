@@ -54,3 +54,6 @@ class OfSalesInvitation(Base):
     accepted_turn_id = Column(BigInteger)
     created_at = Column(DateTime, nullable=False)
     resolved_at = Column(DateTime)
+    offer_terms_json = Column(Text, info={"onlyfans_since": "0108_commercial_progress"})
+    invitation_body = Column(Text, info={"onlyfans_since": "0108_commercial_progress"})
+    delivery_message_id = Column(BigInteger, info={"onlyfans_since": "0108_commercial_progress"})

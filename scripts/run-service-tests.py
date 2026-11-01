@@ -7,6 +7,9 @@ to include every PostgreSQL module against an explicit disposable server.
 """
 import argparse
 import ast
+import hashlib
+import json
+import time
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -80,7 +83,11 @@ def hosted_test_database(enabled, env):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--postgres", action="store_true")
+    parser.add_argument("--report", type=Path, help="write per-module exit codes and source hashes as JSON")
+    parser.add_argument("--module-timeout", type=int, default=300, help="seconds allowed per isolated module")
     args = parser.parse_args()
+    if args.module_timeout < 1:
+        parser.error("--module-timeout must be positive")
     if args.postgres and not os.environ.get("ONLYFANS_TEST_PG_URL"):
         parser.error("--postgres requires ONLYFANS_TEST_PG_URL for a disposable server")
     env = dict(os.environ)
@@ -89,10 +96,11 @@ def main():
     )
     hosted_smoke = os.environ.get("GITHUB_ACTIONS") == "true" and not args.postgres
     with hosted_test_database(hosted_smoke, env):
-        return run_modules(args.postgres, hosted_smoke, env)
+        return run_modules(args.postgres, hosted_smoke, env, report=args.report, module_timeout=args.module_timeout)
 
 
-def run_modules(all_postgres, hosted_smoke, env):
+def run_modules(all_postgres, hosted_smoke, env, *, report=None, module_timeout=300):
+    results = []
     failures = []
     skipped = 0
     paths = sorted((ROOT / "service" / "tests").glob("test_*.py"))
@@ -101,6 +109,7 @@ def run_modules(all_postgres, hosted_smoke, env):
     for path in paths:
         if path.name.endswith("_pg.py") and not (all_postgres or hosted_smoke and path.name in NATIVE_PG_SMOKE):
             skipped += 1
+            results.append({"module": path.name, "status": "not_run", "reason": "disposable_postgresql_required"})
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         uses_pytest = any(
@@ -118,10 +127,24 @@ def run_modules(all_postgres, hosted_smoke, env):
             command += ["-m", "pytest", "-q"]
         command.append(str(path))
         print(f"Running {path.relative_to(ROOT)}", flush=True)
-        if subprocess.run(command, cwd=ROOT, env=env).returncode:
+        started = time.monotonic()
+        source_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        try:
+            code = subprocess.run(command, cwd=ROOT, env=env, timeout=module_timeout).returncode
+            status = "pass" if code == 0 else "fail"
+        except subprocess.TimeoutExpired:
+            code, status = None, "timeout"
+        results.append({"module": path.name, "status": status, "exit_code": code,
+                        "seconds": round(time.monotonic()-started, 2), "source_sha256": source_sha})
+        if status != "pass":
             failures.append(path.name)
+        if report:
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(json.dumps({"module_timeout_seconds": module_timeout, "results": results}, indent=2)+"\n")
     if skipped:
         print(f"{skipped} other PostgreSQL modules excluded; use --postgres with a disposable server to include them.")
+    if report:
+        report.write_text(json.dumps({"module_timeout_seconds": module_timeout, "results": results}, indent=2)+"\n")
     if failures:
         print("Failed: " + ", ".join(failures), file=sys.stderr)
     return bool(failures)

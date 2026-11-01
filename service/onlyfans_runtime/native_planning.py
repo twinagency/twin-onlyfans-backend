@@ -328,9 +328,9 @@ class NativeTextPlanner:
                 raise Refused("native input has moved on")
             ordered = list(reversed([dict(row) for row in messages]))
             review = review_inbound(s, claim.account_id, claim.fan_id, ordered, s.get(Fan, (claim.account_id, claim.fan_id)), now)
-            from .operator_case_port import open_operator_case
+            from .operator_case_port import open_operator_case, durable_sink
             for case in review["cases"]:
-                open_operator_case(account_id=claim.account_id, fan_id=claim.fan_id, **case)
+                open_operator_case(account_id=claim.account_id, fan_id=claim.fan_id, sink=durable_sink(s), **case)
             if review["withheld"] is not None:
                 # Confirmed promotional/business traffic: no customer reply, no model call, no memory. Raw
                 # messages are untouched; the decision is recorded on the plan row and recomputed from the

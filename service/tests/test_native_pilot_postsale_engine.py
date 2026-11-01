@@ -935,8 +935,8 @@ async def exercise(tmp):
     with NativeEngine(ACCOUNT, FAN, chat=chat, send=held_discount, emit=events.append, content=vault, followups=queue,
                       arm_unsend=gw.arm_unsend, unsent=lambda: gw.unsent_ids, card_of=cards.get) as native:
         try:
-            await native.run(1, payload={'discount_offer': oid})
-            check(False, 'J: discount held')
+            held_stats = await native.run(1, payload={'discount_offer': oid})
+            check(False, ('J: discount held', held_stats, events[-8:]))
         except PilotBoundaryError:
             check(not wire.deleted and not wire.posted and ORIG_MSG not in gw.unsent_ids, 'J: held before the wire -> nothing removed or sent')
     check((await offer(oid)).status == 'open', 'J: the original card stays live and open')

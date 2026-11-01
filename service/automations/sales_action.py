@@ -40,15 +40,17 @@ class Pacing:
     grouped_turns: int
 
 
-def pacing(controls: Controls, grouped_turns: int, *, prior_card: bool) -> Pacing:
-    """Where the conversation sits against the (reference) range. The range is [ref-1, 2*ref]: 3 gives the observed
-    middle half 2-6. Repeat pacing is independent of first-offer pacing and labelled experimental in the config view."""
+def pacing(controls: Controls, grouped_turns: int, *, prior_card: bool, raw_bubbles: int | None = None) -> Pacing:
+    """Use independent, explicitly configured bubble/reply windows; never derive one unit from the other."""
     ref = controls.repeat_offer_ref if prior_card else controls.first_offer_ref
-    lo, hi = max(1, ref - 1), 2 * ref
-    position = "before" if grouped_turns < lo else ("within" if grouped_turns <= hi else "beyond")
+    lo, hi = controls.repeat_window if prior_card else controls.first_window
+    # First-offer observations are bubbles. Repeat references are grouped replies.
+    # Unknown bubble counts supply no pressure; never convert turns into bubbles.
+    units = grouped_turns if prior_card else (raw_bubbles if raw_bubbles is not None else 0)
+    position = "before" if units < lo else ("within" if units <= hi else "beyond")
     base = {"before": 0, "within": 1, "beyond": 2}[position]
     shift = {"lower": -1, "standard": 0, "active": 1}[controls.initiative]
-    pressure = max(0, min(2, base + shift)) if position != "before" else (1 if controls.initiative == "active" and grouped_turns >= max(1, lo - 1) else 0)
+    pressure = max(0, min(2, base + shift)) if position != "before" else (1 if controls.initiative == "active" and units >= max(1, lo - 1) else 0)
     return Pacing(ref, "repeat" if prior_card else "first", lo, hi, position, pressure, grouped_turns)
 
 
@@ -58,6 +60,7 @@ class ActionInputs:
     controls: Controls = field(default_factory=Controls)
     grouped_turns: int = 0
     prior_card: bool = False
+    raw_bubbles: int = 0
     # safety / ownership (from the shared conversation policy and the R1 case model; never re-decided here)
     hold: str | None = None                  # stop_contact, distress, takeover, identity, ...
     support: str | None = None               # complaint, delivery_issue, fulfilment_question, open_custom
@@ -100,7 +103,7 @@ def _d(i, action, outcome, reason, pace, **kw):
 
 
 def decide(i: ActionInputs) -> ActionDecision:
-    pace = pacing(i.controls, i.grouped_turns, prior_card=i.prior_card)
+    pace = pacing(i.controls, i.grouped_turns, prior_card=i.prior_card, raw_bubbles=i.raw_bubbles)
     if i.mode == "off":
         return _d(i, ANSWER, EXCLUDED, "disabled", pace)
     # 1. stops, identity, takeover: nothing commercial, whatever the settings say.
@@ -158,7 +161,7 @@ def decide(i: ActionInputs) -> ActionDecision:
         if p >= 1:
             return _d(i, DEVELOP, ACTED, "background_interest_develop", pace)
         return _d(i, ANSWER, EVALUATED, "insufficient_evidence", pace)
-    if p >= 2 and init != "lower":
+    if p >= 2 and init != "lower" and pace.position != "beyond":
         return _d(i, DEVELOP, ACTED, "beyond_range_develop_topic", pace)
     if pace.position == "beyond":
         return _d(i, ANSWER, EVALUATED, "no_suitable_opportunity_beyond_range", pace)
@@ -191,10 +194,10 @@ def count_since_last_card(rows) -> Counts:
                 prior = True
                 continue
             raw += 1
-            substantive = sum(ch.isalnum() for ch in str(body or "")) >= _FILLER_MIN_CHARS
-            if substantive and not in_run:
+            # Filler fails quality elsewhere, but cannot freeze this allowance.
+            if not in_run:
                 grouped += 1
-            in_run = in_run or substantive
+            in_run = True
         else:
             in_run = False
     return Counts(grouped, raw, prior)

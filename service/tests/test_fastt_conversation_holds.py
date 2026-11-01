@@ -73,12 +73,17 @@ def test_unresolved_delivery_and_critical_flag_hold_the_runner_too(tmp_path):
     assert fan_hold_reason(scratch(tmp_path, name="flag.db", flag=True), ACC, 1, True) == "fan-safety-hold"
 
 
-def test_gateway_uses_the_commercial_check_for_cards_and_follow_ups_only():
+def test_gateway_uses_commercial_check_for_cards_followups_and_specific_invitations():
     gateway = runner.Gateway.__new__(runner.Gateway)
     chat, commercial = (lambda: "chat"), (lambda: "commercial")
     gateway.hold_check, gateway.commercial_hold_check, gateway.followup = chat, commercial, False
     assert gateway._hold_for(None) is chat
     assert gateway._hold_for({"media_ids": [1]}) is commercial
+    from types import SimpleNamespace
+    gateway.content = SimpleNamespace(commercial_text=True)
+    assert gateway._hold_for(None) is commercial
+    gateway.content.commercial_text = False
+    assert gateway._hold_for(None) is chat
     gateway.followup = True
     assert gateway._hold_for(None) is commercial
     gateway.commercial_hold_check = None                     # a gateway built without one keeps the old behaviour

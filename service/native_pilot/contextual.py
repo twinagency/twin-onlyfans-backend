@@ -133,7 +133,7 @@ def pending_contextual_delivery(con, account, fan):
     return any(not confirmed_message(con, account, fan, row) for row in rows)
 
 
-def refuse_repeat_media(con, account, fan, terms):
+def refuse_repeat_media(con, account, fan, terms, *, own_attempt_id=None):
     """Canonical media identity wins over changed prices, captions or workers.
 
     Applies only when the new origin table is installed, preserving old fixture
@@ -144,9 +144,11 @@ def refuse_repeat_media(con, account, fan, terms):
     paid_media = set(terms["media_ids"]) - set(terms["preview_ids"])
     if not paid_media:
         return
-    origins=con.execute("SELECT state,snapshot_json FROM of_contextual_offer WHERE account_id=? AND fan_id=? "
+    origins=con.execute("SELECT state,snapshot_json,attempt_id FROM of_contextual_offer WHERE account_id=? AND fan_id=? "
                         "AND state <> 'cancelled'",(account,fan)).fetchall()
     for origin in origins:
+        if own_attempt_id is not None and origin["attempt_id"] == own_attempt_id and origin["state"] == "reserved":
+            continue  # this reservation is independently checked by before_post
         snapshot=json.loads(origin["snapshot_json"])
         offered=set(snapshot["media_ids"])-set(snapshot["preview_ids"])
         if paid_media & offered:
@@ -194,6 +196,16 @@ class ContextualAuthority:
         self.hold_check = hold_check
         self.emit = emit
         self.armed = None
+        self.own_output_ids = ()
+
+    def _input_revision(self, con, ids):
+        marks = ",".join("?" for _ in ids)
+        rows = con.execute("SELECT message_id,direction,body,media_ids,is_unsent FROM messages "
+            f"WHERE account_id=? AND fan_id=? AND message_id IN ({marks}) ORDER BY message_id",
+            (self.account, self.fan, *ids)).fetchall()
+        if len(rows) != len(ids) or any(r["direction"] != "in" or r["is_unsent"] for r in rows):
+            raise Refused("contextual-decision-scope")
+        return digest([list(r) for r in rows])
 
     def _permission(self, con, now, required=None):
         raw = con.execute("SELECT ai_chatter_config_json FROM account_ai_config WHERE account_id=?",
@@ -254,6 +266,8 @@ class ContextualAuthority:
         with store.readonly(self.path) as con:
             self._validate_supporting_ids(con, supporting_ids)
             metadata["supporting_message_ids"] = list(supporting_ids)
+            metadata["input_revision"] = self._input_revision(con, tuple(sorted(set(supporting_ids) | {self.source_message_id})))
+            metadata["own_output_ids"] = list(self.own_output_ids)
             metadata["vault_revision"] = vault_revision(con,self.account,p.attached)
         self.armed = metadata
         try:
@@ -273,12 +287,28 @@ class ContextualAuthority:
                 or any(type(mid) is not int or mid <= 0 for mid in supporting_ids)
                 or len(set(supporting_ids)) != len(supporting_ids)):
             raise Refused("contextual-decision-scope")
-        if supporting_ids == (self.source_message_id,):
-            return
+        self._input_revision(con, tuple(sorted(set(supporting_ids) | {self.source_message_id})))
         rows = con.execute(
             "SELECT message_id,direction FROM messages WHERE account_id=? AND fan_id=? AND is_unsent=FALSE "
             "ORDER BY created_at DESC,message_id DESC LIMIT 20",
             (self.account, self.fan)).fetchall()
+        # Only this turn's confirmed receipts may follow its fan input. A human,
+        # campaign or a competing worker's output remains a freshness veto.
+        filtered = []
+        for row in rows:
+            if row["message_id"] in self.own_output_ids and row["direction"] == "out":
+                if not store.has_table(con, "native_pilot_receipts"):
+                    raise Refused("contextual-own-output-unverified")
+                own = con.execute("SELECT 1 FROM native_pilot_receipts r JOIN native_pilot_inputs i "
+                    "ON i.input_key=r.input_key JOIN native_pilots p ON p.pilot_id=r.pilot_id "
+                    "WHERE p.account_id=? AND p.fan_id=? AND i.message_id=? AND r.state='sent' "
+                    "AND r.provider_message_id=? LIMIT 1", (self.account, self.fan, self.source_message_id,
+                    str(row["message_id"]))).fetchone()
+                if own is None:
+                    raise Refused("contextual-own-output-unverified")
+            else:
+                filtered.append(row)
+        rows = filtered
         if (not rows or rows[0]["message_id"] != self.source_message_id
                 or rows[0]["direction"] != "in"):
             raise Refused("contextual-decision-scope")
@@ -299,6 +329,8 @@ class ContextualAuthority:
         with store.transaction(self.path) as con:
             _, runtime = self._permission(con, now(), "live")
             self._validate_supporting_ids(con, tuple(expected.get("supporting_message_ids", (self.source_message_id,))))
+            if self._input_revision(con, tuple(sorted(set(expected["supporting_message_ids"]) | {self.source_message_id}))) != expected["input_revision"]:
+                raise Refused("contextual-evidence-revised")
             if (runtime["configuration_revision"],runtime["binding_id"]) != (expected["revision"],expected["binding"]):
                 raise Refused("contextual-revision-changed")
             if vault_revision(con,self.account,expected["media_ids"]) != expected["vault_revision"]:
@@ -332,6 +364,8 @@ class ContextualAuthority:
         with store.readonly(self.path) as con:
             _, runtime = self._permission(con, now(), "live")
             self._validate_supporting_ids(con, tuple(metadata.get("supporting_message_ids", (self.source_message_id,))))
+            if self._input_revision(con, tuple(sorted(set(metadata["supporting_message_ids"]) | {self.source_message_id}))) != metadata["input_revision"]:
+                raise Refused("contextual-evidence-revised")
             if (runtime["configuration_revision"],runtime["binding_id"]) != (metadata["revision"],metadata["binding"]):
                 raise Refused("contextual-revision-changed")
             row = con.execute("SELECT snapshot_json,state FROM of_contextual_offer WHERE account_id=? AND decision_key=?",

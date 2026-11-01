@@ -41,7 +41,7 @@ def db(tmp_path):
         CREATE TABLE of_provider_connection(account_id TEXT,binding_id TEXT,revision INTEGER,owner_id INTEGER,status TEXT,expires_at TEXT,last_error TEXT);
         CREATE TABLE of_ledger_scan(account_id TEXT,binding_id TEXT,connection_revision INTEGER,owner_id INTEGER,status TEXT,last_error TEXT,last_complete_at TEXT,last_full_at TEXT,window_end TEXT,coverage_json TEXT);
         CREATE TABLE content_offers(account_id TEXT,fan_id INTEGER,offer_message_id INTEGER,status TEXT,resolved_by TEXT);
-        CREATE TABLE messages(account_id TEXT,fan_id INTEGER,message_id INTEGER,is_paid BOOLEAN);
+        CREATE TABLE messages(account_id TEXT,fan_id INTEGER,message_id INTEGER,is_paid BOOLEAN,direction TEXT DEFAULT 'in',body TEXT DEFAULT 'neutral',media_ids TEXT DEFAULT '[]',is_unsent BOOLEAN DEFAULT FALSE,created_at TEXT DEFAULT '2026-10-30 03:59:00');
         CREATE TABLE vault_sends(account_id TEXT,fan_id INTEGER,media_id INTEGER,message_id INTEGER,price_cents INTEGER,was_purchased BOOLEAN,sent_at TEXT);
         CREATE TABLE vault_items(account_id TEXT,media_id INTEGER,kind TEXT,removed_at TEXT,content_hash TEXT,updated_at_of TEXT,description TEXT,video_description TEXT,ai_fields_json TEXT,operator_overrides_json TEXT,locked_fields_json TEXT);
         """)
@@ -55,6 +55,7 @@ def db(tmp_path):
                                last_complete_at=NOW-timedelta(seconds=30),last_full_at=None)
         c.execute("INSERT INTO of_ledger_scan VALUES(?,?,?,?,?,?,?,?,?,?)",(ACCOUNT,"binding",2,900001,"idle",None,
                   str(scan.last_complete_at),None,str(scan.last_complete_at),_coverage_receipt(scan)))
+        c.execute("INSERT INTO messages(account_id,fan_id,message_id,is_paid) VALUES(?,?,?,NULL)", (ACCOUNT,FAN,10))
         for mid in (101,102,103):
             c.execute("INSERT INTO vault_items VALUES(?,?,?,?,?,?,?,?,?,?,?)",(ACCOUNT,mid,"photo",None,"hash",None,"gym photo",None,None,None,None))
     eng=create_engine("sqlite:///"+str(path))
@@ -66,6 +67,14 @@ def db(tmp_path):
 
 
 def authority(db, mid=10):
+    # Every planning turn now requires an actual canonical source row. Older
+    # fixtures exercised the single-id shortcut without any message evidence.
+    with sqlite3.connect(db) as con:
+        con.execute("INSERT INTO messages(account_id,fan_id,message_id,direction,created_at) "
+                    "SELECT ?,?,?,'in',? WHERE NOT EXISTS (SELECT 1 FROM messages WHERE account_id=? AND fan_id=? AND message_id=?)",
+                    (ACCOUNT,FAN,mid,str(NOW-timedelta(seconds=1)+timedelta(milliseconds=mid)),ACCOUNT,FAN,mid))
+        con.execute("UPDATE messages SET created_at=? WHERE account_id=? AND fan_id=? AND message_id=?",
+                    (str(NOW-timedelta(seconds=1)+timedelta(milliseconds=mid)),ACCOUNT,FAN,mid))
     return ContextualAuthority(db,ACCOUNT,FAN,mid)
 
 
@@ -159,7 +168,7 @@ def test_ignored_card_not_cleared_by_expiry_chatter_or_offer_send(db):
     a.outcome("sent",500)
     with sqlite3.connect(db) as c:
         c.execute("INSERT INTO content_offers VALUES(?,?,?,?,?)",(ACCOUNT,FAN,500,"expired",None))
-        c.execute("INSERT INTO messages VALUES(?,?,?,?)",(ACCOUNT,FAN,500,False))
+        c.execute("INSERT INTO messages(account_id,fan_id,message_id,is_paid) VALUES(?,?,?,?)",(ACCOUNT,FAN,500,False))
     with store.readonly(db) as c:assert ignored_contextual(c,ACCOUNT,FAN)
     assert authority(db,11).check()["mode"] == "live"
     with sqlite3.connect(db) as c:
@@ -190,9 +199,12 @@ def test_parallel_workers_reserve_at_most_one_card(db):
     p=authority(db).check()
     def attempt(mid):
         a=authority(db,mid)
-        with a.arm(delivery(),p,"gym",(mid,)):
-            try:a.reserve(terms(),mid);return True
-            except Refused:return False
+        try:
+            with a.arm(delivery(),p,"gym",(mid,)):
+                a.reserve(terms(),mid)
+            return True
+        except Refused:
+            return False
     with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(attempt,range(10,14)))
     assert sum(results)==1
 
@@ -283,6 +295,8 @@ def test_off_shadow_and_live_action_boundaries(current_mode):
                                description="gym mirror selfie",default_price_cents=1500)]
         yield SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(first=lambda:(101,),scalars=lambda:SimpleNamespace(all=lambda:items))))
     with patch("automations.contextual_offers.get_session",session), \
+         patch("automations.sales_turn.prepare",AsyncMock(return_value=None)), \
+         patch("automations.sales_turn.progress_decision",AsyncMock(return_value=None)), \
          patch.object(content_prompts,"read_hook",AsyncMock(return_value=hook)) as read, \
          patch.object(content_resolver,"resolve",AsyncMock(return_value=Resolution([101,102],contract))) as resolve, \
          patch.object(pack_sender,"_bought_media",AsyncMock(return_value=set())), \
@@ -358,15 +372,18 @@ def test_mode_save_uses_existing_revision_and_audit_without_changing_scope_or_bu
     runtime=SimpleNamespace(configuration_revision=5,binding_id="binding")
     target=SimpleNamespace(engine=eng,_runtime=lambda *_:runtime)
     with patch("onlyfans_runtime.configuration.runtime_model_options",return_value=None):
-        revision,_=update_configuration(target,"tenant",ACCOUNT,patch={"fasttContextualSalesMode":"shadow"},
+        revision,_=update_configuration(target,"tenant",ACCOUNT,patch={"fasttContextualSalesMode":"shadow",
+            "fasttCommercialInitiative":"active", "fasttFirstOfferWindow":[1,4], "fasttRepeatOfferWindow":[4,8]},
             expected_revision=5,expected_fingerprint=before,command_key="b"*64,actor="op-session:"+"a"*64)
     assert revision==6
     with Session(eng) as s:
         row=s.get(AccountAiConfig,ACCOUNT)
-        assert json.loads(row.ai_chatter_config_json)=={**original,KEY:"shadow"}
+        assert json.loads(row.ai_chatter_config_json)=={**original,KEY:"shadow", "fastt_commercial_initiative":"active",
+            "fastt_first_offer_window":[1,4], "fastt_repeat_offer_window":[4,8]}
         assert row.daily_cost_cap_cents==500
         event=s.get(OfConfigurationChange,(ACCOUNT,"b"*64))
-        assert json.loads(event.after_json)=={"fasttContextualSalesMode":"shadow"}
+        assert json.loads(event.after_json)=={"fasttContextualSalesMode":"shadow", "fasttCommercialInitiative":"active",
+            "fasttFirstOfferWindow":[1,4], "fasttRepeatOfferWindow":[4,8]}
     eng.dispose()
 
 
@@ -436,7 +453,7 @@ def test_crash_after_receipt_retention_keeps_hold_until_matching_purchase(db):
     assert authority(db,11).check()["mode"] == "live" # positive receipt resolves delivery, not ownership
     with sqlite3.connect(db) as c:
         c.execute("INSERT INTO content_offers VALUES(?,?,?,?,?)",(ACCOUNT,FAN,500,"delivered","ppv_ledger"))
-        c.execute("INSERT INTO messages VALUES(?,?,?,1)",(ACCOUNT,FAN,500))
+        c.execute("INSERT INTO messages(account_id,fan_id,message_id,is_paid) VALUES(?,?,?,1)",(ACCOUNT,FAN,500))
     b=authority(db,11);p=b.check()
     with b.arm(delivery((103,)),p,"new gym",(11,)):b.reserve(terms((103,)),43)
     with store.readonly(db) as c:
@@ -458,9 +475,7 @@ def test_explicit_same_item_cannot_duplicate_a_card_after_projection_crash(db):
 def multi_message_db(db):
     """Extend the durable-guard fixture with the canonical evidence columns."""
     with sqlite3.connect(db) as con:
-        con.execute("ALTER TABLE messages ADD COLUMN direction TEXT")
-        con.execute("ALTER TABLE messages ADD COLUMN created_at TEXT")
-        con.execute("ALTER TABLE messages ADD COLUMN is_unsent BOOLEAN NOT NULL DEFAULT FALSE")
+        con.execute("DELETE FROM messages WHERE message_id=10")
         con.executemany("INSERT INTO messages(account_id,fan_id,message_id,direction,created_at) "
                         "VALUES(?,?,?,?,?)", [
             (ACCOUNT,FAN,8,"out",str(NOW-timedelta(seconds=3))),

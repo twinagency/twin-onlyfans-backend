@@ -29,6 +29,9 @@ def freeze(ledger, *, pilot_id, owner_token, attempt_id, body, terms):
         if "dispatch_intent" in retained and retained["dispatch_intent"]!=intent:
             raise Refused("frozen-dispatch-conflict")
         retained["dispatch_intent"]=intent
+        if terms and terms.get("canonical_quote"):
+            retained["canonical_quote"] = terms["canonical_quote"]
+            retained["quote_lifecycle"] = "dispatch_intent"
         if terms:retained["content_intent"]=terms
         con.execute("UPDATE native_pilot_receipts SET evidence_json=? WHERE attempt_id=?",(_json(retained),attempt_id))
 

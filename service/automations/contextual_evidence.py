@@ -19,7 +19,7 @@ def recent_context(candidate, fan):
 def evidence(decision, context):
     """Only verbatim, recent fan evidence can justify exploration or an offer."""
     action = decision.get("action")
-    if action not in ("chat", "explore", "send_ppv"):
+    if action not in ("chat", "explore", "send_ppv", "invite", "clarify"):
         return None
     reason = decision.get("reason")
     if not isinstance(reason, str) or not reason.strip():
@@ -70,3 +70,19 @@ terms (8-15 single descriptive lowercase words for retrieval), exclusions (array
 bridge (one short natural line for explore, a question only if one is genuinely needed; for send a short grounded
 introduction with no unsupported claims, price or promise).
 Choose chat with hook=false when there is no justified opportunity."""
+
+SYSTEM += """
+The current conversation includes durable commercial progress, per-creator
+initiative and separate first-bubble/repeat-reply reference windows. Use them
+to choose appropriate progress, never to force a card. At an upper boundary
+do not choose generic explore/rapport/teasing. Choose send_ppv, invite for a
+specific available item, one NECESSARY clarify, or chat with the specific
+evidence for no current opportunity/blocked state. Invite and clarify require
+subject and retrieval terms for real inventory. For clarify also return
+clarification (product_choice|product_question|ambiguous_invitation) and missing
+(exact missing information). Cite the current fan message requiring it. No
+second clarification after extension_used. A direct supported buying request
+and unambiguous item-invitation acceptance must not be delayed or requalified.
+Answer the fan's actual question. Purchases alone cause no action. Never resell
+owned assets, repeat ignored invitations, or repeat the introductory script.
+"""

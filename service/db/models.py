@@ -3380,6 +3380,11 @@ class OfConversationState(Base):
     #: an unresolved attempt blocks conflicting sends regardless of mode, and
     #: resuming replies must not erase it.
     unresolved_attempt_id: Mapped[str | None] = mapped_column(String)
+    # R5 progress belongs to this conversation's existing ownership authority.
+    # No inactivity TTL: invitations, holds and unfinished attempts survive restarts.
+    commercial_state_json: Mapped[str | None] = mapped_column(
+        Text, info={"onlyfans_since": "0108_commercial_progress"}
+    )
     requires_attention: Mapped[bool] = mapped_column(
         # `false()` rather than `text("0")`: on PostgreSQL a boolean column with
         # a default of integer 0 is rejected outright ("column ... is of type

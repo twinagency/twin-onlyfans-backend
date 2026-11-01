@@ -199,6 +199,8 @@ class NativeEngine:
     or hidden process-global routing table exists.
     """
 
+    onlyfans_commercial = True
+
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
                  unanswered_reply_ids=(), unlinked_paid=None, contextual=None, reply_format=False,
@@ -218,6 +220,11 @@ class NativeEngine:
         self.contextual = contextual
         self.reply_format = reply_format is True
         self.content = content
+        if content is not None:
+            content.commercial_text = False
+            content.accepted_inventory_revision = None
+            content.canonical_quote = None
+            content.quote_vault_revision = None
         # Optional Twin approved-context source for the single prompt hook.
         self.context = context
         # All-fans runner: another fan's open offer is that fan's business, not this turn's obligation.
@@ -292,6 +299,7 @@ class NativeEngine:
         sales_enabled = result.pop("_native_on_request_sales_enabled", False) is True
         from onlyfans_runtime.contextual_mode import KEY, mode
         contextual_mode = mode(result)
+        self._bounded_commercial = contextual_mode == "live" and sales_enabled
         result.update(TEXT_ONLY)
         result[KEY] = contextual_mode if getattr(self, "contextual", None) is not None and sales_enabled else "off"
         result.pop("_native_reply_format", None)  # internal capability, never a saved switch
@@ -333,6 +341,13 @@ class NativeEngine:
                 except Exception:
                     # A queued follow-up cannot race past unreadable origin metadata.
                     result["enabled"] = False
+        if self._bounded_commercial and self._job is not None:
+            # R5: queued nudges, discounts and payment-triggered upsells are not
+            # fan participation. Existing recovery/accepted fulfilment stays
+            # with its separate authority; no delayed sales script runs here.
+            result["enabled"] = False
+            self._emit({"event": "sales-withheld", "reason": "commercial-requires-current-fan-turn",
+                        "account_id": self.account_id, "fan_id": self.fan_id})
         if await self._fan_unlinked_paid():
             # Every priced-card writer (model >>OFFER, vault ask lane, post-buy rung, discounted resend) is
             # switched off for this fan only; plain chat is untouched.
@@ -458,6 +473,13 @@ class NativeEngine:
         target = by_id.get(offer_id)
         if target is None:
             return None          # not on the shelf: FASTT rejects the id itself
+        if self._bounded_commercial and self._job is not None:
+            # R5: queued nudges, discounts and payment-triggered upsells are not
+            # fan participation. Existing recovery/accepted fulfilment stays
+            # with its separate authority; no delayed sales script runs here.
+            result["enabled"] = False
+            self._emit({"event": "sales-withheld", "reason": "commercial-requires-current-fan-turn",
+                        "account_id": self.account_id, "fan_id": self.fan_id})
         if await self._fan_unlinked_paid():
             return UNLINKED_PAYMENT
         open_offers = await native._open_offers(account, fan)
@@ -491,7 +513,7 @@ class NativeEngine:
 
     async def enqueue_job(self, account_id, kind, **kwargs):
         self._account(account_id)
-        if self.followups is not None:
+        if self.followups is not None and not getattr(self, "_bounded_commercial", False):
             # Only FASTT's re-engage nudge for THIS fan is kept (runner-owned queue, never scheduled_jobs).
             job = None
             if nudge_job(kind, kwargs.get("payload"), self.fan_id):   # ai_chatter may queue only the stock nudge

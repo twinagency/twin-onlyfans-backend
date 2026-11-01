@@ -234,6 +234,8 @@ def test_planner_preserves_gates(monkeypatch,case):
         description="portrait in soft window light",default_price_cents=1500)]
   yield NS(execute=AsyncMock(return_value=NS(first=lambda:None if case=="missing" else (10,),scalars=lambda:NS(all=lambda:items))))
  monkeypatch.setattr(co,"get_session",session)
+ monkeypatch.setattr("automations.sales_turn.prepare",AsyncMock(return_value=None))
+ monkeypatch.setattr("automations.sales_turn.progress_decision",AsyncMock(return_value=None))
  monkeypatch.setattr(ps,"_bought_media",AsyncMock(return_value={10}))
  offered=AsyncMock(return_value=set())
  monkeypatch.setattr(ps,"offered_media",offered)
@@ -246,7 +248,7 @@ def test_planner_preserves_gates(monkeypatch,case):
   assert resolver.call_args.kwargs["seen"]=={10}
   assert read.call_args.kwargs["contextual_message"]["messages"][-1]["id"]==3
  elif case=="explore":
-  assert result is None and authority.reply_override==hook.bridge
+  assert result is None and authority.reply_override is None  # no conversation authority in this unit fixture
   assert not resolver.called
  else:assert result is None
  if case in ("blocked","takeover","stale","ignored","duplicate","missing","disabled"):

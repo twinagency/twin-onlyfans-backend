@@ -253,7 +253,12 @@ async def _judge(account_id: str, fan_id: int, fan: Fan | None, text: str, *,
             int(cfg["post_purchase_max_msgs"]):
         return None
 
-    res = await llm_client.chat(
+    # The native OnlyFans run retains its pinned, budgeted model transport.
+    # Other runtimes keep the original provider seam.
+    from telegram_runtime.capabilities import active_telegram_capabilities
+    cap = active_telegram_capabilities()
+    chat = cap.chat if getattr(cap, "onlyfans_commercial", False) else llm_client.chat
+    res = await chat(
         model=model,
         messages=[{"role": "system", "content": _SYSTEM},
                   {"role": "user", "content": text[:_TEXT_CLIP]}],

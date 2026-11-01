@@ -18,7 +18,7 @@ def thread(tmp_path, monkeypatch):
     path = tmp_path / "evidence.db"
     with sqlite3.connect(path) as con:
         con.execute("CREATE TABLE messages(account_id TEXT,fan_id INTEGER,message_id INTEGER,"
-                    "direction TEXT,created_at TEXT,is_unsent BOOLEAN NOT NULL DEFAULT FALSE)")
+                    "direction TEXT,created_at TEXT,body TEXT DEFAULT 'neutral',media_ids TEXT DEFAULT '[]',is_unsent BOOLEAN NOT NULL DEFAULT FALSE)")
         con.executemany("INSERT INTO messages(account_id,fan_id,message_id,direction,created_at) VALUES(?,?,?,?,?)", [
             (ACCOUNT, FAN, 7, "in", "2026-10-30T10:00:00"),
             (ACCOUNT, FAN, 8, "out", "2026-10-30T10:01:00"),

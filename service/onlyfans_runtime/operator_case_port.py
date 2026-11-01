@@ -22,12 +22,28 @@ def register_operator_case_sink(fn) -> None:
     _sink = fn
 
 
-def open_operator_case(*, account_id, fan_id, kind, reason, dedupe_key, evidence=None, source_message_id=None):
+def open_operator_case(*, account_id, fan_id, kind, reason, dedupe_key, evidence=None, source_message_id=None, sink=None):
     if kind not in CASE_KINDS:
         raise ValueError("unknown operator case kind")
     request = {"account_id": account_id, "fan_id": fan_id, "kind": kind, "reason": reason, "dedupe_key": dedupe_key,
                "evidence": evidence or {}, "source_message_id": source_message_id}
-    if _sink is None:
+    target = sink or _sink
+    if target is None:
         PENDING.append(request)
         return None
-    return _sink(**request)
+    return target(**request)
+
+
+def durable_sink(session):
+    """Use R1's existing durable case writer inside the caller's transaction."""
+    def write(**request):
+        from .operator_cases import open_case
+        mapping = {"identity_question": ("identity", "all"), "disputed_content": ("complaint", "commercial"),
+                   "unresolved_delivery": ("complaint", "commercial"), "unsupported_custom": ("custom_request", "offer"),
+                   "business_enquiry": ("business", "all"), "attachment_unreadable": ("attachment", "offer")}
+        category, scope = mapping[request["kind"]]
+        case, _ = open_case(session, str(request["account_id"]), int(request["fan_id"]), category,
+            reason=request["reason"], evidence={**request["evidence"], "dedupe_key": request["dedupe_key"]},
+            source_message_id=request["source_message_id"], origin="detector", scope=scope)
+        return case.case_id
+    return write

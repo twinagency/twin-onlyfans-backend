@@ -404,6 +404,8 @@ class Hook:
     action: str = "send_ppv"
     reason: str = ""
     supporting_message_ids: tuple[int, ...] = ()
+    clarification: str | None = None
+    missing: str | None = None
 
 
 #: The three arms, in the order the prompt prefers them.
@@ -668,13 +670,13 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
         evidence_ids = evidence(p, contextual_message)
         log.info("contextual-evaluated account=%s fan=%s action=%s reason=%s",
                  account_id, fan_id, p.get("action"), str(p.get("reason", ""))[:160])
-        if p.get("action") not in ("explore", "send_ppv"):
+        if p.get("action") not in ("explore", "send_ppv", "invite", "clarify"):
             return _no("invalid_contextual_action", code="invalid_model_output")
         if evidence_ids is None:
             return _no("unsupported_contextual_evidence",
                        code="unsupported_conversation_evidence")
     bridge = " ".join(str(p.get("bridge") or "").split())
-    bridge_valid = (_hook_upsell.contextual_bridge_ok(bridge, p.get("action"))
+    bridge_valid = (_hook_upsell.contextual_bridge_ok(bridge, "explore" if p.get("action") in ("invite", "clarify") else p.get("action"))
                     if contextual_message is not None else _hook_upsell.bridge_ok(bridge))
     if not bridge_valid:
         # Dropping it and shipping a bare claim is the other option, and it is
@@ -713,6 +715,7 @@ async def read_hook(account_id: str, fan_id: int, *, voice: str = "her",
         source=source, what=str(p.get("what") or "")[:60], bridge=bridge,
         action=p.get("action", "send_ppv") if contextual_message is not None else "send_ppv",
         reason=str(p.get("reason", ""))[:160], supporting_message_ids=evidence_ids,
+        clarification=p.get("clarification"), missing=str(p.get("missing") or "")[:300] or None,
         contract=Contract(
             is_ask=contextual_message is None, strict=contextual_message is not None, subject=subject,
             media_kind=(kind if kind in MEDIA_KINDS else None),

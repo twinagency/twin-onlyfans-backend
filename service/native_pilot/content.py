@@ -263,8 +263,32 @@ class VaultPlan:
         if (not isinstance(previews, list) or any(not _id(p) for p in previews)
                 or len(set(previews)) != len(previews) or not set(previews) <= set(media)):
             raise Refused("content-send-previews")
-        return {"catalog_id": None, "kind": None, "price_cents": int(cents), "media_ids": list(media),
-                "media_types": {}, "preview_ids": list(previews)}
+        result = {"catalog_id": None, "kind": None, "price_cents": int(cents), "media_ids": list(media),
+                  "media_types": {}, "preview_ids": list(previews)}
+        quote = getattr(self, "canonical_quote", None)
+        if quote is not None:
+            if quote.price_cents != int(cents) or set(m for m, _ in quote.assets) != set(media):
+                raise Refused("canonical-quote-changed")
+            result["canonical_quote"] = json.loads(quote.as_json())
+            result["quote_vault_revision"] = getattr(self, "quote_vault_revision", None)
+        return result
+
+    def bind_quote(self, quote):
+        """Carry the existing authority's quote through its admitted dispatch."""
+        self.canonical_quote = quote
+        if self.path:
+            from twin_bridge.store import readonly
+            from .contextual import vault_revision
+            with readonly(self.path) as con:
+                ids = [m for m, _ in quote.assets]
+                if getattr(self, "accepted_inventory_revision", None):
+                    from onlyfans_runtime.commercial_progress import fingerprint
+                    rows = con.execute("SELECT media_id,kind,content_hash,updated_at_of,description,video_description,removed_at "
+                        "FROM vault_items WHERE account_id=? AND media_id IN (%s) ORDER BY media_id"
+                        % ",".join("?" * len(ids)), (self.account, *ids)).fetchall()
+                    if fingerprint([list(r) for r in rows]) != self.accepted_inventory_revision:
+                        raise Refused("invited-inventory-changed")
+                self.quote_vault_revision = vault_revision(con, self.account, ids)
 
     def check_catalog(self, con, account, require_enabled=False):
         """Nothing is listed, so nothing can drift; the per-send vault check is ``check_send``."""
@@ -276,6 +300,10 @@ class VaultPlan:
         kinds = {int(r[0]): r[1] for r in rows}
         if set(kinds) != set(ids) or any(k not in MEDIA_TYPES for k in kinds.values()):
             raise Refused("content-send-media")
+        if terms.get("quote_vault_revision"):
+            from .contextual import vault_revision
+            if vault_revision(con, account, ids) != terms["quote_vault_revision"]:
+                raise Refused("canonical-quote-content-changed")
         return {**terms, "media_types": {str(i): kinds[i] for i in ids}}
 
     def evidence(self, raw, expected):

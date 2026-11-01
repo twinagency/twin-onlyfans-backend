@@ -398,7 +398,7 @@ class Gateway:
 
     def _hold_for(self, terms):
         """The hold check that applies to THIS send: a priced card or a follow-up is a commercial action."""
-        if (terms or self.followup) and self.commercial_hold_check is not None and self.hold_check is not None:
+        if (terms or self.followup or getattr(getattr(self, "content", None), "commercial_text", False)) and self.commercial_hold_check is not None and self.hold_check is not None:
             return self.commercial_hold_check
         return self.hold_check
 
@@ -495,6 +495,14 @@ class Gateway:
                             not row["owner_expires_at"] or now() >= datetime.fromisoformat(row["owner_expires_at"]) or
                             now() >= datetime.fromisoformat(self.deadline)):
                         raise Refused("authority-lost-before-post")
+                    if terms and self.content:
+                        # Revalidate direct requests as well as contextual offers
+                        # after provider asset reads and immediately before POST.
+                        self.content.check_send(con, self.pilot.account_id, terms)
+                        if unsend_id is None:
+                            from .contextual import refuse_repeat_media
+                            refuse_repeat_media(con, self.pilot.account_id, self.pilot.fan_id, terms,
+                                                own_attempt_id=attempt.id if contextual_metadata is not None else None)
                 check = self._hold_for(terms)
                 if check is not None and check():
                     raise Refused("fan-held-before-post")

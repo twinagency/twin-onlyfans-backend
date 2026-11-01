@@ -45,15 +45,37 @@ def short_acceptance(body) -> bool:
     return is_affirmation(text) or bool(_THUMBS.match(text))
 
 
+def ambiguous_answer(body):
+    text = _text(body).lower()
+    return bool(re.fullmatch(r"(?:maybe|perhaps|not sure|which one|what do you mean|what is it)[?.! ]*", text))
+
+
+async def associate_clarification(account_id, fan_id, invitation_id, source_id, body):
+    """Keep the one necessary clarification on the SAME item/quote association."""
+    async with get_session() as session:
+        row = await session.get(OfSalesInvitation, (str(account_id), invitation_id))
+        if row is None or row.fan_id != int(fan_id) or row.state != OPEN:
+            raise ValueError("clarification invitation changed")
+        terms = json.loads(row.offer_terms_json or "{}")
+        previous = terms.get("clarification")
+        if previous and previous["source_id"] != int(source_id):
+            raise ValueError("invitation clarification already used")
+        terms["clarification"] = {"source_id": int(source_id), "body": body, "delivery_message_id": None}
+        row.offer_terms_json = json.dumps(terms, sort_keys=True)
+        await session.commit()
+
+
 @dataclass(frozen=True)
 class Acceptance:
     invitation_id: str
     media_ids: tuple
     source_message_id: int
     accepted_turn_id: int
+    offer_terms: dict | None = None
 
 
-async def propose(account_id: str, fan_id: int, media_ids, *, source_message_id: int, subject: str | None = None) -> str:
+async def propose(account_id: str, fan_id: int, media_ids, *, source_message_id: int, subject: str | None = None,
+                  offer_terms: dict | None = None, invitation_body: str | None = None) -> str:
     """Record an invitation to real content. Supersedes any older open invitation: one open at a time keeps a
     later 'yes' unambiguous. ``source_message_id`` is the FAN message that supported it."""
     ids = sorted({int(m) for m in media_ids})
@@ -69,7 +91,9 @@ async def propose(account_id: str, fan_id: int, media_ids, *, source_message_id:
             row.state, row.resolved_at = "superseded", now
         invitation = OfSalesInvitation(account_id=str(account_id), invitation_id=str(uuid.uuid4()), fan_id=int(fan_id),
             media_ids_json=json.dumps(ids), subject=(subject or "")[:200] or None,
-            source_message_id=int(source_message_id), state=OPEN, created_at=now)
+            source_message_id=int(source_message_id), state=OPEN, created_at=now,
+            offer_terms_json=json.dumps(offer_terms, sort_keys=True) if offer_terms else None,
+            invitation_body=invitation_body)
         s.add(invitation)
         await s.commit()
         return invitation.invitation_id
@@ -96,18 +120,27 @@ async def resolve_acceptance(account_id: str, fan_id: int) -> tuple[Acceptance |
         done = [r for r in rows if r.state == "accepted" and r.accepted_turn_id == turn]
         if done:
             r = done[0]
-            return Acceptance(r.invitation_id, tuple(json.loads(r.media_ids_json)), r.source_message_id, turn), "already_accepted_this_turn"
+            return Acceptance(r.invitation_id, tuple(json.loads(r.media_ids_json)), r.source_message_id, turn,
+                              json.loads(r.offer_terms_json) if r.offer_terms_json else None), "already_accepted_this_turn"
         opened = [r for r in rows if r.state == OPEN]
         if not opened:
             return None, "no_open_invitation"
         if len(opened) > 1:
             return None, "ambiguous_invitation"
         r = opened[0]
+        if r.invitation_body and not r.delivery_message_id:
+            return None, "invitation_never_reached_fan"
         if turn <= r.source_message_id:
             return None, "acceptance_before_invitation"
+        terms = json.loads(r.offer_terms_json or "{}")
+        clarification = terms.get("clarification") or {}
+        anchor = clarification.get("delivery_message_id") or r.delivery_message_id
+        if clarification and not clarification.get("delivery_message_id"):
+            return None, "clarification_never_reached_fan"
         delivered = (await s.execute(select(Message.message_id).where(
             Message.account_id == str(account_id), Message.fan_id == int(fan_id), Message.direction == "out",
-            Message.message_id > r.source_message_id, Message.message_id < turn).limit(1))).first()
+            *([Message.message_id == anchor] if anchor else []),
+            Message.message_id > r.source_message_id, Message.message_id < turn, Message.is_unsent.is_(False)).limit(1))).first()
         if delivered is None:
             return None, "invitation_never_reached_fan"
         # Another fan message between the invitation and this yes means the 'yes' may answer something else.
@@ -116,9 +149,38 @@ async def resolve_acceptance(account_id: str, fan_id: int) -> tuple[Acceptance |
             Message.message_id > delivered[0], Message.message_id < turn, Message.is_unsent.is_(False)).limit(1))).first()
         if between is not None:
             return None, "fan_changed_subject"
+        unrelated = (await s.execute(select(Message.message_id).where(
+            Message.account_id == str(account_id), Message.fan_id == int(fan_id), Message.direction == "out",
+            Message.message_id > delivered[0], Message.message_id < turn))).first()
+        if unrelated is not None:
+            return None, "intervening_creator_message"
         r.state, r.accepted_turn_id, r.resolved_at = "accepted", turn, datetime.utcnow()
         await s.commit()
-        return Acceptance(r.invitation_id, tuple(json.loads(r.media_ids_json)), r.source_message_id, turn), "accepted"
+        return Acceptance(r.invitation_id, tuple(json.loads(r.media_ids_json)), r.source_message_id, turn,
+                          json.loads(r.offer_terms_json) if r.offer_terms_json else None), "accepted"
+
+
+async def bind_delivery(account_id, fan_id, source_message_id, message_id, body):
+    """Only confirmed delivery of the specific invitation makes a later yes binding."""
+    async with get_session() as s:
+        rows = (await s.execute(select(OfSalesInvitation).where(OfSalesInvitation.account_id == str(account_id),
+            OfSalesInvitation.fan_id == int(fan_id), OfSalesInvitation.source_message_id <= int(source_message_id),
+            OfSalesInvitation.state == OPEN))).scalars().all()
+        for r in rows:
+            earlier = (await s.execute(select(Message.body).where(Message.account_id == str(account_id),
+                Message.fan_id == int(fan_id), Message.direction == "out",
+                Message.message_id > int(source_message_id), Message.message_id <= int(message_id))
+                .order_by(Message.message_id))).scalars().all()
+            words = lambda value: " ".join(re.findall(r"\w+", _text(value).lower()))
+            if r.source_message_id == int(source_message_id) and r.invitation_body and words(r.invitation_body) in words(" ".join(earlier)):
+                r.delivery_message_id = int(message_id)
+            terms = json.loads(r.offer_terms_json or "{}")
+            clarification = terms.get("clarification")
+            if (clarification and clarification["source_id"] == int(source_message_id)
+                    and words(clarification["body"]) in words(" ".join(earlier))):
+                clarification["delivery_message_id"] = int(message_id)
+                r.offer_terms_json = json.dumps(terms, sort_keys=True)
+        await s.commit()
 
 
 async def settle(account_id: str, fan_id: int) -> None:
@@ -142,6 +204,8 @@ async def settle(account_id: str, fan_id: int) -> None:
             after = [b for b in reply]
             if any(short_acceptance(b) for b in after):
                 continue
+            if len(after) == 1 and ambiguous_answer(after[0]):
+                continue  # one item-specific ambiguity can use the bounded clarification path
             r.state = "declined" if any(_language.is_hard_decline(_text(b)) for b in after) else "ignored"
             r.resolved_at = datetime.utcnow()
         await s.commit()
@@ -154,11 +218,12 @@ async def history(account_id: str, fan_id: int, media_ids=()) -> dict:
         async with get_session() as s:
             rows = (await s.execute(select(OfSalesInvitation).where(
                 OfSalesInvitation.account_id == str(account_id), OfSalesInvitation.fan_id == int(fan_id))
-                .order_by(OfSalesInvitation.created_at.desc()).limit(20))).scalars().all()
+                .order_by(OfSalesInvitation.created_at.desc()))).scalars().all()
     except Exception:
-        return {"open": 0, "ignored_same_item": False, "declined_same_item": False, "recent_total": 0}
+        return {"open": 0, "ignored_same_item": False, "declined_same_item": False, "recent_total": 0, "open_matching": []}
     same = [r for r in rows if want and want & set(json.loads(r.media_ids_json))]
     return {"open": sum(r.state == OPEN for r in rows),
             "ignored_same_item": any(r.state == "ignored" for r in same),
             "declined_same_item": any(r.state == "declined" for r in same),
-            "recent_total": len(rows)}
+            "recent_total": len(rows),
+            "open_matching": [r.invitation_id for r in same if r.state == OPEN]}

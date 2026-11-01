@@ -75,7 +75,7 @@ def test_card_resets_the_count_and_marks_prior_card():
 # ── the decision ────────────────────────────────────────────────────────────────────────────────────────────────
 def test_direct_request_ready_offers_immediately_even_with_zero_warmup_on_every_setting():
     for init in ("lower", "standard", "active"):
-        d = decide(I(controls=C(init), grouped_turns=0, direct_request=True, matched=True))
+        d = decide(I(controls=C(init), grouped_turns=0, raw_bubbles=0, direct_request=True, matched=True))
         assert (d.action, d.outcome, d.reason) == ("direct_offer", "acted", "direct_request_ready"), init
         assert d.sends_card
 
@@ -103,7 +103,7 @@ def test_direct_request_without_exact_match_proposes_alternative_not_card():
 def test_protection_beats_every_setting_and_even_a_direct_request(kw, reason):
     for init in ("lower", "standard", "active"):
         d = decide(I(controls=C(init, first=1), direct_request=True, matched=True, evidence="current_interest",
-                     grouped_turns=20, **kw))
+                     grouped_turns=20, raw_bubbles=20, **kw))
         assert d.reason == reason and not d.sends_card, (init, kw)
 
 
@@ -113,16 +113,16 @@ def test_off_mode_makes_no_commercial_decision():
 
 
 def test_current_interest_before_and_after_reference_range_both_may_offer():
-    before = decide(I(evidence="current_interest", grouped_turns=0))
-    after = decide(I(evidence="current_interest", grouped_turns=9))
+    before = decide(I(evidence="current_interest", grouped_turns=0, raw_bubbles=0))
+    after = decide(I(evidence="current_interest", grouped_turns=9, raw_bubbles=9))
     assert before.action == after.action == "proactive_offer"
 
 
 def test_no_suitable_opportunity_beyond_range_is_a_reassessment_not_a_send():
     for init in ("lower", "standard", "active"):
-        d = decide(I(controls=C(init), evidence="none", grouped_turns=30, ready_items=0))
+        d = decide(I(controls=C(init), evidence="none", grouped_turns=30, raw_bubbles=30, ready_items=0))
         assert not d.sends_card and d.action == "answer"
-    d = decide(I(controls=C("lower"), evidence="none", grouped_turns=30))
+    d = decide(I(controls=C("lower"), evidence="none", grouped_turns=30, raw_bubbles=30))
     assert d.action == "answer" and d.reason == "no_suitable_opportunity_beyond_range" and d.outcome == "evaluated"
 
 
@@ -134,25 +134,25 @@ def test_count_alone_never_sends_a_card_on_any_setting():
 
 
 def test_initiative_changes_the_choice_among_appropriate_actions():
-    kw = dict(evidence="background", grouped_turns=3)
+    kw = dict(evidence="background", grouped_turns=3, raw_bubbles=3)
     assert decide(I(controls=C("lower"), **kw)).action == "answer"          # lower waits inside the range
-    assert decide(I(controls=C("lower"), evidence="background", grouped_turns=7)).action == "develop"
+    assert decide(I(controls=C("lower"), evidence="background", grouped_turns=7, raw_bubbles=7)).action == "develop"
     assert decide(I(controls=C("standard"), **kw)).action == "invite"
     assert decide(I(controls=C("active"), **kw)).action == "invite"
-    early = dict(evidence="background", grouped_turns=0)
+    early = dict(evidence="background", grouped_turns=0, raw_bubbles=0)
     assert decide(I(controls=C("lower"), **early)).action == "answer"
     assert decide(I(controls=C("active"), **early)).action == "invite"
-    gentle = decide(I(controls=C("lower"), evidence="current_interest", grouped_turns=0))
+    gentle = decide(I(controls=C("lower"), evidence="current_interest", grouped_turns=0, raw_bubbles=0))
     assert gentle.action == "invite"
 
 
 def test_pacing_reference_range_and_independent_repeat_setting():
     assert (pacing(C(first=3), 2, prior_card=False).lo, pacing(C(first=3), 2, prior_card=False).hi) == (2, 6)
-    first = pacing(C(first=3, repeat=6), 4, prior_card=False)
+    first = pacing(C(first=3, repeat=6), 4, prior_card=False, raw_bubbles=4)
     repeat = pacing(C(first=3, repeat=6), 4, prior_card=True)
     assert first.phase == "first" and first.position == "within"
-    assert repeat.phase == "repeat" and repeat.ref == 6 and repeat.position == "before"
-    assert pacing(C(), 9, prior_card=False).position == "beyond"
+    assert repeat.phase == "repeat" and repeat.ref == 6 and repeat.position == "within"
+    assert pacing(C(), 9, prior_card=False, raw_bubbles=9).position == "beyond"
 
 
 def test_recent_refusal_and_ignored_invitation_do_not_resell_the_same_thing():
@@ -169,7 +169,7 @@ def test_identical_unresolved_card_blocks_but_a_different_request_is_still_possi
 
 
 def test_accepted_invitation_presents_the_offer_without_reproving_interest():
-    d = decide(I(accepted_invitation="inv-1", evidence="none", grouped_turns=0))
+    d = decide(I(accepted_invitation="inv-1", evidence="none", grouped_turns=0, raw_bubbles=0))
     assert (d.action, d.reason, d.invitation_id) == ("direct_offer", "invitation_accepted", "inv-1")
     d = decide(I(accepted_invitation="inv-1", acceptance_revalidated=False))
     assert not d.sends_card and d.reason == "acceptance_not_revalidated"
@@ -319,9 +319,9 @@ def test_ignored_invitation_after_topic_change(db):
 
 def test_decision_rows_are_idempotent_and_include_excluded_turns(db):
     d1 = decide(I(controls=C("active"), direct_request=True, matched=True))
-    d2 = decide(I(evidence="none", grouped_turns=1, ready_items=0))
+    d2 = decide(I(evidence="none", grouped_turns=1, raw_bubbles=1, ready_items=0))
     d3 = decide(I(hold="stop_contact"))
-    d4 = decide(I(evidence="background", grouped_turns=3))
+    d4 = decide(I(evidence="background", grouped_turns=3, raw_bubbles=3))
     assert run(dec.record(ACC, FAN, 10, d1, counts=sa.Counts(2, 5, False), evidence={"matched": [11]}))
     assert not run(dec.record(ACC, FAN, 10, d1))
     run(dec.record(ACC, FAN, 11, d2))
@@ -331,7 +331,7 @@ def test_decision_rows_are_idempotent_and_include_excluded_turns(db):
     assert r["turns_evaluated"] == 4
     assert r["by_outcome"] == {"acted": 2, "excluded": 1, "blocked": 1}
     assert r["no_offer_reasons"] == {"no_match": 1, "hold:stop_contact": 1, "background_interest_invite": 1}
-    assert r["pacing"]["first"]["cards"] == 1 and r["pacing"]["first"]["invitations"] == 1
+    assert r["pacing"]["first"]["proposed_cards"] == 1 and r["pacing"]["first"]["invitations"] == 1
     assert sorted(r["pacing"]["first"]["grouped_turns"]) == [0, 1, 2, 3]
     assert r["pacing"]["first"]["raw_bubbles"] == [5, 4]
 
@@ -340,22 +340,22 @@ def test_report_separates_first_and_repeat_pacing(db):
     run(dec.record(ACC, FAN, 20, decide(I(direct_request=True, matched=True, prior_card=True))))
     run(dec.record(ACC, FAN, 21, decide(I(direct_request=True, matched=True, prior_card=False))))
     r = run(dec.report(ACC))
-    assert r["pacing"]["repeat"]["cards"] == 1 and r["pacing"]["first"]["cards"] == 1
+    assert r["pacing"]["repeat"]["proposed_cards"] == 1 and r["pacing"]["first"]["proposed_cards"] == 1
 
 
 def test_payment_arriving_never_triggers_a_card_but_a_fresh_request_is_served_at_once():
     for init in ("lower", "standard", "active"):
         for g in (0, 1, 3, 8):
             assert not decide(I(controls=C(init), prior_card=True, grouped_turns=g, evidence="none")).sends_card
-        assert decide(I(controls=C(init), prior_card=True, grouped_turns=0, direct_request=True, matched=True)).sends_card
+        assert decide(I(controls=C(init), prior_card=True, grouped_turns=0, raw_bubbles=0, direct_request=True, matched=True)).sends_card
 
 
 def test_repeat_pacing_reference_is_independent_of_first_offer_pacing():
-    kw = dict(evidence="background", grouped_turns=4)
+    kw = dict(evidence="background", grouped_turns=4, raw_bubbles=4)
     first = decide(I(controls=C("standard", first=3, repeat=6), prior_card=False, **kw))
     repeat = decide(I(controls=C("standard", first=3, repeat=6), prior_card=True, **kw))
     assert first.pacing.phase == "first" and repeat.pacing.phase == "repeat"
-    assert first.action == "invite" and repeat.action == "answer"       # the repeat range has not been reached yet
+    assert first.action == "invite" and repeat.action == "invite"       # independent repeat window is explicitly 3-6 replies
 
 
 def test_invitation_line_is_an_offer_shaped_question():
@@ -364,3 +364,21 @@ def test_invitation_line_is_an_offer_shaped_question():
     for bridge in ("love a good workout", "that sounds fun.", "what kind do you like?"):
         assert is_offer_shaped(invitation_line(bridge)) or "?" in bridge
     assert invitation_line("love a good workout").endswith("want me to show you?")
+
+
+def test_one_bound_invitation_clarification_retains_association(db):
+    say(db, 2, "in", "i love feet")
+    invitation = run(inv.propose(ACC, FAN, (11,12), source_message_id=2, subject="feet",
+        offer_terms={"media_ids":[11,12], "price_cents":1200}, invitation_body="Want my feet set?"))
+    say(db, 3, "out", "Want my feet set?")
+    run(inv.bind_delivery(ACC,FAN,2,3,"Want my feet set?"))
+    say(db, 4, "in", "maybe")
+    run(inv.settle(ACC,FAN))
+    assert run(inv.history(ACC,FAN,(11,12)))["open"] == 1
+    run(inv.associate_clarification(ACC,FAN,invitation,4,"Do you mean the feet set?"))
+    say(db, 5, "out", "Do you mean the feet set?")
+    run(inv.bind_delivery(ACC,FAN,4,5,"Do you mean the feet set?"))
+    say(db, 6, "in", "yes")
+    accepted, why=run(inv.resolve_acceptance(ACC,FAN))
+    assert why=="accepted" and accepted.invitation_id==invitation and accepted.media_ids==(11,12)
+    assert accepted.offer_terms["price_cents"]==1200

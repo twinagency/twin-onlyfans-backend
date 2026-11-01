@@ -62,7 +62,7 @@ def eligible(s, account_id, fan_id, now, *, own_intent_id=None):
     if (not sell_lane.SellLane(account_id, "onlyfans-native", cfg).is_ask(turn)
             or _language.detect_bot_accusation(latest.body, lang)):
         return False, "no_current_ask"
-    brake = sell_lane.fan_brake(fan, turn, lad, now)
+    brake = sell_lane.fan_brake(fan, turn, lad, now, scoped_budget=True)
     if brake is not None:
         return False, brake.reason
     pending = select(OfTextIntent.fan_id, OfTextIntent.created_at).where(
@@ -97,9 +97,18 @@ def choice(s, account_id, fan_id, item_id, now):
     terms = catalog_terms(s, account_id, item_id)
     assert_unowned(s, account_id, fan_id, terms)
     item = s.get(CatalogItem, item_id)
+    from . import quote as canonical_quote
+    messages = s.scalars(select(Message).where(Message.account_id == account_id, Message.fan_id == fan_id)
+        .order_by(Message.message_id)).all()
+    budget = canonical_quote.budget_from_messages(messages)
     if item.pricing_mode == "fixed":
         # The saved amount is the offer. Policies may refuse it; nothing here
         # may reprice it, and no dynamic quote arithmetic applies.
+        result = canonical_quote.price(route="locked_card", account_id=account_id, fan_id=fan_id,
+            item_id=item_id, assets=[(f["media_id"], f.get("content_hash") or "") for f in terms["files"]],
+            list_cents=terms["price_cents"], **budget)
+        if result.kind != "ok":
+            raise Refused("native quote: " + result.kind)
         return terms
     biggest, latest = native._paid_ppv_facts_in_session(s, account_id, fan_id)
     fan = upsell.FanState(fan_id=fan_id, max_single_paid_cents=biggest,
@@ -107,12 +116,16 @@ def choice(s, account_id, fan_id, item_id, now):
     lad = s.get(LadderState, (account_id, fan_id))
     rung = int(lad.rung_index or 0) if lad else 0
     asks, median, bounds = native._price_context_in_session(s, account_id, cfg_row)
-    quote = native._quote_item(account_id, fan, item, rung_index=rung,
+    quote = canonical_quote.catalog_price(account_id, fan, item, rung_index=rung,
         media_asks=asks, median=median, bounds=bounds, escalation_mult=cfg["escalation_mult"],
         max_ask_vs_history_mult=cfg["max_ask_history_mult"],
         proven_floor_cents=native._proven_floor_cents(fan, cfg))
     if quote is None:
         raise Refused("native price policy refused this item")
+    final = canonical_quote.price(route="locked_card", account_id=account_id, fan_id=fan_id, item_id=item_id,
+        assets=[(f["media_id"], f.get("content_hash") or "") for f in terms["files"]], list_cents=quote.price_cents, **budget)
+    if final.kind != "ok":
+        raise Refused("native quote: " + final.kind)
     terms["price_cents"] = quote.price_cents
     terms["native_quote"] = {**asdict(quote), "rung_index": rung}
     return terms

@@ -814,6 +814,7 @@ check("it registers scoped reads, native workspace and the smoke check", PATHS, 
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations/{{conversation_id}}/handover",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/ledger",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/operations",
+    f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/operator-cases",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/workspace/{{section}}",
     f"{C.SERVICE_PREFIX}/earnings",
     f"{C.SERVICE_PREFIX}/status",
@@ -1500,7 +1501,7 @@ APP_ROUTES = [
     for route in RELAY.app.routes
 ]
 OF_ROUTES = sorted((path, methods) for path, methods in APP_ROUTES if C.is_service_path(path))
-check("the OnlyFans router is mounted on the real application", len(OF_ROUTES), 9)
+check("the OnlyFans router is mounted on the real application", len(OF_ROUTES), 10)
 check("with exactly the routes the package declares", [p for p, _ in OF_ROUTES], [
     f"{C.SERVICE_PREFIX}/accounts",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations",
@@ -1508,6 +1509,7 @@ check("with exactly the routes the package declares", [p for p, _ in OF_ROUTES],
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/conversations/{{conversation_id}}/handover",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/ledger",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/operations",
+    f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/operator-cases",
     f"{C.SERVICE_PREFIX}/accounts/{{account_id}}/workspace/{{section}}",
     f"{C.SERVICE_PREFIX}/earnings",
     f"{C.SERVICE_PREFIX}/status",

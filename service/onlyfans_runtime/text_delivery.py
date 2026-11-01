@@ -532,6 +532,10 @@ class TextAuthority:
                                preview_json=_json(terms["preview_ids"]) if terms else "[]",
                                price_cents=terms["price_cents"] if terms else 0)
             s.add(intent)
+            if terms and terms["price_cents"] > 0:
+                from .quote import from_terms, QUOTED
+                intent.quote_json = from_terms(terms, account_id=account_id, fan_id=fan_id).as_json()
+                intent.quote_lifecycle = QUOTED
             policy.queued_count += 1
             if recipient is not None:
                 from .campaigns import attach
@@ -622,6 +626,9 @@ class TextAuthority:
                 policy.active_intent_id = intent.intent_id
                 policy.next_dispatch_at = now + timedelta(seconds=policy.throttle_seconds)
             intent.status, intent.reason, intent.updated_at = "dispatching", None, now
+            if intent.quote_json:
+                from .quote import INTENT
+                intent.quote_lifecycle = INTENT
             intent.attempt_id, intent.dispatch_token = attempt, token
             intent.dispatched_at, intent.deadline = now, now + timedelta(seconds=DISPATCH_SECONDS)
             intent.reservation_held = True
@@ -859,6 +866,9 @@ class TextAuthority:
                 self._hold_unknown(s, row, "provider_identity_conflict", tenant_id)
                 return "unknown"
             row.status, row.reason, row.updated_at = "accepted", None, utcnow()
+            if row.quote_json:
+                from .quote import ACCEPTED
+                row.quote_lifecycle = ACCEPTED
             row.provider_message_id = receipt.message_id
             return "accepted"
 
@@ -912,6 +922,9 @@ class TextAuthority:
                     raise Refused("rejection evidence conflict")
                 return "not_accepted"
             row.status, row.reason, row.updated_at = "not_accepted", "proved_not_accepted", utcnow()
+            if row.quote_json:
+                from .quote import CANCELLED
+                row.quote_lifecycle = CANCELLED
             row.receipt_json, row.evidence_ref = encoded, rejection.evidence_ref
             if row.reservation_held:
                 policy = s.scalar(select(OfDeliveryPolicy).where(
@@ -972,6 +985,9 @@ class TextAuthority:
                 s.flush()
             from .media_delivery import project
             project(s, row, proof.message_id, stamp)
+            if row.quote_json:
+                from .quote import RECONCILED
+                row.quote_lifecycle = RECONCILED
             if receipt is None:
                 receipt = OfMessageDelivery(account_id=account_id, fan_id=row.fan_id, message_id=proof.message_id)
                 s.add(receipt)

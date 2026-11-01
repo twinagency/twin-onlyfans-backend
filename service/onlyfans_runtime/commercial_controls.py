@@ -3,8 +3,10 @@
 Lives beside the other off/shadow/live switches (``contextual_mode`` is the mode; these are its tuning). Three settings:
 
 * initiative       lower | standard | active     how readily an appropriate commercial next step is taken
-* first_offer_ref  creator turns before the first paid card at which the planner reassesses (reference, NOT a trigger)
-* repeat_offer_ref creator turns after a purchase/offer before the next is reassessed; EXPERIMENTAL starting setting
+* first_window     confirmed conversational bubbles (initial offline reference 2-6)
+* repeat_window    grouped creator replies (independent experimental reference 3-6)
+
+Legacy scalar reference fields remain readable for old clients; they do not define these windows.
 
 None of these forces a send. They only weight the choice among actions the evidence already supports; relevance,
 creator restrictions, stops, takeover, complaints, budgets, ownership and delivery uncertainty are checked elsewhere
@@ -20,7 +22,9 @@ log = logging.getLogger(__name__)
 INITIATIVE_KEY, INITIATIVE_FIELD = "fastt_commercial_initiative", "fasttCommercialInitiative"
 FIRST_KEY, FIRST_FIELD = "fastt_first_offer_reference", "fasttFirstOfferReference"
 REPEAT_KEY, REPEAT_FIELD = "fastt_repeat_offer_reference", "fasttRepeatOfferReference"
-FIELDS = (INITIATIVE_FIELD, FIRST_FIELD, REPEAT_FIELD)
+FIRST_WINDOW_KEY, FIRST_WINDOW_FIELD = "fastt_first_offer_window", "fasttFirstOfferWindow"
+REPEAT_WINDOW_KEY, REPEAT_WINDOW_FIELD = "fastt_repeat_offer_window", "fasttRepeatOfferWindow"
+FIELDS = (INITIATIVE_FIELD, FIRST_FIELD, REPEAT_FIELD, FIRST_WINDOW_FIELD, REPEAT_WINDOW_FIELD)
 INITIATIVES = ("lower", "standard", "active")
 FIRST_RANGE = (1, 12)
 REPEAT_RANGE = (3, 6)
@@ -28,7 +32,7 @@ DEFAULTS = {"initiative": "standard", "first_offer_ref": 3, "repeat_offer_ref": 
 # Pooled median 3 (middle half 2-6) from the approved reference data; descriptive, not a promise.
 REPEAT_LABEL = "experimental starting setting, not an observed benchmark and not a mandatory wait"
 # Prepared for an approved pilot. NEVER applied by code: an operator chooses to save it through the config interface.
-ACTIVE_PILOT_PROFILE = {INITIATIVE_FIELD: "active", FIRST_FIELD: 3, REPEAT_FIELD: 3}
+ACTIVE_PILOT_PROFILE = {INITIATIVE_FIELD: "active", FIRST_WINDOW_FIELD: [2, 6], REPEAT_WINDOW_FIELD: [3, 6]}
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,8 @@ class Controls:
     initiative: str = "standard"
     first_offer_ref: int = 3
     repeat_offer_ref: int = 4
+    first_window: tuple[int, int] = (2, 6)
+    repeat_window: tuple[int, int] = (3, 6)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -43,6 +49,11 @@ class Controls:
 
 def _int(value, lo, hi):
     return value if type(value) is int and lo <= value <= hi else None
+
+
+def _window(value):
+    return (isinstance(value, (list, tuple)) and len(value) == 2
+            and all(type(x) is int for x in value) and 1 <= value[0] <= value[1] <= 50)
 
 
 def controls(settings) -> Controls:
@@ -63,6 +74,14 @@ def controls(settings) -> Controls:
                 log.warning("invalid_%s: using default", name)
             else:
                 out[name] = good
+    # Legacy scalar fields remain readable for old clients, but never derive a
+    # window by multiplying turns. Explicit windows are independently adjustable.
+    for key, name, fallback in ((FIRST_WINDOW_KEY, "first_window", (2, 6)),
+                                (REPEAT_WINDOW_KEY, "repeat_window", (3, 6))):
+        value = raw.get(key)
+        out[name] = tuple(value) if _window(value) else fallback
+        if value is not None and not _window(value):
+            log.warning("invalid_%s: using default", name)
     return Controls(**out)
 
 
@@ -80,13 +99,21 @@ def validate_patch_fields(patch: dict, error) -> dict:
             if _int(value, *rng) is None:
                 raise error(f"{label} must be a whole number from {rng[0]} to {rng[1]}.")
             result[field] = value
+    for field in (FIRST_WINDOW_FIELD, REPEAT_WINDOW_FIELD):
+        if field in patch:
+            if not _window(patch[field]):
+                raise error("Offer windows require two whole numbers: 1 <= lower <= upper <= 50.")
+            result[field] = list(patch[field])
     return result
 
 
-KEY_OF = {INITIATIVE_FIELD: INITIATIVE_KEY, FIRST_FIELD: FIRST_KEY, REPEAT_FIELD: REPEAT_KEY}
+KEY_OF = {INITIATIVE_FIELD: INITIATIVE_KEY, FIRST_FIELD: FIRST_KEY, REPEAT_FIELD: REPEAT_KEY,
+          FIRST_WINDOW_FIELD: FIRST_WINDOW_KEY, REPEAT_WINDOW_FIELD: REPEAT_WINDOW_KEY}
 
 
 def view(settings, valid=True) -> dict:
     c = controls(settings if valid else {})
     return {INITIATIVE_FIELD: c.initiative, FIRST_FIELD: c.first_offer_ref, REPEAT_FIELD: c.repeat_offer_ref,
+            FIRST_WINDOW_FIELD: list(c.first_window), REPEAT_WINDOW_FIELD: list(c.repeat_window),
+            "fasttFirstOfferReferenceLabel": "proposed reference in confirmed outgoing bubbles; historical median 3, middle half 2-6; not conversion evidence",
             "fasttRepeatOfferReferenceLabel": REPEAT_LABEL}

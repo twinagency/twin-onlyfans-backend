@@ -47,6 +47,14 @@ def system(**kw):
 # ── golden: switch off / other callers are byte-identical to base 6807b6e ────────────────────────────
 def test_switch_off_prompts_byte_identical_to_baseline():
     golden = json.loads(FIX.read_text())
+    # R3 deliberately removed the invented default age after this R2 fixture
+    # was captured. Keep every other byte pinned to the original prompt.
+    for messages in golden.values():
+        for message in messages:
+            for subject in ("girl", "guy"):
+                message["content"] = message["content"].replace(
+                    f"HOW YOU TEXT (a real 22yo {subject}, not an assistant):",
+                    "HOW YOU TEXT (the approved creator's casual voice, not an assistant):")
     assert len(golden) == 72
     for kind in KINDS:
         for style in (False, True):

@@ -373,7 +373,7 @@ async def _load_ladder(account_id: str, fan_id: int) -> LadderState | None:
         return row
 
 
-def fan_brake(fan, turn: Turn, lad: LadderState | None, now: datetime) -> SellVerdict | None:
+def fan_brake(fan, turn: Turn, lad: LadderState | None, now: datetime, *, scoped_budget=False) -> SellVerdict | None:
     """Native sales decisions over an already-read canonical fan and ladder."""
     if _customs.is_owed(fan):
         return SellVerdict(False, R_CUSTOM_OWED)
@@ -388,6 +388,9 @@ def fan_brake(fan, turn: Turn, lad: LadderState | None, now: datetime) -> SellVe
     # exactly what a SELL gate wants — ai_chatter stops selling on all three —
     # so it is used deliberately, not by mistake.
     text, lang = turn.text or "", turn.lang
+    if scoped_budget:
+        from onlyfans_runtime.quote import budget_signal_text
+        text = budget_signal_text(text)
     if _language.detect_spend_regret(text, lang):
         return SellVerdict(False, R_SPEND_REGRET)
     if upsell.detect_companion_intent(text):   # no es form anywhere yet
@@ -629,7 +632,9 @@ class SellLane:
             return SellVerdict(False, R_CUSTOM_OWED)
 
         lad = await _load_ladder(self.account_id, fan_id)
-        brake = fan_brake(fan, turn, lad, now)
+        from telegram_runtime.capabilities import active_telegram_capabilities
+        brake = fan_brake(fan, turn, lad, now,
+                          scoped_budget=getattr(active_telegram_capabilities(), "onlyfans_commercial", False))
         if brake is not None:
             return brake
 
@@ -745,6 +750,13 @@ class SellLane:
             (self._refused_nomemo if contract is not None
              else self._lane_refused)(fan_id, turn, res)
             return SellPlan(None, fan_id, turn, res)
+        from telegram_runtime.capabilities import active_telegram_capabilities
+        if getattr(active_telegram_capabilities(), "onlyfans_commercial", False):
+            from onlyfans_runtime.quote import validate_pack
+            quoted = await validate_pack(d.plan, self.cfg)
+            if quoted.kind != "ok":
+                res = SellResult.refused("quote_" + quoted.kind)
+                return SellPlan(None, fan_id, turn, self._refused_nomemo(fan_id, turn, res))
         return SellPlan(d, fan_id, turn)
 
     async def deliver(self, client, plan: SellPlan, *,
@@ -770,6 +782,20 @@ class SellLane:
             return plan.result
         if plan.delivery is None:                      # unreachable by `plan()`
             return SellResult.refused(R_DISABLED)
+        from telegram_runtime.capabilities import active_telegram_capabilities
+        if getattr(active_telegram_capabilities(), "onlyfans_commercial", False):
+            from onlyfans_runtime.quote import validate_pack
+            quoted = await validate_pack(plan.delivery.plan, self.cfg)
+            if quoted.kind != "ok":
+                return SellResult.refused("quote_" + quoted.kind)
+            content = getattr(active_telegram_capabilities(), "content", None)
+            accepted_revision = getattr(content, "accepted_inventory_revision", None)
+            if accepted_revision:
+                from .sales_turn import inventory_revision
+                if accepted_revision != await inventory_revision(self.account_id, plan.delivery.plan.attached):
+                    return SellResult.refused("invited_inventory_changed")
+            if hasattr(content, "bind_quote"):
+                await asyncio.to_thread(content.bind_quote, quoted.quote)
         if plan.turn.trigger == "contextual_relevance":
             authority = self.contextual_authority(plan.fan_id, plan.turn)
             if authority is None or authority.armed is None:

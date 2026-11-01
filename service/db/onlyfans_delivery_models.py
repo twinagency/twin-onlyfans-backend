@@ -193,6 +193,8 @@ class OfDeliveryPolicyChange(Base):
 
 class OfTextIntent(Base):
     __tablename__ = "of_text_intent"
+    quote_json = Column(Text, info={"onlyfans_since": "0108_commercial_progress"})
+    quote_lifecycle = Column(String(24), info={"onlyfans_since": "0108_commercial_progress"})
     __table_args__ = (
         ForeignKeyConstraint(["account_id", "native_plan_id"], ["of_native_plan.account_id", "of_native_plan.plan_id"], ondelete="RESTRICT"),
         ForeignKeyConstraint(["account_id", "fan_id"], ["fans.account_id", "fans.fan_id"], ondelete="RESTRICT"),

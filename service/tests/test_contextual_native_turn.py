@@ -23,6 +23,7 @@ async def exercise():
     from db.engine import engine,get_session
     from db.models import Base,Account,AccountAiConfig,Fan,Message,VaultItem,ContentOffer,VaultSend
     from db.onlyfans_contextual_models import OfContextualOffer  # register production origin table
+    from db.onlyfans_sales_models import OfSalesInvitation, OfSalesDecision  # current schema metadata
     from native_pilot.content import VaultPlan
     from native_pilot.engine import NativeEngine
     from onlyfans_runtime.configuration import SALES_FLAGS
@@ -98,7 +99,9 @@ async def exercise():
             assert len(cards)==1 and cards[0][1]["price"]>0,(result,sent,events,calls)
             assert 7001 not in cards[0][1]["media_files"],cards
             assert all("already in the card above" not in text for text,_ in sent)
-            if not explicit:assert len(sent)==1 and all("How did your workout" not in text for text,_ in sent)
+            if not explicit:
+                assert len(sent)>=2 and "How did your workout" in sent[0][0]
+                assert not sent[0][1] and sent[-1][1].get("media_files")
             if fixed:assert round(cards[0][1]["price"]*100)==fixed
         assert result["replies_sent"]==1,(current,result)
         assert ("content_resolver_hook" in calls)==(current!="off" and not explicit),(current,calls,events)

@@ -29,7 +29,7 @@ BUDGET_SCOPES = ("per_item", "lifetime")
 QUOTED, AWAITING, INTENT, ACCEPTED, RECONCILED, PURCHASED, FULFILLED, ESCALATED, CANCELLED = (
     "quoted", "awaiting_payment", "dispatch_intent", "provider_accepted", "reconciled", "purchased", "fulfilled",
     "escalated", "cancelled")
-FORWARD = {QUOTED: (AWAITING, CANCELLED), AWAITING: (INTENT, CANCELLED), INTENT: (ACCEPTED, AWAITING, CANCELLED),
+FORWARD = {QUOTED: (AWAITING, INTENT, CANCELLED), AWAITING: (INTENT, PURCHASED, CANCELLED), INTENT: (ACCEPTED, AWAITING, CANCELLED),
            ACCEPTED: (RECONCILED,), RECONCILED: (PURCHASED, CANCELLED), PURCHASED: (FULFILLED,), FULFILLED: (),
            CANCELLED: (), ESCALATED: ()}
 RECEIPT_STATES = (RECONCILED, PURCHASED, FULFILLED)       # the card is known to be on the fan's screen
@@ -143,6 +143,86 @@ def price(*, route: str, account_id: str, fan_id: int, item_id: int, assets, lis
               tuple((int(m), str(v)) for m, v in assets), int(list_cents), int(px), currency.upper(), pct, why,
               budget_cents, budget_scope)
     return PriceOutcome("ok", q)
+
+
+def catalog_price(account_id, fan, item, *, rung_index, media_asks, median, bounds,
+                  escalation_mult, max_ask_vs_history_mult, proven_floor_cents=0):
+    """Existing dynamic algorithm, finalized by the canonical quote authority.
+
+    No new pricing policy: derive_band/next_price remain the original primitives.
+    Both OnlyFans catalogue writers call here; Telegram retains its old route.
+    """
+    from automations import upsell
+    from random import Random
+    media = json.loads(item.media_ids)
+    key = upsell.media_key(media)
+    band, _ = upsell.derive_band(human_asks_cents=[p for m in media for p in media_asks.get(m, [])],
+        account_median_cents=median, item_price_cents=int(item.price_cents or 0))
+    proposal = upsell.next_price(fan=fan, band=band, last_paid_cents=fan.last_paid_cents,
+        rung_index=rung_index, key=key, account_id=str(account_id),
+        rng=Random(f"quote:{account_id}:{fan.fan_id}:{rung_index}:{key}"), library_bounds=bounds,
+        escalation_mult=escalation_mult, max_ask_vs_history_mult=max_ask_vs_history_mult,
+        proven_floor_cents=proven_floor_cents, catalog_floor_cents=int(item.price_cents or 0))
+    if proposal is None:
+        return None
+    result = price(route="locked_card", account_id=str(account_id), fan_id=fan.fan_id,
+        item_id=item.id, assets=[(m, "") for m in media], list_cents=proposal.price_cents)
+    return proposal if result.kind == "ok" else None
+
+
+_BUDGET = re.compile(r"(?:\b(?:my |the )?budget(?: is| of)?|\b(?:can|could) (?:only )?(?:spend|afford)|"
+                     r"\b(?:only|just) (?:have|got))\s*(?:usd\s*)?\$?\s*(\d+(?:\.\d{1,2})?)|"
+                     r"\$?(\d+(?:\.\d{1,2})?)\s+(?:is plenty|is my (?:limit|budget))", re.I)
+
+
+def budget_signal_text(text):
+    """Remove only a stated numeric spending ceiling from legacy refusal tests.
+
+    The original text still reaches R1's hardship/consent controls and the
+    canonical budget reader. Rent, bills, general stops and other distress are
+    left intact. This does not authorise a sale or alter any price.
+    """
+    return _BUDGET.sub("stated spending ceiling", text or "")
+
+
+def budget_from_messages(messages):
+    """Explicit numeric fan budgets only; no model inference, no time expiry.
+
+    Bare budgets apply per item; 'total/all together' applies to verified spend
+    after that statement. A newer explicit budget replaces the earlier scope.
+    """
+    from decimal import Decimal
+    budget, budget_mid = None, None
+    rows = list(messages)
+    for m in rows:
+        if m.direction != "in" or m.is_unsent:
+            continue
+        match = _BUDGET.search(m.body or "")
+        if match:
+            cents = int(Decimal(match.group(1) or match.group(2)) * 100)
+            scope = "lifetime" if re.search(r"\b(total|all together|altogether|overall)\b", m.body, re.I) else "per_item"
+            current = {"budget_cents": cents, "budget_scope": scope}
+            if current != budget:
+                budget, budget_mid = current, m.message_id
+    if budget and budget["budget_scope"] == "lifetime":
+        budget["budget_cents"] = max(0, budget["budget_cents"] - sum(
+            int(m.price_cents or 0) for m in rows if m.direction == "out" and m.is_paid is True and m.message_id > budget_mid))
+    return budget or {}
+
+
+async def validate_pack(plan, cfg):
+    """Finalize existing pack prices against the same explicit budget authority."""
+    from db.engine import get_session
+    from db.models import Message, VaultItem
+    from sqlalchemy import select
+    async with get_session() as s:
+        messages = (await s.execute(select(Message).where(Message.account_id == plan.account_id,
+            Message.fan_id == plan.fan_id).order_by(Message.message_id))).scalars().all()
+        versions = (await s.execute(select(VaultItem.media_id, VaultItem.content_hash, VaultItem.updated_at_of).where(
+            VaultItem.account_id == plan.account_id, VaultItem.media_id.in_(plan.attached)))).all()
+    assets = [(m, h or updated or "") for m, h, updated in versions]
+    return price(route="locked_card", account_id=plan.account_id, fan_id=plan.fan_id,
+        item_id=plan.item_id, assets=assets, list_cents=plan.price_cents, **budget_from_messages(messages))
 
 
 def accept(quote: Quote) -> Quote:

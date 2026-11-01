@@ -248,6 +248,9 @@ def settle_media_purchase(s, *, account_id, fan_id, message, offer, paid, was_pa
         sent.was_purchased = paid
     if offer is not None:
         offer.status, offer.resolved_by = ("delivered", "ppv_ledger") if paid else ("cancelled", None)
+        if offer.quote_json:
+            from .quote import PURCHASED, CANCELLED
+            offer.lifecycle = PURCHASED if paid else CANCELLED
         offer.resolved_at, offer.updated_at = purchase_stamp if paid else stamp, now
         if paid:
             offer.delivery_message_id = message.message_id

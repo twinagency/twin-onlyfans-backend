@@ -85,7 +85,7 @@ from db.models import (
     CATALOG_IS_SINGLE, AccountAiConfig, AutomationRun, Blacklist, CatalogItem,
     ContentOffer, Fan, FanProfile, LadderQuote, LadderState, MassRun, Message,
     PendingOffer, QuotaAudit, RhythmState, ScheduledJob, SkipList, Transaction,
-    VaultSend, created_at_text, parse_ts,
+    VaultItem, VaultSend, created_at_text, parse_ts,
 )
 from llm_client import LLMCapExceeded
 from . import _daylog  # what SHE did today — the creator-side twin of recent_events
@@ -3414,7 +3414,7 @@ async def _record_offer(account_id: str, fan_id: int, item: CatalogItem,
     now = datetime.utcnow()
     price_c = int(quoted_cents if quoted_cents else (item.price_cents or 0))
     async with get_session() as s:
-        s.add(ContentOffer(
+        row = ContentOffer(
             account_id=str(account_id), fan_id=int(fan_id), item_id=int(item.id),
             # Always None since the 2026-08-19 singles-only ruling; the column
             # stays for the legacy script-offer rows already in the table.
@@ -3430,7 +3430,23 @@ async def _record_offer(account_id: str, fan_id: int, item: CatalogItem,
             status=status, resolved_by=resolved_by,
             delivery_message_id=int(delivery_message_id) if delivery_message_id else None,
             offered_at=now, resolved_at=now if status == "delivered" else None,
-            updated_at=now))
+            updated_at=now)
+        s.add(row)
+        if getattr(active_telegram_capabilities(), "onlyfans_commercial", False) and price_c > 0:
+            from onlyfans_runtime.quote import price, RECONCILED
+            sends = (await s.execute(select(VaultSend.media_id).where(VaultSend.account_id == str(account_id),
+                VaultSend.fan_id == int(fan_id), VaultSend.message_id == offer_message_id))).scalars().all()
+            media = list(sends) or _item_media(item)
+            versions = (await s.execute(select(VaultItem.media_id, VaultItem.content_hash, VaultItem.updated_at_of).where(
+                VaultItem.account_id == str(account_id), VaultItem.media_id.in_(media)))).all()
+            canonical = price(route="locked_card", account_id=str(account_id), fan_id=int(fan_id),
+                item_id=int(item.id), assets=[(mid, h or updated or "") for mid, h, updated in versions],
+                list_cents=price_c, subject="assets:" + ",".join(map(str, sorted(media))))
+            if canonical.kind == "ok":
+                row.quote_json, row.currency, row.lifecycle, row.quote_version = canonical.quote.as_json(), "USD", RECONCILED, 1
+                # Receipt projection does not create another payment request.
+                # Existing wire/ownership guards own duplicates before dispatch.
+                row.obligation_id = canonical.quote.obligation_id
 
 
 async def _record_vault_sends(account_id: str, fan_id: int, media: list[int],
@@ -3468,6 +3484,11 @@ async def _resolve_offer(offer_id: int, *, status: str, resolved_by: str | None,
                          tips_accum_cents: int | None = None) -> None:
     now = datetime.utcnow()
     vals: dict = {"status": status, "resolved_by": resolved_by, "updated_at": now}
+    if getattr(active_telegram_capabilities(), "onlyfans_commercial", False):
+        if status == "delivered" and resolved_by == "ppv_ledger":
+            vals["lifecycle"] = "purchased"
+        elif status == "cancelled":
+            vals["lifecycle"] = "cancelled"
     if status in ("delivered", "expired", "cancelled"):
         vals["resolved_at"] = now
     if delivery_message_id is not None:
@@ -4126,6 +4147,23 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
         current_offer = await _load_offer(int(offer.id))
         if current_offer is None or current_offer.status != "open":
             return _skip("offer-resolved")
+        _canonical_discount = None
+        if getattr(active_telegram_capabilities(), "onlyfans_commercial", False):
+            from onlyfans_runtime import quote as canonical_quote
+            async with get_session() as s:
+                _budget_rows = (await s.execute(select(Message).where(Message.account_id == str(account_id),
+                    Message.fan_id == fan_id).order_by(Message.message_id))).scalars().all()
+            _discount = canonical_quote.price(route="locked_card", account_id=str(account_id), fan_id=fan_id,
+                item_id=item.id, assets=[(m, "") for m in hero], list_cents=basis_cents,
+                cfg=cfg, discount_count=discount_count, original_cents=basis_cents,
+                discount_ctx=upsell.DiscountCtx(last_inbound_text=last_text or "", objection_at=lad.objection_at,
+                    last_inbound_at=last_in_at, discount_count_this_item=discount_count,
+                    discount_original_cents=discount_original_cents, cuts_last_30d=cuts30, asks_last_30d=asks30,
+                    spend_regret=upsell.detect_spend_regret(last_text)),
+                **canonical_quote.budget_from_messages(_budget_rows))
+            if _discount.kind != "ok":
+                return _skip("quote_" + _discount.kind)
+            _canonical_discount = _discount.quote.price_cents
         if vault is None:
             try:
                 await asyncio.to_thread(client.unsend_message,
@@ -4152,6 +4190,8 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
                                        original_cents=basis_cents,
                                        min_cents=int(cfg.get("discount_min_price_cents") or upsell.OF_PRICE_FLOOR_CENTS)),
                      upsell.OF_PRICE_MAX_CENTS))
+        if _canonical_discount is not None:
+            px = _canonical_discount
         if vault is not None and px >= seen_cents:
             return _skip("price-at-minimum")   # a "discount" is strictly lower than what he saw, or it is not sent
         line = _pack_line("discount_resend", cfg, fan_id, price_cents=px)
@@ -6144,6 +6184,11 @@ def _quote_item(account_id: str, fan: upsell.FanState, item: CatalogItem, *,
     ITEMS, not by a multiplier fighting three caps. `proven_floor_cents` (opt-in)
     skips any item priced below what he already paid, so a proven buyer climbs a
     tier instead of getting the cheap set re-run at cold-open lows."""
+    if getattr(active_telegram_capabilities(), "onlyfans_commercial", False):
+        from onlyfans_runtime.quote import catalog_price
+        return catalog_price(account_id, fan, item, rung_index=rung_index, media_asks=media_asks,
+            median=median, bounds=bounds, escalation_mult=escalation_mult,
+            max_ask_vs_history_mult=max_ask_vs_history_mult, proven_floor_cents=proven_floor_cents)
     media = _item_media(item)
     key = upsell.media_key(media)
     human = [p for m in media for p in media_asks.get(m, [])]
@@ -8670,7 +8715,11 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                          "(never a permanent bot stop)",
                          account_id, fan_id, objection.reason, objection.decline)
                 continue
-            if gate_on and upsell.detect_spend_regret(c.last_body):
+            _budget_signal = c.last_body
+            if getattr(active_telegram_capabilities(), "onlyfans_commercial", False):
+                from onlyfans_runtime.quote import budget_signal_text
+                _budget_signal = budget_signal_text(c.last_body)
+            if gate_on and upsell.detect_spend_regret(_budget_signal):
                 # §6.1 — poverty brake. 24h offers-PAUSE (never a proactive push, never a
                 # discount), and she keeps talking. We do NOT force full COMPANION here:
                 # measured, 11% of fans who say "broke" still buy within 24h, 18% within
@@ -8705,7 +8754,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 companion_routed += 1
                 continue
 
-            decline = upsell.classify_decline(c.last_body) if gate_on else None
+            decline = upsell.classify_decline(_budget_signal) if gate_on else None
             # HARD is already handled above (it wins over every brake) — so only the
             # SOFT / bare-no branches remain here.
             if decline and decline != upsell.DECLINE_HARD:
@@ -9767,6 +9816,14 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                                               reply_format=cfg.get("_native_reply_format") is True)
             if twin_ctx is not None and twin_ctx.finish is not None:
                 msgs = twin_ctx.finish(msgs)
+            from . import sales_turn as _sales_turn
+            if _sales_turn.active(cfg):
+                _commercial_note = await _sales_turn.prompt_note(lane, c, f)
+                if _commercial_note and msgs and msgs[0].get("role") == "system":
+                    _commercial_system = msgs[0]["content"].replace(
+                        "never name a price or pitch a piece yourself — if he asks to see something, say yes warmly and let it arrive.",
+                        "Develop appropriate paid-content opportunities using verified inventory; only quote a canonical price supplied for this turn.")
+                    msgs[0] = {**msgs[0], "content": _commercial_system + "\n" + _commercial_note}
             try:
                 res = await _runtime_chat(
                     model=model,
@@ -10014,6 +10071,26 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         account_hour=acct_hour_asks, account_day=acct_day_asks),
                     human_ask_at=human_money.get(fan_id, _NO_MONEY).ask,
                     **({"contract": _invited_contract, "resolution": _invited.resolution} if _invited is not None else {}))
+                if _pack_plan and _invited is not None and _invited.offer_terms:
+                    # The accepted invitation fixes these assets and amount.
+                    # Availability/ownership/budget and wire eligibility still run.
+                    _accepted_terms = _invited.offer_terms
+                    _pp = _pack_plan.delivery.plan
+                    if set(_pp.media) != set(_invited.media_ids):
+                        _pack_plan = sell_lane.SellPlan(None, fan_id, _pack_plan.turn,
+                                                       sell_lane.SellResult.refused("invited_item_changed"))
+                    else:
+                        _content = getattr(active_telegram_capabilities(), "content", None)
+                        if _content is not None:
+                            _content.accepted_inventory_revision = _accepted_terms.get("inventory_revision")
+                        _pp = dataclasses.replace(_pp, price_cents=_accepted_terms["price_cents"])
+                        _pack_plan = dataclasses.replace(_pack_plan, delivery=dataclasses.replace(_pack_plan.delivery, plan=_pp))
+                if _pack_plan and _sales_turn.active(cfg):
+                    await _sales_turn.prepare(lane, c, f, new_opportunity=True)
+                    await _sales_turn.progress_decision(lane, c, f, action="offer", item_ids=_pack_plan.delivery.plan.media,
+                        evidence={"verified_match": True, "fan_interest": True,
+                                  "supporting_message_id": c.last_in_mid,
+                                  "accepted_invitation": _invited.invitation_id if _invited else None})
                 if _sales_turn.active(cfg):
                     from . import sales_action as _sa
                     _res = getattr(_pack_plan, "result", None)
@@ -10023,7 +10100,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         _sa.DIRECT_OFFER if _pack_plan else _sa.CLARIFY,
                         _sa.ACTED if _pack_plan else _sa.EXCLUDED,
                         ("invitation_accepted" if _invited is not None else "direct_request_ready") if _pack_plan else _why[:64],
-                        "offer", _sa.pacing(_sales_turn.read_controls(cfg), _ctr.grouped_turns, prior_card=_ctr.prior_card),
+                        "offer", _sa.pacing(_sales_turn.read_controls(cfg), _ctr.grouped_turns, prior_card=_ctr.prior_card, raw_bubbles=_ctr.raw_bubbles),
                         {**_sales_turn.read_controls(cfg).as_dict(), "mode": _sales_turn.contextual_mode(cfg)},
                         _invited.invitation_id if _invited is not None else None),
                         evidence={"wide_ask": _wide, "model_says_ask": bool(signal_on and _model_ask)})
@@ -10072,26 +10149,19 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 _authority = getattr(_cap, "contextual", None)
                 _explore = getattr(_authority, "reply_override", None)
                 if _explore:
-                    raw = (_ca.merge_explore(raw, _explore) if cfg.get("_native_reply_format") is True
-                           else _explore)
+                    if (cfg.get("_native_reply_format") is True and
+                            getattr(_authority, "reply_override_action", None) in ("invite", "clarify")):
+                        raw = raw.strip() + "\n\n" + _explore if _explore not in raw else raw
+                    else:
+                        raw = (_ca.merge_explore(raw, _explore) if cfg.get("_native_reply_format") is True else _explore)
                     _authority.reply_override = None
+                    _authority.reply_override_action = None
             if _contextual is not None:
                 _context_plan, _context_permission, _context_decision = _contextual
                 _authority = _cap.contextual
-                # The paid card is this turn's one response. The generated normal
-                # draft stays untouched in shadow and is not also sent in live.
-                with _authority.arm(_context_plan.delivery, _context_permission,
-                                    _context_decision.reason, _context_decision.supporting_message_ids):
-                    _context_sent = await lane.deliver(client, _context_plan, dry_run=dry_run)
-                _authority.emit({"event":"contextual-opportunity",
-                                 "stage":"delivered" if _context_sent and not dry_run else "rejected",
-                                 "reason":"transport_accepted" if _context_sent and not dry_run else "not_delivered",
-                                 "fan":fan_id})
-                if _context_sent:
-                    forced_this_tick += 1
-                    sent += 1
-                    await _mark_reply_sent(account_id, fan_id, now)
-                    continue
+                # Preserve the normal complete answer. The same plan is delivered
+                # after that response, through the existing lane and authority.
+                _pack_plan = _context_plan
 
             if (_trigger and (gate_ok or (_trigger == "ask" and ask_override))
                     and not seller_off
@@ -10690,6 +10760,15 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             first_no_id = False
             wire_stopped = False
             own_ids: list[int] = []     # bubbles of this reply already on the wire
+            if _sales_turn.active(cfg):
+                try:
+                    await _sales_turn.before_response(lane, c, f, bubbles=len(parts),
+                        has_offer=bool(_pack_plan or offer_item), direct=bool(vault_ask),
+                        failure=getattr(getattr(_pack_plan, "result", None), "reason", None))
+                except Exception:
+                    errors += 1
+                    log.exception("OnlyFans commercial progress held account=%s fan=%s", account_id, fan_id)
+                    continue
             for idx, part in enumerate(parts):
                 # The LAST bubble carries the offer attach: free media for a
                 # teaser; locked media + free pitch text (locked_text=False —
@@ -10871,6 +10950,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         emit_live=True,
                     )
                     sent_ok = True
+                    if _sales_turn.active(cfg):
+                        await _sales_turn.confirmed_output(lane, c, f, msg_id, str(result.get("text") or part))
                     if offer_item is not None and idx == len(parts) - 1:
                         offer_msg_id = int(msg_id)  # the unlock watcher's anchor
                     if teaser is not None and idx == len(parts) - 1:
@@ -10980,10 +11061,27 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 # `compose_caption` puts the claim first and drops the line if it
                 # names media or a price; `_hook_upsell.bridge_ok` already checked
                 # both at the read, so a line that got here survives.
-                _sold = await lane.deliver(client, _pack_plan, dry_run=dry_run,
-                                           voice_line=(_hook[0].bridge
-                                                       if kind == _TURN_HOOK_UPSELL and _hook
-                                                       else None))
+                if _contextual is not None:
+                    _authority = _cap.contextual
+                    if hasattr(_authority, "own_output_ids"):
+                        _authority.own_output_ids = tuple(own_ids)
+                    with _authority.arm(_pack_plan.delivery, _context_permission,
+                                        _context_decision.reason, _context_decision.supporting_message_ids):
+                        _sold = await lane.deliver(client, _pack_plan, dry_run=dry_run)
+                    _authority.emit({"event": "contextual-opportunity", "stage": "delivered" if _sold and not dry_run else "rejected",
+                                     "reason": "transport_accepted" if _sold and not dry_run else "not_delivered", "fan": fan_id})
+                else:
+                    _sold = await lane.deliver(client, _pack_plan, dry_run=dry_run,
+                                               voice_line=(_hook[0].bridge if kind == _TURN_HOOK_UPSELL and _hook else None))
+                if _sales_turn.active(cfg):
+                    await _sales_turn.prepare(lane, c, f)
+                    from .sales_action import ActionDecision, DIRECT_OFFER, ACTED, BLOCKED, EXCLUDED
+                    await _sales_turn.record(lane, c, f, ActionDecision(DIRECT_OFFER,
+                        EXCLUDED if dry_run else ACTED if _sold else BLOCKED,
+                        "dry_run" if dry_run else "provider_accepted" if _sold else str(_sold.reason)[:64],
+                        approach="offer", settings={**_sales_turn.read_controls(cfg).as_dict(),
+                        "mode": _sales_turn.contextual_mode(cfg)}),
+                        evidence={"message_id": _sold.message_id, "price_cents": _sold.price_cents}, stage="deliver")
                 # The hook's budget is spent on the CONFIRMED send and nowhere else.
                 # A plan that was decided but never landed — rhythm parked the reply,
                 # the send failed, the wire audit refused, a dry run — stamps NOTHING,

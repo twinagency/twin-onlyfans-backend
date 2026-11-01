@@ -32,7 +32,7 @@ engine = create_engine(admin.url.set(database=name).render_as_string(hide_passwo
 try:
     with engine.begin() as c:
         bootstrap(c)
-    check(HEAD == "0107_active_selling_quote")
+    check(HEAD == "0108_commercial_progress")
     with engine.begin() as c:
         check_schema(c)
         c.execute(text("SET session_replication_role = replica"))        # throwaway DB: skip the FK chain to accounts/runtime

@@ -110,7 +110,10 @@ async def exercise():
 
     async def rows(model, account):
         async with get_session() as s:
-            return (await s.execute(select(model).where(model.account_id == account))).scalars().all()
+            query = select(model).where(model.account_id == account)
+            if model is OfSalesDecision:
+                query = query.where(OfSalesDecision.stage == "decide")
+            return (await s.execute(query)).scalars().all()
 
     # 1. standard (default) initiative, live: today's single card, plus a decision row saying why.
     sent, calls, events = [], [], []
@@ -142,25 +145,24 @@ async def exercise():
     #    not consulted again (no hook read), and nothing is charged here: this only presents the locked card.
     async with get_session() as s:
         from sqlalchemy import delete
-        await s.execute(delete(Message).where(Message.account_id == "900102", Message.message_id >= 8000))   # engine-written echo
-        (await s.get(Fan, ("900102", 910102))).automation_paused_until = None                              # time has passed
-        s.add(Message(account_id="900102", fan_id=910102, message_id=5002, direction="out", body=" ".join(t for t, _ in sent), automation_kind="ai_chatter",
-                      created_at=datetime.utcnow() - timedelta(seconds=120),
-                      ingested_at=datetime.utcnow() - timedelta(seconds=120)))
-        s.add(Message(account_id="900102", fan_id=910102, message_id=5003, direction="in", body="yes",
+        from sqlalchemy import update
+        await s.execute(update(Message).where(Message.account_id == "900102", Message.direction == "out").values(
+            created_at=datetime.utcnow() - timedelta(seconds=120), ingested_at=datetime.utcnow() - timedelta(seconds=120)))
+        (await s.get(Fan, ("900102", 910102))).automation_paused_until = None
+        s.add(Message(account_id="900102", fan_id=910102, message_id=8250, direction="in", body="yes",
                       created_at=datetime.utcnow() - timedelta(seconds=30),
                       ingested_at=datetime.utcnow() - timedelta(seconds=30)))
         await s.commit()
     sent2, calls2, events2 = [], [], []
-    await turn("900102", 910102, "live", 5003, 3, sent2, calls2, events2)
+    await turn("900102", 910102, "live", 8250, 3, sent2, calls2, events2)
     cards = [(t, k) for t, k in sent2 if k.get("media_files")]
     assert len(cards) == 1 and cards[0][1]["price"] > 0, (sent2, events2, calls2)
     assert set(cards[0][1]["media_files"]) <= set(invited), (cards, invited)
     assert "content_resolver_hook" not in calls2, calls2
     invitations = await rows(OfSalesInvitation, "900102")
-    assert invitations[0].state == "accepted" and invitations[0].accepted_turn_id == 5003
+    assert invitations[0].state == "accepted" and invitations[0].accepted_turn_id == 8250
     kinds = {(d.source_message_id, d.action, d.reason) for d in await rows(OfSalesDecision, "900102")}
-    assert (5003, "direct_offer", "invitation_accepted") in kinds, kinds
+    assert (8250, "direct_offer", "invitation_accepted") in kinds, kinds
     assert len(await rows(ContentOffer, "900102")) == 1
 
     # 4. a bare "yes" with NO stored invitation sells nothing from this path.

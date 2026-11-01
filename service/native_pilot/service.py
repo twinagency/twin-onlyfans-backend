@@ -127,6 +127,9 @@ def _hold_decision(path, account: str, fan: int, strict: bool, action: str):
                                   "WHERE account_id=? AND fan_id=?", (account, fan)).fetchone()
             if row:
                 mode, takeover, unresolved = row[0], row[1], row[2] is not None
+                if unresolved and store.has_table(con, "native_pilot_receipts") and store.has_table(con, "twin_bridge_send_attempts"):
+                    from .ledger import settled_pointer
+                    unresolved = not settled_pointer(con, account, fan, row[2])
         elif strict:
             return policy.Decision(False, "not_enabled")
     # A missing control row is not a stop (single-fan mode); the policy turns it into "never enabled" when strict.

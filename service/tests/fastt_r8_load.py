@@ -81,6 +81,17 @@ def summarise(sim, name, mode, t0, excluded=()):
         growth = {"first_third_mean": round(sum(samples[:third]) / third, 1),
                   "last_third_mean": round(sum(samples[-third:]) / third, 1),
                   "peak_fans_waiting": max(samples), "final_fans_waiting": samples[-1]}
+    order_violations = 0
+    for acct, prov in sim.providers.items():
+        seen = {}
+        for _when, fan, body in prov.post_log:      # bodies are re:<acct>:<fan>:<newest input id>:<bubble>
+            try:
+                key = (int(body.split(":")[3]), int(body.split(":")[4].split("<")[0]))
+            except (IndexError, ValueError):
+                continue
+            if fan in seen and key < seen[fan]:
+                order_violations += 1
+            seen[fan] = key
     rate_v = sum(p.rate_violations for p in sim.providers.values())
     return {
         "scenario": name, "mode": mode, "accounts": len(sim.accounts),
@@ -92,7 +103,7 @@ def summarise(sim, name, mode, t0, excluded=()):
         "newest_input_to_reply_s": {"p50": _r(pctile(lats, .5)), "p95": _r(pctile(lats, .95))},
         "stranded_due_turns": stranded_n, "operator_owned_unanswered": taken_n,
         "duplicate_sends": sim.duplicates, "cross_account_sends": sim.cross_account,
-        "takeover_violations": sim.takeover_violations, "rate_violations": rate_v,
+        "takeover_violations": sim.takeover_violations, "per_fan_order_violations": order_violations, "rate_violations": rate_v,
         "stale_credential_posts": sum(p.stale_credential_posts for p in sim.providers.values()),
         "max_provider_inflight": max((p.max_active for p in sim.providers.values()), default=0),
         "retries": {k: ev.get(k, 0) for k in ("turn-requeued", "turn-released", "turn-abandoned", "provider-throttled",

@@ -184,7 +184,7 @@ async def exercise(case, tmp):
                     clause=substitute_clause if case == "substitute" else ask_clause)
                 assert PHRASE in claim.text and claim.n == 4
                 if case == "substitute":
-                    assert claim.text.startswith("not exactly relaxing but")
+                    assert claim.text.startswith("not exactly what you asked for but")
                 assert all("CONVERSATION" not in c["messages"][1]["content"] for c in calls)
             else:
                 with patch.object(content_resolver, "resolve", resolved):
@@ -258,3 +258,4 @@ def main(case):
 
 if __name__ == "__main__":
     main(sys.argv[1])
+

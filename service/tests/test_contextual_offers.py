@@ -283,16 +283,20 @@ def test_off_shadow_and_live_action_boundaries(current_mode):
     with patch("automations.contextual_offers.get_session",session), \
          patch.object(content_prompts,"read_hook",AsyncMock(return_value=hook)) as read, \
          patch.object(content_resolver,"resolve",AsyncMock(return_value=Resolution([101,102],contract))) as resolve, \
-         patch.object(pack_sender,"_bought_media",AsyncMock(return_value=set())):
+         patch.object(pack_sender,"_bought_media",AsyncMock(return_value=set())), \
+         patch.object(pack_sender,"offered_media",AsyncMock(return_value=set())) as offered:
         result=asyncio.run(plan_contextual(lane,a,c,SimpleNamespace(fan_id=FAN)))
     if current_mode=="off":
         assert result is None and not read.called and not resolve.called
+        offered.assert_not_awaited()
         assert [e["stage"] for e in events]==["skipped"]
     elif current_mode=="shadow":
         assert result is None and read.called and resolve.called and not lane.plan.called
+        offered.assert_awaited_once_with(ACCOUNT,FAN)
         assert next(e for e in events if "matched_media_ids" in e)["matched_media_ids"]==[101,102]
     else:
         assert result[0]=="plan" and result[2].action=="send_ppv" and lane.plan.called
+        offered.assert_awaited_once_with(ACCOUNT,FAN)
 
 
 def test_unrelated_chat_does_no_inference():
@@ -443,4 +447,65 @@ def test_explicit_same_item_cannot_duplicate_a_card_after_projection_crash(db):
         with pytest.raises(Refused,match="item-already-pending"):
             refuse_repeat_media(con,ACCOUNT,FAN,terms((101,),800))
         refuse_repeat_media(con,ACCOUNT,FAN,terms((103,),800))
+
+
+@pytest.fixture
+def multi_message_db(db):
+    """Extend the durable-guard fixture with the canonical evidence columns."""
+    with sqlite3.connect(db) as con:
+        con.execute("ALTER TABLE messages ADD COLUMN direction TEXT")
+        con.execute("ALTER TABLE messages ADD COLUMN created_at TEXT")
+        con.execute("ALTER TABLE messages ADD COLUMN is_unsent BOOLEAN NOT NULL DEFAULT FALSE")
+        con.executemany("INSERT INTO messages(account_id,fan_id,message_id,direction,created_at) "
+                        "VALUES(?,?,?,?,?)", [
+            (ACCOUNT,FAN,8,"out",str(NOW-timedelta(seconds=3))),
+            (ACCOUNT,FAN,9,"in",str(NOW-timedelta(seconds=2))),
+            (ACCOUNT,FAN,10,"in",str(NOW-timedelta(seconds=1))),
+        ])
+    return db
+
+
+def test_multi_message_evidence_reserves_and_passes_before_post(multi_message_db):
+    a=authority(multi_message_db);permission=a.check()
+    with a.arm(delivery(),permission,"Current portrait interest",(9,10)):
+        metadata=a.reserve(terms(),71)
+        a.before_post(metadata)
+    with store.readonly(multi_message_db) as con:
+        row=con.execute("SELECT state,source_message_id,attempt_id,snapshot_json "
+                        "FROM of_contextual_offer").fetchone()
+        assert (row["state"],row["source_message_id"],row["attempt_id"]) == ("reserved",10,71)
+        assert json.loads(row["snapshot_json"])["supporting_message_ids"] == [9,10]
+
+
+def test_multi_message_evidence_keeps_purchase_freshness_gate(multi_message_db):
+    a=authority(multi_message_db);permission=a.check()
+    with a.arm(delivery(),permission,"Current portrait interest",(9,10)):
+        metadata=a.reserve(terms(),72)
+        with sqlite3.connect(multi_message_db) as con:
+            con.execute("UPDATE of_ledger_scan SET window_end=?",(str(NOW-timedelta(days=1)),))
+        with pytest.raises(Refused,match="contextual-purchase-state-stale"):
+            a.before_post(metadata)
+    with store.readonly(multi_message_db) as con:
+        assert con.execute("SELECT state FROM of_contextual_offer").fetchone()[0] == "reserved"
+
+
+def test_multi_message_evidence_cannot_bypass_unknown_delivery(multi_message_db):
+    a=authority(multi_message_db);permission=a.check()
+    with a.arm(delivery(),permission,"Current portrait interest",(9,10)):
+        a.reserve(terms(),73)
+    a.outcome("unknown")
+    with sqlite3.connect(multi_message_db) as con:
+        con.execute("INSERT INTO messages(account_id,fan_id,message_id,direction,created_at) VALUES(?,?,?,?,?)",
+                    (ACCOUNT,FAN,11,"in",str(NOW)))
+    b=authority(multi_message_db,11)
+    with pytest.raises(Refused,match="contextual-offer-unresolved"):
+        b.check()
+    # Even a caller reusing earlier permission cannot reserve a second card.
+    with b.arm(delivery((103,)),permission,"A different portrait",(10,11)):
+        with pytest.raises(Refused,match="contextual-offer-unresolved"):
+            b.reserve(terms((103,)),74)
+    with store.readonly(multi_message_db) as con:
+        assert con.execute("SELECT count(*) FROM of_contextual_offer").fetchone()[0] == 1
+        assert con.execute("SELECT state FROM of_contextual_offer").fetchone()[0] == "unknown"
+
 

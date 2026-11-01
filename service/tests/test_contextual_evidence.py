@@ -233,11 +233,14 @@ def test_planner_preserves_gates(monkeypatch,case):
   yield NS(execute=AsyncMock(return_value=NS(first=lambda:None if case=="missing" else (10,))))
  monkeypatch.setattr(co,"get_session",session)
  monkeypatch.setattr(ps,"_bought_media",AsyncMock(return_value={10}))
+ offered=AsyncMock(return_value=set())
+ monkeypatch.setattr(ps,"offered_media",offered)
  resolver=AsyncMock(return_value=NS(ok=case!="bought",media_ids=[11]))
  monkeypatch.setattr(cr,"resolve",resolver)
  result=asyncio.run(co.plan_contextual(lane,authority,c,fan,blocked=case=="blocked"))
  if case=="eligible":
   assert result and result[2].supporting_message_ids==(3,)
+  offered.assert_awaited_once_with("of-test",1)
   assert resolver.call_args.kwargs["seen"]=={10}
   assert read.call_args.kwargs["contextual_message"]["messages"][-1]["id"]==3
  elif case=="explore":
@@ -259,3 +262,4 @@ def test_planner_preserves_gates(monkeypatch,case):
   assert next(e["failure_code"] for e in reversed(events)
               if e.get("failure_code"))==expected
  assert events
+

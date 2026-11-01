@@ -15,6 +15,7 @@ from .store import Refused,utcnow
 from .activation import activation_view
 from .contextual_mode import FIELD as CONTEXTUAL_FIELD, KEY as CONTEXTUAL_KEY, MODES, mode as contextual_mode
 from .safety_mode import FIELD as SAFETY_FIELD, KEY as SAFETY_KEY, MODES as SAFETY_MODES, mode as safety_mode
+from . import commercial_controls
 from .reply_settings import SWITCHES as REPLY_SWITCHES, enabled as reply_enabled
 
 def fact_fields():
@@ -130,6 +131,7 @@ def editable(row,runtime,session,*,include_activation=False):
         "salesConfigurationValid":sales_valid,
         CONTEXTUAL_FIELD:contextual_mode(sales) if sales_valid else "off",
         SAFETY_FIELD:safety_mode(sales) if sales_valid else "shadow",
+        **commercial_controls.view(sales, sales_valid),
         "onRequestSalesEnabled":on_request_sales_enabled(sales, valid=sales_valid),
         **{name:sales_valid and reply_enabled(sales,key) for name,key in FASTT_SWITCHES.items()},
         **({"activation": activation_view(session,row.account_id,sales,binding_id=runtime.binding_id,model_id=resolved)} if include_activation else {})}
@@ -144,7 +146,7 @@ def get_configuration(store,tenant_id,account_id,*,include_activation=False):
 
 
 def validate_patch(patch):
-    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort","fasttScope",CONTEXTUAL_FIELD,SAFETY_FIELD,*FASTT_SWITCHES}:
+    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort","fasttScope",CONTEXTUAL_FIELD,SAFETY_FIELD,*commercial_controls.FIELDS,*FASTT_SWITCHES}:
         raise InvalidConfiguration("Only creator persona, facts, model, budget, reasoning and on-request sales settings may be edited here.")
     result={}
     if CONTEXTUAL_FIELD in patch:
@@ -157,6 +159,7 @@ def validate_patch(patch):
         if type(value) is not str or value not in SAFETY_MODES:
             raise InvalidConfiguration("Conversation safety detectors must be off, shadow, or live.")
         result[SAFETY_FIELD] = value
+    result.update(commercial_controls.validate_patch_fields(patch, InvalidConfiguration))
     if "fasttScope" in patch:
         from .fastt_scope import normalize
         try: result["fasttScope"] = normalize(patch["fasttScope"])
@@ -300,6 +303,18 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
             after[SAFETY_FIELD] = patch[SAFETY_FIELD]
             changed = changed or previous["value"] != patch[SAFETY_FIELD]
             row.ai_chatter_config_json = canonical(sales)
+        for field in commercial_controls.FIELDS:
+            if field in patch:
+                sales, valid = sales_settings(row)
+                if not valid:
+                    raise InvalidConfiguration("Saved sales configuration needs review before it can be edited.")
+                key = commercial_controls.KEY_OF[field]
+                previous = {"present":key in sales,"value":sales.get(key)}
+                before[field] = previous
+                sales[key] = patch[field]
+                after[field] = patch[field]
+                changed = changed or previous["value"] != patch[field]
+                row.ai_chatter_config_json = canonical(sales)
         if "persona" in patch:
             changed=changed or row.persona!=patch["persona"]
             before["persona"]=row.persona;after["persona"]=patch["persona"];row.persona=patch["persona"]

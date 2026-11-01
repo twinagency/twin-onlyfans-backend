@@ -256,7 +256,7 @@ def native_reader(reader):
         and isinstance(getattr(reader, '_handle', None), NativeProviderSession))
 
 
-def release(store, tenant, claim, *, retry_after=None, now=None):
+def release(store, tenant, claim, *, retry_after=None, rate_limited=False, now=None):
     now = now or utcnow()
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, claim.account)
@@ -285,7 +285,7 @@ def release(store, tenant, claim, *, retry_after=None, now=None):
             seconds = min(3600, max(1, int(retry_after)))
             until = now + timedelta(seconds=seconds)
             row.backoff_until = max(row.backoff_until or until, until)
-            if claim.parallel:
+            if claim.parallel and rate_limited:
                 target = capacity(claim.account).rps
                 row.rate_ceiling = max(1, min(target, row.rate_ceiling or target) // 2)
                 row.rate_recover_at = until + timedelta(minutes=5)

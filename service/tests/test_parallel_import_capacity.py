@@ -90,12 +90,35 @@ def test_session_change_and_wrong_tenant_refuse_old_results(store):
 
 def test_429_backoff_shared_even_when_another_request_succeeds(store):
     s,a=store;c1=acquire(s,a);c2=acquire(s,a)
-    assert budget.release(s,'tenant',c1,retry_after=120)
+    assert budget.release(s,'tenant',c1,retry_after=120,rate_limited=True)
     assert budget.release(s,'tenant',c2)
     with Session(s.engine) as db:
         assert db.get(OfProviderReadBudget,a).rate_ceiling==32
     for kind in budget.KINDS:
         with pytest.raises(budget.ReadDeferred,match='backoff'):acquire(s,a,kind)
+
+
+def test_transient_backoff_does_not_reduce_capacity_or_extend_rate_recovery(store):
+    s,a=store;c=acquire(s,a)
+    assert budget.release(s,'tenant',c,retry_after=5)
+    with Session(s.engine) as db:
+        row=db.get(OfProviderReadBudget,a)
+        assert row.rate_ceiling is None and row.rate_recover_at is None
+    with pytest.raises(budget.ReadDeferred,match='backoff'):acquire(s,a)
+
+
+def test_transient_error_preserves_existing_rate_limit_recovery(store):
+    s,a=store;c=acquire(s,a)
+    assert budget.release(s,'tenant',c,retry_after=1,rate_limited=True)
+    with Session(s.engine) as db,db.begin():
+        row=db.get(OfProviderReadBudget,a)
+        row.backoff_until=utcnow()-timedelta(seconds=1)
+        recovery=row.rate_recover_at
+    c=acquire(s,a)
+    assert budget.release(s,'tenant',c,retry_after=5)
+    with Session(s.engine) as db:
+        row=db.get(OfProviderReadBudget,a)
+        assert row.rate_ceiling==32 and row.rate_recover_at==recovery
 
 
 def test_frozen_clock_charges_identity_and_page_and_refills_fractionally(store):

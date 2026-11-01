@@ -17,7 +17,7 @@ from db.onlyfans_connection_models import OfProviderConnection,OfConnectionChang
 from onlyfans_read.contract import ID_PATTERN
 from .store import NEW_CONVERSATION_AUTOMATION_LOCKED,Refused,utcnow
 from .native_context import canonical
-from .provider_connector import session_from_capture,NativeProviderConnector,NativeAuthenticationError,NativeProtocolError
+from .provider_connector import session_from_capture,NativeProviderConnector,NativeAuthenticationError,NativeProtocolError,NativeRateLimitError
 
 # The stored deadline is a renewable verification lease, not a forced logout.
 # Short in-memory transport deadlines and all existing send gates remain intact.
@@ -493,7 +493,8 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                     check_error=error
                     raise
                 finally:
-                    if budget is not None:release(store,tenant,budget,retry_after=getattr(check_error,'retry_after',None))
+                    if budget is not None:release(store,tenant,budget,retry_after=getattr(check_error,'retry_after',None),
+                        rate_limited=isinstance(check_error,NativeRateLimitError))
                 if check_due:
                     transport=NativeProviderConnector(session_from_capture(account_id=account,owner_id=clear['ownerId'],policy_revision=policy_revision,
                         capture=clear['capture'],x_hash=clear['xHash'],proxy_url=clear['proxyUrl'],expires_at=expires))

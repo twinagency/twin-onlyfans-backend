@@ -11,7 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import math
+import os
 import re
+import time
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urlsplit
 
@@ -210,6 +212,13 @@ class NativeProviderConnector(NativeLoopbackConnector):
             raise Refused("invalid native HTTPS resource bound")
         self._handle = session
         self._timeout, self._max_bytes = float(timeout_seconds), max_response_bytes
+        try:
+            read_timeout = float(os.environ.get('ONLYFANS_PROVIDER_READ_TIMEOUT_SECONDS', timeout_seconds))
+        except (TypeError, ValueError):
+            raise Refused('invalid native HTTPS read timeout') from None
+        if not math.isfinite(read_timeout) or not .05 <= read_timeout <= 10:
+            raise Refused('invalid native HTTPS read timeout')
+        self._read_timeout = read_timeout
         self._vault_max_bytes = max_vault_response_bytes
 
     @property
@@ -236,7 +245,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
             raise Refused("invalid native HTTPS target")
         # Only the narrow read and send paths used by this connector are legal.
         if method == "GET":
-            allowed = target.path in {API_PATH + "/users/me", API_PATH + "/chats", API_PATH + "/vault/media", API_PATH + "/payouts/transactions"} or re.fullmatch(
+            allowed = target.path in {API_PATH + "/users/me", API_PATH + "/chats", API_PATH + "/vault/media", API_PATH + "/payouts/transactions", API_PATH + "/earnings/chart"} or re.fullmatch(
                 re.escape(API_PATH) + r"/chats/[1-9][0-9]*/messages", target.path)
             if not allowed or body:
                 raise Refused("unsupported native HTTPS read")
@@ -282,19 +291,22 @@ class NativeProviderConnector(NativeLoopbackConnector):
         # not open clients, read session files or reach the network.
         from curl_cffi import requests
         chunks, size = [], 0
+        started, status, oversized = time.monotonic(), None, False
         def bounded(chunk):
-            nonlocal size
+            nonlocal size, oversized
             size += len(chunk)
             if size > limit:
+                oversized = True
                 raise NativeProtocolError("native HTTPS response exceeded its byte budget")
             chunks.append(chunk)
             return len(chunk)
         try:
             with requests.Session(impersonate="chrome", trust_env=False, retry=0) as client:
                 response = client.request(method, url, headers=headers, data=body,
-                    proxy=self._handle.proxy_url, timeout=self._timeout,
+                    proxy=self._handle.proxy_url, timeout=self._read_timeout if method == 'GET' else self._timeout,
                     allow_redirects=False, verify=True, accept_encoding="identity",
                     content_callback=bounded, discard_cookies=True)
+                status = response.status_code
                 if response.status_code in {401, 403}:
                     raise NativeAuthenticationError("native provider rejected authentication")
                 if response.status_code == 429:
@@ -311,13 +323,23 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 if len(raw) > limit:
                     raise NativeProtocolError("native HTTPS response exceeded its byte budget")
                 return (response.status_code, raw) if with_status else raw
-        except (NativeProtocolError, Refused):
+        except (NativeProtocolError, Refused) as error:
+            if method == 'GET' and isinstance(error, NativeProtocolError):
+                from .read_failures import observe
+                error.read_failure = observe(error, account=self.account_id, path=path,
+                    started=started, status=status, response_bytes=size, callback_failed=oversized)
             raise
-        except Exception:
+        except Exception as error:
             # curl errors may contain authenticated proxy URLs or response
             # bodies. Never propagate those to logs/API/worker observations.
             if method == "GET":
-                raise NativeReadTransientError() from None
+                # curl may wrap a callback exception. Preserve the local size
+                # failure so the archive retries the same cursor at a smaller limit.
+                failure = NativeProtocolError('native HTTPS response exceeded its byte budget') if oversized else NativeReadTransientError()
+                from .read_failures import observe
+                failure.read_failure = observe(error, account=self.account_id, path=path,
+                    started=started, status=status, response_bytes=size, callback_failed=oversized)
+                raise failure from None
             raise NativeProtocolError("native HTTPS request outcome is uncertain") from None
 
     def vault_page(self, *, offset, limit=24):
@@ -451,6 +473,17 @@ class NativeProviderConnector(NativeLoopbackConnector):
         self.verify_identity()
         path = API_PATH + "/payouts/transactions?" + urlencode(params)
         return self._call("GET", path)
+
+    def earnings_chart(self, *, start, end):
+        """The creator's own Statistics > Earnings totals for one frozen UTC window (one read, no retries)."""
+        self._ready()
+        if (type(start) is not datetime or type(end) is not datetime or start.tzinfo is not None or end.tzinfo is not None
+                or start < datetime(2010, 1, 1) or not timedelta(0) < end - start <= timedelta(days=60000)):
+            raise Refused("invalid bounded native earnings window")
+        params = {"startDate": start.strftime("%Y-%m-%d %H:%M:%S"), "endDate": end.strftime("%Y-%m-%d %H:%M:%S"),
+                  "withTotal": "true", "filter[total_amount]": "total_amount"}
+        self.verify_identity()
+        return self._call("GET", API_PATH + "/earnings/chart?" + urlencode(params))
 
     def send(self, dispatch, *, authority, tenant_id):
         self._ready()

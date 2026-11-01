@@ -244,16 +244,19 @@ class NativeWorker:
                 if stop.is_set():break
                 account_errors=report.errors
                 try:
+                    # Fresh arrivals have their independent inbox lane. Give
+                    # archives a turn before legacy discovery for every account,
+                    # even when that discovery is deferred or raises an error.
+                    if not stop.is_set():self._history_turn(account,report,
+                        revision=account.read_connection_revision,memory=False)
                     if account.read_connection_revision is not None:
-                        # The independent inbox owns fresh arrivals. Archive work
-                        # must receive its turn before legacy discovery, including
-                        # when that discovery is deferred or raises an error.
-                        if not stop.is_set():self._history_turn(account,report,revision=account.read_connection_revision)
                         progress=self._read_progress(account,connection_revision=account.read_connection_revision)
                         if progress is None:
                             report.held+=1
                             continue
                         report.ingress+=progress.applied
+                        if not stop.is_set():self._history_turn(account,report,
+                            revision=account.read_connection_revision,archive=False)
                         # Inactive verified accounts never enter planning or sending.
                         continue
                     # Historical acceptance is repaired even after a binding is
@@ -283,9 +286,6 @@ class NativeWorker:
                     if stop.is_set():break
                     self._deliver(account,report)
                     if stop.is_set():break
-                    if self.history_recovery:
-                        self._history_turn(account,report,memory=False)
-                        if stop.is_set():break
                     # One sender: an account the FASTT runner owns wholesale gets no
                     # Twin claim, plan, campaign or engagement from this worker.
                     from .fastt_manual import fastt_account_owned

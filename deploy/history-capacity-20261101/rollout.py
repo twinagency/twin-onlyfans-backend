@@ -13,7 +13,7 @@ os.umask(0o077)
 locks=[]
 for path in ['/var/lock/twin-onlyfans-native-release.lock','/etc/twin-onlyfans/paid-media-release.lock']:
  f=open(path,'a');fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);locks.append(f)
-assert '58 passed' in (ROOT/'unit-tests.log').read_text()
+assert '59 passed' in (ROOT/'unit-tests.log').read_text()
 pg=(ROOT/'pg-tests.log').read_text()
 assert 'passed' in pg and 'failed' not in pg and 'ERROR' not in pg,pg[-200:]
 before=inspect(NAME);assert before['State']['Running'] and before['Image']==BASE,'Live worker changed; refresh required'
@@ -40,7 +40,7 @@ try:
  for rel in ['onlyfans_runtime/native_worker.py','onlyfans_runtime/launch_history_memory/recovery.py']:
   raw=run(['docker','exec',NAME,'cat','/app/service/'+rel])
   assert raw==(ROOT/'service'/rel).read_text(),'Source mismatch'
- result={'deployed':True,'image':image,'base':BASE,'revision':'139c6f04df72e59649e919f7be843d7b2ccf3b52','environment_preserved':True}
+ result={'deployed':True,'image':image,'base':BASE,'revision':'c9766ec85eee4dc9aed09a2b3e76670645d45464','environment_preserved':True}
  (ROOT/'deployment.json').write_text(json.dumps(result));print(json.dumps(result))
 except Exception:
  if changed:

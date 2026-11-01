@@ -111,3 +111,19 @@ def test_release_marks_only_a_real_rate_limit(monkeypatch, error, limited):
     monkeypatch.setattr(budget, 'release', lambda *a, **kw: calls.append(kw))
     _release_provider(None, 'tenant', object(), error)
     assert calls == [{'retry_after': getattr(error, 'retry_after', None), 'rate_limited': limited}]
+
+
+@pytest.mark.parametrize('error,limited', [
+    (connector.NativeRateLimitError(17), True),
+    (connector.NativeReadTransientError(5), False),
+])
+def test_independent_recent_inbox_preserves_rate_limit_classification(monkeypatch, error, limited):
+    from onlyfans_runtime import recent_inbox
+    claim = object()
+    calls = []
+    monkeypatch.setattr(recent_inbox, 'acquire', lambda *a, **kw: claim)
+    monkeypatch.setattr(recent_inbox, 'release', lambda *a, **kw: calls.append(kw))
+    def read(): raise error
+    with pytest.raises(type(error)):
+        recent_inbox._read(None, 'tenant', 'of-read-test', 1, read, None)
+    assert calls == [{'retry_after': error.retry_after, 'rate_limited': limited}]

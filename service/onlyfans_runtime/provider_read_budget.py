@@ -256,6 +256,12 @@ def native_reader(reader):
         and isinstance(getattr(reader, '_handle', None), NativeProviderSession))
 
 
+def is_rate_limit(error):
+    """A provider timeout is not evidence of upstream throttling."""
+    from .provider_connector import NativeRateLimitError
+    return isinstance(error, NativeRateLimitError)
+
+
 def release(store, tenant, claim, *, retry_after=None, rate_limited=False, now=None):
     now = now or utcnow()
     with Session(store.engine) as s, s.begin():

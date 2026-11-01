@@ -1056,6 +1056,15 @@ class Service:
             if len(self.tasks) >= self.tuning.concurrency:
                 self._status(fan, "waiting", "concurrency-limit", message_id=mid, waiting_since=first)
                 continue
+            # A durable hold is not preparation work. Otherwise an older held
+            # fan can take the only slot on every poll, only to be refused by
+            # its child, indefinitely starving an eligible neighbour. The
+            # child and final wire gate still re-read authority independently.
+            reason = await asyncio.to_thread(fan_hold_reason, self.path, self.db, fan, True)
+            if reason:
+                self._hold_fan(fan, reason)
+                self._status(fan, "held", reason, message_id=mid, waiting_since=first)
+                continue
             if self.already_claimed(fan, mid):
                 continue
             self._status(fan, "preparing", None, message_id=mid, waiting_since=first)

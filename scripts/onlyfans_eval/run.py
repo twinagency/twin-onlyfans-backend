@@ -1,7 +1,8 @@
 """CLI: python ../scripts/onlyfans_eval/run.py --cases PATH [--out DIR] [--generations N] [--transport synthetic|openrouter] ...
 
 Run from service/ with PYTHONPATH=. . Never touches an OnlyFans client or sender. The real-model transport refuses to run
-unless --allow-spend, --max-usd N and the key environment variable are all present (and the estimate fits under the cap).
+unless --allow-spend, --max-usd N, --budget-state PATH and the key environment variable are all present
+(and the estimate fits under the cap). Both routes and every resume must share the same budget journal.
 """
 from __future__ import annotations
 
@@ -134,6 +135,7 @@ def main(argv=None):
     ap.add_argument("--estimate", action="store_true", help="print the cost estimate and exit")
     ap.add_argument("--allow-spend", action="store_true")
     ap.add_argument("--max-usd", type=float)
+    ap.add_argument("--budget-state", help="private spend journal; use the SAME path for both routes and all resumes")
     ap.add_argument("--key-env", default="OPENROUTER_API_KEY")
     ap.add_argument("--completion-tokens", type=int, default=cost.DEFAULT_COMPLETION_TOKENS)
     ap.add_argument("--repair-rate", type=float, default=cost.DEFAULT_REPAIR_RATE)
@@ -163,7 +165,11 @@ def main(argv=None):
             print(str(e), file=sys.stderr)
             return 3
         p = est["price"]
-        transport = transports.OpenRouterTransport(key, args.max_usd, p["in_per_1k_cents"], p["out_per_1k_cents"])
+        if not args.budget_state:
+            print("real model refused: --budget-state is required for a shared, durable cap", file=sys.stderr)
+            return 3
+        transport = transports.OpenRouterTransport(key, args.max_usd, p["in_per_1k_cents"], p["out_per_1k_cents"],
+                                                   budget_state=args.budget_state)
     else:
         transport = transports.SyntheticTransport(args.profile)
 

@@ -150,7 +150,8 @@ def test_upgrade_invalidates_offset_claims_and_preserves_immutable_financial_row
     with store.engine.begin() as c:
         from onlyfans_upgrade_fixture import restore_pre95_content_vault_shape
         restore_pre95_content_vault_shape(c)
-        c.exec_driver_sql("ALTER TABLE fans DROP COLUMN of_profile_checked_at CASCADE, DROP COLUMN of_profile_error")
+        # The shared historical-shape helper already removes the later fan
+        # profile columns; dropping them twice prevents the upgrade test running.
         c.exec_driver_sql("ALTER TABLE content_offers DROP COLUMN post_buy_started_at")
         for table in ("of_ledger_scan","of_ledger_history"):
             c.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN continuation_json CASCADE, DROP COLUMN coverage_json CASCADE")

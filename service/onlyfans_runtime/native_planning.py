@@ -59,6 +59,16 @@ class SyntheticNativeModel:
              **({"sale": self.sale} if self.sales_enabled else {})})
 
 
+def _reply_format_enabled(cfg):
+    """The same literal opt-in the FASTT route reads (native_reply_format_enabled), from the saved account config."""
+    from .reply_settings import enabled
+    try:
+        saved = json.loads(cfg.ai_chatter_config_json or "{}")
+    except (TypeError, ValueError):
+        return False
+    return type(saved) is dict and enabled(saved, "native_reply_format_enabled")
+
+
 def _native_messages(context):
     # The worker environment is selected before these native library imports.
     # The scheduler, provider client and legacy model entrypoint stay disabled.
@@ -93,6 +103,7 @@ def _native_messages(context):
                             hot_thread=False, can_sell=False, pic_offer=False)
     messages, _ = native._build_messages(persona, fan, candidate, set(), history_tail=100,
                                          onlyfans_text_only=True, painful_on=False,
+                                         reply_format=_reply_format_enabled(cfg),
                                          onlyfans_memory=True, profile=profile,
                                          dated_memory="learnedProfile" in context.get("historicalMemory", {}),
                                          onlyfans_sales=context.get("sales"),
@@ -125,6 +136,9 @@ async def _draft(context, messages, model, timeout):
     from native_pilot.identity import discloses_ai
     if discloses_ai(text):
         raise Refused("identity disclosure held")
+    from native_pilot.media_claims import echoes_instruction
+    if echoes_instruction(text):
+        raise Refused("instruction text held")
     sale = memory.pop("sale", None)
     if sale is not None:
         from .native_sales import caption
@@ -147,6 +161,8 @@ async def _draft(context, messages, model, timeout):
             raise Refused("unbacked native media caption")
         if len(text.encode()) > 20000:
             raise Refused("native media caption exceeds its byte budget")
+        if echoes_instruction(text.replace(generated, "")):
+            raise Refused("instruction text held")
     return text, memory, sale
 
 

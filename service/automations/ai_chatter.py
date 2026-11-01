@@ -6502,12 +6502,74 @@ def _turn_kind(*, bot_accused: bool, pic_desc: str, content_ask: bool,
     return ""
 
 
+from . import _complete_answers as _ca
+
 REPLY_FORMAT_INSTRUCTION = (
     "Answer the latest complete message in the creator's approved voice. Use the amount of detail the reply needs. "
     "A brief acknowledgment or one short sentence is sufficient when it answers the turn. "
     "Expand when the question needs explanation. Ask a follow-up only when it helps the conversation. "
     "Do not pad the reply or split it merely to meet a format."
 )
+
+
+REPAIR_NOTE = ("Your previous draft was not usable ({why}). Write the reply again: answer everything he asked in his "
+               "unanswered messages, in his language, and do not repeat a pet name, challenge, sign-off, closing "
+               "question or get-to-know question you already used or that he already answered. Reply with the message only.")
+REPLY_HELD = "reply-repeats-held"
+
+
+def _draft_problems(text: str, c: "_Cand", f: Fan, kind: str) -> list[str]:
+    """Meaning-level problems of a complete-answers draft (see _move_repeat). Pure."""
+    from . import _move_repeat
+    clean = re.sub(r"(?m)^\s*(?:>>OFFER.*|STICKER:.*)$", "", text).strip()
+    recent_out = [b for d, b in c.messages if d == "out"]
+    given = None
+    try:
+        from native_pilot.fan_name import given_name
+        given = given_name([b for d, b in c.messages if d == "in"])
+    except Exception:
+        pass
+    known = _ca.known_topics(f, name=resolve_fan_name(f), given=given)
+    run = _ca.unanswered_run(c.messages)
+    tags = _move_repeat.problems(clean, recent_out, known=known, fan_name=(resolve_fan_name(f) or "").split("/")[0])
+    why = _move_repeat.incomplete(clean, run, kind=kind)
+    if why:
+        tags.append(why)
+    if _move_repeat.language_mismatch(" ".join(run), clean):
+        tags.append("language")
+    return tags
+
+
+async def _complete_repair(raw: str, msgs: list, *, c: "_Cand", f: Fan, kind: str, model, account_id: str,
+                           fan_id: int) -> str:
+    """ONE bounded regeneration for an unusable draft, then trim, then hold. Never a loop, never silent."""
+    from . import _move_repeat
+    tags = _draft_problems(raw, c, f, kind)
+    if not tags:
+        return raw
+    log.info("ai_chatter complete-answers draft problems=%s account=%s fan=%s", tags, account_id, fan_id)
+    best = raw
+    try:
+        res = await _runtime_chat(model=model, purpose=_PURPOSE, account_id=account_id, fan_id=fan_id,
+                                  temperature=_REPLY_TEMPERATURE,
+                                  messages=msgs + [{"role": "system", "content": REPAIR_NOTE.format(why=", ".join(tags))}])
+        again = (res.content or "").strip()
+        if again:
+            best, tags = again, _draft_problems(again, c, f, kind)
+    except LLMCapExceeded:
+        raise
+    except Exception:
+        log.warning("ai_chatter repair call failed account=%s fan=%s", account_id, fan_id, exc_info=True)
+    if not tags:
+        return best
+    if set(tags) <= _move_repeat.TRIM:
+        cut = _move_repeat.trim(best, tags)
+        if cut and not _draft_problems(cut, c, f, kind):
+            return cut
+    hold = getattr(active_telegram_capabilities(), "hold_reply", None)
+    if callable(hold):
+        hold(REPLY_HELD)       # raises: the runner surfaces the turn (requires_attention); nothing is dropped silently
+    return best
 
 
 def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
@@ -6592,7 +6654,10 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     for the opening line and the output contract. That is the whole reason
     `_SellSurface` exists — see its docstring. Adding a way to sell means one
     more construction there, not four more branches here."""
-    reply_format = reply_format is True and not kind and not sell.live
+    # ONE OnlyFans switch (the native_reply_format capability), extended from "ordinary turns" to "complete
+    # answers on every route": see _complete_answers.py. Off => every branch below is the shipped prompt.
+    complete = reply_format is True
+    reply_format = complete and not kind
     questions = _questions_still_needed(f, asked)
     # One flag for "answer identity questions honestly": Twin's scoped text path
     # and the FASTT path with Twin context share the same identity wording.
@@ -6776,6 +6841,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             "He thinks you might be a bot — defending is what a bot does. ONE "
             "breezy brush-off, then something HE told you. No sell, no ask."
         ))
+        if complete:
+            need_block = _ca.BRUSH_OFF_TRUTHFUL if truthful else _ca.BRUSH_OFF_PLAIN
         presented = []
         ask = False
     elif kind == _TURN_REACT_PIC:
@@ -6795,6 +6862,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             "back), ONE line to keep it going. WARM, not sexual, never invent what "
             "he sent. SHORT bubbles."
         )
+        if complete:
+            need_block = need_block.replace(" SHORT bubbles.", "")
         presented = []
         ask = False
     elif kind == _TURN_RATE_PIC:
@@ -6842,6 +6911,10 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             'point cause ur not all the way hard yet, i wanna see that"\n'
             "Never name anything not in the description."
         )
+        if complete:
+            need_block = need_block.replace(
+                "\nSHORT bubbles, the way you'd type it. GOOD: ", _ca.RATE_PIC_TAIL.split("GOOD: ")[0] + "GOOD: ")
+            need_block = need_block.replace("rate him in two short bubbles, then", "rate him, then")
         if bot_accused:
             # This turn is BOTH: he asked if she's a bot and put a picture on the table.
             # The rating is the proof, so it replaces the brush-off rather than joining
@@ -6869,6 +6942,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             "HE'S CLEARLY INTO IT RIGHT NOW — the moment to SELL, not tease. Match "
             f"his heat in one short line, then close it: {sell.close}"
         )
+        if complete:
+            need_block = _ca.ESCALATION.format(close=sell.close)
         presented = []
         ask = False
     elif kind == _TURN_PIC_OFFER:
@@ -6897,6 +6972,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             "the thread's register, ONE short message. An invitation, not a sale: "
             "no price, no offer line, no questions."
         )
+        if complete:
+            need_block = _ca.PIC_OFFER
         presented = []
         ask = False
     elif kind == _TURN_DARE:
@@ -6926,6 +7003,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             "ONE short message. A dare, not a sale: no price, no offer, no "
             "questions."
         )
+        if complete:
+            need_block = _ca.DARE
         presented = []
         ask = False
     elif kind == _TURN_HOT:
@@ -6950,6 +7029,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
             "3. MIRROR IT BACK, HOTTER — his words escalated, as if it's already "
             "happening."
         )
+        if complete:
+            need_block = _ca.HOT_HEAD
         if sell.close:
             need_block += (
                 f"\n4. THEN SELL HIM WHAT HE JUST DESCRIBED. {sell.close} Write it "
@@ -6964,7 +7045,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         need_block = ("YOUR GOAL THIS MESSAGE: answer him, then the ask "
                       "below. No get-to-know question this turn — it can wait.")
     elif reply_format:
-        need_block = "Answer what he said. Ask for clarification only if it is needed to answer accurately."
+        need_block = _ca.ORDINARY_NEED
         presented = []
     elif opener is not None:
         # The gather is done, so this turn works in one gen_info opener — a question
@@ -6988,6 +7069,13 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     else:
         need_block = random.choice(_BREATHER_VARIANTS)
 
+    if complete:
+        # No interview loop, no automatic next question: a fact is asked for only when the model finds it missing
+        # AND relevant (the rule below), never because a dice roll or the gap list said so.
+        presented = []
+        ask = False
+        need_block = f"{need_block}\n{_ca.COMPLETE_ANSWER_RULE}"
+
     # Item 15 — sticky name: once we hold a DURABLE name for him (team-curated
     # custom_nickname or an extracted real_name), pin it so the model greets him by
     # it and NEVER re-interviews for his name — killing the "what's ur name" loop
@@ -7005,10 +7093,10 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     dodge_note = (
         "\n\nIMPORTANT: you asked his name twice and he dodged — do NOT ask his name "
         "again. Pick a playful nickname for him and just use it from now on."
-        if name_dodged else "")
+        if name_dodged and not complete else "")
 
     style_extra = ((STYLE_3LINE,) * 2 + (STYLE_BRIEF,) * 2) if style_on else ()
-    style = REPLY_FORMAT_INSTRUCTION if reply_format else random.choice(_STYLE_VARIANTS + style_extra)
+    style = REPLY_FORMAT_INSTRUCTION if complete else random.choice(_STYLE_VARIANTS + style_extra)
     # A "solo" sticker roll owns the per-message STYLE slot — a bullet buried
     # mid-prompt loses to "YOUR GOAL THIS MESSAGE"/the style line (verified
     # live: 5/5 solo rolls yielded plain text until the directive moved here).
@@ -7025,7 +7113,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
 
     # style_on gates the humanizer, but NOT the emoji vocabulary inside it: the set
     # a creator types from is a lane fact, not an opt-in. "" for her either way.
-    humanizer = f"\n\n{v.humanizer}" if style_on else v.emoji_vocab
+    humanizer = (f"\n\n{_ca.humanizer(v.humanizer) if complete else v.humanizer}"
+                 if style_on else v.emoji_vocab)
     nonnative = f"\n\n{NONNATIVE_REGISTER}" if nonnative_on else ""
     # Sticker protocol enters the prompt only on an allow/solo roll — a model
     # that can't see it can't over-use it (measured 48% attach when always on).
@@ -7138,22 +7227,26 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
            "beat of your day, never a paragraph; ")
         + f"{offers_line} "
         "He may send several texts — read all, reply to the latest.\n\n"
-        f"{v.painful_texting + chr(10) + chr(10) if painful_on else ''}"
+        f"{v.painful_texting + chr(10) + chr(10) if painful_on and not complete else ''}"
         f"{clock_block(clock)}{day_sys}"
         f"{need_block}{dodge_note}{call_him}\n\n"
         f"STYLE FOR THIS MESSAGE — {style}\n\n"
         # Register (text young and casual), NOT a claim about her age — derived
         # from the persona so a 49yo persona isn't told to text like a 22yo.
         f"{register_intro}"
+        + (_ca.VOICE_LINE + _ca.VARY_LINE + _ca.FOLLOWUP_LINE if complete else (
         "- Short and casual — lowercase, u/ur. React to what he said first.\n"
         "- VARY it — never reuse an opener, phrase, or emoji from this chat.\n"
         + ("- Ask a follow-up only when useful; never repeat an answered question.\n" if reply_format else
-           "- At most ONE question, never one he already answered. No paragraphs.\n")
+           "- At most ONE question, never one he already answered. No paragraphs.\n")))
         +
         f"{narration_rule}"
-        "- If he gets explicit early: playfully tease and slow it down — warm, "
-        "never preachy.\n"
-        f"{_good_examples(f, asked, have_durable_name)}\n"
+        + ("- If he gets explicit, stay inside the creator's approved boundaries and consent rules, warm and "
+           "never preachy; never use teasing or slowing down to dodge a product question or a buying request.\n"
+           if complete else
+           "- If he gets explicit early: playfully tease and slow it down — warm, "
+           "never preachy.\n")
+        + f"{'' if complete else _good_examples(f, asked, have_durable_name)}\n"
         f"{ONPLATFORM_GUARDRAIL}\n\n"
         f"{bio_rule}"
         f"{humanizer}{nonnative}{stickers}"
@@ -7236,6 +7329,7 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
         f"{claims_block}"
         f"{day_user}"
         f"Recent conversation (oldest→newest):\n{convo}\n\n"
+        f"{_ca.render_unanswered(_ca.unanswered_run(history)) if complete else ''}"
         # `_quotes.REPLY_NOW` verbatim unless he quote-replied, so the ~93% of turns
         # with no quote build the prompt they always did.
         + quote.tail
@@ -9685,6 +9779,13 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 continue
 
             raw = (res.content or "").strip()
+            if cfg.get("_native_reply_format") is True and raw:
+                try:
+                    raw = await _complete_repair(raw, msgs, c=c, f=f, kind=kind, model=model,
+                                                 account_id=account_id, fan_id=fan_id)
+                except LLMCapExceeded:
+                    cap_hit = True
+                    break
             # Offer marker: parse + ALWAYS strip protocol lines, then validate
             # the id against the code-side manifest (price/terms come from the
             # catalog row — the model never sets them).
@@ -9878,6 +9979,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # deferred-draft exclusion and `lane.deliver` — with no second copy of
             # any of it. On every other turn `_hook_plan` is None and this is the
             # declaration it always was.
+            _grounded_raw = False      # True when `raw` is built from offer data we own (not model prose)
             _pack_plan: "sell_lane.SellPlan | None" = _hook_plan
             if (kind not in _TURNS_NOT_SELLING and vault_ask
                     and forced_this_tick < _MAX_FORCED_ASKS_PER_TICK):
@@ -9920,7 +10022,14 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
 
             if (_pack_plan is not None and _pack_plan.result is not None
                     and _pack_plan.result.reason == "item_already_pending"):
-                raw = "That one is already in the card above."
+                if cfg.get("_native_reply_format") is True:
+                    # Complete-answers scope: a reply grounded in the actual offer data, never the stock line.
+                    from . import _offer_reply
+                    raw = await _offer_reply.existing_offer_reply(
+                        account_id, fan_id, getattr(_pack_plan.result, "detail", ""))
+                    _grounded_raw = True
+                else:
+                    raw = "That one is already in the card above."
                 offer_item = offer_id = None
                 _trigger = None
 
@@ -9938,7 +10047,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 _authority = getattr(_cap, "contextual", None)
                 _explore = getattr(_authority, "reply_override", None)
                 if _explore:
-                    raw = _explore
+                    raw = (_ca.merge_explore(raw, _explore) if cfg.get("_native_reply_format") is True
+                           else _explore)
                     _authority.reply_override = None
             if _contextual is not None:
                 _context_plan, _context_permission, _context_decision = _contextual
@@ -10174,7 +10284,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             _ret_gap_s = ((datetime.utcnow() - _ret_anchor).total_seconds()
                           if _ret_anchor is not None else 0.0)
             _one_bubble = bool(return_single_s > 0 and _ret_gap_s >= return_single_s)
-            if cfg.get("_native_reply_format") is True and not kind and not sell.live:
+            if cfg.get("_native_reply_format") is True:
                 # Preserve complete text; the existing transport limit refuses oversized output.
                 # The existing bubble loop still checks freshness before every send.
                 parts = [_language.apply_word_restriction(p, fan_lang)
@@ -10203,7 +10313,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # score, which is the whole product of the beat. Worse, the score check runs
             # on `raw` BEFORE this split, so the re-ask sees a number that is then
             # truncated away and never fires. The incident thread is exactly this shape.
-            if kind == _TURN_BRUSH_OFF and parts:
+            if kind == _TURN_BRUSH_OFF and parts and cfg.get("_native_reply_format") is not True:
                 parts = parts[:1]
             if not parts:
                 # A sticker-only reply (empty text + a tag) is a legit pure
@@ -10279,7 +10389,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # her one honest sentence is stripped as a phantom and `if not parts:
             # continue` abandons the turn — the picture lands with no words after
             # it, the exact failure the hand-off exists to prevent.
-            if offer_item is None:
+            if offer_item is None and not _grounded_raw:
                 _phantom = (teaser is None and pending is None
                             and c.reply_start != "bound")
 

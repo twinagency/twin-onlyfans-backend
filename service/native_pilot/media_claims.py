@@ -52,6 +52,21 @@ _PLACEHOLDER_RULES = (
     re.compile(r"\b(?:word\s+reaction|your\s+(?:line|message|reply|text|name)|insert\s+\w+)\s+here\b", re.I),
     re.compile(r"\[[^\]\n]{0,40}\bhere\]", re.I),
     re.compile(r"\{\{[^}\n]{1,40}\}\}"),
+    # R2: leaked prompt instructions / section labels / protocol markers
+    re.compile(r"\b(?:STYLE FOR THIS MESSAGE|YOUR GOAL THIS MESSAGE|HOW YOU TEXT|THE FEEL OF TEXTING|ANSWER FIRST|"
+               r"HIS UNANSWERED MESSAGES|What you know about him|Recent conversation \(oldest)\b"),
+    re.compile(r"(?m)^\s*(?:FAN|YOU|SYSTEM|ASSISTANT)\s*:\s*\S"),
+    re.compile(r"(?m)^\s*>>\s*OFFER\b|\bSTICKER:\s*\w"),
+    re.compile(r"\b(?:never mention AI|do not confirm or deny|reply (?:is )?only the message text|in the creator'?s approved voice|"
+               r"as an ai (?:language )?model|here(?:'s| is) (?:the|a|your) (?:reply|response|message)\b)", re.I),
+    re.compile(r"^\s*(?:reply|response|message|output|answer)\s*:", re.I),
+    re.compile(r"^\s*[\[{]\s*\"?(?:reply|facts|profile|sale|item_id)\"?\s*[:\"]", re.I),
+    # R2: internal classifier labels / reason codes (three-part snake_case or the known kebab reason codes)
+    re.compile(r"\b[a-z]{2,}(?:_[a-z]{2,}){2,}\b"),
+    re.compile(r"\b(?:brush_off|rate_pic|react_pic|pic_offer|content_ask|life_tip|hook_upsell|hot_thread|send_ppv|"
+               r"media-claim-unbacked|instruction-placeholder-held|identity-held|item-already-pending|media-already-pending|"
+               r"unlinked-payment|reply-repeats-held)\b"),
+    re.compile(r"\b(?:subject|category|classification|classifier|intent|reason code|failure_code)\s*[:=]\s*\S", re.I),
 )
 
 

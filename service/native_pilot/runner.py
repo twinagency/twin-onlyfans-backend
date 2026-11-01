@@ -418,6 +418,10 @@ class Gateway:
                 raise Refused("unsend-needs-card")
             if len(text.encode("utf-16-le")) // 2 > 4000:
                 raise Refused("output-too-long")
+            from .media_claims import PLACEHOLDER_HELD, echoes_instruction
+            if echoes_instruction(text):
+                # Last line of defence on the exact wire payload (after any rewrite/split/caption composition).
+                raise Refused(PLACEHOLDER_HELD)
             draft_ready_at = now()
             await self.pace()
             throttle_done_at = now()

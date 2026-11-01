@@ -67,6 +67,6 @@ IDs including one from the latest unanswered fan run), evidence (same order:
 objects with id and verbatim quote), what (short content subject),
 subject (specific content subject), media_kind (photo|video|null),
 terms (8-15 single descriptive lowercase words for retrieval), exclusions (array),
-bridge (one short natural question for explore; for send a short grounded
+bridge (one short natural line for explore, a question only if one is genuinely needed; for send a short grounded
 introduction with no unsupported claims, price or promise).
 Choose chat with hook=false when there is no justified opportunity."""

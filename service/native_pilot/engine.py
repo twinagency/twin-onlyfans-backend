@@ -239,6 +239,15 @@ class NativeEngine:
         # --followups in vault mode: FASTT's own nudge delay and what this turn did (see _queue_card_nudge).
         self._nudge_min, self._card_sent, self._nudge_queued = 0, False, False
 
+    @property
+    def complete_answers(self):
+        """The native_reply_format capability, read by shared helpers (content_resolver.answer_line)."""
+        return self.reply_format and self._job is None
+
+    def hold_reply(self, reason):
+        """Hold this turn's reply with a fixed public reason (the runner requeues or surfaces it)."""
+        self._refuse(reason)
+
     def _refuse(self, reason):
         self._violation = reason
         raise PilotBoundaryError(reason)

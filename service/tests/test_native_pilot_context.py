@@ -125,7 +125,7 @@ async def exercise(tag):
         with make(fans[n], context() if context else None, offer) as pilot:
             await pilot.run(n)
         main = [c for c in calls if not c.get("response_format")]
-        check(len(main) == 1, f"one reply call for fan {n}")
+        check(len(main) == 1, f"one reply call for fan {n}: {len(main)}")
         return main[0]
 
     # 1. ordinary turn: persona, effective facts and memory, each exactly once.
@@ -166,18 +166,44 @@ async def exercise(tag):
     check("100% human" in system_of(call) and "Approved dance teacher" not in system_of(call),
           "native prompt untouched without the hook")
 
-    # 4. stale shared facts: refuse before any model call or send.
+    # 4. facts that were never successfully loaded are still refused before any model call or send.
     async with get_session() as s:
         row = await s.get(OfCreatorFactsSource, account)
-        row.checked_at = now - timedelta(hours=1)
+        row.checked_at = None
     before = (len(calls), len(sent))
+    calls.clear()
     try:
         await prompt_for(4)
     except PilotBoundaryError as e:
-        check(str(e) == "creator-facts-not-current", "stale facts reason")
+        check(str(e) == "creator-facts-not-current", "never-loaded facts reason")
     else:
-        raise AssertionError("stale creator facts accepted")
-    check((len(calls), len(sent)) == (0, before[1]), "no model call or send on stale facts")
+        raise AssertionError("never-loaded creator facts accepted")
+    check((len(calls), len(sent)) == (0, before[1]), "no model call or send on never-loaded facts")
+
+    # 4b. a changed shared-creator binding is refused before any model call or send.
+    async with get_session() as s:
+        row = await s.get(OfCreatorFactsSource, account)
+        row.checked_at = now
+        row.binding_id = "other-binding"
+    before = (len(calls), len(sent))
+    try:
+        await prompt_for(4)
+    except Exception as e:
+        check(str(e) == "twin-context-unavailable", ("binding change refused (Refused wrapped as unavailable)", str(e)))
+    else:
+        raise AssertionError("changed creator binding accepted")
+    check((len(calls), len(sent)) == (0, before[1]), "no model call or send on a changed binding")
+    async with get_session() as s:
+        row = await s.get(OfCreatorFactsSource, account)
+        row.binding_id = "bind-" + account
+
+    # 4c. (last, because it answers fan 4) saved facts do not expire by elapsed time (a2eab41 "Keep saved creator facts valid until explicit
+    #    edits"; creator_facts.effective: "Saved facts remain usable until an explicit source or operator edit").
+    async with get_session() as s:
+        row = await s.get(OfCreatorFactsSource, account)
+        row.checked_at = now - timedelta(hours=1)
+    call = await prompt_for(4)
+    check(system_of(call).count("Approved dance teacher") == 1, "facts saved an hour ago are still used")
 
     # 5. a persona that claims to be human is not approved.
     async with get_session() as s:

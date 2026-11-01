@@ -253,9 +253,9 @@ async def suite(root):
     f, p, gateway, client, http = make("cap", count=2)
     check(runner.check_local(f.path, fixtures.ACCT, fixtures.FAN)["creator_profile"] == "native-default")
     for i in range(10):
-        reply = await asyncio.to_thread(gateway.send, fixtures.FAN, "literal <hello> & neutral", {})
+        reply = await asyncio.to_thread(gateway.send, fixtures.FAN, "literal 3 < 5 & 7 > 2", {})
         check(reply["id"] == 1001 + i)
-        check(http.posts[-1]["text"] == "<p>literal &lt;hello&gt; &amp; neutral</p>")
+        check(http.posts[-1]["text"] == "<p>literal 3 &lt; 5 &amp; 7 &gt; 2</p>")
         check(http.posts[-1]["price"] == 0 and http.posts[-1]["mediaFiles"] == [])
         check(http.post_kwargs[-1].get("allow_redirects") is False, "a redirect must never re-POST a message")
         # Production native attribution happens AFTER the gateway returns.

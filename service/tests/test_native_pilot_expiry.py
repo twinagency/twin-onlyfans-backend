@@ -87,7 +87,7 @@ async def exercise(tmp):
                               price_cents=300, is_free_teaser=False, enabled=False, pricing_mode="fixed"))
         for mid in range(7001, 7008):
             text = "bare feet and soles" if mid < 7007 else "selfie in the mirror"
-            s.add(VaultItem(account_id=ACCOUNT, media_id=mid, kind="photo", description=text, search_text=text,
+            s.add(VaultItem(account_id=ACCOUNT, media_id=mid, kind="photo", updated_at_of="2026-10-31T00:00:00+00:00", description=text, search_text=text,
                             tags="[]", created_at=now - timedelta(days=1)))
 
     async def reset_offers(ages):

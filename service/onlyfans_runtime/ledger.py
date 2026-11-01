@@ -77,6 +77,7 @@ def deferred_reason_code(reason):
         "provider read backoff": "provider-backoff",
         "provider read budget exhausted": "budget-exhausted",
         "provider ledger turn due": "ledger-turn-due",
+        "provider read reserved for starved lane": "starved-lane-turn",
     }.get(str(reason or ""), "deferred")
 
 

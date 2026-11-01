@@ -43,7 +43,7 @@ async def exercise():
             s.add(Message(account_id=account,fan_id=fan,message_id=5001,direction="in",
                           body="show me something tonight, what do u have for me" if explicit else "I love your gym workout photos",created_at=now-timedelta(seconds=60)))
             for mid in range(7001,7008):
-                s.add(VaultItem(account_id=account,media_id=mid,kind="photo",description="gym workout mirror photo, creator alone",
+                s.add(VaultItem(account_id=account,media_id=mid,kind="photo",updated_at_of="2026-10-31T00:00:00+00:00",description="gym workout mirror photo, creator alone",
                     search_text="gym workout mirror photo, creator alone",tags="[]",created_at=now-timedelta(days=1)))
             if current == "live":
                 s.add(VaultSend(account_id=account,fan_id=fan,media_id=7001,message_id=4000,

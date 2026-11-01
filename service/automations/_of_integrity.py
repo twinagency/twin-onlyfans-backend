@@ -147,12 +147,11 @@ def rating_allowed(request_texts, attachment_states) -> bool:
 # ── fan corrections (explicit evidence only) ──────────────────────────────
 _NAME = r"([A-Z][a-zA-Z'\-]{1,24})"
 _CORRECTIONS = (
-    ("real_name", re.compile(r"\b(?:my\s+name\s+(?:is|'s)|i\s*'?m\s+called|call\s+me|it\s*'?s)\s+" + _NAME + r"\s*(?:,|\.|!|$|\s+not\b)"), 1),
+    ("real_name", re.compile(r"\b(?:my\s+name\s+(?:is|'s)|i\s*'?m\s+called|call\s+me)\s+" + _NAME + r"\s*(?:,|\.|!|$|\s+not\b)"), 1),
     ("real_name", re.compile(r"\bnot\s+[A-Z][a-zA-Z'\-]{1,24}\s*,?\s*(?:it\s*'?s|my\s+name\s+is|i\s*'?m)\s+" + _NAME), 1),
     ("his_age", re.compile(r"\b(?:i\s*'?m|i\s+am|im)\s+(\d{2})\s*(?:,|\.|!|$|\s+not\b|\s+years?)", re.I), 1),
     ("his_age", re.compile(r"\bactually\s+(?:i\s*'?m|i\s+am|im)\s+(\d{2})\b", re.I), 1),
 )
-_FIELD_PATTERN_NEEDS_CORRECTION = {"his_age": False}
 
 
 def detect_fan_corrections(text) -> list[dict]:
@@ -194,15 +193,17 @@ def creator_age_line(facts) -> str | None:
     return str(age) if age not in (None, "") else None
 
 
-def register_header(persona, texter_noun, *, age_from_persona, onlyfans) -> str:
-    """The 'HOW YOU TEXT' header. Byte-identical to the legacy line unless ``onlyfans`` and no age is known.
+def register_header(texter_noun, *, onlyfans, verified_age, legacy_age) -> str:
+    """The 'HOW YOU TEXT' header.
 
-    ``age_from_persona`` is the persona's own age (None when the persona states none). On an OnlyFans
-    route with no stated age the invented default is dropped: the header describes a voice, not an age.
+    Legacy (not ``onlyfans``): byte-identical to the old line, using ``legacy_age`` (persona_register_age).
+    OnlyFans: the age appears only when the prompt itself carries a verified one (``verified_age``, read from the
+    facts table including its '- Age: N' bullet); otherwise the header describes a voice, not an age.
     """
-    if age_from_persona is not None or not onlyfans:
-        age = age_from_persona if age_from_persona is not None else 22
-        return f"HOW YOU TEXT (a real {age}yo {texter_noun}, not an assistant):\n"
+    if not onlyfans:
+        return f"HOW YOU TEXT (a real {legacy_age}yo {texter_noun}, not an assistant):\n"
+    if verified_age is not None:
+        return f"HOW YOU TEXT (a real {verified_age}yo {texter_noun}, not an assistant):\n"
     return "HOW YOU TEXT (the approved creator's casual voice, not an assistant):\n"
 
 

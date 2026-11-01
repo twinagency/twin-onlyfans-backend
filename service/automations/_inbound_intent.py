@@ -170,7 +170,10 @@ def classify_inbound_intent(message, context=None) -> IntentResult:
     business = _BUSINESS.search(text) is not None
     if business and not customer_intent and not (found & {"ad_tag", "editor_markup", "cross_fan_repeat", "echo_our_outbound"}):
         return IntentResult(BUSINESS, ordered, points, "business_enquiry", customer_intent)
-    if content and points >= 3 and len(found) >= 2 and not customer_intent:
+    content_points = sum(_WEIGHT[x] for x in content)
+    # Account status counts as a supporting kind only once content evidence already reaches the threshold.
+    kinds = len(content) + (1 if "creator_status" in found and content_points >= 3 else 0)
+    if content_points >= 3 and kinds >= 2 and not customer_intent:
         return IntentResult(PROMO, ordered, points, "multiple_independent_promo_signals", customer_intent)
     if content and customer_intent:
         return IntentResult(AMBIGUOUS, ordered, points, "promo_signals_mixed_with_customer_intent", customer_intent)

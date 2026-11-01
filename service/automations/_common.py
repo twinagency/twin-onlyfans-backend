@@ -506,7 +506,7 @@ def source_self_heal_set(subscribed_on, subscribed_by) -> dict:
 # BUNDLE", onlyfans.com/…). A real fan types into the plain chat box and his
 # message arrives as bare <p>text</p> — across 73 of Ava's flagged fans only 3
 # ever emitted one of these, against 44 of jaka's 63 known blasters.
-_PROMO_MARKERS = ("m-editor-", "onlyfans.com", "<strong>", "<em>")
+from ._inbound_intent import LEGACY_PROMO_MARKERS as _PROMO_MARKERS  # one marker list (R7)
 
 
 async def load_promo_spam_ids(account_id) -> set[int]:
@@ -541,6 +541,24 @@ async def load_promo_spam_ids(account_id) -> set[int]:
                    ).exists())
         )).all()
     return {int(r[0]) for r in rows}
+
+
+def intent_context_for_fan(fan, **extra):
+    """IntentContext from a Fan row (R7). Repeats/echo are supplied by callers that can see other chats."""
+    from ._inbound_intent import IntentContext
+    return IntentContext(
+        sender_is_creator=(getattr(fan, "source", "") or "") == "creator_we_follow",
+        lifetime_spend_cents=int(getattr(fan, "lifetime_spend_cents", 0) or 0),
+        our_replies=int(getattr(fan, "turn_counter", 0) or 0), **extra)
+
+
+def message_withheld_as_promo(fan, body, **extra) -> bool:
+    """True when this specific inbound message is confirmed promotional/business traffic (R7).
+
+    Complements, never replaces, load_promo_spam_ids: that is the fan-level conservative filter; this is
+    the per-message classification. Ambiguous and buyer messages are never withheld."""
+    from ._inbound_intent import classify_inbound_intent
+    return classify_inbound_intent(body, intent_context_for_fan(fan, **extra)).suppress_reply
 
 
 def should_skip_muted_creator(fan) -> bool:

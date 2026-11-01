@@ -122,6 +122,24 @@ def run_modules(all_postgres, hosted_smoke, env, *, report=None, module_timeout=
             )
             for node in ast.walk(tree)
         )
+        # A pytest module need not import pytest: plain assertions and imported
+        # fixtures are sufficient. Running such a file as a script exits zero
+        # without executing any of its test bodies.
+        has_tests = any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+            for node in tree.body
+        )
+        script_entrypoint = any(
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare)
+            and isinstance(node.test.left, ast.Name)
+            and node.test.left.id == "__name__"
+            and any(isinstance(value, ast.Constant) and value.value == "__main__"
+                    for value in node.test.comparators)
+            for node in tree.body
+        )
+        uses_pytest = uses_pytest or (has_tests and not script_entrypoint)
         command = [sys.executable]
         if uses_pytest:
             command += ["-m", "pytest", "-q"]

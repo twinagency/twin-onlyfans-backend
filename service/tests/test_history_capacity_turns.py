@@ -85,5 +85,26 @@ class HistoryCapacityTests(unittest.TestCase):
         self.assertEqual(report.held,1)
         worker._deliver.assert_not_called()
 
+    def test_active_account_history_runs_before_a_deferred_read(self):
+        worker=object.__new__(NativeWorker)
+        worker.store=SimpleNamespace()
+        worker.tenant_id='tenant'
+        worker.accounts=[SimpleNamespace(account_id='account',read_connection_revision=None,reader=object())]
+        worker.accounts_per_cycle=1
+        worker._cursor=0
+        worker._lock=threading.Lock()
+        worker._role=Mock();worker._heartbeat=Mock()
+        worker.authority=SimpleNamespace(expire_dispatches=Mock(return_value=0),repair=Mock(return_value=0))
+        worker.facts_reader=None
+        order=[]
+        worker._history_turn=Mock(side_effect=lambda *a,**kw:order.append('history'))
+        worker._read_progress=Mock(side_effect=lambda *a,**kw:order.append('recent'))
+        worker._deliver=Mock()
+        with patch('onlyfans_runtime.delivery_resolution_jobs.poll'):
+            report=worker.step()
+        self.assertEqual(order,['history','recent'])
+        self.assertEqual(report.held,1)
+        worker._deliver.assert_not_called()
+
 
 if __name__=='__main__':unittest.main()

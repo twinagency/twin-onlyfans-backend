@@ -101,7 +101,7 @@ def test_check_local_accepts_any_listed_open_offer(tmp_path):
       CREATE TABLE content_offers(account_id,fan_id,status,mode,item_id);
       CREATE TABLE pending_offer(account_id,fan_id);
       CREATE TABLE twin_bridge_send_attempts(account_id,fan_id,state);
-      CREATE TABLE twin_bridge_turns(account_id,state);
+      CREATE TABLE twin_bridge_turns(account_id,fan_id,state);
       INSERT INTO accounts VALUES('a');
       INSERT INTO content_offers VALUES('a',5,'open','ppv',2);""")
     con.commit(); con.close()

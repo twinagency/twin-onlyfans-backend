@@ -97,6 +97,7 @@ def test_origin_before_projection_also_excluded_and_other_fans_are_scoped(shelf)
 
 def test_curated_picker_filters_previous_paid_card_too(shelf, monkeypatch):
     monkeypatch.setattr(packs,"_live_of_kind",AsyncMock(side_effect=lambda a,m,k:m))
+    monkeypatch.setattr(packs,"_ready_only",AsyncMock(side_effect=lambda a,m,c:m))   # readiness has its own tests
     monkeypatch.setattr(packs.content_resolver,"solo_only",AsyncMock(side_effect=lambda a,m:m))
     monkeypatch.setattr(packs,"spend_bounds",AsyncMock(return_value=(1000,3)))
     monkeypatch.setattr(packs,"rank_by_tier",AsyncMock(side_effect=lambda a,m,t:m))

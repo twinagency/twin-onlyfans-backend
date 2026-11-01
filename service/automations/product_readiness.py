@@ -30,14 +30,17 @@ _REJECTED_REVIEW = frozenset({"rejected", "hidden", "removed", "blocked"})
 
 
 def meaningful_description(text: str | None) -> bool:
-    """False for empty text, a bare type word, or text with fewer than two distinct content words."""
+    """False for empty text, a bare type word, or text with no content word."""
     words = [w for w in _WORD.findall(str(text or "").lower()) if w not in _PLACEHOLDERS]
-    return len(set(words)) >= 2
+    return len(set(words)) >= 1
 
 
-def best_description(item) -> str:
-    """The first meaningful of video_description / description / search_text, else ''."""
-    for field_name in ("video_description", "description", "search_text"):
+def best_description(item, *, prefer_search: bool = False) -> str:
+    """The first meaningful of video_description / description / search_text, else ''.
+    ``prefer_search`` puts the denormalised search blob first (retrieval ranking reads that)."""
+    order = ("search_text", "video_description", "description") if prefer_search else (
+        "video_description", "description", "search_text")
+    for field_name in order:
         value = " ".join(str(getattr(item, field_name, None) or "").split())
         if meaningful_description(value):
             return value
@@ -120,10 +123,11 @@ def item_price_cents(item, ladder_cents: int | None = None) -> int | None:
     return ladder_cents if isinstance(ladder_cents, int) and ladder_cents > 0 else None
 
 
-def ready_ids(items, *, account_id, cfg=None, bought=frozenset(), offered=frozenset(), limits=()) -> set[int]:
+def ready_ids(items, *, account_id, cfg=None, bought=frozenset(), offered=frozenset(), limits=(),
+              price_source=None) -> set[int]:
     cfg = cfg or {}
     currency = str(cfg.get("currency") or DEFAULT_CURRENCY)
-    source = "pack_ladder" if cfg.get("pack_send_enabled") else None
+    source = price_source or ("pack_ladder" if cfg.get("pack_send_enabled") else None)
     return {int(i.media_id) for i in items
             if item_readiness(i, account_id=account_id, price_cents=item_price_cents(i), currency=currency,
                               bought=bought, offered=offered, limits=limits, price_source=source).ready}

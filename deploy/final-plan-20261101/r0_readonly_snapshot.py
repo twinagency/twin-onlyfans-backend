@@ -28,6 +28,9 @@ CONFIG_KEYS = (
     "max_offers_per_fan_per_day", "min_fan_msgs_between_offers", "haggle_discount_pct",
     "teaser_discount_pct", "spend_velocity_cap_7d_cents", "persona_facts_on_ask_only",
 )
+# Style switches (account_ai_config.style_config_json). painful_texting is the
+# brevity governor ("write the LEAST", "a line that PUNCHES beats one that explains"); default ON.
+STYLE_KEYS = ("painful_texting", "strip_emojis", "factground_welcome_chatter_for_info", "sell_customs")
 
 
 def _url() -> str:
@@ -102,17 +105,23 @@ def snapshot(engine) -> dict:
                 for r in _rows(con, f"SELECT account_id, {', '.join(want)} FROM {t}"):
                     acc.setdefault(r["account_id"], {})[t] = {k: _jsonable(v) for k, v in r.items()
                                                               if k != "account_id"}
+            def _blob(v):
+                if isinstance(v, str):
+                    try:
+                        v = json.loads(v)
+                    except ValueError:
+                        v = {}
+                return v if isinstance(v, dict) else {}
+
             if "account_ai_config" in tables and "ai_chatter_config_json" in cols("account_ai_config"):
-                for r in _rows(con, "SELECT account_id, ai_chatter_config_json AS cfg FROM account_ai_config"):
-                    cfg = r["cfg"]
-                    if isinstance(cfg, str):
-                        try:
-                            cfg = json.loads(cfg)
-                        except ValueError:
-                            cfg = {}
-                    cfg = cfg if isinstance(cfg, dict) else {}
-                    acc.setdefault(r["account_id"], {})["config"] = {
-                        k: cfg.get(k, "<missing>") for k in CONFIG_KEYS}
+                style = ", style_config_json AS style" if "style_config_json" in cols("account_ai_config") else ""
+                for r in _rows(con, f"SELECT account_id, ai_chatter_config_json AS cfg{style} FROM account_ai_config"):
+                    cfg = _blob(r["cfg"])
+                    entry = acc.setdefault(r["account_id"], {})
+                    entry["config"] = {k: cfg.get(k, "<missing>") for k in CONFIG_KEYS}
+                    if style:
+                        st = _blob(r["style"])
+                        entry["style"] = {k: st.get(k, "<missing>") for k in STYLE_KEYS}
             else:
                 out["unavailable"].append("account_ai_config.ai_chatter_config_json")
 

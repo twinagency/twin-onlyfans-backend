@@ -2,7 +2,7 @@
 
 Goal: improve the meaning and evidence of fan memories and account for model failures accurately, within the saved daily caps.
 
-Source implementation: c9da4d75081f0631dab1ba689a3ff59708307b6a, based on 766977a68fc0c43f8b35dfcaac70ff7acf94fb73. Existing rate and history changes remain in PR #77. Apply the focused overlay to the current engine rather than deploying this historical branch wholesale.
+Latest source implementation: 2c30b6f17f3099cc7c6c28b2ef795fc337b7fc01. Initial accounting/memory implementation: c9da4d75081f0631dab1ba689a3ff59708307b6a, based on 766977a68fc0c43f8b35dfcaac70ff7acf94fb73. Existing rate and history changes remain in PR #77. Apply the focused overlay to the current engine rather than deploying this historical branch wholesale.
 
 ## Behavior
 
@@ -16,17 +16,17 @@ Source implementation: c9da4d75081f0631dab1ba689a3ff59708307b6a, based on 766977
 
 ## Verified deployment
 
-Deployed 2 November 2026 at 02:19:31 Brisbane over the exact existing API/worker images, under both release locks, with unchanged schema, read policy and daily caps.
+Initial deployment 2 November 2026 at 02:19:31 Brisbane; temporary-work follow-up deployed at 02:27:19 Brisbane over the exact existing API/worker images, under both release locks, with unchanged schema, read policy and daily caps.
 
-Worker/importer/learner: sha256:1b823e21ee9fd308ee5f86959c99d2417e84d63334e423ff1e43670175fc791c
+Worker/importer/learner: sha256:f728669d70d9fcb89e34ced38e7efe808311293d0b175422b004a46114284fe5
 
-API: sha256:d95d300aad9dc7352b3aaa664437db62e9f2d43a6cb0aed3a1301f8e8deded0c
+API: sha256:04532a2d90349893407c08c77a883a6cc62c9ed8386d4eb29b21ab3fc9ef9975
 
-All four services running with zero restarts after deployment. Reply supervisor remains stopped. Candidate source hashes matched committed source. A private profile projection snapshot preceded the repair. Eighteen affected profiles were rebuilt across six stored accounts, including one paused account's stored data. This is a targeted repair count, not complete memory coverage.
+All four services running with zero restarts after deployment. Reply supervisor remains stopped. Candidate source hashes matched committed source. A private profile projection snapshot preceded the repair. Twenty affected profiles were rebuilt across six stored accounts, including one paused account's stored data. This is a targeted repair count, not complete memory coverage.
 
 ## Validation
 
-123 tests and four subtests passed against disposable PostgreSQL plus existing SQLite rehearsals in 144.15 seconds. Covered successful and malformed output, incomplete output, timeouts, HTTP rejection, zero reported cost, undispatched calls, missing usage, evidence/polarity, distinct topic keys, subject and temporal attribution, manual corrections, source withdrawal, queue locking, original-day settlement, mismatched generation rejection and repeat-safe reconciliation. Existing datetime deprecation warnings remain.
+123 tests and four subtests passed against disposable PostgreSQL plus existing SQLite rehearsals in 144.15 seconds. Covered successful and malformed output, incomplete output, timeouts, HTTP rejection, zero reported cost, undispatched calls, missing usage, evidence/polarity, distinct topic keys, subject and temporal attribution, manual corrections, source withdrawal, queue locking, original-day settlement, mismatched generation rejection and repeat-safe reconciliation. The final follow-up passed 89 targeted tests plus four subtests in 57.56 seconds, adding four temporary-work wording cases and a concrete-occupation preservation check. Live projection checks confirmed temporary work and the joke alias no longer appear as occupations/identity, while a normalized supported preference remains. Existing datetime deprecation warnings remain.
 
 ## Billing limitations
 

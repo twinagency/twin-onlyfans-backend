@@ -121,8 +121,15 @@ def history_text(value):
     try:
         return plain_text(value)
     except NativeProtocolError:
-        if (type(value) is not str or len(value.encode()) > 20000
-                or not value.startswith("<p>") or not value.endswith("</p>")):
+        if type(value) is not str or len(value.encode()) > 20000:
+            raise NativeProtocolError("unsupported native history formatting") from None
+        # Older archive bodies contain bare text separated by BR tags, without
+        # a paragraph wrapper. Accept only those same three known break forms;
+        # other markup still requires the bounded, balanced history parser.
+        unwrapped = value.replace("<br />", "\n").replace("<br/>", "\n").replace("<br>", "\n")
+        if unwrapped != value and "<" not in unwrapped and ">" not in unwrapped:
+            return html.unescape(unwrapped)
+        if not value.startswith("<p>") or not value.endswith("</p>"):
             raise NativeProtocolError("unsupported native history formatting") from None
     parser = _HistoryText()
     parser.feed(value)
@@ -191,3 +198,4 @@ def acceptance(raw,dispatch,*,owner_id,request_bytes):
     evidence="native-local:"+hashlib.sha256(request_bytes).hexdigest()+":"+hashlib.sha256(raw).hexdigest()
     return Accepted(dispatch.account_id,dispatch.fan_id,dispatch.intent_id,dispatch.attempt_id,
         dispatch.payload_hash,event.message_id,event.created_at,evidence)
+

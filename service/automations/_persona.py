@@ -65,6 +65,26 @@ _PERSONA_AGE_LINE_RE = re.compile(r"^[ \t]*age[ \t]*:[ \t]*(\d{1,3})\b", re.I | 
 _PERSONA_AGE_PROSE_RE = re.compile(r"\b(\d{1,3})[\s-]*(?:year[\s-]*old|yo)\b", re.I)
 
 
+_STATED_AGE_BULLET_RE = re.compile(r"^[ \t]*(?:[-*\u2022][ \t]*)?age[ \t]*:[ \t]*(\d{1,3})\b", re.I | re.M)
+
+
+def persona_stated_age(persona: str | None) -> int | None:
+    """The age the prompt's persona/facts state (valid range, '- Age: N' bullet included), or None.
+    No default is invented here; used only on OnlyFans routes."""
+    for rx in (_STATED_AGE_BULLET_RE, _PERSONA_AGE_PROSE_RE):
+        m = rx.search(persona or "")
+        if m and 18 <= int(m.group(1)) <= 99:
+            return int(m.group(1))
+    return None
+
+
+def onlyfans_facts_scope() -> bool:
+    """R3 switch: on OnlyFans routes an unknown creator age stays unknown (no default 22yo header).
+    ONLYFANS_FACTS_SCOPE=0 restores the legacy header byte for byte."""
+    import os
+    return os.environ.get("ONLYFANS_FACTS_SCOPE", "1") != "0"
+
+
 def persona_register_age(persona: str | None) -> int:
     """Age for the HOW-YOU-TEXT register line. Never a claim about the creator —
     see the note above. Falls back to DEFAULT_REGISTER_AGE when the persona has

@@ -108,9 +108,10 @@ from ._leash import (  # noqa: F401 — re-exported for fans.py / tests
 from ._markers import protocol_marker_re
 from ._persona import (
     asks_about_her as _persona_asks_about_her, fan_claims_block,
-    persona_register_age,
+    persona_register_age, persona_stated_age, onlyfans_facts_scope,
 )
 from ._outbound import ConsistencyCtx, finalize_draft
+from . import _of_integrity  # R3: OnlyFans facts/attachment helpers (pure)
 from . import _language
 from . import _customs
 from . import _life_tip  # the life-expense tip ask: cadence + block (pure)
@@ -152,7 +153,7 @@ from ._common import (
     load_nonnative_flags, load_spacing_flags,
     load_painful_texting_flag, load_strip_emojis, load_style_flags,
     load_typing_indicator, load_typing_wpm, load_typo_flags,
-    load_promo_spam_ids,
+    load_promo_spam_ids, message_withheld_as_promo,
     detect_pic_offer,
     content_payer_fans,
     quarantine_if_undeliverable, recent_payer_fans, resolve_fan_name, resolve_model,
@@ -7180,7 +7181,8 @@ def _build_messages(persona: str, f: Fan, c: _Cand, asked: set[str],
     persona_head, bio_facts = (
         (persona, "") if canon == "keep" else _prompt_shape.split_facts(persona))
     register_intro = ("HOW YOU TEXT (the approved creator's casual voice):\n" if truthful else
-                      f"HOW YOU TEXT (a real {persona_register_age(persona)}yo {v.texter_noun}, not an assistant):\n")
+                      _of_integrity.register_header(v.texter_noun, verified_age=persona_stated_age(persona), legacy_age=persona_register_age(persona),
+                                                    onlyfans=onlyfans_facts_scope()))
     bio_rule = ("CREATOR FACTS: use only the approved profile. Do not invent "
                 "personal events or unknown details. Never mention AI, bots, clones or automation, and never claim or swear to be human."
                 + (" Never state what a photo or video shows unless it is described to you "
@@ -7836,7 +7838,7 @@ async def _select_candidates(inp: _SelectionInputs) -> "tuple[list[_Cand], Count
             continue
         if not forced:
             if f is not None:
-                if fan_id in promo_spam:
+                if fan_id in promo_spam or message_withheld_as_promo(f, c.last_body or ""):
                     sel["skipped_spam"] += 1
                     continue
                 if int(f.lifetime_spend_cents or 0) >= gate_cents:

@@ -104,7 +104,7 @@ from ._common import (
     load_nonnative_flags, load_spacing_flags, load_strip_emojis, load_style_flags, load_tip_ask_config,
     load_typing_indicator, load_typing_wpm, load_typo_flags, push_nick_and_notes,
     quarantine_if_undeliverable, resolve_fan_name, resolve_model,
-    load_promo_spam_ids,
+    load_promo_spam_ids, message_withheld_as_promo,
     should_skip_muted_creator, skip_unreachable_fan,
     typing_delay_seconds,
     TURN_NEUTRAL_KINDS, _REACTION_TAG,
@@ -115,9 +115,10 @@ from ._wordfilter import (  # compliance word filter
 from ._clock import clock_block, clock_line, load_clock_tz
 from ._persona import (
     claims_to_scalars, compose_persona, fan_claims_block, mentions_self_claim,
-    merge_persona_claims, parse_persona_claims, persona_register_age,
+    merge_persona_claims, parse_persona_claims, persona_register_age, persona_stated_age, onlyfans_facts_scope,
 )
 from ._outbound import ConsistencyCtx, finalize_draft
+from . import _of_integrity  # R3: OnlyFans facts/attachment helpers (pure)
 from . import cat_stickers  # reaction-gif pack (same roll/parse/send seam as ai_chatter)
 from . import gen_info  # profile_is_stale() — the refresh-if-stale hook below
 from . import sell_lane  # THE gate every priced send passes through
@@ -1168,8 +1169,7 @@ def _build_messages(persona: str, f: Fan, c: _Candidate,
         # The age here is the VOICE (text young and casual), not a claim about
         # her — derived from the persona so a 49yo persona isn't told to text
         # like a 22-year-old. See _common.persona_register_age.
-        f"HOW YOU TEXT (a real {persona_register_age(persona)}yo {v.texter_noun}, "
-        "not an assistant):\n"
+        f"{_of_integrity.register_header(v.texter_noun, verified_age=persona_stated_age(persona), legacy_age=persona_register_age(persona), onlyfans=onlyfans_facts_scope())}"
         "- short and casual: lowercase, u/ur/ya. react to what he said first.\n"
         "- VARY it — never reuse an opener, phrase, or emoji from this chat.\n"
         "- at most ONE question, never one he already answered (vague answer → "
@@ -1851,7 +1851,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             # account for five weeks. load_promo_spam_ids() now demands actual promo
             # evidence too. REVERSIBLE skip (no skip_list / gen_info write) — if they
             # ever spend or we get a real exchange, the next tick reconsiders them.
-            if fan_id in promo_spam:
+            if fan_id in promo_spam or message_withheld_as_promo(f, c.last_body or ""):
                 skipped_spam += 1
                 continue
             # He bought CONTENT → he is a customer, hand him to the seller. A

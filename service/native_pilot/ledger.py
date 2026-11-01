@@ -1495,8 +1495,15 @@ class Ledger:
         if not pending:
             return pending
         with store.readonly(self.path) as con:
-            rows = con.execute("SELECT message_id,member_ids_json FROM native_pilot_inputs "
-                               "WHERE pilot_id=? AND state='complete'", (pilot_id,)).fetchall()
+            # R3: handled means handled for this account/fan, not only for this pilot instance. A resumed
+            # conversation starts a new pilot; a question the earlier pilot already examined and handed to a
+            # human must not trigger the handoff again.
+            rows = con.execute(
+                "SELECT i.message_id,i.member_ids_json FROM native_pilot_inputs i "
+                "JOIN native_pilots p ON p.pilot_id=i.pilot_id "
+                "WHERE i.state='complete' AND (i.pilot_id=? OR (p.account_id=(SELECT account_id FROM native_pilots WHERE pilot_id=?) "
+                "AND p.fan_id=(SELECT fan_id FROM native_pilots WHERE pilot_id=?)))",
+                (pilot_id, pilot_id, pilot_id)).fetchall()
         for row in rows:
             members = json.loads(row["member_ids_json"] or "[]")
             pending.difference_update(int(mid) for mid in members)

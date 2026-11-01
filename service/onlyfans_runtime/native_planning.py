@@ -89,7 +89,8 @@ def _native_messages(context):
     candidate = native._Cand(fan.fan_id)
     for message in context["messages"]:
         stamp = datetime.fromisoformat(message["created_at"])
-        candidate.add_message(message["direction"], message["body"], message["message_id"], stamp)
+        # R3: an inbound attachment note (received/processing/described/unsupported/failed) rides the history line.
+        candidate.add_message(message["direction"], message.get("model_body", message["body"]), message["message_id"], stamp)
         if message["direction"] == "in":
             candidate.last_in_text = message["body"]
             candidate.fan_msg_n += 1
@@ -110,6 +111,9 @@ def _native_messages(context):
                                          bot_accused=bot_accused, kind=kind,
                                          v=_voice.blocks(cfg.voice, sell_customs=False),
                                          lang=language)
+    from automations import _of_integrity
+    if messages and messages[0].get("role") == "system":
+        messages[0] = {**messages[0], "content": messages[0]["content"] + _of_integrity.onlyfans_rules()}
     memory = context.get("historicalMemory")
     # Older source excerpts and operator overrides only; canonical facts already reach the composer above.
     if memory and (memory.get("learnedProfile") or memory["interactions"] or memory["overrides"]
@@ -139,6 +143,18 @@ async def _draft(context, messages, model, timeout):
     from native_pilot.media_claims import echoes_instruction
     if echoes_instruction(text):
         raise Refused("instruction text held")
+
+    from automations import _of_integrity
+    if _of_integrity.unsafe_identity_claim(text):
+        raise Refused("identity claim held")
+    intent = context.get("inboundIntent") or {}
+    if _of_integrity.looks_like_rating(text) and not intent.get("ratingAllowed"):
+        raise Refused("unsolicited rating held")
+    # Fan-authored explicit corrections are evidence; promo/business traffic never writes personal memory.
+    if intent.get("memoryBlocked"):
+        memory = {**memory, "facts": [], "profile": None}
+    else:
+        memory = _of_integrity.merge_corrections(memory, context["messages"][-1]["body"])
     sale = memory.pop("sale", None)
     if sale is not None:
         from .native_sales import caption
@@ -164,6 +180,81 @@ async def _draft(context, messages, model, timeout):
         if echoes_instruction(text.replace(generated, "")):
             raise Refused("instruction text held")
     return text, memory, sale
+
+
+def review_inbound(session, account_id, fan_id, rows, fan, now):
+    """R3/R7 review of the unanswered inbound burst (oldest first). Adds ``model_body`` (attachment notes)
+    to each row, classifies each unanswered message on its own and decides whether a customer reply is allowed.
+    """
+    from automations import _of_integrity
+    from automations._inbound_intent import (IntentContext, classify_inbound_intent, signals_of,
+                                             _CONTENT, PROMO, BUSINESS)
+    from native_pilot.identity import sincere_identity_question
+    burst = []
+    for row in reversed(rows):
+        if row["direction"] != "in":
+            break
+        burst.append(row)
+    burst.reverse()
+    base = IntentContext(sender_is_creator=(getattr(fan, "source", "") or "") == "creator_we_follow",
+                         lifetime_spend_cents=int(getattr(fan, "lifetime_spend_cents", 0) or 0),
+                         our_replies=int(getattr(fan, "turn_counter", 0) or 0))
+    window = now - timedelta(hours=24)
+    results, states, cases = [], [], []
+    for row in rows:
+        if row["direction"] == "in":
+            kind = _of_integrity.attachment_kind(row.get("raw_json"))
+            state = _of_integrity.attachment_state(row.get("media_count"), row.get("image_desc"), kind, row["created_at"], now)
+            if state is not None:
+                row["model_body"] = _of_integrity.attachment_note(state, kind, row.get("image_desc"), row.get("media_count") or 1)
+                row["model_body"] = (row["body"] + " " + row["model_body"]).strip() if (row["body"] or "").strip() else row["model_body"]
+            else:
+                row["model_body"] = row["body"]
+            row["attachment"] = {"state": state, "kind": kind} if state else None
+        else:
+            row["model_body"] = row["body"]
+    for row in burst:
+        text = row["body"] or ""
+        ctx = base
+        if signals_of(text, base) & _CONTENT and text.strip():
+            # Cross-chat evidence is only fetched for messages that already carry a promotional signal.
+            others = session.scalar(select(func.count(func.distinct(Message.fan_id))).where(
+                Message.account_id == account_id, Message.direction == "in", Message.body == text,
+                Message.fan_id != fan_id, Message.created_at >= window))
+            echo = session.scalar(select(func.count()).select_from(Message).where(
+                Message.account_id == account_id, Message.direction == "out", Message.body == text,
+                Message.created_at >= now - timedelta(days=7))) > 0
+            own = sum(1 for r in rows if r["direction"] == "in" and r["body"] == text)
+            ctx = IntentContext(**{**base.__dict__, "same_text_other_fans": int(others or 0),
+                                   "same_text_self_count": own, "equals_our_recent_outbound": echo})
+        result = classify_inbound_intent(text, ctx)
+        results.append(result)
+        states.append(row.get("attachment") and row["attachment"]["state"])
+    latest = results[-1] if results else None
+    withheld = None
+    if results and all(r.suppress_reply for r in results):
+        withheld = "business_no_reply" if any(r.label == BUSINESS for r in results) else "promo_no_reply"
+        if any(r.label == BUSINESS for r in results):
+            cases.append({"kind": "business_enquiry", "reason": "business_enquiry_needs_person",
+                          "dedupe_key": f"business:{account_id}:{fan_id}:{burst[-1]['message_id']}",
+                          "evidence": latest.as_json(), "source_message_id": burst[-1]["message_id"]})
+    for row in burst:
+        if sincere_identity_question(row["body"]):
+            cases.append({"kind": "identity_question", "reason": "fan_asked_if_automated_or_human",
+                          "dedupe_key": f"identity:{account_id}:{fan_id}:{row['message_id']}",
+                          "evidence": {}, "source_message_id": row["message_id"]})
+    if any(st in (_of_integrity.FAILED,) for st in states):
+        bad = [r for r, st in zip(burst, states) if st == _of_integrity.FAILED][-1]
+        cases.append({"kind": "attachment_unreadable", "reason": "inbound_attachment_not_described",
+                      "dedupe_key": f"attachment:{account_id}:{fan_id}:{bad['message_id']}",
+                      "evidence": {"messageId": bad["message_id"]}, "source_message_id": bad["message_id"]})
+    texts = [r["body"] for r in burst]
+    intent = {"latest": latest.label if latest else None,
+              "labels": [r.label for r in results],
+              "memoryBlocked": bool(latest is not None and not latest.allows_memory_write),
+              "ratingAllowed": _of_integrity.rating_allowed(texts, [st for st in states if st]),
+              "withheld": withheld}
+    return {"withheld": withheld, "inboundIntent": intent, "cases": cases}
 
 
 class NativeTextPlanner:
@@ -228,13 +319,34 @@ class NativeTextPlanner:
                 raise Refused("shared creator facts are not current")
             if snapshot["config"] is None:
                 raise Refused("approved creator configuration is required")
-            messages = s.execute(select(Message.message_id, Message.direction, Message.body, Message.created_at).where(
+            messages = s.execute(select(Message.message_id, Message.direction, Message.body, Message.created_at,
+                Message.media_count, Message.image_desc, Message.raw_json).where(
                 Message.account_id == claim.account_id, Message.fan_id == claim.fan_id,
                 Message.is_unsent.is_(False)).order_by(Message.created_at.desc(), Message.message_id.desc()).limit(100)).mappings().all()
             if (not messages or messages[0]["direction"] != "in"
                     or messages[0]["message_id"] != claim.target_message_id):
                 raise Refused("native input has moved on")
-            context = {**snapshot, "account_id": claim.account_id, "messages": list(reversed([dict(row) for row in messages]))}
+            ordered = list(reversed([dict(row) for row in messages]))
+            review = review_inbound(s, claim.account_id, claim.fan_id, ordered, s.get(Fan, (claim.account_id, claim.fan_id)), now)
+            from .operator_case_port import open_operator_case
+            for case in review["cases"]:
+                open_operator_case(account_id=claim.account_id, fan_id=claim.fan_id, **case)
+            if review["withheld"] is not None:
+                # Confirmed promotional/business traffic: no customer reply, no model call, no memory. Raw
+                # messages are untouched; the decision is recorded on the plan row and recomputed from the
+                # raw text on any later input, so it is reviewable and reversible.
+                identity = str(uuid.uuid4())
+                s.add(OfNativePlan(account_id=claim.account_id, plan_id=identity, fan_id=claim.fan_id,
+                    binding_id=runtime.binding_id, work_generation=claim.generation, input_revision=claim.input_revision,
+                    claim_json=canonical(asdict(claim)), context_json=canonical({"inboundIntent": review["inboundIntent"]}),
+                    context_hash=fingerprint, planner_version=PLANNER_VERSION, model_id=model.model_id,
+                    status="refused", reason=review["withheld"], created_at=now, expires_at=now+timedelta(seconds=60)))
+                work.status, work.lease_token, work.lease_until = "blocked", None, None
+                return identity
+            for row in ordered:
+                for key in ("media_count", "image_desc", "raw_json"):
+                    row.pop(key, None)
+            context = {**snapshot, "account_id": claim.account_id, "messages": ordered, "inboundIntent": review["inboundIntent"]}
             if policy.media_enabled:
                 from .native_sales import candidates
                 context["sales"] = candidates(s, claim.account_id, claim.fan_id, now)

@@ -35,6 +35,25 @@ class ReportedFanRecovery(HistoryRecovery):
    self._binding(row,runtime);self._lease(row,now)
    return ArchiveClaim(account_id,runtime.binding_id,FAN,row.generation,row.lease_token,row.before_id,connection_revision)
 
+ def step(self,tenant_id,account_id,reader,*,connection_revision=None):
+  from onlyfans_runtime.worker import _provider_claim,_release_provider
+  from onlyfans_runtime.provider_read_budget import ReadDeferred
+  from onlyfans_runtime.read_failures import failure_code
+  budget=error=claim=None
+  try:
+   budget=_provider_claim(self.store,tenant_id,account_id,reader,connection_revision,'history')
+   claim=self.claim(tenant_id,account_id,connection_revision=connection_revision)
+   if claim is None:return 0
+   page=reader.messages(fan_id=FAN,before_id=claim.before_id,limit=20)
+   return int(self.page(tenant_id,claim,page.events,has_more=page.has_more,
+       observations=page.observations,provider_read_claim=budget) in {'continue','complete'})
+  except ReadDeferred:return 0
+  except Exception as exc:
+   error=exc
+   if claim is not None:self.fail(tenant_id,claim,code=failure_code(exc))
+   raise
+  finally:_release_provider(self.store,tenant_id,budget,error)
+
 recovery=ReportedFanRecovery(store)
 from onlyfans_runtime.history_repair import inspect,repair
 snapshot=inspect(store,tenant,ACCOUNT,FAN)
@@ -55,5 +74,5 @@ try:
    count,oldest,newest=s.execute(select(func.count(),func.min(Message.created_at),func.max(Message.created_at)).where(Message.account_id==ACCOUNT,Message.fan_id==FAN)).one()
    print(json.dumps({'account':ACCOUNT,'fan':FAN,'status':row.status,'pages':row.pages_completed,'messages':count,'oldest':str(oldest),'newest':str(newest),'lastError':row.last_error}),flush=True)
    if row.status=='complete':break
-  time.sleep(2)
+  time.sleep(0.7)
 finally:store.close()

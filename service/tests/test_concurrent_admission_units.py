@@ -26,10 +26,11 @@ def policy(**kw):
 
 def test_concurrent_migration_is_the_release_head():
     from db import schema
-    assert schema.HEAD == "0103_concurrent_delivery"
+    assert schema.HEAD == "0104_contextual_item_scope"
     assert schema.REVISION_RANK[schema.CONTEXTUAL_OFFERS] == 101
     assert schema.REVISION_RANK[schema.DAILY_SEND_CAP] == 102
     assert schema.REVISION_RANK[schema.CONCURRENT_DELIVERY] == 103
+    assert schema.REVISION_RANK[schema.CONTEXTUAL_ITEM_SCOPE] == 104
 
 
 def session():

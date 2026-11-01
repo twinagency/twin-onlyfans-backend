@@ -504,64 +504,50 @@ class HistoryRecovery:
         from onlyfans_runtime.provider_read_budget import ReadDeferred
         completed = 0
         scan_error = None
-        scan = self.claim_scan(tenant_id, account_id, connection_revision=connection_revision)
-        if scan is not None:
-            budget=error=None
+        # Acquire provider capacity before consuming a fan's queue turn. A busy
+        # reader must not increment generation and send this fan to the back of
+        # tens of thousands of histories without reading a single message.
+        for discovery in (True, False):
+            budget = error = claim = None
             try:
-                try:budget=_provider_claim(self.store,tenant_id,account_id,reader,connection_revision,'history')
-                except ReadDeferred as deferred:
-                    self.fail(tenant_id,scan,code='provider_read_deferred',retry_at=deferred.retry_at)
-                    raise
+                budget = _provider_claim(self.store, tenant_id, account_id, reader,
+                                         connection_revision, 'history')
+                claim = (self.claim_scan if discovery else self.claim)(
+                    tenant_id, account_id, connection_revision=connection_revision)
+                if claim is None:
+                    continue
                 try:
-                    page = reader.chats(cursor=scan.cursor, limit=PAGE_LIMIT)
-                except Exception as failure:
-                    self.fail(tenant_id, scan, code=failure_code(failure),
-                        retry_at=utcnow() + timedelta(seconds=getattr(failure, 'retry_after', RETRY_SECONDS)))
-                    raise
-                try:
-                    fenced={'provider_read_claim':budget} if budget is not None else {}
-                    self.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor,
-                        profiles=page.profiles, creator_profile=page.creator_profile, **fenced)
-                except (Refused, AttributeError):
-                    self.fail(tenant_id, scan, code="invalid_page")
-                    raise
-                completed += 1
-            except ReadDeferred:
-                pass
-            except Exception as failure:
-                # A failed discovery offset must not starve known fan archives.
-                # Each lane still gets at most one call; propagate the error to
-                # the shared worker after committing any independent progress.
-                error=scan_error=failure
-            finally:_release_provider(self.store,tenant_id,budget,error)
-        claim = self.claim(tenant_id, account_id, connection_revision=connection_revision)
-        if claim is not None:
-            budget=error=None
-            try:
-                try:budget=_provider_claim(self.store,tenant_id,account_id,reader,connection_revision,'history')
-                except ReadDeferred as deferred:
-                    self.fail(tenant_id,claim,code='provider_read_deferred',retry_at=deferred.retry_at)
-                    raise
-                try:
-                    page = reader.messages(fan_id=claim.fan_id, before_id=claim.before_id, limit=PAGE_LIMIT)
+                    page = (reader.chats(cursor=claim.cursor, limit=PAGE_LIMIT) if discovery else
+                            reader.messages(fan_id=claim.fan_id, before_id=claim.before_id, limit=20))
                 except Exception as failure:
                     self.fail(tenant_id, claim, code=failure_code(failure),
                         retry_at=utcnow() + timedelta(seconds=getattr(failure, 'retry_after', RETRY_SECONDS)))
                     raise
                 try:
-                    fenced={'provider_read_claim':budget} if budget is not None else {}
-                    result = self.page(tenant_id, claim, page.events, has_more=page.has_more,
-                        observations=page.observations,**fenced)
+                    fenced = {'provider_read_claim': budget} if budget is not None else {}
+                    if discovery:
+                        self.scan_page(tenant_id, claim, page.fan_ids, next_cursor=page.next_cursor,
+                            profiles=page.profiles, creator_profile=page.creator_profile, **fenced)
+                        completed += 1
+                    else:
+                        result = self.page(tenant_id, claim, page.events, has_more=page.has_more,
+                            observations=page.observations, **fenced)
+                        completed += result in {'continue', 'complete'}
                 except (Refused, AttributeError):
-                    self.fail(tenant_id, claim, code="invalid_page")
+                    self.fail(tenant_id, claim, code='invalid_page')
                     raise
-                completed += result in {"continue", "complete"}
             except ReadDeferred:
+                # No archive claim was taken, so its saved cursor and queue
+                # position remain intact. Shared backoff still owns pacing.
                 pass
             except Exception as failure:
-                error=failure
-                raise
-            finally:_release_provider(self.store,tenant_id,budget,error)
+                error = failure
+                if discovery:
+                    scan_error = failure
+                else:
+                    raise
+            finally:
+                _release_provider(self.store, tenant_id, budget, error)
         if scan_error is not None:
             raise scan_error
         return completed

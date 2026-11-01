@@ -236,3 +236,16 @@ def test_agreed_custom_opens_one_case_with_owner_and_deadline(s):
     assert not missing and case.owner == "alex" and case.due_at is not None and case.status == "open"
     again, _ = custom(s)
     assert again.case_id == case.case_id
+
+
+@pytest.mark.parametrize("text,held", [
+    ("i'll have your custom video ready by friday", "deadline-unbacked"),
+    ("sending you the video tomorrow", "deadline-unbacked"),
+    ("i'll film it tonight for you", "deadline-unbacked"),
+    ("i've refunded you babe", "refund-claim-unbacked"),
+    ("see you tomorrow babe", None),
+    ("making dinner tonight, you hungry?", None),
+    ("a teammate will check the refund", None),
+])
+def test_text_boundary_hold(text, held):
+    assert q.boundary_hold(text) == held

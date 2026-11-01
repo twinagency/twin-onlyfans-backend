@@ -9356,6 +9356,13 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
             _wide = lane.wide_ask(c.last_in_text,
                                   _sell_signal.last_outbound(c.messages),
                                   lang=fan_lang, fan_id=fan_id)
+            # R5: a bare yes/thumbs-up that unambiguously accepts a STORED invitation presents THAT invitation's
+            # content (revalidated), instead of re-reading the thread for something to sell. Live contextual mode only.
+            from . import sales_turn as _sales_turn
+            _invited = (await _sales_turn.accept_invitation(lane, c, f)
+                        if _sales_turn.active(cfg) and not _language.is_content_ask(c.last_body, fan_lang) else None)
+            if _invited is not None and not _wide:
+                _wide = "affirmation"
             vault_ask = _language.is_content_ask(c.last_body, fan_lang) or bool(_wide)
             # Lean-in pivot: he's getting physical/horny (ESCALATION) with something
             # to sell and HAS chatted a bit — ride it as an offer instead of teasing
@@ -9990,6 +9997,8 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                 # per-fan lease taken at the top of this loop is still held, which
                 # is what the seam requires: leases are not re-entrant, so it must
                 # never take or release one of its own.
+                async def _invited_contract(_i=_invited):
+                    return _i.contract
                 _pack_plan = await lane.plan(
                     # `_model_ask` is the model's own line on THIS turn, parsed off
                     # the draft above — the lane ORs it with its regex, and without
@@ -10003,7 +10012,21 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     counters=sell_lane.AskCounters(
                         asks_today=int(asks_by_fan.get(fan_id, 0)),
                         account_hour=acct_hour_asks, account_day=acct_day_asks),
-                    human_ask_at=human_money.get(fan_id, _NO_MONEY).ask)
+                    human_ask_at=human_money.get(fan_id, _NO_MONEY).ask,
+                    **({"contract": _invited_contract, "resolution": _invited.resolution} if _invited is not None else {}))
+                if _sales_turn.active(cfg):
+                    from . import sales_action as _sa
+                    _res = getattr(_pack_plan, "result", None)
+                    _why = str(getattr(_res, "reason", "") or "refused")
+                    _ctr = await _sales_turn.counts(account_id, fan_id)
+                    await _sales_turn.record(lane, c, f, _sa.ActionDecision(
+                        _sa.DIRECT_OFFER if _pack_plan else _sa.CLARIFY,
+                        _sa.ACTED if _pack_plan else _sa.EXCLUDED,
+                        ("invitation_accepted" if _invited is not None else "direct_request_ready") if _pack_plan else _why[:64],
+                        "offer", _sa.pacing(_sales_turn.read_controls(cfg), _ctr.grouped_turns, prior_card=_ctr.prior_card),
+                        {**_sales_turn.read_controls(cfg).as_dict(), "mode": _sales_turn.contextual_mode(cfg)},
+                        _invited.invitation_id if _invited is not None else None),
+                        evidence={"wide_ask": _wide, "model_says_ask": bool(signal_on and _model_ask)})
                 if _pack_plan:
                     # Charged on the DECISION, not the delivery. The per-tick
                     # budget exists to bound a burst of priced sends across the

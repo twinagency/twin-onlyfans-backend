@@ -187,9 +187,32 @@ def wording_gate(text: str, lifecycle: str | None, *, fulfilment_basis: bool = F
         return False, "sent_claim_without_receipt"
     if _DELIVERY_PROMISE.search(t) and lifecycle not in PAID_STATES:
         return False, "promise_without_paid_order"
-    if _DEADLINE.search(t) and not fulfilment_basis:
+    if not fulfilment_basis and _deadline_promise(t):
         return False, "deadline_without_fulfilment_basis"
     return True, "ok"
+
+
+_FULFIL_OBJ = re.compile(r"\b(?:pics?|photos?|videos?|vids?|clips?|custom|voice\s*(?:notes?|messages?)|content|it|yours)\b", re.I)
+_FULFIL_VERB = re.compile(r"\b(?:send|sending|deliver|film|record|shoot|make|have|get|ready|finish(?:ed)?|done|post|drop)\b", re.I)
+
+
+def _deadline_promise(text: str) -> bool:
+    """A time commitment about fulfilment: a deadline word AND a fulfilment verb AND a content object. Ordinary talk
+    about tomorrow ('see you tomorrow', 'dinner tonight') is not a fulfilment promise."""
+    from automations.pack_claim import _DELIVERY_PROMISE
+    return bool(_DEADLINE.search(text) and (_DELIVERY_PROMISE.search(text) or _SENT_CLAIM.search(text)
+                or (_FULFIL_VERB.search(text) and _FULFIL_OBJ.search(text))))
+
+
+def boundary_hold(text: str) -> str | None:
+    """The state-independent half of the gate, for the last text boundary (which already holds unbacked
+    sent/promise claims): a fulfilment deadline or a completed refund can never be backed by this context, because
+    the fulfilment owner and the refund decision live with a human case, not in a bubble."""
+    if _REFUND_DONE.search(text or ""):
+        return "refund-claim-unbacked"
+    if _deadline_promise(text or ""):
+        return "deadline-unbacked"
+    return None
 
 
 # ── persistence on the existing record ────────────────────────────────────────────────────────────────────────────
@@ -300,3 +323,41 @@ def open_custom_case(s, *, account_id: str, fan_id: int, available_verified: boo
                         source_message_id=source_message_id, origin="operator", scope=CUSTOM_SCOPE, owner=owner,
                         due_at=deadline, now=now)
     return case, []
+
+
+# ── adapters for the existing native catalogue delivery (no new sender) ───────────────────────────────────────────
+def from_terms(terms: dict, *, account_id: str, fan_id: int, currency: str = "USD") -> "Quote":
+    """The canonical Quote for a frozen catalogue snapshot (``media_delivery.catalog_terms`` output). The obligation
+    is the locked card for this item's exact hero media, so any send path reaches the same id."""
+    hero = sorted(set(terms["media_ids"]) - set(terms["preview_ids"]))
+    versions = {f["media_id"]: str(f.get("content_hash") or "") for f in terms.get("files", [])}
+    nq = terms.get("native_quote") or {}
+    return Quote(obligation_id(("locked_card"), account_id, fan_id, "item:%s:%s" % (terms["item"]["id"], ",".join(map(str, hero)))),
+                 "locked_card", int(terms["item"]["id"]), tuple((m, versions.get(m, "")) for m in terms["media_ids"]),
+                 int(terms["item"]["price_cents"]), int(terms["price_cents"]), currency.upper(),
+                 budget_cents=None, discount_reason=("native_quote" if nq else "catalogue_price"))
+
+
+def request_exists(s, account_id: str, fan_id: int, terms: dict) -> bool:
+    """True while a payment request for this exact obligation is still unresolved (open/unlocked)."""
+    from sqlalchemy import select
+    O = _offer_model()
+    ob = from_terms(terms, account_id=account_id, fan_id=fan_id).obligation_id
+    return s.scalar(select(O.id).where(O.account_id == account_id, O.obligation_id == ob,
+                                       O.status.in_(("open", "unlocked"))).limit(1)) is not None
+
+
+def attach_to_offer(s, offer, terms: dict, *, account_id: str, fan_id: int, lifecycle: str = RECONCILED) -> None:
+    """Fill the quote columns on the offer a receipt projection just created. The receipt IS the local projection
+    reconciliation, hence the default lifecycle. Never raises: a duplicate open obligation leaves it unset rather
+    than failing a receipt that already happened."""
+    from sqlalchemy import select
+    try:
+        quote = from_terms(terms, account_id=account_id, fan_id=fan_id)
+        O = _offer_model()
+        dup = s.scalar(select(O.id).where(O.account_id == account_id, O.obligation_id == quote.obligation_id,
+                                          O.status.in_(("open", "unlocked")), O.id != offer.id).limit(1))
+        offer.quote_json, offer.currency, offer.lifecycle, offer.quote_version = quote.as_json(), quote.currency, lifecycle, 1
+        offer.obligation_id = None if dup is not None else quote.obligation_id
+    except Exception:
+        return

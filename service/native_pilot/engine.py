@@ -104,6 +104,11 @@ class _TextClient:
             if claims_media_sent(text):
                 # Never claim media was sent when none was: the bubble is held, the turn is regenerated once.
                 self.engine._refuse(MEDIA_CLAIM_HELD)
+        from onlyfans_runtime.quote import boundary_hold
+        held = boundary_hold(text)
+        if held:
+            # R6: no fulfilment deadline and no completed refund is ever stated by the automatic chatter.
+            self.engine._refuse(held)
         if self.engine.content:
             self.engine.content.terms(kwargs)
         try:

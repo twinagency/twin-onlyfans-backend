@@ -207,7 +207,7 @@ def test_creator_a_can_not_use_bs_connection_or_change_bs_budget_policy_or_confi
     h = request_headers(conn)
     cmd = lambda action, payload, rev=0: {"action": action, "payload": payload, "expectedRevision": rev,
                                           "actor": STAFF, "commandKey": key(f"{action}-{rev}")}
-    activate = {"limitUnits": 9999, "throttleSeconds": 1, "mediaEnabled": True, "automateNewConversations": True}
+    activate = {"limitUnits": 9999, "throttleSeconds": 60, "mediaEnabled": True, "automateNewConversations": True}
     # Connection: the agency namespace has no connection route at all (403 for A AND for her own account);
     # the store itself still refuses a scoped actor for B's account (defence in depth below the router).
     assert client.get(conn + B, headers=h).status_code == 403

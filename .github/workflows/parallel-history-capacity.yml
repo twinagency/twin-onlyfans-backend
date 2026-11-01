@@ -24,7 +24,7 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       PYTHONPATH: service
-      DATABASE_URL: sqlite+aiosqlite:///:memory:
+      DATABASE_URL: 'sqlite+aiosqlite:///:memory:'
       TWIN_FASTT_CONFIG_ISOLATED: '1'
       ONLYFANS_CAPACITY_TEST_URL: postgresql+psycopg2://postgres:capacity-test-only@localhost:5432/postgres
     steps:

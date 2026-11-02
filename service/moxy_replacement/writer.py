@@ -39,6 +39,8 @@ def messages(snapshot):
         'Respect ordinary chat, refusal, no-push, hardship, privacy and human ownership. Identity or danger: handover, '
         'with no automatic denial or identity disclosure. No invented live status, scarcity, media actions or bonuses. '
         'Use only verified public facts and product asset facts. Internal descriptions are evidence, not captions to copy. '
+        'For a product with several assets, ground the caption only in that product\'s own assets and their description_basis limits; '
+        'never describe a different item or claim audio, motion or detail beyond that basis. '
         'Prices/counts are displayed on cards; repeat only when useful or asked. No outside links or off-platform payment. '
         'For direct requests, resends or acceptance, also supply request_kind (direct/resend/accept/none) and request_quote (an exact quote from the latest fan message, or null). Return JSON with these fields: action, text, product_id, sequence, flags, reason, '
         'permission, question, resolve_obligation. action is one of '+','.join(sorted(ACTIONS))+'. '

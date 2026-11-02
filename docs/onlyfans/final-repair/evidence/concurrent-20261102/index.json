@@ -1,0 +1,4903 @@
+[
+  {
+    "name": "tmpfs-smoke12",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "tmpfs-smoke12",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/tmpfs-smoke12.json",
+      "--fans",
+      "12",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "45"
+    ],
+    "exit_code": 0,
+    "seconds": 22.87,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/onlyfans_runtime/concurrent_admission.py",
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/ledger.py",
+      "service/native_pilot/service.py",
+      "service/native_pilot/admission.py",
+      "service/twin_bridge/coordination.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_pg.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "tmpfs-smoke12",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 12,
+      "completed": 11,
+      "outstanding": 1,
+      "full_reply_completed": 10,
+      "full_reply_outstanding": 2,
+      "operator_owned_excluded": 0,
+      "completion_pct": 91.667,
+      "within_20": 11,
+      "within_180": 11,
+      "share_within_180": 0.9167,
+      "latency_s": {
+        "p50": 9.3507,
+        "p95": 17.7286,
+        "p99": 17.7286
+      },
+      "right_censored_age_s": {
+        "p50": 17.7908,
+        "p95": 17.7908,
+        "p99": 17.7908
+      },
+      "completion_or_censor_s": {
+        "p50": 9.3507,
+        "p95": 17.7908,
+        "p99": 17.7908
+      },
+      "elapsed_s": 17.791,
+      "throughput_turns_s": 0.6183,
+      "posts": 12,
+      "receipt_states": {
+        "sent": 11,
+        "delivery_unknown": 1
+      },
+      "cpu_seconds": 8.993,
+      "cpu_one_core_pct": 50.55,
+      "rss_peak_mb": 173.1,
+      "threads_peak": 17,
+      "db_connections_peak": 23,
+      "db_active_peak": 3,
+      "db_lock_waiters_peak": 0,
+      "event_loop_lag_s": {
+        "p50": 0.0013,
+        "p95": 0.0361,
+        "p99": 1.0435
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 2,
+        "ready": 12,
+        "generating": 12,
+        "model-start": 12,
+        "model-complete": 12,
+        "contextual-opportunity": 12,
+        "sent": 10,
+        "native-background-job-suppressed": 10,
+        "turn-stats": 10,
+        "turn-timing": 12,
+        "twin-report": 12,
+        "turn-cancel-requested": 1,
+        "turn-abandoned": 1,
+        "stopped": 1,
+        "held": 1
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 12,
+        "fan-unresolved-delivery": 1,
+        "send-check-failed": 1,
+        "delivery-unknown": 2
+      },
+      "input_states": {
+        "stopped": 1,
+        "complete": 10,
+        "failed": 1
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0
+      }
+    }
+  },
+  {
+    "name": "tmpfs-100-default",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "tmpfs-100-default",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/tmpfs-100-default.json",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 107.629,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/onlyfans_runtime/concurrent_admission.py",
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/ledger.py",
+      "service/native_pilot/service.py",
+      "service/native_pilot/admission.py",
+      "service/twin_bridge/coordination.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_pg.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "tmpfs-100-default",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 18,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 51.4293,
+        "p95": 96.4229,
+        "p99": 100.3517
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 51.4293,
+        "p95": 96.4229,
+        "p99": 100.3517
+      },
+      "elapsed_s": 101.423,
+      "throughput_turns_s": 0.986,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 56.848,
+      "cpu_one_core_pct": 56.05,
+      "rss_peak_mb": 223.13,
+      "threads_peak": 26,
+      "db_connections_peak": 21,
+      "db_active_peak": 4,
+      "db_lock_waiters_peak": 2,
+      "event_loop_lag_s": {
+        "p50": 0.0007,
+        "p95": 0.0107,
+        "p99": 0.0438
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 7,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0
+      }
+    }
+  },
+  {
+    "name": "v2-smoke12",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "v2-smoke12",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/v2-smoke12.json",
+      "--fans",
+      "12",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "45"
+    ],
+    "exit_code": 0,
+    "seconds": 18.078,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/onlyfans_runtime/concurrent_admission.py",
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/ledger.py",
+      "service/native_pilot/service.py",
+      "service/native_pilot/admission.py",
+      "service/twin_bridge/coordination.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_pg.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "v2-smoke12",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 12,
+      "completed": 12,
+      "outstanding": 0,
+      "full_reply_completed": 12,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 10.2483,
+        "p95": 13.0108,
+        "p99": 13.0108
+      },
+      "full_reply_within_20": 12,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 12,
+      "within_180": 12,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 9.9095,
+        "p95": 12.9711,
+        "p99": 12.9711
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 9.9095,
+        "p95": 12.9711,
+        "p99": 12.9711
+      },
+      "elapsed_s": 13.018,
+      "throughput_turns_s": 0.9218,
+      "posts": 12,
+      "receipt_states": {
+        "sent": 12
+      },
+      "cpu_seconds": 8.732,
+      "cpu_one_core_pct": 67.08,
+      "rss_peak_mb": 175.4,
+      "threads_peak": 21,
+      "db_connections_peak": 24,
+      "db_active_peak": 4,
+      "db_lock_waiters_peak": 1,
+      "event_loop_lag_s": {
+        "p50": 0.0014,
+        "p95": 0.0175,
+        "p99": 0.2242
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 1,
+        "ready": 12,
+        "generating": 12,
+        "model-start": 12,
+        "model-complete": 12,
+        "contextual-opportunity": 12,
+        "sent": 12,
+        "native-background-job-suppressed": 12,
+        "turn-stats": 12,
+        "turn-timing": 12,
+        "twin-report": 12
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 12
+      },
+      "input_states": {
+        "complete": 12
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "v2-100-default",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "v2-100-default",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/v2-100-default.json",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 108.026,
+    "source_unchanged": false,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/onlyfans_runtime/concurrent_admission.py",
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/ledger.py",
+      "service/native_pilot/service.py",
+      "service/native_pilot/admission.py",
+      "service/twin_bridge/coordination.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_pg.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "v2-100-default",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 51.4935,
+        "p95": 96.7401,
+        "p99": 100.4344
+      },
+      "full_reply_within_20": 18,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 18,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 51.4518,
+        "p95": 96.5481,
+        "p99": 100.3987
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 51.4518,
+        "p95": 96.5481,
+        "p99": 100.3987
+      },
+      "elapsed_s": 101.779,
+      "throughput_turns_s": 0.9825,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 55.103,
+      "cpu_one_core_pct": 54.14,
+      "rss_peak_mb": 223.87,
+      "threads_peak": 26,
+      "db_connections_peak": 24,
+      "db_active_peak": 5,
+      "db_lock_waiters_peak": 2,
+      "event_loop_lag_s": {
+        "p50": 0.0008,
+        "p95": 0.0045,
+        "p99": 0.0286
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 7,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "v2-100-p8-s8-r10",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "v2-100-p8-s8-r10",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/v2-100-p8-s8-r10.json",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 196.342,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/onlyfans_runtime/concurrent_admission.py",
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/ledger.py",
+      "service/native_pilot/service.py",
+      "service/native_pilot/admission.py",
+      "service/twin_bridge/coordination.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "v2-100-p8-s8-r10",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 100,
+      "completed": 99,
+      "outstanding": 1,
+      "full_reply_completed": 99,
+      "full_reply_outstanding": 1,
+      "full_reply_latency_s": {
+        "p50": 49.3794,
+        "p95": 78.4228,
+        "p99": 79.4214
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 99.0,
+      "within_20": 16,
+      "within_180": 99,
+      "share_within_180": 0.99,
+      "latency_s": {
+        "p50": 49.1065,
+        "p95": 78.3529,
+        "p99": 79.3876
+      },
+      "right_censored_age_s": {
+        "p50": 190.0454,
+        "p95": 190.0454,
+        "p99": 190.0454
+      },
+      "completion_or_censor_s": {
+        "p50": 49.1065,
+        "p95": 78.3529,
+        "p99": 79.3876
+      },
+      "elapsed_s": 190.045,
+      "throughput_turns_s": 0.5209,
+      "posts": 99,
+      "receipt_states": {
+        "sent": 99,
+        "not_sent": 1
+      },
+      "cpu_seconds": 69.206,
+      "cpu_one_core_pct": 36.42,
+      "rss_peak_mb": 232.16,
+      "threads_peak": 38,
+      "db_connections_peak": 29,
+      "db_active_peak": 6,
+      "db_lock_waiters_peak": 4,
+      "event_loop_lag_s": {
+        "p50": 0.0006,
+        "p95": 0.0172,
+        "p99": 0.0501
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 12,
+        "ready": 100,
+        "generating": 101,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 99,
+        "native-background-job-suppressed": 99,
+        "turn-stats": 99,
+        "turn-timing": 101,
+        "twin-report": 100,
+        "turn-cancel-requested": 8,
+        "work-board-flush-failed": 1,
+        "turn-abandoned": 1,
+        "turn-requeued": 1
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100,
+        "fan-unresolved-delivery": 8,
+        "native-turn-failed": 1,
+        "dispatch-proof-not-saved": 1
+      },
+      "input_states": {
+        "complete": 99,
+        "failed": 1
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "v2-100-p16-s8-r10",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "v2-100-p16-s8-r10",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/v2-100-p16-s8-r10.json",
+      "--prepare",
+      "16",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 196.061,
+    "source_unchanged": false,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/onlyfans_runtime/concurrent_admission.py",
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/ledger.py",
+      "service/native_pilot/service.py",
+      "service/native_pilot/admission.py",
+      "service/twin_bridge/coordination.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "v2-100-p16-s8-r10",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 100,
+      "completed": 99,
+      "outstanding": 1,
+      "full_reply_completed": 98,
+      "full_reply_outstanding": 2,
+      "full_reply_latency_s": {
+        "p50": 52.9438,
+        "p95": 85.8019,
+        "p99": 86.2479
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 99.0,
+      "within_20": 16,
+      "within_180": 99,
+      "share_within_180": 0.99,
+      "latency_s": {
+        "p50": 52.0185,
+        "p95": 85.766,
+        "p99": 86.2026
+      },
+      "right_censored_age_s": {
+        "p50": 190.0406,
+        "p95": 190.0406,
+        "p99": 190.0406
+      },
+      "completion_or_censor_s": {
+        "p50": 52.0185,
+        "p95": 85.766,
+        "p99": 86.2026
+      },
+      "elapsed_s": 190.041,
+      "throughput_turns_s": 0.5209,
+      "posts": 99,
+      "receipt_states": {
+        "sent": 99,
+        "not_sent": 1
+      },
+      "cpu_seconds": 75.605,
+      "cpu_one_core_pct": 39.78,
+      "rss_peak_mb": 238.42,
+      "threads_peak": 62,
+      "db_connections_peak": 37,
+      "db_active_peak": 13,
+      "db_lock_waiters_peak": 12,
+      "event_loop_lag_s": {
+        "p50": 0.0006,
+        "p95": 0.0514,
+        "p99": 0.1404
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 12,
+        "ready": 100,
+        "generating": 101,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 99,
+        "native-background-job-suppressed": 99,
+        "turn-stats": 98,
+        "turn-timing": 99,
+        "twin-report": 98,
+        "turn-cancel-requested": 3,
+        "held": 4,
+        "resumed": 2,
+        "turn-requeued": 1
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100,
+        "fan-unresolved-delivery": 3,
+        "service-error:LockNotAvailable": 3,
+        "ownership-unavailable": 1,
+        "dispatch-proof-not-saved": 1
+      },
+      "input_states": {
+        "complete": 98,
+        "generating": 2
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "v3-100-p8-s8-r10",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "v3-100-p8-s8-r10",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/v3-100-p8-s8-r10.json",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "100"
+    ],
+    "exit_code": 0,
+    "seconds": 79.092,
+    "source_unchanged": false,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "v3-100-p8-s8-r10",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 42.1688,
+        "p95": 71.4615,
+        "p99": 72.5303
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 16,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 41.8869,
+        "p95": 71.337,
+        "p99": 72.4811
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 41.8869,
+        "p95": 71.337,
+        "p99": 72.4811
+      },
+      "elapsed_s": 72.763,
+      "throughput_turns_s": 1.3743,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 69.078,
+      "cpu_one_core_pct": 94.93,
+      "rss_peak_mb": 231.4,
+      "threads_peak": 38,
+      "db_connections_peak": 29,
+      "db_active_peak": 11,
+      "db_lock_waiters_peak": 9,
+      "event_loop_lag_s": {
+        "p50": 0.003,
+        "p95": 0.0287,
+        "p99": 0.2505
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 5,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100,
+        "turn-cancel-requested": 2
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100,
+        "fan-unresolved-delivery": 2
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-100-p8-s8-r10",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-100-p8-s8-r10",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-100-p8-s8-r10.json",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "100"
+    ],
+    "exit_code": 0,
+    "seconds": 72.625,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-100-p8-s8-r10",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 38.0015,
+        "p95": 65.8279,
+        "p99": 66.969
+      },
+      "full_reply_within_20": 24,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 24,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 37.7603,
+        "p95": 65.7027,
+        "p99": 66.9376
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 37.7603,
+        "p95": 65.7027,
+        "p99": 66.9376
+      },
+      "elapsed_s": 67.133,
+      "throughput_turns_s": 1.4896,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 64.092,
+      "cpu_one_core_pct": 95.47,
+      "rss_peak_mb": 234.46,
+      "threads_peak": 39,
+      "db_connections_peak": 30,
+      "db_active_peak": 6,
+      "db_lock_waiters_peak": 4,
+      "event_loop_lag_s": {
+        "p50": 0.0024,
+        "p95": 0.0286,
+        "p99": 0.2951
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 5,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100,
+        "turn-cancel-requested": 4
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100,
+        "fan-unresolved-delivery": 4
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-100-p16-s8-r10",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-100-p16-s8-r10",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-100-p16-s8-r10.json",
+      "--prepare",
+      "16",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "100"
+    ],
+    "exit_code": 0,
+    "seconds": 85.728,
+    "source_unchanged": false,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-100-p16-s8-r10",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 46.6426,
+        "p95": 79.1885,
+        "p99": 79.5505
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 19,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 45.0098,
+        "p95": 78.9878,
+        "p99": 79.5152
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 45.0098,
+        "p95": 78.9878,
+        "p99": 79.5152
+      },
+      "elapsed_s": 79.662,
+      "throughput_turns_s": 1.2553,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 75.482,
+      "cpu_one_core_pct": 94.75,
+      "rss_peak_mb": 241.23,
+      "threads_peak": 63,
+      "db_connections_peak": 36,
+      "db_active_peak": 20,
+      "db_lock_waiters_peak": 18,
+      "event_loop_lag_s": {
+        "p50": 0.0122,
+        "p95": 0.0838,
+        "p99": 0.3897
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 6,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "turn-cancel-requested": 5,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100,
+        "fan-unresolved-delivery": 5
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "new-concurrent-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "service/tests/test_concurrent_path_pg.py"
+    ],
+    "exit_code": 0,
+    "seconds": 5.657,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "concurrent-admission-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_concurrent_delivery_pg.py"
+    ],
+    "exit_code": 0,
+    "seconds": 3.956,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "native-service-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exit_code": 0,
+    "seconds": 49.451,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "fastt-controls-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "service/tests/test_fastt_controls_pg.py"
+    ],
+    "exit_code": 0,
+    "seconds": 18.819,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "text-delivery-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "service/tests/test_onlyfans_text_delivery_pg.py"
+    ],
+    "exit_code": 0,
+    "seconds": 65.6,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "takeover-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "service/tests/test_onlyfans_fastt_takeover_pg.py"
+    ],
+    "exit_code": 0,
+    "seconds": 16.757,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "final-3x20-concurrent",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-3x20-concurrent",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-3x20-concurrent.json",
+      "--creators",
+      "3",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 61.317,
+    "source_unchanged": false,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-3x20-concurrent",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 60,
+      "completed": 60,
+      "outstanding": 0,
+      "full_reply_completed": 60,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 44.3555,
+        "p95": 55.4701,
+        "p99": 55.4995
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 0,
+      "within_180": 60,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 42.9903,
+        "p95": 55.3597,
+        "p99": 55.3717
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 42.9903,
+        "p95": 55.3597,
+        "p99": 55.3717
+      },
+      "elapsed_s": 55.551,
+      "throughput_turns_s": 1.0801,
+      "posts": 60,
+      "receipt_states": {
+        "sent": 60
+      },
+      "cpu_seconds": 48.924,
+      "cpu_one_core_pct": 88.07,
+      "rss_peak_mb": 221.5,
+      "threads_peak": 39,
+      "db_connections_peak": 46,
+      "db_active_peak": 16,
+      "db_lock_waiters_peak": 13,
+      "event_loop_lag_s": {
+        "p50": 0.0153,
+        "p95": 0.2032,
+        "p99": 0.4838
+      },
+      "events": {
+        "runner-lease-acquired": 3,
+        "engine-queue": 12,
+        "ready": 60,
+        "generating": 60,
+        "model-start": 60,
+        "model-complete": 60,
+        "contextual-opportunity": 60,
+        "sent": 60,
+        "native-background-job-suppressed": 60,
+        "turn-stats": 60,
+        "turn-timing": 60,
+        "twin-report": 60
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 60
+      },
+      "input_states": {
+        "complete": 60
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-3x20-gap",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-3x20-gap",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-3x20-gap.json",
+      "--creators",
+      "3",
+      "--fans",
+      "20",
+      "--mode",
+      "gap",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 195.297,
+    "source_unchanged": false,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-3x20-gap",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 3,
+        "executor_bound": 48
+      },
+      "eligible": 60,
+      "completed": 27,
+      "outstanding": 33,
+      "full_reply_completed": 27,
+      "full_reply_outstanding": 33,
+      "full_reply_latency_s": {
+        "p50": 92.6624,
+        "p95": 173.3959,
+        "p99": 173.3961
+      },
+      "full_reply_within_20": 3,
+      "operator_owned_excluded": 0,
+      "completion_pct": 45.0,
+      "within_20": 3,
+      "within_180": 27,
+      "share_within_180": 0.45,
+      "latency_s": {
+        "p50": 92.5823,
+        "p95": 173.3219,
+        "p99": 173.3234
+      },
+      "right_censored_age_s": {
+        "p50": 190.0047,
+        "p95": 190.0047,
+        "p99": 190.0047
+      },
+      "completion_or_censor_s": {
+        "p50": 190.0047,
+        "p95": 190.0047,
+        "p99": 190.0047
+      },
+      "elapsed_s": 190.005,
+      "throughput_turns_s": 0.1421,
+      "posts": 27,
+      "receipt_states": {
+        "sent": 27
+      },
+      "cpu_seconds": 29.832,
+      "cpu_one_core_pct": 15.7,
+      "rss_peak_mb": 202.36,
+      "threads_peak": 51,
+      "db_connections_peak": 34,
+      "db_active_peak": 6,
+      "db_lock_waiters_peak": 4,
+      "event_loop_lag_s": {
+        "p50": 0.0005,
+        "p95": 0.002,
+        "p99": 0.008
+      },
+      "events": {
+        "runner-lease-acquired": 3,
+        "engine-queue": 36,
+        "ready": 39,
+        "generating": 39,
+        "model-start": 39,
+        "model-complete": 39,
+        "contextual-opportunity": 39,
+        "sent": 27,
+        "native-background-job-suppressed": 27,
+        "turn-stats": 27,
+        "turn-timing": 27,
+        "twin-report": 27
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 39
+      },
+      "input_states": {
+        "complete": 27,
+        "generating": 12
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-50x2-concurrent",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-50x2-concurrent",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-50x2-concurrent.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--prepare",
+      "4",
+      "--send",
+      "4",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 205.308,
+    "source_unchanged": false,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-50x2-concurrent",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 50,
+        "executor_bound": 312
+      },
+      "eligible": 100,
+      "completed": 85,
+      "outstanding": 15,
+      "full_reply_completed": 85,
+      "full_reply_outstanding": 15,
+      "full_reply_latency_s": {
+        "p50": 106.7997,
+        "p95": 110.4961,
+        "p99": 173.6618
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 85.0,
+      "within_20": 0,
+      "within_180": 85,
+      "share_within_180": 0.85,
+      "latency_s": {
+        "p50": 101.2119,
+        "p95": 109.6525,
+        "p99": 173.6182
+      },
+      "right_censored_age_s": {
+        "p50": 190.0467,
+        "p95": 190.0467,
+        "p99": 190.0467
+      },
+      "completion_or_censor_s": {
+        "p50": 102.3444,
+        "p95": 190.0467,
+        "p99": 190.0467
+      },
+      "elapsed_s": 190.047,
+      "throughput_turns_s": 0.4473,
+      "posts": 85,
+      "receipt_states": {
+        "sent": 85
+      },
+      "cpu_seconds": 133.523,
+      "cpu_one_core_pct": 70.26,
+      "rss_peak_mb": 334.73,
+      "threads_peak": 315,
+      "db_connections_peak": 100,
+      "db_active_peak": 13,
+      "db_lock_waiters_peak": 10,
+      "event_loop_lag_s": {
+        "p50": 0.0009,
+        "p95": 0.0751,
+        "p99": 0.4728
+      },
+      "events": {
+        "runner-lease-acquired": 50,
+        "engine-queue": 543,
+        "ready": 100,
+        "generating": 97,
+        "held": 170,
+        "turn-timing": 92,
+        "runner-lease-renew-failed": 21,
+        "safety-scan-failed": 15,
+        "resumed": 160,
+        "lease-renew-failed": 14,
+        "work-board-flush-failed": 9,
+        "twin-report": 92,
+        "turn-abandoned": 7,
+        "sales-withheld": 17,
+        "model-start": 85,
+        "model-complete": 85,
+        "contextual-opportunity": 85,
+        "sent": 85,
+        "native-background-job-suppressed": 85,
+        "turn-stats": 85
+      },
+      "reasons": {
+        "service-error:OperationalError": 165,
+        "ownership-unavailable": 3,
+        "native-turn-failed": 7,
+        "unlinked-payment": 17,
+        "owner-live": 1,
+        "service-error:TimeoutError": 1,
+        "disabled_blocked_or_stale_input": 85
+      },
+      "input_states": {
+        "complete": 85,
+        "generating": 8,
+        "failed": 7
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-50x2-gap",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-50x2-gap",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-50x2-gap.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--mode",
+      "gap",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 204.761,
+    "source_unchanged": false,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-50x2-gap",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 50,
+        "executor_bound": 312
+      },
+      "eligible": 100,
+      "completed": 80,
+      "outstanding": 20,
+      "full_reply_completed": 80,
+      "full_reply_outstanding": 20,
+      "full_reply_latency_s": {
+        "p50": 100.8633,
+        "p95": 120.7028,
+        "p99": 190.0147
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 80.0,
+      "within_20": 0,
+      "within_180": 79,
+      "share_within_180": 0.79,
+      "latency_s": {
+        "p50": 99.1424,
+        "p95": 120.664,
+        "p99": 189.9672
+      },
+      "right_censored_age_s": {
+        "p50": 190.0442,
+        "p95": 190.0442,
+        "p99": 190.0442
+      },
+      "completion_or_censor_s": {
+        "p50": 112.111,
+        "p95": 190.0442,
+        "p99": 190.0442
+      },
+      "elapsed_s": 190.044,
+      "throughput_turns_s": 0.421,
+      "posts": 80,
+      "receipt_states": {
+        "sent": 80
+      },
+      "cpu_seconds": 132.356,
+      "cpu_one_core_pct": 69.64,
+      "rss_peak_mb": 329.67,
+      "threads_peak": 315,
+      "db_connections_peak": 99,
+      "db_active_peak": 16,
+      "db_lock_waiters_peak": 10,
+      "event_loop_lag_s": {
+        "p50": 0.0009,
+        "p95": 0.0633,
+        "p99": 0.5308
+      },
+      "events": {
+        "runner-lease-acquired": 50,
+        "engine-queue": 539,
+        "ready": 99,
+        "generating": 91,
+        "held": 136,
+        "safety-scan-failed": 23,
+        "runner-lease-renew-failed": 22,
+        "sales-withheld": 9,
+        "resumed": 111,
+        "turn-timing": 85,
+        "twin-report-failed": 1,
+        "twin-report": 84,
+        "work-board-flush-failed": 5,
+        "turn-abandoned": 4,
+        "lease-renew-failed": 4,
+        "send-stall-check-failed": 1,
+        "model-start": 80,
+        "model-complete": 80,
+        "contextual-opportunity": 80,
+        "sent": 80,
+        "native-background-job-suppressed": 80,
+        "turn-stats": 80
+      },
+      "reasons": {
+        "service-error:OperationalError": 124,
+        "ownership-unavailable": 8,
+        "unlinked-payment": 9,
+        "native-turn-failed": 4,
+        "owner-live": 4,
+        "OperationalError": 1,
+        "disabled_blocked_or_stale_input": 80
+      },
+      "input_states": {
+        "generating": 15,
+        "complete": 80,
+        "failed": 4
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-100-gap",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-100-gap",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-100-gap.json",
+      "--mode",
+      "gap",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 195.683,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-100-gap",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 24
+      },
+      "eligible": 100,
+      "completed": 10,
+      "outstanding": 90,
+      "full_reply_completed": 10,
+      "full_reply_outstanding": 90,
+      "full_reply_latency_s": {
+        "p50": 87.182,
+        "p95": 188.0762,
+        "p99": 188.0762
+      },
+      "full_reply_within_20": 1,
+      "operator_owned_excluded": 0,
+      "completion_pct": 10.0,
+      "within_20": 1,
+      "within_180": 9,
+      "share_within_180": 0.09,
+      "latency_s": {
+        "p50": 87.1413,
+        "p95": 188.0403,
+        "p99": 188.0403
+      },
+      "right_censored_age_s": {
+        "p50": 190.0442,
+        "p95": 190.0442,
+        "p99": 190.0442
+      },
+      "completion_or_censor_s": {
+        "p50": 190.0442,
+        "p95": 190.0442,
+        "p99": 190.0442
+      },
+      "elapsed_s": 190.044,
+      "throughput_turns_s": 0.0526,
+      "posts": 10,
+      "receipt_states": {
+        "sent": 10
+      },
+      "cpu_seconds": 13.609,
+      "cpu_one_core_pct": 7.16,
+      "rss_peak_mb": 166.55,
+      "threads_peak": 16,
+      "db_connections_peak": 19,
+      "db_active_peak": 4,
+      "db_lock_waiters_peak": 1,
+      "event_loop_lag_s": {
+        "p50": 0.0005,
+        "p95": 0.0016,
+        "p99": 0.0024
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 12,
+        "ready": 14,
+        "generating": 14,
+        "model-start": 14,
+        "model-complete": 14,
+        "contextual-opportunity": 14,
+        "sent": 10,
+        "native-background-job-suppressed": 10,
+        "turn-stats": 10,
+        "turn-timing": 10,
+        "twin-report": 10
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 14
+      },
+      "input_states": {
+        "complete": 10,
+        "generating": 4
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-100-paced",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-100-paced",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-100-paced.json",
+      "--paced",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 137.891,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-100-paced",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 81.4087,
+        "p95": 126.3918,
+        "p99": 130.33
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 0,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 81.3705,
+        "p95": 126.3564,
+        "p99": 130.3014
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 81.3705,
+        "p95": 126.3564,
+        "p99": 130.3014
+      },
+      "elapsed_s": 131.368,
+      "throughput_turns_s": 0.7612,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 71.116,
+      "cpu_one_core_pct": 54.14,
+      "rss_peak_mb": 231.46,
+      "threads_peak": 39,
+      "db_connections_peak": 31,
+      "db_active_peak": 13,
+      "db_lock_waiters_peak": 11,
+      "event_loop_lag_s": {
+        "p50": 0.0007,
+        "p95": 0.0085,
+        "p99": 0.0357
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 9,
+        "ready": 100,
+        "held": 100,
+        "resumed": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "reply-pacing-receipt": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "reply-target-wait": 100,
+        "disabled_blocked_or_stale_input": 100
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-20-multi-slow-held-competing",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-20-multi-slow-held-competing",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-20-multi-slow-held-competing.json",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--multi",
+      "--held",
+      "--slow-latency",
+      "20",
+      "--competing-runner",
+      "--duration",
+      "130"
+    ],
+    "exit_code": 0,
+    "seconds": 46.482,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-20-multi-slow-held-competing",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 19,
+      "completed": 19,
+      "outstanding": 0,
+      "full_reply_completed": 19,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 24.3388,
+        "p95": 41.3705,
+        "p99": 41.3705
+      },
+      "full_reply_within_20": 7,
+      "operator_owned_excluded": 1,
+      "completion_pct": 100.0,
+      "within_20": 10,
+      "within_180": 19,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 19.3191,
+        "p95": 35.3103,
+        "p99": 35.3103
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 19.3191,
+        "p95": 35.3103,
+        "p99": 35.3103
+      },
+      "elapsed_s": 41.415,
+      "throughput_turns_s": 0.4588,
+      "posts": 38,
+      "receipt_states": {
+        "sent": 38
+      },
+      "cpu_seconds": 13.31,
+      "cpu_one_core_pct": 32.14,
+      "rss_peak_mb": 175.79,
+      "threads_peak": 26,
+      "db_connections_peak": 26,
+      "db_active_peak": 5,
+      "db_lock_waiters_peak": 4,
+      "event_loop_lag_s": {
+        "p50": 0.0005,
+        "p95": 0.0038,
+        "p99": 0.0118
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "held": 1,
+        "engine-queue": 3,
+        "ready": 19,
+        "generating": 19,
+        "model-start": 19,
+        "model-complete": 19,
+        "contextual-opportunity": 19,
+        "sent": 38,
+        "native-background-job-suppressed": 19,
+        "turn-stats": 19,
+        "turn-timing": 19,
+        "twin-report": 19
+      },
+      "reasons": {
+        "runner-lease-held": 1,
+        "disabled_blocked_or_stale_input": 19
+      },
+      "input_states": {
+        "complete": 19
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-20-takeover",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-20-takeover",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-20-takeover.json",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--slow-latency",
+      "20",
+      "--takeover-after",
+      "2",
+      "--duration",
+      "90"
+    ],
+    "exit_code": 0,
+    "seconds": 27.44,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-20-takeover",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 19,
+      "completed": 19,
+      "outstanding": 0,
+      "full_reply_completed": 19,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 13.9806,
+        "p95": 22.6082,
+        "p99": 22.6082
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 1,
+      "completion_pct": 100.0,
+      "within_20": 16,
+      "within_180": 19,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 13.858,
+        "p95": 22.576,
+        "p99": 22.576
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 13.858,
+        "p95": 22.576,
+        "p99": 22.576
+      },
+      "elapsed_s": 22.636,
+      "throughput_turns_s": 0.8394,
+      "posts": 19,
+      "receipt_states": {
+        "sent": 19
+      },
+      "cpu_seconds": 13.778,
+      "cpu_one_core_pct": 60.87,
+      "rss_peak_mb": 180.88,
+      "threads_peak": 28,
+      "db_connections_peak": 27,
+      "db_active_peak": 6,
+      "db_lock_waiters_peak": 4,
+      "event_loop_lag_s": {
+        "p50": 0.0008,
+        "p95": 0.0161,
+        "p99": 0.2363
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 2,
+        "ready": 19,
+        "generating": 19,
+        "model-start": 19,
+        "model-complete": 19,
+        "contextual-opportunity": 19,
+        "sent": 19,
+        "native-background-job-suppressed": 19,
+        "turn-stats": 19,
+        "turn-timing": 19,
+        "twin-report": 19
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 19
+      },
+      "input_states": {
+        "complete": 19
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-20-media",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-20-media",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-20-media.json",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--multi",
+      "--media",
+      "--duration",
+      "100"
+    ],
+    "exit_code": 0,
+    "seconds": 45.076,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-20-media",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 20,
+      "completed": 20,
+      "outstanding": 0,
+      "full_reply_completed": 20,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 26.0944,
+        "p95": 39.0735,
+        "p99": 40.0577
+      },
+      "full_reply_within_20": 6,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 9,
+      "within_180": 20,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 20.9848,
+        "p95": 39.0363,
+        "p99": 40.0274
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 20.9848,
+        "p95": 39.0363,
+        "p99": 40.0274
+      },
+      "elapsed_s": 40.107,
+      "throughput_turns_s": 0.4987,
+      "posts": 36,
+      "receipt_states": {
+        "sent": 36
+      },
+      "cpu_seconds": 13.759,
+      "cpu_one_core_pct": 34.31,
+      "rss_peak_mb": 178.8,
+      "threads_peak": 38,
+      "db_connections_peak": 26,
+      "db_active_peak": 6,
+      "db_lock_waiters_peak": 3,
+      "event_loop_lag_s": {
+        "p50": 0.0005,
+        "p95": 0.0051,
+        "p99": 0.0209
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 3,
+        "ready": 20,
+        "generating": 20,
+        "model-start": 20,
+        "model-complete": 20,
+        "contextual-opportunity": 16,
+        "sent": 36,
+        "native-background-job-suppressed": 20,
+        "turn-stats": 20,
+        "turn-timing": 20,
+        "twin-report": 20
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 16
+      },
+      "input_states": {
+        "complete": 20
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-20-429",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-20-429",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-20-429.json",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--fault",
+      "429",
+      "--duration",
+      "130"
+    ],
+    "exit_code": 0,
+    "seconds": 38.687,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-20-429",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 20,
+      "completed": 20,
+      "outstanding": 0,
+      "full_reply_completed": 20,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 14.6322,
+        "p95": 23.2708,
+        "p99": 33.7154
+      },
+      "full_reply_within_20": 15,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 15,
+      "within_180": 20,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 14.4583,
+        "p95": 23.2425,
+        "p99": 33.6775
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 14.4583,
+        "p95": 23.2425,
+        "p99": 33.6775
+      },
+      "elapsed_s": 33.741,
+      "throughput_turns_s": 0.5927,
+      "posts": 21,
+      "receipt_states": {
+        "sent": 20,
+        "not_sent": 1
+      },
+      "cpu_seconds": 16.193,
+      "cpu_one_core_pct": 47.99,
+      "rss_peak_mb": 182.34,
+      "threads_peak": 39,
+      "db_connections_peak": 29,
+      "db_active_peak": 5,
+      "db_lock_waiters_peak": 2,
+      "event_loop_lag_s": {
+        "p50": 0.0006,
+        "p95": 0.0125,
+        "p99": 0.0749
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 3,
+        "ready": 20,
+        "generating": 21,
+        "model-start": 21,
+        "model-complete": 21,
+        "contextual-opportunity": 21,
+        "sent": 20,
+        "native-background-job-suppressed": 20,
+        "turn-stats": 20,
+        "turn-timing": 21,
+        "twin-report": 20,
+        "provider-throttled": 1,
+        "turn-requeued": 1
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 21,
+        "provider-rate-limited": 1
+      },
+      "input_states": {
+        "complete": 20
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-20-401",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-20-401",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-20-401.json",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--fault",
+      "401",
+      "--duration",
+      "50"
+    ],
+    "exit_code": 0,
+    "seconds": 54.821,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-20-401",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 20,
+      "completed": 17,
+      "outstanding": 3,
+      "full_reply_completed": 17,
+      "full_reply_outstanding": 3,
+      "full_reply_latency_s": {
+        "p50": 13.4796,
+        "p95": 21.2254,
+        "p99": 21.2254
+      },
+      "full_reply_within_20": 15,
+      "operator_owned_excluded": 0,
+      "completion_pct": 85.0,
+      "within_20": 15,
+      "within_180": 17,
+      "share_within_180": 0.85,
+      "latency_s": {
+        "p50": 13.3724,
+        "p95": 21.2003,
+        "p99": 21.2003
+      },
+      "right_censored_age_s": {
+        "p50": 50.0323,
+        "p95": 50.0323,
+        "p99": 50.0323
+      },
+      "completion_or_censor_s": {
+        "p50": 14.5117,
+        "p95": 50.0323,
+        "p99": 50.0323
+      },
+      "elapsed_s": 50.032,
+      "throughput_turns_s": 0.3398,
+      "posts": 18,
+      "receipt_states": {
+        "sent": 17,
+        "not_sent": 1
+      },
+      "cpu_seconds": 14.267,
+      "cpu_one_core_pct": 28.52,
+      "rss_peak_mb": 181.44,
+      "threads_peak": 33,
+      "db_connections_peak": 28,
+      "db_active_peak": 6,
+      "db_lock_waiters_peak": 3,
+      "event_loop_lag_s": {
+        "p50": 0.0005,
+        "p95": 0.0043,
+        "p99": 0.0381
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 4,
+        "ready": 20,
+        "generating": 20,
+        "model-start": 20,
+        "model-complete": 20,
+        "contextual-opportunity": 20,
+        "sent": 17,
+        "native-background-job-suppressed": 17,
+        "turn-stats": 17,
+        "turn-timing": 18,
+        "twin-report": 17,
+        "account-blocked": 1,
+        "turn-requeued": 1
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 20,
+        "account-auth-failed": 2
+      },
+      "input_states": {
+        "complete": 17,
+        "generating": 2,
+        "requeued:1": 1
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-20-timeout-lost",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-20-timeout-lost",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-20-timeout-lost.json",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--fault",
+      "timeout_lost",
+      "--duration",
+      "60"
+    ],
+    "exit_code": 0,
+    "seconds": 64.902,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-20-timeout-lost",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 20,
+      "completed": 19,
+      "outstanding": 1,
+      "full_reply_completed": 19,
+      "full_reply_outstanding": 1,
+      "full_reply_latency_s": {
+        "p50": 14.3567,
+        "p95": 23.9281,
+        "p99": 23.9281
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 95.0,
+      "within_20": 16,
+      "within_180": 19,
+      "share_within_180": 0.95,
+      "latency_s": {
+        "p50": 14.2639,
+        "p95": 23.8884,
+        "p99": 23.8884
+      },
+      "right_censored_age_s": {
+        "p50": 60.0133,
+        "p95": 60.0133,
+        "p99": 60.0133
+      },
+      "completion_or_censor_s": {
+        "p50": 14.2639,
+        "p95": 23.8884,
+        "p99": 60.0133
+      },
+      "elapsed_s": 60.013,
+      "throughput_turns_s": 0.3166,
+      "posts": 20,
+      "receipt_states": {
+        "sent": 19,
+        "delivery_unknown": 1
+      },
+      "cpu_seconds": 14.082,
+      "cpu_one_core_pct": 23.46,
+      "rss_peak_mb": 177.7,
+      "threads_peak": 32,
+      "db_connections_peak": 29,
+      "db_active_peak": 6,
+      "db_lock_waiters_peak": 4,
+      "event_loop_lag_s": {
+        "p50": 0.0005,
+        "p95": 0.004,
+        "p99": 0.0351
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 4,
+        "ready": 20,
+        "generating": 20,
+        "model-start": 20,
+        "model-complete": 20,
+        "contextual-opportunity": 20,
+        "sent": 19,
+        "native-background-job-suppressed": 19,
+        "turn-stats": 19,
+        "turn-timing": 20,
+        "twin-report": 20,
+        "stopped": 1,
+        "held": 1
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 20,
+        "delivery-unknown": 2
+      },
+      "input_states": {
+        "complete": 19,
+        "stopped": 1
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-20-timeout-accepted",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-20-timeout-accepted",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-20-timeout-accepted.json",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--fault",
+      "timeout_accepted",
+      "--duration",
+      "90"
+    ],
+    "exit_code": 0,
+    "seconds": 94.861,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-20-timeout-accepted",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 20,
+      "completed": 19,
+      "outstanding": 1,
+      "full_reply_completed": 19,
+      "full_reply_outstanding": 1,
+      "full_reply_latency_s": {
+        "p50": 14.2968,
+        "p95": 24.7032,
+        "p99": 24.7032
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 95.0,
+      "within_20": 16,
+      "within_180": 19,
+      "share_within_180": 0.95,
+      "latency_s": {
+        "p50": 14.2094,
+        "p95": 24.6689,
+        "p99": 24.6689
+      },
+      "right_censored_age_s": {
+        "p50": 90.016,
+        "p95": 90.016,
+        "p99": 90.016
+      },
+      "completion_or_censor_s": {
+        "p50": 14.2094,
+        "p95": 24.6689,
+        "p99": 90.016
+      },
+      "elapsed_s": 90.016,
+      "throughput_turns_s": 0.2111,
+      "posts": 20,
+      "receipt_states": {
+        "sent": 19,
+        "delivery_unknown": 1
+      },
+      "cpu_seconds": 17.176,
+      "cpu_one_core_pct": 19.08,
+      "rss_peak_mb": 177.51,
+      "threads_peak": 38,
+      "db_connections_peak": 28,
+      "db_active_peak": 6,
+      "db_lock_waiters_peak": 3,
+      "event_loop_lag_s": {
+        "p50": 0.0009,
+        "p95": 0.003,
+        "p99": 0.0152
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 6,
+        "ready": 20,
+        "generating": 20,
+        "model-start": 20,
+        "model-complete": 20,
+        "contextual-opportunity": 20,
+        "sent": 19,
+        "native-background-job-suppressed": 19,
+        "turn-stats": 19,
+        "turn-timing": 20,
+        "twin-report": 20,
+        "stopped": 1,
+        "held": 1,
+        "delivery-reconcile": 1
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 20,
+        "delivery-unknown": 2,
+        "delivery-unresolved:read-NativeProtocolError": 1
+      },
+      "input_states": {
+        "complete": 19,
+        "stopped": 1
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-100-default",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-100-default",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-100-default.json",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 109.087,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-100-default",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 24
+      },
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 52.0193,
+        "p95": 97.0088,
+        "p99": 100.9712
+      },
+      "full_reply_within_20": 17,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 18,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 51.9786,
+        "p95": 96.9674,
+        "p99": 100.9309
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 51.9786,
+        "p95": 96.9674,
+        "p99": 100.9309
+      },
+      "elapsed_s": 102.016,
+      "throughput_turns_s": 0.9802,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 62.658,
+      "cpu_one_core_pct": 61.42,
+      "rss_peak_mb": 226.49,
+      "threads_peak": 27,
+      "db_connections_peak": 23,
+      "db_active_peak": 4,
+      "db_lock_waiters_peak": 3,
+      "event_loop_lag_s": {
+        "p50": 0.0007,
+        "p95": 0.0046,
+        "p99": 0.0208
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 7,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-model-tests",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_model.py"
+    ],
+    "exit_code": 1,
+    "seconds": 0.739,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "final-ledger-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "service/tests/test_onlyfans_ledger_markers_pg.py"
+    ],
+    "exit_code": 0,
+    "seconds": 25.973,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "final-isolation-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "service/tests/test_iso45_isolation_pg.py"
+    ],
+    "exit_code": 0,
+    "seconds": 16.14,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "final-100-8-verify",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-100-8-verify",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-100-8-verify.json",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "120"
+    ],
+    "exit_code": 0,
+    "seconds": 81.383,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-100-8-verify",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 42.8656,
+        "p95": 73.9027,
+        "p99": 75.0805
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 16,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 42.6133,
+        "p95": 73.728,
+        "p99": 75.0366
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 42.6133,
+        "p95": 73.728,
+        "p99": 75.0366
+      },
+      "elapsed_s": 75.289,
+      "throughput_turns_s": 1.3282,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 72.53,
+      "cpu_one_core_pct": 96.34,
+      "rss_peak_mb": 233.95,
+      "threads_peak": 39,
+      "db_connections_peak": 30,
+      "db_active_peak": 8,
+      "db_lock_waiters_peak": 5,
+      "event_loop_lag_s": {
+        "p50": 0.0029,
+        "p95": 0.0304,
+        "p99": 0.3042
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 5,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-native-service-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exit_code": 1,
+    "seconds": 37.107,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "baseline-linux-100-default",
+    "repo": "baseline-local",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "baseline-linux-100-default",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/baseline-linux-100-default.json",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 108.823,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/onlyfans_runtime/concurrent_admission.py",
+      "service/onlyfans_runtime/store.py",
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/ledger.py",
+      "service/native_pilot/send_gate.py",
+      "service/native_pilot/service.py",
+      "service/native_pilot/admission.py",
+      "service/twin_bridge/coordination.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "baseline-linux-100-default",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "completion_pct": 100.0,
+      "within_20": 17,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 52.0795,
+        "p95": 97.0877,
+        "p99": 101.0644
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 52.0795,
+        "p95": 97.0877,
+        "p99": 101.0644
+      },
+      "elapsed_s": 102.135,
+      "throughput_turns_s": 0.9791,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 74.373,
+      "cpu_one_core_pct": 72.82,
+      "rss_peak_mb": 222.22,
+      "threads_peak": 26,
+      "db_connections_peak": 22,
+      "db_active_peak": 3,
+      "db_lock_waiters_peak": 0,
+      "event_loop_lag_s": {
+        "p50": 0.0009,
+        "p95": 0.0256,
+        "p99": 0.1112
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 7,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100,
+        "turn-cancel-requested": 4
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100,
+        "fan-unresolved-delivery": 4
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0
+      }
+    }
+  },
+  {
+    "name": "final-3x20-verify",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-3x20-verify",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-3x20-verify.json",
+      "--creators",
+      "3",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 57.587,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-3x20-verify",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 3,
+        "executor_bound": 84
+      },
+      "eligible": 60,
+      "completed": 60,
+      "outstanding": 0,
+      "full_reply_completed": 60,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 40.5143,
+        "p95": 51.9548,
+        "p99": 52.2013
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 0,
+      "within_180": 60,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 39.7756,
+        "p95": 51.9017,
+        "p99": 52.1583
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 39.7756,
+        "p95": 51.9017,
+        "p99": 52.1583
+      },
+      "elapsed_s": 52.251,
+      "throughput_turns_s": 1.1483,
+      "posts": 60,
+      "receipt_states": {
+        "sent": 60
+      },
+      "cpu_seconds": 49.702,
+      "cpu_one_core_pct": 95.12,
+      "rss_peak_mb": 225.74,
+      "threads_peak": 87,
+      "db_connections_peak": 47,
+      "db_active_peak": 14,
+      "db_lock_waiters_peak": 12,
+      "event_loop_lag_s": {
+        "p50": 0.0173,
+        "p95": 0.1709,
+        "p99": 0.5415
+      },
+      "events": {
+        "runner-lease-acquired": 3,
+        "engine-queue": 12,
+        "ready": 60,
+        "generating": 60,
+        "model-start": 60,
+        "model-complete": 60,
+        "contextual-opportunity": 60,
+        "sent": 60,
+        "native-background-job-suppressed": 60,
+        "turn-stats": 60,
+        "turn-timing": 60,
+        "twin-report": 60
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 60
+      },
+      "input_states": {
+        "complete": 60
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-20-profile",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "cProfile",
+      "-o",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-20-profile.prof",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-20-profile",
+      "--out",
+      "/workspace/scratch/86d4770bae26/tmpfs-evidence/final-20-profile.json",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--rate",
+      "10",
+      "--duration",
+      "100"
+    ],
+    "exit_code": 0,
+    "seconds": 28.681,
+    "source_unchanged": true,
+    "group": "tmpfs-evidence",
+    "changed_since_start": [
+      "service/native_pilot/model.py",
+      "service/native_pilot/runner.py",
+      "service/native_pilot/service.py",
+      "service/tests/test_native_pilot_service.py",
+      "service/tests/test_concurrent_path_regressions.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "final-20-profile",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 20,
+      "completed": 20,
+      "outstanding": 0,
+      "full_reply_completed": 20,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 17.4538,
+        "p95": 21.8563,
+        "p99": 22.1418
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 16,
+      "within_180": 20,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 17.0566,
+        "p95": 21.8108,
+        "p99": 22.094
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 17.0566,
+        "p95": 21.8108,
+        "p99": 22.094
+      },
+      "elapsed_s": 22.171,
+      "throughput_turns_s": 0.9021,
+      "posts": 20,
+      "receipt_states": {
+        "sent": 20
+      },
+      "cpu_seconds": 19.152,
+      "cpu_one_core_pct": 86.38,
+      "rss_peak_mb": 197.61,
+      "threads_peak": 33,
+      "db_connections_peak": 28,
+      "db_active_peak": 7,
+      "db_lock_waiters_peak": 5,
+      "event_loop_lag_s": {
+        "p50": 0.0021,
+        "p95": 0.0321,
+        "p99": 0.2549
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 2,
+        "ready": 20,
+        "generating": 20,
+        "model-start": 20,
+        "model-complete": 20,
+        "contextual-opportunity": 20,
+        "sent": 20,
+        "native-background-job-suppressed": 20,
+        "turn-stats": 20,
+        "turn-timing": 20,
+        "twin-report": 20
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 20
+      },
+      "input_states": {
+        "complete": 20
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "compat-native-service-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exit_code": 1,
+    "seconds": 55.107,
+    "source_unchanged": true,
+    "group": "compat-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "compat-model",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_model.py"
+    ],
+    "exit_code": 0,
+    "seconds": 0.746,
+    "source_unchanged": true,
+    "group": "compat-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "compat-custom",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "service/tests/test_concurrent_path_regressions.py"
+    ],
+    "exit_code": 0,
+    "seconds": 0.838,
+    "source_unchanged": true,
+    "group": "compat-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "compat-100-8",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "compat-100-8",
+      "--out",
+      "/workspace/scratch/86d4770bae26/compat-evidence/compat-100-8.json",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "120"
+    ],
+    "exit_code": 0,
+    "seconds": 83.228,
+    "source_unchanged": true,
+    "group": "compat-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "compat-100-8",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 41.9902,
+        "p95": 75.2821,
+        "p99": 76.369
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 16,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 41.7051,
+        "p95": 75.055,
+        "p99": 76.326
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 41.7051,
+        "p95": 75.055,
+        "p99": 76.326
+      },
+      "elapsed_s": 76.856,
+      "throughput_turns_s": 1.3011,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 73.286,
+      "cpu_one_core_pct": 95.36,
+      "rss_peak_mb": 230.85,
+      "threads_peak": 39,
+      "db_connections_peak": 30,
+      "db_active_peak": 9,
+      "db_lock_waiters_peak": 5,
+      "event_loop_lag_s": {
+        "p50": 0.0029,
+        "p95": 0.0314,
+        "p99": 0.273
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 5,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "compat-timeout-accepted",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "compat-timeout-accepted",
+      "--out",
+      "/workspace/scratch/86d4770bae26/compat-evidence/compat-timeout-accepted.json",
+      "--fans",
+      "20",
+      "--prepare",
+      "8",
+      "--send",
+      "4",
+      "--fault",
+      "timeout_accepted",
+      "--duration",
+      "90"
+    ],
+    "exit_code": 0,
+    "seconds": 66.605,
+    "source_unchanged": false,
+    "group": "compat-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "compat-timeout-accepted",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 20,
+      "completed": 20,
+      "outstanding": 0,
+      "full_reply_completed": 19,
+      "full_reply_outstanding": 1,
+      "full_reply_latency_s": {
+        "p50": 13.702,
+        "p95": 25.3005,
+        "p99": 25.3005
+      },
+      "full_reply_within_20": 16,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 16,
+      "within_180": 20,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 13.6561,
+        "p95": 23.2104,
+        "p99": 25.2551
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 13.6561,
+        "p95": 23.2104,
+        "p99": 25.2551
+      },
+      "elapsed_s": 61.759,
+      "throughput_turns_s": 0.3238,
+      "posts": 20,
+      "receipt_states": {
+        "sent": 20
+      },
+      "cpu_seconds": 14.125,
+      "cpu_one_core_pct": 22.87,
+      "rss_peak_mb": 180.38,
+      "threads_peak": 26,
+      "db_connections_peak": 27,
+      "db_active_peak": 5,
+      "db_lock_waiters_peak": 3,
+      "event_loop_lag_s": {
+        "p50": 0.0009,
+        "p95": 0.0032,
+        "p99": 0.0213
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 4,
+        "ready": 20,
+        "generating": 20,
+        "model-start": 20,
+        "model-complete": 20,
+        "contextual-opportunity": 20,
+        "sent": 19,
+        "native-background-job-suppressed": 19,
+        "turn-stats": 19,
+        "turn-timing": 20,
+        "twin-report": 20,
+        "stopped": 1,
+        "held": 1,
+        "delivery-reconcile": 1
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 20,
+        "delivery-unknown": 2
+      },
+      "input_states": {
+        "complete": 19,
+        "stopped": 1
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "compat-50x2-concurrent",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "compat-50x2-concurrent",
+      "--out",
+      "/workspace/scratch/86d4770bae26/compat-evidence/compat-50x2-concurrent.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 203.641,
+    "source_unchanged": true,
+    "group": "compat-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "compat-50x2-concurrent",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 50,
+        "executor_bound": 312
+      },
+      "eligible": 100,
+      "completed": 83,
+      "outstanding": 17,
+      "full_reply_completed": 83,
+      "full_reply_outstanding": 17,
+      "full_reply_latency_s": {
+        "p50": 114.2783,
+        "p95": 116.4895,
+        "p99": 116.8476
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 83.0,
+      "within_20": 0,
+      "within_180": 83,
+      "share_within_180": 0.83,
+      "latency_s": {
+        "p50": 109.8858,
+        "p95": 115.7215,
+        "p99": 116.8129
+      },
+      "right_censored_age_s": {
+        "p50": 190.0423,
+        "p95": 190.0423,
+        "p99": 190.0423
+      },
+      "completion_or_censor_s": {
+        "p50": 111.2263,
+        "p95": 190.0423,
+        "p99": 190.0423
+      },
+      "elapsed_s": 190.042,
+      "throughput_turns_s": 0.4367,
+      "posts": 83,
+      "receipt_states": {
+        "sent": 83
+      },
+      "cpu_seconds": 137.336,
+      "cpu_one_core_pct": 72.27,
+      "rss_peak_mb": 343.02,
+      "threads_peak": 315,
+      "db_connections_peak": 121,
+      "db_active_peak": 11,
+      "db_lock_waiters_peak": 8,
+      "event_loop_lag_s": {
+        "p50": 0.0008,
+        "p95": 0.057,
+        "p99": 0.6798
+      },
+      "events": {
+        "runner-lease-acquired": 50,
+        "engine-queue": 527,
+        "ready": 100,
+        "generating": 100,
+        "held": 2,
+        "turn-timing": 100,
+        "twin-report": 100,
+        "turn-abandoned": 17,
+        "resumed": 2,
+        "model-start": 83,
+        "model-complete": 83,
+        "contextual-opportunity": 83,
+        "sent": 83,
+        "native-background-job-suppressed": 83,
+        "turn-stats": 83
+      },
+      "reasons": {
+        "service-error:TimeoutError": 2,
+        "native-turn-failed": 17,
+        "disabled_blocked_or_stale_input": 83
+      },
+      "input_states": {
+        "failed": 17,
+        "complete": 83
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "compat-50x2-gap",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "compat-50x2-gap",
+      "--out",
+      "/workspace/scratch/86d4770bae26/compat-evidence/compat-50x2-gap.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--mode",
+      "gap",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 205.241,
+    "source_unchanged": true,
+    "group": "compat-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "compat-50x2-gap",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 50,
+        "executor_bound": 312
+      },
+      "eligible": 100,
+      "completed": 95,
+      "outstanding": 5,
+      "full_reply_completed": 95,
+      "full_reply_outstanding": 5,
+      "full_reply_latency_s": {
+        "p50": 106.4013,
+        "p95": 124.7305,
+        "p99": 125.6553
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 95.0,
+      "within_20": 0,
+      "within_180": 95,
+      "share_within_180": 0.95,
+      "latency_s": {
+        "p50": 105.2833,
+        "p95": 124.6833,
+        "p99": 125.6247
+      },
+      "right_censored_age_s": {
+        "p50": 190.0425,
+        "p95": 190.0425,
+        "p99": 190.0425
+      },
+      "completion_or_censor_s": {
+        "p50": 117.5069,
+        "p95": 125.6247,
+        "p99": 190.0425
+      },
+      "elapsed_s": 190.042,
+      "throughput_turns_s": 0.4999,
+      "posts": 95,
+      "receipt_states": {
+        "sent": 95
+      },
+      "cpu_seconds": 138.311,
+      "cpu_one_core_pct": 72.78,
+      "rss_peak_mb": 342.15,
+      "threads_peak": 315,
+      "db_connections_peak": 119,
+      "db_active_peak": 10,
+      "db_lock_waiters_peak": 6,
+      "event_loop_lag_s": {
+        "p50": 0.0009,
+        "p95": 0.0614,
+        "p99": 0.6616
+      },
+      "events": {
+        "runner-lease-acquired": 50,
+        "engine-queue": 548,
+        "ready": 100,
+        "generating": 100,
+        "held": 10,
+        "turn-timing": 100,
+        "twin-report": 100,
+        "turn-abandoned": 5,
+        "resumed": 10,
+        "model-start": 95,
+        "model-complete": 95,
+        "contextual-opportunity": 95,
+        "sent": 95,
+        "native-background-job-suppressed": 95,
+        "turn-stats": 95
+      },
+      "reasons": {
+        "service-error:TimeoutError": 10,
+        "native-turn-failed": 5,
+        "disabled_blocked_or_stale_input": 95
+      },
+      "input_states": {
+        "failed": 5,
+        "complete": 95
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-clock-native-service-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exit_code": 1,
+    "seconds": 25.984,
+    "source_unchanged": true,
+    "group": "compat-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "committed-100-capacity",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "committed-100-capacity",
+      "--out",
+      "/workspace/scratch/86d4770bae26/compat-evidence/committed-100-capacity.json",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "120"
+    ],
+    "exit_code": 1,
+    "seconds": 126.237,
+    "source_unchanged": false,
+    "group": "compat-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "complete-native-service-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exit_code": 1,
+    "seconds": 106.718,
+    "source_unchanged": true,
+    "group": "complete-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "complete-50x2-concurrent",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "complete-50x2-concurrent",
+      "--out",
+      "/workspace/scratch/86d4770bae26/complete-evidence/complete-50x2-concurrent.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--fleet-db-pool",
+      "64",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 1,
+    "seconds": 0.339,
+    "source_unchanged": true,
+    "group": "complete-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "complete-50x2-gap",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "complete-50x2-gap",
+      "--out",
+      "/workspace/scratch/86d4770bae26/complete-evidence/complete-50x2-gap.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--fleet-db-pool",
+      "64",
+      "--mode",
+      "gap",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 1,
+    "seconds": 0.337,
+    "source_unchanged": true,
+    "group": "complete-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "complete-100-capacity",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "complete-100-capacity",
+      "--out",
+      "/workspace/scratch/86d4770bae26/complete-evidence/complete-100-capacity.json",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "120"
+    ],
+    "exit_code": 1,
+    "seconds": 0.341,
+    "source_unchanged": true,
+    "group": "complete-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "complete-native-service-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exit_code": 1,
+    "seconds": 101.841,
+    "source_unchanged": true,
+    "group": "sealed-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "complete-50x2-concurrent",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "complete-50x2-concurrent",
+      "--out",
+      "/workspace/scratch/86d4770bae26/sealed-evidence/complete-50x2-concurrent.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--fleet-db-pool",
+      "64",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 206.397,
+    "source_unchanged": false,
+    "group": "sealed-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "complete-50x2-concurrent",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 50,
+        "executor_bound": 312
+      },
+      "eligible": 100,
+      "completed": 0,
+      "outstanding": 100,
+      "full_reply_completed": 0,
+      "full_reply_outstanding": 100,
+      "full_reply_latency_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 0.0,
+      "within_20": 0,
+      "within_180": 0,
+      "share_within_180": 0.0,
+      "latency_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "right_censored_age_s": {
+        "p50": 190.0224,
+        "p95": 190.0224,
+        "p99": 190.0224
+      },
+      "completion_or_censor_s": {
+        "p50": 190.0224,
+        "p95": 190.0224,
+        "p99": 190.0224
+      },
+      "elapsed_s": 190.022,
+      "throughput_turns_s": 0.0,
+      "posts": 0,
+      "receipt_states": {},
+      "cpu_seconds": 147.347,
+      "cpu_one_core_pct": 77.54,
+      "rss_peak_mb": 358.19,
+      "threads_peak": 314,
+      "db_connections_peak": 180,
+      "db_active_peak": 21,
+      "db_lock_waiters_peak": 13,
+      "event_loop_lag_s": {
+        "p50": 0.0008,
+        "p95": 0.0589,
+        "p99": 0.6727
+      },
+      "events": {
+        "runner-lease-acquired": 50,
+        "engine-queue": 540,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "turn-timing": 100,
+        "twin-report": 100,
+        "turn-abandoned": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100,
+        "send-check-failed": 100
+      },
+      "input_states": {
+        "failed": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "complete-50x2-gap",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "complete-50x2-gap",
+      "--out",
+      "/workspace/scratch/86d4770bae26/sealed-evidence/complete-50x2-gap.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--fleet-db-pool",
+      "64",
+      "--mode",
+      "gap",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 207.55,
+    "source_unchanged": false,
+    "group": "sealed-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false,
+    "metrics": {
+      "name": "complete-50x2-gap",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 50,
+        "executor_bound": 312
+      },
+      "eligible": 100,
+      "completed": 0,
+      "outstanding": 100,
+      "full_reply_completed": 0,
+      "full_reply_outstanding": 100,
+      "full_reply_latency_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 0.0,
+      "within_20": 0,
+      "within_180": 0,
+      "share_within_180": 0.0,
+      "latency_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "right_censored_age_s": {
+        "p50": 190.0501,
+        "p95": 190.0501,
+        "p99": 190.0501
+      },
+      "completion_or_censor_s": {
+        "p50": 190.0501,
+        "p95": 190.0501,
+        "p99": 190.0501
+      },
+      "elapsed_s": 190.05,
+      "throughput_turns_s": 0.0,
+      "posts": 0,
+      "receipt_states": {},
+      "cpu_seconds": 138.417,
+      "cpu_one_core_pct": 72.83,
+      "rss_peak_mb": 358.91,
+      "threads_peak": 314,
+      "db_connections_peak": 169,
+      "db_active_peak": 19,
+      "db_lock_waiters_peak": 12,
+      "event_loop_lag_s": {
+        "p50": 0.0008,
+        "p95": 0.0508,
+        "p99": 0.6984
+      },
+      "events": {
+        "runner-lease-acquired": 50,
+        "engine-queue": 547,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "turn-timing": 100,
+        "twin-report": 100,
+        "turn-abandoned": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100,
+        "send-check-failed": 100
+      },
+      "input_states": {
+        "failed": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "complete-100-capacity",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "complete-100-capacity",
+      "--out",
+      "/workspace/scratch/86d4770bae26/sealed-evidence/complete-100-capacity.json",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "120"
+    ],
+    "exit_code": 1,
+    "seconds": 5.742,
+    "source_unchanged": true,
+    "group": "sealed-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "complete-projection-native-service-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exit_code": 1,
+    "seconds": 102.55,
+    "source_unchanged": false,
+    "group": "sealed-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py",
+      "service/native_pilot/tools/concurrent_benchmark.py"
+    ],
+    "application_and_harness_unchanged": false
+  },
+  {
+    "name": "pool-50x2-concurrent",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "pool-50x2-concurrent",
+      "--out",
+      "/workspace/scratch/86d4770bae26/sealed-evidence/pool-50x2-concurrent.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--fleet-db-pool",
+      "64",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 129.899,
+    "source_unchanged": false,
+    "group": "sealed-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py"
+    ],
+    "application_and_harness_unchanged": true,
+    "metrics": {
+      "name": "pool-50x2-concurrent",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 50,
+        "executor_bound": 312
+      },
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 112.7128,
+        "p95": 113.9375,
+        "p99": 114.0864
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 0,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 106.106,
+        "p95": 109.2674,
+        "p99": 112.0837
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 106.106,
+        "p95": 109.2674,
+        "p99": 112.0837
+      },
+      "elapsed_s": 114.151,
+      "throughput_turns_s": 0.876,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 115.706,
+      "cpu_one_core_pct": 101.36,
+      "rss_peak_mb": 363.31,
+      "threads_peak": 315,
+      "db_connections_peak": 181,
+      "db_active_peak": 24,
+      "db_lock_waiters_peak": 11,
+      "event_loop_lag_s": {
+        "p50": 0.0349,
+        "p95": 0.9184,
+        "p99": 2.6391
+      },
+      "events": {
+        "runner-lease-acquired": 50,
+        "engine-queue": 308,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "pool-50x2-gap",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "pool-50x2-gap",
+      "--out",
+      "/workspace/scratch/86d4770bae26/sealed-evidence/pool-50x2-gap.json",
+      "--creators",
+      "50",
+      "--fans",
+      "2",
+      "--fleet-db-pool",
+      "64",
+      "--mode",
+      "gap",
+      "--duration",
+      "190"
+    ],
+    "exit_code": 0,
+    "seconds": 141.118,
+    "source_unchanged": true,
+    "group": "sealed-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py"
+    ],
+    "application_and_harness_unchanged": true,
+    "metrics": {
+      "name": "pool-50x2-gap",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 50,
+        "executor_bound": 312
+      },
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 104.9207,
+        "p95": 123.134,
+        "p99": 123.3336
+      },
+      "full_reply_within_20": 0,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 0,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 102.9801,
+        "p95": 122.5585,
+        "p99": 123.2832
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 102.9801,
+        "p95": 122.5585,
+        "p99": 123.2832
+      },
+      "elapsed_s": 123.436,
+      "throughput_turns_s": 0.8101,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 117.176,
+      "cpu_one_core_pct": 94.93,
+      "rss_peak_mb": 361.71,
+      "threads_peak": 315,
+      "db_connections_peak": 183,
+      "db_active_peak": 23,
+      "db_lock_waiters_peak": 11,
+      "event_loop_lag_s": {
+        "p50": 0.0052,
+        "p95": 0.4549,
+        "p99": 1.9326
+      },
+      "events": {
+        "runner-lease-acquired": 50,
+        "engine-queue": 340,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-published-100",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/native_pilot/tools/concurrent_benchmark.py",
+      "--name",
+      "final-published-100",
+      "--out",
+      "/workspace/scratch/86d4770bae26/sealed-evidence/final-published-100.json",
+      "--prepare",
+      "8",
+      "--send",
+      "8",
+      "--rate",
+      "10",
+      "--duration",
+      "120"
+    ],
+    "exit_code": 0,
+    "seconds": 77.757,
+    "source_unchanged": true,
+    "group": "sealed-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py"
+    ],
+    "application_and_harness_unchanged": true,
+    "metrics": {
+      "name": "final-published-100",
+      "clock": "real wall clock; no time scaling",
+      "transports": "synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL",
+      "fleet_simulation": {
+        "service_processes": 1,
+        "creator_services": 1,
+        "executor_bound": 36
+      },
+      "eligible": 100,
+      "completed": 100,
+      "outstanding": 0,
+      "full_reply_completed": 100,
+      "full_reply_outstanding": 0,
+      "full_reply_latency_s": {
+        "p50": 40.865,
+        "p95": 70.3818,
+        "p99": 71.502
+      },
+      "full_reply_within_20": 19,
+      "operator_owned_excluded": 0,
+      "completion_pct": 100.0,
+      "within_20": 19,
+      "within_180": 100,
+      "share_within_180": 1.0,
+      "latency_s": {
+        "p50": 40.5897,
+        "p95": 70.1625,
+        "p99": 71.4765
+      },
+      "right_censored_age_s": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "completion_or_censor_s": {
+        "p50": 40.5897,
+        "p95": 70.1625,
+        "p99": 71.4765
+      },
+      "elapsed_s": 71.905,
+      "throughput_turns_s": 1.3907,
+      "posts": 100,
+      "receipt_states": {
+        "sent": 100
+      },
+      "cpu_seconds": 68.929,
+      "cpu_one_core_pct": 95.86,
+      "rss_peak_mb": 234.02,
+      "threads_peak": 39,
+      "db_connections_peak": 30,
+      "db_active_peak": 9,
+      "db_lock_waiters_peak": 7,
+      "event_loop_lag_s": {
+        "p50": 0.0027,
+        "p95": 0.0298,
+        "p99": 0.2293
+      },
+      "events": {
+        "runner-lease-acquired": 1,
+        "engine-queue": 5,
+        "ready": 100,
+        "generating": 100,
+        "model-start": 100,
+        "model-complete": 100,
+        "contextual-opportunity": 100,
+        "sent": 100,
+        "native-background-job-suppressed": 100,
+        "turn-stats": 100,
+        "turn-timing": 100,
+        "twin-report": 100
+      },
+      "reasons": {
+        "disabled_blocked_or_stale_input": 100
+      },
+      "input_states": {
+        "complete": 100
+      },
+      "correctness": {
+        "wrong_recipient_posts": 0,
+        "duplicate_receipts": 0,
+        "held_posts": 0,
+        "contender_activated": false,
+        "takeover_posts_after": 0,
+        "duplicate_sends": 0
+      }
+    }
+  },
+  {
+    "name": "final-800-service-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exit_code": 1,
+    "seconds": 126.633,
+    "source_unchanged": true,
+    "group": "sealed-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py"
+    ],
+    "application_and_harness_unchanged": true
+  },
+  {
+    "name": "pause-resume-diagnostic",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "/workspace/scratch/86d4770bae26/diagnostic_multi.py"
+    ],
+    "exit_code": 1,
+    "seconds": 80.928,
+    "source_unchanged": true,
+    "group": "diagnostic-evidence",
+    "changed_since_start": [
+      "service/tests/test_native_pilot_service.py"
+    ],
+    "application_and_harness_unchanged": true
+  },
+  {
+    "name": "terminal-800-service-pg",
+    "repo": "backend",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "service/tests/test_native_pilot_service_pg.py"
+    ],
+    "exit_code": 0,
+    "seconds": 81.512,
+    "source_unchanged": true,
+    "group": "terminal-evidence",
+    "changed_since_start": [],
+    "application_and_harness_unchanged": true
+  }
+]

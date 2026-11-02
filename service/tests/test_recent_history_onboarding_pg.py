@@ -336,3 +336,20 @@ def test_fact_free_paid_processing_receipted_once_and_older_queue_preserved(read
     with engine.connect() as c:
         assert c.scalar(text('SELECT count(*) FROM of_profile_receipts WHERE message_id=10'))==0
         assert c.scalar(text('SELECT count(*) FROM messages WHERE message_id=10'))==1
+
+
+def test_runtime_lock_contention_is_retryable_and_failed_session_rolls_back(ready):
+    from sqlalchemy.exc import DBAPIError
+    from onlyfans_runtime.parallel_history import _transient_database_error
+    store,_,engine,_=ready
+    with Session(engine) as holder, holder.begin():
+        holder.scalar(select(OfRuntime).where(OfRuntime.account_id==A).with_for_update())
+        with Session(engine) as contender:
+            with pytest.raises(DBAPIError) as caught:
+                with contender.begin():
+                    contender.scalar(select(OfRuntime).where(OfRuntime.account_id==A).with_for_update(nowait=True))
+            assert caught.value.orig.pgcode=='55P03'
+            assert _transient_database_error(caught.value)
+            assert not contender.in_transaction()
+    with Session(engine) as db, db.begin():
+        assert db.scalar(select(OfRuntime).where(OfRuntime.account_id==A).with_for_update(nowait=True))

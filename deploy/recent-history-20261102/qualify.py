@@ -16,6 +16,7 @@ try:
  for k,v in env.items():args+=['-e',k+'='+v]
  args+=[manifest['testImage'],'-m','pytest','-q','--tb=short','--disable-warnings',
   'tests/test_recent_history_onboarding_pg.py','tests/test_history_pilot_measurement.py',
+  'tests/test_parallel_history_scheduler.py',
   'tests/test_profile_learning_cohort.py','tests/test_onlyfans_connection_states_pg.py','tests/test_onlyfans_connections_pg.py',
   'tests/test_onlyfans_launch_personality_workflow.py::test_structured_approved_onboarding_excludes_private_data_and_beats_archive_claims',
   'tests/test_onlyfans_launch_personality_workflow.py::test_structured_onboarding_conflicts_block_existing_approval_atomically']

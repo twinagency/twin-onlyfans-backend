@@ -1,4 +1,4 @@
-"""Build a two-file reporting repair on the deployed immutable pilot images."""
+"""Build the reporting and importer refresh repair on the deployed immutable pilot images."""
 import hashlib,json,os,pathlib,subprocess,sys
 os.umask(0o077)
 HERE=pathlib.Path(__file__).resolve().parent

@@ -101,8 +101,8 @@ finally:s.close()
  baseline_text=run(base+['-'],input=setup)
  baseline=json.loads(baseline_text)  # Empty stdin/output must abort before any pilot job starts.
  assert baseline['schemaVersion']=='of-history-pilot-snapshot.v1' and baseline['accountId']==A
- assert all(k in baseline for k in ['sources','receipts','modelCalls','cutoffAt','historyPageCanonicalAdditions'])
- (P/'pilot.before.private.json').write_text(baseline_text)
+ assert all(k in baseline for k in ['observedAt','sources','receipts','modelCalls','cutoffAt','historyPageCanonicalAdditions','phaseProgress'])
+ with (P/'pilot.before.private.json').open('x') as stream:stream.write(baseline_text)
  tmp=C.with_suffix('.recent-history-next');tmp.write_text(json.dumps(cfg,indent=2)+'\n');os.replace(tmp,C);changed=True
  compose('up','-d','--no-deps','--no-build','--pull','never','api','worker')
  for _ in range(30):

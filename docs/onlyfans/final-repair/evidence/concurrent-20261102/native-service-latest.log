@@ -1,0 +1,22 @@
+ledger level ok 57
+loop level ok 191
+{"event": "finished", "persistent": true}
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 2230, in <module>
+    main()
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 2222, in main
+    asyncio.run(multi_level(backend, root))
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 1617, in multi_level
+    await until(lambda: len(posted(http, FA)) == 1, "the held message is answered after the Pause", events)
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 409, in until
+    raise AssertionError("timeout waiting for " + label + "; last events: " + json.dumps(events[-6:], default=str))
+AssertionError: timeout waiting for the held message is answered after the Pause; last events: [{"event": "ready", "pilot_id": "svc-176774528-318022381", "account_id": "176774528", "fan_id": 318022381, "engine": "fastt-native", "persistent": true, "lease_utc": "2026-11-02 04:35:39.123000", "creator_profile": "native-default"}, {"event": "generating", "source_message_id": "5021", "engine": "fastt-native"}, {"event": "sent", "engine": "fastt-native", "provider_message_id": "7001", "pilot_sent": 1, "limit": 95}, {"event": "turn-stats", "stats": {}}, {"event": "turn-timing", "account": "176774528", "fan_id": 318022381, "outcome": "sent", "first_input_at": "2026-11-02 04:33:39.123000", "claimed_at": "2026-11-02 04:33:39.123000", "generation_started_at": "2026-11-02 04:33:39.123000", "generation_done_at": "2026-11-02 04:33:39.123000", "decision_at": "2026-11-02 04:33:39.123000", "provider_first_send_at": "2026-11-02 04:33:39.123000", "provider_last_send_at": "2026-11-02 04:33:39.123000", "reconciled_at": "2026-11-02 04:33:39.123000", "user_visible_s": 0.0, "queue_before_claim_s": 0.0, "generation_s": 0.0, "decision_to_send_s": 0.0, "bubbles_sent": 1, "requeues": 0, "model": {"calls": 0, "failed": 0, "truncated": 0, "latency_ms": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "purposes": {}}}, {"event": "engine-queue", "pending": 0, "ready": 0, "quiet": 0, "in_flight": 0, "send_waiting": 0, "oldest_wait_s": 0.0, "concurrency": 1}]

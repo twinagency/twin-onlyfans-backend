@@ -1,0 +1,5 @@
+/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_content.py:149: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow() - timedelta(seconds=30)))
+/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_content.py:166: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  result = {'id': 10000 + len(sent), 'text': text, 'createdAt': datetime.utcnow().isoformat(), 'fromUser': {'id': 900001}}
+{"native_single_card_real_shape": true, "provider_calls": 1, "model_calls": 1}

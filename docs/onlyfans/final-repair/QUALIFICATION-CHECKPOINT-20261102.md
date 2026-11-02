@@ -79,3 +79,8 @@ No row is a claim that the complete programme is finished. The frozen all-139 Po
 ## Concrete resource packet
 
 The private Linux source/reference archives and the exact five unpublished-file request are listed in [the isolated qualification unblock packet](ISOLATED-QUALIFICATION-UNBLOCK-20261102.md). This requests no live delivery or deployment permission. Both automatically rejected actions remain unexecuted; independent Windows/local repairs and focused reruns continue.
+
+
+## Concurrent path continuation
+
+The isolated concurrent-path implementation is `cfab868e2c87706ddce4ff6cfb2bbeffd76c720f`, preserving `d3a7022` as its parent. See [the measured concurrent qualification report](CONCURRENT-QUALIFICATION-20261102.md) for exact workloads, configuration, source hashes, commands and retained failures. It adds no sender or Moxy redesign and changes no production settings. The 100-in-20-second target failed; the source 25–90-second paced synthetic workload passed 100/100 within 180 seconds. The declared 50-creator x2-fan synthetic roster completed 100/100 with a bounded aggregate async pool64 and PostgreSQL max_connections300. Final native-service PostgreSQL passes800checks; local service passes776. Full25–180-second pacing, live model/provider performance, separate-process fleet sizing and the original R9 gates are not cleared. This section does not supersede the frozen 17-failure broad PostgreSQL report or turn concurrency results into release qualification.

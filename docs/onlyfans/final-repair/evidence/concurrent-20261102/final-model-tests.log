@@ -1,0 +1,34 @@
+test_budget_consumes_failures_and_latches (__main__.ModelTests.test_budget_consumes_failures_and_latches) ... ok
+test_concurrent_calls_reserve_without_overshoot (__main__.ModelTests.test_concurrent_calls_reserve_without_overshoot) ... FAIL
+test_deadline_bounds_total_request_and_cancellation (__main__.ModelTests.test_deadline_bounds_total_request_and_cancellation) ... ok
+test_incomplete_output_records_safe_finish_diagnostics (__main__.ModelTests.test_incomplete_output_records_safe_finish_diagnostics) ... ok
+test_invalid_provider_envelopes_and_usage (__main__.ModelTests.test_invalid_provider_envelopes_and_usage) ... ok
+test_json_format_preserved_and_parsed (__main__.ModelTests.test_json_format_preserved_and_parsed) ... ok
+test_pinned_wire_native_prompt_and_real_result (__main__.ModelTests.test_pinned_wire_native_prompt_and_real_result) ... ok
+test_post_response_stop_discards_result (__main__.ModelTests.test_post_response_stop_discards_result) ... ok
+test_reject_bad_json_no_retry (__main__.ModelTests.test_reject_bad_json_no_retry) ... ok
+test_resolver_purposes_get_bounded_larger_output_cap (__main__.ModelTests.test_resolver_purposes_get_bounded_larger_output_cap) ... ok
+test_response_bound (__main__.ModelTests.test_response_bound) ... ok
+test_scope_route_and_inputs_refused_before_request (__main__.ModelTests.test_scope_route_and_inputs_refused_before_request) ... ok
+test_stop_deadline_and_reservation_refusal (__main__.ModelTests.test_stop_deadline_and_reservation_refusal) ... ok
+test_transport_error_does_not_leak (__main__.ModelTests.test_transport_error_does_not_leak) ... ok
+test_unknown_cost_is_not_reported_as_free (__main__.ModelTests.test_unknown_cost_is_not_reported_as_free) ... ok
+
+======================================================================
+FAIL: test_concurrent_calls_reserve_without_overshoot (__main__.ModelTests.test_concurrent_calls_reserve_without_overshoot)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_model.py", line 275, in test_concurrent_calls_reserve_without_overshoot
+    self.assertEqual(sum(isinstance(r, LLMResult) for r in results), 1)
+AssertionError: 0 != 1
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.089s
+
+FAILED (failures=1)

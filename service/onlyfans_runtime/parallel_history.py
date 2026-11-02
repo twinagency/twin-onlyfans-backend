@@ -9,6 +9,15 @@ import time
 from .import_capacity import capacity
 
 
+def _transient_database_error(exc):
+    from sqlalchemy.exc import DBAPIError
+    if not isinstance(exc, DBAPIError):
+        return False
+    code = getattr(exc.orig, 'pgcode', None)
+    return (exc.connection_invalidated or code in {'55P03', '57014', '40001', '40P01'}
+            or isinstance(code, str) and code.startswith('08'))
+
+
 def run(store, tenant, accounts, stop, *, workers=64, refresh=None):
     """I/O concurrency across fans; cursors and session fences remain in HistoryRecovery.
 
@@ -20,7 +29,9 @@ def run(store, tenant, accounts, stop, *, workers=64, refresh=None):
         raise ValueError('history workers must be 1–256')
     recovery = HistoryRecovery(store)
     active, next_at, scanning, last_scan = {}, {}, set(), {}
-    refreshed = time.monotonic()
+    refresh_due = time.monotonic() + (60 if accounts else 0)
+    refresh_failures = 0
+    seed_failures = {}
     with futures.ThreadPoolExecutor(max_workers=workers) as pool:
         while not stop.is_set():
             now = time.monotonic()
@@ -41,9 +52,25 @@ def run(store, tenant, accounts, stop, *, workers=64, refresh=None):
                     next_at[account] = max(next_at.get(account, 0), now + 1)
                 print(json.dumps({'component':'parallel-history','account':account,
                     'state':state,'pages':pages,'errorType':error}), flush=True)
-            if refresh is not None and now-refreshed >= 60:
-                accounts = refresh()
-                refreshed = time.monotonic()
+            if refresh is not None and now >= refresh_due:
+                try:
+                    accounts = refresh()
+                except Exception as exc:
+                    if not _transient_database_error(exc):
+                        raise
+                    # No new reads may use a cohort whose credentials could
+                    # not be refreshed. Already admitted reads retain their
+                    # existing durable generation and provider fences.
+                    accounts = {}
+                    refresh_failures = min(refresh_failures + 1, 7)
+                    delay = min(60, 2 ** (refresh_failures - 1))
+                    print(json.dumps({'component':'parallel-history','state':'cohort_refresh_deferred',
+                        'errorType':type(exc).__name__,'retrySeconds':delay}), flush=True)
+                else:
+                    refresh_failures, delay = 0, 60
+                refresh_due = time.monotonic() + delay
+            if stop.is_set():
+                break
             counts = {}
             for account, _ in active.values():
                 counts[account] = counts.get(account, 0) + 1
@@ -60,7 +87,20 @@ def run(store, tenant, accounts, stop, *, workers=64, refresh=None):
                 discovery = account not in scanning and now-last_scan.get(account, -60) >= 2
                 if discovery:
                     # One coordinator owns seeding/discovery for each account.
-                    recovery.request_account(tenant, account, connection_revision=revision)
+                    try:
+                        recovery.request_account(tenant, account, connection_revision=revision)
+                    except Exception as exc:
+                        if not _transient_database_error(exc):
+                            raise
+                        failures = min(seed_failures.get(account, 0) + 1, 7)
+                        seed_failures[account] = failures
+                        delay = min(60, 2 ** (failures - 1))
+                        next_at[account] = now + delay
+                        print(json.dumps({'component':'parallel-history','account':account,
+                            'state':'discovery_deferred','errorType':type(exc).__name__,
+                            'retrySeconds':delay}), flush=True)
+                        continue
+                    seed_failures.pop(account, None)
                     scanning.add(account)
                     last_scan[account] = now
                 task = pool.submit(recovery.step, tenant, account, bound.reader,
@@ -102,7 +142,7 @@ def main():
                 return result
         return result
     try:
-        run(store, tenant, refresh(), stop,
+        run(store, tenant, {}, stop,
             workers=int(os.environ.get('ONLYFANS_IMPORT_WORKERS', '64')), refresh=refresh)
     finally:
         store.close()

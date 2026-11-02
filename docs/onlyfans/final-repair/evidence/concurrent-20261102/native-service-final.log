@@ -1,0 +1,22 @@
+ledger level ok 57
+loop level ok 191
+{"event": "finished", "persistent": true}
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 2225, in <module>
+    main()
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 2217, in main
+    asyncio.run(multi_level(backend, root))
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 1424, in multi_level
+    await until(lambda: len(posted(http, FA)) == 1 and len(posted(http, FB)) == 1, "A and B answered", events)
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 409, in until
+    raise AssertionError("timeout waiting for " + label + "; last events: " + json.dumps(events[-6:], default=str))
+AssertionError: timeout waiting for A and B answered; last events: [{"event": "ready", "pilot_id": "svc-176774528-318022380", "account_id": "176774528", "fan_id": 318022380, "engine": "fastt-native", "persistent": true, "lease_utc": "2026-11-02 04:33:00.123000", "creator_profile": "native-default"}, {"event": "generating", "source_message_id": "5001", "engine": "fastt-native"}, {"event": "lease-lost", "reason": "authority-lost"}, {"event": "turn-timing", "account": "176774528", "fan_id": 318022380, "outcome": "error:pilot-deadline", "first_input_at": "2026-11-02 04:24:26.123000", "claimed_at": "2026-11-02 04:33:00.123000", "generation_started_at": "2026-11-02 04:33:00.123000", "generation_done_at": "2026-11-02 04:34:00.123000", "decision_at": null, "provider_first_send_at": null, "provider_last_send_at": null, "reconciled_at": "2026-11-02 04:34:00.123000", "user_visible_s": 574.0, "queue_before_claim_s": 514.0, "generation_s": 60.0, "decision_to_send_s": null, "bubbles_sent": 0, "requeues": 0, "model": {"calls": 0, "failed": 0, "truncated": 0, "latency_ms": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "purposes": {}}}, {"event": "turn-abandoned", "reason": "pilot-deadline", "fan_id": 318022380}, {"event": "engine-queue", "pending": 0, "ready": 0, "quiet": 0, "in_flight": 0, "send_waiting": 0, "oldest_wait_s": 0.0, "concurrency": 1}]

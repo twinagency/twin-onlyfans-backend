@@ -147,5 +147,18 @@
   "images": {
     "worker": "sha256:9a70ed1001e221fc4a9171112b3ac49112cfa7cdbe11dd209e0267e59271330e",
     "api": "sha256:a0aa29f506aa0f81f1a4cfb275ca7d185ce1a771f9489c91254311ac28e87934"
+  },
+  "handoffReconciliation": {
+    "standaloneCommitCompared": "91a8325b1963b0b134d81d7008bc366f93cf51ef",
+    "concurrentReplyHeadRetained": "766a7992908e5706d024b90e083d6a260f93a8c5",
+    "importerRefreshFix": "transient DB backoff, suspend stale cohort, isolate discovery failure; not deployed",
+    "newDeploymentPerformed": false,
+    "liveReadback": "blocked: control device offline",
+    "tests": {
+      "combinedPassed": 59,
+      "runtimeLockPassed": 1,
+      "finalSchedulerPassed": 7,
+      "countsOverlap": true
+    }
   }
 }

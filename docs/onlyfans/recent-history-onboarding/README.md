@@ -2,6 +2,8 @@
 
 **Maile's backend pilot is deployed and running. AI replies are confirmed disabled. The pilot and full dashboard release are not complete.** No fresh onboarding duration, 90-minute result, or numeric time/cost saving is claimed.
 
+Latest handoff reconciliation and the deployment plan are in [RECONCILIATION-20261102.md](RECONCILIATION-20261102.md). The importer refresh fix is committed for testing; no further deployment was made. Live readback is blocked by the offline control device.
+
 ## Current deployed release
 
 | Item | Verified value |

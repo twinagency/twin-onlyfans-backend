@@ -1,0 +1,37 @@
+{
+  "liveDashboard": {
+    "image": "sha256:22be6bc89bf7308e2c2214e03d63313bfc32f2edb6c831bddcd1a06a28258049",
+    "repositoryDigest": "323149985112.dkr.ecr.ap-southeast-2.amazonaws.com/twin-onlyfans@sha256:22be6bc89bf7308e2c2214e03d63313bfc32f2edb6c831bddcd1a06a28258049",
+    "gitSha": "3d0ee2e3e2848f9cd5019399a82fe27a67f435c2",
+    "nextBuildId": "xvlzKe6xnQRSavfQQmgfM",
+    "imageCreated": "2026-11-01T14:39:35.457088223+10:00",
+    "ociLabels": {},
+    "matchingSourceRecovered": false,
+    "branchesInspected": 357,
+    "gitCommitLookup": "404",
+    "existingDeploymentPreserved": true,
+    "containerSnapshot": "private host only"
+  },
+  "earlierFinalImageRerunRecovered": {
+    "passed": 23,
+    "seconds": 110.11
+  },
+  "newCompatibilityTests": {
+    "passed": 57,
+    "seconds": 99.956,
+    "environment": "isolated local PostgreSQL"
+  },
+  "pilotMeasurementTests": {
+    "passed": 3,
+    "seconds": 6.655
+  },
+  "currentReleaseStatus": "maile_backend_pilot_live_measurement_repair_not_deployed",
+  "deployedApplicationCommit": "9870b64889833b16a36397c8ffa45dc7e236cea3",
+  "reportingRepairCommit": "c8216d33ef409be5bc99aed0f654b1ccfe3023b3",
+  "initialQualification": {
+    "passed": 66,
+    "seconds": 336.5251062660245
+  },
+  "baselineCapturedBeforePilotJobs": false,
+  "baselineReconstructionVerified": false
+}

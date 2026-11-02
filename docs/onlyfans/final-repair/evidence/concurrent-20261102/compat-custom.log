@@ -1,0 +1,16 @@
+........                                                                 [100%]
+=============================== warnings summary ===============================
+service/tests/test_concurrent_path_regressions.py::test_a_scheduled_future_reply_yields_its_slot_until_it_is_due
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_path_regressions.py:40: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now=datetime.utcnow();due=now+timedelta(seconds=60)
+
+service/tests/test_concurrent_path_regressions.py::test_cancelled_offloaded_ownership_does_not_leave_local_acquisition_armed
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_path_regressions.py:131: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    owner_token='synthetic-cancelled-owner',now=datetime.utcnow(),io_offload=True))
+
+service/tests/test_concurrent_path_regressions.py::test_reordered_admissions_cannot_refill_the_same_elapsed_time_twice
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_path_regressions.py:141: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    start=datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+8 passed, 3 warnings in 0.48s

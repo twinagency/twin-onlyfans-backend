@@ -1,0 +1,1 @@
+[{"name": "terminal-800-service-pg", "test": ["service/tests/test_native_pilot_service_pg.py"]}]

@@ -628,6 +628,12 @@ class TextAuthority:
                 obsolete = not self._engagement().current(s, intent, runtime, now)
             reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now,
                 manual_attachment=self._manual_attachment(intent), action=self._action(intent))
+            if reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
+                # A different fan's pending ingress can temporarily invalidate the
+                # account history check. Preserve the current, still-unsent reply;
+                # every retry rechecks its snapshot, expiry and conversation holds.
+                intent.reason, intent.updated_at = reason, now
+                return "queued"
             if reason:
                 intent.status = "cancelled" if obsolete else "refused"
                 intent.reason, intent.updated_at = reason, now
@@ -798,6 +804,18 @@ class TextAuthority:
                 reason = "attempt_ownership_changed"
             if reason is None and policy.used_units > policy.limit_units:
                 reason = "cap_exhausted"
+            if reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
+                # No wire marker exists yet. Release this attempt's reservation
+                # and retain the intent for a fresh admission after ingress drains.
+                # Ownership validation above must succeed before this deferral.
+                if policy.used_units < 1:
+                    raise Refused("delivery reservation unavailable")
+                row.status, row.reason, row.updated_at = "queued", reason, now
+                policy.queued_count += 1
+                policy.used_units -= 1
+                row.reservation_held = False
+                self._release_hold(s, row, tenant_id)
+                return None
             if reason:
                 if policy is None or (row.reservation_held and policy.used_units < 1):
                     raise Refused("delivery reservation unavailable")
@@ -910,6 +928,15 @@ class TextAuthority:
                 row.quote_lifecycle = ACCEPTED
             row.provider_message_id = receipt.message_id
             return "accepted"
+
+    @staticmethod
+    def _waiting_for_ingress(runtime, now):
+        # Only a fresh account's transient ingress backlog is retryable here.
+        # Recovery or stale/missing sync retains its existing refusal behaviour.
+        return (bool(runtime.pending_events) and not runtime.recovery_needed
+                and runtime.last_sync_at is not None
+                and now - timedelta(seconds=MAX_SYNC_AGE_SECONDS) <= runtime.last_sync_at
+                <= now + timedelta(minutes=5))
 
     def _release_hold(self, s, row, tenant_id=None):
         policy = s.get(OfDeliveryPolicy, row.account_id)

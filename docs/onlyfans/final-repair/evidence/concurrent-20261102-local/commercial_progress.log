@@ -1,0 +1,39 @@
+...........................................                              [100%]
+=============================== warnings summary ===============================
+service/tests/test_commercial_progress.py: 39 warnings
+  /workspace/scratch/86d4770bae26/backend/service/onlyfans_runtime/commercial_progress.py:46: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    "source_id": int(source_id), "started_at": (now or datetime.utcnow()).isoformat(),
+
+service/tests/test_commercial_progress.py: 22 warnings
+  /workspace/scratch/86d4770bae26/backend/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+service/tests/test_commercial_progress.py::test_restarts_topic_changes_settings_do_not_reset_and_generic_input_does_not_reopen
+service/tests/test_commercial_progress.py::test_edit_and_takeover_cannot_release_selling
+service/tests/test_commercial_progress.py::test_shadow_does_not_persist_or_reset_live_attempt
+service/tests/test_commercial_progress.py::test_delivery_pointer_needs_both_scoped_positive_owners_and_is_not_cleared
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_progress.py:116: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    s.add(Message(account_id="900111", fan_id=910111, message_id=100, direction="in", body="Hello", created_at=datetime.utcnow()))
+
+service/tests/test_commercial_progress.py::test_restarts_topic_changes_settings_do_not_reset_and_generic_input_does_not_reopen
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_progress.py:125: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    s.add(Message(account_id="900111", fan_id=910111, message_id=101, direction="out", body="ok", automation_kind="ai_chatter", created_at=datetime.utcnow()))
+
+service/tests/test_commercial_progress.py::test_restarts_topic_changes_settings_do_not_reset_and_generic_input_does_not_reopen
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_progress.py:126: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    s.add(Message(account_id="900111", fan_id=910111, message_id=102, direction="in", body="A different topic", created_at=datetime.utcnow()))
+
+service/tests/test_commercial_progress.py::test_explicit_budget_is_not_a_blanket_stop_but_hardship_remains
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_progress.py:212: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    assert sell_lane.fan_brake(None,plain,None,datetime.utcnow()).reason == "spend_regret"
+
+service/tests/test_commercial_progress.py::test_explicit_budget_is_not_a_blanket_stop_but_hardship_remains
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_progress.py:213: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    assert sell_lane.fan_brake(None,plain,None,datetime.utcnow(),scoped_budget=True) is None
+
+service/tests/test_commercial_progress.py::test_explicit_budget_is_not_a_blanket_stop_but_hardship_remains
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_progress.py:215: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    assert sell_lane.fan_brake(None,hardship,None,datetime.utcnow(),scoped_budget=True).reason == "spend_regret"
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+43 passed, 70 warnings in 4.88s

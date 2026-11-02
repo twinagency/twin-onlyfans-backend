@@ -35,7 +35,7 @@ def recent_progress(s, runtime, fan_id=None):
     tenant = s.scalar(select(OfCreatorBinding.tenant_id).where(OfCreatorBinding.id==runtime.binding_id))
     params = {'tenant':tenant,'account':runtime.account_id,'binding':runtime.binding_id,'cutoff':p.cutoff_at,'fan':fan_id}
     # Same source-fingerprint receipts as the paid learner, including fact-free results.
-    pending = s.scalar(text('''SELECT count(*) FROM messages m WHERE m.account_id=:account
+    pending_sources = '''FROM messages m WHERE m.account_id=:account
         AND m.created_at>=:cutoff AND m.direction='in' AND (:fan IS NULL OR m.fan_id=:fan)
         AND EXISTS (SELECT 1 FROM of_ingress i WHERE i.account_id=m.account_id AND i.binding_id=:binding
             AND i.fan_id=m.fan_id AND i.message_id=m.message_id AND i.status='applied')
@@ -43,7 +43,8 @@ def recent_progress(s, runtime, fan_id=None):
             AND r.binding_id=:binding AND r.fan_id=m.fan_id AND r.source_fan=m.fan_id
             AND r.message_id=m.message_id AND r.body_md5=md5(m.body) AND r.source_at=m.created_at
             AND r.direction=m.direction AND r.unsent=m.is_unsent AND r.automation=coalesce(m.automation_kind,'')
-            AND r.next_chunk=r.total_chunks)'''),params)
+            AND r.next_chunk=r.total_chunks)'''
+    pending = s.scalar(text('SELECT count(*) ' + pending_sources),params)
     old = s.scalar(select(func.count()).select_from(OfOlderHistoryJob).where(
         OfOlderHistoryJob.account_id == runtime.account_id, OfOlderHistoryJob.binding_id == runtime.binding_id,
         True if fan_id is None else OfOlderHistoryJob.fan_id == fan_id))
@@ -67,8 +68,14 @@ def recent_progress(s, runtime, fan_id=None):
     hold = s.execute(text('''SELECT hold_code,hold_until FROM of_profile_accounts
         WHERE tenant_id=:tenant AND account_id=:account AND binding_id=:binding'''),params).first()
     active_hold = bool(hold and hold[1] and str(hold[1]) > str(utcnow()))
-    memory_errors = s.scalar(text('''SELECT count(*) FROM of_profile_learning WHERE tenant_id=:tenant AND account_id=:account
-        AND binding_id=:binding AND fan_id>0 AND (:fan IS NULL OR fan_id=:fan) AND error_code IS NOT NULL'''),params)
+    # Historical failures remain stored, but only failures with unprocessed
+    # current-window sources can block recent memory readiness.
+    memory_errors, deferred_errors = s.execute(text(f"""SELECT
+        count(*) FILTER (WHERE fan_id IN (SELECT m.fan_id {pending_sources})),
+        count(*) FILTER (WHERE fan_id NOT IN (SELECT m.fan_id {pending_sources}))
+        FROM of_profile_learning WHERE tenant_id=:tenant AND account_id=:account
+        AND binding_id=:binding AND fan_id>0 AND (:fan IS NULL OR fan_id=:fan)
+        AND error_code IS NOT NULL"""),params).one()
     from .history_telemetry import OfHistoryReadAttempt as A
     attempts, http_attempts, failed, unfinished = s.execute(select(func.count(),
         func.coalesce(func.sum(A.http_attempts),0),func.count().filter(A.outcome=='failed'),
@@ -118,7 +125,7 @@ def recent_progress(s, runtime, fan_id=None):
             'firstCurrentRunReceiptAt':str(receipt_first) if receipt_first else None,
             'lastCurrentRunReceiptAt':str(receipt_last) if receipt_last else None,
             'receiptIntervalMeasurement':'wall interval between committed memory receipts; cumulative model latency is separate',
-            'errors':memory_errors, 'budgetHold':hold[0] if active_hold else None,
+            'errors':memory_errors, 'errorsOutsidePendingRecentWork':deferred_errors, 'budgetHold':hold[0] if active_hold else None,
             'completionDoesNotMeanLifetimeHistory':True},
         'memoryModelAccounting':accounting,
         'lifetimeHistory':{'complete':lifetime_complete,'conversationsComplete':lifetime_states.get('complete',0)},

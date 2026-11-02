@@ -92,7 +92,10 @@ def provision_account(store,tenant,*,creator_id,creator_name,owner_id,handle,com
         s.add(Account(id=account,nickname=creator_name));s.flush()
         s.add(OfCreatorBinding(id=binding_id,tenant_id=tenant,creator_id=creator_id,creator_name=creator_name,
             account_id=account,handle=handle,channel='onlyfans'));s.flush()
-        s.add(OfRuntime(account_id=account,binding_id=binding_id,activated_at=utcnow(),enabled=False))
+        runtime=OfRuntime(account_id=account,binding_id=binding_id,activated_at=utcnow(),enabled=False)
+        s.add(runtime);s.flush()
+        from .history_policy import ensure
+        ensure(s,runtime,new_account=True)
         from .contextual_mode import new_account_settings
         s.add(AccountAiConfig(account_id=account,
             ai_chatter_config_json=canonical(new_account_settings())));s.flush()

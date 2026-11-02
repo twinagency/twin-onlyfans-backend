@@ -1,0 +1,67 @@
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running stamp_revision  -> 0070_onlyfans_read_bindings
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade 0070_onlyfans_read_bindings -> 0071_onlyfans_foundation, Durable scoped OnlyFans admission; no provider or automation enablement.
+INFO  [alembic.runtime.migration] Running upgrade 0071_onlyfans_foundation -> 0072_onlyfans_text_delivery, Synthetic-only durable text intents and immutable policy-change evidence.
+INFO  [alembic.runtime.migration] Running upgrade 0072_onlyfans_text_delivery -> 0073_one_use_egress, One-use wire marker without activation, replay or evidence reset.
+INFO  [alembic.runtime.migration] Running upgrade 0073_one_use_egress -> 0074_native_text_plans, Restart-safe native text preparation; no model/provider activation.
+INFO  [alembic.runtime.migration] Running upgrade 0074_native_text_plans -> 0075_native_model_budget, Link native plans to the existing cost owner without reopening any allowance.
+INFO  [alembic.runtime.migration] Running upgrade 0075_native_model_budget -> 0076_native_memory_evidence, Record source-backed native corrections without a second memory store.
+INFO  [alembic.runtime.migration] Running upgrade 0076_native_memory_evidence -> 0077_native_media_sales, Carry existing media through the same one-use delivery authority.
+INFO  [alembic.runtime.migration] Running upgrade 0077_native_media_sales -> 0078_operator_controls, Audit explicit operator controls without reopening delivery or model rights.
+INFO  [alembic.runtime.migration] Running upgrade 0078_operator_controls -> 0079_native_configuration, Audit bounded native creator edits without resetting any financial policy.
+INFO  [alembic.runtime.migration] Running upgrade 0079_native_configuration -> 0080_onlyfans_campaigns, Durable campaign audiences and audited controls; no provider activation.
+INFO  [alembic.runtime.migration] Running upgrade 0080_onlyfans_campaigns -> 0081_native_connection, Explicit encrypted account connection and native transport policy.
+INFO  [alembic.runtime.migration] Running upgrade 0081_native_connection -> 0082_content_management, Audited scoped metadata edits on the existing native catalogue.
+INFO  [alembic.runtime.migration] Running upgrade 0082_content_management -> 0083_vault_management, Bounded selected-account vault reads and native catalogue creation evidence.
+INFO  [alembic.runtime.migration] Running upgrade 0083_vault_management -> 0084_native_ledger, Read-only native transaction polling into the existing canonical ledger.
+INFO  [alembic.runtime.migration] Running upgrade 0084_native_ledger -> 0085_shared_creator_facts, Project approved Twin creator facts with explicit platform overrides.
+INFO  [alembic.runtime.migration] Running upgrade 0085_shared_creator_facts -> 0086_vault_edits, Audit native edits to existing vault metadata and internal folders.
+INFO  [alembic.runtime.migration] Running upgrade 0086_vault_edits -> 0087_creator_enrollment, Verify creator sessions before creating canonical account bindings.
+INFO  [alembic.runtime.migration] Running upgrade 0087_creator_enrollment -> 0088_native_vault_media, Durable native upload admission and requested video preparation.
+INFO  [alembic.runtime.migration] Running upgrade 0088_native_vault_media -> 0089_offer_import, Paid-offer import evidence, fixed catalogue pricing and continuous content sync.
+INFO  [alembic.runtime.migration] Running upgrade 0089_offer_import -> 0090_launch, History memory, personality workflow and proactive engagement (all default off).
+INFO  [alembic.runtime.migration] Running upgrade 0090_launch -> 0091_launch_controls, Durable launch commands, source continuation and coordinated provider reads.
+INFO  [alembic.runtime.migration] Running upgrade 0091_launch_controls -> 0092_ledger_history, Independent full-history progress; canonical transactions and evidence are reused.
+INFO  [alembic.runtime.migration] Running upgrade 0092_ledger_history -> 0093_conversation_default_off, New fan controls start off; existing operator decisions are preserved.
+INFO  [alembic.runtime.migration] Running upgrade 0092_ledger_history -> 0093_ledger_markers, Durable verified financial continuation and versioned coverage proof.
+INFO  [alembic.runtime.migration] Running upgrade 0093_ledger_markers -> 0094_purchase_reply, Fence supported post-purchase replies at the existing offer receipt.
+INFO  [alembic.runtime.migration] Running upgrade 0094_purchase_reply -> 0095_content_fold_pending, Track changed canonical messages in the existing content-source owner.
+INFO  [alembic.runtime.migration] Running upgrade 0095_content_fold_pending -> 0096_vault_continuation, Preserve bounded-page vault continuation past the first 4,800 items.
+INFO  [alembic.runtime.migration] Running upgrade 0096_vault_continuation, 0093_conversation_default_off -> 0097_release_controls, Join the deployed default-off branch and CRM reliability migrations.
+INFO  [alembic.runtime.migration] Running upgrade 0097_release_controls -> 0098_ledger_exclusion, Audited per-transaction exclusion of unlinked paid purchases from the account-wide commerce hold.
+INFO  [alembic.runtime.migration] Running upgrade 0098_ledger_exclusion -> 0099_fan_identity_sync, Bounded, resumable fan display-profile checks; no activation or data rewrite.
+INFO  [alembic.runtime.migration] Running upgrade 0099_fan_identity_sync -> 0100_manual_free_media, Permit explicitly selected free media in manual delivery intents.
+INFO  [alembic.runtime.migration] Running upgrade 0100_manual_free_media -> 0101_contextual_offers, Durable contextual-origin decisions. Existing sale/receipt tables remain authoritative.
+INFO  [alembic.runtime.migration] Running upgrade 0101_contextual_offers -> 0102_daily_send_cap, Optional per-account daily send cap beside the lifetime allowance; no data rewrite, default unchanged.
+INFO  [alembic.runtime.migration] Running upgrade 0102_daily_send_cap -> 0103_concurrent_delivery, Account-specific concurrent delivery; defaults preserve the existing gap mode.
+INFO  [alembic.runtime.migration] Running upgrade 0103_concurrent_delivery -> 0104_contextual_item_scope, Keep one uncertain delivery per fan; retain multiple confirmed unpaid cards.
+INFO  [alembic.runtime.migration] Running upgrade 0104_contextual_item_scope -> 0105_operator_cases, Additive: one durable operator-case table for conversation holds (R1).
+INFO  [alembic.runtime.migration] Running upgrade 0105_operator_cases -> 0106_read_lane_fairness, R4 additive: bounded-starvation marker on the read budget; stored substitution agreement.
+INFO  [alembic.runtime.migration] Running upgrade 0106_read_lane_fairness -> 0107_active_selling_quote, R5/R6 additive: sales decision log, durable invitations, canonical quote columns on content_offers.
+INFO  [alembic.runtime.migration] Running upgrade 0107_active_selling_quote -> 0108_commercial_progress, Durable bounded progress on the existing conversation authority; inert until enabled.
+ledger level on PostgreSQL ok 62
+{"event": "finished", "persistent": true}
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service_pg.py", line 203, in <module>
+    main()
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service_pg.py", line 184, in main
+    asyncio.run(suite.loop_level(backend, Path(root)))
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 610, in loop_level
+    await replied(f, http, 2, "second reply")
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 563, in replied
+    await until(lambda: len(http.posts) == n and
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 409, in until
+    raise AssertionError("timeout waiting for " + label + "; last events: " + json.dumps(events[-6:], default=str))
+AssertionError: timeout waiting for second reply; last events: [{"event": "sent", "engine": "fastt-native", "provider_message_id": "1001", "pilot_sent": 1, "limit": 2}, {"event": "turn-stats", "stats": {}}, {"event": "turn-timing", "account": "176774528", "fan_id": 318022380, "outcome": "sent", "first_input_at": null, "claimed_at": "2026-11-02 06:22:16.123000", "generation_started_at": "2026-11-02 06:22:16.123000", "generation_done_at": "2026-11-02 06:22:16.123000", "decision_at": "2026-11-02 06:22:16.123000", "provider_first_send_at": "2026-11-02 06:22:16.123000", "provider_last_send_at": "2026-11-02 06:22:16.123000", "reconciled_at": "2026-11-02 06:22:16.123000", "user_visible_s": null, "queue_before_claim_s": null, "generation_s": 0.0, "decision_to_send_s": 0.0, "bubbles_sent": 1, "requeues": 0, "model": {"calls": 0, "failed": 0, "truncated": 0, "latency_ms": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "purposes": {}}}, {"event": "generating", "source_message_id": "5001", "engine": "fastt-native"}, {"event": "turn-timing", "account": "176774528", "fan_id": 318022380, "outcome": "error:external-outbound", "first_input_at": null, "claimed_at": "2026-11-02 06:22:36.123000", "generation_started_at": "2026-11-02 06:22:36.123000", "generation_done_at": "2026-11-02 06:22:36.123000", "decision_at": null, "provider_first_send_at": null, "provider_last_send_at": null, "reconciled_at": "2026-11-02 06:22:36.123000", "user_visible_s": null, "queue_before_claim_s": null, "generation_s": 0.0, "decision_to_send_s": null, "bubbles_sent": 0, "requeues": 0, "model": {"calls": 0, "failed": 0, "truncated": 0, "latency_ms": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "purposes": {}}}, {"event": "turn-abandoned", "reason": "external-outbound"}]

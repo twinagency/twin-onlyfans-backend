@@ -957,8 +957,6 @@ def test_two_workers_cannot_double_admit_one_intent(database, monkeypatch):
     assert used == len(fans) and queued == 0 and not pending_attempts
 
 
-@pytest.mark.xfail(strict=True, reason='FINDING: any other fan\'s pending ingress event makes admit() permanently refuse an unrelated fan\'s '
-                   'ready Moxy reply (history_not_current), and nothing re-creates it')
 def test_other_fans_pending_inbound_must_not_permanently_refuse_a_ready_reply(database, monkeypatch):
     """Minimal repro. Fan A's reply is queued. Fan B's inbound event is recorded but not yet drained (the normal
     few-millisecond window in a live account). A's dispatch is refused terminally instead of deferred."""

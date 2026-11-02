@@ -1,0 +1,236 @@
+[
+  {
+    "module": "test_commercial_progress.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_progress.py"
+    ],
+    "exit_code": 0,
+    "seconds": 5.743,
+    "sha256": "ba8d6c90271fab7e9208c19b2fe22970f364f4e940893c74f7daa345c23540b6"
+  },
+  {
+    "module": "test_commercial_full_path.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py"
+    ],
+    "exit_code": 0,
+    "seconds": 25.521,
+    "sha256": "4d773a8f6bdb4c04f98a225914de53a8f437d163b7c00ee6bfb4cbba508236e4"
+  },
+  {
+    "module": "test_concurrent_path_regressions.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_path_regressions.py"
+    ],
+    "exit_code": 0,
+    "seconds": 1.117,
+    "sha256": "ed045a8d884ae58c9e64489ae18a7f2c11bc3c663a2cc1a46a6b1647c7260ab3"
+  },
+  {
+    "module": "test_concurrent_delivery.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_delivery.py"
+    ],
+    "exit_code": 0,
+    "seconds": 30.54,
+    "sha256": "fc546b78d9589eb37c4843c6e0574c51615926e0d3ed35b7027c4733ffbe7f39"
+  },
+  {
+    "module": "test_concurrent_admission_units.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_admission_units.py"
+    ],
+    "exit_code": 0,
+    "seconds": 0.767,
+    "sha256": "e4f498ebcffef6d9a44d678e8e5e7ef5c05db5c4f6576def092394ffac615157"
+  },
+  {
+    "module": "test_native_reply_pacing.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_reply_pacing.py"
+    ],
+    "exit_code": 0,
+    "seconds": 2.572,
+    "sha256": "6c698b4482961579b4430ab89beb5558bfd09d6f6788228601d955ec9145bc2c"
+  },
+  {
+    "module": "test_fastt_engine_v2_units.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_engine_v2_units.py"
+    ],
+    "exit_code": 0,
+    "seconds": 0.866,
+    "sha256": "52fb66125d0099f5480fe9a258688a69936efe329589d02c7dfc682626bd90f7"
+  },
+  {
+    "module": "test_fastt_engine_v2.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_engine_v2.py"
+    ],
+    "exit_code": 0,
+    "seconds": 27.11,
+    "sha256": "bb23689c9d7fc3be8710f323a96c3b4d81753ff955aa3c4e626161143b3c0e32"
+  },
+  {
+    "module": "test_r8_gap_vs_concurrent.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_r8_gap_vs_concurrent.py"
+    ],
+    "exit_code": 0,
+    "seconds": 27.803,
+    "sha256": "2eca634ca401bb97abd67bd4a938892b9da5c9fab24a797f6c7ed7546579c825"
+  },
+  {
+    "module": "test_r8_oldest_need_first.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_r8_oldest_need_first.py"
+    ],
+    "exit_code": 0,
+    "seconds": 16.813,
+    "sha256": "f0a5e9dd6b21977a61c35e3a0259a9f71571c4353dc1faa7d8f0c8d82669f6f8"
+  },
+  {
+    "module": "test_r8_cancelled_waiter_not_abandoned.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_r8_cancelled_waiter_not_abandoned.py"
+    ],
+    "exit_code": 0,
+    "seconds": 10.484,
+    "sha256": "28d4c807c26dbb98dd680c38272d32b6f050b5c76df18226661c172c559da723"
+  },
+  {
+    "module": "test_native_pilot_service.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py"
+    ],
+    "exit_code": 1,
+    "seconds": 33.804,
+    "sha256": "8896ec488cc49568561ff312977420b7c3519f76042119e0d9b00550f63265bb"
+  },
+  {
+    "module": "test_native_pilot_runner.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_runner.py"
+    ],
+    "exit_code": 0,
+    "seconds": 5.699,
+    "sha256": "56985c89ffeb4b622ae3fbea7f24aa5bb88b8529f853c00eb6bf92f80a7fe127"
+  },
+  {
+    "module": "test_native_pilot_ledger.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_ledger.py"
+    ],
+    "exit_code": 0,
+    "seconds": 2.226,
+    "sha256": "735cd9e4d1009afabfdc8b556785a70dc15d64b3e6b922b3f8fab52a2f2e35ed"
+  },
+  {
+    "module": "test_native_pilot_content.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_content.py"
+    ],
+    "exit_code": 0,
+    "seconds": 2.776,
+    "sha256": "2ea480486c1c1c6e4f81e23bb1d41846595dace72689b99a5732b2e6514378d9"
+  },
+  {
+    "module": "test_onlyfans_egress_isolation.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_egress_isolation.py"
+    ],
+    "exit_code": 0,
+    "seconds": 3.324,
+    "sha256": "d7002c6b8ba593ed443dce990f68cefb20ec8050678c63176ca82f4835eaf222"
+  },
+  {
+    "module": "test_onlyfans_launch_integration.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_integration.py"
+    ],
+    "exit_code": 0,
+    "seconds": 2.18,
+    "sha256": "8c12957e9176c3d69a3dada0484b002780027dff1307931ac5a7b39fb97b7e64"
+  },
+  {
+    "module": "test_native_reply_format.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_reply_format.py"
+    ],
+    "exit_code": 0,
+    "seconds": 1.922,
+    "sha256": "026064935f5a04cc181f9d7630a1a8e972f27f01aee701a5b9e2022f1a726616"
+  },
+  {
+    "module": "test_turn_timing.py",
+    "command": [
+      "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--tb=short",
+      "/workspace/scratch/86d4770bae26/backend/service/tests/test_turn_timing.py"
+    ],
+    "exit_code": 0,
+    "seconds": 0.419,
+    "sha256": "4720461b808a0cf77274edbb405de309092f31af2e3dbe51ca5b526a95649c79"
+  }
+]

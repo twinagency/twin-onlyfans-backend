@@ -83,6 +83,10 @@ class Probe:
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.delenv("ONLYFANS_PROCESS_ROLE", raising=False)
+    # This fixture exercises the legacy role fence on a non-Moxy account.
+    # Selected and failed owner lookups are covered by test_moxy_fence.py.
+    from moxy_replacement import routing
+    monkeypatch.setattr(routing, 'owner_state', lambda account: routing.NOT_SELECTED)
     probe = Probe()
     monkeypatch.setattr(provider.requests, "Session", probe.factory)
     # Converter construction is local too; even its multipart object is fake.
@@ -285,6 +289,8 @@ for route in onlyfans_app.app.routes:
         assert methods == {"GET", "HEAD"}, route.path
     elif (route.path == "/onlyfans/content-sync/v1/accounts/{account_id}/drafts/{draft_id}/files/{file_id}/chunks/{index}"):
         assert methods == {"PUT"}, route.path
+    elif route.path == "/onlyfans/configuration/v1/accounts/{account_id}/moxy":
+        assert methods in ({"GET"}, {"PUT"}), route.path
     elif route.path.startswith(("/onlyfans/configuration/v1/", "/onlyfans/campaign/v1/",
                                 "/onlyfans/content/v1/", "/onlyfans/content/v2/",
                                 "/onlyfans/offer-import/v1/", "/onlyfans/content-sync/v1/",
@@ -358,3 +364,4 @@ def test_raw_http_mutation_sinks_require_review():
     }
     # 8b09952 moved primary-session construction from __init__ into the per-thread _new_http_session factory.
     assert sessions == {("_new_http_session", "requests.Session"), ("_upload_part_session", "requests.Session")}
+

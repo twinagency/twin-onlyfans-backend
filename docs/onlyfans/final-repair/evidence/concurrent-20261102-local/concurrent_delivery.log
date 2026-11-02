@@ -1,0 +1,10 @@
+  100 fans latency s {'n': 100, 'median': 15.0, 'p95': 19.9, 'p99': 21.0, 'max': 21.0} provider overlap 8
+  ok   faults/429/takeover
+  ok   duplicate events
+  ok   multiple bubbles
+  ok   uncertain delivery
+  ok   restart during burst
+  ok   multiple creators
+  ok   paid content
+  ok   auth failure
+concurrent delivery: all cases passed (58 checks); 100-fan latency {'n': 100, 'median': 15.0, 'p95': 19.9, 'p99': 21.0, 'max': 21.0}

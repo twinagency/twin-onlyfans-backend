@@ -58,7 +58,24 @@ def _stamp(value):
         raise NativeProtocolError("unsupported vault timestamp") from None
 
 
-def parse_vault_page(raw, *, owner_id):
+def _page_size(account):
+    """Per-account operational paging, independent of content/sales policy.
+
+    Large accounts repeat substantial folder metadata on every media item.
+    Smaller pages retain the wire byte bound and the ordinary import cursor.
+    Unconfigured accounts keep the existing page size.
+    """
+    try:
+        sizes = json.loads(os.environ.get('ONLYFANS_VAULT_PAGE_SIZES', '{}'))
+        if (type(sizes) is not dict or any(type(k) is not str or not ID_PATTERN.fullmatch(k)
+                or type(v) is not int or not 1 <= v <= PAGE_SIZE for k, v in sizes.items())):
+            raise ValueError()
+        return sizes.get(account, PAGE_SIZE)
+    except (ValueError, TypeError):
+        raise Refused('invalid vault page size configuration') from None
+
+
+def parse_vault_page(raw, *, owner_id, page_size=PAGE_SIZE):
     """Strict supported subset of the existing GET vault/media dialect.
 
     Missing isReady is not invented as True. Unsupported kinds remain visible
@@ -66,12 +83,14 @@ def parse_vault_page(raw, *, owner_id):
     or not at all; no skipped malformed row can silently advance its cursor.
     """
     _id(owner_id)
+    if type(page_size) is not int or not 1 <= page_size <= PAGE_SIZE:
+        raise NativeProtocolError('invalid vault page size')
     load(raw, max_bytes=MAX_VAULT_BYTES)  # strict JSON with a separate bounded vault-page budget
     try:
         value = json.loads(raw)
         json.dumps(value, allow_nan=False)
         rows, more = value["list"], value["hasMore"]
-        if type(rows) is not list or type(more) is not bool or len(rows) > PAGE_SIZE or more and len(rows) != PAGE_SIZE:
+        if type(rows) is not list or type(more) is not bool or len(rows) > page_size or more and len(rows) != page_size:
             raise ValueError()
         seen = set()
         for row in rows:
@@ -444,6 +463,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
         if candidate is None:
             break
         account, identity = candidate
+        page_size = _page_size(account)
         with Session(store.engine) as s, s.begin():
             runtime = store._runtime(s, tenant, account)
             job = s.get(OfVaultSyncJob, (account, identity))
@@ -479,8 +499,8 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 expires_at=expires.replace(tzinfo=timezone.utc)))
             from .worker import _provider_claim
             budget=_provider_claim(store,tenant,account,transport,connection_revision,'vault')
-            raw = transport.vault_page(offset=offset, limit=PAGE_SIZE)
-            rows, more = parse_vault_page(raw, owner_id=owner)
+            raw = transport.vault_page(offset=offset, limit=page_size)
+            rows, more = parse_vault_page(raw, owner_id=owner, page_size=page_size)
             if os.environ.get("ONLYFANS_VAULT_PREVIEWS_ENABLED") == "1":
                 from .vault_previews import warm_page
                 warm_page(transport, rows, binding_id=binding, owner_id=owner, stop=stop)
@@ -490,7 +510,10 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             if isinstance(problem,ReadDeferred):deferred=problem.retry_at;error=deferred_error(problem)
             elif isinstance(problem,NativeAuthenticationError):error='connection_unavailable'
             elif isinstance(problem,NativeReadTransientError):error='vault_read_failed'
-            elif isinstance(problem,NativeProtocolError):error='provider_rate_limited' if hasattr(problem,'retry_after') else 'unsupported_vault_response'
+            elif isinstance(problem,NativeProtocolError):
+                if hasattr(problem,'retry_after'):error='provider_rate_limited'
+                elif getattr(problem,'read_failure',{}).get('category')=='response_limit':error='vault_response_too_large'
+                else:error='unsupported_vault_response'
             else:error='vault_read_failed'
         try:
             with Session(store.engine) as s, s.begin():
@@ -572,5 +595,6 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             from .worker import _release_provider
             _release_provider(store,tenant,budget,failure)
     return processed
+
 
 

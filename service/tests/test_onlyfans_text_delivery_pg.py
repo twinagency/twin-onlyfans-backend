@@ -169,7 +169,7 @@ def test_admission_rechecks_stop_and_recovery_state(database, change):
             s.flush()
             s.add(OfMessageDelivery(account_id=ACCOUNT, fan_id=FAN, message_id=7, outcome="unknown", attempt_id="old-attempt", evidence_ref="retained"))
     transport = SyntheticTextTransport(ACCOUNT)
-    assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == "refused"
+    assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == ("queued" if change == "pending" else "refused")
     assert not transport.calls
     with Session(engine) as s:
         assert s.get(OfDeliveryPolicy, ACCOUNT).used_units == 0
@@ -713,3 +713,4 @@ def test_transport_registration_is_exact_and_account_bound(database):
     assert_no_outbound(engine)
     with Session(engine) as s: assert s.get(OfDeliveryPolicy, ACCOUNT).used_units == 0
     store.close()
+

@@ -600,6 +600,10 @@ class HistoryRecovery:
             self._release(row, error=code)
             if retry_at is not None:
                 row.retry_at = max(row.retry_at, min(retry_at, utcnow() + timedelta(hours=1)))
+            if code == 'provider_thread_unavailable':
+                # An inaccessible thread is missing coverage, never an empty
+                # successful import. Preserve its cursor and retry hourly.
+                row.retry_at = max(row.retry_at, utcnow() + timedelta(hours=1))
 
     def progress(self, tenant_id, account_id, *, fan_id=None):
         """Counts are observed coverage, never an invented total or percentage."""

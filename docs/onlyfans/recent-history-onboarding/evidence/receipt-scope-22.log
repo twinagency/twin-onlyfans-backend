@@ -1,0 +1,29 @@
+......................                                                   [100%]
+=============================== warnings summary ===============================
+service/tests/test_recent_history_onboarding_pg.py: 106 warnings
+service/tests/test_history_pilot_measurement.py: 12 warnings
+  /workspace/scratch/8c1a07a232eb/backend/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+service/tests/test_recent_history_onboarding_pg.py::test_fact_free_paid_processing_receipted_once_and_older_queue_preserved
+service/tests/test_recent_history_onboarding_pg.py::test_fact_free_paid_processing_receipted_once_and_older_queue_preserved
+  /workspace/scratch/8c1a07a232eb/backend/service/onlyfans_runtime/profile_learning/worker.py:205: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now=datetime.utcnow()
+
+service/tests/test_recent_history_onboarding_pg.py::test_fact_free_paid_processing_receipted_once_and_older_queue_preserved
+service/tests/test_recent_history_onboarding_pg.py::test_fact_free_paid_processing_receipted_once_and_older_queue_preserved
+  /workspace/scratch/8c1a07a232eb/backend/service/onlyfans_runtime/profile_learning/worker.py:231: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    {**job,'until':datetime.utcnow()+LEASE})
+
+service/tests/test_recent_history_onboarding_pg.py::test_fact_free_paid_processing_receipted_once_and_older_queue_preserved
+service/tests/test_recent_history_onboarding_pg.py::test_fact_free_paid_processing_receipted_once_and_older_queue_preserved
+  /workspace/scratch/8c1a07a232eb/backend/service/onlyfans_runtime/profile_learning/worker.py:289: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    if current['lease_token']!=job['lease_token'] or until<datetime.utcnow(): raise Refused('profile-lease-lost')
+
+service/tests/test_recent_history_onboarding_pg.py::test_fact_free_paid_processing_receipted_once_and_older_queue_preserved
+service/tests/test_recent_history_onboarding_pg.py::test_fact_free_paid_processing_receipted_once_and_older_queue_preserved
+  /workspace/scratch/8c1a07a232eb/backend/service/onlyfans_runtime/profile_learning/worker.py:356: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    due=datetime.utcnow()+(timedelta(seconds=1) if more else INTERVAL)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+22 passed, 126 warnings in 44.28s

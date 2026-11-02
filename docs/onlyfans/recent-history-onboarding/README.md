@@ -1,5 +1,7 @@
 # Recent-history onboarding release, 2 November 2026
 
+**Start here for continuation:** [Complete Claude handoff: scope, source reconciliation, deployed state, measurements and remaining work](CLAUDE-HANDOFF.md). The separate original/concurrent branch has advanced to `1b4bbf6` since the last integration; reconcile it before any deployment. The handoff archives work without changing running services.
+
 **Current backend release: 9d6756b, deployed and healthy. Maile only; AI replies disabled.**
 
 [Current deployment, measurements, 79-test qualification and remaining gates](RELEASE-9d6756b.md). New-account enrollment is implemented behind a disabled rollout switch; other accounts have not been enrolled. Recent memory backlog is zero at the latest checkpoint, but provider coverage and the complete release remain unfinished.

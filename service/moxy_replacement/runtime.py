@@ -17,7 +17,7 @@ from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_moxy_models import MoxyAccount, MoxyFan, MoxyEvent, MoxyAudit
 from onlyfans_runtime.store import Refused, utcnow
 from onlyfans_runtime.native_context import canonical, versions
-from .configuration import load, CreatorConfiguration, ActionBlocked, InvalidConfiguration, digest
+from .configuration import load, load_foundation, CreatorConfiguration, ActionBlocked, InvalidConfiguration, digest
 from .authority import ProductAuthority, readiness
 from . import writer
 
@@ -32,7 +32,7 @@ def configuration(settings):
     required={'creator_key','products','sequences','catalogue_bindings','operational'}
     if type(settings) is not dict or not required<=set(settings):raise InvalidConfiguration('Moxy source bindings required')
     cfg=load(settings['creator_key']) if 'creator_document' not in settings else CreatorConfiguration(
-        load('amelia').foundation,settings['creator_document'])
+        load_foundation(),settings['creator_document'])
     pa=ProductAuthority(cfg,settings['products'],settings['sequences'])
     from .pilot import scope
     scope(settings)
@@ -145,6 +145,12 @@ def observe_input(s,event,decision):
                 'status':'open','owner':'moxy','source_ref':'moxy-event:'+event.event_id,'source_event':event.event_id})
     if canonical(state)!=before:
         mf.state_json=canonical(state);mf.revision+=1;mf.updated_at=utcnow()
+    if decision.get('permission')=='customs':
+        # Owned custom lifecycle (quote, route, owner, deadline, fulfilment): see customs.py.
+        settings=json.loads(s.get(MoxyAccount,event.account_id).settings_json)
+        from .customs import record_request
+        record_request(s,event,decision,configuration(settings)[0],json.loads(event.snapshot_json)['fan_state'],
+            settings['operational'].get('assigned_operator'))
 
 
 def snapshot(s,account,fan,event):
@@ -225,8 +231,14 @@ def validate_decision(settings,snap,decision):
     if decision['permission']:
         if cfg.resolve(decision['permission'],facts).value is False: raise ActionBlocked('permission_refused')
     if facts.get('talker_label') is True and facts.get('currently_spending') is False:
+        try:gap=cfg.resolve('talker_timing',facts).value
+        except ActionBlocked as exc:
+            # An absent rule leaves the gap unresolved; it is never guessed.
+            raise ActionBlocked('talker_timing_unresolved' if str(exc).startswith('instruction_missing') else str(exc)) from exc
+        seconds=gap.get('minimum_reply_gap_seconds') if type(gap) is dict else None
+        if type(seconds) is not int or seconds<=0:raise ActionBlocked('talker_timing_unresolved')
         outgoing=[m for m in snap['history'] if m['direction']=='out']
-        if outgoing and utcnow()-__import__('datetime').datetime.fromisoformat(outgoing[-1]['at'])<timedelta(hours=1):raise ActionBlocked('creator_hourly_reply_setting')
+        if outgoing and utcnow()-__import__('datetime').datetime.fromisoformat(outgoing[-1]['at'])<timedelta(seconds=seconds):raise ActionBlocked('creator_reply_gap_setting')
     if facts.get('clock_label') is True:
         if snap['operational'].get('in_graveyard_shift') is None:raise ActionBlocked('graveyard_shift_unknown')
         if snap['operational']['in_graveyard_shift']:raise ActionBlocked('graveyard_clock_hold')
@@ -506,6 +518,12 @@ class MoxyService:
                 if digest(snapshot(s,account,e.fan_id,e))!=e.snapshot_hash:
                     e.status='stale';e.reason='moxy_snapshot_changed'
             s.flush()
+            owner=s.get(MoxyAccount,account)
+            surface_campaign_recovery(s,account,owner)
+            if owner is not None and owner.mode=='on':
+                # Owed fulfilment is Moxy-initiated work; Preview never advances live state.
+                from .outreach import produce
+                produce(s,account,json.loads(owner.settings_json))
             busy=set(s.scalars(select(MoxyEvent.fan_id).where(MoxyEvent.account_id==account,
                 MoxyEvent.status.in_(('generating','queued','unknown')))))
             candidates=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,
@@ -535,6 +553,26 @@ class MoxyService:
             except Refused:return 0
         with ThreadPoolExecutor(max_workers=min(4,len(ids) or 1)) as pool:
             return sum(pool.map(prepare_one,ids))
+
+
+def surface_campaign_recovery(s,account,owner):
+    """A campaign rejected by the provider becomes an owned, visible operator case.
+
+    The confirmed rejection, its receipt and the Moxy decision stay untouched; nothing is
+    re-sent automatically. The case is non-blocking (scope 'offer'), so ordinary chat with
+    the fan continues, and it is created once per event even after an operator resolves it.
+    """
+    from db.onlyfans_case_models import OfOperatorCase
+    from onlyfans_runtime.operator_cases import open_case
+    assigned=json.loads(owner.settings_json)['operational'].get('assigned_operator') if owner is not None else None
+    for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='held',
+            MoxyEvent.reason=='campaign_provider_recovery_required')).all():
+        if s.scalar(select(OfOperatorCase.case_id).where(OfOperatorCase.account_id==account,OfOperatorCase.fan_id==e.fan_id,
+                OfOperatorCase.category=='campaign_recovery',OfOperatorCase.evidence_json.like('%'+e.event_id+'%')).limit(1)):
+            continue
+        open_case(s,account,e.fan_id,'campaign_recovery',reason='campaign_provider_recovery_required',
+            evidence={'event_id':e.event_id,'campaign_id':json.loads(e.payload_json).get('campaign_id'),'intent_id':e.intent_id},
+            origin='detector',scope='offer',owner=assigned)
 
 
 def current(s,intent):

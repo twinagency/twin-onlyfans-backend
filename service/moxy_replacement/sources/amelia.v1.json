@@ -15,7 +15,8 @@
     "Creator Basics p3 is internal context; no automatic fan-facing approval for biography, relationship, family, location or pets.",
     "Never Say and Content Reference fields are blank placeholders, not approved values.",
     "Current fan IDs, VIP/spender authority, hourly talker applicability and recovery authority require existing operational records.",
-    "The dated live schedule/update is not verified current availability."
+    "The dated live schedule/update is not verified current availability.",
+    "Welcome offers, promotions, free previews, rewards, discounts and scheduled engagement are not defined by the sheet or the common PDFs; Moxy produces none of them until a source defines the condition."
   ],
   "rules": [
     {

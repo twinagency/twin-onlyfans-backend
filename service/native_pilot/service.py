@@ -306,6 +306,10 @@ class ServiceGateway(runner.Gateway):
 
 # Thread pool sizing factor (unchanged from before the send-order work): preparation slots x this + 12 threads.
 LIVE_TURNS_PER_SLOT = 3
+# Hard cap on live turns (preparing + parked at the send gate) per preparation slot. Parked turns hold no worker thread,
+# but each keeps engine state and a claimed input, so their number is bounded. Only a turn that has not sent its first
+# bubble is refused at the cap; a parked turn finishing its later bubbles is never starved by it.
+LIVE_TURNS_CAP_PER_SLOT = 8
 
 
 class Service:
@@ -843,12 +847,16 @@ class Service:
         if self.board is not None:
             self.board.set(fan, state, reason, **kw)
 
+    def preparing_count(self):
+        return sum(1 for f in self.tasks if not getattr(self.children.get(f), "first_bubble_sent", False))
+
     def has_preparation_slot(self):
         """A fan whose first bubble is out only waits at the send gate for the rest of its bubbles. That wait is a
-        parked coroutine (no worker thread, see Gateway.send_async), so it no longer counts against the preparation
-        bound, and the live-turn count is not what limits the thread pool any more."""
-        preparing = sum(1 for f in self.tasks if not getattr(self.children.get(f), "first_bubble_sent", False))
-        return preparing < self.tuning.concurrency
+        parked coroutine (no worker thread, see Gateway.send_async), so it does not count against the preparation
+        bound. Turns that have not sent their first bubble are refused at the hard live-turn cap
+        (LIVE_TURNS_CAP_PER_SLOT x concurrency); parked turns finishing their bubbles are never refused by it."""
+        return (self.preparing_count() < self.tuning.concurrency
+                and len(self.tasks) < self.tuning.concurrency * LIVE_TURNS_CAP_PER_SLOT)
 
     async def _run_fan(self, fan, first=None):
         """One fan's whole turn as a task. Never raises: every outcome becomes a hold / board state."""
@@ -952,7 +960,7 @@ class Service:
         self.next_queue_event = now + self.tuning.status_every_s
         self.queue_stats = {"pending": len(ready) + len(waiting), "ready": len(ready), "quiet": len(waiting),
                             "in_flight": len(self.tasks), "send_waiting": self.send_gate.waiting,
-                            "oldest_wait_s": round(oldest_s, 1), "concurrency": self.tuning.concurrency}
+                            "preparing": self.preparing_count(), "oldest_wait_s": round(oldest_s, 1), "concurrency": self.tuning.concurrency}
         runner.emit({"event": "engine-queue", **self.queue_stats})
 
     @classmethod

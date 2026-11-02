@@ -11,7 +11,7 @@ from native_pilot.content import VaultPlan
 from native_pilot.engine import NativeEngine
 from native_pilot.ledger import Refused
 from native_pilot.send_gate import SendGate
-from native_pilot.service import Service, LIVE_TURNS_PER_SLOT
+from native_pilot.service import Service, LIVE_TURNS_PER_SLOT, LIVE_TURNS_CAP_PER_SLOT
 from native_pilot.runner import Gateway
 
 
@@ -190,12 +190,14 @@ def test_a_fan_with_its_first_bubble_sent_frees_a_preparation_slot_within_a_boun
         assert svc.has_preparation_slot()                # fan 1 now only waits to send its remaining bubbles
         svc.child(3);svc.tasks[3]=waiter
         assert not svc.has_preparation_slot()            # two still preparing again
-        for fan in range(3,40):
+        cap=2*LIVE_TURNS_CAP_PER_SLOT
+        for fan in range(3,cap+1):
             svc.child(fan);svc.tasks[fan]=waiter;svc.children[fan].first_bubble_sent=True
         svc.children[2].first_bubble_sent=True
-        assert svc.has_preparation_slot()        # parked continuations hold no thread: only preparing fans are bounded
+        assert len(svc.tasks)==cap and not svc.has_preparation_slot()   # hard cap on live turns reached
+        del svc.tasks[cap];assert svc.has_preparation_slot()            # parked turns below the cap do not starve a new fan
         svc.child(99);svc.tasks[99]=waiter;svc.child(98);svc.tasks[98]=waiter
-        assert not svc.has_preparation_slot()    # two preparing again
+        assert not svc.has_preparation_slot()                           # two preparing again
     asyncio.run(run())
 
 
@@ -279,4 +281,4 @@ def test_a_bubble_to_a_client_without_a_coroutine_send_keeps_the_threaded_call()
 
 
 def test_thread_pool_and_live_turn_factor_are_the_original_values():
-    assert LIVE_TURNS_PER_SLOT==3 and 8*LIVE_TURNS_PER_SLOT+12==36
+    assert LIVE_TURNS_PER_SLOT==3 and 8*LIVE_TURNS_PER_SLOT+12==36 and LIVE_TURNS_CAP_PER_SLOT==8

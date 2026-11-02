@@ -1,5 +1,14 @@
 # Recent-history onboarding release, 2 November 2026
 
+**Current backend release: 9d6756b, deployed and healthy. Maile only; AI replies disabled.**
+
+[Current deployment, measurements, 79-test qualification and remaining gates](RELEASE-9d6756b.md). New-account enrollment is implemented behind a disabled rollout switch; other accounts have not been enrolled. Recent memory backlog is zero at the latest checkpoint, but provider coverage and the complete release remain unfinished.
+
+## Historical 22:19 / 22:52 evidence below
+
+The following counts and image references are earlier checkpoints, superseded by the current release report above.
+
+
 [Latest checkpoint: memory backlog recovered; reporting correction published, not deployed](RECOVERY-2252-BRISBANE.md).
 
 **Backend repair deployed; Maile pilot still incomplete. AI replies remain disabled.** No fresh onboarding speedup or 90-minute result is demonstrated.

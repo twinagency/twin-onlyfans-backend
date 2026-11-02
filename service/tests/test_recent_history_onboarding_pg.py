@@ -498,3 +498,26 @@ def test_unavailable_plus_transient_error_still_blocks(ready):
         h=recent_progress(s,s.get(OfRuntime,A))['initialHistory']
         assert h['state']=='incomplete'
         assert h['conversationsUnavailable']==1 and h['blockingProviderErrors']=={'provider_timeout':1}
+
+
+@pytest.mark.parametrize('code',['provider_timeout','provider_protocol_failed','provider_http_transient'])
+def test_retried_cursor_success_clears_error_and_unblocks_readiness(ready,code):
+    """The existing path retries a failed cursor after RETRY_SECONDS (no attempt cap),
+    and the next successful page clears last_error and lifts the readiness block."""
+    from onlyfans_runtime.launch_history_memory.recovery import RETRY_SECONDS
+    _,r,engine,cutoff=ready
+    r.request_fan(T,A,202)
+    scan_all(r)
+    finish_or_fail(r,engine,cutoff,{202:code})
+    with Session(engine) as s:
+        row=s.get(OfRecentHistoryCursor,(A,202))
+        assert row.status=='needed' and row.last_error==code
+        assert row.retry_at<=utcnow()+timedelta(seconds=RETRY_SECONDS+1)  # short, not hourly
+        assert recent_progress(s,s.get(OfRuntime,A))['initialHistory']['state']=='incomplete'
+    with Session(engine) as s,s.begin():
+        s.get(OfRecentHistoryCursor,(A,202)).retry_at=utcnow()-timedelta(seconds=1)
+    finish_or_fail(r,engine,cutoff,{})
+    with Session(engine) as s:
+        assert s.get(OfRecentHistoryCursor,(A,202)).last_error is None
+        h=recent_progress(s,s.get(OfRuntime,A))['initialHistory']
+        assert h['state']=='recent_history_ready' and h['providerErrors']=={}

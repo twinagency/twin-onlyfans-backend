@@ -18,7 +18,12 @@ with backup.open('rb') as f:assert hashlib.file_digest(f,'sha256').hexdigest()==
 lower=(P/'containers.pre-pilot.private.json').stat().st_mtime
 upper=backup.stat().st_mtime
 assert lower<=upper<deployment['deployedAt']
-def run(a,**kw):return subprocess.run(a,check=True,capture_output=True,text=True,**kw).stdout
+def run(a,**kw):
+ result=subprocess.run(a,capture_output=True,text=True,**kw)
+ if result.returncode:
+  (P/'baseline-command-error.private.log').write_text(result.stderr)
+  raise RuntimeError('Isolated baseline command failed; private diagnostic retained')
+ return result.stdout
 scope=json.loads(run(['docker','exec','twin-onlyfans-worker-1','python','-c','''import json,os
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -31,18 +36,30 @@ try:
   print(json.dumps({'tenant':t,'account':a,'binding':b,'started':start,'cutoff':cutoff}))
 finally:s.close()
 ''']))
-network='recent-evidence-'+uuid.uuid4().hex[:8];db=network+'-db'
-run(['docker','network','create','--internal',network])
+state_file=P/'baseline-clone.private.json'
+state=json.loads(state_file.read_text()) if state_file.exists() else None
+if state:
+ assert state['backupSha256']==deployment['backupSha256']
+ network,db=state['network'],state['db']
+ assert json.loads(run(['docker','network','inspect',network]))[0]['Internal']
+ assert json.loads(run(['docker','inspect',db]))[0]['State']['Running']
+else:
+ network='recent-evidence-'+uuid.uuid4().hex[:8];db=network+'-db'
+ run(['docker','network','create','--internal',network])
+succeeded=False
 try:
- run(['docker','run','-d','--name',db,'--network',network,'--memory','1g','--cpus','1',
+ if not state:run(['docker','run','-d','--name',db,'--network',network,'--memory','1g','--cpus','1',
       '-v',str(backup)+':/backup.dump:ro','-e','POSTGRES_USER=synthetic','-e','POSTGRES_PASSWORD=synthetic',
       '-e','POSTGRES_DB=postgres','ca0bd484cb98'])
  for _ in range(60):
   if subprocess.run(['docker','exec',db,'pg_isready','-U','synthetic','-d','postgres'],capture_output=True).returncode==0:break
   time.sleep(.25)
  else:raise RuntimeError('Isolated evidence database unavailable')
- with (P/'baseline-restore.private.log').open('w') as out:
-  subprocess.run(['docker','exec',db,'pg_restore','-U','synthetic','-d','postgres','--no-owner','--no-privileges','--exit-on-error','/backup.dump'],check=True,stdout=out,stderr=subprocess.STDOUT)
+ if not state:
+  with (P/'baseline-restore.private.log').open('w') as out:
+   subprocess.run(['docker','exec',db,'pg_restore','-U','synthetic','-d','postgres','--no-owner','--no-privileges','--exit-on-error','/backup.dump'],check=True,stdout=out,stderr=subprocess.STDOUT)
+  state={'network':network,'db':db,'backupSha256':deployment['backupSha256']}
+  state_file.write_text(json.dumps(state))
  url='postgresql+psycopg2://synthetic:synthetic@'+db+':5432/postgres'
  base=['docker','run','--rm','-i','--network',network,'--memory','1g','--cpus','1','--entrypoint','python',
        '-e','DATABASE_URL='+url,'-e','ONLYFANS_MIGRATION_URL='+url,'-e','ONLYFANS_PROCESS_ROLE=worker',
@@ -55,7 +72,8 @@ from onlyfans_runtime.store import Store
 d=json.load(sys.stdin);s=Store(os.environ['DATABASE_URL'])
 try:
  with s.engine.begin() as c:
-  c.execute(text('INSERT INTO of_history_policy(account_id,binding_id,enabled,started_at,cutoff_at,timestamp_order_verified,writing_sample_limit,updated_at) VALUES (:account,:binding,true,:started,:cutoff,false,0,:started)'),d)
+  c.execute(text('SET LOCAL statement_timeout=120000'))  # Isolated copy only.
+  c.execute(text('INSERT INTO of_history_policy(account_id,binding_id,enabled,started_at,cutoff_at,timestamp_order_verified,writing_sample_limit,updated_at) VALUES (:account,:binding,true,:started,:cutoff,false,0,:started) ON CONFLICT (account_id) DO NOTHING'),d)
   c.execute(text('ANALYZE messages'));c.execute(text('ANALYZE of_ingress'));c.execute(text('ANALYZE of_profile_receipts'))
  snapshot=capture(s,d['tenant'],d['account']);snapshot['historyPageCanonicalAdditions']=0
  assert snapshot['recentHttpAttempts']==0
@@ -63,6 +81,7 @@ try:
 finally:s.close()
 '''
  snapshot=json.loads(run(base+['-c',code],input=json.dumps(scope)))
+ assert snapshot['bindingId']==scope['binding'] and snapshot['cutoffAt']==scope['cutoff'].replace(' ','T')
  snapshot['observedAt']=datetime.fromtimestamp(lower,timezone.utc).isoformat()
  provenance={'source':'pre-pilot database dump reconstructed in an isolated database',
   'backupSha256':deployment['backupSha256'],'snapshotTimeLowerBound':snapshot['observedAt'],
@@ -73,9 +92,12 @@ finally:s.close()
  snapshot['baselineProvenance']=provenance
  with target.open('x') as f:json.dump(snapshot,f)
  (P/'baseline-reconstruction.json').write_text(json.dumps(provenance,indent=2))
+ succeeded=True
  print(json.dumps({'baselineRecovered':True,'windowSources':len(snapshot['sources']),
   'completedIncomingReceipts':len(snapshot['receipts']),'modelCallRecords':len(snapshot['modelCalls']),
   'provenance':provenance}),flush=True)
 finally:
- subprocess.run(['docker','rm','-fv',db],capture_output=True)
- subprocess.run(['docker','network','rm',network],capture_output=True)
+ if succeeded:
+  subprocess.run(['docker','rm','-fv',db],capture_output=True)
+  subprocess.run(['docker','network','rm',network],capture_output=True)
+  state_file.unlink(missing_ok=True)

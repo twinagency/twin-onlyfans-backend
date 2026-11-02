@@ -7,6 +7,7 @@ from db.onlyfans_moxy_models import MoxyAccount,MoxyFan,MoxyEvent,MoxyAudit
 from onlyfans_runtime.store import Refused,utcnow
 from onlyfans_runtime.native_context import canonical
 from .runtime import MoxyService,_fan,account_readiness
+from .customs import open_customs
 
 
 def view(store,tenant,account):
@@ -15,7 +16,8 @@ def view(store,tenant,account):
         if owner is None:return {'engine':'legacy','moxySelected':False}
         rows=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account).order_by(MoxyEvent.created_at.desc()).limit(50)).all()
         return {'engine':'moxy','moxySelected':True,'mode':owner.mode,'revision':owner.revision,
-            'readiness':account_readiness(s,account,json.loads(owner.settings_json)),'settings':json.loads(owner.settings_json),
+            'readiness':account_readiness(s,account,json.loads(owner.settings_json)),
+            'customs':open_customs(s,account),'settings':json.loads(owner.settings_json),
             'decisions':[{'id':e.event_id,'fanId':e.fan_id,'kind':e.kind,'status':e.status,'reason':e.reason,
                 'decision':json.loads(e.decision_json) if e.decision_json else None,'intentId':e.intent_id} for e in rows]}
 

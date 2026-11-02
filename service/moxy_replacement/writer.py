@@ -13,7 +13,10 @@ FULL_TEXT=('Specialist services/customs are available only where an instruction 
     'conditions are met; name that rule key as permission, and where it is absent or its condition unknown or unmet, '
     'do not promise availability or request payment. Fulfilment and remedies are limited to the snapshot\'s owed '
     'obligations and approved remedies; complaints are handled within the complaints instruction and those remedies. '
-    'A campaign event carries its own authorised terms; follow them within the same rules. ')
+    'A campaign event carries its own authorised terms; follow them within the same rules. '
+    'A custom obligation in the snapshot shows its stage: before stage confirmed, never promise, price or accept a custom '
+    '(say you will check availability); a quote, deadline or payment route exists only once recorded there; '
+    'payment stays on platform and delivery is by the owning human. ')
 
 
 def _scope_text(snapshot):

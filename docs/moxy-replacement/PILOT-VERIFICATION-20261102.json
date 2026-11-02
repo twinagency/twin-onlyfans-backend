@@ -1,0 +1,25 @@
+{
+  "preserved_server_commit": "54020a7193b79521be3ba284ea8582b2b94d3537",
+  "previous_server_commit": "7fc5b3d94626db3baea3cef2ebcdbabe42baa70e",
+  "checks_read_this_handoff": [
+    {
+      "log": "/srv/projects/moxy-pilot-controls.log",
+      "exit_code": 0,
+      "passed": 12,
+      "duration_seconds": 65.38
+    },
+    {
+      "log": "/srv/projects/moxy-pilot-qualified.log",
+      "exit_code": 0,
+      "passed": 51,
+      "duration_seconds": 211.93
+    }
+  ],
+  "counts_overlap": true,
+  "model": "simulated",
+  "provider": "simulated",
+  "tests_rerun_during_publication": false,
+  "actual_model_evaluation": "not run",
+  "inventory": "prior zero-row query invalid; corrected IDs recovered, inventory/purchase audit unfinished",
+  "production_changed": false
+}

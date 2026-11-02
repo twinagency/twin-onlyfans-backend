@@ -32,6 +32,11 @@ def messages(snapshot):
         'reason is a short internal rationale. handover and none have empty text. '
         'invite must name a real product; offer/continue/resend/alternative carry the selected product. '
         'correct/fulfil may send only a preauthorised remedy/owed product from the snapshot. '
+        'When a pilot scope is present, only its selected fans and products are authorised. '
+        'Specialist services/customs, automated fulfilment and unresolved complaints require handover to its supervisor. '
+        'Do not promise availability or request payment for those deferred services. '
+        'Continue natural conversation, proactive item invitations, buying requests and purchase-aware continuation '
+        'using the selected verified inventory. No unattended campaigns. '
         'No tool calls, marker syntax, HTML, commentary or alternative drafts.\n'+canonical(cfg)},
         {'role':'user','content':canonical({k:v for k,v in snapshot.items() if k!='instructions'})}]
 

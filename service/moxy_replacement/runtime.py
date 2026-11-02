@@ -34,6 +34,8 @@ def configuration(settings):
     cfg=load(settings['creator_key']) if 'creator_document' not in settings else CreatorConfiguration(
         load('amelia').foundation,settings['creator_document'])
     pa=ProductAuthority(cfg,settings['products'],settings['sequences'])
+    from .pilot import scope
+    scope(settings)
     sequence_rule=cfg.overrides.get('vip_sequence')
     if sequence_rule:
         per_level=sequence_rule['value'].get('ppvs_per_level')
@@ -192,7 +194,7 @@ def snapshot(s,account,fan,event):
     memory=native.get('historicalMemory') or {}
     state_view={'revision':state.revision if state else None,'input_revision':state.input_revision if state else None,
         'mode':state.mode if state else None,'takeover':state.takeover_state if state else None}
-    result={'account_revision':owner.revision,'binding_id':owner.binding_id,'configuration_fingerprint':pa.fingerprint,
+    result={'fan_id':fan,'pilot':settings.get('pilot'),'account_revision':owner.revision,'binding_id':owner.binding_id,'configuration_fingerprint':pa.fingerprint,
         'instructions':cfg.public_context(),'public_facts':settings.get('public_facts',{}),
         'fan_state':facts,'fan_revision':mf.revision,'control':state_view,'event':{'kind':event.kind,'payload':json.loads(event.payload_json)},
         'history':history,'memory':memory,'invitation':memo.get('invitation'),
@@ -205,6 +207,8 @@ def snapshot(s,account,fan,event):
 
 
 def validate_decision(settings,snap,decision):
+    from .pilot import decision as pilot_decision
+    pilot_decision(settings,snap,decision)
     cfg,pa=configuration(settings)
     if (set(decision['flags']) & {'hardship','ordinary_chat','refusal','boundary_reset'}
             and decision['action'] in {'invite','offer','resend','alternative','continue'}):
@@ -371,6 +375,10 @@ class MoxyService:
             runtime=self.store._runtime(s,tenant,account);owner=s.get(MoxyAccount,account);event=s.get(MoxyEvent,(account,event_id))
             if event.status!='pending':return event_id
             if owner.mode=='off':event.status='held';event.reason='moxy_off';return event_id
+            from .pilot import check as pilot_check
+            try:pilot_check(json.loads(owner.settings_json),event.fan_id,event.kind)
+            except ActionBlocked as exc:
+                event.status='held';event.reason=str(exc);return event_id
             busy=s.scalar(select(MoxyEvent.event_id).where(MoxyEvent.account_id==account,MoxyEvent.fan_id==event.fan_id,
                 MoxyEvent.event_id!=event_id,MoxyEvent.status.in_(('generating','ready','queued','unknown'))).limit(1))
             if busy:return event_id
@@ -418,6 +426,8 @@ class MoxyService:
             if event.snapshot_hash!=digest(snapshot(s,account,event.fan_id,event)):
                 event.status='stale';event.reason='moxy_snapshot_changed';return event_id
             if reason:event.status='unknown' if reason.endswith('unknown') else 'held';event.reason=reason;return event_id
+            from .pilot import route_specialist
+            result=route_specialist(json.loads(owner.settings_json),result)
             if owner.mode!='preview':observe_input(s,event,result)
             try:validate_decision(json.loads(owner.settings_json),snap,result)
             except (ActionBlocked,InvalidConfiguration) as exc:
@@ -430,7 +440,8 @@ class MoxyService:
             event.snapshot_json=canonical(snap);event.snapshot_hash=digest(snap)
             if result['action']=='handover':
                 from onlyfans_runtime.operator_cases import open_case
-                category='identity' if 'identity' in result['flags'] else 'distress'
+                category=('identity' if 'identity' in result['flags'] else 'distress' if 'danger' in result['flags']
+                    else 'complaint' if 'complaint' in result['flags'] else 'other')
                 open_case(s,account,event.fan_id,category,reason='moxy_owned_handover',evidence={'event_id':event_id},origin='detector',scope='all',owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
                 event.status='done';return event_id
             if result['action']=='none':event.status='done';return event_id

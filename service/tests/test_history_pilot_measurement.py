@@ -78,10 +78,14 @@ def test_receipts_from_another_tenant_do_not_complete_this_tenants_memory(ready)
             md5(m.body),m.created_at,m.direction,m.is_unsent,coalesce(m.automation_kind,''),1,1
             FROM messages m JOIN of_runtime r ON r.account_id=m.account_id
             WHERE m.account_id=:account AND m.message_id=20'''), {'account':A})
+    with engine.begin() as db:
+        db.execute(text("UPDATE of_profile_learning SET error_code='profile-model-request-failed' WHERE account_id=:account"), {'account':A})
     assert capture(store,T,A)['receipts']=={}
     with Session(engine) as db:
         result=recent_progress(db,db.get(OfRuntime,A))
         assert result['memoryProcessing']['messagesAwaitingProcessing']==1
+        assert result['memoryProcessing']['errors']==1
+        assert result['memoryProcessing']['errorsOutsidePendingRecentWork']==0
     with engine.begin() as db:
         db.execute(text('''INSERT INTO of_profile_receipts SELECT :tenant,account_id,binding_id,
             fan_id,source_fan,message_id,body_md5,source_at,direction,unsent,automation,
@@ -89,4 +93,34 @@ def test_receipts_from_another_tenant_do_not_complete_this_tenants_memory(ready)
             WHERE tenant_id='other-tenant' AND account_id=:account'''), {'tenant':T,'account':A})
     assert len(capture(store,T,A)['receipts'])==1
     with Session(engine) as db:
-        assert recent_progress(db,db.get(OfRuntime,A))['memoryProcessing']['messagesAwaitingProcessing']==0
+        view=recent_progress(db,db.get(OfRuntime,A))['memoryProcessing']
+        assert view['messagesAwaitingProcessing']==0
+        assert view['errors']==0
+        assert view['errorsOutsidePendingRecentWork']==1
+        assert db.execute(text("SELECT count(*) FROM of_profile_learning WHERE account_id=:account AND error_code IS NOT NULL"), {'account':A}).scalar()==2
+
+
+def test_recovered_memory_retry_is_bounded_and_preserves_attempts(ready):
+    import importlib.util
+    from pathlib import Path
+    from sqlalchemy import text
+    spec=importlib.util.spec_from_file_location('retry_memory',Path(__file__).parents[2]/'deploy/recent-history-20261102/retry-recovered-memory.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    store,recovery,engine,cutoff=ready
+    claim=recovery.claim(T,A)
+    recovery.page(T,claim,[event(20,cutoff)],has_more=False)
+    with engine.begin() as db:
+        db.execute(text("""INSERT INTO of_profile_learning(tenant_id,account_id,binding_id,fan_id,error_code,attempts,next_at)
+            SELECT :tenant,account_id,binding_id,101,'profile-model-request-failed',3,CURRENT_TIMESTAMP+interval '1 day'
+            FROM of_runtime WHERE account_id=:account ON CONFLICT DO NOTHING"""),{'tenant':T,'account':A})
+    with pytest.raises(AssertionError,match='No current successful'):
+        module.retry(store,T,A,apply=True)
+    with engine.begin() as db:
+        db.execute(text("""INSERT INTO grok_calls(purpose,account_id,fan_id,model,endpoint,prompt_json,status,was_dry_run,called_at)
+            VALUES ('gen_info',:account,999,'synthetic','https://fixture.invalid','{}','done',false,CURRENT_TIMESTAMP)"""),{'account':A})
+    assert module.retry(store,T,A)['jobsRescheduled']==0
+    assert module.retry(store,T,A,apply=True)['jobsRescheduled']==1
+    assert module.retry(store,T,A,apply=True)['jobsRescheduled']==0
+    with engine.begin() as db:
+        row=db.execute(text("SELECT attempts,error_code FROM of_profile_learning WHERE tenant_id=:tenant AND account_id=:account AND fan_id=101"),{'tenant':T,'account':A}).one()
+        assert row==(3,'profile-model-request-failed')

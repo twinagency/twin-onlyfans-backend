@@ -733,7 +733,13 @@ class OFClient:
             params["id"] = before_id
         if offset is not None:
             params["offset"] = offset
-        return self.get_json(f"{API_BASE}/chats/{chat_id}/messages", params=params)
+        from unread_preservation import preserve_unread
+        return preserve_unread(
+            account_id=self.account_id, fan_id=chat_id,
+            snapshot=lambda: self.get_chat(chat_id),
+            read=lambda: self.get_json(f"{API_BASE}/chats/{chat_id}/messages", params=params),
+            restore=self.mark_chat_unread,
+        )
 
     def iter_messages(self, chat_id: str | int, *, page_size: int = 10,
                       delay_s: float = 0.3, max_pages: int | None = None,

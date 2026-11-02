@@ -17,6 +17,41 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
+def scoped_caption_key(account_id, model):
+    """Optional account-bound credential resolver for this isolated vision child.
+
+    The caller supplies only its verified, decrypted connection model. Secrets
+    remain in process memory; this grants no other account, provider or purpose.
+    Unselected accounts retain their existing deployment-key configuration.
+    """
+    from native_pilot.scope import AccountScope
+    from onlyfans_runtime.store import Refused
+    accounts = {a.strip() for a in os.environ.get(
+        'ONLYFANS_VAULT_DESCRIPTION_SCOPED_KEYS', '').split(',') if a.strip()}
+    if any(not AccountScope.valid(a) or not a.startswith('of-') for a in accounts):
+        raise Refused('invalid scoped caption account configuration')
+    if account_id not in accounts:
+        return None
+    from llm_client import _resolve
+    from onlyfans_runtime.provider_connector import _header
+    try:
+        if type(model) is not dict or set(model) != {'modelId', 'apiKey'}:
+            raise ValueError()
+        _, provider = _resolve(model['modelId'])
+        if provider.name != 'openrouter':
+            raise ValueError()
+        key = _header(model['apiKey'], 'model credential', 4096)
+    except Exception:
+        raise Refused('scoped caption credential unavailable') from None
+
+    async def resolve(request_account, provider, purpose=''):
+        if (request_account != account_id or getattr(provider, 'name', None) != 'openrouter'
+                or purpose != 'describe_media'):
+            raise Refused('caption credential scope unavailable')
+        return key
+    return resolve
+
+
 async def run(args):
     if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
         raise RuntimeError("worker role required")
@@ -58,8 +93,8 @@ async def run(args):
                     if runtime.binding_id != args.binding or connection.revision != args.revision:
                         raise Refused("caption generation changed")
                     clear = _open(connection, args.tenant)
-                    # Captioning needs the verified media session and house vision
-                    # key, independently of enabling/configuring fan replies.
+                    # Captioning needs the verified media session and a scoped
+                    # vision credential, independently of enabling fan replies.
                     snapshot = SimpleNamespace(scope=scope, expires_at=connection.expires_at.replace(tzinfo=timezone.utc),
                         capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"])
                     ids = list(session.scalars(select(VaultItem.media_id).where(
@@ -110,6 +145,9 @@ async def run(args):
                 import vault_ai_api as api
                 api._VISION_PROVIDER = "openrouter"
                 import llm_client
+                account_key = scoped_caption_key(args.account, clear.get('model'))
+                if account_key is not None:
+                    llm_client._tenant_api_key = account_key
                 legacy_chat = llm_client.chat
                 os.environ["ONLYFANS_PROCESS_ROLE"] = "worker"
 
@@ -119,6 +157,8 @@ async def run(args):
                         raise Refused("caption model scope unavailable")
                     # The established caption CLI's legacy bridge is confined
                     # to this one serial, metadata-only child and purpose.
+                    if account_key is not None and kwargs.get('model') != caption_vault.DEFAULT_MODEL:
+                        raise Refused('caption fallback provider unavailable')
                     os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
                     try:
                         return await legacy_chat(**kwargs)
@@ -246,4 +286,5 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

@@ -358,3 +358,33 @@ def test_media_description_states_and_moxy_only(env, monkeypatch):
     assert calls == [3]
     with pytest.raises(Refused):
         asyncio.run(md.ensure_described(FREE, [1], describe=fake))
+
+
+def test_vault_ingest_describes_for_moxy_accounts_only_and_bounded(env, monkeypatch):
+    import vault_ingest
+    from moxy_replacement import media_descriptions as md
+    seen = []
+
+    async def fake(account, mid):
+        seen.append((account, mid))
+
+    monkeypatch.setattr(md, "get_session", ax.get_session)
+    from db.models import VaultItem
+    sync = create_engine(env.sync_url)
+    VaultItem.__table__.create(sync)
+    now = datetime(2026, 11, 1)
+    with Session(sync) as s, s.begin():
+        for acct in (MOXY_ON, FREE):
+            for mid in range(1, 31):
+                s.add(VaultItem(account_id=acct, media_id=mid, kind="photo", created_at=now))
+    sync.dispose()
+    asyncio.run(vault_ingest._describe_for_moxy(FREE, [1, 2], describe=fake))
+    assert seen == []                                   # non-Moxy account untouched
+    asyncio.run(vault_ingest._describe_for_moxy(MOXY_ON, list(range(1, 31)), describe=fake))
+    assert len(seen) == md.MAX_ENSURE and {a for a, _ in seen} == {MOXY_ON}   # bounded
+    seen.clear()
+
+    async def boom(*a, **k):
+        raise RuntimeError("provider down")
+    monkeypatch.setattr(md, "ensure_described", boom)
+    asyncio.run(vault_ingest._describe_for_moxy(MOXY_ON, [1]))   # never raises

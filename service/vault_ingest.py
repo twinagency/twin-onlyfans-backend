@@ -25,6 +25,7 @@ the mirror; `vault_mirror` owns the row shape. Three modules, three sentences.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Iterable
 
@@ -165,4 +166,17 @@ async def ingest_ids(account_id: str, media_ids: Iterable[Any], client: Any) -> 
                     account_id, len(rows), e)
         return 0
     log.info("mirror ingest: account=%s landed=%d", account_id, len(rows))
+    await _describe_for_moxy(account_id, [v["media_id"] for v in rows])
     return len(rows)
+
+
+async def _describe_for_moxy(account_id: str, media_ids: list[int], *, describe=None) -> None:
+    """Moxy-selected accounts only: describe newly landed media (bounded by
+    `media_descriptions.MAX_ENSURE`). Never raises; other accounts are untouched."""
+    try:
+        from moxy_replacement import media_descriptions, routing
+        if await asyncio.to_thread(routing.owner_state, account_id) != routing.SELECTED:
+            return
+        await media_descriptions.ensure_described(account_id, media_ids, describe=describe)
+    except Exception as e:  # noqa: BLE001 - a description failure never fails an import
+        log.warning("moxy describe on ingest failed account=%s: %s", account_id, e)

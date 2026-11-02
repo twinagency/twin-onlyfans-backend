@@ -39,7 +39,7 @@ def setup(database,monkeypatch,creator='amelia',mode='on',sequence=False):
         for i,key in enumerate(['first','second','third','fourth']):
             now=utcnow();mid=7101+i
             desc='Synthetic fixture photograph of a sports outfit, no live/custom claim.'
-            v=VaultItem(account_id=ACCOUNT,media_id=mid,kind='photo',description=desc,content_hash='fixture-'+key,
+            v=VaultItem(account_id=ACCOUNT,media_id=mid,kind='photo',description=desc,describe_status='described',describe_generated_at=now,content_hash='fixture-'+key,
                 created_at=now,updated_at=now);s.add(v)
             item=CatalogItem(account_id=ACCOUNT,kind='image_set',label='Synthetic '+key,description_for_ai=desc,
                 media_ids=json.dumps([mid]),preview_media_ids='[]',price_cents=7500,pricing_mode='fixed',
@@ -178,4 +178,35 @@ def test_duplicate_event_keys_and_restart_keep_one_model_call(database,monkeypat
     assert duplicate==identity
     later=model(decision());MoxyService(store).prepare(TENANT,ACCOUNT,identity,later)
     assert later.calls==[]
+    store.close()
+
+
+@pytest.mark.parametrize('state,fields,reason',[
+    ('pending',{'describe_status':None},'media_description_pending'),
+    ('failed',{'describe_status':'failed'},'media_description_failed'),
+    ('unsupported',{'describe_status':'blocked_drm'},'media_description_unsupported'),
+    ('stale',{'updated_at':utcnow()+timedelta(days=1)},'media_description_pending'),
+])
+def test_asset_description_state_excludes_product_with_visible_reason(database,monkeypatch,state,fields,reason):
+    from moxy_replacement.runtime import account_readiness
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    with Session(engine) as s,s.begin():
+        assert account_readiness(s,ACCOUNT,settings)['excluded_products']=={}
+        v=s.get(VaultItem,(ACCOUNT,7101))
+        for k,val in fields.items():setattr(v,k,val)
+    with Session(engine) as s:
+        r=account_readiness(s,ACCOUNT,settings)
+    assert r['excluded_products']=={'first':reason+':7101'}
+    assert 'product_excluded:first:%s:7101'%reason in r['blockers'] and not r['ready']
+    store.close()
+
+
+def test_removed_asset_is_missing_description_exclusion(database,monkeypatch):
+    from moxy_replacement.runtime import account_readiness
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    with Session(engine) as s,s.begin():
+        s.get(VaultItem,(ACCOUNT,7102)).removed_at=utcnow()
+    with Session(engine) as s:
+        r=account_readiness(s,ACCOUNT,settings)
+    assert r['excluded_products']=={'second':'media_description_missing:7102'}
     store.close()

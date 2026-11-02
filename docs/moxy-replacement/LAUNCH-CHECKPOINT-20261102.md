@@ -8,6 +8,22 @@ The full Moxy engine is NOT deployed or enabled. No customer messages or purchas
 
 Only the bounded vault-page repair is deployed: commit d27368e45fd058d6a3a82c7c22c87f333e46c245, worker image sha256:21cf0c7143604855911b969492798c3d8ad0ad691c7f92d027a37d3e9e48adfd. Other service versions were preserved.
 
+## Corrections 2026-11-03 (supersede statements marked SUPERSEDED below)
+
+Applied from Jesse's handoff brief of 3 Nov 2026. Where this section and an earlier statement disagree, this section governs.
+
+Bundle candidate counts:
+- The earlier totals of 1,116 (Amelia) and 816 (Cristina), 1,932 together, were double-counted. The two inventory runs each rescanned the same saved priced-message rows and each wrote its own candidate set, so every combination was counted once per run. SUPERSEDED.
+- Correct distinct attachment combinations: 558 Amelia + 408 Cristina = 966.
+- Saved priced-message rows scanned (unchanged): Amelia 78,451; Cristina 67,348. Row counts include priced rows that may not contain media.
+- The 966 combinations come from historical priced messages. They are NOT individual media counts, verified purchases or automatically approved products. A combination groups unordered attachment ids only; price and order variants within it are retained, and previews and lock state are unverified until a provider source is read for that exact message.
+
+Vault import state:
+- At 3 Nov 2026 05:14 Brisbane (2 Nov 19:14 UTC) each account had 60 imported vault items. Amelia had zero nonempty descriptions; Cristina had one. Both vault imports were still pending.
+- This supersedes the earlier 36-item snapshot below, which is kept only as history.
+
+Commercial mapping recovery (code, this branch): offer_import.recover_mappings is a read-only report that deduplicates across runs, keeps variants, blocks offers with unavailable assets, maps only an exact existing catalogue item automatically, and lists everything else in an unresolved register. It creates no approvals, prices, bindings or sequences. Amelia's "VIP vault graphics" are progress/marketing artwork and are not a sequence. Not yet run against production.
+
 ## Preserved integration
 
 Backend branch: codex/moxy-launch-20261103.
@@ -57,15 +73,15 @@ Tenant: twin-internal.
 The accounts have verified native connections with encrypted account-bound OpenRouter model credentials. The worker's global house key is absent. That mismatch explains the automatic description failures; it is not proof that no account model key exists.
 
 The normal inventory importer scanned already-saved outgoing priced-message rows, with no new history downloads and no model calls:
-- Amelia: complete, 78,451 rows scanned, 1,116 bundle candidates.
-- Cristina: complete, 67,348 rows scanned, 816 bundle candidates.
+- Amelia: complete, 78,451 rows scanned, ~~1,116 bundle candidates~~ (SUPERSEDED, see Corrections 2026-11-03).
+- Cristina: complete, 67,348 rows scanned, ~~816 bundle candidates~~ (SUPERSEDED, see Corrections 2026-11-03).
 These are inventory candidates, not approved products, verified purchases or revenue. Row counts include priced rows that may not contain media. Exact source observations, previews, asset membership and current approved prices still require validation.
 
 Inventory job IDs:
 - Amelia: 6337dbb9-8476-47d2-960d-19ed4effcedb
 - Cristina: 41f36e40-ee7c-4fa6-9926-988ac0e97990
 
-Last checked vault rows: 36 per account. Amelia had 35 failed descriptions and one fetch_failed. Cristina had one described asset and 35 failed. This was an advancing partial vault import, not a complete vault snapshot.
+SUPERSEDED snapshot (see Corrections 2026-11-03 for the later 60-item observation): last checked vault rows: 36 per account. Amelia had 35 failed descriptions and one fetch_failed. Cristina had one described asset and 35 failed. This was an advancing partial vault import, not a complete vault snapshot.
 
 One bounded real-media check succeeded for Cristina: media 4773415574, call 43557, 269 description characters. Its generated timestamp was newer than its row update timestamp. Amelia had no item eligible under the existing retry delay, so its check attempted zero items. Do not call Amelia verified or bypass retry delay to manufacture a result.
 

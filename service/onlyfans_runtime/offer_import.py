@@ -677,3 +677,167 @@ def withdraw_draft(store, tenant, account, item_id, *, command_key, actor):
             fingerprint=create.fingerprint, media_key=create.media_key, reuse_confirmed=False,
             description_approved=False, item_id=item_id, result_json=canonical(result), created_at=utcnow()))
         return result
+
+
+# ── Commercial mapping recovery (read-only) ─────────────────────────────
+# Recovers what historical priced messages prove and says plainly what they
+# do not. It never creates drafts, approvals, prices, bindings or sequences:
+# reuse_confirmed/description_approved stay a human decision on an exact
+# observation (create_draft), and Moxy settings are changed only by their
+# own versioned, approved path. Output is a report plus an unresolved
+# register in the same {key, reason} shape as Moxy controls.
+
+# Only an export of Moxy's own scripts or vault sequences can establish step
+# membership. Progress/marketing artwork (e.g. "VIP vault" graphics) cannot.
+SEQUENCE_SOURCES = ("moxy_script_export", "vault_sequence_export")
+GRAPHIC_REASON = ("VIP vault graphics are progress/marketing artwork; they do not establish "
+                  "paid-content sequence membership, order or prices")
+CATEGORY_REASON = ("product category is not recorded on catalogue items or messages; the creator's "
+                   "per-category price floors cannot be applied without verified content descriptions")
+
+
+def documented_price_floor(creator_key):
+    """Lowest minimum_cents among the creator's documented product price rules, or None.
+
+    A conservative bound only: a price below every documented floor is wrong for
+    any category. It is not a substitute for the per-category floor.
+    """
+    from moxy_replacement.configuration import load
+    floors = []
+    for rule in load(creator_key).public_context()["rules"]:
+        value = rule["value"]
+        if rule["key"].startswith("product:") and type(value) is dict and type(value.get("minimum_cents")) is int:
+            floors.append(value["minimum_cents"])
+    return min(floors) if floors else None
+
+
+def sequence_status(evidence=None):
+    """Accept only authoritative sequence exports; report everything else as rejected.
+
+    evidence: [{"kind", "name", "steps": [{"step", "mediaIds", "priceCents"}]}]
+    """
+    accepted, rejected = {}, []
+    for entry in evidence or []:
+        kind = entry.get("kind") if type(entry) is dict else None
+        if kind not in SEQUENCE_SOURCES:
+            rejected.append({"kind": kind, "reason": GRAPHIC_REASON if kind == "vip_graphic"
+                             else "not_an_authoritative_sequence_source"})
+            continue
+        steps = entry.get("steps")
+        name = entry.get("name")
+        valid = (type(name) is str and name and type(steps) is list and steps and all(
+            type(st) is dict and type(st.get("step")) is int and type(st.get("priceCents")) is int
+            and st["priceCents"] > 0 and _ids(json.dumps(st.get("mediaIds"))) for st in steps)
+            and sorted(st["step"] for st in steps) == list(range(1, len(steps) + 1)))
+        if not valid:
+            rejected.append({"kind": kind, "reason": "incomplete_sequence_steps"})
+            continue
+        accepted[name] = sorted(steps, key=lambda st: st["step"])
+    unresolved = [] if accepted else [{"key": "sequence:vault", "reason":
+        "no authoritative sequence source (Moxy script or sequence export) is available; " + GRAPHIC_REASON}]
+    return {"sequences": accepted, "rejected": rejected, "unresolved": unresolved}
+
+
+def distinct_combinations(s, account, binding_id):
+    """Attachment combinations deduplicated across every inventory run.
+
+    Each run rescans the same saved rows, so counts per variant take the highest
+    run total rather than the sum; summing is the double count this prevents.
+    """
+    jobs = {j.job_id: j for j in s.scalars(select(OfOfferImportJob).where(
+        OfOfferImportJob.account_id == account, OfOfferImportJob.binding_id == binding_id,
+        OfOfferImportJob.mode == "inventory"))}
+    merged = {}
+    if not jobs:
+        return []
+    for row in s.scalars(select(OfOfferImportCandidate).where(OfOfferImportCandidate.account_id == account,
+            OfOfferImportCandidate.job_id.in_(list(jobs))).order_by(OfOfferImportCandidate.media_key,
+            OfOfferImportCandidate.job_id)):
+        entry = merged.setdefault(row.media_key, {"mediaKey": row.media_key, "mediaIds": _ids(row.media_json) or [],
+            "variants": {}, "samples": {}, "runs": set(), "complete": False})
+        entry["runs"].add(row.job_id)
+        entry["complete"] = entry["complete"] or jobs[row.job_id].status == "complete"
+        for v in json.loads(row.variants_json):
+            have = entry["variants"].get(v["key"])
+            if have is None:
+                entry["variants"][v["key"]] = dict(v)
+            else:
+                have["count"] = max(have["count"], v["count"])
+                if v["latest"] and (have["latest"] is None or v["latest"]["messageId"] > have["latest"]["messageId"]):
+                    have["latest"] = v["latest"]
+        for sample in json.loads(row.samples_json):
+            entry["samples"].setdefault(sample["messageId"], sample)
+    out = []
+    for entry in merged.values():
+        entry["variants"] = sorted(entry["variants"].values(), key=lambda v: v["key"])
+        entry["samples"] = sorted(entry["samples"].values(), key=lambda x: x["messageId"])[:MAX_SAMPLES]
+        entry["runs"] = sorted(entry["runs"])
+        out.append(entry)
+    return out
+
+
+def _classify(entry, *, existing, asset_reasons, observations, floor):
+    """(status, reasons, extra). Every non-mapped outcome carries its reason."""
+    media = entry["mediaIds"]
+    variants = entry["variants"]
+    exact = [v for v in variants if v["key"] != "other"]
+    if len(media) > MAX_ATTACHMENTS:
+        return "blocked", ["too_many_attachments"], {}
+    if asset_reasons:
+        return "blocked", sorted(asset_reasons), {}
+    if any(v["key"] == "other" for v in variants):
+        return "unresolved", ["variants_truncated"], {}
+    if len(exact) > 1:
+        return "unresolved", ["variant_conflict"], {}
+    variant = exact[0] if exact else None
+    if variant is None:
+        return "unresolved", ["no_exact_variant"], {}
+    price = variant["priceCents"]
+    order = [int(m) for m in variant["mediaIds"]]
+    if floor is not None and price < floor:
+        return "unresolved", ["historical_price_below_creator_floor"], {"floorCents": floor}
+    if existing is not None:
+        same = _ids(existing.media_ids) == order and existing.price_cents == price
+        if not same:
+            return "unresolved", ["existing_item_terms_differ"], {"itemId": existing.id}
+        return "mapped_existing", [], {"proposedBinding": {"itemId": existing.id, "priceCents": price,
+            "enabled": bool(existing.enabled)}}
+    verified = [o for o in observations if o.preview_json is not None and o.locked_text is False
+                and not json.loads(o.reasons_json) and o.price_cents == price and _ids(o.media_json) == order]
+    if not verified:
+        return "unresolved", ["source_details_needed"], {}
+    return "awaiting_approval", ["approval_required"], {"observationId": verified[0].observation_id}
+
+
+def recover_mappings(store, tenant, account, *, creator_key=None, sequence_evidence=None):
+    """Read-only recovery report for one account (see section comment above)."""
+    floor = documented_price_floor(creator_key) if creator_key else None
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        from db.onlyfans_connection_models import OfProviderConnection
+        connection = s.get(OfProviderConnection, account)
+        if connection is not None and (connection.binding_id != runtime.binding_id or connection.status != "verified"):
+            connection = None
+        combos = distinct_combinations(s, account, runtime.binding_id)
+        items, unresolved, counts = [], [], {}
+        for entry in combos:
+            media = entry["mediaIds"]
+            _, asset_reasons = _asset_state(s, account, runtime, connection, media)
+            observations = s.scalars(select(OfOfferObservation).where(OfOfferObservation.account_id == account,
+                OfOfferObservation.binding_id == runtime.binding_id,
+                OfOfferObservation.media_key == entry["mediaKey"]).limit(50)).all()
+            status, reasons, extra = _classify(entry, existing=_existing(s, account, media),
+                asset_reasons=asset_reasons, observations=observations, floor=floor)
+            counts[status] = counts.get(status, 0) + 1
+            items.append({"candidateId": entry["mediaKey"], "attachmentCount": len(media), "status": status,
+                "reasons": reasons, "variants": [{"priceCents": v["priceCents"], "mediaIds": v["mediaIds"],
+                    "count": v["count"], "latest": v["latest"]} for v in entry["variants"]],
+                "runs": entry["runs"], **extra})
+            if status != "mapped_existing":
+                unresolved.append({"key": "catalogue:" + entry["mediaKey"][:16], "reason": ",".join(reasons)})
+        sequences = sequence_status(sequence_evidence)
+        account_level = [{"key": "catalogue:category", "reason": CATEGORY_REASON}] + sequences["unresolved"]
+        return {"distinctCombinations": len(combos), "byStatus": counts, "items": items,
+            "sequences": sequences["sequences"], "rejectedSequenceEvidence": sequences["rejected"],
+            "priceFloorCents": floor, "approvalsCreated": 0, "pricesInvented": 0,
+            "unresolved": account_level + unresolved}

@@ -18,7 +18,7 @@ for role in ['worker','api']:
  for item in packet['files']:
   p=root/item['path'];p.parent.mkdir(parents=True,exist_ok=True)
   run(['docker','cp',name+':/app/'+item['path'],str(p)])
-  assert hashlib.sha256(p.read_bytes()).hexdigest()==item['expectedSha256'],'File differs from qualified pilot'
+  assert hashlib.sha256(p.read_bytes()).hexdigest()==item['expectedSha256'],'File differs from qualified pilot: '+item['path']
   p.write_text(item['content'])
  (root/'Dockerfile').write_text('FROM '+base+'\nCOPY service/ /app/service/\nLABEL org.opencontainers.image.revision="'+REV+'"\n')
  tag='twin-recent-history:'+role+'-'+REV[:12]

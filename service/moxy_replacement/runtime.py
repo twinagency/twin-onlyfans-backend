@@ -17,7 +17,7 @@ from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_moxy_models import MoxyAccount, MoxyFan, MoxyEvent, MoxyAudit
 from onlyfans_runtime.store import Refused, utcnow
 from onlyfans_runtime.native_context import canonical, versions
-from .configuration import load, CreatorConfiguration, ActionBlocked, InvalidConfiguration, digest
+from .configuration import load, load_foundation, CreatorConfiguration, ActionBlocked, InvalidConfiguration, digest
 from .authority import ProductAuthority, readiness
 from . import writer
 
@@ -32,7 +32,7 @@ def configuration(settings):
     required={'creator_key','products','sequences','catalogue_bindings','operational'}
     if type(settings) is not dict or not required<=set(settings):raise InvalidConfiguration('Moxy source bindings required')
     cfg=load(settings['creator_key']) if 'creator_document' not in settings else CreatorConfiguration(
-        load('amelia').foundation,settings['creator_document'])
+        load_foundation(),settings['creator_document'])
     pa=ProductAuthority(cfg,settings['products'],settings['sequences'])
     from .pilot import scope
     scope(settings)
@@ -225,8 +225,14 @@ def validate_decision(settings,snap,decision):
     if decision['permission']:
         if cfg.resolve(decision['permission'],facts).value is False: raise ActionBlocked('permission_refused')
     if facts.get('talker_label') is True and facts.get('currently_spending') is False:
+        try:gap=cfg.resolve('talker_timing',facts).value
+        except ActionBlocked as exc:
+            # An absent rule leaves the gap unresolved; it is never guessed.
+            raise ActionBlocked('talker_timing_unresolved' if str(exc).startswith('instruction_missing') else str(exc)) from exc
+        seconds=gap.get('minimum_reply_gap_seconds') if type(gap) is dict else None
+        if type(seconds) is not int or seconds<=0:raise ActionBlocked('talker_timing_unresolved')
         outgoing=[m for m in snap['history'] if m['direction']=='out']
-        if outgoing and utcnow()-__import__('datetime').datetime.fromisoformat(outgoing[-1]['at'])<timedelta(hours=1):raise ActionBlocked('creator_hourly_reply_setting')
+        if outgoing and utcnow()-__import__('datetime').datetime.fromisoformat(outgoing[-1]['at'])<timedelta(seconds=seconds):raise ActionBlocked('creator_reply_gap_setting')
     if facts.get('clock_label') is True:
         if snap['operational'].get('in_graveyard_shift') is None:raise ActionBlocked('graveyard_shift_unknown')
         if snap['operational']['in_graveyard_shift']:raise ActionBlocked('graveyard_clock_hold')

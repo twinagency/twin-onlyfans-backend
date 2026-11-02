@@ -112,9 +112,18 @@ class CreatorConfiguration:
                 'unresolved': deepcopy(self.creator['unresolved'])}
 
 
+def _root(directory=None):
+    return Path(directory) if directory else Path(__file__).with_name('sources')
+
+
+def load_foundation(directory=None):
+    """The common foundation, independent of any creator source file."""
+    return json.loads((_root(directory) / 'foundation.v1.json').read_text())
+
+
 def load(creator_key, directory=None):
-    root = Path(directory) if directory else Path(__file__).with_name('sources')
+    root = _root(directory)
     if type(creator_key) is not str or not creator_key.replace('_', '').isalnum():
         raise InvalidConfiguration('invalid creator key')
-    return CreatorConfiguration(json.loads((root / 'foundation.v1.json').read_text()),
+    return CreatorConfiguration(load_foundation(root),
                                 json.loads((root / (creator_key + '.v1.json')).read_text()))

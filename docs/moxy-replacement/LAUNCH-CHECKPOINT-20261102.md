@@ -1,0 +1,101 @@
+# Moxy launch checkpoint, 2 November 2026 UTC
+
+## Actual release state
+
+Jesse explicitly authorised completing deployment and commercial testing. This checkpoint does not revoke that authorisation. Do not request deployment permission again merely because older handoffs say review only.
+
+The full Moxy engine is NOT deployed or enabled. No customer messages or purchases were made by this launch session. Production schema remains 0110_recent_history; no Moxy account activation or migration 0111 has run.
+
+Only the bounded vault-page repair is deployed: commit d27368e45fd058d6a3a82c7c22c87f333e46c245, worker image sha256:21cf0c7143604855911b969492798c3d8ad0ad691c7f92d027a37d3e9e48adfd. Other service versions were preserved.
+
+## Preserved integration
+
+Backend branch: codex/moxy-launch-20261103.
+Code commit: f237162eb28d92baa73d89c894bd666250156ce1.
+Parents: Claude 2f60f8bd3253156cabf281bd4192cc586f0b5965 and scoped-vision repair 18ff3a32f5f71d7df100248d8df7a073a71573ea.
+This incorporates production 9d6756b, bounded vault repair d27368e, Claude completion, and delivery fixes. It preserves production changes and Moxy sender ownership fences.
+
+All 1007 service files were compared by Git blob hash against the qualified development worktree: zero mismatches. Never upload environment files, session secrets, credentials or raw customer archives.
+
+Development worktree: /srv/projects/moxy-launch-20261103 on work-server. Its local Git ancestry remains the original 54020a7 base plus the preserved overlay. Do not force-push that ancestry over the published integration branch. The published commit is the reproducible source.
+
+Changes added in this launch pass:
+- Bounded per-account vault pages: six items for the two launch accounts; unchanged 1 MiB response and ownership protections.
+- Fresh ingress temporarily defers a queued reply instead of permanently refusing it. Wire reservations and counters are released consistently; new fan input, takeover and expiry are revalidated.
+- Existing stale/recovery refusal remains intact.
+- Legacy egress fixtures explicitly identify non-Moxy ownership; the API route allowlist includes only the specific Moxy configuration GET/PUT route.
+- Optional scoped description credentials use only the selected account's verified OpenRouter key, only for describe_media. Unselected accounts retain existing behaviour. An unconfigured fallback provider remains blocked.
+- No scoped description flag has been enabled persistently. That repair is committed, not deployed.
+
+## Test evidence
+
+Counts overlap; do not add them into a unique-test total.
+- Initial integrated Moxy suite: 229 passed, 705.12 seconds.
+- Vault regression selection: 66 passed, 57.03 seconds.
+- New ingress regression failed on unpatched source as expected.
+- Broad delivery qualification: 99 passed, 13 failed. All 16 new ingress cases and the three latest multicreator cases passed. Failures were investigated: stale/recovery deferral was narrowed, pending-ingress expectations updated, legacy-owner fixtures corrected, and the exact Moxy API route added.
+- Final delivery/fence selection: 181 passed, 271.43 seconds, exit 0.
+- Scoped credential tests: 15 passed, 1.59 seconds. An initially missing OpenRouter fallback registration was caught; the final implementation refuses that unavailable fallback instead of selecting an unregistered model.
+
+Logs on work-server:
+- /srv/projects/moxy-launch-integration-20261103.log
+- /srv/projects/moxy-vault-after-20261103.log
+- /srv/projects/moxy-pending-before-20261103.log
+- /srv/projects/moxy-delivery-qualification-20261103.log
+- /srv/projects/moxy-delivery-final-20261103.log and .exit.json
+- /srv/projects/moxy-caption-key-test-20261103.log
+
+Disposable PostgreSQL only: moxy-review-pg-20261102, port 55432. Runner /srv/projects/moxy-launch-test-runner-20261103.py obtains its fixture credentials internally. Never use production for regression tests.
+
+## Production data recovered
+
+Correct accounts:
+- Amelia: of-312988353
+- Cristina: of-63665785
+Tenant: twin-internal.
+
+The accounts have verified native connections with encrypted account-bound OpenRouter model credentials. The worker's global house key is absent. That mismatch explains the automatic description failures; it is not proof that no account model key exists.
+
+The normal inventory importer scanned already-saved outgoing priced-message rows, with no new history downloads and no model calls:
+- Amelia: complete, 78,451 rows scanned, 1,116 bundle candidates.
+- Cristina: complete, 67,348 rows scanned, 816 bundle candidates.
+These are inventory candidates, not approved products, verified purchases or revenue. Row counts include priced rows that may not contain media. Exact source observations, previews, asset membership and current approved prices still require validation.
+
+Inventory job IDs:
+- Amelia: 6337dbb9-8476-47d2-960d-19ed4effcedb
+- Cristina: 41f36e40-ee7c-4fa6-9926-988ac0e97990
+
+Last checked vault rows: 36 per account. Amelia had 35 failed descriptions and one fetch_failed. Cristina had one described asset and 35 failed. This was an advancing partial vault import, not a complete vault snapshot.
+
+One bounded real-media check succeeded for Cristina: media 4773415574, call 43557, 269 description characters. Its generated timestamp was newer than its row update timestamp. Amelia had no item eligible under the existing retry delay, so its check attempted zero items. Do not call Amelia verified or bypass retry delay to manufacture a result.
+
+No persistent scoped-key flag or bulk model-analysis job was started.
+
+## New evidence and explicit approval block
+
+Amelia's current vault metadata exposes folder 27540040, named "vip vault graphs". A scoped provider GET verified three photo IDs in that folder:
+4294360357, 4294360356, 4294360354. hasMore was true.
+The folder may help recover sequence instructions; its name alone does not establish its contents, approval or current applicability.
+
+Automatic approval review rejected executing an OCR request that would send those three private graphics to the account's OpenRouter model. Reason: launch/testing authorisation did not explicitly authorise that sensitive media disclosure. The OCR command was NOT submitted to AWS and the three images were NOT sent. Do not retry through another execution path. Ask Jesse explicitly before that external OCR step, or use a genuinely safer approved source.
+
+Prepared but unexecuted request is on the connected Windows device at Temp/moxy-vault-graph-ocr.json. It is a bounded single-call inspection, not a new background job. It contains code, not credential values. Revalidate the source and current connection before any authorised execution.
+
+## Remaining launch gates
+
+1. Verify exact asset-to-product-to-sequence mappings against current source material and creator price rules. Historical bundle frequency and folder names are evidence, not approval.
+2. Verify exact purchase/ownership links for the selected real test fans. Do not globally set ownership_verified or purchase_links_verified true.
+3. Resolve current labels/exceptions, VIP qualification, Cristina's graveyard shift, assigned handover operator and external sender coordination from actual operational records.
+4. Complete actual-model conversation and controlled provider qualification on the configured products. Synthetic tests and one successful media description are not a completed real selling test.
+5. Reconcile dashboard branch/source against the running frontend; preserve newer onboarding work.
+6. Prepare coordinated schema-compatible release for all affected processes. Old strict-schema processes cannot simply be left running across migration 0111. Preserve paused legacy supervisor, existing obligations and uncertain delivery records.
+7. Enable only the verified creator/test scope, verify real receipts and reconciliation, then expand within Jesse's launch authorisation.
+
+Do not invent defaults to clear readiness, silently skip Moxy sequences, restart stopped bulk history/memory jobs, or present the current repair as commercially live.
+
+Useful SSM evidence IDs:
+- Vault repair promotion: 0ba7622c-f37b-4bd7-ac2f-b716993eeddb
+- Bounded description: 4ad1f6a8-dc82-4439-8261-5b699a4a618d
+- Description/inventory state: 9583ec63-7c1a-42e6-8986-f1acf83d7cac
+- Completed inventory scans: f8f96425-0e60-4493-84a0-ea5f82244cd6
+- Verified graph folder metadata: e472c89f-2a35-4872-911d-9bb76eda8c68

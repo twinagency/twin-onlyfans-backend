@@ -15,7 +15,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from onlyfans_read.agency_scope import actor_allowed
-from sqlalchemy import and_, or_, select, func
+from sqlalchemy import and_, or_, select, func, case
 from sqlalchemy.orm import Session
 
 from onlyfans_read.contract import ID_PATTERN
@@ -446,6 +446,21 @@ def _vault_job_expired(requested_at, last_progress_at, now):
     return now - last_activity > timedelta(hours=1)
 
 
+def vault_priority_accounts():
+    """ONLYFANS_VAULT_PRIORITY_ACCOUNTS: comma-separated account ids whose pending vault jobs are
+    picked before other accounts' (an initial import for a launch creator). Unset = unchanged order.
+    Ordering only: every page still passes the same provider read budget and fences."""
+    raw = os.environ.get("ONLYFANS_VAULT_PRIORITY_ACCOUNTS", "")
+    return tuple(a for a in (x.strip() for x in raw.split(",")) if a and ID_PATTERN.fullmatch(a))[:16]
+
+
+def _priority_order():
+    accounts = vault_priority_accounts()
+    if not accounts:
+        return case((OfVaultSyncJob.account_id.is_(None), 0), else_=1)  # constant: unchanged order
+    return case((OfVaultSyncJob.account_id.in_(accounts), 0), else_=1)
+
+
 def process_vault_jobs(store, tenant, *, limit=1, stop=None):
     """At most limit GET pages, including identity checks, outside transactions.
 
@@ -472,7 +487,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
                 OfCreatorBinding.channel == "onlyfans", or_(OfVaultSyncJob.status == "pending",
                     and_(OfVaultSyncJob.status == "running", OfVaultSyncJob.lease_until <= now)))
-                .order_by(OfVaultSyncJob.updated_at, OfVaultSyncJob.account_id).limit(1)).first()
+                .order_by(_priority_order(), OfVaultSyncJob.updated_at, OfVaultSyncJob.account_id).limit(1)).first()
         if candidate is None:
             if processed < limit and not (stop is not None and stop.is_set()):
                 processed += confirm_removals(store, tenant, stop=stop)

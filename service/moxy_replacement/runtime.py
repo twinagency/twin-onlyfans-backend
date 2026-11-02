@@ -82,33 +82,52 @@ def _fan(s,account,fan):
     return row
 
 
-def _inventory(s,account,settings,pa):
-    result={}
+def _inventory_report(s,account,settings,pa):
+    """(usable inventory, {product_key: reason}). A product is never dropped silently:
+    an asset whose description is pending/failed/unsupported/missing is excluded with
+    `media_description_<state>:<media_id>` so readiness and operators can see why."""
+    from .media_descriptions import item_state
+    result={};excluded={}
     for key,p in pa.products.items():
         item=s.get(CatalogItem,settings['catalogue_bindings'].get(key))
-        if not item or item.account_id!=account or not item.enabled: continue
+        if not item or item.account_id!=account or not item.enabled:
+            excluded[key]='catalogue_item_missing_or_disabled';continue
         try: ids=json.loads(item.media_ids); previews=json.loads(item.preview_media_ids)
-        except (TypeError,ValueError): continue
-        if ids!=[a['id'] for a in p['assets']] or item.price_cents!=p['price_cents'] or item.pricing_mode!='fixed': continue
-        files=[];valid=True
+        except (TypeError,ValueError):
+            excluded[key]='catalogue_media_unreadable';continue
+        if ids!=[a['id'] for a in p['assets']] or item.price_cents!=p['price_cents'] or item.pricing_mode!='fixed':
+            excluded[key]='catalogue_binding_mismatch';continue
+        files=[];reason=None
         for a in p['assets']:
             v=s.get(VaultItem,(account,a['id']))
-            if not v or v.removed_at is not None or v.kind not in {'photo','image','video'}:
-                valid=False;break
+            if v is not None and v.removed_at is not None:v=None
+            if v is None:
+                reason='media_description_missing:%s'%a['id'];break
+            if v.kind not in {'photo','image','video'}:
+                reason='media_kind_unsupported:%s'%a['id'];break
+            state=item_state(v)
+            if state!='described':
+                reason='media_description_%s:%s'%(state,a['id']);break
             # Asset facts are approved on import/change, never derived from an
             # old fan-facing caption. Revisions bind exact current metadata.
             facts=(v.video_description or v.description or '').strip()
             evidence=digest({'media_id':v.media_id,'content_hash':v.content_hash,
                 'description':facts,'updated_at':v.updated_at.isoformat() if v.updated_at else None})
             if a['evidence_ref']!='asset:'+evidence or a['facts']!=[facts] or not facts:
-                valid=False;break
+                reason='asset_evidence_stale:%s'%a['id'];break
             files.append({'media_id':v.media_id,'kind':v.kind,'content_hash':v.content_hash,
                 'updated_at':v.updated_at,'removed_at':None})
-        if not valid or not ids or set(previews)==set(ids): continue
+        if reason is None and (not ids or set(previews)==set(ids)):reason='catalogue_media_invalid'
+        if reason:
+            excluded[key]=reason;continue
         result[key]={'item':{n:getattr(item,n) for n in ('id','account_id','script_id','enabled','kind','label',
             'description_for_ai','price_cents','is_free_teaser','updated_at','pricing_mode')},
             'source':None,'media_ids':ids,'preview_ids':previews,'price_cents':p['price_cents'],'files':files}
-    return json.loads(canonical(result))
+    return json.loads(canonical(result)),excluded
+
+
+def _inventory(s,account,settings,pa):
+    return _inventory_report(s,account,settings,pa)[0]
 
 
 def account_readiness(s,account,settings):
@@ -116,7 +135,11 @@ def account_readiness(s,account,settings):
     ready=readiness(cfg,account_bound=True,products=settings['products'],sequences=settings['sequences'],
         operational=settings['operational'],coordination_verified=settings.get('coordination_verified'))
     if not settings['operational'].get('assigned_operator'):ready['blockers'].append('handover_owner_missing')
-    if set(_inventory(s,account,settings,pa))!=set(pa.products):ready['blockers'].append('real_inventory_mapping_incomplete')
+    usable,excluded=_inventory_report(s,account,settings,pa)
+    if set(usable)!=set(pa.products):ready['blockers'].append('real_inventory_mapping_incomplete')
+    ready['excluded_products']=excluded
+    ready['blockers']+=['product_excluded:%s:%s'%(k,r) for k,r in sorted(excluded.items())
+        if r.startswith(('media_description_','media_kind_'))]
     policy=s.get(OfDeliveryPolicy,account)
     synthetic=policy is not None and policy.transport_kind=='synthetic' and settings.get('fixture') is True
     if not synthetic and settings.get('production_verification') is not True:ready['blockers'].append('production_verification_missing')

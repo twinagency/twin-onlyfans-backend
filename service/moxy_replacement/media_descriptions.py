@@ -66,7 +66,11 @@ async def descriptions(account_id: str, media_ids) -> list[dict]:
     return [_view(m, by.get(m)) for m in ids]
 
 
-async def ensure_described(account_id: str, media_ids, *, describe=None, retry_failed=False) -> list[dict]:
+MAX_ENSURE = 20     # per call; larger imports are described by later calls/sweeps
+
+
+async def ensure_described(account_id: str, media_ids, *, describe=None, retry_failed=False,
+                           max_items: int = MAX_ENSURE) -> list[dict]:
     """Describe pending items (and failed ones when `retry_failed`) for a
     Moxy-owned account, then return every item's state. A failure is recorded
     by the describe pipeline and reported as `failed`; it never raises."""
@@ -77,8 +81,9 @@ async def ensure_described(account_id: str, media_ids, *, describe=None, retry_f
     if describe is None:
         from vault_ai_api import _describe_one as describe
     before = await descriptions(account_id, media_ids)
-    for row in before:
-        if row["state"] == "pending" or (retry_failed and row["state"] == "failed"):
+    todo = [r for r in before if r["state"] == "pending" or (retry_failed and r["state"] == "failed")]
+    for row in todo[:max(0, int(max_items))]:
+        if True:
             try:
                 await describe(account_id, row["media_id"])
             except Exception:  # noqa: BLE001 - recorded state is re-read below

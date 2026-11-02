@@ -6,8 +6,41 @@ from sqlalchemy.orm import Session
 from db.onlyfans_moxy_models import MoxyAccount,MoxyFan,MoxyEvent,MoxyAudit
 from onlyfans_runtime.store import Refused,utcnow
 from onlyfans_runtime.native_context import canonical
-from .runtime import MoxyService,_fan,account_readiness
+from .runtime import MoxyService,_fan,account_readiness,configuration
+from . import outreach
 from .customs import open_customs
+
+
+def _unresolved(settings):
+    cfg=configuration(settings)[0]
+    key=cfg.creator['creator_key']
+    out=[{'key':'creator:%s:%d'%(key,i),'reason':r} for i,r in enumerate(cfg.creator['unresolved'])]
+    return out+[{'key':'outreach:'+k,'reason':r} for k,r in sorted(outreach.unresolved().items())]
+
+
+def _media_states(s,account,settings):
+    """Per product, per asset description state (described/pending/failed/unsupported/missing)."""
+    from db.models import VaultItem
+    from .media_descriptions import item_state
+    result={}
+    for key,p in settings['products'].items() if isinstance(settings['products'],dict) else [(p['id'],p) for p in settings['products']]:
+        assets=[]
+        for a in p['assets']:
+            v=s.get(VaultItem,(account,a['id']))
+            if v is not None and v.removed_at is not None:v=None
+            assets.append({'mediaId':a['id'],'state':item_state(v)})
+        states={a['state'] for a in assets}
+        result[key]={'assets':assets,'state':'described' if states<={'described'} else
+            next(x for x in ('missing','failed','unsupported','pending') if x in states)}
+    return result
+
+
+def _cases_by_fan(s,account):
+    from onlyfans_runtime import operator_cases
+    out={}
+    for c in reversed(operator_cases.list_cases(s,account,include_resolved=True,limit=500)):
+        out[c['fanId']]={'caseId':c['caseId'],'status':c['status'],'owner':c['owner'],'category':c['category']}
+    return out
 
 
 def view(store,tenant,account):
@@ -15,11 +48,14 @@ def view(store,tenant,account):
         store._runtime(s,tenant,account);owner=s.get(MoxyAccount,account)
         if owner is None:return {'engine':'legacy','moxySelected':False}
         rows=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account).order_by(MoxyEvent.created_at.desc()).limit(50)).all()
+        settings=json.loads(owner.settings_json);cases=_cases_by_fan(s,account)
         return {'engine':'moxy','moxySelected':True,'mode':owner.mode,'revision':owner.revision,
+            'unresolved':_unresolved(settings),'mediaDescriptions':_media_states(s,account,settings),
             'readiness':account_readiness(s,account,json.loads(owner.settings_json)),
             'customs':open_customs(s,account),'settings':json.loads(owner.settings_json),
             'decisions':[{'id':e.event_id,'fanId':e.fan_id,'kind':e.kind,'status':e.status,'reason':e.reason,
-                'decision':json.loads(e.decision_json) if e.decision_json else None,'intentId':e.intent_id} for e in rows]}
+                'decision':json.loads(e.decision_json) if e.decision_json else None,'intentId':e.intent_id,
+                'operatorCase':cases.get(e.fan_id) if e.status=='held' or (e.decision_json and json.loads(e.decision_json).get('action')=='handover') else None} for e in rows]}
 
 
 def update_fan(store,tenant,account,fan,*,state,actor,evidence_ref):

@@ -1,0 +1,35 @@
+{
+  "sourceCommit": "9870b64889833b16a36397c8ffa45dc7e236cea3",
+  "deployedAt": 1793612662.233188,
+  "images": {
+    "worker": "sha256:9a70ed1001e221fc4a9171112b3ac49112cfa7cdbe11dd209e0267e59271330e",
+    "api": "sha256:a0aa29f506aa0f81f1a4cfb275ca7d185ce1a771f9489c91254311ac28e87934"
+  },
+  "schema": "0110_recent_history",
+  "account": "of-323358988",
+  "aiRepliesEnabled": false,
+  "dashboardReplaced": false,
+  "backupBytes": 750543194,
+  "backupSha256": "8dd2fcd543acbba784c8c8e1b2d4c268cfcf90739489bcfbeff323f207621337",
+  "qualification": {
+    "passed": 66,
+    "pytestSeconds": 333.14,
+    "elapsedSeconds": 336.5251062660245,
+    "ssmCommand": "db69d054-c32c-44a7-87b0-3934d88765a7"
+  },
+  "promotionSsmCommand": "7ede05c8-6637-403e-8461-8c45f6bc0ba7",
+  "legacyUiCheck": {
+    "passed": 2,
+    "bundleSha256": "611bb48b159dff496b7e0aefd56a86db666096c6d02acc650c225a3313d2e99b"
+  },
+  "baselineCapturedBeforePilotJobs": false,
+  "originalManifestIncorrectlyReportedBaselineCaptured": true,
+  "baselineFailure": "docker run omitted -i; Python stdin command did not execute",
+  "baselineRecoveryStatus": "committed procedure, not yet executed",
+  "reportingQuery": {
+    "originalTimeoutSeconds": 10,
+    "tenantScopedQueryMeasuredSeconds": 1.0681187739828601,
+    "pendingIncomingAtQuery": 30,
+    "repairDeployed": false
+  }
+}

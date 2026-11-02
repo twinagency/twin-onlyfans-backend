@@ -2,7 +2,11 @@
 import json,pathlib,subprocess
 P=pathlib.Path('/var/lib/twin-release/recent-history-20261102-resume')
 assert (P/'deployment.json').exists(),'Pilot has not deployed'
-before=(P/'pilot.before.private.json').read_text()
+baseline=P/'pilot.before.private.json'
+if baseline.stat().st_size==0:
+ baseline=P/'pilot.recovered-before.private.json'
+before=baseline.read_text()
+assert json.loads(before)['schemaVersion']=='of-history-pilot-snapshot.v1'
 script='''import json,os,sys
 from sqlalchemy import func,select
 from sqlalchemy.orm import Session
@@ -17,6 +21,7 @@ try:
  with Session(store.engine) as db:
   after['historyPageCanonicalAdditions']=int(db.scalar(select(func.coalesce(func.sum(OfRecentHistoryCursor.messages_added),0)).where(OfRecentHistoryCursor.account_id==a)))
  comparison=compare(before,after)
+ comparison['baselineProvenance']=before.get('baselineProvenance',{'source':'captured before pilot jobs'})
  comparison['newCanonicalMessagesSavedByHistoryPages']=after['historyPageCanonicalAdditions']-before['historyPageCanonicalAdditions']
  # New source keys include concurrent live arrivals, unlike the page-commit counter.
  print(json.dumps({'privateSnapshot':after,'publicReport':{'pilot':comparison,'coverage':report(store,t,a),'aiRepliesEnabled':False}}))

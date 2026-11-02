@@ -70,7 +70,7 @@ private_env=P/'pilot.private.env';pilot_env={**env,'ONLYFANS_RECENT_HISTORY_ACCO
 private_env.write_text(''.join(k+'='+v+'\n' for k,v in pilot_env.items()))
 # Existing Docker network, no host port and no authority to increase limits.
 networks=list(old['twin-onlyfans-worker-1']['NetworkSettings']['Networks']);assert len(networks)==1
-base=['docker','run','--rm','--network',networks[0],'--memory','1g','--cpus','1','--env-file',str(private_env),'--entrypoint','python',images['worker']]
+base=['docker','run','--rm','-i','--network',networks[0],'--memory','1g','--cpus','1','--env-file',str(private_env),'--entrypoint','python',images['worker']]
 migrated=False;changed=False
 try:
  compose('stop','-t','90','worker','api')
@@ -98,7 +98,11 @@ try:
  print(json.dumps(baseline))
 finally:s.close()
 '''
- (P/'pilot.before.private.json').write_text(run(base+['-'],input=setup))
+ baseline_text=run(base+['-'],input=setup)
+ baseline=json.loads(baseline_text)  # Empty stdin/output must abort before any pilot job starts.
+ assert baseline['schemaVersion']=='of-history-pilot-snapshot.v1' and baseline['accountId']==A
+ assert all(k in baseline for k in ['sources','receipts','modelCalls','cutoffAt','historyPageCanonicalAdditions'])
+ (P/'pilot.before.private.json').write_text(baseline_text)
  tmp=C.with_suffix('.recent-history-next');tmp.write_text(json.dumps(cfg,indent=2)+'\n');os.replace(tmp,C);changed=True
  compose('up','-d','--no-deps','--no-build','--pull','never','api','worker')
  for _ in range(30):

@@ -57,3 +57,36 @@ def test_private_capture_reads_current_binding_and_reports_new_sources(ready):
     assert result['newModelCalls']==0
     assert 'Private synthetic text' not in str(after)
     assert all(len(k)==64 for k in after['sources'])
+
+
+def test_receipts_from_another_tenant_do_not_complete_this_tenants_memory(ready):
+    from sqlalchemy import text
+    from sqlalchemy.orm import Session
+    from db.onlyfans_models import OfRuntime
+    from onlyfans_runtime.history_progress import recent_progress
+    store,recovery,engine,cutoff=ready
+    claim=recovery.claim(T,A)
+    recovery.page(T,claim,[event(20,cutoff)],has_more=False)
+    with engine.begin() as db:
+        for tenant in ['other-tenant', T]:
+            db.execute(text('''INSERT INTO of_profile_learning(tenant_id,account_id,binding_id,fan_id)
+                SELECT :tenant,account_id,binding_id,101 FROM of_runtime WHERE account_id=:account
+                ON CONFLICT DO NOTHING'''), {'tenant':tenant,'account':A})
+        db.execute(text('''INSERT INTO of_profile_receipts(tenant_id,account_id,binding_id,fan_id,
+            source_fan,message_id,body_md5,source_at,direction,unsent,automation,next_chunk,total_chunks)
+            SELECT 'other-tenant',m.account_id,r.binding_id,m.fan_id,m.fan_id,m.message_id,
+            md5(m.body),m.created_at,m.direction,m.is_unsent,coalesce(m.automation_kind,''),1,1
+            FROM messages m JOIN of_runtime r ON r.account_id=m.account_id
+            WHERE m.account_id=:account AND m.message_id=20'''), {'account':A})
+    assert capture(store,T,A)['receipts']=={}
+    with Session(engine) as db:
+        result=recent_progress(db,db.get(OfRuntime,A))
+        assert result['memoryProcessing']['messagesAwaitingProcessing']==1
+    with engine.begin() as db:
+        db.execute(text('''INSERT INTO of_profile_receipts SELECT :tenant,account_id,binding_id,
+            fan_id,source_fan,message_id,body_md5,source_at,direction,unsent,automation,
+            next_chunk,total_chunks,processed_at FROM of_profile_receipts
+            WHERE tenant_id='other-tenant' AND account_id=:account'''), {'tenant':T,'account':A})
+    assert len(capture(store,T,A)['receipts'])==1
+    with Session(engine) as db:
+        assert recent_progress(db,db.get(OfRuntime,A))['memoryProcessing']['messagesAwaitingProcessing']==0

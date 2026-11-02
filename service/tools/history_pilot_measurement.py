@@ -42,7 +42,7 @@ def capture(store, tenant, account):
             # The same fingerprint conditions used by the paid learner and progress report.
             receipts = {}
             for fan, mid, at in s.execute(text('''SELECT m.fan_id,m.message_id,r.processed_at
-                FROM messages m JOIN of_profile_receipts r ON r.account_id=m.account_id
+                FROM messages m JOIN of_profile_receipts r ON r.tenant_id=:tenant AND r.account_id=m.account_id
                 AND r.binding_id=:binding AND r.fan_id=m.fan_id AND r.source_fan=m.fan_id
                 AND r.message_id=m.message_id AND r.body_md5=md5(m.body) AND r.source_at=m.created_at
                 AND r.direction=m.direction AND r.unsent=m.is_unsent
@@ -50,7 +50,7 @@ def capture(store, tenant, account):
                 WHERE m.account_id=:account AND m.created_at>=:cutoff AND m.direction='in'
                 AND EXISTS (SELECT 1 FROM of_ingress i WHERE i.account_id=m.account_id
                     AND i.binding_id=:binding AND i.fan_id=m.fan_id AND i.message_id=m.message_id
-                    AND i.status='applied')'''), {'account':account,'binding':runtime.binding_id,'cutoff':p.cutoff_at}):
+                    AND i.status='applied')'''), {'tenant':tenant,'account':account,'binding':runtime.binding_id,'cutoff':p.cutoff_at}):
                 key = hashlib.sha256(f'{account}:{fan}:{mid}'.encode()).hexdigest()
                 receipts[key] = {'digest': sources[key], 'committedAt': str(at)}
             calls = {}

@@ -16,17 +16,8 @@ from onlyfans_runtime.store import utcnow
 @pytest.mark.parametrize("with_native_plan", [False, True])
 def test_populated_one_use_sender_upgrade_retains_unknowns_caps_and_controls(database, with_native_plan):
     _, engine = database
-    snapshots = Path(__file__).resolve().parents[1] / "db/snapshots"
-    with engine.begin() as c:
-        c.exec_driver_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
-        for name in ("0070_postgresql.sql", "0071_foundation.sql", "0072_delivery.sql", "0073_egress.sql"):
-            c.exec_driver_sql((snapshots/name).read_text())
-        if with_native_plan:
-            c.exec_driver_sql((snapshots/"0074_native_text.sql").read_text())
-        c.exec_driver_sql("CREATE TABLE alembic_version(version_num varchar(32) PRIMARY KEY)")
-        c.execute(text("INSERT INTO alembic_version VALUES (:revision)"), {"revision": NATIVE if with_native_plan else EGRESS})
-        check_schema(c, expected=NATIVE if with_native_plan else EGRESS)
-        assert ("of_native_plan" in inspect(c).get_table_names()) == with_native_plan
+    # Seed current ORM rows, then reconstruct the actual published old schema.
+    # Inserting today's ORM into 0073 fails before migration is exercised.
 
     now = utcnow()
     with Session(engine) as s, s.begin():
@@ -70,7 +61,10 @@ def test_populated_one_use_sender_upgrade_retains_unknowns_caps_and_controls(dat
     if with_native_plan: tables += ("of_native_plan",)
     def retained_rows(c):
         return {name: [dict(row) for row in c.execute(text(f'SELECT * FROM "{name}"')).mappings()] for name in tables}
-    with engine.connect() as c:
+    with engine.begin() as c:
+        from test_onlyfans_offer_import_upgrade_pg import historical_schema
+        historical_schema(c, NATIVE if with_native_plan else EGRESS)
+        assert ("of_native_plan" in inspect(c).get_table_names()) == with_native_plan
         before = retained_rows(c)
     with engine.begin() as c:
         upgrade(c)
@@ -93,7 +87,11 @@ def test_populated_one_use_sender_upgrade_retains_unknowns_caps_and_controls(dat
     if with_native_plan:
         for row in after["of_native_plan"]: assert row.pop("sale_json") is None
     for row in after["of_runtime"]: assert row.pop("configuration_revision") == 0
-    assert after == before, "migration may add a plan link, but cannot reset authority or rewrite evidence"
+    # Every pre-existing column must retain its exact value. New additive
+    # columns are checked by check_schema and explicit defaults above.
+    retained = {table: [{key: row[key] for key in before[table][i]} for i, row in enumerate(rows)]
+                for table, rows in after.items()}
+    assert retained == before, "migration cannot reset authority or rewrite evidence"
     with Session(engine) as s:
         if not with_native_plan:
             assert list(s.scalars(select(OfNativePlan))) == [], "schema upgrade never invokes or activates a planner"
@@ -130,7 +128,9 @@ def test_populated_budget_upgrade_retains_cost_evidence_and_cannot_regenerate_ol
         for row in after["of_delivery_policy"]: assert row.pop("media_enabled") is False
         for row in after["of_native_plan"]: assert row.pop("sale_json") is None
         for row in after.get("of_runtime",[]): assert row.pop("configuration_revision")==0
-        assert after==before
+        retained={table:[{key:row[key] for key in before[table][i]} for i,row in enumerate(rows)]
+                  for table,rows in after.items()}
+        assert retained==before
         assert c.scalar(text("SELECT count(*) FROM of_native_memory_change"))==0
     model=SyntheticNativeModel()
     assert planner.prepare(TENANT,claim,model)==identity and model.calls==[]

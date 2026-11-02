@@ -1,0 +1,305 @@
+{
+  "version": 1,
+  "creator_key": "amelia",
+  "required_operational_fields": [
+    "account_binding",
+    "vip_qualification",
+    "current_fan_labels",
+    "fan_exception_identity_map",
+    "vault_sequences",
+    "approved_recovery_limits"
+  ],
+  "unresolved": [
+    "Exact Locker Rooms/VIP Vault scripts, ordered steps, prices and actual asset IDs are not enumerated in the sheet.",
+    "XXX prohibition on p1 and VIP-only full-nude/BG wording on p2 require same-creator resolution for affected assets; do not infer permission.",
+    "Creator Basics p3 is internal context; no automatic fan-facing approval for biography, relationship, family, location or pets.",
+    "Never Say and Content Reference fields are blank placeholders, not approved values.",
+    "Current fan IDs, VIP/spender authority, hourly talker applicability and recovery authority require existing operational records.",
+    "The dated live schedule/update is not verified current availability."
+  ],
+  "rules": [
+    {
+      "key": "voice",
+      "value": "sporty_chill_funny",
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Sporty, chill, funny, sarcastic and direct. Gym vocabulary is a style cue, never a mandatory vocabulary list. Emoji preference is unspecified."
+    },
+    {
+      "key": "sexting",
+      "value": true,
+      "requires": {
+        "spender": true,
+        "vip": true
+      },
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "No sexting with regular fans; spenders only, upsell as VIP. Do not use the PG label to erase this explicit conditional permission."
+    },
+    {
+      "key": "customs",
+      "value": {
+        "minimum_cents": 50000
+      },
+      "requires": {
+        "vip": true
+      },
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Never discuss customs with non-VIPs. VIP minimum $500; actual availability and acceptance authority still required."
+    },
+    {
+      "key": "prohibited_categories",
+      "value": [
+        "kitty",
+        "bootyhole",
+        "xxx"
+      ],
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          1,
+          2
+        ]
+      },
+      "instruction": "Do not send kitty, bootyhole or XXX content. Report prohibited material found in the vault to operations."
+    },
+    {
+      "key": "fan_exceptions",
+      "value": "verified_identity_mapping_required",
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          4,
+          5
+        ]
+      },
+      "instruction": "Respect the p4 no-push fan, pinned marital/anxiety boundaries, and dislikes of pasties/toy content. The blocked fan in p5 is do-not-engage; an alternate identity requires operations review. Do not match these exceptions by name alone."
+    },
+    {
+      "key": "talker_timing",
+      "value": {
+        "minimum_reply_gap_seconds": 3600
+      },
+      "requires": {
+        "talker_label": true,
+        "currently_spending": false
+      },
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          6
+        ]
+      },
+      "instruction": "The talker label permits replies once an hour while not spending; it is not a general account sales cadence."
+    },
+    {
+      "key": "social_access",
+      "value": "snap_creator_follow_only",
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "The sheet asks staff to follow her active Snapchat and turn on TikTok notifications. This does not grant fans private off-platform contact."
+    },
+    {
+      "key": "live_invitations",
+      "value": "verified_live_only",
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          1,
+          3,
+          4
+        ]
+      },
+      "instruction": "May say busy and invite to an actual TikTok/OF live when verified available; dated plans alone do not prove a current live."
+    },
+    {
+      "key": "ratings",
+      "value": "text_only",
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Ratings are text-only; verify requested scope and authorised product."
+    },
+    {
+      "key": "product:long_video",
+      "value": {
+        "minimum_cents": 6000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Long videos including livestream copies start at $60."
+    },
+    {
+      "key": "product:feet_photos",
+      "value": {
+        "minimum_cents": 2000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Feet pictures $20; price according to the actual content."
+    },
+    {
+      "key": "product:feet_photos_video",
+      "value": {
+        "minimum_cents": 3000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Feet pictures and videos $30; price according to the actual content."
+    },
+    {
+      "key": "product:covered_boobs",
+      "value": {
+        "minimum_cents": 3000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Covered boobs $30+."
+    },
+    {
+      "key": "product:hand_bra",
+      "value": {
+        "minimum_cents": 6000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Hand-bra $60+."
+    },
+    {
+      "key": "product:nipples",
+      "value": {
+        "minimum_cents": 20000,
+        "requires": {
+          "vip": true,
+          "high_spender": true
+        }
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Nips $200 for high-spending VIPs only."
+    },
+    {
+      "key": "product:covered_booty",
+      "value": {
+        "minimum_cents": 3000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Covered booty $30+; no prohibited explicit areas."
+    },
+    {
+      "key": "product:bikini_lingerie_booty",
+      "value": {
+        "minimum_cents": 3500,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Bikini/lingerie not bare $35+."
+    },
+    {
+      "key": "product:nude_booty",
+      "value": {
+        "minimum_cents": 7500,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Nude booty $75; no kitty/bootyhole content."
+    },
+    {
+      "key": "product:used_underwear",
+      "value": {
+        "minimum_cents": 100000,
+        "requires": {
+          "vip": true
+        }
+      },
+      "requires": {},
+      "source": {
+        "document": "01_Amelia.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "VIP requested underwear price $1000/pair; inventory and fulfilment require verification."
+    }
+  ]
+}

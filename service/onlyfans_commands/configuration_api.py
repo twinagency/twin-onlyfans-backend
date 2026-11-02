@@ -99,3 +99,46 @@ async def post(request:Request,account_id:str):
     except Exception:return refuse("outcome_unconfirmed",500,"The save outcome is not confirmed. Refresh or retry the same request.")
     return response({"ok":True,"applied":True,"accountId":account_id,"commandKey":body["commandKey"],
         "recordedRevision":revision,"recordedFingerprint":fingerprint})
+
+
+@router.get("/accounts/{account_id}/moxy")
+async def moxy_view(request:Request,account_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from moxy_replacement.controls import view
+    try: return response({'ok':True,'accountId':account_id,'moxy':await asyncio.to_thread(view,store,tenant,account_id)})
+    except Refused:return refuse('not_available',404,'Moxy configuration is unavailable.')
+    except Exception:return refuse('configuration_unavailable',503,'Moxy configuration could not be read.')
+
+
+@router.put("/accounts/{account_id}/moxy")
+async def moxy_configure(request:Request,account_id:str):
+    context=authenticate(request,account_id)
+    if isinstance(context,JSONResponse):return context
+    store,tenant=context
+    from moxy_replacement.runtime import MoxyService
+    from moxy_replacement.configuration import InvalidConfiguration
+    from onlyfans_read.agency_scope import actor_allowed
+    try:
+        if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json':raise ValueError()
+        raw=bytearray()
+        async for part in request.stream():
+            if len(raw)+len(part)>131072:return refuse('request_too_large',413,'The Moxy configuration request is too large.')
+            raw.extend(part)
+        body=json.loads(raw,object_pairs_hook=unique_keys)
+        if type(body) is not dict or set(body)!={'expectedRevision','mode','settings','actor'}:raise ValueError()
+        if not actor_allowed(body['actor']):return refuse('forbidden',403,'Moxy management permission is required.')
+        if type(body['expectedRevision']) is not int or body['expectedRevision']<0:raise ValueError()
+    except (ValueError,TypeError,UnicodeError,RecursionError):
+        return refuse('invalid_request',400,'That Moxy configuration request is invalid.')
+    try:
+        result=await asyncio.to_thread(MoxyService(store).configure,tenant,account_id,
+            expected_revision=body['expectedRevision'],mode=body['mode'],settings=body['settings'],actor=body['actor'])
+        return response({'ok':True,'accountId':account_id,'moxy':result})
+    except Refused as exc:
+        if str(exc)=='scope unavailable':return refuse('not_available',404,'Moxy configuration is unavailable.')
+        return refuse('configuration_refused',409,str(exc))
+    except (InvalidConfiguration,ValueError,KeyError,TypeError):
+        return refuse('invalid_configuration',400,'Review the source-backed Moxy configuration.')
+    except Exception:return refuse('outcome_unconfirmed',500,'Refresh before retrying this Moxy change.')

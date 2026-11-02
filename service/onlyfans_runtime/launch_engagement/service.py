@@ -86,6 +86,8 @@ class EngagementService:
             return revision
 
     def _definition(self, s, runtime, fan_id, kind, now):
+        from moxy_replacement.runtime import selected
+        if selected(s,runtime.account_id):raise Refused('moxy_canonical_owner_required')
         settings, policy = self._settings(s, runtime)
         switches = {"offer": policy.offers, "follow_up": policy.follow_ups, "reengage": policy.reengagement}
         if kind not in switches or not switches[kind]:

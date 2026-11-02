@@ -555,6 +555,34 @@ class Store:
                 takeover_from="none", takeover_to="none", created_at=now))
             return True
 
+    def runtime_stop_candidates(self, account_id, fan_ids):
+        """Read a bounded controls window once; return only missing/drifting rows.
+
+        This grants no authority. Repairs still use reconcile_runtime_stop's
+        locked transaction, and selection/each wire check read current controls.
+        Avoid an ORM transaction per unchanged fan on every account tick.
+        """
+        from . import runtime_stop
+        from db.models import SkipList
+        ids = tuple(dict.fromkeys(fan_ids))
+        if not ids:
+            return set()
+        with Session(self.engine) as s:
+            rows = s.execute(select(Fan.fan_id, OfConversationState.mode,
+                                    OfConversationState.takeover_state, SkipList.reason)
+                .outerjoin(OfConversationState, (OfConversationState.account_id == Fan.account_id)
+                           & (OfConversationState.fan_id == Fan.fan_id))
+                .outerjoin(SkipList, (SkipList.account_id == Fan.account_id)
+                           & (SkipList.fan_id == Fan.fan_id))
+                .where(Fan.account_id == account_id, Fan.fan_id.in_(ids))).all()
+        needed = set(ids) - {r[0] for r in rows}
+        enforced = {runtime_stop.MANUAL_RESTRICT, *runtime_stop.STRONGER}
+        for fan, mode, takeover, reason in rows:
+            wanted = mode != "automated" or takeover != "none"
+            if mode is None or wanted != (reason in enforced):
+                needed.add(fan)
+        return needed
+
     def reconcile_runtime_stop(self, tenant_id, account_id, fan_id):
         """Repair drift between Twin's state and the runtime stop; fail closed.
 

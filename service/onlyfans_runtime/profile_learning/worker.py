@@ -18,6 +18,7 @@ from db.onlyfans_models import OfIngress, OfRuntime
 from onlyfans_runtime.store import Store, Refused
 from .evidence import digest, merge, project, summary, validate, FIELD_LOCKS
 from .storage import SCOPE, identity, valid_observation
+from . import cohort
 
 INTERVAL=timedelta(hours=2)
 PAGE=40
@@ -56,6 +57,7 @@ def seed(store,tenant):
             OfRuntime.binding_id==OfCreatorBinding.id).where(OfCreatorBinding.tenant_id==tenant,
             OfCreatorBinding.channel=='onlyfans',OfCreatorBinding.revoked_at.is_(None))).all()
         for b in bindings:
+            if not cohort.includes(b.account_id): continue
             scoped(store,s,tenant,b.account_id,b.id)
             p={'tenant':tenant,'account':b.account_id,'binding':b.id}
             s.execute(text('INSERT INTO of_profile_accounts(tenant_id,account_id,binding_id) VALUES (:tenant,:account,:binding) ON CONFLICT DO NOTHING'),p)
@@ -212,6 +214,7 @@ def claim_job(store,tenant,stop):
             ORDER BY a.last_claimed_at,a.account_id'''),{'tenant':tenant,'now':now}).all()
         job=None
         for account,binding in accounts:
+            if not cohort.includes(account): continue
             from onlyfans_runtime.history_policy import policy
             skip_creator = policy(s, account, binding) is not None
             job=s.execute(text('''SELECT p.* FROM of_profile_learning p
@@ -250,6 +253,7 @@ def finalize_silent(store,tenant,stop,*,limit=SILENT_BATCH):
             ORDER BY a.account_id'''),{'tenant':tenant}).all()
     suffix=' FOR UPDATE OF p SKIP LOCKED' if store.engine.dialect.name=='postgresql' else ''
     for account,binding in accounts:
+        if not cohort.includes(account): continue
         if stop.is_set(): break
         with Session(store.engine) as s,s.begin():
             keys=s.execute(text('''SELECT p.fan_id FROM of_profile_learning p
@@ -430,11 +434,15 @@ def transient_database_error(exc):
 
 
 def daily_maintenance(store,tenant):
-    """Re-evaluation is also performed on every read. Daily sweep rebuilds cold summaries."""
+    """Only the selected process cohort is re-evaluated during a rollout."""
+    selected = cohort.accounts()
+    if selected == frozenset(): return
     with Session(store.engine) as s,s.begin():
-        s.execute(text('''UPDATE of_profile_learning SET next_at=CURRENT_TIMESTAMP WHERE tenant_id=:tenant
-            AND error_code IS NULL AND next_at>CURRENT_TIMESTAMP AND (maintenance_at IS NULL OR maintenance_at<:yesterday)'''),
-            {'tenant':tenant,'yesterday':datetime.utcnow()-timedelta(days=1)})
+        statement = text("""UPDATE of_profile_learning SET next_at=CURRENT_TIMESTAMP WHERE tenant_id=:tenant
+            AND (:scope_all OR account_id IN :scope_accounts)
+            AND error_code IS NULL AND next_at>CURRENT_TIMESTAMP AND (maintenance_at IS NULL OR maintenance_at<:yesterday)""").bindparams(bindparam('scope_accounts', expanding=True))
+        s.execute(statement, {'tenant':tenant, 'yesterday':datetime.utcnow()-timedelta(days=1),
+            'scope_all':selected is None, 'scope_accounts':list(selected or [])})
 
 
 def main():

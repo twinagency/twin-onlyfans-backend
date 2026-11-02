@@ -271,6 +271,14 @@ class NativeTextPlanner:
         self.authority = TextAuthority(store)
 
     def prepare(self, tenant_id, claim, model, *, timeout_seconds=10):
+        from moxy_replacement.runtime import selected, MoxyService
+        with Session(self.engine) as scope_session:
+            self.store._runtime(scope_session, tenant_id, claim.account_id)
+            migrated = selected(scope_session, claim.account_id)
+        if migrated:
+            service = MoxyService(self.store)
+            identity = service.from_claim(tenant_id, claim)
+            return service.prepare(tenant_id, claim.account_id, identity, model, timeout=timeout_seconds)
         from .provider_model import NativeProviderModel
         if type(claim) is not Claim or type(model) not in {SyntheticNativeModel, NativeProviderModel}:
             raise Refused("only an explicit scoped native model invocation is registered")
@@ -459,6 +467,12 @@ class NativeTextPlanner:
         return identity
 
     def queue(self, tenant_id, account_id, plan_id):
+        from moxy_replacement.runtime import selected, MoxyService
+        with Session(self.engine) as scope_session:
+            self.store._runtime(scope_session, tenant_id, account_id)
+            migrated = selected(scope_session, account_id)
+        if migrated:
+            return MoxyService(self.store).queue(tenant_id, account_id, plan_id)
         with Session(self.engine) as s:
             self.store._runtime(s, tenant_id, account_id)
             plan = s.get(OfNativePlan, (account_id, plan_id))

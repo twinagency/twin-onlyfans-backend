@@ -208,6 +208,8 @@ def record_quote(s, intent, message_id, now):
     """Same accepted-quote ledger; no exposure is counted before acceptance."""
     from db.models import LadderQuote
     from automations import upsell
+    if intent.moxy_event_id:
+        return  # Moxy has configured terms, not a legacy discount/price ladder.
     terms = json.loads(intent.catalog_snapshot_json)
     q = terms.get("native_quote")
     # Fixed offers are recorded where the seller would record a quote (its own

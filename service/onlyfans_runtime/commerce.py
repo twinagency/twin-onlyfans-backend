@@ -258,6 +258,12 @@ def settle_media_purchase(s, *, account_id, fan_id, message, offer, paid, was_pa
         LadderQuote.fan_id == fan_id, LadderQuote.message_id == message.message_id).with_for_update()).all()
     for quote in quotes:
         quote.paid, quote.paid_at = paid, purchase_stamp if paid else None
+    from moxy_replacement.runtime import selected, enqueue
+    if selected(s, account_id):
+        enqueue(s, account_id, fan_id, 'purchase' if paid else 'refund',
+            f'linked-purchase:{message.message_id}:{paid}:{stamp.isoformat()}',
+            {'message_id':message.message_id, 'exact_link':True, 'paid':paid})
+        return  # Moxy does not create or advance the legacy price ladder.
     from automations import upsell
     lad = s.get(LadderState, (account_id, fan_id))
     if lad is None:

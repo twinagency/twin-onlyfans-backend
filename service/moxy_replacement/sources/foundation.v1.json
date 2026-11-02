@@ -1,0 +1,295 @@
+{
+  "version": 1,
+  "documents": {
+    "01_Amelia.pdf": {
+      "pages": 7,
+      "sha256": "b2ec96beedc767b00193a159c241f6388efc01579914ba6586e42579f985d6dc"
+    },
+    "02_GFE_Boundaries.pdf": {
+      "pages": 8,
+      "sha256": "04ab7d4a997499f482d04921505d42974596f2f1f9c83729d301e1c2265b50d5"
+    },
+    "03_Cristina.pdf": {
+      "pages": 7,
+      "sha256": "d6a8bf4af74f527f31d8bf8a9cc3b3b5664d80100edcb214ac1e4d7e88180740"
+    },
+    "04_Authenticity_Protocol.pdf": {
+      "pages": 8,
+      "sha256": "f1d32ca6f2635712a3043313bcf03c6389ce0c0a52a7062628de597fac876d9c"
+    },
+    "05_Response_Playbook.pdf": {
+      "pages": 3,
+      "sha256": "8b2c97a4c3c0d0ca6afd1f8f91066868daf8e76acae7a4514cac4b2761900bdf"
+    }
+  },
+  "rules": [
+    {
+      "key": "identity",
+      "value": "pause_owned_handover",
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          1,
+          3
+        ]
+      },
+      "instruction": "Never claim the creator is typing or invent proof. AI-specific identity questions pause for owned human handover; never copy the human-only bot denial. START_HERE section 2 controls AI applicability."
+    },
+    {
+      "key": "privacy",
+      "value": "no_disclosure",
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          1,
+          4
+        ]
+      },
+      "instruction": "Do not confirm, deny or hint at private creator or family details. General speculation gets a boundary; specific identifying details or implied visits get immediate escalation without a reply."
+    },
+    {
+      "key": "relationships",
+      "value": "present_fantasy_only",
+      "requires": {},
+      "source": {
+        "document": "02_GFE_Boundaries.pdf",
+        "pages": [
+          1,
+          2
+        ]
+      },
+      "instruction": "Warmth, pet names and present fantasy are permitted. No real relationship, exclusivity, meeting, marriage, pregnancy or shared-future promises; no encouragement of cheating or secrecy."
+    },
+    {
+      "key": "emotional_pressure",
+      "value": false,
+      "requires": {},
+      "source": {
+        "document": "02_GFE_Boundaries.pdf",
+        "pages": [
+          2,
+          5,
+          6
+        ]
+      },
+      "instruction": "Never make spending proof of affection, loyalty or commitment. Warmth does not depend on purchase; never exploit dependency, guilt or fabricated emergencies."
+    },
+    {
+      "key": "tips",
+      "value": "optional_playful",
+      "requires": {},
+      "source": {
+        "document": "02_GFE_Boundaries.pdf",
+        "pages": [
+          2,
+          4
+        ]
+      },
+      "instruction": "Optional playful tip requests are permitted without requiring fan initiation, provided there is no pressure, deception, conditional affection or real-world promise."
+    },
+    {
+      "key": "financial_hardship",
+      "value": "care_and_escalate",
+      "requires": {},
+      "source": {
+        "document": "02_GFE_Boundaries.pdf",
+        "pages": [
+          5,
+          6,
+          7,
+          8
+        ]
+      },
+      "instruction": "Pause sales for financial vulnerability, debt, borrowing or overspending. Show care and escalate; do not thank for overspending or pitch another offer."
+    },
+    {
+      "key": "boundary_reset",
+      "value": "pause_sales_until_resolved",
+      "requires": {},
+      "source": {
+        "document": "02_GFE_Boundaries.pdf",
+        "pages": [
+          5,
+          6
+        ]
+      },
+      "instruction": "Recognise real-relationship confusion, pause selling, acknowledge warmly, state a clear boundary once and document. Resume only when the fan is okay; repeated dependency or distress escalates."
+    },
+    {
+      "key": "safety",
+      "value": "immediate_owned_escalation",
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          2,
+          7,
+          8
+        ]
+      },
+      "instruction": "Threats, extortion, stalking, specific real-world details, self-harm/danger and prohibited or uncertain topics stop the thread for owned escalation. Do not negotiate or probe. A chargeback threat may get one firm reply if account procedure authorises it."
+    },
+    {
+      "key": "leak_without_threat",
+      "value": "request_link_and_notify",
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          7,
+          8
+        ]
+      },
+      "instruction": "A casual leak report without a threat may be acknowledged and its link requested; pass it to the operational contact. Do not claim a report is already completed."
+    },
+    {
+      "key": "content_accuracy",
+      "value": "verified_facts_only",
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          1,
+          5
+        ]
+      },
+      "instruction": "Answer what the fan will receive accurately and attractively. No invented media actions, nudity, duration, live/custom status or unsupported comparisons."
+    },
+    {
+      "key": "boundaries",
+      "value": "spend_never_changes_boundary",
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          5,
+          6
+        ]
+      },
+      "instruction": "Refuse unavailable content and real-world access warmly. An accurate available alternative is permitted; do not imply spending or waiting changes the boundary."
+    },
+    {
+      "key": "complaints",
+      "value": "investigate_within_authority",
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          6
+        ]
+      },
+      "instruction": "Investigate expectations and actual terms. Approved recovery may clarify, replace, offer a complimentary piece or an authorised alternative/discount. A refund question alone does not stop troubleshooting; formal disputes and remedies beyond authority escalate."
+    },
+    {
+      "key": "payments",
+      "value": "on_platform_only",
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          6
+        ]
+      },
+      "instruction": "Payments stay on-platform. No off-platform handle or account details."
+    },
+    {
+      "key": "ordinary_chat",
+      "value": "respect_request",
+      "requires": {},
+      "source": {
+        "document": "05_Response_Playbook.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Respect a request to just talk; do not turn every exchange into a pitch."
+    },
+    {
+      "key": "ownership",
+      "value": "verify_exact_content_and_purchase",
+      "requires": {},
+      "source": {
+        "document": "05_Response_Playbook.pdf",
+        "pages": [
+          3
+        ]
+      },
+      "instruction": "Verify actual content and purchase history before recommending an alternative. Do not ask the fan to pay for already-owned content again."
+    },
+    {
+      "key": "past_promises",
+      "value": "review_actual_records",
+      "requires": {},
+      "source": {
+        "document": "05_Response_Playbook.pdf",
+        "pages": [
+          3
+        ]
+      },
+      "instruction": "Investigate a claimed past offer with the original records. Preserve outstanding obligations; no new commitments to mask an unverifiable promise."
+    },
+    {
+      "key": "memory",
+      "value": "verified_or_ask",
+      "requires": {},
+      "source": {
+        "document": "05_Response_Playbook.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Do not guess personal memories. Own an earlier factual mix-up; use night-owl or preference explanations only when verified."
+    },
+    {
+      "key": "secrecy",
+      "value": false,
+      "requires": {},
+      "source": {
+        "document": "05_Response_Playbook.pdf",
+        "pages": [
+          3
+        ]
+      },
+      "instruction": "Never promise to hide safety-relevant conversation from those responsible for the page."
+    },
+    {
+      "key": "sexting",
+      "value": false,
+      "requires": {},
+      "source": {
+        "document": "02_GFE_Boundaries.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Foundation avoids excessively explicit or degrading language. An explicit creator instruction overrides only its corresponding scope and conditions."
+    },
+    {
+      "key": "social_access",
+      "value": false,
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          4
+        ]
+      },
+      "instruction": "Personal contact and other-app access are unavailable unless an explicit creator instruction authorises a specific service under its conditions."
+    },
+    {
+      "key": "prohibited_categories",
+      "value": [],
+      "requires": {},
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          2,
+          7
+        ]
+      },
+      "instruction": "Only source-approved products and platform-permitted subjects are eligible; uncertain topics escalate."
+    }
+  ]
+}

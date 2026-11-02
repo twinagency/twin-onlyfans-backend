@@ -204,7 +204,7 @@ class OfTextIntent(Base):
         CheckConstraint("origin IN ('automated','manual','campaign','engagement')", name="origin"),
         CheckConstraint("status IN ('queued','dispatching','accepted','not_accepted','unknown','cancelled','refused')", name="status"),
         CheckConstraint("provider_message_id IS NULL OR provider_message_id > 0", name="provider_message_id"),
-        CheckConstraint(_MediaShape("(catalog_item_id IS NULL AND media_json = '[]' AND preview_json = '[]' AND price_cents = 0 AND catalog_snapshot_json IS NULL AND offer_id IS NULL) OR (catalog_item_id IS NOT NULL AND media_json <> '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents >= 300 AND price_cents <= 20000) OR (origin = 'manual' AND catalog_item_id IS NOT NULL AND media_json <> '[]' AND preview_json = '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents = 0 AND offer_id IS NULL AND catalog_snapshot_json::jsonb @> '{\"manual_vault\": true}'::jsonb)"),
+        CheckConstraint(_MediaShape("(catalog_item_id IS NULL AND media_json = '[]' AND preview_json = '[]' AND price_cents = 0 AND catalog_snapshot_json IS NULL AND offer_id IS NULL) OR (catalog_item_id IS NOT NULL AND media_json <> '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents >= 300 AND price_cents <= 20000) OR (moxy_event_id IS NOT NULL AND catalog_item_id IS NOT NULL AND media_json <> '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents = 0) OR (origin = 'manual' AND catalog_item_id IS NOT NULL AND media_json <> '[]' AND preview_json = '[]' AND catalog_snapshot_json IS NOT NULL AND price_cents = 0 AND offer_id IS NULL AND catalog_snapshot_json::jsonb @> '{\"manual_vault\": true}'::jsonb)"),
                         name="media_shape", info={"onlyfans_since": "0077_native_media_sales"}),
         Index("ix_of_text_intent_queued", "account_id", "status", "created_at", "intent_id"),
         Index("ix_of_text_intent_unresolved", "account_id", "status", "deadline",
@@ -228,6 +228,7 @@ class OfTextIntent(Base):
     policy_revision = Column(Integer, nullable=False)
     work_generation = Column(Integer)
     work_token = Column(String(36))
+    moxy_event_id = Column(String(36), info={'onlyfans_since': '0111_moxy_owner'})
     native_plan_id = Column(String(36), info={"onlyfans_since": "0074_native_text_plans"})
     media_json = Column(Text, nullable=False, server_default=text("'[]'"), info={"onlyfans_since": "0077_native_media_sales"})
     preview_json = Column(Text, nullable=False, server_default=text("'[]'"), info={"onlyfans_since": "0077_native_media_sales"})

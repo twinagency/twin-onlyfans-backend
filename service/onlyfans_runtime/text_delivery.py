@@ -207,6 +207,9 @@ class TextAuthority:
                 except (Refused, ValueError, TypeError):
                     return False
             return True
+        if row.moxy_event_id is not None:
+            from moxy_replacement.delivery import media_current
+            return media_current(s, row)
         if row.catalog_item_id is None:
             return row.media_json == "[]" and row.preview_json == "[]" and row.price_cents == 0 and row.catalog_snapshot_json is None
         if policy is None or not policy.media_enabled:
@@ -268,6 +271,9 @@ class TextAuthority:
     @staticmethod
     def _action(row):
         from .conversation_policy import action_of
+        if row.moxy_event_id:
+            from moxy_replacement.delivery import action_class
+            return action_class(row.catalog_snapshot_json)
         return action_of(row.origin, row.catalog_item_id)
 
     def _safety_scan(self, tenant_id, account_id, fan_id, origin):
@@ -359,11 +365,17 @@ class TextAuthority:
 
     def prepare(self, tenant_id, account_id, fan_id, *, command_key, expected_revision,
                 body, origin, actor, work: Claim | None = None, ttl_seconds=300, native_plan_id=None,
-                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None, manual_media=None):
+                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None, manual_media=None, moxy_event_id=None):
         from onlyfans_read.agency_scope import current_scope, actor_allowed
         if current_scope.get() is not None and (origin != "manual" or not actor_allowed(actor, capability="chat")):
             raise Refused("manual messaging permission required")
         _id(fan_id)
+        if moxy_event_id is None:
+            from moxy_replacement.routing import route_legacy
+            route_legacy(self, tenant_id, account_id, fan_id, origin, command_key,
+                {'campaign_id': campaign_id, 'engagement_action_id': engagement_action_id})
+        elif type(moxy_event_id) is not str or len(moxy_event_id) != 36 or origin != 'automated' or work is not None or native_plan_id is not None:
+            raise Refused('invalid_moxy_decision_reference')
         if (not isinstance(command_key, str) or not 1 <= len(command_key) <= 64
                 or type(expected_revision) is not int or expected_revision < 0
                 or not isinstance(body, str) or (not body.strip() and manual_media is None) or len(body.encode()) > 20000
@@ -387,9 +399,9 @@ class TextAuthority:
             raise Refused("work scope mismatch")
         if catalog_item_id is not None:
             _id(catalog_item_id)
-            if origin == "automated" and native_plan_id is None:
+            if origin == "automated" and native_plan_id is None and moxy_event_id is None:
                 raise Refused("automated media requires its native plan")
-        if quoted_price_cents is not None and (catalog_item_id is None or native_plan_id is None):
+        if quoted_price_cents is not None and (catalog_item_id is None or (native_plan_id is None and moxy_event_id is None)):
             raise Refused("only a recorded native quote may change the sticker price")
         if manual_media is not None:
             from .manual_media import normalize
@@ -399,6 +411,8 @@ class TextAuthority:
         request = dict(account_id=account_id, fan_id=fan_id, command_key=command_key,
                        expected_revision=expected_revision, body=body, origin=origin,
                        actor=actor, work=asdict(work) if work else None, ttl_seconds=ttl_seconds)
+        if moxy_event_id is not None:
+            request['moxy_event_id'] = moxy_event_id
         if campaign_id is not None:
             request["campaign_id"] = campaign_id
         if engagement_action_id is not None:
@@ -433,8 +447,14 @@ class TextAuthority:
             state = s.get(OfConversationState, (account_id, fan_id))
             fan = s.get(Fan, (account_id, fan_id))
             from .conversation_policy import action_of
+            moxy_event = None
+            moxy_terms = None
+            moxy_action = None
+            if moxy_event_id is not None:
+                from moxy_replacement.delivery import prepare_decision
+                moxy_event, moxy_terms, moxy_action = prepare_decision(s, account_id, fan_id, moxy_event_id, body)
             reason = self._eligibility(s, runtime, policy, state, fan, origin, now,
-                manual_attachment=manual_media is not None, action=action_of(origin, catalog_item_id))
+                manual_attachment=manual_media is not None, action=moxy_action or action_of(origin, catalog_item_id))
             if reason:
                 raise Refused(reason)
             from .handover import staff_owns_takeover
@@ -465,6 +485,10 @@ class TextAuthority:
                 if terms["price_cents"] > 0:
                     from .media_delivery import assert_unowned
                     assert_unowned(s, account_id, fan_id, terms, manual=True)
+            elif moxy_event is not None and moxy_terms is not None:
+                if not policy.media_enabled or moxy_terms['item']['id'] != catalog_item_id or moxy_terms['price_cents'] != quoted_price_cents:
+                    raise Refused('moxy_media_terms_changed')
+                terms = moxy_terms
             elif catalog_item_id is not None:
                 from .media_delivery import catalog_terms, assert_unowned
                 if not policy.media_enabled:
@@ -488,7 +512,7 @@ class TextAuthority:
                         "source_quote": saved["source_quote"], "source_message_id": saved["source_message_id"]}
                     if terms["price_cents"] != quoted_price_cents:
                         raise Refused("native price snapshot changed")
-            if origin == "automated":
+            if origin == "automated" and moxy_event is None:
                 row = s.get(OfWork, (account_id, fan_id))
                 if not self._valid_work(work, row, state, now):
                     raise Refused("stale planning claim")
@@ -526,12 +550,16 @@ class TextAuthority:
                                updated_at=now, expires_at=(min(now + timedelta(seconds=ttl_seconds), plan.expires_at) if native_plan_id is not None
                                    else min(now + timedelta(seconds=ttl_seconds), action.expires_at) if action is not None
                                    else now + timedelta(seconds=ttl_seconds)), wire_version=1,
-                               native_plan_id=native_plan_id, catalog_item_id=catalog_item_id,
+                               moxy_event_id=moxy_event_id, native_plan_id=native_plan_id, catalog_item_id=catalog_item_id,
                                catalog_snapshot_json=_json(terms) if terms else None,
                                media_json=_json(terms["media_ids"]) if terms else "[]",
                                preview_json=_json(terms["preview_ids"]) if terms else "[]",
                                price_cents=terms["price_cents"] if terms else 0)
             s.add(intent)
+            if moxy_event is not None:
+                moxy_event.status, moxy_event.intent_id = 'queued', identity
+                from moxy_replacement.campaigns import attach as attach_moxy_campaign
+                attach_moxy_campaign(s,moxy_event,identity)
             if terms and terms["price_cents"] > 0:
                 from .quote import from_terms, QUOTED
                 intent.quote_json = from_terms(terms, account_id=account_id, fan_id=fan_id).as_json()
@@ -582,6 +610,9 @@ class TextAuthority:
             from .handover import staff_owns_takeover
             if not obsolete and intent.origin == "manual":
                 obsolete = not staff_owns_takeover(s, account_id, intent.fan_id, state, intent.actor)
+            if not obsolete:
+                from moxy_replacement.runtime import current
+                obsolete = not current(s, intent)
             if not obsolete and intent.native_plan_id is not None:
                 from .native_context import matches
                 obsolete = not matches(s, intent)
@@ -666,7 +697,7 @@ class TextAuthority:
                 or len(set(grant.preview_ids)) != len(grant.preview_ids)
                 or type(grant.price_cents) is not int
                 or (not grant.media_ids and (grant.preview_ids or grant.price_cents != 0))
-                or (grant.media_ids and not (300 <= grant.price_cents <= 20000 or grant.origin == "manual" and grant.price_cents == 0))):
+                or (grant.media_ids and not (300 <= grant.price_cents <= 20000 or grant.price_cents == 0))):
             raise Refused("invalid media dispatch grant")
 
     def check_dispatch_preflight(self, tenant_id, grant: Dispatch, *, transport_generation):
@@ -723,6 +754,9 @@ class TextAuthority:
             from .handover import staff_owns_takeover
             if not obsolete and row.origin == "manual":
                 obsolete = not staff_owns_takeover(s, row.account_id, row.fan_id, state, row.actor)
+            if not obsolete:
+                from moxy_replacement.runtime import current
+                obsolete = not current(s, row)
             if not obsolete and row.native_plan_id is not None:
                 from .native_context import matches
                 obsolete = not matches(s, row)
@@ -1001,6 +1035,9 @@ class TextAuthority:
                 s.add(chat)
             if chat.last_message_at is None or (stamp, proof.message_id) > (chat.last_message_at, chat.last_message_id or 0):
                 chat.last_message_id, chat.last_message_at, chat.last_message_preview = proof.message_id, stamp, row.body[:500]
+            if row.moxy_event_id:
+                from moxy_replacement.runtime import delivered
+                delivered(s, row)
             row.projected_at, row.updated_at = utcnow(), utcnow()
             self._release_hold(s, row, tenant_id)
             return True

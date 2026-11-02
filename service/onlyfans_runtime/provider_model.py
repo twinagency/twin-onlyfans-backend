@@ -87,6 +87,11 @@ class NativeProviderModel:
     def __repr__(self):
         return f"NativeProviderModel(account_id={self.account_id!r}, model_id={self.model_id!r})"
 
+    def fork(self):
+        """A separate one-attempt invocation with the same scoped credential."""
+        return NativeProviderModel(account_id=self.account_id,model_id=self.model_id,
+            api_key=self._api_key,expires_at=self._expires_at)
+
     def _ready(self):
         if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
             raise Refused("native model calls require the worker role")
@@ -224,6 +229,14 @@ class NativeProviderModel:
             call = session.get(GrokCall, self._call_id)
             plan = session.scalar(select(OfNativePlan).where(
                 OfNativePlan.account_id == self.account_id, OfNativePlan.model_call_id == self._call_id))
+            if plan is None:
+                from db.onlyfans_moxy_models import MoxyEvent
+                from types import SimpleNamespace
+                event = session.scalar(select(MoxyEvent).where(MoxyEvent.account_id == self.account_id,
+                    MoxyEvent.model_call_id == self._call_id))
+                if event is not None and call is not None:
+                    plan = SimpleNamespace(status=event.status, resolved_model_id=call.model,
+                        expires_at=event.lease_until, fan_id=event.fan_id)
             if (call is None or call.account_id != self.account_id or call.status != "pending"
                     or call.was_dry_run or call.endpoint != self.endpoint or call.model != self.model_id
                     or plan is None or plan.status != "generating" or plan.resolved_model_id != self.model_id

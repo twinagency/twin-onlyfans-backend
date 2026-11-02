@@ -60,7 +60,8 @@ EARNINGS_TOTALS = "0105_earnings_totals"
 PARALLEL_HISTORY = "0106_parallel_history_reads"
 HISTORY_RELEASE_MERGE = "0109_history_release_merge"
 RECENT_HISTORY = "0110_recent_history"
-HEAD = RECENT_HISTORY
+MOXY = '0111_moxy_owner'
+HEAD = MOXY
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -77,6 +78,7 @@ REVISION_RANK[EARNINGS_TOTALS] = 105
 REVISION_RANK[PARALLEL_HISTORY] = 106
 REVISION_RANK[HISTORY_RELEASE_MERGE] = 109
 REVISION_RANK[RECENT_HISTORY] = 110
+REVISION_RANK[MOXY] = 111
 
 
 class SchemaMismatch(RuntimeError):
@@ -85,6 +87,7 @@ class SchemaMismatch(RuntimeError):
 
 def _metadata():
     from .models import Base
+    from . import onlyfans_moxy_models
     from . import onlyfans_models  # noqa: F401 — register current tables
     from . import onlyfans_delivery_models  # noqa: F401 — register current tables
     from . import onlyfans_campaign_models,onlyfans_connection_models,onlyfans_content_models  # noqa: F401

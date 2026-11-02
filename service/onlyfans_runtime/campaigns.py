@@ -342,6 +342,8 @@ class CampaignService:
         selected = []
         with Session(self.engine) as s, s.begin():
             runtime = self.store._delivery_runtime(s, tenant_id, account_id)
+            from moxy_replacement.runtime import selected as moxy_selected
+            migrated = moxy_selected(s, account_id)
             now = authority._db_now(s)
             policy = s.get(OfDeliveryPolicy, account_id)
             from . import concurrent_admission
@@ -396,6 +398,10 @@ class CampaignService:
                         else:
                             recipient.reason = "ownership_evidence_unavailable"
                         continue
+                if migrated:
+                    from moxy_replacement.campaigns import enqueue_recipient
+                    enqueue_recipient(s, runtime, campaign, recipient)
+                    continue
                 selected.append(dict(campaign_id=campaign.campaign_id, fan_id=recipient.fan_id,
                     expected_revision=state.revision, body=campaign.body, actor=campaign.actor,
                     catalog_item_id=campaign.catalog_item_id))

@@ -604,6 +604,8 @@ class NativeEngine:
         return self
 
     async def run(self, run_id, payload=None):
+        from moxy_replacement.routing import refuse_legacy
+        refuse_legacy(self.account_id)
         """One fan turn. ``payload`` is only ever one of FASTT's own follow-up jobs for this fan (``--followups``): the
         stock nudge, or an offer-keyed discount / post-buy job the runner's post-sale scan queued."""
         if self._token is None or self._running:

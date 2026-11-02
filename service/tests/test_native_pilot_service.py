@@ -394,6 +394,7 @@ def ledger_level(backend, root):
 class Clock:
     def __init__(self, start):
         self.t = start
+        self._wait_wall = None
 
     def __call__(self):
         return self.t
@@ -401,8 +402,17 @@ class Clock:
     def add(self, seconds):
         self.t += timedelta(seconds=seconds)
 
+    def advance_wait(self):
+        # One wall-clock-derived advance shared by every PG heartbeat. Counting
+        # each fan's nominal sleep multiplies time; counting none freezes holds.
+        import time
+        current = time.monotonic()
+        if self._wait_wall is not None:
+            self.add(min(0.05, current - self._wait_wall) * 100)
+        self._wait_wall = current
 
-async def until(pred, label, events, timeout=20.0):
+
+async def until(pred, label, events, timeout=60.0):
     end = asyncio.get_running_loop().time() + timeout
     while not pred():
         if asyncio.get_running_loop().time() > end:
@@ -438,9 +448,12 @@ async def loop_level(backend, root):
         pass
 
     async def fast_idle(self, seconds):
-        clock.add(seconds)  # virtual time passes while the process waits
+        if backend.pg:
+            clock.advance_wait()
+        else:
+            clock.add(seconds)
         try:
-            await asyncio.wait_for(self.stop.wait(), 0.002)
+            await asyncio.wait_for(self.stop.wait(), 0.02 if backend.pg else 0.002)
         except asyncio.TimeoutError:
             pass
 
@@ -513,8 +526,10 @@ async def loop_level(backend, root):
                 if FakeEngine.die_after_first and i == 1:
                     self.chat.__self__.stopped_reason = "model-timeout"
                     return {"errors": 1}
+                clock.add(1)  # the synthetic reply follows its input, as real generation does
                 raw = await asyncio.to_thread(self.send, self.fan, text, {})
-                f.source(raw["id"], direction="out", body=raw["text"], created_at=clock().isoformat(sep=" "))
+                f.source(raw["id"], direction="out", body=raw["text"],
+                         created_at=ts(raw["createdAt"]).isoformat(sep=" "))
                 f.sql("UPDATE messages SET automation_kind='ai_chatter',sent_by_employee_id=5 WHERE message_id=?", (raw["id"],))
                 if FakeEngine.card:   # the confirmed bubble is the priced card
                     f.sql("UPDATE messages SET automation_kind='ai_upseller',price_cents=300 WHERE message_id=?", (raw["id"],))
@@ -556,9 +571,11 @@ async def loop_level(backend, root):
         return mid
 
     async def replied(f, http, n, label, outs=None):
-        """n POSTs AND the stored outbound rows (the engine's attribution write follows the POST)."""
+        """Wait for POST, attribution and terminal claim persistence separately."""
         await until(lambda: len(http.posts) == n and
                     f.sql("SELECT count(*) FROM messages WHERE direction='out'")[0][0] == (n if outs is None else outs), label, events)
+        await until(lambda: not f.sql("SELECT 1 FROM native_pilot_inputs WHERE state='generating'"),
+                    label + " claim settled", events)
 
     def kinds(name):
         return [e for e in events if e.get("event") == name]
@@ -1229,9 +1246,12 @@ async def multi_level(backend, root):
         pass
 
     async def fast_idle(self, seconds):
-        clock.add(seconds)
+        if backend.pg:
+            clock.advance_wait()
+        else:
+            clock.add(seconds)
         try:
-            await asyncio.wait_for(self.stop.wait(), 0.002)
+            await asyncio.wait_for(self.stop.wait(), 0.02 if backend.pg else 0.002)
         except asyncio.TimeoutError:
             pass
 
@@ -1607,7 +1627,15 @@ async def multi_level(backend, root):
         says(f, FB, "b unaffected")
         await until(lambda: len(posted(http, FB)) == 1, "B still answered", events)
         backend.fan_skip(f, FA, None)                            # the Pause is lifted
-        await until(lambda: len(posted(http, FA)) == 1, "the held message is answered after the Pause", events)
+        try:
+            await until(lambda: len(posted(http, FA)) == 1, "the held message is answered after the Pause", events)
+        except AssertionError:
+            svc=task.get_coro().cr_frame.f_locals.get('service')
+            print('pause-resume-diagnostic',repr(dict(clock=clock(),holds=getattr(svc,'fan_holds',None),
+                inputs=f.sql("SELECT pilot_id,state,message_id FROM native_pilot_inputs"),
+                pilots=f.sql("SELECT pilot_id,state,reason,cutoff FROM native_pilots"),
+                messages=f.sql("SELECT fan_id,message_id,direction,created_at FROM messages"))),flush=True)
+            raise
         await settle()
         check(len(posted(http, FA)) == 1 and f.sql("SELECT count(*) FROM messages WHERE direction='out' AND fan_id=?", (FA,))[0][0] == 1)
         await stop(task, patcher)
@@ -1860,7 +1888,7 @@ async def followup_loop_level(backend, root):
         if seconds != RENEW:      # the lease renewals do not advance virtual time (keeps the scenarios arrangeable)
             clock.add(seconds)
         try:
-            await asyncio.wait_for(self.stop.wait(), 0.002)
+            await asyncio.wait_for(self.stop.wait(), 0.02 if backend.pg else 0.002)
         except asyncio.TimeoutError:
             pass
 

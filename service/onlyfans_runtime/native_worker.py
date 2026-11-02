@@ -287,6 +287,23 @@ class NativeWorker:
                     if self.history_memory:
                         self._history_turn(account,report,archive=False)
                         if stop.is_set():break
+                    from moxy_replacement.runtime import selected, MoxyService
+                    with Session(self.store.engine) as scope_session:
+                        self.store._runtime(scope_session, self.tenant_id, account.account_id)
+                        migrated = selected(scope_session, account.account_id)
+                    if migrated:
+                        service = MoxyService(self.store)
+                        # Existing campaigns enter Moxy as decisions; their old
+                        # body can never dispatch directly for a migrated account.
+                        self.campaigns.queue_due(self.tenant_id, account.account_id)
+                        for _ in range(4):
+                            claim = self.store.claim(self.tenant_id, account_ids=(account.account_id,))
+                            if claim is None:break
+                            service.from_claim(self.tenant_id, claim); report.claims += 1
+                        if account.model is not None:
+                            report.queued += service.step(self.tenant_id, account.account_id, account.model)
+                        self._deliver(account, report)
+                        continue
                     queued,retired=self.planner.recover(self.tenant_id,account.account_id,limit=4)
                     report.queued+=queued;report.held+=retired
                     if stop.is_set():break

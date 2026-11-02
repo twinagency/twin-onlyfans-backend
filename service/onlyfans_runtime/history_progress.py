@@ -1,6 +1,6 @@
 """Read-only, scoped coverage. Unknown lifetime totals never become percentages."""
 from sqlalchemy import and_, func, select, text
-from db.models import Message
+from db.models import Message, OfCreatorBinding
 from db.onlyfans_models import OfIngress
 from .history_policy import policy, OfOlderHistoryJob
 from .store import utcnow
@@ -25,17 +25,21 @@ def recent_progress(s, runtime, fan_id=None):
     scan = s.get(OfRecentHistoryScan, runtime.account_id)
     discovery = bool(scan and scan.binding_id == runtime.binding_id and scan.status == 'complete'
                      and scan.known_fans_complete and not scan.last_error)
-    covered = (bool(counts) if fan_id is not None else discovery) and not (
+    # This state describes the initial import, including complete discovery.
+    # One completed fan cannot make the account window ready while other
+    # conversations are still being discovered (or satisfy the UI contract).
+    covered = discovery and (bool(counts) if fan_id is not None else True) and not (
         counts.get('needed', 0) or counts.get('running', 0) or errors)
     total, fans, incoming = s.execute(select(func.count(), func.count(func.distinct(Message.fan_id)),
         func.count().filter(Message.direction == 'in')).where(*scope)).one()
-    params = {'account':runtime.account_id,'binding':runtime.binding_id,'cutoff':p.cutoff_at,'fan':fan_id}
+    tenant = s.scalar(select(OfCreatorBinding.tenant_id).where(OfCreatorBinding.id==runtime.binding_id))
+    params = {'tenant':tenant,'account':runtime.account_id,'binding':runtime.binding_id,'cutoff':p.cutoff_at,'fan':fan_id}
     # Same source-fingerprint receipts as the paid learner, including fact-free results.
     pending = s.scalar(text('''SELECT count(*) FROM messages m WHERE m.account_id=:account
         AND m.created_at>=:cutoff AND m.direction='in' AND (:fan IS NULL OR m.fan_id=:fan)
         AND EXISTS (SELECT 1 FROM of_ingress i WHERE i.account_id=m.account_id AND i.binding_id=:binding
             AND i.fan_id=m.fan_id AND i.message_id=m.message_id AND i.status='applied')
-        AND NOT EXISTS (SELECT 1 FROM of_profile_receipts r WHERE r.account_id=m.account_id
+        AND NOT EXISTS (SELECT 1 FROM of_profile_receipts r WHERE r.tenant_id=:tenant AND r.account_id=m.account_id
             AND r.binding_id=:binding AND r.fan_id=m.fan_id AND r.source_fan=m.fan_id
             AND r.message_id=m.message_id AND r.body_md5=md5(m.body) AND r.source_at=m.created_at
             AND r.direction=m.direction AND r.unsent=m.is_unsent AND r.automation=coalesce(m.automation_kind,'')
@@ -61,9 +65,9 @@ def recent_progress(s, runtime, fan_id=None):
         OfOlderHistoryJob.binding_id==runtime.binding_id,L.status=='complete',
         True if fan_id is None else OfOlderHistoryJob.fan_id==fan_id))
     hold = s.execute(text('''SELECT hold_code,hold_until FROM of_profile_accounts
-        WHERE account_id=:account AND binding_id=:binding'''),params).first()
+        WHERE tenant_id=:tenant AND account_id=:account AND binding_id=:binding'''),params).first()
     active_hold = bool(hold and hold[1] and str(hold[1]) > str(utcnow()))
-    memory_errors = s.scalar(text('''SELECT count(*) FROM of_profile_learning WHERE account_id=:account
+    memory_errors = s.scalar(text('''SELECT count(*) FROM of_profile_learning WHERE tenant_id=:tenant AND account_id=:account
         AND binding_id=:binding AND fan_id>0 AND (:fan IS NULL OR fan_id=:fan) AND error_code IS NOT NULL'''),params)
     from .history_telemetry import OfHistoryReadAttempt as A
     attempts, http_attempts, failed, unfinished = s.execute(select(func.count(),
@@ -87,7 +91,7 @@ def recent_progress(s, runtime, fan_id=None):
         model_ms += call.latency_ms or 0
     accounting = {k.replace('Units','Usd'):str(Decimal(v)/10000) for k,v in billing.items()}
     receipt_first, receipt_last = s.execute(text("""SELECT min(processed_at),max(processed_at) FROM of_profile_receipts
-        WHERE account_id=:account AND binding_id=:binding AND fan_id>0
+        WHERE tenant_id=:tenant AND account_id=:account AND binding_id=:binding AND fan_id>0
         AND source_at>=:cutoff AND processed_at>=:started AND (:fan IS NULL OR fan_id=:fan)"""),{**params,'started':p.started_at}).one()
     accounting.update(scope='account memory calls since fixed policy start, including activated older jobs',
         cumulativeModelCallMilliseconds=model_ms)

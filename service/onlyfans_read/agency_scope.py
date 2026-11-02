@@ -111,10 +111,12 @@ class AgencyScopeMiddleware:
                 # content-sync/v1 lists its own operations; a draft chunk upload is the only PUT.
                 chunk = sync and scope["method"] == "PUT" and bool(re.fullmatch(
                     r"/onlyfans/content-sync/v1/accounts/[A-Za-z0-9._:-]{1,64}/drafts/[0-9a-f-]{36}/files/[0-9a-f-]{36}/chunks/[0-9]{1,6}", path))
+                moxy_put = scope["method"] == "PUT" and bool(re.fullmatch(
+                    r"/onlyfans/configuration/v1/accounts/[A-Za-z0-9._:-]{1,64}/moxy", path))
                 chat_write = grant.can_chat and scope["method"] == "POST" and bool(re.fullmatch(
                     r"/onlyfans/(?:control/v1/accounts/[A-Za-z0-9._:-]{1,64}/conversations/[A-Za-z0-9._:-]{1,64}|configuration/v1/accounts/[A-Za-z0-9._:-]{1,64}/history-memory/fans/[1-9][0-9]{0,17}/corrections)", path))
                 if (not allowed
-                        or scope["method"] not in ({"GET", "HEAD", "POST"} | ({"PUT"} if chunk else set()))
+                        or scope["method"] not in ({"GET", "HEAD", "POST"} | ({"PUT"} if chunk or moxy_put else set()))
                         or (scope["method"] in {"POST", "PUT"} and not grant.can_manage and not chat_write)):
                     raise ValueError("agency action unavailable")
         except (ValueError, TypeError, RecursionError):

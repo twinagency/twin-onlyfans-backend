@@ -113,6 +113,10 @@ def assert_unowned(session, account_id, fan_id, snapshot, *, manual=False):
 
 def project(session, intent, message_id, stamp):
     """Called inside the receipt projection transaction; never asserts purchase."""
+    if intent.moxy_event_id and intent.price_cents == 0 and intent.catalog_item_id is not None:
+        from .manual_media import project_free
+        project_free(session, intent, message_id, stamp)
+        return
     if intent.catalog_item_id is None:
         return
     if intent.offer_id is not None:

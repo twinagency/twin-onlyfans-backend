@@ -80,20 +80,22 @@ def test_actual_native_text_preparation_queues_only_then_receipt_materializes(da
     store.close()
 
 
-def test_native_identity_turn_uses_the_existing_turn_selector_and_never_discloses(database, monkeypatch):
+def test_native_identity_turn_pauses_for_owned_handover_without_calling_model(database, monkeypatch):
     _, engine = database
     store, _, _, planner = ready(database, monkeypatch)
     store.record(TENANT, ACCOUNT, event(mid=2, body="Are you a bot?")); store.drain(TENANT, ACCOUNT)
     due(engine)
     claim = store.claim(TENANT)
-    model = SyntheticNativeModel("haha why would u think that")
-    plan = planner.prepare(TENANT, claim, model)
-    assert plan_state(engine, plan) == "ready"
-    prompt = str(model.calls[0])
-    assert "Do not confirm or deny it" in prompt and "never swear you are human" in prompt
-    assert "AI chat clone" not in prompt and "answer honestly" not in prompt
-    assert "No sale or follow-up question" in prompt
-    assert "breezy brush-off" not in prompt and "100% human" not in prompt
+    model = SyntheticNativeModel("Must never answer identity automatically")
+    with pytest.raises(Refused):
+        planner.prepare(TENANT, claim, model)
+    assert model.calls == []
+    with Session(engine) as s:
+        control = s.get(OfConversationState, (ACCOUNT, 101))
+        assert control.mode == "paused" and control.requires_attention
+        from db.onlyfans_case_models import OfOperatorCase
+        assert s.scalar(select(OfOperatorCase).where(OfOperatorCase.account_id == ACCOUNT,
+            OfOperatorCase.fan_id == 101, OfOperatorCase.category == "identity")).status in {"open", "acknowledged"}
     store.close()
 
 

@@ -58,12 +58,16 @@ def _scope():
 
 def fastt_account_owned(account_id) -> bool:
     """True when the whole account is owned (``<account>:*``, or database mode ``all``)."""
+    from moxy_replacement.routing import selected_sync
+    if selected_sync(account_id): return False
     account = to_fastt_account_id(account_id)
     return fastt_scope.platform_scope_enabled() or account in _scope()[1]
 
 
 def fastt_owned(account_id, fan_id) -> bool:
     """The legacy worker must not send for this fan (never shrinks within a process)."""
+    from moxy_replacement.routing import selected_sync
+    if selected_sync(account_id): return False
     account = to_fastt_account_id(account_id)
     if fastt_scope.platform_scope_enabled():
         return True  # Fail closed: discovery failure never hands an account to a second sender.
@@ -74,6 +78,8 @@ def fastt_owned(account_id, fan_id) -> bool:
 def fastt_serves(account_id, fan_id) -> bool:
     """The FASTT runner may act for this fan now: the current selection, which can shrink."""
     pairs, accounts = fastt_scope.serve_scope()
+    from moxy_replacement.routing import selected_sync
+    if selected_sync(account_id): return False
     account = to_fastt_account_id(account_id)
     return account in accounts or (account, fan_id) in pairs
 

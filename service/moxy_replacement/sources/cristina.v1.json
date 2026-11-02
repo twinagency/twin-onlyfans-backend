@@ -1,0 +1,324 @@
+{
+  "version": 1,
+  "creator_key": "cristina",
+  "required_operational_fields": [
+    "account_binding",
+    "vip_qualification",
+    "current_fan_labels",
+    "fan_exception_identity_map",
+    "vault_sequences",
+    "graveyard_shift_definition",
+    "approved_recovery_limits",
+    "assigned_operator"
+  ],
+  "unresolved": [
+    "VIP Vault scripts, level membership, all four PPVs per level, prices and actual assets are not enumerated.",
+    "GY shift timezone/start/end and current fan labels require operational definition.",
+    "Creator Basics pp3-4 is internal context, not automatic public biography approval; relationship disclosure has a narrow explicit condition.",
+    "Hard NOs, Never Say, current updates and content-reference rows contain blank placeholders.",
+    "Pinned tone, ownership and no-feet fan exception require current stable identity and evidence.",
+    "Snapchat add-back range needs an exact approved offer, availability and fulfilment owner."
+  ],
+  "rules": [
+    {
+      "key": "voice",
+      "value": "flirty_suggestive_sarcastic",
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1,
+          4
+        ]
+      },
+      "instruction": "Flirty, suggestive, slightly sarcastic without trying too hard; PG/PG13 presentation. All emojis allowed; listed phrases are examples, not a vocabulary whitelist."
+    },
+    {
+      "key": "sexting",
+      "value": true,
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Explicit sexting is explicitly permitted. The general PG13 account description does not cancel this creator-specific permission."
+    },
+    {
+      "key": "customs",
+      "value": {
+        "minimum_cents": 100000
+      },
+      "requires": {
+        "assigned_operator_authorised": true
+      },
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Customs start at $1000. A covering operator checks with assigned AA or operations/supervisor before confirming."
+    },
+    {
+      "key": "vip_sequence",
+      "value": {
+        "ppvs_per_level": 4,
+        "skip_levels": false,
+        "skip_scripts": false
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1,
+          2
+        ]
+      },
+      "instruction": "Use the actual VIP Vault sequence; no skipped levels/scripts. All four PPVs of each level must be unlocked for VIP completion."
+    },
+    {
+      "key": "vip_label",
+      "value": "location_then_date_label",
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "When adding VIP ask where the fan is from for IF and apply the documented VIP date label; do not assume unknown location."
+    },
+    {
+      "key": "clock_timing",
+      "value": "no_reply_in_graveyard_shift",
+      "requires": {
+        "clock_label": true
+      },
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Clock-labelled fans must not be answered during the GY shift; an unknown shift definition blocks this affected scheduling decision."
+    },
+    {
+      "key": "fan_exceptions",
+      "value": "verified_identity_mapping_required",
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          5
+        ]
+      },
+      "instruction": "The named top fan has all content, likes bikini pictures, must not receive feet content and needs pinned tone. Current ownership still requires verification; historical spend is not proof."
+    },
+    {
+      "key": "fan_labels",
+      "value": "current_labels_only",
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          5
+        ]
+      },
+      "instruction": "Cross means never opens, clock means timewaster, black dot permits a longer unread period; no general sales timing is derived."
+    },
+    {
+      "key": "ratings",
+      "value": "pg13_text_only",
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1,
+          2
+        ]
+      },
+      "instruction": "Ratings PG13, text only; dick rate $35."
+    },
+    {
+      "key": "social_access",
+      "value": {
+        "service": "snap_add_back",
+        "minimum_cents": 80000,
+        "maximum_cents": 100000
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          4
+        ]
+      },
+      "instruction": "The sheet authorises paid Snapchat add-back at $800-$1000. This narrow service overrides the generic other-app refusal only when mapped, authorised and available."
+    },
+    {
+      "key": "product:text_rating",
+      "value": {
+        "minimum_cents": 3500,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Text-only rating $35."
+    },
+    {
+      "key": "product:boobs_photos",
+      "value": {
+        "minimum_cents": 9000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Boobs 4-5 pictures $90+; see-through/nipples VIP only."
+    },
+    {
+      "key": "product:see_through",
+      "value": {
+        "minimum_cents": 9000,
+        "requires": {
+          "vip": true,
+          "high_spender": true
+        }
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1,
+          2
+        ]
+      },
+      "instruction": "See-through/nipples reserved for VIPs, suggestive/nippier bundles for loyal big-spending VIPs."
+    },
+    {
+      "key": "product:nipples",
+      "value": {
+        "minimum_cents": 9000,
+        "requires": {
+          "vip": true,
+          "high_spender": true
+        }
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1,
+          2
+        ]
+      },
+      "instruction": "Nippier content only loyal/big-spending VIPs."
+    },
+    {
+      "key": "product:booty_photos",
+      "value": {
+        "minimum_cents": 6000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Booty 4-5 pictures $60."
+    },
+    {
+      "key": "product:bikini_lingerie_booty",
+      "value": {
+        "minimum_cents": 6000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Bikinis and lingerie $60+."
+    },
+    {
+      "key": "product:nude_booty",
+      "value": {
+        "minimum_cents": 7000,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "Bare booty $70+."
+    },
+    {
+      "key": "product:g_string_booty",
+      "value": {
+        "minimum_cents": 9900,
+        "requires": {}
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "instruction": "G-string cheeks fully showing $99+."
+    },
+    {
+      "key": "product:used_underwear",
+      "value": {
+        "minimum_cents": 100000,
+        "requires": {
+          "underwear_eligibility_verified": true
+        }
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Used undies/outfit $1000+, high-spender or VIP route, exact eligibility approved before offer."
+    },
+    {
+      "key": "product:used_underwear_negotiated",
+      "value": {
+        "minimum_cents": 60000,
+        "requires": {
+          "underwear_eligibility_verified": true,
+          "negotiated_price_authorised": true
+        }
+      },
+      "requires": {},
+      "source": {
+        "document": "03_Cristina.pdf",
+        "pages": [
+          1
+        ]
+      },
+      "instruction": "Negotiation may reduce to $600 minimum, only within this specific authorised service; not a generic discount ladder."
+    }
+  ]
+}

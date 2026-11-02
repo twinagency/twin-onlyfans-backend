@@ -126,7 +126,7 @@ def get_capture_context(store,tenant,creator,account=None):
     return {'accountId':account,'ownerId':owner,'proxyUrl':proxy,'fingerprint':capture_network_fingerprint(proxy)}
 
 
-def get_connection(store,tenant,account,*,include_sync=False,include_runner=False,include_policy=False,runner_status_path=None):
+def get_connection(store,tenant,account,*,include_sync=False,include_runner=False,include_policy=False,include_recent=False,runner_status_path=None):
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account)
         row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
@@ -145,10 +145,13 @@ def get_connection(store,tenant,account,*,include_sync=False,include_runner=Fals
             'policyRevision':policy.revision if policy else 0,'usedUnits':policy.used_units if policy else 0,
             'limitUnits':policy.limit_units if policy else 0,'mediaEnabled':bool(policy and policy.media_enabled),
             'automateNewConversations':bool(row and row.automate_new_conversations and not NEW_CONVERSATION_AUTOMATION_LOCKED)}
-        if include_sync:
+        recent = None
+        if include_sync or include_recent:
             from .history_progress import recent_progress
             recent = recent_progress(s, runtime)
-            if recent is not None:
+            # Existing dashboard clients enforce exact connection keys.
+            # Only callers explicitly negotiating recent history receive it.
+            if include_recent and recent is not None:
                 result['recentHistory'] = recent
         if include_policy:
             result['throttleSeconds']=policy.throttle_seconds if policy else None
@@ -166,6 +169,11 @@ def get_connection(store,tenant,account,*,include_sync=False,include_runner=Fals
                 'conversationsComplete':recovery.get('complete',0),'conversationsRemaining':sum(count for state,count in recovery.items() if state!='complete'),
                 'pendingMessages':runtime.pending_events,'quarantinedMessages':quarantined,'recoveryRequired':runtime.recovery_needed,
                 'lastCompleteSyncAt':runtime.last_sync_at.isoformat()+'Z' if runtime.last_sync_at else None}
+            if recent is not None and not recent['lifetimeHistory']['complete']:
+                # The old UI's "Last import complete" condition must not be
+                # satisfied by a completed recent-window/live catch-up pass.
+                result['sync']['recoveryRequired'] = True
+                result['sync']['lastCompleteSyncAt'] = None
         return result
 
 def personality_credential_status(s,account,binding_id,*,_unavailable_as_none=False,_lock_runtime=True):

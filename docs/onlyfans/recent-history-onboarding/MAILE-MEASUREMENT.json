@@ -17,7 +17,8 @@
     "Operational OnlyFans PostgreSQL host is not accessible through the connected Supabase project; that project's schema contains no of_runtime, messages or profile-learning tables.",
     "Current operational image/schema must be inspected before any rollout.",
     "Native timestamp ordering is unverified. Safe exhaustive traversal may not reduce provider requests.",
-    "Dashboard browser rendering and production deployment are unverified."
+    "Dashboard browser rendering and production deployment are unverified.",
+    "GitHub CI runs ended in startup_failure; no remote CI execution has been qualified."
   ],
   "comparison": {
     "measuredFullHistoryRun": null,

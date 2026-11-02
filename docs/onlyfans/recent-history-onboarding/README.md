@@ -79,3 +79,5 @@ Remove the account from the allowlist, or explicitly disable its durable policy,
 - The original ledger reconstruction failure was separately reproduced on the untouched original source baseline: **1 failed**, 6.15 seconds. It remains a whole-release qualification issue, not a claimed pass.
 
 The evidence directory contains raw logs, limitations, and hashes of final relevant source files. All records are synthetic. No live fan messages were sent and no paid model calls were made. Test runtime does not measure Maile onboarding.
+
+GitHub publication check: both draft PRs are cleanly mergeable and both source parents are retained. The newly triggered backend runs `41387702674` / `41387666936` and dashboard runs `41387741369` / `41387736177` ended in `startup_failure`. No GitHub CI pass is claimed; this is an additional release blocker. Local PostgreSQL/contract evidence remains separate.

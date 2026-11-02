@@ -659,5 +659,17 @@
     "service/tests/test_vault_sync_resilience_pg.py": "3e41983b0b2834d68b7bf20410c1ce7ba4d1a98ef5f0bae0d861aa604a63cfe2",
     "service/tests/test_vault_upload.py": "23d45bb14e8c9e24c762965cc89b4c592c47a5c03bd575728cf8d1e2ffda38bf",
     "service/tests/vtime.py": "484fa766073c2ffccb9be81c4302d87f444b0b84801268fbd79975f52f5a9408"
+  },
+  "githubCI": {
+    "backendRuns": [
+      41387702674,
+      41387666936
+    ],
+    "dashboardRuns": [
+      41387741369,
+      41387736177
+    ],
+    "conclusion": "startup_failure",
+    "qualified": false
   }
 }

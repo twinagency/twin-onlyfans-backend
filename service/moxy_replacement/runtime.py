@@ -446,7 +446,12 @@ class MoxyService:
             terms=validate_decision(json.loads(s.get(MoxyAccount,account).settings_json),snap,d)
             control=s.get(OfConversationState,(account,event.fan_id));fan=event.fan_id
             body=d['text'];revision=control.revision
-        return self.authority.prepare(tenant,account,fan,command_key='moxy:'+event_id,
+            # A proved rejection is retained as its own immutable attempt. A
+            # bounded rate-limit retry receives a new idempotency key.
+            command_key='moxy:'+event_id
+            if event.reason=='provider_rate_limit_retry' and event.intent_id:
+                command_key=digest({'moxy_retry_event':event_id,'rejected_intent':event.intent_id})
+        return self.authority.prepare(tenant,account,fan,command_key=command_key,
             expected_revision=revision,body=body,origin='automated',actor='moxy-owner',moxy_event_id=event_id,
             catalog_item_id=terms['item']['id'] if terms else None,
             quoted_price_cents=terms['price_cents'] if terms else None)
@@ -460,7 +465,31 @@ class MoxyService:
                 e.status='unknown';e.reason='interrupted_moxy_generation'
             for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='queued')):
                 intent=s.get(OfTextIntent,(account,e.intent_id))
-                if intent and intent.status in {'cancelled','refused','not_accepted'}:
+                if intent and intent.status=='not_accepted':
+                    evidence=intent.evidence_ref or ''
+                    if evidence.startswith('fastt-auth-failed:'):
+                        e.status='held';e.reason='provider_authentication_required'
+                    elif evidence.startswith('fastt-rate-limited:'):
+                        attempts=s.scalar(select(func.count()).select_from(OfTextIntent).where(
+                            OfTextIntent.account_id==account,OfTextIntent.moxy_event_id==e.event_id,
+                            OfTextIntent.status=='not_accepted'))
+                        policy=s.get(OfDeliveryPolicy,account)
+                        if attempts>=3:
+                            e.status='held';e.reason='provider_retry_limit_reached'
+                        elif json.loads(e.payload_json).get('campaign_id'):
+                            e.status='held';e.reason='campaign_provider_recovery_required'
+                        elif s.get(MoxyAccount,account).mode!='on':
+                            e.status='held';e.reason='moxy_off'
+                        elif max((t for t in (policy.provider_cooldown_until,policy.next_dispatch_at)
+                                  if t is not None),default=utcnow())>utcnow():
+                            e.reason='provider_rate_limited'
+                        elif digest(snapshot(s,account,e.fan_id,e))!=e.snapshot_hash:
+                            e.status='stale';e.reason='moxy_snapshot_changed'
+                        else:
+                            e.status='ready';e.reason='provider_rate_limit_retry'
+                    else:
+                        e.status='stale';e.reason=intent.reason
+                elif intent and intent.status in {'cancelled','refused'}:
                     e.status='stale';e.reason=intent.reason
             for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='ready')):
                 if digest(snapshot(s,account,e.fan_id,e))!=e.snapshot_hash:

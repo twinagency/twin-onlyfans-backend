@@ -1,7 +1,7 @@
 {
   "accountId": "of-323358988",
   "referenceAccount": "Maile",
-  "releaseStatus": "staged_rollout_blocked_dashboard_provenance",
+  "releaseStatus": "committed_pilot_not_deployed_control_path_unavailable",
   "rolloutEnabled": false,
   "recentWindowMessages": null,
   "recentWindowFans": null,
@@ -14,10 +14,10 @@
   "measuredSpeedup": null,
   "demonstratedNinetyMinuteOnboarding": false,
   "blockers": [
-    "Live OnlyFans dashboard reports GIT_SHA 3d0ee2e3e2848f9cd5019399a82fe27a67f435c2 (image sha256:22be6bc89bf7308e2c2214e03d63313bfc32f2edb6c831bddcd1a06a28258049). This commit is unavailable in the connected twin-dashboard repository. The located host checkout is older, and the matching release source has not been recovered. A whole-dashboard replacement from a different base could overwrite concurrent work. Enabling the new response before compatible UI deployment could break strict connection parsing.",
-    "Full dashboard build/deployment and end-to-end Maile run remain unexecuted. Production schema, services and rollout flags are unchanged.",
-    "Native timestamp ordering is unverified. Safe exhaustive traversal may not reduce provider requests.",
-    "GitHub CI startup_failure; independent live-base container tests and schema-copy rehearsal supply separate qualification evidence."
+    "Latest exact-base qualification result cannot be retrieved after remote control timeouts. Promotion was not executed; policy and audited reply pause are not applied.",
+    "Exact frontend source for running 3d0ee2e3 image remains unavailable. Backend pilot no longer requires frontend replacement, but the new dashboard card is not deployed.",
+    "Native timestamp ordering remains unverified; exhaustive traversal cannot guarantee provider request savings.",
+    "Maile pilot has not run; fresh requests, new receipts, elapsed time and actual new model cost remain unmeasured."
   ],
   "comparison": {
     "measuredFullHistoryRun": null,
@@ -94,6 +94,26 @@
     },
     "perAccountPilot": "Maile only, not enabled; existing 2rps/8 slots and US$6 daily model cap preserved",
     "actualFeatureRun": false,
-    "additionalFinalImageRerun": "Submitted after final discovery-readiness fix; completion result not retrieved when the remote connection stopped returning output. Only the earlier 22-test live-base result and final 2-test local PostgreSQL result are claimed."
-  }
+    "additionalFinalImageRerun": "Recovered from host: earlier final-image run passed 23 tests in 110.11 seconds. The subsequent 9870 compatibility build is a different job and remains unverified.",
+    "newCompatibilityTests": {
+      "passed": 57,
+      "seconds": 99.956
+    },
+    "newMeasurementTests": {
+      "passed": 3,
+      "seconds": 6.655
+    },
+    "earlierFinalImageResult": {
+      "passed": 23,
+      "seconds": 110.11
+    },
+    "latestBuild": {
+      "ssmCommand": "db69d054-c32c-44a7-87b0-3934d88765a7",
+      "result": "unverified",
+      "sourceCommit": "9870b64889833b16a36397c8ffa45dc7e236cea3",
+      "artifactSha256": "544a71d0ba10bfa7ae47aa7ed1524e00b2db9d6d1349b9525be91a9dc4c294cd"
+    }
+  },
+  "applicationCommit": "9870b64889833b16a36397c8ffa45dc7e236cea3",
+  "deploymentConfigurationCommit": "be42c3120aa75c402514a1dbeef89b0908da230e"
 }

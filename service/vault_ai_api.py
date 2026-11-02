@@ -2695,10 +2695,98 @@ def _parse_describe(text: str) -> dict[str, Any]:
 # This module is back to one job: her VAULT.
 
 
+import vault_describe_state as vds  # noqa: E402
+
+
+class _ItemLease:
+    """Cross-process, per-item guard so an automatic worker and a manual sweep never
+    pay to describe the same asset at once. PostgreSQL transaction advisory lock held
+    on a dedicated connection for the item's lifetime; a no-op on SQLite."""
+
+    def __init__(self, account_id: str, media_id: int):
+        self.key = int.from_bytes(__import__("hashlib").sha256(
+            f"vault-describe-item:{account_id}:{media_id}".encode()).digest()[:8], "big", signed=True)
+        self.session = None
+        self.acquired = True
+
+    async def __aenter__(self):
+        from sqlalchemy import text
+        from db.engine import async_session_factory
+        self.session = async_session_factory()
+        bind = self.session.get_bind()
+        if bind.dialect.name != "postgresql":
+            return self
+        self.acquired = bool(await self.session.scalar(
+            text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": self.key}))
+        return self
+
+    async def __aexit__(self, *exc):
+        try:
+            await self.session.rollback()
+        finally:
+            await self.session.close()
+
+
+async def _record_failure(account_id: str, media_id: int, status: str, category: str, *,
+                          scope_guard=None, model: str | None = None, call_id=None) -> None:
+    """Record ONE failed attempt with its category and bounded-backoff stamp.
+    A still-valid description is never downgraded or replaced."""
+    async with get_session() as s:
+        if scope_guard is not None:
+            await scope_guard(s, media_id, phase="write")
+        item = await s.get(VaultItem, (account_id, media_id), with_for_update=True)
+        if item is None:
+            return
+        if (item.describe_status == "described" and (item.description or item.video_description)
+                and not vds.content_changed(item)):
+            return
+        failure, stamp_at = vds.next_failure(vds.failure_of(item), category, vds.stamp_of(item),
+                                             datetime.utcnow())
+        item.ai_fields_json = vds.merge_failure(item, failure)
+        item.describe_status = status
+        item.describe_generated_at = stamp_at
+        if model:
+            item.describe_model = model
+        if call_id is not None:
+            item.describe_call_id = call_id
+
+
+def _llm_category(exc: Exception) -> str:
+    """auth | budget | model — the three ways a provider call fails. Auth and budget
+    are about the ACCOUNT, not the media, so they never mark an item failed."""
+    from llm_client import LLMConfigError, LLMHTTPError
+    if isinstance(exc, LLMConfigError):
+        return "auth"
+    if isinstance(exc, LLMHTTPError):
+        if exc.status in (401, 403):
+            return "auth"
+        if exc.status == 402:
+            return "budget"
+    return "model"
+
+
 async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-30b",
                         prompt_version: str = "v2",
-                        frames: int | None = None, scope_guard=None) -> dict[str, Any]:
+                        frames: int | None = None, scope_guard=None,
+                        skip_unchanged: bool = False, escalate: bool = True) -> dict[str, Any]:
+    """Describe one item, once at a time across processes (see `_ItemLease`)."""
+    async with _ItemLease(account_id, media_id) as lease:
+        if not lease.acquired:
+            return {"media_id": media_id, "ok": False, "status": "in_progress", "category": None,
+                    "detail": "another description job holds this item"}
+        return await _describe_one_locked(account_id, media_id, model, prompt_version, frames,
+                                          scope_guard, skip_unchanged, escalate)
+
+
+async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwen3-vl-30b",
+                               prompt_version: str = "v2",
+                               frames: int | None = None, scope_guard=None,
+                               skip_unchanged: bool = False, escalate: bool = True) -> dict[str, Any]:
     """Describe one item.
+
+    `skip_unchanged` (automatic worker): an item already described for its current
+    content is not paid for again. `escalate=False` forbids the 235b retry (the
+    account-scoped credential path allows exactly one model).
 
     `prompt_version` picks the bake-off variant: "v2" (default — rich structured
     schema, the one in production) or "v1" (the original one-sentence prompt,
@@ -2711,29 +2799,37 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
         item = await s.get(VaultItem, (account_id, media_id))
     if item is None:
         raise HTTPException(status_code=404, detail={"error": "not_in_mirror", "media_id": media_id})
+    if (skip_unchanged and item.describe_status == "described"
+            and (item.description or item.video_description) and not vds.content_changed(item)):
+        return {"media_id": media_id, "ok": True, "status": "unchanged", "skipped": True,
+                "cost_millicents": 0}
     raw = load_json(item.raw_json, {}) or {}
     want = int(frames) if frames else _frames_for_duration(item.duration_seconds)
     got = await vault_frames.collect(account_id, item, raw, want=want)
     if not got.images:
         status = _NO_IMAGE_STATUS.get(got.reason, "fetch_failed")
-        async with get_session() as s:
-            if scope_guard is not None:
-                await scope_guard(s, media_id, phase="write")
-            await s.execute(
-                update(VaultItem)
-                .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
-                .values(describe_status=status, describe_generated_at=datetime.utcnow())
-            )
-            await s.commit()
+        category = "fetching" if status == "fetch_failed" else "unsupported"
+        await _record_failure(account_id, media_id, status, category, scope_guard=scope_guard)
         # `detail` is what the sweep shows the operator as `first_error`. Without
         # it a whole vault failing on a frame bug reads as "1,777 could not be
         # described" and nothing else — a failure count with no cause is the same
         # shape as the missing-provider-key incident this row's status was added
         # for. `got.detail` carries the exception when `collect` swallowed one.
-        return {"media_id": media_id, "ok": False, "status": status,
+        return {"media_id": media_id, "ok": False, "status": status, "category": category,
                 "detail": got.detail or f"no frames ({status})"}
+    is_video = item.kind == "video"
+    if is_video and got.source == "poster" and len(got.images) < vds.POSTER_MIN_FRAMES:
+        # A thumbnail or two is NOT analysis of the clip. Stay explicitly unresolved.
+        await _record_failure(account_id, media_id, "poster_only", "unsupported", scope_guard=scope_guard)
+        return {"media_id": media_id, "ok": False, "status": "poster_only", "category": "unsupported",
+                "detail": f"only {len(got.images)} platform preview still(s); clip not analysable"}
+    note = vds.sampling_note(item.kind, got.source or ("storyboard" if is_video else "photo"),
+                             len(got.images), item.duration_seconds)
 
     prompt = _DESCRIBE_PROMPT if str(prompt_version) == "v1" else _DESCRIBE_PROMPT_V2
+    if is_video:
+        prompt += ("\n\nSAMPLING LIMIT: " + note + ". Describe only what these images show; "
+                   "never state audio, speech, or any action or detail not visible in them.")
     content = [{"type": "text", "text": prompt}]
     content += [{"type": "image_url", "image_url": {"url": u}} for u in got.images]
 
@@ -2742,7 +2838,7 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     result = None
     used_model = model
     data: dict[str, Any] = {}
-    for attempt_model in (model, "qwen3-vl-235b"):
+    for attempt_model in ((model, "qwen3-vl-235b") if escalate else (model,)):
         try:
             result = await llm_client.chat(
                 model=attempt_model,
@@ -2758,24 +2854,21 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
             # first_error, so it carries the same sentence the pre-flight
             # refusal does rather than the exception's own developer text.
             budget = await _vision_budget(account_id)
-            return {"media_id": media_id, "ok": False, "status": "capped",
+            return {"media_id": media_id, "ok": False, "status": "capped", "category": "budget",
                     "detail": budget["blocked_reason"] or str(e)}
         except LLMError as e:
             # RECORD the failure. Leaving the status NULL made a failed item
             # indistinguishable from one never attempted — a missing
             # DEEPINFRA_API_KEY failed all 327 items of a vault while the UI
             # reported "done 327/327" and the row stayed blank.
-            async with get_session() as s:
-                if scope_guard is not None:
-                    await scope_guard(s, media_id, phase="write")
-                await s.execute(
-                    update(VaultItem)
-                    .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
-                    .values(describe_status="failed", describe_model=attempt_model,
-                            describe_generated_at=datetime.utcnow())
-                )
-                await s.commit()
-            return {"media_id": media_id, "ok": False, "status": "error", "detail": str(e)[:300]}
+            category = _llm_category(e)
+            if category == "model":
+                await _record_failure(account_id, media_id, "failed", "model",
+                                      scope_guard=scope_guard, model=attempt_model)
+            # auth/budget concern the account, not this asset: the item is left
+            # untouched (still pending) and the category is surfaced to the caller.
+            return {"media_id": media_id, "ok": False, "status": "error", "category": category,
+                    "detail": str(e)[:300]}
         used_model = attempt_model
         if not vision.is_refusal(result.content):
             parsed = _parse_describe(result.content)
@@ -2786,18 +2879,10 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
             break  # escalation also failed
 
     if not (data.get("description") or data.get("tags")):
-        async with get_session() as s:
-            if scope_guard is not None:
-                await scope_guard(s, media_id, phase="write")
-            await s.execute(
-                update(VaultItem)
-                .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
-                .values(describe_status="refused", describe_model=used_model,
-                        describe_call_id=(result.call_id if result else None),
-                        describe_generated_at=datetime.utcnow())
-            )
-            await s.commit()
-        return {"media_id": media_id, "ok": False, "status": "refused",
+        await _record_failure(account_id, media_id, "refused", "model", scope_guard=scope_guard,
+                              model=used_model, call_id=(result.call_id if result else None))
+        return {"media_id": media_id, "ok": False, "status": "refused", "category": "model",
+                "cost_millicents": result.cost_cents if result else 0,
                 "raw": (result.content if result else "" or "")[:200]}
 
     tags = [str(t).lower().strip() for t in (data.get("tags") or []) if str(t).strip()][:12]
@@ -2805,7 +2890,6 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     tier = data.get("explicitness")  # sfw|suggestive|explicit|hardcore
     nsfw = bool(data.get("nsfw")) if data.get("nsfw") is not None else None
     sellable = bool(data.get("sellable")) if data.get("sellable") is not None else None
-    is_video = item.kind == "video"
     # Fold the V2 taxonomy into the local search blob too, so a search for
     # "pulled_aside" or "solo_toy" hits even though those never appear in the
     # prose. `beats` carries the clip's progression, which is often the only
@@ -2824,7 +2908,10 @@ async def _describe_one(account_id: str, media_id: int, model: str = "qwen3-vl-3
     # Stamp WHICH variant produced this row: a v1 row is a candidate for a later
     # v2 re-scan, and without the stamp "already described" is ambiguous.
     data = {**data, "_prompt_version": ("v1" if str(prompt_version) == "v1" else "v2"),
-            "_frames": len(got.images)}
+            "_frames": len(got.images), "_frame_source": got.source or ("storyboard" if is_video else "photo"),
+            "_sampling_note": note}
+    if vds.stamp_of(item):
+        data["_content_stamp"] = vds.stamp_of(item)
 
     # `ai_fields_json` is written whole from `data`, which holds ONLY what the
     # describe prompt answers — so re-describing an item used to silently drop

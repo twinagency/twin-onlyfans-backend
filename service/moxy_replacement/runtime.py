@@ -86,7 +86,7 @@ def _inventory_report(s,account,settings,pa):
     """(usable inventory, {product_key: reason}). A product is never dropped silently:
     an asset whose description is pending/failed/unsupported/missing is excluded with
     `media_description_<state>:<media_id>` so readiness and operators can see why."""
-    from .media_descriptions import item_state
+    from .media_descriptions import item_state,effective_description,limitations,operator_corrected
     result={};excluded={}
     for key,p in pa.products.items():
         item=s.get(CatalogItem,settings['catalogue_bindings'].get(key))
@@ -97,7 +97,7 @@ def _inventory_report(s,account,settings,pa):
             excluded[key]='catalogue_media_unreadable';continue
         if ids!=[a['id'] for a in p['assets']] or item.price_cents!=p['price_cents'] or item.pricing_mode!='fixed':
             excluded[key]='catalogue_binding_mismatch';continue
-        files=[];reason=None
+        files=[];reason=None;facts_by_asset=[]
         for a in p['assets']:
             v=s.get(VaultItem,(account,a['id']))
             if v is not None and v.removed_at is not None:v=None
@@ -110,18 +110,28 @@ def _inventory_report(s,account,settings,pa):
                 reason='media_description_%s:%s'%(state,a['id']);break
             # Asset facts are approved on import/change, never derived from an
             # old fan-facing caption. Revisions bind exact current metadata.
-            facts=(v.video_description or v.description or '').strip()
+            facts=effective_description(v)
             evidence=digest({'media_id':v.media_id,'content_hash':v.content_hash,
                 'description':facts,'updated_at':v.updated_at.isoformat() if v.updated_at else None})
             if a['evidence_ref']!='asset:'+evidence or a['facts']!=[facts] or not facts:
                 reason='asset_evidence_stale:%s'%a['id'];break
+            facts_by_asset.append(facts)
             files.append({'media_id':v.media_id,'kind':v.kind,'content_hash':v.content_hash,
-                'updated_at':v.updated_at,'removed_at':None})
+                'updated_at':v.updated_at,'removed_at':None,
+                # What the description is based on (sampling limits), so a caption never
+                # claims audio, motion or detail the analysis could not have seen.
+                'description_basis':limitations(v),'operator_corrected':operator_corrected(v)})
         if reason is None and (not ids or set(previews)==set(ids)):reason='catalogue_media_invalid'
         if reason:
             excluded[key]=reason;continue
-        result[key]={'item':{n:getattr(item,n) for n in ('id','account_id','script_id','enabled','kind','label',
-            'description_for_ai','price_cents','is_free_teaser','updated_at','pricing_mode')},
+        shown={n:getattr(item,n) for n in ('id','account_id','script_id','enabled','kind','label',
+            'description_for_ai','price_cents','is_free_teaser','updated_at','pricing_mode')}
+        # The catalogue's free-text note can predate a re-analysis or operator correction;
+        # the model is shown the CURRENT effective asset descriptions instead, so one
+        # selected set never carries two disagreeing descriptions.
+        shown['description_for_ai']=facts_by_asset[0] if len(facts_by_asset)==1 else '; '.join(
+            'item %d: %s'%(i+1,f) for i,f in enumerate(facts_by_asset))
+        result[key]={'item':shown,
             'source':None,'media_ids':ids,'preview_ids':previews,'price_cents':p['price_cents'],'files':files}
     return json.loads(canonical(result)),excluded
 
@@ -194,6 +204,9 @@ def snapshot(s,account,fan,event):
     from ownership import owned_media_in_session
     inventory=_inventory(s,account,settings,pa)
     owned=sorted(owned_media_in_session(s,account,fan,limit=10000))
+    from .exposure import previously_sent_assets
+    exposed,exposure_verified=previously_sent_assets(s,account,fan)
+    paid_assets={key:sorted(set(terms['media_ids'])-set(terms['preview_ids'])) for key,terms in inventory.items()}
     offers=s.scalars(select(ContentOffer).where(ContentOffer.account_id==account,ContentOffer.fan_id==fan)).all()
     purchased=[];pending=[]
     for key,terms in inventory.items():
@@ -208,7 +221,9 @@ def snapshot(s,account,fan,event):
         'commerce_uncertain':held(s,account,fan),
         'financial_hardship':memo.get('financial_hardship',False) or any(c=='hardship' for c,_ in cases),
         'ordinary_chat_only':memo.get('ordinary_chat_only',False),'sales_refused':memo.get('sales_refused',False),
-        'no_push':verified.get('no_push',False),'owned_assets':owned,'purchased_products':sorted(set(purchased)),
+        'no_push':verified.get('no_push',False),'owned_assets':owned,
+        'previously_sent_assets':exposed,'paid_assets_by_product':paid_assets,
+        'exposure_history_verified':exposure_verified,'purchased_products':sorted(set(purchased)),
         'pending_products':sorted(set(pending)),'rejected_products':memo.get('rejected_products',[]),
         'budget_cents':memo.get('budget_cents',verified.get('budget_cents')),
         'requested_resend_product':memo.get('requested_resend_product'),

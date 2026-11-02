@@ -14,6 +14,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 
+from sqlalchemy import case, select
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
@@ -52,10 +54,28 @@ def scoped_caption_key(account_id, model):
     return resolve
 
 
+def select_batch(session, account, limit):
+    """Photos first (cheap, fast) but never to the exclusion of videos: whenever both
+    kinds are pending, ONE video rides in every batch, so a long photo backlog cannot
+    starve clips. A video-only or photo-only backlog fills the batch as before (a
+    video batch stays at one clip: it is the long, bounded unit of work)."""
+    from db.models import VaultItem
+    from onlyfans_runtime.store import utcnow
+    from onlyfans_runtime.vault_description_worker import pending
+    def pick(kind, n):
+        return list(session.scalars(select(VaultItem.media_id).where(
+            VaultItem.account_id == account, VaultItem.kind == kind, pending(utcnow()))
+            .order_by(case((VaultItem.describe_status.is_(None), 0), else_=1), VaultItem.media_id).limit(n)))
+    video = pick("video", 1)
+    if limit == 1:
+        return pick("photo", 1) or video
+    return pick("photo", limit - 1 if video else limit) + video
+
+
 async def run(args):
     if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
         raise RuntimeError("worker role required")
-    from sqlalchemy import case, select, text
+    from sqlalchemy import text
     from sqlalchemy.orm import Session
     from db.engine import get_session
     from db.models import AccountAiConfig, OfCreatorBinding, VaultItem
@@ -66,6 +86,7 @@ async def run(args):
     from onlyfans_runtime.vault_management import _connection, _provenance
     from onlyfans_runtime.connections import _open
     from onlyfans_runtime.vault_description_worker import pending
+    import vault_describe_state as vds
     from vault_ai_effective import effective_value, locked_fields
     from native_pilot.scope import AccountScope
     from native_pilot.connection import build_client
@@ -76,7 +97,8 @@ async def run(args):
         raise Refused("caption scope unavailable")
     store = Store(os.environ["DATABASE_URL"])
     summary = {"schemaVersion": "of-vault-description.v1", "account": args.account,
-               "state": "complete", "described": 0, "failed": 0}
+               "state": "complete", "described": 0, "failed": 0, "unchanged": 0, "skipped": 0,
+               "failures": {}, "costMillicents": 0}
     client = None
     try:
         with store.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as lease:
@@ -97,15 +119,7 @@ async def run(args):
                     # vision credential, independently of enabling fan replies.
                     snapshot = SimpleNamespace(scope=scope, expires_at=connection.expires_at.replace(tzinfo=timezone.utc),
                         capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"])
-                    ids = list(session.scalars(select(VaultItem.media_id).where(
-                        VaultItem.account_id == args.account, pending(utcnow()))
-                        .order_by(case((VaultItem.kind == "photo", 0), else_=1),
-                            case((VaultItem.describe_status.is_(None), 0), else_=1), VaultItem.media_id).limit(args.limit)))
-
-                # Keep video batches bounded; photos should not wait for a long clip.
-                with Session(store.engine) as session:
-                    if ids and session.get(VaultItem, (args.account, ids[0])).kind == "video":
-                        ids = ids[:1]
+                    ids = select_batch(session, args.account, args.limit)
                 metadata = {}
 
                 async def guard(session, media_id, *, phase="read"):
@@ -238,22 +252,32 @@ async def run(args):
                     async with get_session() as session:
                         await guard(session, media_id)
                         item = await session.get(VaultItem, (args.account, media_id))
-                        if (effective_value(item, "description") or effective_value(item, "video_description")
-                            or "description" in locked_fields(item) or "video_description" in locked_fields(item)):
+                        if ("description" in locked_fields(item) or "video_description" in locked_fields(item)
+                            or ((effective_value(item, "description") or effective_value(item, "video_description"))
+                                and not vds.content_changed(item))):
+                            summary["skipped"] += 1
                             continue
                     preview_ready = await warm_preview(media_id)
                     if item.kind == "photo" and not preview_ready:
                         async with get_session() as session:
                             await guard(session, media_id, phase="write")
-                            current_item = await session.get(VaultItem, (args.account, media_id))
-                            current_item.describe_status = "fetch_failed"
-                            current_item.describe_generated_at = utcnow()
+                        await api._record_failure(args.account, media_id, "fetch_failed", "fetching", scope_guard=guard)
                         summary["failed"] += 1
+                        summary["failures"]["fetching"] = summary["failures"].get("fetching", 0) + 1
                         continue
-                    result = await api._describe_one(args.account, media_id, model=caption_vault.DEFAULT_MODEL, scope_guard=guard)
-                    summary["described" if result.get("ok") else "failed"] += 1
-                    if result.get("status") == "capped":
-                        summary["state"] = "budget_paused"
+                    result = await api._describe_one(args.account, media_id, model=caption_vault.DEFAULT_MODEL,
+                        scope_guard=guard, skip_unchanged=True, escalate=account_key is None)
+                    summary["costMillicents"] += int(result.get("cost_millicents") or 0)
+                    if result.get("ok"):
+                        summary["unchanged" if result.get("skipped") else "described"] += 1
+                    else:
+                        category = result.get("category") or "busy"
+                        summary["failed"] += 1
+                        summary["failures"][category] = summary["failures"].get(category, 0) + 1
+                    if result.get("category") in ("budget", "auth"):
+                        # Account-level: stop the batch, surface it, spend nothing more.
+                        summary["state"] = "budget_paused" if result["category"] == "budget" else "retry_pending"
+                        summary["reason"] = result["category"]
                         break
                 return summary
             finally:
@@ -262,6 +286,20 @@ async def run(args):
         if client is not None:
             await asyncio.to_thread(client.http.close)
         store.close()
+
+
+def failure_reason(exc):
+    """Fixed vocabulary only: auth | budget | changed | scope | error."""
+    text = str(exc).lower()
+    if "credential" in text:
+        return "auth"
+    if "budget" in text or "cap" in text.split():
+        return "budget"
+    if "changed" in text or "paused" in text:
+        return "changed"
+    if "scope" in text or "unavailable" in text:
+        return "scope"
+    return "error"
 
 
 def main(argv=None):
@@ -276,9 +314,11 @@ def main(argv=None):
         parser.error("Use a current revision and a batch of 1..4")
     try:
         result = asyncio.run(run(args))
-    except Exception:
-        # Never expose model replies, authenticated URLs, captures or keys.
-        print(json.dumps({"schemaVersion": "of-vault-description.v1", "account": args.account, "state": "retry_pending"}), flush=True)
+    except Exception as exc:
+        # Never expose model replies, authenticated URLs, captures or keys: only a
+        # fixed category derived from the exception's message.
+        print(json.dumps({"schemaVersion": "of-vault-description.v1", "account": args.account,
+                          "state": "retry_pending", "reason": failure_reason(exc)}), flush=True)
         return 1
     print(json.dumps(result), flush=True)
     return 0

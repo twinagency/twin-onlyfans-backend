@@ -107,6 +107,13 @@ class ProductAuthority:
             raise ActionBlocked('product_previously_rejected')
         if purpose == 'resend' and state.get('requested_resend_product') != product_id:
             raise ActionBlocked('resend_not_requested')
+        # Prior exposure is distinct from ownership. Only selected paid attachments
+        # are checked here: reusing a free preview does not sell that preview.
+        if purpose != 'resend' and state.get('exposure_history_verified') is False:
+            raise ActionBlocked('media_exposure_history_unreadable')
+        paid_assets=set(state.get('paid_assets_by_product', {}).get(product_id, assets))
+        if purpose != 'resend' and paid_assets & set(state.get('previously_sent_assets', [])):
+            raise ActionBlocked('media_previously_sent_requires_explicit_resend')
         if purpose == 'continuation' and sequence is None:
             raise ActionBlocked('continuation_sequence_missing')
         memberships = [name for name, steps in self.sequences.items() if product_id in steps]

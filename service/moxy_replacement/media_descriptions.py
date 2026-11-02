@@ -16,30 +16,64 @@ here, or DRM-blocked with no poster frame) | missing (no such vault item).
 """
 from __future__ import annotations
 
+import os
+
 from sqlalchemy import select
 
+import vault_describe_state as vds
 from db.engine import get_session
 from db.models import VaultItem
+from vault_ai_effective import effective_value, locked_fields
 
 DESCRIBABLE_KINDS = ("photo", "gif", "video")
-_UNSUPPORTED_STATUS = {"blocked_drm", "gone"}
+_UNSUPPORTED_STATUS = {"blocked_drm", "gone", "poster_only"}
+
+
+def effective_description(item) -> str:
+    """The description Moxy may use: operator-locked text first (for a video its own
+    field, then the other), else the AI text. Never the raw column alone, so an
+    operator correction always beats a model description."""
+    if item is None:
+        return ""
+    order = ("video_description", "description") if item.kind == "video" else ("description", "video_description")
+    locked = locked_fields(item)
+    for field in [f for f in order if f in locked] + list(order):
+        value = effective_value(item, field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def operator_corrected(item) -> bool:
+    locked = locked_fields(item)
+    return bool(locked & {"description", "video_description"}) and bool(effective_description(item))
 
 
 def item_state(item) -> str:
+    """described needs a description that is the operator's, or the model's for the
+    CURRENT content. Unrelated metadata (expiring URLs, tags, prices) never makes a
+    description stale; only a change of the recorded content stamp does."""
     if item is None:
         return "missing"
     if item.kind not in DESCRIBABLE_KINDS:
         return "unsupported"
+    if operator_corrected(item):
+        return "described"
     st = item.describe_status
-    if st == "described" and (item.description or item.video_description):
-        stale = (item.updated_at and item.describe_generated_at
-                 and item.updated_at > item.describe_generated_at)
-        return "pending" if stale else "described"
+    if st == "described" and effective_description(item):
+        return "pending" if vds.content_changed(item) else "described"
     if st in _UNSUPPORTED_STATUS:
         return "unsupported"
     if st in (None, "capped"):
         return "pending"
     return "failed"        # failed, refused, fetch_failed, empty "described"
+
+
+def limitations(item) -> dict:
+    """What the description is based on, from the describe run's own record."""
+    f = vds.fields_of(item)
+    out = {k: f.get(k) for k in ("_frame_source", "_frames", "_sampling_note") if f.get(k) is not None}
+    return {k.lstrip("_"): v for k, v in out.items()}
 
 
 def _view(media_id, item) -> dict:
@@ -51,9 +85,12 @@ def _view(media_id, item) -> dict:
             "call_id": item.describe_call_id, "frames": item.frames_sampled,
             "generated_at": item.describe_generated_at.isoformat() if item.describe_generated_at else None,
             "content_hash": item.content_hash,
+            "operator_corrected": operator_corrected(item),
+            "failure": vds.failure_of(item),
         }
         if state == "described":
-            out["description"] = item.video_description or item.description
+            out["description"] = effective_description(item)
+            out["limitations"] = limitations(item)
     return out
 
 
@@ -79,6 +116,11 @@ async def ensure_described(account_id: str, media_ids, *, describe=None, retry_f
     if await asyncio.to_thread(routing.owner_state, account_id) != routing.SELECTED:
         raise routing.Refused("moxy_account_required")
     if describe is None:
+        if account_id in scoped_accounts():
+            # The account-scoped worker owns these descriptions (own credential,
+            # bounded batches, one child per account). The global-credential path
+            # here would fail without a key and mark items failed: report only.
+            return await descriptions(account_id, media_ids)
         from vault_ai_api import _describe_one as describe
     before = await descriptions(account_id, media_ids)
     todo = [r for r in before if r["state"] == "pending" or (retry_failed and r["state"] == "failed")]
@@ -88,3 +130,7 @@ async def ensure_described(account_id: str, media_ids, *, describe=None, retry_f
         except Exception:  # noqa: BLE001 - recorded state is re-read below
             pass
     return await descriptions(account_id, media_ids)
+
+
+def scoped_accounts() -> set[str]:
+    return {a.strip() for a in os.environ.get("ONLYFANS_VAULT_DESCRIPTION_SCOPED_KEYS", "").split(",") if a.strip()}

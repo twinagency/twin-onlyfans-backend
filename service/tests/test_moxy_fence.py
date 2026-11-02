@@ -341,12 +341,16 @@ def test_media_description_states_and_moxy_only(env, monkeypatch):
         add(3, "video", describe_status="failed")
         add(4, "video", describe_status="blocked_drm")
         add(5, "audio")
-        add(6, "photo", description="old", describe_status="described",
-            describe_generated_at=now, updated_at=now + timedelta(days=1))
+        # content changed since described -> pending; metadata-only change -> still described
+        add(6, "photo", description="old", describe_status="described", content_hash="new",
+            ai_fields_json='{"_content_stamp": ":old"}', describe_generated_at=now, updated_at=now)
+        add(7, "photo", description="same", describe_status="described", content_hash="h",
+            ai_fields_json='{"_content_stamp": ":h"}', describe_generated_at=now,
+            updated_at=now + timedelta(days=1), thumb_url="https://expiring.example/changed")
     sync.dispose()
-    got = {r["media_id"]: r["state"] for r in asyncio.run(md.descriptions(MOXY_ON, [1, 2, 3, 4, 5, 6, 99]))}
+    got = {r["media_id"]: r["state"] for r in asyncio.run(md.descriptions(MOXY_ON, [1, 2, 3, 4, 5, 6, 7, 99]))}
     assert got == {1: "described", 2: "pending", 3: "failed", 4: "unsupported",
-                   5: "unsupported", 6: "pending", 99: "missing"}
+                   5: "unsupported", 6: "pending", 7: "described", 99: "missing"}
     calls = []
 
     async def fake(account, mid):
@@ -388,3 +392,24 @@ def test_vault_ingest_describes_for_moxy_accounts_only_and_bounded(env, monkeypa
         raise RuntimeError("provider down")
     monkeypatch.setattr(md, "ensure_described", boom)
     asyncio.run(vault_ingest._describe_for_moxy(MOXY_ON, [1]))   # never raises
+
+
+def test_scoped_accounts_are_described_by_their_worker_not_the_global_path(env, monkeypatch):
+    """ensure_described must not call the global-credential describe for an account that
+    has its own scoped worker (that path has no key there and would mark items failed)."""
+    from db.models import VaultItem
+    from moxy_replacement import media_descriptions as md
+    import vault_ai_api
+    monkeypatch.setattr(md, "get_session", ax.get_session)
+    sync = create_engine(env.sync_url)
+    VaultItem.__table__.create(sync)
+    with Session(sync) as s, s.begin():
+        s.add(VaultItem(account_id=MOXY_ON, media_id=1, kind="photo", created_at=datetime(2026, 11, 1)))
+    sync.dispose()
+
+    async def boom(*a, **k):
+        raise AssertionError("global describe path must not run for a scoped account")
+    monkeypatch.setattr(vault_ai_api, "_describe_one", boom)
+    monkeypatch.setenv("ONLYFANS_VAULT_DESCRIPTION_SCOPED_KEYS", MOXY_ON)
+    got = asyncio.run(md.ensure_described(MOXY_ON, [1]))
+    assert got[0]["state"] == "pending"

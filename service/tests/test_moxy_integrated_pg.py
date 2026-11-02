@@ -185,7 +185,10 @@ def test_duplicate_event_keys_and_restart_keep_one_model_call(database,monkeypat
     ('pending',{'describe_status':None},'media_description_pending'),
     ('failed',{'describe_status':'failed'},'media_description_failed'),
     ('unsupported',{'describe_status':'blocked_drm'},'media_description_unsupported'),
-    ('stale',{'updated_at':utcnow()+timedelta(days=1)},'media_description_pending'),
+    ('content-changed',{'content_hash':'fixture-changed','ai_fields_json':'{"_content_stamp": ":fixture-first"}'},'media_description_pending'),
+    # Unrelated metadata never makes the DESCRIPTION pending; the approved evidence
+    # binding (which embeds updated_at) still fails closed until it is re-bound.
+    ('metadata-only',{'updated_at':utcnow()+timedelta(days=1)},'asset_evidence_stale'),
 ])
 def test_asset_description_state_excludes_product_with_visible_reason(database,monkeypatch,state,fields,reason):
     from moxy_replacement.runtime import account_readiness
@@ -197,7 +200,8 @@ def test_asset_description_state_excludes_product_with_visible_reason(database,m
     with Session(engine) as s:
         r=account_readiness(s,ACCOUNT,settings)
     assert r['excluded_products']=={'first':reason+':7101'}
-    assert 'product_excluded:first:%s:7101'%reason in r['blockers'] and not r['ready']
+    assert not r['ready']
+    if reason.startswith('media_description_'):assert 'product_excluded:first:%s:7101'%reason in r['blockers']
     store.close()
 
 

@@ -328,3 +328,37 @@ def test_sent_input_schedule_is_still_closed_and_unfinished_input_keeps_it(f):
     # claimed, still generating, no receipt: not settled, the schedule is reused (target kept)
     retry,_,_=prepare(f,seconds=72,ledger=Ledger(f.path))
     assert retry['schedule']['schedule_key']==d['schedule']['schedule_key']
+
+
+def test_extended_pacing_is_explicit_and_preserves_the_original_anchor(f):
+    from onlyfans_runtime.reply_settings import DELAY_MAX_KEY
+    f.sql("UPDATE account_ai_config SET ai_chatter_config_json=?",(json.dumps({pacing.PACING:True,DELAY_MAX_KEY:180}),))
+    dice=Dice(180)
+    snap=f.ledger.snapshot(**f.call)
+    d=pacing.prepare(f.ledger,f.pilot,snap,now=L.NOW+timedelta(seconds=5),rng=dice)
+    assert dice.calls[0][1]==180
+    assert d['schedule']['delay_seconds']==180
+    first=d['schedule']['first_received_at']
+    again=pacing.prepare(f.ledger,f.pilot,snap,now=L.NOW+timedelta(seconds=30),rng=Dice(25))
+    assert again['schedule']['first_received_at']==first
+    assert again['schedule']['target_at']==d['schedule']['target_at']
+
+
+@pytest.mark.parametrize('value',[True,25,179,181,'180',None])
+def test_delay_configuration_requires_a_supported_literal_integer(value):
+    from onlyfans_runtime.configuration import validate_patch,InvalidConfiguration
+    with pytest.raises(InvalidConfiguration):validate_patch({'nativeReplyDelayMaxSeconds':value})
+
+
+def test_expanding_the_legacy_delay_constraint_preserves_every_schedule_field(f):
+    # A historical 25..90 table retains its schedule verbatim during widening.
+    with store.transaction(f.path) as con:
+        con.execute('DROP INDEX native_reply_pacing_pending')
+        con.execute('DROP TABLE native_reply_pacing')
+        con.execute(pacing_schema.DDL.replace('<=180','<=90'))
+        con.execute(pacing_schema.INDEX)
+    d,_,_=prepare(f,dice=Dice(65))
+    before=f.sql('SELECT * FROM native_reply_pacing')
+    pacing_schema.upgrade(f.path);pacing_schema.upgrade(f.path)
+    assert f.sql('SELECT * FROM native_reply_pacing')==before
+    assert d['schedule']['delay_seconds']==65

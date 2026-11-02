@@ -11,13 +11,16 @@ from test_onlyfans_native_planning_pg import plan_state
 from db.models import AccountAiConfig, Fan, FanProfile, Message
 from db.onlyfans_delivery_models import OfNativePlan, OfTextIntent
 from db.onlyfans_models import OfWork
+from db.onlyfans_case_models import OfOperatorCase
+from db.models import OfConversationState
+from onlyfans_runtime.store import Refused
 from onlyfans_runtime.native_planning import NativeTextPlanner, SyntheticNativeModel
 from onlyfans_runtime import operator_case_port as port
 
 ADS = "#ads go show her some love on her free page https://example.invalid/synthetic-page"
 
 
-def prepare_turn(database, monkeypatch, bodies, *, fan_update=None, media=None, model=None, persona_facts='{"name":"Synthetic Creator"}'):
+def prepare_turn(database, monkeypatch, bodies, *, fan_update=None, media=None, model=None, persona_facts='{"name":"Synthetic Creator"}', held=False):
     url, engine = database
     monkeypatch.setenv("ONLYFANS_PROCESS_ROLE", "worker")
     monkeypatch.setenv("DATABASE_URL", url)
@@ -42,7 +45,12 @@ def prepare_turn(database, monkeypatch, bodies, *, fan_update=None, media=None, 
     assert claim is not None
     model = model or SyntheticNativeModel("Thanks for telling me, how has your day been?")
     planner = NativeTextPlanner(store)
-    plan = planner.prepare(TENANT, claim, model)
+    if held:
+        with pytest.raises(Refused):planner.prepare(TENANT, claim, model)
+        plan=None
+        assert model.calls==[]
+    else:
+        plan = planner.prepare(TENANT, claim, model)
     return store, engine, planner, plan, model
 
 
@@ -94,7 +102,10 @@ def test_spender_is_never_auto_excluded(database, monkeypatch):
 def test_business_enquiry_is_withheld_and_opens_an_operator_case(database, monkeypatch):
     store, engine, planner, plan, model = prepare_turn(database, monkeypatch, ["Hi, I run an agency and would like to discuss managing your page"])
     assert plan_row(engine, plan) == ("refused", "business_no_reply") and model.calls == []
-    assert [c["kind"] for c in port.PENDING] == ["business_enquiry"]
+    with Session(engine) as s:
+        case=s.scalar(select(OfOperatorCase))
+        assert (case.category,case.status,case.scope,case.source_message_id)==("business","open","all",1)
+    assert port.PENDING==[]
     store.close()
 
 
@@ -127,7 +138,7 @@ def test_media_only_inbound_is_visible_to_the_planner_in_every_state(database, m
     store, engine, planner, plan, model = prepare_turn(database, monkeypatch, [""],
         media={1: {"media_count": 1, "image_desc": desc, "raw_json": '{"media":[{"type":"photo"}]}', "created_at": created}})
     prompt = json.dumps(model.calls[0])
-    assert expect in prompt and "[he sent a photo" in prompt
+    assert expect in prompt and "[he sent photo;" in prompt
     assert "FACT DISCIPLINE" in prompt and "ATTACHMENTS:" in prompt
     store.close()
 
@@ -152,22 +163,41 @@ def test_failed_attachment_opens_a_visible_case_and_never_asks_for_a_resend(data
     created = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=900)
     store, engine, planner, plan, model = prepare_turn(database, monkeypatch, [""],
         media={1: {"media_count": 1, "image_desc": None, "raw_json": '{"media":[{"type":"photo"}]}', "created_at": created}})
-    assert "attachment_unreadable" in [c["kind"] for c in port.PENDING]
+    with Session(engine) as s:
+        case=s.scalar(select(OfOperatorCase))
+        assert (case.category,case.status,case.scope,case.source_message_id)==("attachment","open","offer",1)
+    assert port.PENDING==[]
     store.close()
 
 
 @pytest.mark.parametrize("reply", ["no im not a bot babe", "its really me typing all of this myself"])
 def test_false_denial_of_automation_is_held(database, monkeypatch, reply):
-    store, engine, planner, plan, model = prepare_turn(database, monkeypatch, ["are you a bot?"], model=SyntheticNativeModel(reply))
-    assert plan_row(engine, plan)[0] == "refused"
+    store, engine, planner, plan, model = prepare_turn(database, monkeypatch, ["are you a bot?"], model=SyntheticNativeModel(reply), held=True)
+    assert model.calls==[] and counts(engine)[1]==0
     store.close()
 
 
-def test_identity_question_opens_a_case_once_and_keeps_the_existing_model_turn(database, monkeypatch):
-    store, engine, planner, plan, model = prepare_turn(database, monkeypatch, ["are you a bot?"])
-    assert plan_state(engine, plan) == "ready" and "Do not confirm or deny it" in json.dumps(model.calls[0])
-    assert [c["kind"] for c in port.PENDING] == ["identity_question"]
-    assert port.PENDING[0]["dedupe_key"].endswith(":1")
+@pytest.mark.parametrize("reply", ["no im not a bot babe", "its really me typing all of this myself"])
+def test_unsolicited_false_identity_claim_is_refused_after_generation(database, monkeypatch, reply):
+    # An ordinary input remains eligible for a model call, but a spontaneous
+    # false identity claim still cannot become an outbound intent.
+    store, engine, planner, plan, model = prepare_turn(database, monkeypatch,
+        ["How has your day been?"], model=SyntheticNativeModel(reply))
+    assert len(model.calls)==1 and plan_row(engine,plan)==("refused","draft_refused")
+    assert counts(engine)[1]==0
+    store.close()
+
+
+def test_identity_question_opens_one_durable_case_and_holds_generation(database, monkeypatch):
+    store, engine, planner, plan, model = prepare_turn(database, monkeypatch, ["are you a bot?"], held=True)
+    from onlyfans_runtime.operator_cases import scan
+    scan(store,TENANT,ACCOUNT,101)
+    with Session(engine) as s:
+        cases=list(s.scalars(select(OfOperatorCase)))
+        assert len(cases)==1
+        assert (cases[0].category,cases[0].status,cases[0].scope,cases[0].source_message_id)==("identity","open","all",1)
+        assert s.get(OfConversationState,(ACCOUNT,101)).mode=="paused"
+    assert model.calls==[] and counts(engine)[1]==0 and port.PENDING==[]
     store.close()
 
 

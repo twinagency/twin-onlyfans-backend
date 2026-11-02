@@ -162,7 +162,7 @@ async def exercise(args, db):
            dict(mode=args.mode, rate=args.rate, burst=args.burst, max=args.send))
     settings = {'native_reply_pacing_enabled': args.paced,
                 'native_reply_format_enabled': True, 'language': 'en',
-                'split_reply_max_parts': 3}
+                'split_reply_max_parts': 3,'native_reply_delay_max_seconds':args.pacing_max}
     if args.media:
         from onlyfans_runtime.configuration import SALES_FLAGS
         settings.update({k:True for k in SALES_FLAGS})
@@ -356,6 +356,9 @@ async def exercise(args, db):
         m.wrap(stack,OnlyFansTextAdapter,'preflight_history','provider_preflight')
         m.wrap(stack,runner,'read_sources','context_sources')
         m.wrap(stack,pacing,'prepare','reply_schedule')
+        m.wrap(stack,service.Service,'safety_check','safety_scan')
+        import db.schema as schema_module
+        m.wrap(stack,schema_module,'check_schema','schema_validation')
         m.wrap(stack,store.PgConnection,'execute','database_statement')
         m.wrap(stack,NativeEngine,'load_config','engine_config')
         m.wrap(stack,NativeEngine,'_no_obligations','engine_obligations')
@@ -489,6 +492,7 @@ def main():
     p.add_argument('--read-latency',type=float,default=.02);p.add_argument('--poll',type=float,default=2)
     p.add_argument('--duration',type=float,default=190);p.add_argument('--paced',action='store_true')
     p.add_argument('--fleet-db-pool',type=int,default=0)
+    p.add_argument('--pacing-max',type=int,choices=[90,180],default=90)
     p.add_argument('--multi',action='store_true');p.add_argument('--held',action='store_true')
     p.add_argument('--media',action='store_true')
     p.add_argument('--fault',choices=['429','401','timeout_lost','timeout_accepted'])

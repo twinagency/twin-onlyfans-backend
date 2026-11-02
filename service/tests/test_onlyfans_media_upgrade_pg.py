@@ -30,7 +30,8 @@ def test_populated_memory_upgrade_preserves_unknown_delivery_and_model_allowance
             for key,value in {"media_json":"[]","preview_json":"[]","price_cents":0,"catalog_item_id":None,
                     "catalog_snapshot_json":None,"offer_id":None}.items():assert row.pop(key)==value
         for row in after.get("of_runtime",[]): assert row.pop("configuration_revision")==0
-        assert after==before
+        from onlyfans_upgrade_fixture import assert_original_rows_preserved
+        assert_original_rows_preserved(before, after)
         assert c.scalar(text("SELECT count(*) FROM of_commerce_evidence"))==0
 
 

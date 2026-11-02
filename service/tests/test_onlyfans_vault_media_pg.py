@@ -349,7 +349,14 @@ def test_single_video_and_multipart_photo_share_native_protocol(database,monkeyp
     for file,data in zip(files,[clip,large]):chunk(store,account,job,file,data)
     upload.finish_upload(store,TENANT,account,job['jobId'],actor=ACTOR)
     if not shutil.which('ffprobe'):
-        monkeypatch.setattr(upload.subprocess,'run',lambda args,**kw:subprocess.CompletedProcess(args,0,b'{"streams":[{"codec_type":"video"}]}'))
+        real_run = subprocess.run
+        def probe_only(args, **kw):
+            if Path(args[0]).name == 'ffprobe':
+                return subprocess.CompletedProcess(args,0,b'{"streams":[{"codec_type":"video"}]}')
+            # Windows upload locks inspect process identity through PowerShell.
+            # Keep that ownership check real; this fixture replaces only ffprobe.
+            return real_run(args, **kw)
+        monkeypatch.setattr(upload.subprocess,'run',probe_only)
     # Container normalization has its own owner/suite. Pin its output here
     # to check the actual multipart boundaries against these original bytes.
     monkeypatch.setattr(media_prep,'prepare',lambda path,*args,**kw:(Path(path),False))

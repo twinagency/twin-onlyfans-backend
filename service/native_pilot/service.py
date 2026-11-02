@@ -46,6 +46,7 @@ import copy
 import logging
 import os
 import secrets
+import threading
 import signal
 import time
 from datetime import datetime, timedelta, timezone
@@ -349,6 +350,7 @@ class Service:
         self.content = self.context = None
         self.followups = None      # followups.FollowupQueue when --followups, else None (every job suppressed)
         self.prior_catalog = None
+        self._control_store_lock = threading.Lock()
         self.catalog_owner = self
         self.next_conn_check = 0.0
         self._session_lock = None
@@ -560,9 +562,7 @@ class Service:
         from sqlalchemy import text as sql
         if not self.all_fans and not self._owned(self.args.fan):
             return None
-        if getattr(self, "_twin_store", None) is None:
-            self._twin_store = Store(url)
-        store = self._twin_store
+        store = self.control_store(url)
         controlled = [self.args.fan] if not self.all_fans else (fans or [])
         candidates = (store.runtime_stop_candidates(self.db, controlled)
                       if self.all_fans and hasattr(store, "runtime_stop_candidates") else None)
@@ -1679,6 +1679,21 @@ class Service:
         pending = self.ledger.unhandled_source_ids(pilot_id=self.pilot_id, source_ids=questions)
         return {mid: src for mid, src in questions.items() if mid in pending}
 
+    def control_store(self, url):
+        """Reuse one schema-validated pool; every control operation reads fresh rows."""
+        owner = getattr(self, "catalog_owner", self)
+        if not hasattr(owner, "_control_store_lock"):
+            owner._control_store_lock = threading.Lock()
+        with owner._control_store_lock:
+            current = getattr(owner, "_twin_store", None)
+            if current is None:
+                from onlyfans_runtime.store import Store
+                current = owner._twin_store = Store(url)
+                owner._control_store_url = url
+            elif getattr(owner, "_control_store_url", url) != url:
+                raise Refused("control-store-target-changed")
+            return current
+
     async def safety_check(self):
         """Run the shared inbound detectors (``operator_cases.scan``) for this fan; True when a hold is now enforced.
 
@@ -1692,7 +1707,7 @@ class Service:
         def run():
             from onlyfans_runtime import operator_cases
             from onlyfans_runtime.store import Store
-            return operator_cases.scan(Store(url), tenant, self.db, self.args.fan)
+            return operator_cases.scan(self.control_store(url), tenant, self.db, self.args.fan)
         try:
             enforced = await asyncio.to_thread(run)
         except Exception as exc:  # noqa: BLE001 - existing holds stay in force; detection never becomes a send path
@@ -1726,7 +1741,7 @@ class Service:
                 raise RuntimeError("twin-control-unavailable")
 
             def pause():
-                store = Store(url)
+                store = self.control_store(url)
                 with Session(store.engine) as s:
                     row = s.get(OfConversationState, (self.db, fan))
                     if row is None or row.mode != "automated":
@@ -1740,7 +1755,7 @@ class Service:
             await asyncio.to_thread(pause)
             from onlyfans_runtime import operator_cases
             await asyncio.to_thread(lambda: operator_cases.hold(
-                Store(url), tenant, self.db, fan, "identity", reason=attention[:64],
+                self.control_store(url), tenant, self.db, fan, "identity", reason=attention[:64],
                 evidence={"trigger": trigger, "attention": attention}, origin="detector"))
         except Exception as exc:  # fail closed: the runtime stop is still written
             async with get_session() as session:
@@ -1773,7 +1788,7 @@ class Service:
                 raise RuntimeError("twin-control-unavailable")
 
             def pause():
-                store = Store(url)
+                store = self.control_store(url)
                 with Session(store.engine) as s:
                     row = s.get(OfConversationState, (self.db, self.args.fan))
                     if row is None or row.mode != "automated":
@@ -1986,7 +2001,13 @@ class Service:
                         from of_client import close_client_http
                         close_client_http(self.client)
                 finally:
-                    await engine.dispose()
+                    try:
+                        control = getattr(self, "_twin_store", None)
+                        if control is not None and callable(getattr(control, "close", None)):
+                            await asyncio.to_thread(control.close)
+                            self._twin_store = None
+                    finally:
+                        await engine.dispose()
 
 
 async def preflight(args):

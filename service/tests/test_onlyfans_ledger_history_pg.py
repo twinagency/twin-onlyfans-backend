@@ -198,8 +198,8 @@ def test_additive_upgrade_from_91_retains_financial_evidence(database):
         conn.exec_driver_sql("ALTER TABLE of_ledger_scan DROP COLUMN continuation_json CASCADE, DROP COLUMN coverage_json CASCADE")
         from onlyfans_upgrade_fixture import restore_pre95_content_vault_shape
         restore_pre95_content_vault_shape(conn)
-        # Remove policy fields introduced after this historical revision.
-        conn.exec_driver_sql("ALTER TABLE of_delivery_policy DROP COLUMN daily_limit_units CASCADE, DROP COLUMN delivery_mode CASCADE, DROP COLUMN provider_requests_per_second CASCADE, DROP COLUMN provider_burst CASCADE, DROP COLUMN provider_max_concurrent CASCADE, DROP COLUMN conversation_min_gap_seconds CASCADE, DROP COLUMN provider_cooldown_until CASCADE")
+        # The shared historical-shape helper already removes 0102/0103 policy
+        # columns with their real downgrades; do not drop them a second time.
         conn.exec_driver_sql("ALTER TABLE content_offers DROP COLUMN post_buy_started_at")
         conn.exec_driver_sql("UPDATE alembic_version SET version_num='0091_launch_controls'")
         check_schema(conn,expected="0091_launch_controls")

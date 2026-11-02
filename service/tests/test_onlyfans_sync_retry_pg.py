@@ -11,16 +11,18 @@ from onlyfans_runtime.launch_operations_models import OfLaunchWorkerHealth
 from onlyfans_runtime.store import utcnow
 
 
+@pytest.mark.parametrize('archive_enabled',[False,True])
 @pytest.mark.parametrize('outgoing',[False,True])
 @pytest.mark.parametrize('failure',[NativeReadTransientError,NativeRateLimitError])
-def test_paced_read_retry_does_not_claim_a_worker_crash(database,monkeypatch,outgoing,failure):
+def test_paced_read_retry_does_not_claim_a_worker_crash(database,monkeypatch,outgoing,failure,archive_enabled):
     store,account,loaded,worker=native_worker(database,monkeypatch,outgoing=outgoing)
+    worker.history_recovery=archive_enabled
     try:
         def unavailable(*a,**kw):raise failure()
         monkeypatch.setattr(intake,'read_step',unavailable)
         monkeypatch.setattr(worker,'_deliver',lambda *a:pytest.fail('retry must not send'))
         report=worker.step()
-        assert report.held==1 and report.errors==0 and report.claims==0 and report.queued==0
+        assert report.held==1+int(archive_enabled) and report.errors==0 and report.claims==0 and report.queued==0
         with Session(store.engine) as s:
             assert s.get(OfLaunchWorkerHealth,account).last_error is None
     finally:store.close()

@@ -48,6 +48,11 @@ def messages(snapshot):
         'resolve_obligation is a provided obligation ID only when the action actually resolves it, otherwise null. '
         'reason is a short internal rationale. handover and none have empty text. '
         'invite must name a real product; offer/continue/resend/alternative carry the selected product. '
+        'When the fan accepts the retained invitation, the action is offer with that invitation\'s product. '
+        'When the selected product belongs to a sequence listed in the snapshot, set sequence to that sequence\'s name (never null); '
+        'otherwise sequence is null. '
+        'Never promise a refund, replacement, resend or any other outcome for a complaint unless it is listed in approved_remedies; '
+        'otherwise say only that you will look into it. '
         'correct/fulfil may send only a preauthorised remedy/owed product from the snapshot. '
         +_scope_text(snapshot)+
         'Continue natural conversation, proactive item invitations, buying requests and purchase-aware continuation '

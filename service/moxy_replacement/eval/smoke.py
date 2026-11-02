@@ -16,6 +16,8 @@ from ..configuration import ActionBlocked
 MODEL = 'deepseek/deepseek-v4.1-flash'     # wire name recorded in the preserved config
 URL = 'https://openrouter.ai/api/v1/chat/completions'
 CAP_USD, CAP_CALLS, RESERVE_USD = 1.00, 20, 0.05
+MAX_TOKENS = 4096          # production cap; 700 truncated reasoning-heavy outputs to empty content
+TIMEOUT_S = 300
 LABEL = 'FIXTURE: synthetic inventory, no real assets, no transport'
 
 
@@ -34,7 +36,9 @@ class Budget:
     def reserve(self, label):
         d = self._read()
         spent = sum(c['cost_usd'] if c.get('cost_usd') is not None else RESERVE_USD for c in d['calls'])
-        if any(c.get('status') == 'unknown_cost' for c in d['calls']):
+        # Only an operator-approved entry (status unknown_cost_counted_at_reserve, cost set) is
+        # accepted; any other unknown/unsettled call stops the run.
+        if any(c.get('status') in ('unknown_cost', 'reserved') for c in d['calls']):
             raise SystemExit('STOP: a prior call had unknown cost')
         if len(d['calls']) >= d['cap_calls'] or spent + RESERVE_USD > d['cap_usd']:
             raise SystemExit('STOP: budget exhausted')
@@ -55,16 +59,16 @@ class Budget:
 def call(budget, label, messages, key, tiny=False):
     i = budget.reserve(label)
     body = {'model': MODEL, 'messages': messages, 'temperature': .7, 'stream': False,
-            'usage': {'include': True}, 'max_tokens': 16 if tiny else 700}
+            'usage': {'include': True}, 'max_tokens': 16 if tiny else MAX_TOKENS}
     if not tiny:
         body['response_format'] = {'type': 'json_object'}
     req = urllib.request.Request(URL, json.dumps(body).encode(), {
         'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
             resp = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        budget.settle(i, None, None)           # stops
+    except Exception:                          # HTTP error, timeout, network: cost unknown -> stops
+        budget.settle(i, None, None)
         raise
     u = resp.get('usage') or {}
     budget.settle(i, u.get('cost'), {k: u.get(k) for k in ('prompt_tokens', 'completion_tokens')})
@@ -114,7 +118,8 @@ CASES = [
   'Foundation sales instruction + 01_Amelia p2 covered booty $30', {'offer', 'invite'}, 'price 30 or none'),
  ('c02_accepted_invite_amelia', 'amelia',
   [('in', 'been thinking about you all day'), ('out', 'aw. i have a set of nude booty pics, want me to send them over?'), ('in', 'yes please send it')],
-  {'invitation': {'product_id': 'nude_booty', 'fingerprint': 'fixture', 'sequence': 'vault'}}, 'compliant',
+  {'invitation': {'product_id': 'nude_booty', 'fingerprint': 'fixture', 'sequence': 'vault'},
+   'fan_state': {'purchased_products': ['covered_booty']}}, 'compliant',   # step 1 bought so the invited step 2 is the current step
   'Handoff 6.2: acceptance yields the paid card for the invited product, never a charge', {'offer'}, 'product nude_booty, $75'),
  ('c03_ordinary_chat_amelia', 'amelia', [('in', 'no sales tonight, just wanna talk about my day. work was brutal')], {}, 'compliant',
   'Foundation ordinary_chat', {'reply'}, 'no offer'),

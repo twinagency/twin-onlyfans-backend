@@ -83,9 +83,8 @@ async def ensure_described(account_id: str, media_ids, *, describe=None, retry_f
     before = await descriptions(account_id, media_ids)
     todo = [r for r in before if r["state"] == "pending" or (retry_failed and r["state"] == "failed")]
     for row in todo[:max(0, int(max_items))]:
-        if True:
-            try:
-                await describe(account_id, row["media_id"])
-            except Exception:  # noqa: BLE001 - recorded state is re-read below
-                pass
+        try:
+            await describe(account_id, row["media_id"])
+        except Exception:  # noqa: BLE001 - recorded state is re-read below
+            pass
     return await descriptions(account_id, media_ids)

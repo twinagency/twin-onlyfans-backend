@@ -42,6 +42,30 @@ def test_pilot_absent_prompt_has_no_pilot_restrictions_and_follows_configuration
     assert 'No message-count quota' in text               # shared rules unchanged
 
 
+# Eval-found writer ambiguities (2026-11-03 smoke run): acceptance action, sequence naming, complaint promises.
+def test_prompt_pins_acceptance_action_sequence_name_and_complaint_promises():
+    text = system(snap())
+    assert 'accepts the retained invitation, the action is offer with that invitation' in text
+    assert 'belongs to a sequence listed in the snapshot, set sequence to that sequence' in text
+    assert 'unless it is listed in approved_remedies' in text
+    pilot = system(snap(pilot={'fan_ids': [101], 'product_ids': ['first'], 'supervisor': 'op'}))
+    assert 'set sequence to that sequence' in pilot       # rule is scope-independent
+
+
+def test_smoke_budget_accepts_counted_entry_but_stops_on_new_unknown(tmp_path):
+    from moxy_replacement.eval.smoke import Budget
+    import json as j
+    path = tmp_path / 'j.json'
+    path.write_text(j.dumps({'cap_usd': 1.0, 'cap_calls': 20, 'calls': [
+        {'label': 'c10', 'status': 'unknown_cost_counted_at_reserve', 'cost_usd': 0.05, 'note': 'approved'}]}))
+    b = Budget(path)
+    i = b.reserve('next')                                  # approved entry does not stop the run
+    with pytest.raises(SystemExit):
+        b.settle(i, None, None)                            # new unknown cost stops
+    with pytest.raises(SystemExit):
+        Budget(path).reserve('after')                      # and nothing further runs
+
+
 # Task 2 + 3 helpers
 def settings_for(creator_document=None, creator='amelia'):
     result = {'creator_key': creator, 'products': [product()], 'sequences': {},

@@ -1,0 +1,284 @@
+{
+  "source_commit": "546518171972784264908344ba5f9d0c6ea49993",
+  "scope": "Failure excerpts from the completed frozen Windows PostgreSQL sweep. A later diagnosis or repair cannot change these original outcomes.",
+  "failures": [
+    {
+      "module": "test_native_pilot_load_pg.py",
+      "errors": [
+        "Traceback (most recent call last):",
+        "ModuleNotFoundError: No module named 'resource'"
+      ],
+      "tail": [
+        "    import load_test",
+        "  File \"C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\native_pilot\\tools\\load_test.py\", line 37, in <module>",
+        "    import resource",
+        "ModuleNotFoundError: No module named 'resource'"
+      ]
+    },
+    {
+      "module": "test_onlyfans_content_sync_delivery_pg.py",
+      "errors": [
+        "E   OSError: [WinError 1314] A required privilege is not held by the client: 'C:\\\\Users\\\\conta\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-unknown\\\\pytest-19\\\\test_spool_symlinks_are_refuse0\\\\outside' -> 'C:\\\\Users\\\\conta\\\\AppData\\\\Local\\\\Temp\\\\pytest-of-unknown\\\\pytest-19\\\\test_spool_symlinks_are_refuse0\\\\spool\\\\4685afc6-1d5b-4f55-82a3-5bfc44e34330'",
+        "FAILED service/tests/test_onlyfans_content_sync_delivery_pg.py::test_spool_symlinks_are_refused"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_content_sync_delivery_pg.py::test_spool_symlinks_are_refused",
+        "1 failed, 64 passed, 1245 warnings in 721.99s (0:12:01)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_http_pg.py",
+      "errors": [
+        "E   AssertionError: {\"schemaVersion\":\"of-configuration.v3\",\"ok\":false,\"outcome\":\"refused\",\"error\":\"Creator configuration could not be read.\"}",
+        "E   assert 503 == 200",
+        "E    +  where 503 = <Response [503 Service Unavailable]>.status_code",
+        "FAILED service/tests/test_onlyfans_http_pg.py::test_real_authenticated_read_path"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_http_pg.py::test_real_authenticated_read_path",
+        "1 failed, 110 warnings in 129.97s (0:02:09)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_ledger_history_pg.py",
+      "errors": [
+        "E   psycopg2.errors.UndefinedColumn: column \"daily_limit_units\" of relation \"of_delivery_policy\" does not exist",
+        "E   sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedColumn) column \"daily_limit_units\" of relation \"of_delivery_policy\" does not exist",
+        "E   ",
+        "E   (Background on this error at: https://sqlalche.me/e/20/f405)",
+        "FAILED service/tests/test_onlyfans_ledger_history_pg.py::test_additive_upgrade_from_91_retains_financial_evidence"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_ledger_history_pg.py::test_additive_upgrade_from_91_retains_financial_evidence",
+        "1 failed, 15 passed, 56 warnings in 164.15s (0:02:44)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_loopback_transport_pg.py",
+      "errors": [
+        "E   assert 0 == 1",
+        "E    +  where 0 = len([])",
+        "E    +    where [] = <test_onlyfans_loopback_transport_pg.Peer object at 0x0000024B5EC28890>.records",
+        "E    +    where [] = <test_onlyfans_loopback_transport_pg.Peer object at 0x0000024B5F166F00>.records",
+        "FAILED service/tests/test_onlyfans_loopback_transport_pg.py::test_absolute_transport_deadline_bounds_headers_and_continuous_body_drip[slow_headers]",
+        "FAILED service/tests/test_onlyfans_loopback_transport_pg.py::test_absolute_transport_deadline_bounds_headers_and_continuous_body_drip[drip_body]"
+      ],
+      "tail": [
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_loopback_transport_pg.py::test_absolute_transport_deadline_bounds_headers_and_continuous_body_drip[slow_headers]",
+        "FAILED service/tests/test_onlyfans_loopback_transport_pg.py::test_absolute_transport_deadline_bounds_headers_and_continuous_body_drip[drip_body]",
+        "2 failed, 45 passed, 195 warnings in 419.00s (0:06:59)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_media_upgrade_pg.py",
+      "errors": [
+        "E   AssertionError: assert {'fans': [{'a...), ...}], ...} == {'fans': [{'a...), ...}], ...}",
+        "E     ",
+        "E     Omitting 6 identical items, use -vv to show",
+        "E     Differing items:",
+        "E     {'of_text_intent': [{'account_id': 'acc-a', 'actor': 'native-text-worker', 'attempt_id': 'da7d7261-4ff2-4d7e-8cad-315b2cc219c8', 'binding_id': 'binding-acc-a', ...}]} != {'of_text_intent': [{'account_id': 'acc-a', 'actor': 'native-text-worker', 'attempt_id': 'da7d7261-4ff2-4d7e-8cad-315b2cc219c8', 'binding_id': 'binding-acc-a', ...}]}",
+        "E     {'fans': [{'account_id': 'acc-a', 'applied_notes': None, 'applied_notes_at': None, 'automation_paused_until': None, ...}]} != {'fans': [{'account_id': 'acc-a', 'applied_notes': None...",
+        "E     ...Full output truncated (4 lines hidden), use '-vv' to show",
+        "FAILED service/tests/test_onlyfans_media_upgrade_pg.py::test_populated_memory_upgrade_preserves_unknown_delivery_and_model_allowances"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_media_upgrade_pg.py::test_populated_memory_upgrade_preserves_unknown_delivery_and_model_allowances",
+        "1 failed, 6 passed, 8 warnings in 104.57s (0:01:44)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_native_connector_pg.py",
+      "errors": [
+        "E   AssertionError: assert 1 == 0",
+        "E    +  where 1 = len([[{'content': 'Synthetic Creator enjoys hiking and coffee.\\n\\nYou are texting fans as the creator on OnlyFans. Use the...nFAN: How has your day been?\\n\\nReply to his last message now, in the STYLE FOR THIS MESSAGE above.', 'role': 'user'}]])",
+        "E    +    where [[{'content': 'Synthetic Creator enjoys hiking and coffee.\\n\\nYou are texting fans as the creator on OnlyFans. Use the...nFAN: How has your day been?\\n\\nReply to his last message now, in the STYLE FOR THIS MESSAGE above.', 'role': 'user'}]] = <onlyfans_runtime.native_planning.SyntheticNativeModel object at 0x00000256A39DC290>.calls",
+        "E    +  and   0 = len([])",
+        "E    +    where [] = <onlyfans_native_protocol_fixture.NativePeer object at 0x00000256A35188F0>.posts",
+        "FAILED service/tests/test_onlyfans_native_connector_pg.py::test_native_response_uncertainty_keeps_unit_cost_and_never_retries[slow]"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_native_connector_pg.py::test_native_response_uncertainty_keeps_unit_cost_and_never_retries[slow]",
+        "1 failed, 30 passed, 231 warnings in 395.91s (0:06:35)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_native_memory_pg.py",
+      "errors": [
+        "E   onlyfans_runtime.store.Refused: stale native planning claim",
+        "FAILED service/tests/test_onlyfans_native_memory_pg.py::test_manual_fan_language_uses_native_language_and_identity_owner"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_native_memory_pg.py::test_manual_fan_language_uses_native_language_and_identity_owner",
+        "1 failed, 26 passed, 348 warnings in 353.28s (0:05:53)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_native_planning_pg.py",
+      "errors": [
+        "E   onlyfans_runtime.store.Refused: stale native planning claim",
+        "FAILED service/tests/test_onlyfans_native_planning_pg.py::test_native_identity_turn_uses_the_existing_turn_selector_and_never_discloses"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_native_planning_pg.py::test_native_identity_turn_uses_the_existing_turn_selector_and_never_discloses",
+        "1 failed, 21 passed, 158 warnings in 298.73s (0:04:58)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_native_upgrade_pg.py",
+      "errors": [
+        "E   psycopg2.errors.UndefinedColumn: column \"of_profile_checked_at\" of relation \"fans\" does not exist",
+        "E   LINE 1: ...med, persona_job_claimed, profile_last_synced_at, of_profile...",
+        "E                                                                ^",
+        "E   sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedColumn) column \"of_profile_checked_at\" of relation \"fans\" does not exist",
+        "E   ",
+        "E   (Background on this error at: https://sqlalche.me/e/20/f405)",
+        "E   AssertionError: assert {'fan_profile...', ...}], ...} == {'fan_profile...', ...}], ...}",
+        "E     ",
+        "E     Omitting 6 identical items, use -vv to show",
+        "E     Differing items:"
+      ],
+      "tail": [
+        "FAILED service/tests/test_onlyfans_native_upgrade_pg.py::test_populated_one_use_sender_upgrade_retains_unknowns_caps_and_controls[False]",
+        "FAILED service/tests/test_onlyfans_native_upgrade_pg.py::test_populated_one_use_sender_upgrade_retains_unknowns_caps_and_controls[True]",
+        "FAILED service/tests/test_onlyfans_native_upgrade_pg.py::test_populated_budget_upgrade_retains_cost_evidence_and_cannot_regenerate_old_input",
+        "3 failed, 14 warnings in 85.50s (0:01:25)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_provider_pg.py",
+      "errors": [
+        "E   assert 0 == 1",
+        "E    +  where 0 = CycleReport(ingress=0, claims=1, queued=1, repaired=0, expired=0, accepted=0, not_accepted=1, unknown=0, held=0, errors=0).unknown",
+        "E    +    where CycleReport(ingress=0, claims=1, queued=1, repaired=0, expired=0, accepted=0, not_accepted=1, unknown=0, held=0, errors=0) = step()",
+        "E    +      where step = <onlyfans_runtime.native_worker.NativeWorker object at 0x000001FC923540B0>.step",
+        "FAILED service/tests/test_onlyfans_provider_pg.py::test_native_send_uncertainty_holds_without_second_model_or_post[wrong_owner]"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_provider_pg.py::test_native_send_uncertainty_holds_without_second_model_or_post[wrong_owner]",
+        "1 failed, 16 passed, 125 warnings in 184.11s (0:03:04)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_recovery_pg.py",
+      "errors": [
+        "E   AssertionError: assert (33206 & 511) == 384",
+        "E    +  where 33206 = os.stat_result(st_mode=33206, st_ino=101049516639162333, st_dev=16871322586627854933, st_nlink=1, st_uid=0, st_gid=0, st_size=507033, st_atime=1793576072, st_mtime=1793576072, st_ctime=1793576071).st_mode",
+        "E    +    where os.stat_result(st_mode=33206, st_ino=101049516639162333, st_dev=16871322586627854933, st_nlink=1, st_uid=0, st_gid=0, st_size=507033, st_atime=1793576072, st_mtime=1793576072, st_ctime=1793576071) = stat()",
+        "E    +      where stat = WindowsPath('C:/Users/conta/AppData/Local/Temp/pytest-of-unknown/pytest-26/test_encrypted_roundtrip_retai0/snapshot.twinof').stat",
+        "FAILED service/tests/test_onlyfans_recovery_pg.py::test_encrypted_roundtrip_retains_all_public_evidence_and_blocks_startup"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_recovery_pg.py::test_encrypted_roundtrip_retains_all_public_evidence_and_blocks_startup",
+        "1 failed, 14 passed, 60 warnings in 191.38s (0:03:11)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_release_rehearsal_pg.py",
+      "errors": [
+        "E   AssertionError: INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.",
+        "E     INFO  [alembic.runtime.migration] Will assume transactional DDL.",
+        "E     INFO  [alembic.runtime.migration] Running stamp_revision  -> 0070_onlyfans_read_bindings",
+        "E     INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.",
+        "E     INFO  [alembic.runtime.migration] Running upgrade 0070_onlyfans_read_bindings -> 0071_onlyfans_foundation, Durable scoped OnlyFans admission; no provider or automation enablement.",
+        "E     INFO  [alembic.runtime.migration] Running upgrade 0071_onlyfans_foundation -> 0072_onlyfans_text_delivery, Synthetic-only durable text intents and immutable policy-change evidence.",
+        "E     INFO  [alembic.runtime.migration] Running upgrade 0072_onlyfans_text_delivery -> 0073_one_use_egress, One-use wire marker without activation, replay or evidence reset.",
+        "E     INFO  [alembic.runtime.migration] Running upgrade 0073_one_use_egress -> 0074_native_text_plans, Restart-safe native text preparation; no model/provider activation.",
+        "E     INFO  [alembic.runtime.migration] Running upgrade 0074_native_text_plans -> 0075_native_model_budget, Link native plans to the existing cost owner without reopening any allowance.",
+        "E     INFO  [alembic.runtime.migration] Running upgrade 0075_native_model_budget -> 0076_native_memory_evidence, Record source-backed native corrections without a second memory store."
+      ],
+      "tail": [
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_release_rehearsal_pg.py::test_one_command_demo_smoke_runs_current_screens_and_removes_its_database",
+        "FAILED service/tests/test_onlyfans_release_rehearsal_pg.py::test_one_command_demo_removes_its_database_after_frontend_start_failure",
+        "2 failed, 2 passed, 110 warnings in 178.14s (0:02:58)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_sync_retry_pg.py",
+      "errors": [
+        "E   assert (2 == 1)",
+        "E    +  where 2 = CycleReport(ingress=0, claims=0, queued=0, repaired=0, expired=0, accepted=0, not_accepted=0, unknown=0, held=2, errors=0).held",
+        "FAILED service/tests/test_onlyfans_sync_retry_pg.py::test_paced_read_retry_does_not_claim_a_worker_crash[NativeReadTransientError-False]",
+        "FAILED service/tests/test_onlyfans_sync_retry_pg.py::test_paced_read_retry_does_not_claim_a_worker_crash[NativeReadTransientError-True]",
+        "FAILED service/tests/test_onlyfans_sync_retry_pg.py::test_paced_read_retry_does_not_claim_a_worker_crash[NativeRateLimitError-False]",
+        "FAILED service/tests/test_onlyfans_sync_retry_pg.py::test_paced_read_retry_does_not_claim_a_worker_crash[NativeRateLimitError-True]"
+      ],
+      "tail": [
+        "FAILED service/tests/test_onlyfans_sync_retry_pg.py::test_paced_read_retry_does_not_claim_a_worker_crash[NativeReadTransientError-True]",
+        "FAILED service/tests/test_onlyfans_sync_retry_pg.py::test_paced_read_retry_does_not_claim_a_worker_crash[NativeRateLimitError-False]",
+        "FAILED service/tests/test_onlyfans_sync_retry_pg.py::test_paced_read_retry_does_not_claim_a_worker_crash[NativeRateLimitError-True]",
+        "4 failed, 2 passed, 19 warnings in 76.59s (0:01:16)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_vault_media_pg.py",
+      "errors": [
+        "E   AssertionError: {'cleanupRequired': False, 'files': [{'error': None, 'fileId': '52b658da-da94-405d-a237-649f7b758834', 'mediaId': None...', 'mediaId': None, 'name': 'large.png', ...}], 'jobId': '455fd620-8f6c-4386-9930-39da97e1180a', 'kind': 'upload', ...}",
+        "E   assert 'failed' == 'complete'",
+        "E     ",
+        "E     - complete",
+        "E     + failed",
+        "FAILED service/tests/test_onlyfans_vault_media_pg.py::test_single_video_and_multipart_photo_share_native_protocol"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_vault_media_pg.py::test_single_video_and_multipart_photo_share_native_protocol",
+        "1 failed, 17 passed, 42 warnings in 146.06s (0:02:26)"
+      ]
+    },
+    {
+      "module": "test_onlyfans_worker_entry_pg.py",
+      "errors": [
+        "E   OSError: [WinError 10038] An operation was attempted on something that is not a socket",
+        "FAILED service/tests/test_onlyfans_worker_entry_pg.py::test_actual_worker_process_stops_on_sigterm_while_idle_and_closes_cleanly"
+      ],
+      "tail": [
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "=========================== short test summary info ===========================",
+        "FAILED service/tests/test_onlyfans_worker_entry_pg.py::test_actual_worker_process_stops_on_sigterm_while_idle_and_closes_cleanly",
+        "1 failed, 3 passed, 9 warnings in 56.93s"
+      ]
+    },
+    {
+      "module": "test_r3r7_native_planning_pg.py",
+      "errors": [
+        "E   AssertionError: assert [] == ['business_enquiry']",
+        "E     ",
+        "E     Right contains one more item: 'business_enquiry'",
+        "E     Use -v to get more diff",
+        "E   assert ('has not been looked at yet' in '[{\"role\": \"system\", \"content\": \"Synthetic Creator enjoys hiking and coffee.\\\\n\\\\nYou are texting fans as the creator ...ribe or rate it, do not ask him to resend]\\\\n\\\\nReply to his last message now, in the STYLE FOR THIS MESSAGE above.\"}]' and '[he sent a photo' in '[{\"role\": \"system\", \"content\": \"Synthetic Creator enjoys hiking and ",
+        "E   assert ('you could not view it' in '[{\"role\": \"system\", \"content\": \"Synthetic Creator enjoys hiking and coffee.\\\\n\\\\nYou are texting fans as the creator ...e or rate it, do not ask him to resend it]\\\\n\\\\nReply to his last message now, in the STYLE FOR THIS MESSAGE above.\"}]' and '[he sent a photo' in '[{\"role\": \"system\", \"content\": \"Synthetic Creator enjoys hiking and coffe",
+        "E   assert ('a mountain at sunrise' in '[{\"role\": \"system\", \"content\": \"Synthetic Creator enjoys hiking and coffee.\\\\n\\\\nYou are texting fans as the creator ...t say who it shows: a mountain at sunrise]\\\\n\\\\nReply to his last message now, in the STYLE FOR THIS MESSAGE above.\"}]' and '[he sent a photo' in '[{\"role\": \"system\", \"content\": \"Synthetic Creator enjoys hiking and coffe",
+        "E   AssertionError: assert 'attachment_unreadable' in []",
+        "E   onlyfans_runtime.store.Refused: stale native planning claim",
+        "FAILED service/tests/test_r3r7_native_planning_pg.py::test_business_enquiry_is_withheld_and_opens_an_operator_case"
+      ],
+      "tail": [
+        "FAILED service/tests/test_r3r7_native_planning_pg.py::test_false_denial_of_automation_is_held[no im not a bot babe]",
+        "FAILED service/tests/test_r3r7_native_planning_pg.py::test_false_denial_of_automation_is_held[its really me typing all of this myself]",
+        "FAILED service/tests/test_r3r7_native_planning_pg.py::test_identity_question_opens_a_case_once_and_keeps_the_existing_model_turn",
+        "8 failed, 9 passed, 121 warnings in 181.30s (0:03:01)"
+      ]
+    }
+  ]
+}

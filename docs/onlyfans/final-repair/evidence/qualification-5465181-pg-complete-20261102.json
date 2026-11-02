@@ -1,0 +1,2081 @@
+{
+  "environment": {
+    "commit": "546518171972784264908344ba5f9d0c6ea49993",
+    "remote_head_at_download": "546518171972784264908344ba5f9d0c6ea49993",
+    "file_count": 1925,
+    "archive_sha256": "a04b854adaaf57fdfc1031dbe518db5cd95ea90f391693728ee80e216c5431ba",
+    "all_blob_hashes_verified": true,
+    "directory": "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181",
+    "git_tree": "4a8326b3aa8b9f4c67609b5f2c3704128c468f28",
+    "started_utc": "2026-11-01T21:49:02.336959+00:00",
+    "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+    "pg": "PostgreSQL 16.15 task-owned loopback cluster",
+    "module_parallelism": 3,
+    "timing_modules": "sequential after ordinary modules",
+    "applicable_platform": "Windows; Unix-only checks are failures with platform cause, not passes",
+    "whole_release_qualified": false,
+    "source_unchanged": true,
+    "finished_utc": "2026-11-01T23:57:02.394622+00:00",
+    "counts": {
+      "pass": 122,
+      "fail": 17
+    }
+  },
+  "results": [
+    {
+      "module": "test_automatic_vault_descriptions_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_automatic_vault_descriptions_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 64.66,
+      "source_sha256": "988e4b96c7aeb2197d5c3e43c77aa7253bdeac8dfbc27da0b831e60ceb6b3e3c"
+    },
+    {
+      "module": "test_concurrent_delivery_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_concurrent_delivery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 11.48,
+      "source_sha256": "bc110e7c7f6c975e01a8565ebbdb4b034e1f81e0260d2fb18eb02122093ce86b"
+    },
+    {
+      "module": "test_contextual_release_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_contextual_release_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 34.09,
+      "source_sha256": "08f6d5939fbbe8606dff284b04e8132ca63cf56457018f7eaede61e8f4576a01"
+    },
+    {
+      "module": "test_conversation_holds_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_conversation_holds_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 430.34,
+      "source_sha256": "a3927d9959a7078eca6bbfce083723738c2736d9756bc8280a9e20932aac3261"
+    },
+    {
+      "module": "test_crm_control_contract_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_crm_control_contract_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 42.27,
+      "source_sha256": "b06e443c2cd10e4815065d4671a9c055800a5e06a89c7f804adc5bdc6379804e"
+    },
+    {
+      "module": "test_crm_history_repair_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_crm_history_repair_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 27.8,
+      "source_sha256": "c2d670fd03235fb74efb7183abd8aece966cf2aaedacab6e070d63606369ccfa"
+    },
+    {
+      "module": "test_crm_read_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_crm_read_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 33.81,
+      "source_sha256": "07940a1b3b24e14d9edeab57f5fb4e1b2122d6ceeb6ce48341c49b25a8b58338"
+    },
+    {
+      "module": "test_crm_resolution_jobs_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_crm_resolution_jobs_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 45,
+      "source_sha256": "dfab442f0360230c5597978a00904527fc0580527826bcdd19a43f6314990657"
+    },
+    {
+      "module": "test_default_attention_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_default_attention_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 63.06,
+      "source_sha256": "8a339429e3037128e60c8d2f7213bf0d6dc45e623e060e92b123fa63533d0659"
+    },
+    {
+      "module": "test_fastt_activation_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_fastt_activation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 43.28,
+      "source_sha256": "def7a67b5e33b116e783bc5babef7892426c24282e6465fdab40408b396dc7d2"
+    },
+    {
+      "module": "test_fastt_controls_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_fastt_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 136.16,
+      "source_sha256": "2719d42bd36ff665078806e89da955bf0429e116de11ca62d3b09450e149c532"
+    },
+    {
+      "module": "test_fastt_engine_v2_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_fastt_engine_v2_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 11.83,
+      "source_sha256": "6e5a138e0a046214b096ef419e7ab2c23960051030a504f40bfac77f03bb523d"
+    },
+    {
+      "module": "test_fastt_new_conversations_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_fastt_new_conversations_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 186.02,
+      "source_sha256": "41fd8d5cb6aea38bdfa471127e6baaf4d86c2e8016f7c1fa6032192d07fb89fd"
+    },
+    {
+      "module": "test_fastt_read_priority_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_fastt_read_priority_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 32.59,
+      "source_sha256": "1fb5662f955db57d5f1700d91e05206552d284579e155d56fb4262e835a91f12"
+    },
+    {
+      "module": "test_fastt_scope_manual_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_fastt_scope_manual_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 29.59,
+      "source_sha256": "0826c8e3d8ae9f154bfdff027967482b169d4054baa9cc8d479690200c09e97c"
+    },
+    {
+      "module": "test_history_html_archive_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_history_html_archive_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 32.86,
+      "source_sha256": "4da38a4b87c196fa449241e22631eeff38e3e3b2f53e3d8bfe26cad5c95f005e"
+    },
+    {
+      "module": "test_iso45_isolation_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_iso45_isolation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 84.92,
+      "source_sha256": "4fb00d1b0d9f46d0fdbdf79ef24b9b0e55e2889484f5b68e3ae9fe71e1ce99a1"
+    },
+    {
+      "module": "test_iso45_roles_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_iso45_roles_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 98.56,
+      "source_sha256": "d57165427966482815eb9cf7e1463b9769903a3b897f62dc2d94b275e28c606e"
+    },
+    {
+      "module": "test_ledger_read_fairness_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_ledger_read_fairness_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 103.22,
+      "source_sha256": "707ec6781e5ddca65d47c4c03a6bc60166436a7293289b4b103345b620b7ebd0"
+    },
+    {
+      "module": "test_manual_attachment_history_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_manual_attachment_history_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 387.58,
+      "source_sha256": "4fe48249ce19f08736a545fa2bbaaf1c9613eef659968e87c5a878d75b916034"
+    },
+    {
+      "module": "test_manual_vault_composer_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_manual_vault_composer_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 109.16,
+      "source_sha256": "4d2f011b489d8729b481ebbaf06923144c4564391ab15bf58499492d99413b02"
+    },
+    {
+      "module": "test_native_pilot_attribution_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_native_pilot_attribution_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 39.31,
+      "source_sha256": "1391daed7a0573ba521b42ab2f7e2a9f78542cb283b8365bf1f100e2ea7b26e4"
+    },
+    {
+      "module": "test_native_pilot_daily_allowance_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_native_pilot_daily_allowance_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 9.17,
+      "source_sha256": "92ddaa0a3aba95f73f2263cc9944e89b0eb8ac647067df2c380a0eed7943c71e"
+    },
+    {
+      "module": "test_native_pilot_load_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_native_pilot_load_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 0.39,
+      "source_sha256": "69f2232f38665f94a81880ddae55ff2fb1ff9367a280900de3b16d1140c7ba26"
+    },
+    {
+      "module": "test_native_pilot_service_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_native_pilot_service_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 360.52,
+      "source_sha256": "65646a7aaf5ac457bf83d1631242f452e97bc902bcf4a226af3ec4b191a78cb7"
+    },
+    {
+      "module": "test_native_pilot_storage_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_native_pilot_storage_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 53.48,
+      "source_sha256": "894d95dc8eb788f4b87c7a23d188c67606fe32885ab4ce62a2acf093593c1317"
+    },
+    {
+      "module": "test_native_reply_pacing_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_native_reply_pacing_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 120.98,
+      "source_sha256": "35bc118774c3b94d19bf44b789b89972bd64d1d747ae41cc0bc92bb30c8db8b3"
+    },
+    {
+      "module": "test_onlyfans_activation_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_activation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 259.27,
+      "source_sha256": "35f300bef461c34cea8c93d203d158aa0d1a75b0aa148034ffd37bbccb1c71f7"
+    },
+    {
+      "module": "test_onlyfans_agency_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_agency_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 73.41,
+      "source_sha256": "7d8791b4eada27ad1accc8d422dd23e9f798c06e1b4d2125bfec0d21a8370ab4"
+    },
+    {
+      "module": "test_onlyfans_automatic_imports_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_automatic_imports_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 117.39,
+      "source_sha256": "22c468ef7eb2c3980c31013729dde1f23a19c9f7e717e807b83c224849c4844f"
+    },
+    {
+      "module": "test_onlyfans_bulk_controls_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_bulk_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 52.7,
+      "source_sha256": "020203f38bcd2a48591f73900901fef1a0b8b1af3ecf5adc3754d77d1017c5e1"
+    },
+    {
+      "module": "test_onlyfans_campaign_media_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_campaign_media_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 338.69,
+      "source_sha256": "e5ed243c55f6e343feb4bd1492f8a2600fd49cde1e71060104d8f7464c7e78c7"
+    },
+    {
+      "module": "test_onlyfans_campaign_reporting_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_campaign_reporting_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 72.98,
+      "source_sha256": "11d4ed43b7ba6165c138853f4e8c0565906ab754311fa5f013f61ef760c94d2f"
+    },
+    {
+      "module": "test_onlyfans_campaigns_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_campaigns_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 316.42,
+      "source_sha256": "7919c12817aa4c813680e38b449096781f7c90b4b6f8a9de90501081585f04ae"
+    },
+    {
+      "module": "test_onlyfans_capacity_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_capacity_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 192.75,
+      "source_sha256": "42e3a124151cafa202f9c2ec8a9657a90b55602111060b12449ed6837016d161"
+    },
+    {
+      "module": "test_onlyfans_commerce_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_commerce_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 321.59,
+      "source_sha256": "642d1ff738aaa3ffec4259b366799ad8ead6b6a21fb1dff8ec8f2e3fc0af013e"
+    },
+    {
+      "module": "test_onlyfans_configuration_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_configuration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 590.33,
+      "source_sha256": "63ebfc3bded478c38ae9ed43bb8cfcbb244a48b19959be322f9280f25ede5ed1"
+    },
+    {
+      "module": "test_onlyfans_connection_renewal_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_connection_renewal_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 133.47,
+      "source_sha256": "a500eb3c2fba5aded5f1d447ac20b0931b4287d69f8d56847ea2ba648400e65c"
+    },
+    {
+      "module": "test_onlyfans_connection_states_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_connection_states_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 78.52,
+      "source_sha256": "1ecb4fa50b5e0c6c1b21b3eeb30ed6ecb61994a5fcb65286fff6c35ac97fca7a"
+    },
+    {
+      "module": "test_onlyfans_connections_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_connections_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 350.62,
+      "source_sha256": "ec188c9a51e9ec01b4f8c44aea99836e2e2def192a7df3ddf792aed52f8c24e9"
+    },
+    {
+      "module": "test_onlyfans_content_carrier_authority_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_content_carrier_authority_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 70.94,
+      "source_sha256": "4810d16b4009516cbd6b2bc52f90ee8843d5a826396a01a9dd1d904c6eddfe78"
+    },
+    {
+      "module": "test_onlyfans_content_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_content_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 264.78,
+      "source_sha256": "c860f82b2f905be56b27f6ec43e16878b5412ef270fbe0f5dcfb1eeb80cf5f6b"
+    },
+    {
+      "module": "test_onlyfans_content_progress_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_content_progress_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 119.77,
+      "source_sha256": "8320af63edbfc96af8c85a8e8eed8aab3ce1342bbc18caa4a1d16449c37f9ef8"
+    },
+    {
+      "module": "test_onlyfans_content_sync_delivery_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_content_sync_delivery_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 728.3,
+      "source_sha256": "e0f9af153c66eacae828ab9bb5ff4d72dd75786ace99b39f91833962e0071cd1"
+    },
+    {
+      "module": "test_onlyfans_content_sync_findings_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_content_sync_findings_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 186.67,
+      "source_sha256": "de9d0972bb09e56ba505b75273275bfe418f31cfd9ba9ff882526c016cc0767d"
+    },
+    {
+      "module": "test_onlyfans_content_sync_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_content_sync_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 420.55,
+      "source_sha256": "4edf9a2a58149aae09b9884ad9bcc051fcebdab6153611f41b4959eea47ba75d"
+    },
+    {
+      "module": "test_onlyfans_controls_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 197.27,
+      "source_sha256": "30f9d4704269239e51cd4a25ba1e6c2eeba26ccd25f09951950931c0db5dc6ca"
+    },
+    {
+      "module": "test_onlyfans_creator_enrollments_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_creator_enrollments_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 258.14,
+      "source_sha256": "50dd852a89e3617f48b5fc6ddb15c05b4c7dcf8611635fa68234ba9967fabb7b"
+    },
+    {
+      "module": "test_onlyfans_creator_facts_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_creator_facts_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 127.81,
+      "source_sha256": "2c05fdb3dfb4e9355d6968a27eddc56dbeb7a75649492e7f0dfb589898c90d50"
+    },
+    {
+      "module": "test_onlyfans_dashboard_sessions_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_dashboard_sessions_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 30.95,
+      "source_sha256": "984a7bbdd6b66fae327808f858944316ff741585c489b22c1afdd09c9911ba81"
+    },
+    {
+      "module": "test_onlyfans_earnings_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_earnings_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 139.58,
+      "source_sha256": "66404dc1efd89efcbc02b6bcf4b9384caa77e3ddb72f82b14165a945d926a4b9"
+    },
+    {
+      "module": "test_onlyfans_egress_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_egress_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 287.17,
+      "source_sha256": "7c45a163d73082f153f50d1bea2a5a2287b9a6824826a53d108b109b5e039dd2"
+    },
+    {
+      "module": "test_onlyfans_fastt_campaign_controls_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_fastt_campaign_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 83.47,
+      "source_sha256": "f6891b78747aa064b91769749b191ef34931fc3d30c4acd4ea5471656ebbad10"
+    },
+    {
+      "module": "test_onlyfans_fastt_campaign_dispatch_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_fastt_campaign_dispatch_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 415.8,
+      "source_sha256": "1069db8dfd288f6d06c31a5e48870aafa87385aa69d01c8b510293568ae0831b"
+    },
+    {
+      "module": "test_onlyfans_fastt_models_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_fastt_models_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 97.08,
+      "source_sha256": "22dc7898ae592ad4a67eb7ad898bf654f5987d7ee83c6420ca8b24173c170dfc"
+    },
+    {
+      "module": "test_onlyfans_fastt_operator_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_fastt_operator_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 62.64,
+      "source_sha256": "b6caaa548b1907e3ff590f8e9221e9241a7e8c884f5b405b8e6f4819ddd5d482"
+    },
+    {
+      "module": "test_onlyfans_fastt_recovery_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_fastt_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 107,
+      "source_sha256": "948ea34619b4a512eb28ca5c63aa082651cff65ea2abf77f6b63e3edee4a86b0"
+    },
+    {
+      "module": "test_onlyfans_fastt_sales_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_fastt_sales_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 208.84,
+      "source_sha256": "dc496d58ffe471df79c861ced574f1acd0d245827bdc083b9220a8140980332b"
+    },
+    {
+      "module": "test_onlyfans_fastt_takeover_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_fastt_takeover_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 102.31,
+      "source_sha256": "bf3bcb4a9512e4734c0de9e4a4ba9d304125fd7295940aea30fd89a3b4199dfb"
+    },
+    {
+      "module": "test_onlyfans_fixed_price_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_fixed_price_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 94.05,
+      "source_sha256": "a6a454e559b89e8c297631bcd3bc026708ab3419dedc0cc35520537f2a6ff5eb"
+    },
+    {
+      "module": "test_onlyfans_fold_pending_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_fold_pending_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 52.64,
+      "source_sha256": "4785aee2a2cb97e1a9ab1d3e4c5c55ddd109b7ad72e25756a6995c3e771934c3"
+    },
+    {
+      "module": "test_onlyfans_foundation_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_foundation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 369.69,
+      "source_sha256": "ebd7e1ab911b4a73735cb58caa098811bb6fcaba9847ac2a3cfc1f8e54669b1f"
+    },
+    {
+      "module": "test_onlyfans_http_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_http_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 133.89,
+      "source_sha256": "8624ddb1fa22f083cc473f1a07fb056d6a4e49e009b8771c9ebc018848e40fb0"
+    },
+    {
+      "module": "test_onlyfans_inbox_batch_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_inbox_batch_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 25.56,
+      "source_sha256": "136819f15766751b546456c5a1d61d30888ae285498a569fd3d6bb1375cdcd4a"
+    },
+    {
+      "module": "test_onlyfans_independent_inbox_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_independent_inbox_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 67.39,
+      "source_sha256": "abd7ee065ed1dcf7d964527082f09a5d907eed7507db5931abf1e724acdf4386"
+    },
+    {
+      "module": "test_onlyfans_launch_budget_configuration_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_budget_configuration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 114.48,
+      "source_sha256": "0667b61fb71379afabb22331d0eaa73e52ccdc6f778d4ea2d0801e3b517b8e7d"
+    },
+    {
+      "module": "test_onlyfans_launch_controls_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 335.59,
+      "source_sha256": "1e8d172162a88bfecc52bf4fa7809913a9825d0c7a945b081dfc2d55b55d63f0"
+    },
+    {
+      "module": "test_onlyfans_launch_credential_status_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_credential_status_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 275.78,
+      "source_sha256": "03f48c2b049c3fcc7fb1290553d63ecd2d44f3fb5274c1f54492044765361723"
+    },
+    {
+      "module": "test_onlyfans_launch_engagement_events_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_engagement_events_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 264.62,
+      "source_sha256": "0dcd9d9e06f5202e75fa2bc5ff676744b53f93ddac791c808e322c78788fe4cc"
+    },
+    {
+      "module": "test_onlyfans_launch_engagement_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_engagement_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 456.08,
+      "source_sha256": "1954dfb2e6aebbc7d84ca8c2f778acde107d6377dc133cdbb62c3ddaa19800a8"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_history_memory_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 166.11,
+      "source_sha256": "b42c773463fdf544cb9dfbec9577ad98593fed4da2b2ab1bea3ebbade546b9a1"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_planning_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_history_memory_planning_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 62.81,
+      "source_sha256": "c3c4d61bd3946dcabeb60326f40379ca658013cf88a6462d7318398f2d4f4bde"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_recent_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_history_memory_recent_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 147.48,
+      "source_sha256": "444c2089b162399bb52dc4ac44271de84f80f013aa5a2307b2b09a13050945e5"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_recovery_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_history_memory_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 317.08,
+      "source_sha256": "9493d2c8c69056aa1102a036ec9c34ec6bb0508bab5891788ad73904ae3c6d78"
+    },
+    {
+      "module": "test_onlyfans_launch_integration_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_integration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 90.59,
+      "source_sha256": "78c523a7bc036af8e306ab09c0893292eb601959b4b0f2f04e7d83d5ba4832ce"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_api_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_ledger_api_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 112,
+      "source_sha256": "9c4fa648379b954bbbe95c9ac583937c306a7196f7c364a5a6d0c49185e2ca19"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_recovery_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_ledger_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 268.56,
+      "source_sha256": "e8605b1cf4bd69a03588bc587bdabf0064a06cacc2ca2a539430b4daf1129498"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_credentials_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_personality_credentials_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 134.97,
+      "source_sha256": "225d3a0bb6774cf590d2520610a2c8cd6ebd3cd917f109146698b80e90fe3e9e"
+    },
+    {
+      "module": "test_onlyfans_launch_provider_budget_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_provider_budget_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 230.5,
+      "source_sha256": "11af92d9186e1dc198740f09c89de6934708603f0d1725dfcc76419c2bfc16d8"
+    },
+    {
+      "module": "test_onlyfans_launch_reconciled_scope_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_reconciled_scope_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 61.86,
+      "source_sha256": "e164271a5b2f5b8bd9661c6fe0ca17efe58d596a4d657bbba64b4fbfd2f8ae32"
+    },
+    {
+      "module": "test_onlyfans_launch_schema_upgrade_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_schema_upgrade_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 65.08,
+      "source_sha256": "4114a7f2be504deccdb2d3bac45275eceb1dccd8aafb7ea56944051be1b99789"
+    },
+    {
+      "module": "test_onlyfans_launch_worker_health_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_launch_worker_health_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 65,
+      "source_sha256": "3deb558c2acc59c53c551a0a989f61fce821a9e6f02741c8df75716d1e688f85"
+    },
+    {
+      "module": "test_onlyfans_ledger_exclusion_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_ledger_exclusion_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 121.97,
+      "source_sha256": "f09e8157816c0561ba2c45f2dd0bb6b2167875dc6a995938d0d1e0bd7ec62bf3"
+    },
+    {
+      "module": "test_onlyfans_ledger_history_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_ledger_history_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 167.83,
+      "source_sha256": "893d5b604257463aee4bf704dae98e56a8afe4c120984d38623fc70bb99970ad"
+    },
+    {
+      "module": "test_onlyfans_ledger_markers_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_ledger_markers_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 146.17,
+      "source_sha256": "ee44e0b7e0cc5f2acfaf72e49ec72dfcda2b7cab946dd2a5b1aa282ef9b54ea8"
+    },
+    {
+      "module": "test_onlyfans_ledger_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_ledger_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 326.77,
+      "source_sha256": "596ec3eaf009dba89c74da950f8f1b0a0c3b64026bee376277f0b9e18ea2deda"
+    },
+    {
+      "module": "test_onlyfans_live_controls_compat_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_live_controls_compat_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 189.91,
+      "source_sha256": "874a5bd2f275415f21571b14365593b36c7ee72258788595ffc0bacb2018def6"
+    },
+    {
+      "module": "test_onlyfans_loopback_transport_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_loopback_transport_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 423.77,
+      "source_sha256": "48656e9f847cf9962d1213fa5140d84d731245095cd989a2425eb0f3b639f044"
+    },
+    {
+      "module": "test_onlyfans_manual_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_manual_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 178.89,
+      "source_sha256": "01af4269733d506e6b967984607ffbc63b95006e0f2d4b3f6402c102b8c9c5bb"
+    },
+    {
+      "module": "test_onlyfans_media_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_media_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 392.81,
+      "source_sha256": "d775cd39aeea98974ff88feb3007ffde4adea84d0432b26263531da6697103c8"
+    },
+    {
+      "module": "test_onlyfans_media_upgrade_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_media_upgrade_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 109.75,
+      "source_sha256": "4e69426b39a2c23decc063d6df6cc53dda23b8d39c35d4253effc84a99835e91"
+    },
+    {
+      "module": "test_onlyfans_migration_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_migration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 11.56,
+      "source_sha256": "5509b939bee5bcde64467f30eddf2a80b448d5f4752682c7c8f1d077cb441774"
+    },
+    {
+      "module": "test_onlyfans_native_budget_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_native_budget_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 230.88,
+      "source_sha256": "479804961876f447468dc495b95935bb802373b35c84a693cc3668bff1eacc22"
+    },
+    {
+      "module": "test_onlyfans_native_caption_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_native_caption_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 79.86,
+      "source_sha256": "5a5ee0ff349ed373b7b83d73a6f65e831c4682f9732c4dc3df8b05ccb985920f"
+    },
+    {
+      "module": "test_onlyfans_native_connector_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_native_connector_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 400.86,
+      "source_sha256": "a240757d5402b7a4c138b7b95bd84a4a34caeb7a77b5275b898fd986b64b8395"
+    },
+    {
+      "module": "test_onlyfans_native_history_links_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_native_history_links_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 25.69,
+      "source_sha256": "17fa71d8a3368c9875e8c6f97a0e6f158ed4ed780851e3e85292876c372836e2"
+    },
+    {
+      "module": "test_onlyfans_native_loopback_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_native_loopback_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 29.64,
+      "source_sha256": "5e856b230ecf7bb2fd5fa0d268cd4a943a7b525520a441f64532b59ef777a28f"
+    },
+    {
+      "module": "test_onlyfans_native_memory_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_native_memory_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 357.75,
+      "source_sha256": "7d0149efacb60f10fbbb8c74115f5692a50a95ca77fcb3f5a917e6636e6fb249"
+    },
+    {
+      "module": "test_onlyfans_native_planning_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_native_planning_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 303.02,
+      "source_sha256": "fa7bc650d6947268336224cb4fafa2776e614b9b761ad2d75cd589555e3c34e6"
+    },
+    {
+      "module": "test_onlyfans_native_upgrade_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_native_upgrade_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 90.78,
+      "source_sha256": "94acae0db5f7179a025276aec0e528035d9b178dbadd8dc2dda241e3f8585b34"
+    },
+    {
+      "module": "test_onlyfans_offer_import_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_offer_import_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 819.75,
+      "source_sha256": "3e215217cf2c4dd08f0432bb5648924d65fede3cfdd539eb2841fcc6302f5f06"
+    },
+    {
+      "module": "test_onlyfans_offer_import_upgrade_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_offer_import_upgrade_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 590.41,
+      "source_sha256": "4a6bc889f358f616eece64e289c76ddaf3f5b25a705d834022471fa1ee611627"
+    },
+    {
+      "module": "test_onlyfans_offer_post_source_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_offer_post_source_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 54.05,
+      "source_sha256": "d893998b80e99fd617599f493d975ff50fb93523e65a9d56966eb08caa006fcd"
+    },
+    {
+      "module": "test_onlyfans_operations_timezone_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_operations_timezone_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 54.14,
+      "source_sha256": "ccbd18d885f396990642e3dc9a85182abb52e386ae8b7c54237286eceb034247"
+    },
+    {
+      "module": "test_onlyfans_paid_post_progress_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_paid_post_progress_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 88.84,
+      "source_sha256": "268ec5cbfc2c23a6b26edd75cb29bc9a4002630b66c950a062f0472c186c22e0"
+    },
+    {
+      "module": "test_onlyfans_post_buy_receipt_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_post_buy_receipt_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 116.89,
+      "source_sha256": "ac0b834efa15b99b52340230bc011503b8c87414baa14283ae1380a36b02a3b6"
+    },
+    {
+      "module": "test_onlyfans_protected_vault_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_protected_vault_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 33.12,
+      "source_sha256": "490d62d891e59e38db341e279d35e4b98164bda377fbd98984b41190f33105bb"
+    },
+    {
+      "module": "test_onlyfans_provider_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_provider_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 188.12,
+      "source_sha256": "beeaafc812dc246a12020d159bb218db5c99abb36822eb7d32ddc25ff62e97ca"
+    },
+    {
+      "module": "test_onlyfans_proxy_connection_scope_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_proxy_connection_scope_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 32.23,
+      "source_sha256": "6204e4122cf55a9b466ecfaa219729a0d4e64d7151ae16387cc5e3afc17d6b00"
+    },
+    {
+      "module": "test_onlyfans_readonly_inbox_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_readonly_inbox_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 214.89,
+      "source_sha256": "fac540407831b1a16027e12003499a43189bacc604e85b35caeb8631cc92682c"
+    },
+    {
+      "module": "test_onlyfans_recent_inbox_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_recent_inbox_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 113.3,
+      "source_sha256": "e06a2087b7bee22e0ecb173ab5f20e3ad68d598b85718faa72a60adf63d3f675"
+    },
+    {
+      "module": "test_onlyfans_recorded_earnings_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_recorded_earnings_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 40.5,
+      "source_sha256": "bf9acaf4f1514fa65c6b0b8063b08591cc4f8e07a7303cbdde5c6ee544297e54"
+    },
+    {
+      "module": "test_onlyfans_recovery_fairness_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_recovery_fairness_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 29,
+      "source_sha256": "5df8aa0919881a28010a30e3b47d4a1e83a35abf4db195eaa0ef4727053565ef"
+    },
+    {
+      "module": "test_onlyfans_recovery_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_recovery_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 195.78,
+      "source_sha256": "7f8f2628d043ea567887aa97ad2ddf239ba599c10f0254cda24dc561c0a18417"
+    },
+    {
+      "module": "test_onlyfans_release_package_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_release_package_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 137.86,
+      "source_sha256": "e1af3d6c1b5163e6ce7006a521f6075369765707e509a2440428ba6d0426f981"
+    },
+    {
+      "module": "test_onlyfans_release_rehearsal_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_release_rehearsal_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 182.55,
+      "source_sha256": "b5449473d38a7fec67233ea3441e71771099da511582382af99123ec89f3496b"
+    },
+    {
+      "module": "test_onlyfans_send_recovery_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_send_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 91.98,
+      "source_sha256": "ca6872812739198c33cc657d00a66691e7f3d144e83e0c6f25bd17f2216d7773"
+    },
+    {
+      "module": "test_onlyfans_sync_retry_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_sync_retry_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 80.44,
+      "source_sha256": "78b596625b67bd853981572da1aad4bb4cf426c356fc43e9ccf188b3b1ae7c8f"
+    },
+    {
+      "module": "test_onlyfans_text_delivery_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_text_delivery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 430.25,
+      "source_sha256": "eb5fe97a57396f08b73aea6f061a004ccd56d026389307dcd1e9cdc6deca0435"
+    },
+    {
+      "module": "test_onlyfans_thread_paging_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_thread_paging_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 32.22,
+      "source_sha256": "93f87f04ee9a63d5e775caaa15132a39560abfa1dd9d7a323ea2e25455665292"
+    },
+    {
+      "module": "test_onlyfans_vault_continuation_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_vault_continuation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 33.16,
+      "source_sha256": "ef1cbaad304df62d04564cdf30303a860e608534f831a9c4eb627b7d7e0bc0ac"
+    },
+    {
+      "module": "test_onlyfans_vault_editing_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_vault_editing_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 94.56,
+      "source_sha256": "69d5cf129d284040a014e4163b7bc132b350e837d0452745a55484f8732a4fd9"
+    },
+    {
+      "module": "test_onlyfans_vault_media_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_vault_media_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 149.84,
+      "source_sha256": "a42d240f3bbbe6675e2d27107a1a96bf12341b436a53e9829d1014c0ce12c4d0"
+    },
+    {
+      "module": "test_onlyfans_vault_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_vault_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 112.95,
+      "source_sha256": "6d9df15fb7e78f8806f38515651d2f62d8bcd083a4ae17068e4bcce2dd0224da"
+    },
+    {
+      "module": "test_onlyfans_vault_previews_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_vault_previews_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 53.22,
+      "source_sha256": "66f4d1188a5d82620869bc43e65377d4ed0cfe8d24119d6168dbaa7e0ff730eb"
+    },
+    {
+      "module": "test_onlyfans_worker_entry_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_worker_entry_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 62.55,
+      "source_sha256": "2ef58530927bd1df22b8b1f5cfed131c09a0906672317e51c7fda083e575c946"
+    },
+    {
+      "module": "test_onlyfans_worker_media_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_worker_media_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 57.48,
+      "source_sha256": "caa3dc8aa7b78976dc277d09c73b05ffcef9767a27171a8b9ca45fc7dae5161f"
+    },
+    {
+      "module": "test_onlyfans_worker_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_worker_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 335.25,
+      "source_sha256": "17ed46a45be0915aa0fd7c6f5fb850e8188148fcee883dd3c3b9e264981a4378"
+    },
+    {
+      "module": "test_onlyfans_workspace_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_onlyfans_workspace_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 129.45,
+      "source_sha256": "eb0dac7d26f4602a1a9b82fa0baa49ff14815b9d2c3ba01b029628d8872ba4df"
+    },
+    {
+      "module": "test_paid_media_recovery_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_paid_media_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 112.2,
+      "source_sha256": "18662873e35c14e22ec68f7eb4477621cd33cdde1fbdf0838af55e42979234bf"
+    },
+    {
+      "module": "test_profile_learning_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_profile_learning_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 157.72,
+      "source_sha256": "0353e1da8a15da72a6625a881ac4361e6653a7ac1ca897fda07d5cffdd408501"
+    },
+    {
+      "module": "test_r3r7_native_planning_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_r3r7_native_planning_pg.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 185.02,
+      "source_sha256": "0d4ed800d44469e08c86ba7d32eca1c409083466c850c8d8fb11e89f9840114f"
+    },
+    {
+      "module": "test_read_lane_fairness_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_read_lane_fairness_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 81.81,
+      "source_sha256": "d5449352fc35acccc9fadf90377d4744fbcd39f78f106fb04917b3c532715bd7"
+    },
+    {
+      "module": "test_reply_configuration_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_reply_configuration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 135.73,
+      "source_sha256": "e51d9b8f4dd24e3e9e80b8a7f2b92b89eba8f4f1fa12ae1857b433e8e0374b31"
+    },
+    {
+      "module": "test_throughput_migration_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_throughput_migration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 13.91,
+      "source_sha256": "de53517ddca8e439a76f29155731967764c17de42829c93a8d4314e6623b2001"
+    },
+    {
+      "module": "test_throughput_queue_cap_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_throughput_queue_cap_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 19.2,
+      "source_sha256": "ee487b7309f7155509400e89e81af769251f330e9234a736f25d525d34c9b7f4"
+    },
+    {
+      "module": "test_vault_auto_folders_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_vault_auto_folders_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.48,
+      "source_sha256": "7a57882385edef40e4f80178426ca8e1bb160d8594ae869826f60f60705c1ff2"
+    },
+    {
+      "module": "test_vault_preview_worker_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_vault_preview_worker_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 55.48,
+      "source_sha256": "42c269b3bec6fc0c455a443089d7687c0c2fc6b5b8cc92e82db69dd1a1b35d7c"
+    },
+    {
+      "module": "test_vault_sync_resilience_pg.py",
+      "command": [
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\venv312\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "C:\\Users\\conta\\codex-work\\of-original-qualification-20261102\\frozen-5465181\\service\\tests\\test_vault_sync_resilience_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 56.31,
+      "source_sha256": "3e41983b0b2834d68b7bf20410c1ce7ba4d1a98ef5f0bae0d861aa604a63cfe2"
+    }
+  ],
+  "source_hash_count": 910,
+  "scope_note": "Completed Windows PostgreSQL sweep, exact 5465181 source. Driver completion is not acceptance success; failed modules and platform limitations remain open. Full source hashes retained in the original isolated results.json."
+}

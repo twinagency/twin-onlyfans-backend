@@ -1,5 +1,7 @@
 # Recent-history onboarding release, 2 November 2026
 
+[Latest checkpoint: memory backlog recovered; reporting correction published, not deployed](RECOVERY-2252-BRISBANE.md).
+
 **Backend repair deployed; Maile pilot still incomplete. AI replies remain disabled.** No fresh onboarding speedup or 90-minute result is demonstrated.
 
 | Release item | Verified value |

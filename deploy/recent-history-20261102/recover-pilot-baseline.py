@@ -70,6 +70,12 @@ from sqlalchemy import text
 from tools.history_pilot_measurement import capture
 from onlyfans_runtime.store import Store
 d=json.load(sys.stdin);s=Store(os.environ['DATABASE_URL'])
+assert s.engine.url.host.startswith('recent-evidence-'), 'Offline snapshot database required'
+from sqlalchemy import create_engine
+original=s.engine
+s.engine=create_engine(os.environ['DATABASE_URL'],pool_size=1,max_overflow=0,
+ connect_args={'options':'-c timezone=UTC -c statement_timeout=120000 -c lock_timeout=3000'})
+original.dispose()
 try:
  with s.engine.begin() as c:
   c.execute(text('SET LOCAL statement_timeout=120000'))  # Isolated copy only.

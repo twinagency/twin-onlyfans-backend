@@ -492,7 +492,7 @@ async def rr1_takeover_race() -> None:
     real_wait = coordination.wait_for_quiescence_all
     state: dict = {"task": None, "armed": False}
 
-    async def wait_wrapper(account_id, fan_id, *, timeout_s, poll_s=0.02):
+    async def wait_wrapper(account_id, fan_id, *, timeout_s, poll_s=0.02, io_offload=False):
         if state["armed"] and state["task"] is None:
             # The takeover has ALREADY passed its checks; now the worker commits
             # `dispatching` + the attempt row and enters the guarded POST.
@@ -503,7 +503,8 @@ async def rr1_takeover_race() -> None:
                 if blocking.entered.is_set() or state["task"].done():
                     break
                 await asyncio.sleep(0.01)
-        return await real_wait(account_id, fan_id, timeout_s=timeout_s, poll_s=poll_s)
+        return await real_wait(account_id, fan_id, timeout_s=timeout_s, poll_s=poll_s,
+                               io_offload=io_offload)
 
     coordination.wait_for_quiescence_all = wait_wrapper
     state["armed"] = True

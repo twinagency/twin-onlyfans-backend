@@ -322,3 +322,39 @@ def test_caption_rewrite_unmigrated_runs_and_unknown_owner_skips(env, monkeypatc
     monkeypatch.setattr(coordination, "_database_url", lambda: "")
     assert asyncio.run(pc.line_for("canned line", {}, FREE, 55, [9])) == apply_word_restriction("canned line")
     assert len(calls) == 1
+
+
+# ── media descriptions ────────────────────────────────────────────────
+
+def test_media_description_states_and_moxy_only(env, monkeypatch):
+    from db.models import VaultItem
+    from moxy_replacement import media_descriptions as md
+    monkeypatch.setattr(md, "get_session", ax.get_session)
+    sync = create_engine(env.sync_url)
+    VaultItem.__table__.create(sync)
+    now = datetime(2026, 11, 1)
+    with Session(sync) as s, s.begin():
+        def add(mid, kind, **kw):
+            s.add(VaultItem(account_id=MOXY_ON, media_id=mid, kind=kind, created_at=now, **kw))
+        add(1, "photo", description="a", describe_status="described", describe_generated_at=now, updated_at=now)
+        add(2, "photo")
+        add(3, "video", describe_status="failed")
+        add(4, "video", describe_status="blocked_drm")
+        add(5, "audio")
+        add(6, "photo", description="old", describe_status="described",
+            describe_generated_at=now, updated_at=now + timedelta(days=1))
+    sync.dispose()
+    got = {r["media_id"]: r["state"] for r in asyncio.run(md.descriptions(MOXY_ON, [1, 2, 3, 4, 5, 6, 99]))}
+    assert got == {1: "described", 2: "pending", 3: "failed", 4: "unsupported",
+                   5: "unsupported", 6: "pending", 99: "missing"}
+    calls = []
+
+    async def fake(account, mid):
+        calls.append(mid)
+    asyncio.run(md.ensure_described(MOXY_ON, [1, 2, 3, 6], describe=fake))
+    assert sorted(calls) == [2, 6]
+    calls.clear()
+    asyncio.run(md.ensure_described(MOXY_ON, [3], describe=fake, retry_failed=True))
+    assert calls == [3]
+    with pytest.raises(Refused):
+        asyncio.run(md.ensure_described(FREE, [1], describe=fake))

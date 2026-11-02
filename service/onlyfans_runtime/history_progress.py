@@ -25,7 +25,10 @@ def recent_progress(s, runtime, fan_id=None):
     scan = s.get(OfRecentHistoryScan, runtime.account_id)
     discovery = bool(scan and scan.binding_id == runtime.binding_id and scan.status == 'complete'
                      and scan.known_fans_complete and not scan.last_error)
-    covered = (bool(counts) if fan_id is not None else discovery) and not (
+    # This state describes the initial import, including complete discovery.
+    # One completed fan cannot make the account window ready while other
+    # conversations are still being discovered (or satisfy the UI contract).
+    covered = discovery and (bool(counts) if fan_id is not None else True) and not (
         counts.get('needed', 0) or counts.get('running', 0) or errors)
     total, fans, incoming = s.execute(select(func.count(), func.count(func.distinct(Message.fan_id)),
         func.count().filter(Message.direction == 'in')).where(*scope)).one()

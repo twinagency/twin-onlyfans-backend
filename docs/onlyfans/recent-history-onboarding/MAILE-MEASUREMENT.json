@@ -1,11 +1,11 @@
 {
   "accountId": "of-323358988",
   "referenceAccount": "Maile",
-  "releaseStatus": "draft_not_deployed",
+  "releaseStatus": "staged_rollout_blocked_dashboard_provenance",
   "rolloutEnabled": false,
   "recentWindowMessages": null,
   "recentWindowFans": null,
-  "recentWindowCoverageComplete": null,
+  "recentWindowCoverageComplete": false,
   "providerHttpAttempts": null,
   "elapsedImportSeconds": null,
   "memoryProcessingSeconds": null,
@@ -14,10 +14,10 @@
   "measuredSpeedup": null,
   "demonstratedNinetyMinuteOnboarding": false,
   "blockers": [
+    "Live OnlyFans dashboard reports GIT_SHA 3d0ee2e3e2848f9cd5019399a82fe27a67f435c2 (image sha256:22be6bc89bf7308e2c2214e03d63313bfc32f2edb6c831bddcd1a06a28258049). This commit is unavailable in the connected twin-dashboard repository. The located host checkout is older, and the matching release source has not been recovered. A whole-dashboard replacement from a different base could overwrite concurrent work. Enabling the new response before compatible UI deployment could break strict connection parsing.",
+    "Full dashboard build/deployment and end-to-end Maile run remain unexecuted. Production schema, services and rollout flags are unchanged.",
     "Native timestamp ordering is unverified. Safe exhaustive traversal may not reduce provider requests.",
-    "Dashboard browser rendering and production deployment are unverified.",
-    "GitHub CI runs ended in startup_failure; no remote CI execution has been qualified.",
-    "Live schema is 0106_parallel_history_reads. The draft merge/migration and one native planner patch require exact live-base qualification before rollout; stopped import/learner services have not been restarted."
+    "GitHub CI startup_failure; independent live-base container tests and schema-copy rehearsal supply separate qualification evidence."
   ],
   "comparison": {
     "measuredFullHistoryRun": null,
@@ -27,7 +27,6 @@
     "supabaseProject": "aouaenqayfltoqrmpitg",
     "readOnlyConnectionEventuallySucceeded": true,
     "operationalTablesPresent": false,
-    "personalDeviceDiscovery": "Automatic approval review rejected broad user-directory discovery on the connected personal device because this repository task did not authorize inspecting that device. No remote device command ran; work continued in the isolated workspace.",
     "operationalAccessRecovered": true,
     "operationalDatabaseAccess": "AWS SSM on twin-dashboard-prod; Supabase is a separate integration database"
   },
@@ -77,5 +76,23 @@
     "featureImportDurationSeconds": null,
     "featureActualModelCostUsd": null,
     "productionChangesMade": false
+  },
+  "qualification": {
+    "liveBaseTargetedTestsPassed": 22,
+    "liveBaseSeconds": 105.46,
+    "productionSchemaCopyUpgradePassed": true,
+    "localFinalReadinessRegression": {
+      "passed": 2,
+      "seconds": 9.227
+    },
+    "componentBrowserChecksPassed": 4,
+    "fullDashboardBuildVerified": false,
+    "databaseBackup": {
+      "privateHostOnly": true,
+      "bytes": 726457491,
+      "sha256": "5fafcbf5d02469c231a56e56c4d79b2b3013fda993b7bdbd22d8be6191571c52"
+    },
+    "perAccountPilot": "Maile only, not enabled; existing 2rps/8 slots and US$6 daily model cap preserved",
+    "actualFeatureRun": false
   }
 }

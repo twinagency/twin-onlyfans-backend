@@ -63,10 +63,10 @@ Remove the account from the allowlist, or explicitly disable its durable policy,
 
 ## Remaining gates
 
-- Current operational host/image/schema inspection and Maile live run.
+- Operational access and live-base qualification are complete. Maile live run is blocked by the paired dashboard source issue below.
 - Real provider timestamp-order proof before date-based early stop.
 - Actual Maile recent-window fan/message counts, request counts, import duration, memory duration, charges and full-history comparison.
-- Dashboard browser rendering, deployment and integrated UI checks.
+- Full dashboard build/deployment and integrated UI checks; four component-level Chromium checks pass.
 - A stale ledger reconstruction test also fails on the untouched original baseline; it attempts to drop an already absent `daily_limit_units` column. Its fixture is not repaired in this scoped change. Keep its result explicit when evaluating whole-release readiness.
 - These checks do not qualify the separate concurrent-reply release or remove its existing R9 gates.
 
@@ -75,7 +75,7 @@ Remove the account from the allowlist, or explicitly disable its durable policy,
 - Broad isolated PostgreSQL run: **211 passed**, two PostgreSQL-only capacity cases initially skipped, 249.53 seconds. This candidate preceded small discovery-digest, priority and reporting refinements.
 - Final targeted PostgreSQL run after those refinements: **56 passed**, 70.94 seconds. Includes all 16 new recent-onboarding cases, the approved-onboarding/native/FASTT checks, both current release-line upgrades, and the two read-lane fairness suites.
 - The two skipped capacity cases were then executed on real isolated PostgreSQL: **2 passed**, 1.07 seconds, covering simultaneous admission and migration/cursor preservation. Counts overlap; they must not be added as a distinct-test total.
-- Dashboard strict-parser checks: **12 passed** on Node 24. Rendering in React/a browser remains unverified.
+- Dashboard strict-parser checks: **12 passed** on Node 24. Four subsequent component-level Chromium checks pass; the full deployed Next build remains unverified.
 - The original ledger reconstruction failure was separately reproduced on the untouched original source baseline: **1 failed**, 6.15 seconds. It remains a whole-release qualification issue, not a claimed pass.
 
 The evidence directory contains raw logs, limitations, and hashes of final relevant source files. All records are synthetic. No live fan messages were sent and no paid model calls were made. Test runtime does not measure Maile onboarding.
@@ -88,10 +88,20 @@ Read-only AWS SSM access was recovered through the existing `jesse-gpt` profile.
 
 A later fixed-cutoff query found 2,947 of 3,535 stored incoming messages inside the window. This excludes 588 stored incoming sources from initial extraction, about 16.6% of that stored incoming workload; it is not a lifetime or measured billing reduction. Routine creator extraction would also be removed, but no numeric saving is asserted. Existing same-day memory ledger rows total 16,270 units settled and 1,316 units unresolved (one unit is US$0.0001); settled ledger amounts are not necessarily provider-reported invoice charges. No new paid model calls were made.
 
-An exact task-hunk check on the running worker found all contexts in 13 of 14 files. The native-planning context differs, so a blind production patch was not applied. Current migration/rollback qualification remains required. The newer concurrent-reply commit `cfab868e2c87706ddce4ff6cfb2bbeffd76c720f` was integrated without conflict; its focused combined suite passed 24 tests in 33.94 seconds.
+An exact task-hunk check on the running worker found all contexts in 13 of 14 files. The native-planning context differs, so a blind production patch was not applied. The subsequent exact-live-image overlay and copied-schema migration rehearsal pass; no production migration has run. The newer concurrent-reply commit `cfab868e2c87706ddce4ff6cfb2bbeffd76c720f` was integrated without conflict; its focused combined suite passed 24 tests in 33.94 seconds.
 
 ### Exact live-image qualification
 
 The task-specific overlay now passes 22 PostgreSQL/approval/cohort tests on the actual worker image (105.46 seconds), and an upgrade from a private schema-only copy of production succeeds to `0110_recent_history`. The earlier staged test packaging error was a missing fixture file and was corrected before the complete rerun. No production schema or service has changed at this checkpoint. Four Chromium checks of the actual new React component pass at 375 and 1280 pixels; this does not qualify the full Next build.
 
 `ONLYFANS_PROFILE_ACCOUNTS` is an optional process cohort: absent preserves existing behavior, an empty JSON array disables work, and the rollout process selects only Maile. Seeding, claiming, silent completion, maintenance and accounting reconciliation respect the same cohort. This permits measuring Maile without restarting extraction for other creators. Existing rates, model configuration and daily caps are reused.
+
+### Release checkpoint: blocked before production activation
+
+The private host backup is complete (726,457,491 bytes, SHA256 `5fafcbf5d02469c231a56e56c4d79b2b3013fda993b7bdbd22d8be6191571c52`). Production remains on its original images/schema; the stopped importer, learner and reply supervisor remain stopped. No paid feature calls or fan sends have been made. The final fan-scoped readiness regression also passes on PostgreSQL: account discovery must succeed before the initial-window ready state can be emitted, preserving the paired strict UI contract.
+
+The live OF dashboard reports source `3d0ee2e3e2848f9cd5019399a82fe27a67f435c2`, image `sha256:22be6bc89bf7308e2c2214e03d63313bfc32f2edb6c831bddcd1a06a28258049`. GitHub Contents and commit search cannot find this commit in the connected repository. The located host checkout is from a much older release and has no current connection contract. Its release directory retains environment/previous-image records, not the matching source. Available AWS build records did not establish this live source. The main dashboard is a separate image/revision and must remain separate.
+
+**Required input to unblock:** the repository/branch or protected source archive corresponding to the live OF dashboard image. Do not deploy the current dashboard PR wholesale over an unqualified live base. The strict connection contract in the paired source requires the frontend update; enabling an unverified response risks breaking connection parsing, so backend activation and the Maile benchmark are deferred together. This is a source-provenance blocker, not a missing deployment permission.
+
+No end-to-end import elapsed time, feature model charge or numeric speedup has been demonstrated. The 87,646-message / 16,571-fan observation is a stored lower bound at a provisional cutoff, not complete new import coverage.

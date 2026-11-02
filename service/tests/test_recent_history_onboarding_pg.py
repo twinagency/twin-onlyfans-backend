@@ -120,6 +120,17 @@ def test_invalid_order_failed_request_and_restart_never_complete(ready):
         assert s.get(OfHistoryCursor,(A,F)).before_id is None
 
 
+def test_fan_readiness_waits_for_successful_account_discovery(ready):
+    _,r,engine,cutoff=ready
+    c=r.claim(T,A);r.page(T,c,[event(20,cutoff)],has_more=False)
+    c=r.claim(T,A);r.page(T,c,[event(20,cutoff)],has_more=False)
+    with Session(engine) as s:
+        assert s.get(OfRecentHistoryCursor,(A,F)).status=='complete'
+        view=recent_progress(s,s.get(OfRuntime,A),F)
+        assert view['initialHistory']['discoveryComplete'] is False
+        assert view['initialHistory']['state']=='incomplete'
+
+
 def test_discovery_old_thread_does_not_stop_other_threads_and_requires_stability(ready):
     _,r,engine,_=ready
     c=r.claim_scan(T,A);r.scan_page(T,c,[F],next_cursor='1')

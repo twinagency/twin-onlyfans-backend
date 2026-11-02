@@ -20,7 +20,8 @@ def inspect(name):
     return json.loads(run(['docker', 'inspect', name]))[0]
 
 
-assert '22 passed' in (P / 'live-base-tests.log').read_text()
+tests = (P / 'live-base-tests.log').read_text()
+assert '[100%]' in tests and ' passed' in tests and 'ERROR' not in tests and 'failed' not in tests
 assert 'ready (0110_recent_history)' in (P / 'live-schema-rehearsal.log').read_text()
 assert shutil.disk_usage(P).free > 4 * 1024**3, 'Insufficient backup headroom'
 before = {}

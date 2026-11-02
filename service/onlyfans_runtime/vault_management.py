@@ -34,6 +34,9 @@ MAX_PAGES = 200
 CATALOGUE_BOUND = 2000
 # Folder lists are repeated per media item; response bytes remain independently bounded.
 MAX_FOLDER_STATES = 1000
+# Terminal causes that say nothing about the vault itself; a successor job resumes at the cursor.
+RESUMABLE_ERRORS = {"connection_changed", "connection_unavailable", "vault_job_expired", "vault_read_failed"}
+RESUME_OVERLAP = 24
 
 
 class InvalidVault(ValueError):
@@ -186,10 +189,20 @@ def request_sync(store, tenant, account, *, expected_connection_revision, comman
             OfVaultSyncJob.status.in_(("pending", "running"))).limit(1)):
             raise Refused("vault sync already active")
         now = utcnow()
+        # An interrupted initial scan continues from its committed cursor instead of
+        # restarting a multi-hour import from zero. A short overlap re-reads the last
+        # page so items that shifted while the job was down are not skipped.
+        offset = pages = 0
+        previous = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
+            OfVaultSyncJob.binding_id == runtime.binding_id).order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
+        if (previous is not None and previous.status in {"failed", "superseded"}
+                and previous.last_error in RESUMABLE_ERRORS and previous.owner_id == connection.owner_id
+                and previous.page_offset > 0):
+            offset, pages = max(0, previous.page_offset - RESUME_OVERLAP), previous.pages_read
         row = OfVaultSyncJob(account_id=account, job_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
             command_key=command_key, request_hash=fingerprint, actor=actor,
             connection_revision=connection.revision, owner_id=connection.owner_id, max_pages=MAX_PAGES,
-            status="pending", page_offset=0, pages_read=0, items_seen=0, requested_at=now, updated_at=now)
+            status="pending", page_offset=offset, pages_read=pages, items_seen=offset, requested_at=now, updated_at=now)
         s.add(row)
         s.flush()
         return job_view(row)
@@ -461,6 +474,8 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                     and_(OfVaultSyncJob.status == "running", OfVaultSyncJob.lease_until <= now)))
                 .order_by(OfVaultSyncJob.updated_at, OfVaultSyncJob.account_id).limit(1)).first()
         if candidate is None:
+            if processed < limit and not (stop is not None and stop.is_set()):
+                processed += confirm_removals(store, tenant, stop=stop)
             break
         account, identity = candidate
         page_size = _page_size(account)
@@ -559,6 +574,10 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                     else:
                         for field in MIRROR_REFRESH_FIELDS:
                             setattr(row, field, values[field])
+                    if media.get("isDeleted") is True or media.get("isHidden") is True:
+                        # The provider itself says so: stop offering it (history is kept; a later
+                        # clean sighting lifts the stamp through MIRROR_REFRESH_FIELDS).
+                        row.removed_at = utcnow()
                     s.flush()
                     observation = s.get(OfVaultObservation, (account, media["id"]))
                     if observation is None:
@@ -598,3 +617,122 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
 
 
 
+
+
+_RECHECK_AFTER = {}   # (account, media_id) -> monotonic time before which a failed check is not retried
+RECHECK_BACKOFF_SECONDS = 300
+
+
+def _removal_candidate(session, tenant):
+    """One asset missing from the latest complete scan of an otherwise idle account.
+
+    Absence from a scan is only a reason to ask the provider about that exact
+    asset, never proof of deletion: an offset scan of a changing vault can skip
+    items. Nothing is returned while any scan of the account is active.
+    """
+    import time
+    accounts = session.scalars(select(OfVaultSyncJob.account_id).join(
+        OfCreatorBinding, OfCreatorBinding.id == OfVaultSyncJob.binding_id).where(
+        OfCreatorBinding.tenant_id == tenant, OfCreatorBinding.revoked_at.is_(None),
+        OfCreatorBinding.channel == "onlyfans", OfVaultSyncJob.status == "complete").distinct()
+        .order_by(OfVaultSyncJob.account_id)).all()
+    for account in accounts:
+        latest = session.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account)
+            .order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
+        if latest is None or latest.status in {"pending", "running"}:
+            continue
+        done = session.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
+            OfVaultSyncJob.status == "complete").order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
+        rows = session.execute(select(VaultItem.media_id).join(OfVaultObservation, and_(
+            OfVaultObservation.account_id == VaultItem.account_id, OfVaultObservation.media_id == VaultItem.media_id))
+            .where(VaultItem.account_id == account, VaultItem.media_id > 0, VaultItem.removed_at.is_(None),
+                OfVaultObservation.observed_at < done.requested_at)
+            .order_by(OfVaultObservation.observed_at).limit(20)).all()
+        for (media_id,) in rows:
+            if _RECHECK_AFTER.get((account, media_id), 0) <= time.monotonic():
+                return account, media_id, done.job_id
+    return None
+
+
+def confirm_removals(store, tenant, *, stop=None):
+    """Read one asset the latest complete scan did not return, by id. Returns 1 if one was resolved.
+
+    Provider 404 (identity verified first) confirms removal: the row is
+    soft-removed and keeps its descriptions, locks, notes and purchase/delivery
+    references. A found asset is refreshed and re-observed; a provider
+    deleted/hidden flag removes it from sale. Any other outcome changes nothing.
+    Uses the shared provider read budget like every vault page.
+    """
+    import time
+    from decimal import Decimal
+    with Session(store.engine) as s:
+        found = _removal_candidate(s, tenant)
+    if found is None:
+        return 0
+    account, media_id, done_id = found
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        connection = s.get(OfProviderConnection, account)
+        done = s.get(OfVaultSyncJob, (account, done_id))
+        if (connection is None or connection.binding_id != runtime.binding_id or done.binding_id != runtime.binding_id
+                or connection.owner_id != done.owner_id or connection.status != "verified"
+                or connection.expires_at <= utcnow()):
+            return 0
+        from .connections import _open
+        try:
+            clear = _open(connection, tenant)
+        except Refused:
+            return 0
+        owner, expires, revision = connection.owner_id, connection.expires_at, connection.revision
+    budget = failure = media = None
+    resolved = False
+    try:
+        from .provider_connector import NativeProviderConnector, session_from_capture
+        from .worker import _provider_claim
+        transport = NativeProviderConnector(session_from_capture(account_id=account, owner_id=owner,
+            policy_revision=1, capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"],
+            expires_at=expires.replace(tzinfo=timezone.utc)))
+        budget = _provider_claim(store, tenant, account, transport, revision, "vault")
+        media = transport.vault_media_by_id(media_id)
+        if media is not None:
+            if type(media) is not dict or media.get("id") != media_id:
+                raise NativeProtocolError("unsupported vault response")
+            parse_vault_page(json.dumps({"list": [media], "hasMore": False},
+                default=lambda v: float(v) if isinstance(v, Decimal) else str(v)).encode(), owner_id=owner)
+            media = json.loads(json.dumps(media, default=lambda v: float(v) if isinstance(v, Decimal) else str(v)))
+        resolved = True
+    except Exception as problem:
+        failure = problem
+        _RECHECK_AFTER[(account, media_id)] = time.monotonic() + RECHECK_BACKOFF_SECONDS
+    try:
+        if not resolved:
+            return 0
+        with Session(store.engine) as s, s.begin():
+            runtime = store._runtime(s, tenant, account)
+            connection = s.get(OfProviderConnection, account)
+            if (connection is None or connection.binding_id != runtime.binding_id or connection.owner_id != owner
+                    or connection.status != "verified"):
+                return 0
+            from .provider_read_budget import current
+            try:
+                current(store, tenant, budget, session=s) if budget is not None else None
+            except Refused:
+                return 0
+            row = s.get(VaultItem, (account, media_id))
+            if row is None or row.removed_at is not None:
+                return 0
+            if media is None:
+                row.removed_at = utcnow()
+                return 1
+            values = row_values(account, media)
+            for field in MIRROR_REFRESH_FIELDS:
+                setattr(row, field, values[field])
+            if media.get("isDeleted") is True or media.get("isHidden") is True:
+                row.removed_at = utcnow()
+            s.flush()
+            observation = s.get(OfVaultObservation, (account, media_id))
+            observation.job_id, observation.raw_hash, observation.observed_at = done_id, digest(row.raw_json), utcnow()
+            return 1
+    finally:
+        from .worker import _release_provider
+        _release_provider(store, tenant, budget, failure)

@@ -30,9 +30,20 @@ def _process_connection_enrollments(store, tenant, *, limit, stop):
     return process_enrollments(store, tenant, limit=limit, stop=stop)
 
 
+def vault_pages_per_pass():
+    try:
+        return min(4, max(1, int(os.environ.get("ONLYFANS_VAULT_PAGES_PER_PASS", "1"))))
+    except ValueError:
+        return 1
+
+
 def _process_vault_jobs(store, tenant, *, limit, stop):
     from onlyfans_runtime.vault_management import process_vault_jobs
-    return process_vault_jobs(store, tenant, limit=limit, stop=stop)
+    # One page per maintenance turn made large vaults crawl (one page per account per ~N loop
+    # turns). ONLYFANS_VAULT_PAGES_PER_PASS (1-4, default 1 = unchanged) lets a turn drain a few
+    # pages, oldest-updated job first so accounts rotate; each page still passes the shared
+    # provider read budget (reserves, deferral, backoff) and a deferral ends the pass.
+    return process_vault_jobs(store, tenant, limit=max(limit, vault_pages_per_pass()), stop=stop)
 
 
 def _process_ledger_jobs(store, tenant, *, limit, stop):

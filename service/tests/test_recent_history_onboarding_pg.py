@@ -131,6 +131,34 @@ def test_fan_readiness_waits_for_successful_account_discovery(ready):
         assert view['initialHistory']['state']=='incomplete'
 
 
+def test_legacy_connection_shape_and_lifetime_label_survive_recent_readiness(ready):
+    store,r,engine,cutoff=ready
+    from db.onlyfans_models import OfScan
+    from onlyfans_runtime.connections import get_connection
+    scan_all(r)
+    for _ in range(2):
+        c=r.claim(T,A);r.page(T,c,[event(20,cutoff)],has_more=False)
+    with Session(engine) as s,s.begin():
+        runtime=s.get(OfRuntime,A)
+        runtime.last_sync_at=utcnow();runtime.recovery_needed=False
+        scan=s.get(OfScan,A)
+        if scan is None:s.add(OfScan(account_id=A,status='complete'))
+        else:scan.status='complete'
+    legacy=get_connection(store,T,A,include_sync=True)
+    assert set(legacy)=={'accountId','revision','status','ownerId','expiresAt','verifiedAt',
+        'lastError','outgoingEnabled','policyRevision','usedUnits','limitUnits','mediaEnabled',
+        'automateNewConversations','sync'}
+    assert legacy['sync']['recoveryRequired'] is True
+    assert legacy['sync']['lastCompleteSyncAt'] is None
+    modern=get_connection(store,T,A,include_sync=True,include_recent=True)
+    assert modern['recentHistory']['initialHistory']['state']=='recent_history_ready'
+    assert modern['recentHistory']['lifetimeHistory']['complete'] is False
+    assert modern['sync']==legacy['sync']
+    with Session(engine) as s:
+        assert s.get(OfRuntime,A).last_sync_at is not None  # projection only
+        assert s.get(OfHistoryCursor,(A,F)).status!='complete'
+
+
 def test_discovery_old_thread_does_not_stop_other_threads_and_requires_stability(ready):
     _,r,engine,_=ready
     c=r.claim_scan(T,A);r.scan_page(T,c,[F],next_cursor='1')

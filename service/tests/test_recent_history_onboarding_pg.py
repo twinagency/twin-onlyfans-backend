@@ -159,20 +159,54 @@ def test_legacy_connection_shape_and_lifetime_label_survive_recent_readiness(rea
         assert s.get(OfHistoryCursor,(A,F)).status!='complete'
 
 
-def test_discovery_old_thread_does_not_stop_other_threads_and_requires_stability(ready):
+def sweep(r,*pages):
+    """Run one full discovery sweep over the given pages (lists of fan ids)."""
+    offset=0
+    for i,ids in enumerate(pages):
+        c=r.claim_scan(T,A)
+        offset+=len(ids)
+        r.scan_page(T,c,ids,next_cursor=str(offset) if i<len(pages)-1 else None)
+
+
+def test_discovery_old_thread_does_not_stop_other_threads_and_requires_two_sweeps(ready):
     _,r,engine,_=ready
-    c=r.claim_scan(T,A);r.scan_page(T,c,[F],next_cursor='1')
-    c=r.claim_scan(T,A);r.scan_page(T,c,[202],next_cursor=None)
-    c=r.claim_scan(T,A);r.scan_page(T,c,[202],next_cursor='1')
-    c=r.claim_scan(T,A);r.scan_page(T,c,[F],next_cursor=None)
-    with Session(engine) as s:assert s.get(OfRecentHistoryScan,A).status!='complete'
-    # A stable second full pass completes discovery; every thread remains separately owed.
-    c=r.claim_scan(T,A);r.scan_page(T,c,[202],next_cursor='1')
-    c=r.claim_scan(T,A);r.scan_page(T,c,[F],next_cursor=None)
+    sweep(r,[F],[202])
+    # One complete sweep is never enough, even though it found a new fan.
+    with Session(engine) as s:
+        scan=s.get(OfRecentHistoryScan,A)
+        assert scan.status!='complete' and scan.pass_number==1
+    # The provider list reorders between sweeps (recent activity): same fans
+    # in a different order is still a stable second sweep.
+    sweep(r,[202],[F])
     with Session(engine) as s:
         assert s.get(OfRecentHistoryScan,A).status=='complete'
         assert s.get(OfRecentHistoryCursor,(A,202))
         assert recent_progress(s,s.get(OfRuntime,A))['initialHistory']['state']=='incomplete'
+
+
+def test_discovery_repeats_and_skips_from_reordering_do_not_block_stability(ready):
+    _,r,engine,_=ready
+    sweep(r,[F,202],[303])
+    # Offset paging under reordering: 202 repeated across pages, F skipped.
+    sweep(r,[303,202],[202])
+    with Session(engine) as s:
+        assert s.get(OfRecentHistoryScan,A).status=='complete'
+
+
+def test_discovery_fan_arriving_during_a_sweep_forces_one_more_sweep(ready):
+    _,r,engine,_=ready
+    sweep(r,[F],[202])
+    # 303 first appears mid-sweep: this sweep found something unseen, so the
+    # fan set is not yet agreed even though pass 2 completed.
+    sweep(r,[202],[303,F])
+    with Session(engine) as s:
+        scan=s.get(OfRecentHistoryScan,A)
+        assert scan.status!='complete' and scan.pass_number==2
+        assert s.get(OfRecentHistoryCursor,(A,303)).status=='needed'
+    # 303 now has a cursor, so a sweep that sees it again is stable.
+    sweep(r,[F],[303,202])
+    with Session(engine) as s:
+        assert s.get(OfRecentHistoryScan,A).status=='complete'
 
 
 def test_arrival_during_import_is_saved_once_in_catchup(ready):
@@ -407,3 +441,60 @@ def test_missing_thread_preserves_cursor_blocks_readiness_and_backs_off(ready):
         assert progress['initialHistory']['providerErrors']['provider_thread_unavailable']==1
         assert not progress['lifetimeHistory']['complete']
     assert recovery.claim(T,A) is None
+
+
+def finish_or_fail(r,engine,cutoff,fail_codes):
+    """Drain every recent cursor: fail those in fail_codes, finish the rest."""
+    for _ in range(10):
+        c=r.claim(T,A)
+        if c is None: break
+        if c.fan_id in fail_codes: r.fail(T,c,code=fail_codes[c.fan_id])
+        else: r.page(T,c,[event(20,cutoff,fan=c.fan_id)],has_more=False)
+
+
+def test_unavailable_thread_stays_visible_but_does_not_block_readiness(ready):
+    _,r,engine,cutoff=ready
+    r.request_fan(T,A,202)
+    scan_all(r)
+    finish_or_fail(r,engine,cutoff,{202:'provider_thread_unavailable'})
+    with Session(engine) as s:
+        assert s.get(OfRecentHistoryCursor,(A,202)).status=='needed'
+        h=recent_progress(s,s.get(OfRuntime,A))['initialHistory']
+        assert h['state']=='recent_history_ready'
+        assert h['conversationsUnavailable']==1
+        assert h['providerErrors']=={'provider_thread_unavailable':1}  # still visible
+        assert h['blockingProviderErrors']=={}
+        assert h['conversationsAwaitingWork']==1  # unchanged meaning: not hidden
+        assert h['completedAt'] is not None
+    # A later successful retry clears the error and the unavailable count.
+    with Session(engine) as s,s.begin():
+        s.get(OfRecentHistoryCursor,(A,202)).retry_at=None
+    finish_or_fail(r,engine,cutoff,{})
+    with Session(engine) as s:
+        h=recent_progress(s,s.get(OfRuntime,A))['initialHistory']
+        assert h['conversationsUnavailable']==0 and h['providerErrors']=={}
+        assert h['state']=='recent_history_ready'
+
+
+@pytest.mark.parametrize('code',['provider_timeout','provider_protocol_failed','provider_http_transient','conflicting_history'])
+def test_transient_and_conflict_errors_still_block_readiness(ready,code):
+    _,r,engine,cutoff=ready
+    r.request_fan(T,A,202)
+    scan_all(r)
+    finish_or_fail(r,engine,cutoff,{202:code})
+    with Session(engine) as s:
+        h=recent_progress(s,s.get(OfRuntime,A))['initialHistory']
+        assert h['state']=='incomplete'
+        assert h['conversationsUnavailable']==0
+        assert h['blockingProviderErrors']=={code:1}
+
+
+def test_unavailable_plus_transient_error_still_blocks(ready):
+    _,r,engine,cutoff=ready
+    r.request_fan(T,A,202); r.request_fan(T,A,303)
+    scan_all(r)
+    finish_or_fail(r,engine,cutoff,{202:'provider_thread_unavailable',303:'provider_timeout'})
+    with Session(engine) as s:
+        h=recent_progress(s,s.get(OfRuntime,A))['initialHistory']
+        assert h['state']=='incomplete'
+        assert h['conversationsUnavailable']==1 and h['blockingProviderErrors']=={'provider_timeout':1}

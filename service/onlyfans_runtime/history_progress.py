@@ -22,6 +22,15 @@ def recent_progress(s, runtime, fan_id=None):
     counts = dict(s.execute(select(C.status, func.count()).where(*filters).group_by(C.status)).all())
     errors = dict(s.execute(select(C.last_error, func.count()).where(*filters,
         C.last_error.is_not(None)).group_by(C.last_error)).all())
+    # A thread the provider answers 404/410 for is permanent missing coverage,
+    # not a failure that a retry is expected to clear: it is retried hourly
+    # (HistoryRecovery.fail) and a later success clears last_error. It stays
+    # counted (unavailable / providerErrors) but must not hold readiness
+    # forever. Every other error, including conflicting_history, still blocks.
+    unavailable = s.scalar(select(func.count()).where(*filters, C.status != 'complete',
+        C.last_error == 'provider_thread_unavailable'))
+    blocking_errors = {k: v for k, v in errors.items() if k != 'provider_thread_unavailable'}
+    awaiting = counts.get('needed', 0) + counts.get('running', 0) - unavailable
     scan = s.get(OfRecentHistoryScan, runtime.account_id)
     discovery = bool(scan and scan.binding_id == runtime.binding_id and scan.status == 'complete'
                      and scan.known_fans_complete and not scan.last_error)
@@ -29,7 +38,7 @@ def recent_progress(s, runtime, fan_id=None):
     # One completed fan cannot make the account window ready while other
     # conversations are still being discovered (or satisfy the UI contract).
     covered = discovery and (bool(counts) if fan_id is not None else True) and not (
-        counts.get('needed', 0) or counts.get('running', 0) or errors)
+        awaiting or blocking_errors)
     total, fans, incoming = s.execute(select(func.count(), func.count(func.distinct(Message.fan_id)),
         func.count().filter(Message.direction == 'in')).where(*scope)).one()
     tenant = s.scalar(select(OfCreatorBinding.tenant_id).where(OfCreatorBinding.id==runtime.binding_id))
@@ -113,6 +122,7 @@ def recent_progress(s, runtime, fan_id=None):
             'discoveryError':scan.last_error if scan else None,
             'conversationsDiscovered':sum(counts.values()),'conversationsReady':counts.get('complete',0),
             'conversationsAwaitingWork':counts.get('needed',0)+counts.get('running',0),
+            'conversationsUnavailable':unavailable,'blockingProviderErrors':blocking_errors,
             'messagesSavedInWindow':total,'fansWithStoredWindowMessages':fans,'providerErrors':errors,
             'completedAt':completed_at.isoformat()+'Z' if completed_at else None,
             'elapsedSeconds':max(0,((completed_at or utcnow())-p.started_at).total_seconds()),

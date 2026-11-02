@@ -65,7 +65,7 @@ def test_malformed_page_still_stops_atomically(database,monkeypatch):
     assert process_vault_jobs(store,TENANT)==0
     with Session(store.engine) as s:
         row=s.get(OfVaultSyncJob,(account,job['jobId']))
-        assert row.status=='failed' and row.page_offset==0 and row.last_error=='unsupported_vault_response'
+        assert row.status=='failed' and row.page_offset==0 and row.last_error=='unsupported_vault_response:page:type_other'
         assert s.scalar(select(func.count()).select_from(VaultItem))==0
     store.close()
 

@@ -58,67 +58,180 @@ def _stamp(value):
         raise NativeProtocolError("unsupported vault timestamp") from None
 
 
+class _Reject(ValueError):
+    """Internal: which strict check failed. Carries a fixed code, never provider content."""
+    def __init__(self, reason, row=None):
+        super().__init__(reason)
+        self.reason, self.row = reason, row
+
+
+_LOAD_REASONS = (("byte budget", "bytes"), ("response size", "size"), ("duplicate", "dup_key"),
+    ("nonfinite", "nonfinite"), ("must be an object", "not_object"), ("invalid native JSON", "json"))
+
+
+def _load_reason(problem):
+    text = str(problem.__cause__) + " " + str(problem) if problem.__cause__ is not None else str(problem)
+    for needle, code in _LOAD_REASONS:
+        if needle in text:
+            return code
+    return "other"
+
+
+def _safe_kind(value):
+    """Provider enum text is echoed only when it is a short lowercase token."""
+    return value if type(value) is str and re.fullmatch(r"[a-z_]{1,12}", value) else "other"
+
+
+def _ts(value, name, row):
+    try:
+        return _stamp(value)
+    except NativeProtocolError:
+        raise _Reject(name, row) from None
+
+
 def parse_vault_page(raw, *, owner_id):
     """Strict supported subset of the existing GET vault/media dialect.
 
     Missing isReady is not invented as True. Unsupported kinds remain visible
     but cannot become sellable products. A malformed page is applied atomically
     or not at all; no skipped malformed row can silently advance its cursor.
+
+    A rejection carries `.reason` (fixed short code, optional `.row` index) so
+    the failure is diagnosable without logging any provider content.
     """
     _id(owner_id)
-    load(raw, max_bytes=MAX_VAULT_BYTES)  # strict JSON with a separate bounded vault-page budget
+    try:
+        load(raw, max_bytes=MAX_VAULT_BYTES)  # strict JSON with a separate bounded vault-page budget
+    except NativeProtocolError as problem:
+        error = NativeProtocolError("unsupported vault response")
+        error.reason, error.row = "load_" + _load_reason(problem), None
+        raise error from None
+    row_index = None
     try:
         value = json.loads(raw)
         json.dumps(value, allow_nan=False)
+        if "list" not in value or "hasMore" not in value:
+            raise _Reject("missing_list_or_hasMore")
         rows, more = value["list"], value["hasMore"]
-        if type(rows) is not list or type(more) is not bool or len(rows) > PAGE_SIZE or more and len(rows) != PAGE_SIZE:
-            raise ValueError()
+        if type(rows) is not list:
+            raise _Reject("list_not_array")
+        if type(more) is not bool:
+            raise _Reject("hasMore_not_bool")
+        if len(rows) > PAGE_SIZE:
+            raise _Reject("page_over_limit")
+        if more and len(rows) != PAGE_SIZE:
+            raise _Reject("hasMore_short_page")
         seen = set()
-        for row in rows:
+        for row_index, row in enumerate(rows):
+            r = row_index
             if type(row) is not dict:
-                raise ValueError()
-            mid = _id(row.get("id"))
-            if mid in seen or row.get("type") not in {"photo", "video", "audio", "gif"}:
-                raise ValueError()
+                raise _Reject("row_not_object", r)
+            try:
+                mid = _id(row.get("id"))
+            except Refused:
+                raise _Reject("id_invalid", r) from None
+            if mid in seen:
+                raise _Reject("id_duplicate", r)
+            if row.get("type") not in {"photo", "video", "audio", "gif"}:
+                raise _Reject("type_" + _safe_kind(row.get("type")), r)
             seen.add(mid)
-            _stamp(row.get("createdAt"))
+            _ts(row.get("createdAt"), "createdAt", r)
             if row.get("updatedAt") is not None:
-                _stamp(row["updatedAt"])
+                _ts(row["updatedAt"], "updatedAt", r)
             for flag in ["isReady", "isProcessing", "isDeleted", "isHidden", "canView"]:
                 if flag in row and type(row[flag]) is not bool:
-                    raise ValueError()
-            if "userId" in row and _id(row["userId"]) != owner_id:
-                raise ValueError()
-            if "user" in row and (type(row["user"]) is not dict or _id(row["user"].get("id")) != owner_id):
-                raise ValueError()
+                    raise _Reject("flag_" + flag, r)
+            try:
+                if "userId" in row and _id(row["userId"]) != owner_id:
+                    raise _Reject("userId_mismatch", r)
+                if "user" in row:
+                    if type(row["user"]) is not dict:
+                        raise _Reject("user_not_object", r)
+                    if _id(row["user"].get("id")) != owner_id:
+                        raise _Reject("user_id_mismatch", r)
+            except Refused:
+                raise _Reject("owner_field_invalid", r) from None
             for dimension in ["width", "height"]:
                 if row.get(dimension) is not None and (type(row[dimension]) is not int or not 1 <= row[dimension] <= 32768):
-                    raise ValueError()
+                    raise _Reject(dimension, r)
             duration = row.get("duration")
             if duration is not None and (type(duration) not in {int, float} or not math.isfinite(duration) or not 0 <= duration <= 86400):
-                raise ValueError()
+                raise _Reject("duration", r)
             files = row.get("files")
             if files is not None:
                 if type(files) is not dict:
-                    raise ValueError()
+                    raise _Reject("files_not_object", r)
                 for variant in files.values():
                     if variant is None:
                         continue
                     if type(variant) is not dict:
-                        raise ValueError()
+                        raise _Reject("variant_not_object", r)
                     if variant.get("url") is not None:
                         url = variant["url"]
-                        if type(url) is not str or len(url) > 8192 or any(ord(c) < 32 for c in url):
-                            raise ValueError()
+                        if type(url) is not str:
+                            raise _Reject("url_not_string", r)
+                        if len(url) > 8192:
+                            raise _Reject("url_too_long", r)
+                        if any(ord(c) < 32 for c in url):
+                            raise _Reject("url_control_char", r)
                         parsed = urlsplit(url)
-                        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
-                            raise ValueError()
+                        if parsed.scheme != "https":
+                            raise _Reject("url_not_https", r)
+                        if not parsed.hostname:
+                            raise _Reject("url_no_host", r)
+                        if parsed.username or parsed.password:
+                            raise _Reject("url_credentials", r)
+                        if parsed.fragment:
+                            raise _Reject("url_fragment", r)
             folders = row.get("listStates")
-            if folders is not None and (type(folders) is not list or len(folders) > MAX_FOLDER_STATES or any(type(f) is not dict for f in folders)):
-                raise ValueError()
+            if folders is not None:
+                if type(folders) is not list:
+                    raise _Reject("listStates_not_array", r)
+                if len(folders) > MAX_FOLDER_STATES:
+                    raise _Reject("listStates_too_many", r)
+                if any(type(f) is not dict for f in folders):
+                    raise _Reject("listStates_item", r)
         return rows, more
+    except _Reject as problem:
+        error = NativeProtocolError("unsupported vault response")
+        error.reason, error.row = problem.reason, problem.row
+        raise error from None
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
-        raise NativeProtocolError("unsupported vault response") from None
+        error = NativeProtocolError("unsupported vault response")
+        error.reason, error.row = "unexpected_shape", row_index
+        raise error from None
+
+
+_TRANSPORT_REASONS = (("byte budget", "bytes"), ("not delivery evidence", "http_status"),
+    ("encoded native", "encoded"), ("must be JSON", "not_json"), ("invalid native JSON", "json"),
+    ("duplicate", "dup_key"), ("nonfinite", "nonfinite"), ("response size", "size"),
+    ("must be an object", "not_object"), ("outcome is uncertain", "uncertain"))
+
+
+def vault_failure_reason(problem):
+    """Fixed, non-sensitive reason code for a vault NativeProtocolError (<= 37 chars)."""
+    reason = getattr(problem, "reason", None)
+    if type(reason) is str:
+        stage = "page"
+    else:
+        stage = getattr(problem, "stage", None)
+        stage = stage if stage in {"identity", "page"} else "read"
+        text = str(problem)
+        reason = next((code for needle, code in _TRANSPORT_REASONS if needle in text), "other")
+        status = (getattr(problem, "read_failure", None) or {}).get("httpStatus")
+        if reason == "http_status" and type(status) is int:
+            reason = f"http_{status}"
+    reason = re.sub(r"[^A-Za-z0-9_]", "", reason)
+    return f"{stage}:{reason}"[:37]
+
+
+def _log_vault_reject(account, offset, problem, reason):
+    import logging
+    logging.getLogger(__name__).warning("onlyfans_vault_reject %s", json.dumps(
+        {"account": account if type(account) is str and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", account) else "unavailable",
+         "offset": offset if type(offset) is int else None, "reason": reason,
+         "row": getattr(problem, "row", None), "httpStatus": (getattr(problem, "read_failure", None) or {}).get("httpStatus"),
+         "responseBytes": (getattr(problem, "read_failure", None) or {}).get("responseBytes")}, sort_keys=True))
 
 
 def _connection(session, runtime):
@@ -490,7 +603,11 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             if isinstance(problem,ReadDeferred):deferred=problem.retry_at;error=deferred_error(problem)
             elif isinstance(problem,NativeAuthenticationError):error='connection_unavailable'
             elif isinstance(problem,NativeReadTransientError):error='vault_read_failed'
-            elif isinstance(problem,NativeProtocolError):error='provider_rate_limited' if hasattr(problem,'retry_after') else 'unsupported_vault_response'
+            elif isinstance(problem,NativeProtocolError):
+                if hasattr(problem,'retry_after'):error='provider_rate_limited'
+                else:
+                    reason=vault_failure_reason(problem);_log_vault_reject(account,offset,problem,reason)
+                    error=('unsupported_vault_response:'+reason)[:64]
             else:error='vault_read_failed'
         try:
             with Session(store.engine) as s, s.begin():

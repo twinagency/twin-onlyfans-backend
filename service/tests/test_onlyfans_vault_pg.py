@@ -207,7 +207,7 @@ def test_partial_invalid_page_is_not_applied_and_provider_errors_are_redacted(da
     monkeypatch.setattr(NativeProviderConnector, "vault_page", lambda self, **kw: page([media(), media(12, isReady="bad")]))
     assert process_vault_jobs(store, TENANT) == 0
     result = list_vault(store, TENANT, account)
-    assert result["items"] == [] and result["sync"]["lastError"] == "unsupported_vault_response"
+    assert result["items"] == [] and result["sync"]["lastError"] == "unsupported_vault_response:page:flag_isReady"
     queue(store, account, "e" * 64)
     def fail(self, **kw): raise RuntimeError("cookie=secret proxy=https://private.example")
     monkeypatch.setattr(NativeProviderConnector, "vault_page", fail)

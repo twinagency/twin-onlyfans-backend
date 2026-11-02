@@ -356,10 +356,18 @@ class NativeProviderConnector(NativeLoopbackConnector):
         if (type(offset) is not int or not 0 <= offset <= 1000000
                 or type(limit) is not int or not 1 <= limit <= 24):
             raise Refused("invalid bounded native vault page")
-        self.verify_identity()
+        try:
+            self.verify_identity()
+        except NativeProtocolError as problem:
+            problem.stage = "identity"  # which call failed; fixed label for diagnostics
+            raise
         path = API_PATH + "/vault/media?" + urlencode(
             {"limit":limit,"offset":offset,"sort":"desc","field":"recent","list":"all"})
-        return self._call("GET", path)
+        try:
+            return self._call("GET", path)
+        except NativeProtocolError as problem:
+            problem.stage = "page"
+            raise
 
     def vault_media_by_id(self, media_id):
         """One bounded read of a known imported asset; caller owns provenance."""

@@ -158,3 +158,67 @@ def test_fans_share_one_schema_validated_control_pool():
         factory.assert_called_once_with('postgresql://synthetic')
         with pytest.raises(Refused,match='control-store-target-changed'):
             a.control_store('postgresql://different')
+
+
+def test_a_fans_first_bubble_goes_before_other_fans_later_bubbles():
+    async def run():
+        gate=SendGate(poll_s=.001);order=[]
+        await gate.acquire(lambda:None,1,key='blocker')
+        async def send(key,priority,later):
+            await gate.acquire(lambda:None,1,priority=priority,key=key,later=later)
+            order.append(key);gate.release(key)
+        # fan-a is the oldest need and already answered once; its next bubble must not pass fan-c's first bubble
+        tasks=[asyncio.create_task(send('a2','2026-01-01T00:00:00',True)),
+               asyncio.create_task(send('b','2026-01-01T00:00:30',False)),
+               asyncio.create_task(send('c','2026-01-01T00:01:00',False))]
+        await asyncio.sleep(.02)
+        gate.release('blocker')
+        await asyncio.gather(*tasks)
+        assert order==['b','c','a2']
+        assert gate.held==0 and not gate._active
+    asyncio.run(run())
+
+
+def test_a_fan_with_its_first_bubble_sent_frees_a_preparation_slot_within_a_bound():
+    async def run():
+        svc=parent();svc.tuning=SimpleNamespace(concurrency=2)
+        waiter=asyncio.get_running_loop().create_future()
+        for fan in (1,2):
+            svc.child(fan);svc.tasks[fan]=waiter
+        assert not svc.has_preparation_slot()
+        svc.children[1].first_bubble_sent=True
+        assert svc.has_preparation_slot()                # fan 1 now only waits to send its remaining bubbles
+        svc.child(3);svc.tasks[3]=waiter
+        assert not svc.has_preparation_slot()            # two still preparing again
+        svc.children[2].first_bubble_sent=svc.children[3].first_bubble_sent=True
+        for fan in (4,5,6):
+            svc.child(fan);svc.tasks[fan]=waiter;svc.children[fan].first_bubble_sent=True
+        assert len(svc.tasks)==6 and not svc.has_preparation_slot()   # never more than 3x the preparation bound
+    asyncio.run(run())
+
+
+def test_a_throttled_continuation_gives_the_slot_to_a_waiting_first_bubble():
+    async def run():
+        gate=SendGate(max_concurrency=1,poll_s=.001);order=[]
+        gateway=object.__new__(Gateway)
+        gateway.send_gate=gate;gateway.pilot=SimpleNamespace(fan_id=1);gateway.send_priority='a'
+        gateway.abort_reason=lambda:None;gateway.send_wait_max_s=2;gateway.throttled_retries=5
+        gateway.stopped_reason=None;gateway.turn_sends=1      # one bubble already out: this is the continuation
+        tries=[]
+        async def inner(text,terms=None):
+            tries.append(1)
+            if len(tries)<=2:raise Refused("allowance-throttled")
+            order.append('continuation');return 'sent'
+        gateway._send_inner=inner
+        async def first_bubble():
+            await gate.acquire(lambda:None,2,priority='b',key=2)
+            order.append('first');gate.release(2)
+        # the continuation holds the only slot and is throttled; a first bubble arrives and queues behind it
+        sending=asyncio.create_task(gateway._send('x'))
+        await asyncio.sleep(.0)
+        waiting=asyncio.create_task(first_bubble())
+        await asyncio.sleep(.05)
+        await asyncio.wait_for(asyncio.gather(sending,waiting),5)
+        assert order==['first','continuation']
+        assert gate.held==0 and not gate._active
+    asyncio.run(run())

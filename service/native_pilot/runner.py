@@ -379,6 +379,7 @@ class Gateway:
     send_gate = None            # engine v2: the account's SendGate (service-owned); None = bounded pilot, no gate
     send_wait_max_s = 900.0
     tolerate_newer = False      # engine v2: set for a burst past the hard maximum wait (see Service.turn)
+    turn_sends = 0              # engine v2: bubbles already sent this turn (>0 = a continuation at the gate)
     send_priority = None        # engine v2: sort key at the gate (age of the fan's first unanswered message, ISO text)
     throttled_retries = 40
     open_offer_blocks = True    # engine v2: the persistent service sets False (an open offer never stops a text reply)
@@ -390,19 +391,32 @@ class Gateway:
         if gate is None:
             return await self._send_inner(text, terms)
         gate_key = self.pilot.fan_id
-        await gate.acquire(self.abort_reason, self.send_wait_max_s, priority=self.send_priority, key=gate_key)
+        await gate.acquire(self.abort_reason, self.send_wait_max_s, priority=self.send_priority, key=gate_key,
+                           later=self.turn_sends > 0)
+        holding = True
         try:
             for tries in range(self.throttled_retries):
                 try:
-                    return await self._send_inner(text, terms)
+                    sent = await self._send_inner(text, terms)
+                    self.turn_sends += 1
+                    return sent
                 except Refused as exc:
                     if exc.reason not in self.ADMISSION_RETRY or self.stopped_reason:
                         raise
+                    if self.turn_sends > 0 and gate.first_waiting():
+                        # Throttled with a first bubble queued behind us: give the slot to the fan who has had no
+                        # reply yet, then take our place again behind every first bubble.
+                        gate.release(gate_key)
+                        holding = False
+                        await gate.acquire(self.abort_reason, self.send_wait_max_s, priority=self.send_priority,
+                                           key=gate_key, later=True)
+                        holding = True
                     await asyncio.sleep(min(2.0, 0.25 * (tries + 1)))      # re-pace; the DB gate decides
             self.stopped_reason = "allowance-wait-timeout"
             raise Refused(self.stopped_reason)
         finally:
-            gate.release(gate_key)
+            if holding:
+                gate.release(gate_key)
 
     def _hold_for(self, terms):
         """The hold check that applies to THIS send: a priced card or a follow-up is a commercial action."""

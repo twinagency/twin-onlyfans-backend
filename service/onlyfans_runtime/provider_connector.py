@@ -259,6 +259,25 @@ class NativeProviderConnector(NativeLoopbackConnector):
             return self._signed_request(method, path, body, max_response_bytes=MAX_HISTORY_BYTES)
         return self._signed_request(method, path, body)
 
+    def messages(self, *, fan_id, before_id, limit):
+            # The upstream message GET can clear a human chatter's unread badge.
+            # Only this explicitly owned connector gains the narrow undo operation;
+            # the general _call write allowlist remains unchanged.
+            from unread_preservation import preserve_unread
+            self._ready(); self._limit(limit); _id(fan_id)
+            if fan_id == self._handle.owner_id:
+                raise Refused("native conversation cannot target its owner")
+            if before_id is not None:
+                _id(before_id)
+            self.verify_identity()
+            parent_messages = super().messages
+            return preserve_unread(
+                account_id=self.account_id, fan_id=fan_id,
+                snapshot=lambda: load(self._signed_request("GET", API_PATH + f"/chats/{fan_id}"), max_bytes=MAX_HISTORY_BYTES),
+                read=lambda: parent_messages(fan_id=fan_id, before_id=before_id, limit=limit),
+                restore=lambda target: load(self._signed_request("DELETE", API_PATH + f"/chats/{target}/mark-as-read")),
+            )
+
     def verify_identity(self):
         value = load(self._call("GET", API_PATH + "/users/me"))
         if type(value.get("id")) is not int or value["id"] != self._handle.owner_id:

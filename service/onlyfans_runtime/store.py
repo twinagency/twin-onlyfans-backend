@@ -235,7 +235,10 @@ class Store:
             # Registration is deliberately not an update/allowance reset.
             if s.get(OfRuntime, account_id) is not None:
                 raise Refused("runtime already registered")
-            s.add(OfRuntime(account_id=account_id, binding_id=binding.id, activated_at=activated_at, enabled=enabled))
+            runtime=OfRuntime(account_id=account_id, binding_id=binding.id, activated_at=activated_at, enabled=enabled)
+            s.add(runtime);s.flush()
+            from .history_policy import ensure
+            ensure(s,runtime,new_account=True)
 
     def record(self, tenant_id, account_id, event: Event, *, source="ws"):
         payload = event.payload()

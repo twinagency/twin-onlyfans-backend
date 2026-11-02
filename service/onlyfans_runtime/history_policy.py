@@ -54,8 +54,15 @@ def configured(account):
     return account in value
 
 
+def automatic_new_accounts():
+    value = os.environ.get('ONLYFANS_RECENT_HISTORY_NEW_ACCOUNTS', '0')
+    if value not in {'0', '1'}:
+        raise Refused('invalid recent-history new-account switch')
+    return value == '1'
+
+
 def policy(s, account, binding=None):
-    if not configured(account):
+    if not configured(account) and not automatic_new_accounts():
         return None
     row = s.get(OfHistoryPolicy, account)
     if row is None or not row.enabled:
@@ -65,12 +72,18 @@ def policy(s, account, binding=None):
     return row
 
 
-def ensure(s, runtime):
-    if not configured(runtime.account_id):
+def ensure(s, runtime, *, new_account=False):
+    explicit = configured(runtime.account_id)
+    automatic = automatic_new_accounts()
+    if not explicit and not automatic:
         return None
     row = s.get(OfHistoryPolicy, runtime.account_id)
+    # The global switch admits new connections only. It must not enroll an
+    # existing account when the importer first sees it after a rollout.
+    if row is None and not explicit and not (automatic and new_account):
+        return None
     if row is None:
-        now = utcnow()
+        now = runtime.activated_at if new_account else utcnow()
         row = OfHistoryPolicy(account_id=runtime.account_id, binding_id=runtime.binding_id,
             enabled=True, started_at=now, cutoff_at=now-timedelta(days=30), updated_at=now)
         s.add(row)

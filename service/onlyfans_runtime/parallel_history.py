@@ -122,8 +122,9 @@ def main():
             or os.environ.get('ONLYFANS_PARALLEL_IMPORT_ENABLED') != '1'):
         raise SystemExit('explicit worker tenant and parallel import enablement required')
     configured = json.loads(os.environ.get('ONLYFANS_IMPORT_CAPACITY', '{}'))
-    if not isinstance(configured, dict) or not configured:
-        raise SystemExit('explicit account capacity map required')
+    from .history_policy import automatic_new_accounts
+    if not isinstance(configured, dict) or (not configured and not automatic_new_accounts()):
+        raise SystemExit('explicit account capacity map or new-account rollout required')
     for account in configured:
         capacity(account)
     from .store import Store
@@ -137,7 +138,15 @@ def main():
         while not stop.is_set():
             rows, cursor, _ = load_worker_cohort(store, tenant, after_account=cursor,
                 stop=stop, include_read_only=True)
-            result.update((a.account_id, a) for a in rows if a.account_id in configured)
+            # Explicit capacity overrides remain unchanged. Newly enrolled
+            # accounts use the existing conservative default governor limits.
+            from sqlalchemy.orm import Session
+            from .history_policy import automatic_new_accounts, policy
+            with Session(store.engine) as session:
+                for account in rows:
+                    if account.account_id in configured or (automatic_new_accounts()
+                            and policy(session,account.account_id) is not None):
+                        result[account.account_id] = account
             if cursor is None:
                 return result
         return result

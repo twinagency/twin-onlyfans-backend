@@ -136,3 +136,12 @@ def test_shutdown_during_refresh_backoff_does_not_issue_reads(monkeypatch):
     def refresh(state):calls.append(state['now']);raise _db_timeout()
     state=_coordinator(monkeypatch,refresh=refresh,until=.5)
     assert calls==[0] and state['steps']==[]
+
+
+def test_hundred_accounts_all_get_turns_in_bounded_pool(monkeypatch):
+    accounts={f'of-{i:03d}':_bound(str(i)) for i in range(100)}
+    state=_coordinator(monkeypatch,initial=accounts,refresh=lambda _: accounts,until=20)
+    assert {account for _,account,_ in state['steps']}==set(accounts)
+    first={}
+    for t,account,_ in state['steps']:first.setdefault(account,t)
+    assert max(first.values())<20

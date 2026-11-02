@@ -14,7 +14,7 @@ _CURL = {5: "proxy_dns", 6: "host_dns", 7: "connect", 18: "partial_response",
          92: "http2", 97: "proxy"}
 ERROR_CODES = frozenset({"provider_timeout", "provider_dns_failed", "provider_proxy_failed",
     "provider_tls_failed", "provider_transport_failed", "provider_http_transient",
-    "provider_rate_limited", "provider_auth_required", "provider_protocol_failed"})
+    "provider_rate_limited", "provider_auth_required", "provider_protocol_failed", "provider_thread_unavailable"})
 
 
 def operation(path):
@@ -39,6 +39,8 @@ def observe(error, *, account, path, started, status=None, response_bytes=0,
     category = _CURL.get(code, "transport")
     if callback_failed:
         category, failure = "response_limit", "provider_protocol_failed"
+    elif type(status) is int and status in {404, 410} and operation(path) == 'messages':
+        category, failure = 'thread_unavailable', 'provider_thread_unavailable'
     elif isinstance(error, NativeAuthenticationError):
         category, failure = "authentication", "provider_auth_required"
     elif isinstance(error, NativeRateLimitError):

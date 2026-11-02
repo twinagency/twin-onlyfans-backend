@@ -1,0 +1,13 @@
+# New accounts and staged rollout
+
+The policy is reusable across creators. The Maile metrics describe only of-323358988 and are predominantly reused archive work, not seven accounts and not a fresh-account benchmark.
+
+The existing ONLYFANS_RECENT_HISTORY_ACCOUNTS JSON list controls individual account pilots. ONLYFANS_RECENT_HISTORY_NEW_ACCOUNTS=1 additionally enrolls newly provisioned/registered accounts, atomically with account creation, using activated_at minus 30 days. Its default is 0. Existing unflagged accounts are never enrolled by importer discovery. Existing policy rows/cutoffs survive retries, switch-off and switch-on. Existing explicit account flags still work when the global switch is off.
+
+Automatic cohorts are read through the existing paginated connection loader, require a durable policy row, and use the existing default provider capacity unless an explicit per-account capacity already exists. The existing global worker pool bounds concurrency. No rates, inflight settings, model caps, reply settings or purchase controls are raised. A synthetic 100-account registration test verifies separate cutoff rows, preserved existing accounts, disabled replies and switch-off preservation. A separate simulated 100-account scheduler test verifies all accounts receive turns through a two-worker pool. Neither proves real provider/model performance for 100 creators.
+
+Production remains Maile-only while the pilot is incomplete. Before expanding: qualify the pilot, remove any Maile-only ONLYFANS_PROFILE_ACCOUNTS process cohort restriction in the reviewed deployment configuration, and enable the new-account switch consistently across API, worker, importer and learner. Existing accounts are enrolled deliberately through their account flags; they reuse existing archives and memories. Rollback disables both switches and preserves all stored data. Never enable replies as part of this rollout.
+
+The provider has no verified timestamp-order guarantee in this release. The supported fallback still traverses IDs and filters persisted initial messages by the fixed date. It does not promise fewer provider requests or completion within 90 minutes. HTTP 404/410 on message-thread reads are recorded as provider_thread_unavailable, retain the same cursor, remain incomplete, and retry after one hour. They do not imply deletion and do not count as successful empty coverage.
+
+Maile-specific approval of creator biography/boundaries is independent of implementing this reusable mechanism. Her current saved personality revisions are drafts. The mechanism must never manufacture a creator's approval from historical chats.

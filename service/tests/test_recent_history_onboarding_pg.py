@@ -353,3 +353,57 @@ def test_runtime_lock_contention_is_retryable_and_failed_session_rolls_back(read
             assert not contender.in_transaction()
     with Session(engine) as db, db.begin():
         assert db.scalar(select(OfRuntime).where(OfRuntime.account_id==A).with_for_update(nowait=True))
+
+
+def test_new_account_rollout_freezes_cutoffs_for_100_creators_without_enrolling_existing(ready,monkeypatch):
+    from onlyfans_runtime.connections import provision_account
+    from onlyfans_runtime.history_policy import ensure,policy
+    store,recovery,engine,cutoff=ready
+    monkeypatch.setenv('ONLYFANS_RECENT_HISTORY_NEW_ACCOUNTS','1')
+    with Session(engine) as s,s.begin():
+        runtime=s.get(OfRuntime,A)
+        assert ensure(s,runtime).cutoff_at==cutoff
+    accounts=[]
+    for i in range(100):
+        accounts.append(provision_account(store,T,creator_id=f'synthetic-{i}',creator_name='Synthetic Creator',
+            owner_id=7000000+i,handle='synthetic',command_key=str(i).zfill(64),actor='op-session:'+'a'*64))
+    with Session(engine) as s,s.begin():
+        assert s.scalar(select(func.count()).select_from(OfHistoryPolicy))==101
+        for a in accounts:
+            runtime=s.get(OfRuntime,a);p=policy(s,a,runtime.binding_id)
+            assert not runtime.enabled
+            assert p.started_at==runtime.activated_at and p.cutoff_at==runtime.activated_at-timedelta(days=30)
+            assert ensure(s,runtime).cutoff_at==p.cutoff_at
+    monkeypatch.setenv('ONLYFANS_RECENT_HISTORY_NEW_ACCOUNTS','0')
+    old=provision_account(store,T,creator_id='existing',creator_name='Existing Synthetic',owner_id=8000000,
+        handle='existing',command_key='f'*64,actor='op-session:'+'a'*64)
+    monkeypatch.setenv('ONLYFANS_RECENT_HISTORY_NEW_ACCOUNTS','1')
+    with Session(engine) as s,s.begin():
+        assert ensure(s,s.get(OfRuntime,old)) is None
+        assert policy(s,old) is None
+    monkeypatch.setenv('ONLYFANS_RECENT_HISTORY_NEW_ACCOUNTS','0')
+    with Session(engine) as s:
+        assert policy(s,accounts[0]) is None
+        assert s.get(OfHistoryPolicy,accounts[0]) is not None
+        assert policy(s,A).cutoff_at==cutoff
+
+
+def test_missing_thread_preserves_cursor_blocks_readiness_and_backs_off(ready):
+    from onlyfans_runtime.read_failures import observe, failure_code
+    from onlyfans_runtime.native_protocol import NativeProtocolError
+    import time
+    store,recovery,engine,cutoff=ready
+    claim=recovery.claim(T,A)
+    failure=NativeProtocolError('private detail')
+    failure.read_failure=observe(failure,account=A,path='/api2/v2/chats/101/messages',started=time.monotonic(),status=404)
+    assert failure_code(failure)=='provider_thread_unavailable'
+    recovery.fail(T,claim,code=failure_code(failure))
+    with Session(engine) as s:
+        row=s.get(OfRecentHistoryCursor,(A,F))
+        assert row.status=='needed' and row.before_id==claim.before_id
+        assert row.retry_at>utcnow()+timedelta(minutes=59)
+        progress=recent_progress(s,s.get(OfRuntime,A))
+        assert progress['initialHistory']['state']=='incomplete'
+        assert progress['initialHistory']['providerErrors']['provider_thread_unavailable']==1
+        assert not progress['lifetimeHistory']['complete']
+    assert recovery.claim(T,A) is None

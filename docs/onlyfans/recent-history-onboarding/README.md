@@ -1,48 +1,41 @@
 # Recent-history onboarding release, 2 November 2026
 
-**Maile's backend pilot is deployed and running. AI replies are confirmed disabled. The pilot and full dashboard release are not complete.** No fresh onboarding duration, 90-minute result, or numeric time/cost saving is claimed.
+**Backend repair deployed; Maile pilot still incomplete. AI replies remain disabled.** No fresh onboarding speedup or 90-minute result is demonstrated.
 
-Latest handoff reconciliation and the deployment plan are in [RECONCILIATION-20261102.md](RECONCILIATION-20261102.md). The importer refresh fix is committed for testing; no further deployment was made. Live readback is blocked by the offline control device.
-
-## Current deployed release
-
-| Item | Verified value |
+| Release item | Verified value |
 | --- | --- |
-| Application/build source | `9870b64889833b16a36397c8ffa45dc7e236cea3` |
-| Deployment scripts | `be42c3120aa75c402514a1dbeef89b0908da230e`, packaged from `21edbb880a563748db71a38d9b81a38be5b3fd32` |
-| Worker, importer, learner image | `sha256:9a70ed1001e221fc4a9171112b3ac49112cfa7cdbe11dd209e0267e59271330e` |
-| API image | `sha256:a0aa29f506aa0f81f1a4cfb275ca7d185ce1a771f9489c91254311ac28e87934` |
-| Schema | `0110_recent_history` |
-| Pilot account | Maile, `of-323358988` only |
-| Deployment completed | 2 November 2026, 19:44 Brisbane |
-| Policy start / fixed cutoff | `2026-11-02T09:44:23.165525Z` / `2026-10-03T09:44:23.165525Z` |
-| Existing provider capacity | 2 requests/second, 8 in-flight slots; unchanged |
-| AI controls | Maile paused through existing audited control; reply supervisor remains stopped |
-| Dashboards | Both original containers and images preserved |
+| Application source | 91c260ba54451ba51525cd3cc2ab0737bedc1592 |
+| Worker/importer/learner image | sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319 |
+| API image | sha256:60cbff853ce2142e58728429c8aa350def2ce7ee0f288babaca3e8a35c4ec265 |
+| Latest repair deployed | 2 November, 22:19 Brisbane |
+| Schema | 0110_recent_history, unchanged |
+| Fixed cutoff | 2026-10-03T09:44:23.165525Z, unchanged |
+| Control state | Maile paused; supervisor stopped; both dashboards unchanged |
 
-The API, worker, importer and learner were read back running on the expected revision-labelled images with zero restarts. The additive production migration and API health check succeeded. The actual compiled OF dashboard label passed two checks; its legacy response cannot label an incomplete lifetime archive complete.
+All four deployed services were independently read back running on the expected images with zero restarts. Health, environment preservation, release locks and image/configuration guards passed. The controlled restart took 33.45 seconds. Rates, capacity and daily caps were preserved. Only Maile is opted in. The original pre-pilot backup and schema-compatible flag-off rollback remain private on the host.
 
-Private pre-pilot backup: 750,543,194 bytes, SHA256 `8dd2fcd543acbba784c8c8e1b2d4c268cfcf90739489bcfbeff323f207621337`. Configuration/container snapshots, backup and rollback configuration remain on the operational host. No database restore or destructive migration was performed in production.
+## Measured checkpoint, 22:19 Brisbane
 
-## Reporting repair and measurement limitation
+- Coverage: 90,476 stored window messages across 16,573 fans. Initial coverage incomplete; 23,897 recent conversation cursors not ready. Lifetime completeness is false.
+- Reuse: all 88,539 pre-pilot window sources unchanged, no baseline sources lost, 2,714 completed incoming receipts reused.
+- New work: 1,932 additional window sources in the comparison snapshot, including concurrent live arrivals and the backup-to-activation gap; 1,087 canonical additions committed by history-page imports.
+- Extraction: 91 new completed incoming receipts, including 33 for reused sources. Current coverage query shows 2,805 of 2,835 incoming messages processed, with 30 pending.
+- New calls: 58; provider-reported charges US$0.0085; zero token estimates, active reservations or unresolved reservations in that group. No pre-existing-call settlement changes were counted as new cost.
+- Cumulative model-call latency: 67.553 seconds. Receipt commit span: 7,620.57 seconds. Neither is end-to-end memory-processing duration.
+- Provider attempts: 5,926 in the comparison snapshot; 5,935 in the later coverage query. Separate reads and concurrent activity explain differing totals.
+- Policy elapsed: 9,322.85 seconds, approximately 2h35m, and still incomplete. This includes live operations, validation work and restart time on an existing archive; it is not a fresh-onboarding performance result.
 
-Reporting repair **`c8216d33ef409be5bc99aed0f654b1ccfe3023b3` is committed but not deployed**. It addresses two observed failures:
+The original baseline file is empty because the initial promotion omitted Docker stdin attachment. Baseline evidence was reconstructed successfully from the verified private pre-pilot dump. Its transaction snapshot is bounded between 19:42:23 and 19:43:45 Brisbane, before the policy start at 19:44:23. The gap and concurrent arrivals are explicit in the aggregate measurement. It must not be presented as an original start-of-pilot capture.
 
-1. The initial promotion's `docker run` omitted `-i`. The Python stdin baseline command did not run, leaving an empty snapshot. The original deployment manifest's `baselineCapturedBeforePilotJobs=true` claim is incorrect. `evidence/pilot-deployment.json` corrects it. Future promotion attaches stdin and validates the complete JSON snapshot before starting pilot jobs.
-2. The progress receipt query omitted the tenant column at the front of the receipt primary key. On Maile it hit the existing 10-second statement timeout. The tenant-scoped query completed in **1.068 seconds** in a read-only production check. The repair also scopes measurement receipts and error/hold reporting to the tenant. A new PostgreSQL regression verifies that another tenant's receipt cannot complete this tenant's memory.
+Offline recovery uses a disposable internal network and synthetic DB credentials. Long-read timeouts apply only to that isolated database. Production timeouts were not changed. Successful recovery cleaned up the temporary database/network. Recovery tooling commits are 62191c352e4940cf7c2f9ae9c1709da3e37cac54 and d0d100cf9a4ecb02a62d61579ff51a41a284bdd0.
 
-The intact pre-pilot dump can supply source, receipt and model-call evidence. `recover-pilot-baseline.py` restores it into a disposable PostgreSQL container on an internal network with no production credentials or external access, migrates that copy, applies the live frozen cutoff only to the copy, and produces private fingerprints. It keeps the original empty snapshot and records the dump snapshot's lower/upper timing bounds and live-arrival gap. **Recovery has not been confirmed executed.** A reconstructed result must never be presented as an original start-of-pilot capture or fresh onboarding benchmark.
+## Remaining blockers
 
-The repair artifact was prepared and the remote staging command was attempted, but its submission/completion is unconfirmed after the control device stopped responding. A subsequent AWS list returned no matching `source-c821` command in the latest 20 commands. Do not resubmit blindly: inspect command records and host files first. No reporting-repair promotion command has been submitted.
+Recent discovery is unfinished. Provider failures remain visible: the checkpoint records 208 protocol failures, nine timeouts, one transient HTTP failure and one conflicting-history cursor. Bounded post-deployment diagnostics identify HTTP 404 for inaccessible message threads; these are not successful coverage. Initial readiness must stay false.
 
-- Repair artifact SHA256: `38ccaab934c9981e2e3ede85edc7951054082501d93e44495049169ff6c98ba8` (15,459 bytes).
-- Intended S3 key: `onlyfans/releases/recent-history/c8216d33ef409be5bc99aed0f654b1ccfe3023b3/repair.zip` in the existing private transfer bucket.
-- Intended host source: `/var/lib/twin-release/recent-history-20261102-resume/source-c821`.
-- Intended qualified build: `/var/lib/twin-release/recent-history-20261102-resume/repair-c8216d33ef40`.
+There are 14 memory jobs with profile-model-request-failed and 30 incoming sources awaiting receipts. Preserve their existing retry/review controls and budget. Creator onboarding reports review_required; no creator approval is fabricated. The exact running dashboard source remains missing, so the new card is not live. No rollout expansion has occurred.
 
-The last small readback showed 6,648 recent conversations needed and two running; discovery was still running without a recorded discovery error. These are an intermediate cursor checkpoint, not complete fan coverage. A separate query counted 30 incoming sources still lacking matching receipts. Neither observation establishes completed memory or onboarding.
-
-`MAILE-MEASUREMENT.json` distinguishes these facts from the earlier provisional stored-archive snapshot. Final recent-window fan/message counts, provider requests, import duration, memory duration and new actual model charges remain unmeasured. The older 87,646-message / 16,571-fan observation used a different provisional cutoff and is not the pilot result.
+The next work is to resolve provider accessibility/coverage and model-request blockers, complete the existing onboarding approval path, and recover the exact dashboard source. The actual end-to-end import/memory completion time and full-history cost/time comparison remain unknown. Stored incoming-character volume in the window is about 80.9% of the stored incoming archive; this is source volume, not a measured 19.1% billing saving or a lifetime estimate.
 
 ## Source integration and dashboard provenance
 
@@ -86,23 +79,12 @@ Approved onboarding uses the existing immutable review/approval workflow. It sep
 
 A returning fan's live inbound message activates one durable creator/fan older-history job. Repeated triggers preserve cursors and may raise priority for earlier references, commitments or missing purchase context. Stored older sources are reused before further reads. Existing bounded admission/backoff, aging and periodic older turns preserve live priority and eventual progress within available capacity. Chat text never establishes payment. The engine is instructed to use available evidence and the existing verification/review path; older history is not promised before the first reply.
 
-## Checks and release continuation
+## Verification and rollback
 
-- Initial deployed exact-base candidate: **66 passed**, 333.14 seconds pytest / 336.525 seconds wall. SSM `db69d054-c32c-44a7-87b0-3934d88765a7`.
-- Original promotion: SSM `7ede05c8-6637-403e-8461-8c45f6bc0ba7` succeeded, including backup, audited Maile pause, migration, health and actual-dashboard label checks. The empty-baseline defect is explicitly corrected above.
-- Reporting repair local PostgreSQL: **22 passed**, 44.28 seconds pytest / 46.332 seconds wall.
-- Earlier broad/targeted PostgreSQL checks: 211 passed plus later 56 and two capacity cases; counts overlap and are not a distinct-test total. Local compatibility 57 and earlier measurement three also passed.
-- Four component Chromium checks and 12 strict-parser checks passed. Full live frontend build remains unverified.
-- GitHub runs ended in `startup_failure`; no GitHub CI pass is claimed. One stale ledger fixture also fails on the untouched original baseline and remains explicit; this change does not qualify the separate concurrent-reply R9 gates.
+The deployed combined candidate passed 75 isolated checks on the exact immutable production bases: 336.37 seconds pytest / 339.89 seconds wall. The earlier c821 reporting candidate's recovered result is 67 passed. Earlier local 59-check reconciliation, real PostgreSQL lock rollback and final seven-case scheduler results remain separate; counts overlap. Upstream concurrent-reply performance results are not a live onboarding benchmark.
 
-On restored control access:
+Promotion/measurement SSM command ebf8874a-de09-4cbc-b09a-e9d3513b5c35 succeeded. Baseline recovery 9f76aa26-3302-48b0-afe3-bfced8a56616 succeeded. The earlier waiting promotion 27fac695-70f5-46d3-9359-48d92d90c688 was cancelled before deployment. Raw aggregate evidence is in evidence/live-deployment-91c260.json and evidence/pilot-measurement-20261102.json. Private snapshots stay on the host.
 
-1. Inspect AWS records and the intended repair directory before retrying staging. The initial deployed images above remain the last verified live state.
-2. Run the committed reporting build/qualification and isolated baseline recovery if not already completed. Never reset pilot cursors or delete imported data.
-3. Require a passing repair qualification and a valid reconstructed baseline before invoking `promote-reporting-repair.py`. It checks image/configuration leases and release locks, preserves all environment values, cutoff, stopped supervisor and dashboards, and makes no schema change.
-4. Run the committed `measure.py`. It keeps private fingerprints on the host and publishes only aggregates: unchanged reused sources, new/edited sources, reused/new receipts, history-page canonical additions, HTTP attempts, and new calls separately from pre-existing-call settlement changes. Provider-reported charges, token estimates and active/unresolved reservations stay separate. Receipt span and cumulative model latency are not end-to-end memory duration.
-5. Declare recent readiness only after successful discovery and every relevant thread. Expand only after Maile's coverage, controls and measurement checks pass. No expansion is authorized by this checkpoint.
+GitHub CI startup failures are not passes. Four component Chromium checks and 12 parser checks do not qualify a full live Next build. The separate concurrent-reply release gates remain separate.
 
-## Rollback
-
-A private schema-compatible flag-off configuration is retained. Stop pilot importer/learner work, remove Maile from the rollout allowlist on cooperating services, and retain compatible binaries and all data/cursors/receipts. Turning the flag on again reuses the fixed cutoff and progress. Old binaries pinned to schema HEAD `0106_parallel_history_reads` cannot be used as an image-only rollback after `0110_recent_history`. The migration refuses destructive downgrade. Never automatically re-enable Maile replies or start the stopped supervisor.
+For rollback, stop scoped importer/learner work and apply the retained schema-compatible flag-off configuration. Preserve every message, memory, purchase, receipt and cursor. Old binaries pinned to schema 0106 cannot be used as an image-only rollback after 0110. Never automatically re-enable Maile replies or start the stopped supervisor.

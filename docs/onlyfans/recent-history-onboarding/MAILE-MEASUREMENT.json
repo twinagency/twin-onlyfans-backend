@@ -1,164 +1,196 @@
 {
-  "accountId": "of-323358988",
   "referenceAccount": "Maile",
-  "releaseStatus": "maile_backend_pilot_live_measurement_repair_not_deployed",
+  "applicationCommit": "91c260ba54451ba51525cd3cc2ab0737bedc1592",
+  "images": {
+    "worker": "sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319",
+    "api": "sha256:60cbff853ce2142e58728429c8aa350def2ce7ee0f288babaca3e8a35c4ec265"
+  },
+  "releaseStatus": "backend_repair_deployed_maile_pilot_incomplete",
   "rolloutEnabled": true,
-  "recentWindowMessages": null,
-  "recentWindowFans": null,
+  "aiRepliesEnabled": false,
   "recentWindowCoverageComplete": false,
-  "providerHttpAttempts": null,
-  "elapsedImportSeconds": null,
-  "memoryProcessingSeconds": null,
-  "actualProviderReportedModelCostUsd": null,
-  "unresolvedReservationsUsd": null,
+  "memoryProcessingComplete": false,
+  "recentWindowMessages": 90476,
+  "recentWindowFans": 16573,
+  "measurement": {
+    "pilot": {
+      "schemaVersion": "of-history-pilot-comparison.v1",
+      "accountId": "of-323358988",
+      "basis": "Observed pilot with reused archive; not fresh creator onboarding performance",
+      "observedElapsedSeconds": 9441.824003,
+      "existingWindowSourcesAtStart": 88539,
+      "unchangedExistingWindowSourcesReused": 88539,
+      "newWindowSourcesSaved": 1932,
+      "existingWindowSourcesEdited": 0,
+      "baselineSourcesNoLongerInScope": 0,
+      "reusedCompletedIncomingReceipts": 2714,
+      "newlyCompletedIncomingReceipts": 91,
+      "newlyCompletedReceiptsForReusedSources": 33,
+      "newReceiptCommitSpanSeconds": 7620.570209,
+      "receiptSpanIsNotTotalMemoryProcessingTime": true,
+      "newRecentProviderHttpAttempts": 5926,
+      "newModelCalls": 58,
+      "newModelCallAmounts": {
+        "providerReportedUnits": 85,
+        "tokenEstimateUnits": 0,
+        "activeReservationUnits": 0,
+        "unresolvedReservationUnits": 0
+      },
+      "amountUsdPerUnit": "0.0001",
+      "preExistingModelCallSettlementChanges": {
+        "providerReportedUnits": 0,
+        "tokenEstimateUnits": 0,
+        "activeReservationUnits": 0,
+        "unresolvedReservationUnits": 0
+      },
+      "cumulativeNewModelCallLatencyMs": 67553,
+      "newSourcesIncludeConcurrentLiveArrivals": true,
+      "fullHistoryTimeOrCostSavingsDemonstrated": false,
+      "baselineProvenance": {
+        "source": "pre-pilot database dump reconstructed in an isolated database",
+        "backupSha256": "8dd2fcd543acbba784c8c8e1b2d4c268cfcf90739489bcfbeff323f207621337",
+        "snapshotTimeLowerBound": "2026-11-02T09:42:23.355491+00:00",
+        "snapshotTimeUpperBound": "2026-11-02T09:43:45.361569+00:00",
+        "pilotPolicyStartedAt": "2026-11-02 09:44:23.165525Z",
+        "originalSnapshotWasEmpty": true,
+        "notFreshOnboarding": true,
+        "newSourcesMayIncludeLiveArrivalsBetweenBackupAndPilot": true,
+        "elapsedComparisonIncludesBackupToActivationGap": true,
+        "productionWrites": false
+      },
+      "newCanonicalMessagesSavedByHistoryPages": 1087
+    },
+    "coverage": {
+      "schemaVersion": "of-onboarding-measurement.v1",
+      "measuredAt": "2026-11-02T12:19:46.443062+00:00",
+      "accountId": "of-323358988",
+      "progress": {
+        "schemaVersion": "of-history-recovery.v1",
+        "accountId": "of-323358988",
+        "fanId": null,
+        "status": "incomplete",
+        "discoveryComplete": true,
+        "discoveryCursor": null,
+        "discoveryLastError": null,
+        "conversationsDiscovered": 23897,
+        "conversationsComplete": 161,
+        "conversationsUnscheduled": 0,
+        "conversationsRetrying": 8660,
+        "conversationsDeferredForLiveInput": 0,
+        "pagesCommitted": 16509,
+        "messagesObserved": 38714,
+        "messagesAdded": 23701,
+        "totalMessages": null,
+        "percentComplete": null,
+        "proof": "available_provider_history",
+        "recentRecoveryNeeded": true,
+        "fanProfiles": {
+          "known": 23893,
+          "named": 23740,
+          "missingNames": 153,
+          "unchecked": 1488,
+          "unavailable": 512,
+          "retrying": 0
+        },
+        "recentHistory": {
+          "creatorOnboarding": {
+            "state": "review_required",
+            "routineCreatorArchiveExtraction": "disabled"
+          },
+          "schemaVersion": "of-recent-history.v1",
+          "startedAt": "2026-11-02T09:44:23.165525Z",
+          "cutoffAt": "2026-10-03T09:44:23.165525Z",
+          "retentionPolicy": "preserve_all_stored_data",
+          "initialHistory": {
+            "state": "incomplete",
+            "discoveryComplete": false,
+            "discoveryPasses": 0,
+            "discoveryError": null,
+            "conversationsDiscovered": 23897,
+            "conversationsReady": 0,
+            "conversationsAwaitingWork": 23897,
+            "messagesSavedInWindow": 90476,
+            "fansWithStoredWindowMessages": 16573,
+            "providerErrors": {
+              "provider_timeout": 9,
+              "provider_http_transient": 1,
+              "conflicting_history": 1,
+              "provider_protocol_failed": 208
+            },
+            "completedAt": null,
+            "elapsedSeconds": 9322.849274,
+            "providerOrdering": "id_desc_exhaustive_date_filter",
+            "orderingEvidence": null,
+            "providerRequests": 5935,
+            "pageReadAttempts": 2971,
+            "failedReadAttempts": 226,
+            "unfinishedReadAttempts": 1,
+            "providerRequestMeasurement": "HTTP attempts counted at dispatch, including identity probes and failures"
+          },
+          "memoryProcessing": {
+            "state": "incomplete",
+            "incomingMessagesInWindow": 2835,
+            "messagesProcessed": 2805,
+            "messagesAwaitingProcessing": 30,
+            "firstCurrentRunReceiptAt": "2026-11-02 09:44:26.832827",
+            "lastCurrentRunReceiptAt": "2026-11-02 11:51:27.403036",
+            "receiptIntervalMeasurement": "wall interval between committed memory receipts; cumulative model latency is separate",
+            "errors": 14,
+            "budgetHold": null,
+            "completionDoesNotMeanLifetimeHistory": true
+          },
+          "memoryModelAccounting": {
+            "providerReportedUsd": "0.0085",
+            "tokenEstimateUsd": "0",
+            "activeReservationUsd": "0",
+            "unresolvedReservationUsd": "0",
+            "scope": "account memory calls since fixed policy start, including activated older jobs",
+            "cumulativeModelCallMilliseconds": 67553
+          },
+          "lifetimeHistory": {
+            "complete": false,
+            "conversationsComplete": 161
+          },
+          "olderHistory": {
+            "activatedFanJobs": 0,
+            "completedFanJobs": 0,
+            "pendingFanJobs": 0,
+            "scheduler": "bounded existing archive lane"
+          },
+          "lifetimeTotalMessages": null,
+          "percentComplete": null
+        },
+        "lifetimeHistoryComplete": false
+      },
+      "comparison": {
+        "basis": "current-binding stored archive only; unimported lifetime history is unknown",
+        "storedMessages": 97581,
+        "storedWindowMessages": 90476,
+        "storedIncomingMessages": 3427,
+        "storedWindowIncomingMessages": 2835,
+        "storedIncomingCharacters": 164322,
+        "storedWindowIncomingCharacters": 132882,
+        "recentIncomingCharacterFraction": 0.8086683462956877,
+        "inference": "Character counts describe source volume, not billed tokens or a measured time/cost saving.",
+        "fullHistoryProviderRequests": null,
+        "fullHistoryModelCostUsd": null,
+        "fullHistoryEndToEndSeconds": null,
+        "measuredSpeedup": null
+      }
+    },
+    "aiRepliesEnabled": false
+  },
+  "blockers": [
+    "Recent discovery and thread traversal incomplete; 23,897 recent conversations not yet ready at checkpoint.",
+    "Provider HTTP 404 inaccessible threads and other provider errors cannot count as covered.",
+    "30 incoming messages awaiting processing; 14 job errors profile-model-request-failed.",
+    "Approved creator onboarding state is review_required.",
+    "Exact source for the running OF dashboard remains missing; new recent-status card is not deployed.",
+    "Timestamp order unverified; exhaustive traversal may not save provider requests."
+  ],
+  "elapsedImportCompletionSeconds": null,
+  "endToEndMemoryProcessingSeconds": null,
   "measuredSpeedup": null,
   "demonstratedNinetyMinuteOnboarding": false,
-  "blockers": [
-    "Reporting repair is committed and locally tested but its exact-base build submission/completion is unconfirmed after the remote device stopped responding; no repair promotion was submitted.",
-    "The original pre-pilot snapshot is empty because Docker stdin was not attached. The verified pre-pilot database dump is intact. The committed isolated baseline reconstruction has not been confirmed executed; no fresh onboarding performance claim is valid.",
-    "The original progress receipt query times out at 10 seconds on Maile. A read-only tenant-scoped query completed in 1.068 seconds; this repair is not yet deployed.",
-    "Initial conversation discovery and lifetime coverage remain incomplete. Final request counts, duration and new actual model cost are unmeasured.",
-    "The exact source for running dashboard revision 3d0ee2e3 is still unavailable (Git object lookup again returned 404). Existing dashboards remain unchanged; the new progress card is not live.",
-    "Provider timestamp ordering is unverified. Exhaustive traversal may not save provider requests."
-  ],
-  "comparison": {
-    "measuredFullHistoryRun": null,
-    "interpretation": "No defensible numeric speedup or cost reduction is available yet. The report tool compares verified stored workload without claiming an unknown lifetime total. Synthetic regression duration is not onboarding duration."
-  },
-  "productionAccess": {
-    "supabaseProject": "aouaenqayfltoqrmpitg",
-    "readOnlyConnectionEventuallySucceeded": true,
-    "operationalTablesPresent": false,
-    "operationalAccessRecovered": true,
-    "operationalDatabaseAccess": "AWS SSM on twin-dashboard-prod; Supabase is a separate integration database"
-  },
-  "observedStoredDataBaseline": {
-    "status": "read_only_baseline_observed_not_deployed",
-    "ssmInstance": "i-09a9dd3bd749643a5",
-    "measuredAt": "2026-11-02T05:39:53.550451Z",
-    "fixedComparisonCutoff": "2026-10-03T05:39:53.550451Z",
-    "accountId": "of-323358988",
-    "storedMessagesAtFirstQuery": 94571,
-    "storedRecentMessagesAtFirstQuery": 87646,
-    "storedRecentFansAtFirstQuery": 16571,
-    "storedRecentIncomingAtFirstQuery": 2947,
-    "coverageComplete": false,
-    "historyCursorStates": {
-      "complete": 161,
-      "needed": 23731,
-      "running": 5
-    },
-    "historyImporterRunning": false,
-    "profileLearnerRunning": false,
-    "replySupervisorRunning": false,
-    "schema": "0106_parallel_history_reads",
-    "workerImagePrefix": "f728669d70d9",
-    "apiImagePrefix": "04532a2d9034",
-    "laterSnapshot": {
-      "storedIncomingAll": 3535,
-      "storedIncomingInFixedWindow": 2947,
-      "storedOutgoingAll": 91123,
-      "storedOutgoingInFixedWindow": 84786,
-      "note": "A separate query after the first snapshot; live data continued changing. Counts are not a complete lifetime inventory."
-    },
-    "memoryCostCurrentUtcDay": {
-      "settledLedgerUnits": 16270,
-      "settledCalls": 853,
-      "unresolvedReservationUnits": 1316,
-      "unresolvedCalls": 17,
-      "usdPerUnit": "0.0001",
-      "note": "Existing accounting ledger amounts before this feature. Settled amounts may include token estimates. These are not measured feature cost or verified provider invoice charges."
-    },
-    "patchCompatibility": {
-      "matchedFiles": 13,
-      "checkedFiles": 14,
-      "mismatch": "service/onlyfans_runtime/native_planning.py",
-      "basis": "Exact uniqueness of before-contexts for task-specific changes; not a complete semantic or migration qualification."
-    },
-    "featureImportDurationSeconds": null,
-    "featureActualModelCostUsd": null,
-    "productionChangesMade": false
-  },
-  "qualification": {
-    "liveBaseTargetedTestsPassed": 66,
-    "liveBaseSeconds": 336.5251062660245,
-    "productionSchemaCopyUpgradePassed": true,
-    "localFinalReadinessRegression": {
-      "passed": 2,
-      "seconds": 9.227
-    },
-    "componentBrowserChecksPassed": 4,
-    "fullDashboardBuildVerified": false,
-    "databaseBackup": {
-      "privateHostOnly": true,
-      "bytes": 750543194,
-      "sha256": "8dd2fcd543acbba784c8c8e1b2d4c268cfcf90739489bcfbeff323f207621337"
-    },
-    "perAccountPilot": "Maile only, enabled; AI replies disabled; existing 2 rps / 8 slots and daily model cap preserved",
-    "actualFeatureRun": true,
-    "additionalFinalImageRerun": "Initial 9870 exact-base qualification passed 66 tests; the reporting repair is a distinct, not yet verified build.",
-    "newCompatibilityTests": {
-      "passed": 57,
-      "seconds": 99.956
-    },
-    "newMeasurementTests": {
-      "passed": 3,
-      "seconds": 6.655
-    },
-    "earlierFinalImageResult": {
-      "passed": 23,
-      "seconds": 110.11
-    },
-    "latestBuild": {
-      "ssmCommand": "db69d054-c32c-44a7-87b0-3934d88765a7",
-      "result": "passed",
-      "sourceCommit": "9870b64889833b16a36397c8ffa45dc7e236cea3",
-      "artifactSha256": "544a71d0ba10bfa7ae47aa7ed1524e00b2db9d6d1349b9525be91a9dc4c294cd",
-      "passed": 66,
-      "seconds": 336.5251062660245
-    },
-    "reportingRepairLocalTests": {
-      "passed": 22,
-      "wallSeconds": 46.332,
-      "pytestSeconds": 44.28
-    }
-  },
-  "applicationCommit": "9870b64889833b16a36397c8ffa45dc7e236cea3",
-  "deploymentConfigurationCommit": "be42c3120aa75c402514a1dbeef89b0908da230e",
-  "repairCommit": "c8216d33ef409be5bc99aed0f654b1ccfe3023b3",
-  "fixedCutoffAt": "2026-10-03T09:44:23.165525Z",
-  "policyStartedAt": "2026-11-02T09:44:23.165525Z",
-  "aiRepliesEnabled": false,
-  "baselineSnapshot": {
-    "captured": false,
-    "originalDeploymentManifestClaimWasIncorrect": true,
-    "recoveryStatus": "committed_procedure_not_verified_executed",
-    "recoverySource": "verified pre-pilot private PostgreSQL dump",
-    "timingLimitation": "Reconstructed comparison must include explicit dump snapshot bounds and live arrivals between backup and policy activation."
-  },
-  "observedRecentCursorCheckpoint": {
-    "complete": 0,
-    "running": 2,
-    "needed": 6648,
-    "discoveryState": "running",
-    "discoveryError": null,
-    "isFinalMeasurement": false
-  },
-  "images": {
-    "worker": "sha256:9a70ed1001e221fc4a9171112b3ac49112cfa7cdbe11dd209e0267e59271330e",
-    "api": "sha256:a0aa29f506aa0f81f1a4cfb275ca7d185ce1a771f9489c91254311ac28e87934"
-  },
-  "handoffReconciliation": {
-    "standaloneCommitCompared": "91a8325b1963b0b134d81d7008bc366f93cf51ef",
-    "concurrentReplyHeadRetained": "766a7992908e5706d024b90e083d6a260f93a8c5",
-    "importerRefreshFix": "transient DB backoff, suspend stale cohort, isolate discovery failure; not deployed",
-    "newDeploymentPerformed": false,
-    "liveReadback": "blocked: control device offline",
-    "tests": {
-      "combinedPassed": 59,
-      "runtimeLockPassed": 1,
-      "finalSchedulerPassed": 7,
-      "countsOverlap": true
-    }
-  }
+  "snapshotCountLimitation": "Comparison snapshot and subsequent coverage query are separate reads; concurrent arrivals can change totals."
 }

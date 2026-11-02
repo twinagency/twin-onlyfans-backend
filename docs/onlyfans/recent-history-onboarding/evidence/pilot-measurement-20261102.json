@@ -1,0 +1,168 @@
+{
+  "pilot": {
+    "schemaVersion": "of-history-pilot-comparison.v1",
+    "accountId": "of-323358988",
+    "basis": "Observed pilot with reused archive; not fresh creator onboarding performance",
+    "observedElapsedSeconds": 9441.824003,
+    "existingWindowSourcesAtStart": 88539,
+    "unchangedExistingWindowSourcesReused": 88539,
+    "newWindowSourcesSaved": 1932,
+    "existingWindowSourcesEdited": 0,
+    "baselineSourcesNoLongerInScope": 0,
+    "reusedCompletedIncomingReceipts": 2714,
+    "newlyCompletedIncomingReceipts": 91,
+    "newlyCompletedReceiptsForReusedSources": 33,
+    "newReceiptCommitSpanSeconds": 7620.570209,
+    "receiptSpanIsNotTotalMemoryProcessingTime": true,
+    "newRecentProviderHttpAttempts": 5926,
+    "newModelCalls": 58,
+    "newModelCallAmounts": {
+      "providerReportedUnits": 85,
+      "tokenEstimateUnits": 0,
+      "activeReservationUnits": 0,
+      "unresolvedReservationUnits": 0
+    },
+    "amountUsdPerUnit": "0.0001",
+    "preExistingModelCallSettlementChanges": {
+      "providerReportedUnits": 0,
+      "tokenEstimateUnits": 0,
+      "activeReservationUnits": 0,
+      "unresolvedReservationUnits": 0
+    },
+    "cumulativeNewModelCallLatencyMs": 67553,
+    "newSourcesIncludeConcurrentLiveArrivals": true,
+    "fullHistoryTimeOrCostSavingsDemonstrated": false,
+    "baselineProvenance": {
+      "source": "pre-pilot database dump reconstructed in an isolated database",
+      "backupSha256": "8dd2fcd543acbba784c8c8e1b2d4c268cfcf90739489bcfbeff323f207621337",
+      "snapshotTimeLowerBound": "2026-11-02T09:42:23.355491+00:00",
+      "snapshotTimeUpperBound": "2026-11-02T09:43:45.361569+00:00",
+      "pilotPolicyStartedAt": "2026-11-02 09:44:23.165525Z",
+      "originalSnapshotWasEmpty": true,
+      "notFreshOnboarding": true,
+      "newSourcesMayIncludeLiveArrivalsBetweenBackupAndPilot": true,
+      "elapsedComparisonIncludesBackupToActivationGap": true,
+      "productionWrites": false
+    },
+    "newCanonicalMessagesSavedByHistoryPages": 1087
+  },
+  "coverage": {
+    "schemaVersion": "of-onboarding-measurement.v1",
+    "measuredAt": "2026-11-02T12:19:46.443062+00:00",
+    "accountId": "of-323358988",
+    "progress": {
+      "schemaVersion": "of-history-recovery.v1",
+      "accountId": "of-323358988",
+      "fanId": null,
+      "status": "incomplete",
+      "discoveryComplete": true,
+      "discoveryCursor": null,
+      "discoveryLastError": null,
+      "conversationsDiscovered": 23897,
+      "conversationsComplete": 161,
+      "conversationsUnscheduled": 0,
+      "conversationsRetrying": 8660,
+      "conversationsDeferredForLiveInput": 0,
+      "pagesCommitted": 16509,
+      "messagesObserved": 38714,
+      "messagesAdded": 23701,
+      "totalMessages": null,
+      "percentComplete": null,
+      "proof": "available_provider_history",
+      "recentRecoveryNeeded": true,
+      "fanProfiles": {
+        "known": 23893,
+        "named": 23740,
+        "missingNames": 153,
+        "unchecked": 1488,
+        "unavailable": 512,
+        "retrying": 0
+      },
+      "recentHistory": {
+        "creatorOnboarding": {
+          "state": "review_required",
+          "routineCreatorArchiveExtraction": "disabled"
+        },
+        "schemaVersion": "of-recent-history.v1",
+        "startedAt": "2026-11-02T09:44:23.165525Z",
+        "cutoffAt": "2026-10-03T09:44:23.165525Z",
+        "retentionPolicy": "preserve_all_stored_data",
+        "initialHistory": {
+          "state": "incomplete",
+          "discoveryComplete": false,
+          "discoveryPasses": 0,
+          "discoveryError": null,
+          "conversationsDiscovered": 23897,
+          "conversationsReady": 0,
+          "conversationsAwaitingWork": 23897,
+          "messagesSavedInWindow": 90476,
+          "fansWithStoredWindowMessages": 16573,
+          "providerErrors": {
+            "provider_timeout": 9,
+            "provider_http_transient": 1,
+            "conflicting_history": 1,
+            "provider_protocol_failed": 208
+          },
+          "completedAt": null,
+          "elapsedSeconds": 9322.849274,
+          "providerOrdering": "id_desc_exhaustive_date_filter",
+          "orderingEvidence": null,
+          "providerRequests": 5935,
+          "pageReadAttempts": 2971,
+          "failedReadAttempts": 226,
+          "unfinishedReadAttempts": 1,
+          "providerRequestMeasurement": "HTTP attempts counted at dispatch, including identity probes and failures"
+        },
+        "memoryProcessing": {
+          "state": "incomplete",
+          "incomingMessagesInWindow": 2835,
+          "messagesProcessed": 2805,
+          "messagesAwaitingProcessing": 30,
+          "firstCurrentRunReceiptAt": "2026-11-02 09:44:26.832827",
+          "lastCurrentRunReceiptAt": "2026-11-02 11:51:27.403036",
+          "receiptIntervalMeasurement": "wall interval between committed memory receipts; cumulative model latency is separate",
+          "errors": 14,
+          "budgetHold": null,
+          "completionDoesNotMeanLifetimeHistory": true
+        },
+        "memoryModelAccounting": {
+          "providerReportedUsd": "0.0085",
+          "tokenEstimateUsd": "0",
+          "activeReservationUsd": "0",
+          "unresolvedReservationUsd": "0",
+          "scope": "account memory calls since fixed policy start, including activated older jobs",
+          "cumulativeModelCallMilliseconds": 67553
+        },
+        "lifetimeHistory": {
+          "complete": false,
+          "conversationsComplete": 161
+        },
+        "olderHistory": {
+          "activatedFanJobs": 0,
+          "completedFanJobs": 0,
+          "pendingFanJobs": 0,
+          "scheduler": "bounded existing archive lane"
+        },
+        "lifetimeTotalMessages": null,
+        "percentComplete": null
+      },
+      "lifetimeHistoryComplete": false
+    },
+    "comparison": {
+      "basis": "current-binding stored archive only; unimported lifetime history is unknown",
+      "storedMessages": 97581,
+      "storedWindowMessages": 90476,
+      "storedIncomingMessages": 3427,
+      "storedWindowIncomingMessages": 2835,
+      "storedIncomingCharacters": 164322,
+      "storedWindowIncomingCharacters": 132882,
+      "recentIncomingCharacterFraction": 0.8086683462956877,
+      "inference": "Character counts describe source volume, not billed tokens or a measured time/cost saving.",
+      "fullHistoryProviderRequests": null,
+      "fullHistoryModelCostUsd": null,
+      "fullHistoryEndToEndSeconds": null,
+      "measuredSpeedup": null
+    }
+  },
+  "aiRepliesEnabled": false
+}

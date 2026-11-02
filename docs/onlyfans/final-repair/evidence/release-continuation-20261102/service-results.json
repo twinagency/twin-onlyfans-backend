@@ -1,0 +1,4013 @@
+{
+  "environment": {
+    "started_utc": "2026-11-02T12:46:55.107051+00:00",
+    "base_remote_head": "1b4bbf646adab11e5cdfee4eff25b772cee37dc9",
+    "ordinary_parallelism": 3,
+    "timing_browser_and_native_service": "sequential after ordinary modules",
+    "transports": "synthetic; loopback Python socket guard; scrubbed environment",
+    "postgres": "16.15 tmpfs with retained test-only UID shim, not production image/durability evidence",
+    "source_hash_count": 958,
+    "status": "finished",
+    "finished_utc": "2026-11-02T13:31:28.166516+00:00",
+    "source_unchanged": true,
+    "passed": 282,
+    "failed": 3
+  },
+  "results": [
+    {
+      "module": "test_active_selling.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_active_selling.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 14.11,
+      "source_sha256": "26d77be5a237d1275a6d20088039fbeaa85c3935ae5cd80049692bdf42566699"
+    },
+    {
+      "module": "test_active_selling_turn.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_active_selling_turn.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.403,
+      "source_sha256": "af0896248502db5f29fa0d494956c3ab4cc5e9126b668e81061380917b8e9e59"
+    },
+    {
+      "module": "test_agency_launch_contracts.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_agency_launch_contracts.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.284,
+      "source_sha256": "b856e92bf89765215905aa9b786a0ac08b822a68ddf78d5be6e09a47d26fdc55"
+    },
+    {
+      "module": "test_automatic_vault_descriptions_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_automatic_vault_descriptions_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 12.602,
+      "source_sha256": "988e4b96c7aeb2197d5c3e43c77aa7253bdeac8dfbc27da0b831e60ceb6b3e3c"
+    },
+    {
+      "module": "test_commercial_full_path.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 31.613,
+      "source_sha256": "4d773a8f6bdb4c04f98a225914de53a8f437d163b7c00ee6bfb4cbba508236e4"
+    },
+    {
+      "module": "test_commercial_progress.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_progress.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.026,
+      "source_sha256": "ba8d6c90271fab7e9208c19b2fe22970f364f4e940893c74f7daa345c23540b6"
+    },
+    {
+      "module": "test_concurrent_admission_units.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_admission_units.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.817,
+      "source_sha256": "e4f498ebcffef6d9a44d678e8e5e7ef5c05db5c4f6576def092394ffac615157"
+    },
+    {
+      "module": "test_concurrent_delivery.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_delivery.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 27.053,
+      "source_sha256": "fc546b78d9589eb37c4843c6e0574c51615926e0d3ed35b7027c4733ffbe7f39"
+    },
+    {
+      "module": "test_concurrent_delivery_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_delivery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 5.796,
+      "source_sha256": "bc110e7c7f6c975e01a8565ebbdb4b034e1f81e0260d2fb18eb02122093ce86b"
+    },
+    {
+      "module": "test_concurrent_path_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_path_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.192,
+      "source_sha256": "4a936d2d467655ba92e1b7c3a18b3a45d251aa3019c61f601018de30eaf865f0"
+    },
+    {
+      "module": "test_concurrent_path_regressions.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_concurrent_path_regressions.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.469,
+      "source_sha256": "6e5eaed6c63f10a3aa8aef7ff119dacbdd8be1217ffc63632e8b90556fc1afee"
+    },
+    {
+      "module": "test_configuration_negotiation.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_configuration_negotiation.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.779,
+      "source_sha256": "2108e61fed75bc0a8b092c059275d182cc9c9ed35be9e50a8c8d5d557321d03f"
+    },
+    {
+      "module": "test_contextual_evidence.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_contextual_evidence.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.623,
+      "source_sha256": "09e48715cc0f610a0c80ee41fad177bf931546073386b76042f4e85bf69dcfde"
+    },
+    {
+      "module": "test_contextual_evidence_scope.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_contextual_evidence_scope.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.619,
+      "source_sha256": "0717c51a8c8a133232291bb8e2dba9e957a2a1c24ce5af2361b6ef1ea791e3cf"
+    },
+    {
+      "module": "test_contextual_item_scope_migration.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_contextual_item_scope_migration.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.768,
+      "source_sha256": "93d528f2194f249cd8a45824d15a972f5909f2a09d8f9ce6509089441984ddcc"
+    },
+    {
+      "module": "test_contextual_native_turn.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_contextual_native_turn.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 5.958,
+      "source_sha256": "cb90994c14bc714a1bfe423576ab05dcf24f6cb9fab39f1d3adab8c1ade6bf18"
+    },
+    {
+      "module": "test_contextual_offers.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_contextual_offers.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 4.295,
+      "source_sha256": "c0428a2cf169715f650c84cdcf3f1922d505ac817c40f583856f7a7a0d6e24a4"
+    },
+    {
+      "module": "test_contextual_release_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_contextual_release_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 10.828,
+      "source_sha256": "08f6d5939fbbe8606dff284b04e8132ca63cf56457018f7eaede61e8f4576a01"
+    },
+    {
+      "module": "test_conversation_holds_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_conversation_holds_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 83.496,
+      "source_sha256": "a3927d9959a7078eca6bbfce083723738c2736d9756bc8280a9e20932aac3261"
+    },
+    {
+      "module": "test_conversation_policy.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_conversation_policy.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.523,
+      "source_sha256": "cc805b72088593d1d768c759f99fb4263f62a5c993dc2ecb4856e4f56d69d72b"
+    },
+    {
+      "module": "test_creator_opening_prices.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_creator_opening_prices.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.97,
+      "source_sha256": "498def01f19a901d99061df6885449228700bc72e68b0ba6e8bcb786e2edcc03"
+    },
+    {
+      "module": "test_crm_control_contract_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_crm_control_contract_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 8.937,
+      "source_sha256": "b06e443c2cd10e4815065d4671a9c055800a5e06a89c7f804adc5bdc6379804e"
+    },
+    {
+      "module": "test_crm_history_repair_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_crm_history_repair_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 7.857,
+      "source_sha256": "c2d670fd03235fb74efb7183abd8aece966cf2aaedacab6e070d63606369ccfa"
+    },
+    {
+      "module": "test_crm_read_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_crm_read_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 8.02,
+      "source_sha256": "07940a1b3b24e14d9edeab57f5fb4e1b2122d6ceeb6ce48341c49b25a8b58338"
+    },
+    {
+      "module": "test_crm_resolution_jobs_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_crm_resolution_jobs_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 8.969,
+      "source_sha256": "dfab442f0360230c5597978a00904527fc0580527826bcdd19a43f6314990657"
+    },
+    {
+      "module": "test_crm_video_regressions.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_crm_video_regressions.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.878,
+      "source_sha256": "f601d88e960d62be0c680977858166be707cae92885ece1fc8262700e3f92f31"
+    },
+    {
+      "module": "test_default_attention_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_default_attention_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 14.364,
+      "source_sha256": "8a339429e3037128e60c8d2f7213bf0d6dc45e623e060e92b123fa63533d0659"
+    },
+    {
+      "module": "test_fastt_activation.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_activation.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.219,
+      "source_sha256": "1f83c63ed7d28c5f5b0ae1c739cd767158d9579d75b7b89a85c4ca53e6430831"
+    },
+    {
+      "module": "test_fastt_activation_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_activation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 12.635,
+      "source_sha256": "def7a67b5e33b116e783bc5babef7892426c24282e6465fdab40408b396dc7d2"
+    },
+    {
+      "module": "test_fastt_controls_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 29.848,
+      "source_sha256": "2719d42bd36ff665078806e89da955bf0429e116de11ca62d3b09450e149c532"
+    },
+    {
+      "module": "test_fastt_conversation_holds.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_conversation_holds.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.877,
+      "source_sha256": "55b3893944937692fbe4cc9ffd526d70d39af0717cdb7e8ec5b3f2018a23a74e"
+    },
+    {
+      "module": "test_fastt_engine_v2.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_engine_v2.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 35.319,
+      "source_sha256": "bb23689c9d7fc3be8710f323a96c3b4d81753ff955aa3c4e626161143b3c0e32"
+    },
+    {
+      "module": "test_fastt_engine_v2_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_engine_v2_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 5.351,
+      "source_sha256": "6e5a138e0a046214b096ef419e7ab2c23960051030a504f40bfac77f03bb523d"
+    },
+    {
+      "module": "test_fastt_engine_v2_units.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_engine_v2_units.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.22,
+      "source_sha256": "52fb66125d0099f5480fe9a258688a69936efe329589d02c7dfc682626bd90f7"
+    },
+    {
+      "module": "test_fastt_new_conversations_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_new_conversations_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 31.313,
+      "source_sha256": "41fd8d5cb6aea38bdfa471127e6baaf4d86c2e8016f7c1fa6032192d07fb89fd"
+    },
+    {
+      "module": "test_fastt_platform_scope.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_platform_scope.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.771,
+      "source_sha256": "251c011a56818b8680a1c2cd0801a5f4e76a2bf4bc5fe9d58b95637aaaafc059"
+    },
+    {
+      "module": "test_fastt_quality_guards.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_quality_guards.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.527,
+      "source_sha256": "a452b971130b887b2375aef14871534a6262a6dacf07b8e27dedb9a97fd0d2b9"
+    },
+    {
+      "module": "test_fastt_read_priority_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_read_priority_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 8.701,
+      "source_sha256": "1fb5662f955db57d5f1700d91e05206552d284579e155d56fb4262e835a91f12"
+    },
+    {
+      "module": "test_fastt_reply_budget.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_reply_budget.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.186,
+      "source_sha256": "8d673d11c58b5aa3deb4af7f2cd5aaab26b02b91ac6269edf6a73fb59ce95dc5"
+    },
+    {
+      "module": "test_fastt_requested_caption.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_requested_caption.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 53.805,
+      "source_sha256": "e0abaddadb3dfb209c773189b6189248ad0d019816196e682f2a20b455296376"
+    },
+    {
+      "module": "test_fastt_scope_agreement.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_scope_agreement.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.573,
+      "source_sha256": "f1748ca54ec3f682179416ad183fee8791afea0f5454cbed2b5e93daebcd1ca5"
+    },
+    {
+      "module": "test_fastt_scope_db.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_scope_db.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.176,
+      "source_sha256": "9e1f92ea37867abe78bde5f2ca91b768643edd39c4fdae3ab73b9299e597fd7d"
+    },
+    {
+      "module": "test_fastt_scope_manual_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_scope_manual_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 7.207,
+      "source_sha256": "0826c8e3d8ae9f154bfdff027967482b169d4054baa9cc8d479690200c09e97c"
+    },
+    {
+      "module": "test_fastt_scope_wide.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_scope_wide.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.58,
+      "source_sha256": "51356170bfce1a5147012f7734211025ef2d3f464a60660af8ffaad5e9dc94e0"
+    },
+    {
+      "module": "test_fastt_wire_stop.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_fastt_wire_stop.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 5.395,
+      "source_sha256": "e0a82e846245fa66c081b3701df9d6ecb90913d887fb06dc328adae903793498"
+    },
+    {
+      "module": "test_first_offer_benchmark.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_first_offer_benchmark.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.566,
+      "source_sha256": "7f0f024e4984139cfb6a7d3c052d3f1233a9fa02c4971786663c38a37443425c"
+    },
+    {
+      "module": "test_history_capacity_turns.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_history_capacity_turns.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.218,
+      "source_sha256": "de674775777c0903424fe70902217b328fcb72c4c62b426219ba393ed87c32a8"
+    },
+    {
+      "module": "test_history_html_archive_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_history_html_archive_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.443,
+      "source_sha256": "4da38a4b87c196fa449241e22631eeff38e3e3b2f53e3d8bfe26cad5c95f005e"
+    },
+    {
+      "module": "test_history_legacy_breaks.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_history_legacy_breaks.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.52,
+      "source_sha256": "f8fefe2a4d42bedee6148efda00866f2eb36bd92763a9b1f9a41d8d4072aa7f6"
+    },
+    {
+      "module": "test_iso45_isolation_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_iso45_isolation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 18.664,
+      "source_sha256": "4fb00d1b0d9f46d0fdbdf79ef24b9b0e55e2889484f5b68e3ae9fe71e1ce99a1"
+    },
+    {
+      "module": "test_iso45_roles_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_iso45_roles_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 23.163,
+      "source_sha256": "d57165427966482815eb9cf7e1463b9769903a3b897f62dc2d94b275e28c606e"
+    },
+    {
+      "module": "test_ledger_date_filters.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_ledger_date_filters.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 9.508,
+      "source_sha256": "a15bfca2534f60f67aa36a34f88aa83098e4fc8c52ef5f94b222d672030bd28f"
+    },
+    {
+      "module": "test_ledger_read_fairness_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_ledger_read_fairness_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 18.088,
+      "source_sha256": "707ec6781e5ddca65d47c4c03a6bc60166436a7293289b4b103345b620b7ebd0"
+    },
+    {
+      "module": "test_ledger_refresh_schedule.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_ledger_refresh_schedule.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.569,
+      "source_sha256": "cecd7501e1e9a914e100046fab9cf0e8774f03bd610d0d4a313d500a7c1bac64"
+    },
+    {
+      "module": "test_manual_attachment_history_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_manual_attachment_history_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 60.515,
+      "source_sha256": "4fe48249ce19f08736a545fa2bbaaf1c9613eef659968e87c5a878d75b916034"
+    },
+    {
+      "module": "test_manual_vault_composer_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_manual_vault_composer_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 21.758,
+      "source_sha256": "4d2f011b489d8729b481ebbaf06923144c4564391ab15bf58499492d99413b02"
+    },
+    {
+      "module": "test_native_pilot_attribution_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_attribution_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 10.628,
+      "source_sha256": "1391daed7a0573ba521b42ab2f7e2a9f78542cb283b8365bf1f100e2ea7b26e4"
+    },
+    {
+      "module": "test_native_pilot_caption_vault.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_caption_vault.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.628,
+      "source_sha256": "928e85c655f998ab76c6f671142447869ac0d7ef6805ff992b0017466ceb5a47"
+    },
+    {
+      "module": "test_native_pilot_content.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_content.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.178,
+      "source_sha256": "2ea480486c1c1c6e4f81e23bb1d41846595dace72689b99a5732b2e6514378d9"
+    },
+    {
+      "module": "test_native_pilot_context.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_context.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 4.988,
+      "source_sha256": "c1376a789927a27d4723a4cb1dc6eab3232a59a072f0925caba1ea6a9906237c"
+    },
+    {
+      "module": "test_native_pilot_daily_allowance.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_daily_allowance.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.216,
+      "source_sha256": "dca0ef8edf7606bc3ae2a183d0904251889019d4fad5ffdd52a17975d00e9ebe"
+    },
+    {
+      "module": "test_native_pilot_daily_allowance_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_daily_allowance_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.427,
+      "source_sha256": "92ddaa0a3aba95f73f2263cc9944e89b0eb8ac647067df2c380a0eed7943c71e"
+    },
+    {
+      "module": "test_native_pilot_engine.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_engine.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.94,
+      "source_sha256": "84ba294358a193371277b108b1050745f0d45566deb62aaa38379c60899a975c"
+    },
+    {
+      "module": "test_native_pilot_expiry.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_expiry.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.941,
+      "source_sha256": "90cd333886503114f99837e4e71664b4a2305701c388d1add538a1bf4f2d5ed4"
+    },
+    {
+      "module": "test_native_pilot_followups.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_followups.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 4.583,
+      "source_sha256": "0012889f05272ab36c43ce57895e932e802f11f69c17f7a974be4b3f82593d60"
+    },
+    {
+      "module": "test_native_pilot_identity.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_identity.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.37,
+      "source_sha256": "a5c280be3ee06d607cf2dd3859e976022c52e06806f697afa599b3cbdd85c433"
+    },
+    {
+      "module": "test_native_pilot_ledger.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_ledger.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.426,
+      "source_sha256": "735cd9e4d1009afabfdc8b556785a70dc15d64b3e6b922b3f8fab52a2f2e35ed"
+    },
+    {
+      "module": "test_native_pilot_load_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_load_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 10.711,
+      "source_sha256": "69f2232f38665f94a81880ddae55ff2fb1ff9367a280900de3b16d1140c7ba26"
+    },
+    {
+      "module": "test_native_pilot_manifest.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_manifest.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.217,
+      "source_sha256": "a232085d2f9453e66686995d4b72846a8509a19c5c40dcb4a70c895a5be72d2f"
+    },
+    {
+      "module": "test_native_pilot_model.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_model.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.918,
+      "source_sha256": "cabbfcdd47869931b0793edaad0ad434a8f63bad69a89115588c25d7231fc128"
+    },
+    {
+      "module": "test_native_pilot_offers.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_offers.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 8.11,
+      "source_sha256": "270aaccfc494683447aa2930290a03a1c9ce8127d2072abcec7aaa02228c03d1"
+    },
+    {
+      "module": "test_native_pilot_overlap.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_overlap.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.979,
+      "source_sha256": "06705965316858f329c78009a688acf19b74139c939bcc782fbcdc67a24023e5"
+    },
+    {
+      "module": "test_native_pilot_postsale.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_postsale.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.781,
+      "source_sha256": "f060db45659c06fbd91db612d859056529607e8b3192aeef3d010a5d3be8a816"
+    },
+    {
+      "module": "test_native_pilot_postsale_engine.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_postsale_engine.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 13.62,
+      "source_sha256": "52153f2e7ea36149a6fb8fd68232ed7e7d292e065daaf60cce782c7c1d7b4a93"
+    },
+    {
+      "module": "test_native_pilot_receipt_recovery.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_receipt_recovery.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.327,
+      "source_sha256": "0d377ed34ecb0afdb6407ecafec343be4c3e0c81664aed25c352208b4d0979a7"
+    },
+    {
+      "module": "test_native_pilot_recovery.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_recovery.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.867,
+      "source_sha256": "91d3f3984a0558ccfc538166690d6aaa59fdf2d2c8a78d30f743326d6fa6b0a0"
+    },
+    {
+      "module": "test_native_pilot_reporting.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_reporting.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.225,
+      "source_sha256": "dc9b479736e1d7660594c0f93bdcb9f7ad881340c5954d0db0a96fea5de9f764"
+    },
+    {
+      "module": "test_native_pilot_resolver_seam.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_resolver_seam.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.33,
+      "source_sha256": "a8eb551c01bc1dde01462442739de3fe467197c7ac4e2e9977b67bc04f2768ab"
+    },
+    {
+      "module": "test_native_pilot_runner.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_runner.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.135,
+      "source_sha256": "56985c89ffeb4b622ae3fbea7f24aa5bb88b8529f853c00eb6bf92f80a7fe127"
+    },
+    {
+      "module": "test_native_pilot_runtime.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_runtime.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 4.584,
+      "source_sha256": "fb419c614a770c25a534abf36a874b41e601f4e33309b2f9e08531bb512b79d1"
+    },
+    {
+      "module": "test_native_pilot_service.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 44.915,
+      "source_sha256": "2dcc2c865f18618238d257989d039b6ffab103b45e606822cb54059c1409682a"
+    },
+    {
+      "module": "test_native_pilot_service_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 85.36,
+      "source_sha256": "65646a7aaf5ac457bf83d1631242f452e97bc902bcf4a226af3ec4b191a78cb7"
+    },
+    {
+      "module": "test_native_pilot_storage_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_storage_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 14.479,
+      "source_sha256": "894d95dc8eb788f4b87c7a23d188c67606fe32885ab4ce62a2acf093593c1317"
+    },
+    {
+      "module": "test_native_pilot_supervisor.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_supervisor.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.368,
+      "source_sha256": "a2da664a7de2d75714f5523d49eacdea622ff39f2375bda951bb66779e87925d"
+    },
+    {
+      "module": "test_native_pilot_vault.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_vault.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.819,
+      "source_sha256": "afecf1331bf64f073d91aecaa3b096a8d2727400d7ac759c5802616da76c358e"
+    },
+    {
+      "module": "test_native_pilot_vision.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_vision.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.081,
+      "source_sha256": "5e5026288eb2a9ba0f53c062805230e4995338ab9d2f96b4425c5029174e9481"
+    },
+    {
+      "module": "test_native_reply_format.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_reply_format.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.924,
+      "source_sha256": "026064935f5a04cc181f9d7630a1a8e972f27f01aee701a5b9e2022f1a726616"
+    },
+    {
+      "module": "test_native_reply_pacing.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_reply_pacing.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.622,
+      "source_sha256": "f596da2e4afa55a722e47684f4c4723af218f118bc35c5d7296a3b02acc0dee8"
+    },
+    {
+      "module": "test_native_reply_pacing_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_reply_pacing_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 30.318,
+      "source_sha256": "35bc118774c3b94d19bf44b789b89972bd64d1d747ae41cc0bc92bb30c8db8b3"
+    },
+    {
+      "module": "test_native_reply_pacing_upgrade_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_reply_pacing_upgrade_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 5.03,
+      "source_sha256": "9c96ac01319b9d101ef16e4c19c40b02fd5cd4a1393ef7ea69252c84ec82c483"
+    },
+    {
+      "module": "test_offer_restriction_policy.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_offer_restriction_policy.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.57,
+      "source_sha256": "db4e632d390461524a6132d9d4ef6e5eb7f262478e4e2c1af56994656a91419c"
+    },
+    {
+      "module": "test_offer_selection_fresh.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_offer_selection_fresh.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.192,
+      "source_sha256": "a260eff368076a64781eff8deea00ad5c77b9e76452ae21d9ba227899adf39f2"
+    },
+    {
+      "module": "test_onlyfans_acceptance_tools.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_acceptance_tools.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.019,
+      "source_sha256": "21566adde7040f405f8cf8b61827b9344cd69a554bd2541b1b647b3d863fd810"
+    },
+    {
+      "module": "test_onlyfans_activation_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_activation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 38.581,
+      "source_sha256": "35f300bef461c34cea8c93d203d158aa0d1a75b0aa148034ffd37bbccb1c71f7"
+    },
+    {
+      "module": "test_onlyfans_agency_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_agency_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 12.172,
+      "source_sha256": "7d8791b4eada27ad1accc8d422dd23e9f798c06e1b4d2125bfec0d21a8370ab4"
+    },
+    {
+      "module": "test_onlyfans_ai_filter.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_ai_filter.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.734,
+      "source_sha256": "88b63939b34b593413023f828b43760cc0b8b441334620c361e6bd74ee04525b"
+    },
+    {
+      "module": "test_onlyfans_automatic_imports_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_automatic_imports_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 18.76,
+      "source_sha256": "22c468ef7eb2c3980c31013729dde1f23a19c9f7e717e807b83c224849c4844f"
+    },
+    {
+      "module": "test_onlyfans_browser_capture.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_browser_capture.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.669,
+      "source_sha256": "0d9971e0cc9417719d53722656f2765466a76214e28ff90678e22dd72c7a97db"
+    },
+    {
+      "module": "test_onlyfans_bulk_controls_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_bulk_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 12.791,
+      "source_sha256": "020203f38bcd2a48591f73900901fef1a0b8b1af3ecf5adc3754d77d1017c5e1"
+    },
+    {
+      "module": "test_onlyfans_campaign_media_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_campaign_media_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 59.146,
+      "source_sha256": "e5ed243c55f6e343feb4bd1492f8a2600fd49cde1e71060104d8f7464c7e78c7"
+    },
+    {
+      "module": "test_onlyfans_campaign_reporting_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_campaign_reporting_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 17.775,
+      "source_sha256": "11d4ed43b7ba6165c138853f4e8c0565906ab754311fa5f013f61ef760c94d2f"
+    },
+    {
+      "module": "test_onlyfans_campaigns_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_campaigns_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 49.346,
+      "source_sha256": "7919c12817aa4c813680e38b449096781f7c90b4b6f8a9de90501081585f04ae"
+    },
+    {
+      "module": "test_onlyfans_capacity_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_capacity_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 83.122,
+      "source_sha256": "42e3a124151cafa202f9c2ec8a9657a90b55602111060b12449ed6837016d161"
+    },
+    {
+      "module": "test_onlyfans_commerce_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_commerce_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 57.902,
+      "source_sha256": "642d1ff738aaa3ffec4259b366799ad8ead6b6a21fb1dff8ec8f2e3fc0af013e"
+    },
+    {
+      "module": "test_onlyfans_configuration_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_configuration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 101.203,
+      "source_sha256": "b11f3ff65d1752fbd55fcefbbbfd8cbb19db4159e5378bc211374ab29c466280"
+    },
+    {
+      "module": "test_onlyfans_connection_renewal.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_connection_renewal.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.829,
+      "source_sha256": "38c521fa182ec9736ba9627ff398d8919d37c1574d977fba0245b2f07064c9b3"
+    },
+    {
+      "module": "test_onlyfans_connection_renewal_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_connection_renewal_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 23.723,
+      "source_sha256": "a500eb3c2fba5aded5f1d447ac20b0931b4287d69f8d56847ea2ba648400e65c"
+    },
+    {
+      "module": "test_onlyfans_connection_states_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_connection_states_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 16.947,
+      "source_sha256": "1ecb4fa50b5e0c6c1b21b3eeb30ed6ecb61994a5fcb65286fff6c35ac97fca7a"
+    },
+    {
+      "module": "test_onlyfans_connections_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_connections_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 55.961,
+      "source_sha256": "ec188c9a51e9ec01b4f8c44aea99836e2e2def192a7df3ddf792aed52f8c24e9"
+    },
+    {
+      "module": "test_onlyfans_content_carrier_authority_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_content_carrier_authority_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 12.995,
+      "source_sha256": "4810d16b4009516cbd6b2bc52f90ee8843d5a826396a01a9dd1d904c6eddfe78"
+    },
+    {
+      "module": "test_onlyfans_content_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_content_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 49.631,
+      "source_sha256": "c860f82b2f905be56b27f6ec43e16878b5412ef270fbe0f5dcfb1eeb80cf5f6b"
+    },
+    {
+      "module": "test_onlyfans_content_progress_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_content_progress_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 21.351,
+      "source_sha256": "8320af63edbfc96af8c85a8e8eed8aab3ce1342bbc18caa4a1d16449c37f9ef8"
+    },
+    {
+      "module": "test_onlyfans_content_sync_carrier.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_content_sync_carrier.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.624,
+      "source_sha256": "b9a3aa249128e01d61fdec159769bd0269fdeda7028f1ea5d32fc2ebfde00080"
+    },
+    {
+      "module": "test_onlyfans_content_sync_delivery_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_content_sync_delivery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 117.301,
+      "source_sha256": "e0f9af153c66eacae828ab9bb5ff4d72dd75786ace99b39f91833962e0071cd1"
+    },
+    {
+      "module": "test_onlyfans_content_sync_findings_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_content_sync_findings_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 31.474,
+      "source_sha256": "de9d0972bb09e56ba505b75273275bfe418f31cfd9ba9ff882526c016cc0767d"
+    },
+    {
+      "module": "test_onlyfans_content_sync_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_content_sync_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 67.896,
+      "source_sha256": "4edf9a2a58149aae09b9884ad9bcc051fcebdab6153611f41b4959eea47ba75d"
+    },
+    {
+      "module": "test_onlyfans_controls_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 34.366,
+      "source_sha256": "30f9d4704269239e51cd4a25ba1e6c2eeba26ccd25f09951950931c0db5dc6ca"
+    },
+    {
+      "module": "test_onlyfans_creator_enrollments_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_creator_enrollments_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 35.521,
+      "source_sha256": "50dd852a89e3617f48b5fc6ddb15c05b4c7dcf8611635fa68234ba9967fabb7b"
+    },
+    {
+      "module": "test_onlyfans_creator_facts_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_creator_facts_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 25.14,
+      "source_sha256": "2c05fdb3dfb4e9355d6968a27eddc56dbeb7a75649492e7f0dfb589898c90d50"
+    },
+    {
+      "module": "test_onlyfans_dashboard_sessions_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_dashboard_sessions_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 8.063,
+      "source_sha256": "984a7bbdd6b66fae327808f858944316ff741585c489b22c1afdd09c9911ba81"
+    },
+    {
+      "module": "test_onlyfans_demo_assets.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_demo_assets.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.719,
+      "source_sha256": "aa5e859aefde0673b50d359fb4e83d9f62bf08bcb39f61331b216e62a41d506a"
+    },
+    {
+      "module": "test_onlyfans_earnings_breakdown_totals.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_earnings_breakdown_totals.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.273,
+      "source_sha256": "d2e383e688d868795d366b9c34427173a69c6aa84f5823dffe53b1ada03432e4"
+    },
+    {
+      "module": "test_onlyfans_earnings_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_earnings_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 24.741,
+      "source_sha256": "66404dc1efd89efcbc02b6bcf4b9384caa77e3ddb72f82b14165a945d926a4b9"
+    },
+    {
+      "module": "test_onlyfans_earnings_scope.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_earnings_scope.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.62,
+      "source_sha256": "a4e7787e9c1fe04c6a275f9961626ed06cf0deae212f7d066b76928aae4d98f6"
+    },
+    {
+      "module": "test_onlyfans_egress_isolation.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_egress_isolation.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.936,
+      "source_sha256": "d7002c6b8ba593ed443dce990f68cefb20ec8050678c63176ca82f4835eaf222"
+    },
+    {
+      "module": "test_onlyfans_egress_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_egress_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 42.41,
+      "source_sha256": "7c45a163d73082f153f50d1bea2a5a2287b9a6824826a53d108b109b5e039dd2"
+    },
+    {
+      "module": "test_onlyfans_eval_budget.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_eval_budget.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.619,
+      "source_sha256": "9920aaa3a3c0298ae37411012617240812afb60fae4aa7696be4b075fef12ea7"
+    },
+    {
+      "module": "test_onlyfans_eval_harness.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_eval_harness.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.325,
+      "source_sha256": "e831d1bf00bc7896402ecb53d8bc8c1abe2eaf4b363f0a3da7828098a29ef7e9"
+    },
+    {
+      "module": "test_onlyfans_fastt_campaign_controls_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fastt_campaign_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 14.695,
+      "source_sha256": "f6891b78747aa064b91769749b191ef34931fc3d30c4acd4ea5471656ebbad10"
+    },
+    {
+      "module": "test_onlyfans_fastt_campaign_dispatch_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fastt_campaign_dispatch_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 108.467,
+      "source_sha256": "1069db8dfd288f6d06c31a5e48870aafa87385aa69d01c8b510293568ae0831b"
+    },
+    {
+      "module": "test_onlyfans_fastt_models_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fastt_models_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 16.204,
+      "source_sha256": "22dc7898ae592ad4a67eb7ad898bf654f5987d7ee83c6420ca8b24173c170dfc"
+    },
+    {
+      "module": "test_onlyfans_fastt_operator.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fastt_operator.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.571,
+      "source_sha256": "a89596b4a7ca6c6583ce467b8e842ada92b96ec06ec265307a6db6e262201421"
+    },
+    {
+      "module": "test_onlyfans_fastt_operator_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fastt_operator_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 11.067,
+      "source_sha256": "b6caaa548b1907e3ff590f8e9221e9241a7e8c884f5b405b8e6f4819ddd5d482"
+    },
+    {
+      "module": "test_onlyfans_fastt_recovery_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fastt_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 16.137,
+      "source_sha256": "948ea34619b4a512eb28ca5c63aa082651cff65ea2abf77f6b63e3edee4a86b0"
+    },
+    {
+      "module": "test_onlyfans_fastt_sales_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fastt_sales_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 32.185,
+      "source_sha256": "dc496d58ffe471df79c861ced574f1acd0d245827bdc083b9220a8140980332b"
+    },
+    {
+      "module": "test_onlyfans_fastt_takeover_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fastt_takeover_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 18.768,
+      "source_sha256": "bf3bcb4a9512e4734c0de9e4a4ba9d304125fd7295940aea30fd89a3b4199dfb"
+    },
+    {
+      "module": "test_onlyfans_fixed_price_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fixed_price_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 16.639,
+      "source_sha256": "a6a454e559b89e8c297631bcd3bc026708ab3419dedc0cc35520537f2a6ff5eb"
+    },
+    {
+      "module": "test_onlyfans_fold_pending_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_fold_pending_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 13.262,
+      "source_sha256": "4785aee2a2cb97e1a9ab1d3e4c5c55ddd109b7ad72e25756a6995c3e771934c3"
+    },
+    {
+      "module": "test_onlyfans_foundation_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_foundation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 71.789,
+      "source_sha256": "ebd7e1ab911b4a73735cb58caa098811bb6fcaba9847ac2a3cfc1f8e54669b1f"
+    },
+    {
+      "module": "test_onlyfans_history_diagnostics.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_history_diagnostics.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.519,
+      "source_sha256": "262247e0ad9faa600bb2650408b6f5d9aae6ea827725b1f458e1855307f514b9"
+    },
+    {
+      "module": "test_onlyfans_http_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_http_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 209.027,
+      "source_sha256": "8624ddb1fa22f083cc473f1a07fb056d6a4e49e009b8771c9ebc018848e40fb0"
+    },
+    {
+      "module": "test_onlyfans_inbox_batch_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_inbox_batch_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.038,
+      "source_sha256": "136819f15766751b546456c5a1d61d30888ae285498a569fd3d6bb1375cdcd4a"
+    },
+    {
+      "module": "test_onlyfans_incoming_media.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_incoming_media.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.619,
+      "source_sha256": "2405200fe760b3bcd996393b8737572ec2c8b0d9d6efb8dd921e7197e8c6eef4"
+    },
+    {
+      "module": "test_onlyfans_independent_inbox_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_independent_inbox_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 10.855,
+      "source_sha256": "abd7ee065ed1dcf7d964527082f09a5d907eed7507db5931abf1e724acdf4386"
+    },
+    {
+      "module": "test_onlyfans_launch_budget_configuration_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_budget_configuration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 18.691,
+      "source_sha256": "0667b61fb71379afabb22331d0eaa73e52ccdc6f778d4ea2d0801e3b517b8e7d"
+    },
+    {
+      "module": "test_onlyfans_launch_controls_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_controls_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 65.08,
+      "source_sha256": "1e8d172162a88bfecc52bf4fa7809913a9825d0c7a945b081dfc2d55b55d63f0"
+    },
+    {
+      "module": "test_onlyfans_launch_credential_status_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_credential_status_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 39.041,
+      "source_sha256": "03f48c2b049c3fcc7fb1290553d63ecd2d44f3fb5274c1f54492044765361723"
+    },
+    {
+      "module": "test_onlyfans_launch_engagement_contract.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_engagement_contract.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.72,
+      "source_sha256": "2b073488d669b13ad10d37784ca995077d8a5bbcfe0ea7b6d5980ceebbd8f6f0"
+    },
+    {
+      "module": "test_onlyfans_launch_engagement_events_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_engagement_events_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 47.494,
+      "source_sha256": "0dcd9d9e06f5202e75fa2bc5ff676744b53f93ddac791c808e322c78788fe4cc"
+    },
+    {
+      "module": "test_onlyfans_launch_engagement_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_engagement_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 81.777,
+      "source_sha256": "1954dfb2e6aebbc7d84ca8c2f778acde107d6377dc133cdbb62c3ddaa19800a8"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_history_memory.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.523,
+      "source_sha256": "9ee7bbfc09bec3e2e985c6bd53b687224a4f04d0eb7167e87c2117b54b176168"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_history_memory_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 30.26,
+      "source_sha256": "b42c773463fdf544cb9dfbec9577ad98593fed4da2b2ab1bea3ebbade546b9a1"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_planning_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_history_memory_planning_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 15.835,
+      "source_sha256": "c3c4d61bd3946dcabeb60326f40379ca658013cf88a6462d7318398f2d4f4bde"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_recent_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_history_memory_recent_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 30.809,
+      "source_sha256": "444c2089b162399bb52dc4ac44271de84f80f013aa5a2307b2b09a13050945e5"
+    },
+    {
+      "module": "test_onlyfans_launch_history_memory_recovery_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_history_memory_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 49.907,
+      "source_sha256": "9493d2c8c69056aa1102a036ec9c34ec6bb0508bab5891788ad73904ae3c6d78"
+    },
+    {
+      "module": "test_onlyfans_launch_integration.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_integration.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.023,
+      "source_sha256": "8c12957e9176c3d69a3dada0484b002780027dff1307931ac5a7b39fb97b7e64"
+    },
+    {
+      "module": "test_onlyfans_launch_integration_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_integration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 17.483,
+      "source_sha256": "78c523a7bc036af8e306ab09c0893292eb601959b4b0f2f04e7d83d5ba4832ce"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_api_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_ledger_api_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 21.801,
+      "source_sha256": "9c4fa648379b954bbbe95c9ac583937c306a7196f7c364a5a6d0c49185e2ca19"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_boundary.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_ledger_boundary.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.573,
+      "source_sha256": "147a7b2239e0ef9cb84342fadaec8ca3e60d440e3a954533fdd3301294e9ed22"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_contract.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_ledger_contract.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.521,
+      "source_sha256": "a9317aa66ea047589367d409e790484126a924a308d7e4121d9b75bdec07ad30"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_diagnostics.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_ledger_diagnostics.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.535,
+      "source_sha256": "7f1a33e60ef462824cbcce92ef7dbf59489c5af7bd160726fdb2a6a7fca08b35"
+    },
+    {
+      "module": "test_onlyfans_launch_ledger_recovery_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_ledger_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 52.697,
+      "source_sha256": "e8605b1cf4bd69a03588bc587bdabf0064a06cacc2ca2a539430b4daf1129498"
+    },
+    {
+      "module": "test_onlyfans_launch_monitoring.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_monitoring.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.517,
+      "source_sha256": "e11528e772e052be788ce361d95870b0d3b362d5fb521be5a40d14dbd2a0a4f3"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_api.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_personality_api.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.574,
+      "source_sha256": "552203aa8a0ea455ae04efb11a85c4d656f7806bbc514239aba47954c93d84a1"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_credentials_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_personality_credentials_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 27.282,
+      "source_sha256": "225d3a0bb6774cf590d2520610a2c8cd6ebd3cd917f109146698b80e90fe3e9e"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_importer.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_personality_importer.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.117,
+      "source_sha256": "d19dda800db87ebb9af139a1356fa2da6192b7b9dd7b461660f74395bcc185f2"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_policy.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_personality_policy.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.468,
+      "source_sha256": "76aa9b1e966e7592572265402209a1f96cc7e61471a9ab19ff9b939da327eec2"
+    },
+    {
+      "module": "test_onlyfans_launch_personality_workflow.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_personality_workflow.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 12.641,
+      "source_sha256": "447afc94b4873acf5c5ebdc679878e66336e543a5a4d30771471fdd2edbd44c8"
+    },
+    {
+      "module": "test_onlyfans_launch_provider_budget_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_provider_budget_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 37.885,
+      "source_sha256": "11af92d9186e1dc198740f09c89de6934708603f0d1725dfcc76419c2bfc16d8"
+    },
+    {
+      "module": "test_onlyfans_launch_provider_rate_limit.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_provider_rate_limit.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.025,
+      "source_sha256": "e02d7d5e6a371da4d46cde9771d015ec8e157e512aa130cc58a9cd5c83907841"
+    },
+    {
+      "module": "test_onlyfans_launch_reconciled_scope_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_reconciled_scope_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 12.833,
+      "source_sha256": "e164271a5b2f5b8bd9661c6fe0ca17efe58d596a4d657bbba64b4fbfd2f8ae32"
+    },
+    {
+      "module": "test_onlyfans_launch_review.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_review.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.928,
+      "source_sha256": "b50fad464b871ecaa49f197576c8ea3e65bdd1e8fd3f2212f09c42d8941c9ce0"
+    },
+    {
+      "module": "test_onlyfans_launch_schema_upgrade_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_schema_upgrade_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 16.763,
+      "source_sha256": "4114a7f2be504deccdb2d3bac45275eceb1dccd8aafb7ea56944051be1b99789"
+    },
+    {
+      "module": "test_onlyfans_launch_upload_permission.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_upload_permission.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.268,
+      "source_sha256": "44e67baee2eadbeeaa03313fb0ff722be1793c52f7efa8245fbd7dc525871f64"
+    },
+    {
+      "module": "test_onlyfans_launch_worker_health_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_launch_worker_health_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 14.787,
+      "source_sha256": "3deb558c2acc59c53c551a0a989f61fce821a9e6f02741c8df75716d1e688f85"
+    },
+    {
+      "module": "test_onlyfans_ledger_exclusion_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_ledger_exclusion_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 21.715,
+      "source_sha256": "f09e8157816c0561ba2c45f2dd0bb6b2167875dc6a995938d0d1e0bd7ec62bf3"
+    },
+    {
+      "module": "test_onlyfans_ledger_history_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_ledger_history_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 31.352,
+      "source_sha256": "aab01fb01a59fbd77cb2589f1bd0d3787f98693417046d9a222ccae9da9820ae"
+    },
+    {
+      "module": "test_onlyfans_ledger_markers_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_ledger_markers_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 35.201,
+      "source_sha256": "ee44e0b7e0cc5f2acfaf72e49ec72dfcda2b7cab946dd2a5b1aa282ef9b54ea8"
+    },
+    {
+      "module": "test_onlyfans_ledger_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_ledger_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 56.28,
+      "source_sha256": "596ec3eaf009dba89c74da950f8f1b0a0c3b64026bee376277f0b9e18ea2deda"
+    },
+    {
+      "module": "test_onlyfans_live_controls_compat_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_live_controls_compat_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 44.957,
+      "source_sha256": "874a5bd2f275415f21571b14365593b36c7ee72258788595ffc0bacb2018def6"
+    },
+    {
+      "module": "test_onlyfans_loopback_transport_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_loopback_transport_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 65.777,
+      "source_sha256": "48656e9f847cf9962d1213fa5140d84d731245095cd989a2425eb0f3b639f044"
+    },
+    {
+      "module": "test_onlyfans_manual_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_manual_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 27.551,
+      "source_sha256": "01af4269733d506e6b967984607ffbc63b95006e0f2d4b3f6402c102b8c9c5bb"
+    },
+    {
+      "module": "test_onlyfans_media_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_media_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 61.836,
+      "source_sha256": "d775cd39aeea98974ff88feb3007ffde4adea84d0432b26263531da6697103c8"
+    },
+    {
+      "module": "test_onlyfans_media_upgrade_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_media_upgrade_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 22.794,
+      "source_sha256": "f1b3c4a02a34e429d23776a2a6f8bbdbef69112c0519cdba7053acd3dcbfd920"
+    },
+    {
+      "module": "test_onlyfans_message_media.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_message_media.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.37,
+      "source_sha256": "6322718b5e7cafa639332cf0ce438b708d4840a9d1e0ebe6756079b1775e175d"
+    },
+    {
+      "module": "test_onlyfans_migration_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_migration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.834,
+      "source_sha256": "5509b939bee5bcde64467f30eddf2a80b448d5f4752682c7c8f1d077cb441774"
+    },
+    {
+      "module": "test_onlyfans_native_budget_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_budget_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 43.211,
+      "source_sha256": "479804961876f447468dc495b95935bb802373b35c84a693cc3668bff1eacc22"
+    },
+    {
+      "module": "test_onlyfans_native_caption_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_caption_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 16.448,
+      "source_sha256": "5a5ee0ff349ed373b7b83d73a6f65e831c4682f9732c4dc3df8b05ccb985920f"
+    },
+    {
+      "module": "test_onlyfans_native_connector_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_connector_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 79.937,
+      "source_sha256": "a240757d5402b7a4c138b7b95bd84a4a34caeb7a77b5275b898fd986b64b8395"
+    },
+    {
+      "module": "test_onlyfans_native_history.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_history.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.475,
+      "source_sha256": "58ba504ee1d20cca7cf4f66ae9f75d12cfd5d4695970119d4e2914af2bbb09ca"
+    },
+    {
+      "module": "test_onlyfans_native_history_links_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_history_links_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.957,
+      "source_sha256": "17fa71d8a3368c9875e8c6f97a0e6f158ed4ed780851e3e85292876c372836e2"
+    },
+    {
+      "module": "test_onlyfans_native_loopback_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_loopback_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 7.96,
+      "source_sha256": "5e856b230ecf7bb2fd5fa0d268cd4a943a7b525520a441f64532b59ef777a28f"
+    },
+    {
+      "module": "test_onlyfans_native_memory_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_memory_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 70.079,
+      "source_sha256": "de2aaa93b254b8115a086c3b0d88b617dde069e736eeecea86b179db79c37f2d"
+    },
+    {
+      "module": "test_onlyfans_native_planning_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_planning_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 62.45,
+      "source_sha256": "09dc08745dd78f77139e6cc3d555f37a0f1234699d744dcdeb7c7f9b06ad05f2"
+    },
+    {
+      "module": "test_onlyfans_native_protocol.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_protocol.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.278,
+      "source_sha256": "1f8a53753153fc1dc30a1149edf38460e08f16200fd5290667ca980eb69fb3a6"
+    },
+    {
+      "module": "test_onlyfans_native_upgrade_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_native_upgrade_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 31.925,
+      "source_sha256": "b5837d0b3a49a32d276d546d20b7b4e0d01fcb340c7dc2e43a7e262ff5f62877"
+    },
+    {
+      "module": "test_onlyfans_network_guard.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_network_guard.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.518,
+      "source_sha256": "b740e5a632a7f49cb6bd88ca5ae4c7e42a2bc1865884380f23484162954d3050"
+    },
+    {
+      "module": "test_onlyfans_offer_import.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_offer_import.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.892,
+      "source_sha256": "234224cc9b865ac850631a24dc2b467fe57ceb1628f8aeea322842dd0ecba469"
+    },
+    {
+      "module": "test_onlyfans_offer_import_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_offer_import_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 622.082,
+      "source_sha256": "3e215217cf2c4dd08f0432bb5648924d65fede3cfdd539eb2841fcc6302f5f06"
+    },
+    {
+      "module": "test_onlyfans_offer_import_upgrade_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_offer_import_upgrade_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 97.087,
+      "source_sha256": "4a6bc889f358f616eece64e289c76ddaf3f5b25a705d834022471fa1ee611627"
+    },
+    {
+      "module": "test_onlyfans_offer_post_source_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_offer_post_source_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 11.175,
+      "source_sha256": "d893998b80e99fd617599f493d975ff50fb93523e65a9d56966eb08caa006fcd"
+    },
+    {
+      "module": "test_onlyfans_operations_timezone_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_operations_timezone_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 10.639,
+      "source_sha256": "ccbd18d885f396990642e3dc9a85182abb52e386ae8b7c54237286eceb034247"
+    },
+    {
+      "module": "test_onlyfans_paid_post_progress_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_paid_post_progress_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 18.351,
+      "source_sha256": "268ec5cbfc2c23a6b26edd75cb29bc9a4002630b66c950a062f0472c186c22e0"
+    },
+    {
+      "module": "test_onlyfans_post_buy_receipt_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_post_buy_receipt_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 24.681,
+      "source_sha256": "ac0b834efa15b99b52340230bc011503b8c87414baa14283ae1380a36b02a3b6"
+    },
+    {
+      "module": "test_onlyfans_post_detail_adapter.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_post_detail_adapter.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.719,
+      "source_sha256": "29593e8cf91db17189f6c989ac4733702f25a8ee14b14ecfdaf2143c2728a7ef"
+    },
+    {
+      "module": "test_onlyfans_protected_vault_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_protected_vault_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 8.206,
+      "source_sha256": "490d62d891e59e38db341e279d35e4b98164bda377fbd98984b41190f33105bb"
+    },
+    {
+      "module": "test_onlyfans_provider_adapters.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_provider_adapters.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.826,
+      "source_sha256": "f40e63a8f02ffc9e5d7cb7600085cf516405711d9564d7a1f4c8c9c88366a732"
+    },
+    {
+      "module": "test_onlyfans_provider_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_provider_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 40.463,
+      "source_sha256": "f9216482f6654c80d40e22a7f122e03eba7bb7fd585baf678cc2b4ea9fa8952c"
+    },
+    {
+      "module": "test_onlyfans_proxy_connection_scope_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_proxy_connection_scope_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 7.453,
+      "source_sha256": "6204e4122cf55a9b466ecfaa219729a0d4e64d7151ae16387cc5e3afc17d6b00"
+    },
+    {
+      "module": "test_onlyfans_read.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_read.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 5.972,
+      "source_sha256": "8d8d0734d6f4e25e162bebb5162f5b451a431e282d2620fda35fea56e0e1d3e1"
+    },
+    {
+      "module": "test_onlyfans_readonly_inbox_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_readonly_inbox_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 38.866,
+      "source_sha256": "fac540407831b1a16027e12003499a43189bacc604e85b35caeb8631cc92682c"
+    },
+    {
+      "module": "test_onlyfans_recent_inbox_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_recent_inbox_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 27.015,
+      "source_sha256": "e06a2087b7bee22e0ecb173ab5f20e3ad68d598b85718faa72a60adf63d3f675"
+    },
+    {
+      "module": "test_onlyfans_recorded_earnings_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_recorded_earnings_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 10.053,
+      "source_sha256": "bf9acaf4f1514fa65c6b0b8063b08591cc4f8e07a7303cbdde5c6ee544297e54"
+    },
+    {
+      "module": "test_onlyfans_recovery_fairness_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_recovery_fairness_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 7.414,
+      "source_sha256": "5df8aa0919881a28010a30e3b47d4a1e83a35abf4db195eaa0ef4727053565ef"
+    },
+    {
+      "module": "test_onlyfans_recovery_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 39.275,
+      "source_sha256": "7f8f2628d043ea567887aa97ad2ddf239ba599c10f0254cda24dc561c0a18417"
+    },
+    {
+      "module": "test_onlyfans_release_package_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_release_package_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 32.105,
+      "source_sha256": "e1af3d6c1b5163e6ce7006a521f6075369765707e509a2440428ba6d0426f981"
+    },
+    {
+      "module": "test_onlyfans_release_rehearsal_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_release_rehearsal_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 144.062,
+      "source_sha256": "b5449473d38a7fec67233ea3441e71771099da511582382af99123ec89f3496b"
+    },
+    {
+      "module": "test_onlyfans_role_boundary.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_role_boundary.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.12,
+      "source_sha256": "ac3ef32cfd6e821315b193037b9f57e3d1c4138c7ae5b779d5b62f33626eb899"
+    },
+    {
+      "module": "test_onlyfans_send_recovery_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_send_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 18.164,
+      "source_sha256": "ca6872812739198c33cc657d00a66691e7f3d144e83e0c6f25bd17f2216d7773"
+    },
+    {
+      "module": "test_onlyfans_sync_retry_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_sync_retry_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 21.813,
+      "source_sha256": "79de9d62a1223303b541a911dfc2b1a833260e520319989ce6f9db689dc8ca0e"
+    },
+    {
+      "module": "test_onlyfans_text_delivery_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_text_delivery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 76.811,
+      "source_sha256": "eb5fe97a57396f08b73aea6f061a004ccd56d026389307dcd1e9cdc6deca0435"
+    },
+    {
+      "module": "test_onlyfans_thread_paging_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_thread_paging_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 9.404,
+      "source_sha256": "93f87f04ee9a63d5e775caaa15132a39560abfa1dd9d7a323ea2e25455665292"
+    },
+    {
+      "module": "test_onlyfans_vault_continuation_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_vault_continuation_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 8.458,
+      "source_sha256": "ef1cbaad304df62d04564cdf30303a860e608534f831a9c4eb627b7d7e0bc0ac"
+    },
+    {
+      "module": "test_onlyfans_vault_editing_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_vault_editing_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 22.166,
+      "source_sha256": "820e60dc5f3b636f5a84f5c512163ca0aa3025c9045ef015f695ae47e63a20d3"
+    },
+    {
+      "module": "test_onlyfans_vault_folder_states.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_vault_folder_states.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.472,
+      "source_sha256": "d04877953e54e97f9154e1c53ba0daf34773a5170b1a1456a88243608763a92b"
+    },
+    {
+      "module": "test_onlyfans_vault_media_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_vault_media_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 31.36,
+      "source_sha256": "73304b3e92876d3b8bf956b2e9aea5b531628f9f363dc4d651942912fbde9aa4"
+    },
+    {
+      "module": "test_onlyfans_vault_offer_availability.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_vault_offer_availability.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.017,
+      "source_sha256": "3ded55f03c20716d6c0b799cd38ea8844142ce373f6889a52d99d8f267e7e71b"
+    },
+    {
+      "module": "test_onlyfans_vault_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_vault_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 22.164,
+      "source_sha256": "1fbeb0f4c67ac75836109450a3790bfa6286da54367f67bc4ab80569c03a1e91"
+    },
+    {
+      "module": "test_onlyfans_vault_previews_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_vault_previews_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 11.719,
+      "source_sha256": "66f4d1188a5d82620869bc43e65377d4ed0cfe8d24119d6168dbaa7e0ff730eb"
+    },
+    {
+      "module": "test_onlyfans_vault_response_limits.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_vault_response_limits.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.372,
+      "source_sha256": "13cadbcf43d43e717a35b976a6b806b5b6810056a76ce0c81af470d18828361f"
+    },
+    {
+      "module": "test_onlyfans_vault_summary.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_vault_summary.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.424,
+      "source_sha256": "4769dff0d8a592727090d00e117cb9081738f99ac73fd046c9921809f4e23932"
+    },
+    {
+      "module": "test_onlyfans_worker_entry.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_worker_entry.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.652,
+      "source_sha256": "b4db1c29f43a465a760aaeebf9c95b84b3005f911cc9a2e3f3cdcadd4628b9a5"
+    },
+    {
+      "module": "test_onlyfans_worker_entry_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_worker_entry_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 17.432,
+      "source_sha256": "2ef58530927bd1df22b8b1f5cfed131c09a0906672317e51c7fda083e575c946"
+    },
+    {
+      "module": "test_onlyfans_worker_maintenance.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_worker_maintenance.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.579,
+      "source_sha256": "f50d67a366e4d27e030c11d7ae6720ebaf09b33eea8e1ecbeaf73041e9683e84"
+    },
+    {
+      "module": "test_onlyfans_worker_media_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_worker_media_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 13.725,
+      "source_sha256": "caa3dc8aa7b78976dc277d09c73b05ffcef9767a27171a8b9ca45fc7dae5161f"
+    },
+    {
+      "module": "test_onlyfans_worker_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_worker_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 75.843,
+      "source_sha256": "17ed46a45be0915aa0fd7c6f5fb850e8188148fcee883dd3c3b9e264981a4378"
+    },
+    {
+      "module": "test_onlyfans_workspace_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_onlyfans_workspace_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 28.588,
+      "source_sha256": "eb0dac7d26f4602a1a9b82fa0baa49ff14815b9d2c3ba01b029628d8872ba4df"
+    },
+    {
+      "module": "test_paid_media_recovery_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_paid_media_recovery_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 22.207,
+      "source_sha256": "18662873e35c14e22ec68f7eb4477621cd33cdde1fbdf0838af55e42979234bf"
+    },
+    {
+      "module": "test_proactive_defaults.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_proactive_defaults.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.619,
+      "source_sha256": "7b2ffc9cb3d7125627c41fa396a9747bab8bf6384d49d1b3893c9c1eca088cb0"
+    },
+    {
+      "module": "test_product_readiness.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_product_readiness.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.368,
+      "source_sha256": "d34be87f0076e9c73bb91cbee8b8c5c40c9b411a72c3ae8ad96e3726b286378e"
+    },
+    {
+      "module": "test_profile_learning_evidence.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_profile_learning_evidence.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.424,
+      "source_sha256": "631defebc4524686ef92fa558a4763756fe93b9b0dab58d851d2f3dfd6acb051"
+    },
+    {
+      "module": "test_profile_learning_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_profile_learning_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 10.545,
+      "source_sha256": "0353e1da8a15da72a6625a881ac4361e6653a7ac1ca897fda07d5cffdd408501"
+    },
+    {
+      "module": "test_profile_learning_queue.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_profile_learning_queue.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 5.222,
+      "source_sha256": "5b8f005b19c316c6449fc7bda7475d586f55a864c4f379fd03c2a810c7d53c5b"
+    },
+    {
+      "module": "test_profile_learning_temporal.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_profile_learning_temporal.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.479,
+      "source_sha256": "b0cda62de6badb35a90f2b43857953f15419c231690960c4c12057322e4be193"
+    },
+    {
+      "module": "test_profile_subject_attribution.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_profile_subject_attribution.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.117,
+      "source_sha256": "a8d185fe047201e75eb918c457d8915c0b1735590d7863ea6e0d5f9d33e05d3c"
+    },
+    {
+      "module": "test_quote_lifecycle.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_quote_lifecycle.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 9.642,
+      "source_sha256": "9e9a69c8cbd1c6ca9cdd493f5eb88894d8db61a8e79d0abab624aa38f3633983"
+    },
+    {
+      "module": "test_r2_complete_answers.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_r2_complete_answers.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 7.488,
+      "source_sha256": "d58243297bf84be3bf7f490e82530007a816ee448d2c2a6b36fe907d222af6a9"
+    },
+    {
+      "module": "test_r3_age_prompt_repro.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_r3_age_prompt_repro.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.977,
+      "source_sha256": "84c89bfaf71e762ba4805f74420fb23bb9d9588ccac06a03a1b1006872791b4b"
+    },
+    {
+      "module": "test_r3_facts_attachments.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_r3_facts_attachments.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.277,
+      "source_sha256": "ae8f0b8cd13b254ef316fcca47bb40efea52e85e48dbaa5b2d3d6f75f8f6f00b"
+    },
+    {
+      "module": "test_r3r7_inbound_intent.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_r3r7_inbound_intent.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.366,
+      "source_sha256": "3d41e9fcd2a9fd3424c627a326a54e84cc1d98717cbec5e3d359772bdce32572"
+    },
+    {
+      "module": "test_r3r7_native_planning_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_r3r7_native_planning_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 36.416,
+      "source_sha256": "09c66aa6297cbd6b8236dac6c03a56112f58e80848fb80e79865aca608ef7e1b"
+    },
+    {
+      "module": "test_r8_cancelled_waiter_not_abandoned.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_r8_cancelled_waiter_not_abandoned.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 7.347,
+      "source_sha256": "28d4c807c26dbb98dd680c38272d32b6f050b5c76df18226661c172c559da723"
+    },
+    {
+      "module": "test_r8_gap_vs_concurrent.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_r8_gap_vs_concurrent.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 27.834,
+      "source_sha256": "2eca634ca401bb97abd67bd4a938892b9da5c9fab24a797f6c7ed7546579c825"
+    },
+    {
+      "module": "test_r8_oldest_need_first.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_r8_oldest_need_first.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 11.814,
+      "source_sha256": "f0a5e9dd6b21977a61c35e3a0259a9f71571c4353dc1faa7d8f0c8d82669f6f8"
+    },
+    {
+      "module": "test_read_lane_fairness_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_read_lane_fairness_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 20.376,
+      "source_sha256": "d5449352fc35acccc9fadf90377d4744fbcd39f78f106fb04917b3c532715bd7"
+    },
+    {
+      "module": "test_reply_configuration_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_reply_configuration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 30.234,
+      "source_sha256": "e51d9b8f4dd24e3e9e80b8a7f2b92b89eba8f4f1fa12ae1857b433e8e0374b31"
+    },
+    {
+      "module": "test_requested_discount_policy.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_requested_discount_policy.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.73,
+      "source_sha256": "07e1d79545e223d40ed6f5dbeab2aae0883ba160000bb8e8e3abcf6bd54d7076"
+    },
+    {
+      "module": "test_service_test_discovery.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_service_test_discovery.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.933,
+      "source_sha256": "74c4542b1c2d1a6ae9325cb81dd908f6d2cd7b71adbbe9a245401873c24832bf"
+    },
+    {
+      "module": "test_smart_lists_safety.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_smart_lists_safety.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.782,
+      "source_sha256": "76d185e1e1e9962202531190ff855585ade550a2bab0ba663cd24e2df69582ca"
+    },
+    {
+      "module": "test_substitute_caption_subject.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_substitute_caption_subject.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.115,
+      "source_sha256": "a5d4f0f4c5a661dddfc1fb55ca211df5ca272ad1f311f94a4633b6c18c6f1bb0"
+    },
+    {
+      "module": "test_substitution_agreement.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_substitution_agreement.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.789,
+      "source_sha256": "61df0e78062df0c578a780d94cbb9a79534a7e59bf3336ccc97cf24ece164440"
+    },
+    {
+      "module": "test_throughput_burst.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_throughput_burst.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 217.179,
+      "source_sha256": "98423f82b63c3a0904f63b8bc95e1c0f1ed2aaddd65f61f2ff5abaed61168f9a"
+    },
+    {
+      "module": "test_throughput_daily_cap.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_throughput_daily_cap.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.164,
+      "source_sha256": "533245776da752d05697bb7cea95eccd520014985f7a87044f1bdb3ac980d742"
+    },
+    {
+      "module": "test_throughput_engine.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_throughput_engine.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 14.02,
+      "source_sha256": "9a6d40466170a45736ef0cf0ada1cca1093707d6e0b2101a24231f195411735d"
+    },
+    {
+      "module": "test_throughput_migration_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_throughput_migration_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 6.49,
+      "source_sha256": "de53517ddca8e439a76f29155731967764c17de42829c93a8d4314e6623b2001"
+    },
+    {
+      "module": "test_throughput_queue_cap_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_throughput_queue_cap_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 7.347,
+      "source_sha256": "ee487b7309f7155509400e89e81af769251f330e9234a736f25d525d34c9b7f4"
+    },
+    {
+      "module": "test_turn_timing.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_turn_timing.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.416,
+      "source_sha256": "4720461b808a0cf77274edbb405de309092f31af2e3dbe51ca5b526a95649c79"
+    },
+    {
+      "module": "test_twin_bridge_client.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_client.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.265,
+      "source_sha256": "ab07afd997ea862b723686068148e9417d6ea3331f8021e9bb92d4f74470f7da"
+    },
+    {
+      "module": "test_twin_bridge_contract.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_contract.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 0.222,
+      "source_sha256": "77dd592f378de154a3727fc08533080c05be84950929900ded4cd5650f1fae36"
+    },
+    {
+      "module": "test_twin_bridge_delivery.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_delivery.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 8.415,
+      "source_sha256": "21f5144276602f83b7112e147cfb73c78f16e2bba2155e22b05ac581eb4aaea6"
+    },
+    {
+      "module": "test_twin_bridge_history.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_history.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.769,
+      "source_sha256": "4974258b87bf9284b43ae87f03e4734546f737f295b14951b8493e4fedfc258b"
+    },
+    {
+      "module": "test_twin_bridge_intake.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_intake.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 3.486,
+      "source_sha256": "68e9ee3a92d0cfea0c36a26d0b29516893abcf895fef48f5792bfa4b0bc59a01"
+    },
+    {
+      "module": "test_twin_bridge_ownership.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_ownership.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 55.539,
+      "source_sha256": "3db6bef1b5a9b3d2e50f07093b88ab4a952c43cff635273568ccc5c5db465930"
+    },
+    {
+      "module": "test_twin_bridge_pilot.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_pilot.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 5.893,
+      "source_sha256": "080cc4032c01180aee9f486eaf066c1e43ec46bfbb560011c67d2920f72c9080"
+    },
+    {
+      "module": "test_twin_bridge_repeat.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_repeat.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.616,
+      "source_sha256": "9f4d9ff0e2cead00b5712810c302fc50b9be5d74e842e03134b8a31f6edd4954"
+    },
+    {
+      "module": "test_twin_bridge_repeat_runner.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_repeat_runner.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.215,
+      "source_sha256": "73ab44eda6a6d82c7532bec558bb8c3046ccf12b26bbe88c65f2598a76ac3948"
+    },
+    {
+      "module": "test_twin_bridge_roundtrip.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_roundtrip.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 0.918,
+      "source_sha256": "f4f2ff11012182dd5f7cecedae688d3c048fcd841c9323c72a1f5f23169ae497"
+    },
+    {
+      "module": "test_twin_bridge_runner.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_runner.py"
+      ],
+      "exit_code": 1,
+      "status": "fail",
+      "seconds": 0.064,
+      "source_sha256": "831a2253348126d999a5048e9687bb2f5aeabc0027310a87616e9af82845079d"
+    },
+    {
+      "module": "test_twin_bridge_turns.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_twin_bridge_turns.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 2.323,
+      "source_sha256": "4c6cfe6cff66adcce7b202ba53bac5655ab4b2f8b9bb1c589a459177963d10e6"
+    },
+    {
+      "module": "test_vault_auto_folders.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_vault_auto_folders.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.723,
+      "source_sha256": "8cbad41afdf9afedaac4d1e6e16a814d1b4e390b9cfb1c9641f8b8ce7467b63d"
+    },
+    {
+      "module": "test_vault_auto_folders_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_vault_auto_folders_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.067,
+      "source_sha256": "7a57882385edef40e4f80178426ca8e1bb160d8594ae869826f60f60705c1ff2"
+    },
+    {
+      "module": "test_vault_preview_worker_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_vault_preview_worker_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 12.414,
+      "source_sha256": "42c269b3bec6fc0c455a443089d7687c0c2fc6b5b8cc92e82db69dd1a1b35d7c"
+    },
+    {
+      "module": "test_vault_sync_resilience.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_vault_sync_resilience.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 1.976,
+      "source_sha256": "4d777f6f3f9fc49fd2043cb58b055dc7a1661c392af87b17a5c2aab1a091d45b"
+    },
+    {
+      "module": "test_vault_sync_resilience_pg.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "--tb=short",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_vault_sync_resilience_pg.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 12.381,
+      "source_sha256": "3e41983b0b2834d68b7bf20410c1ce7ba4d1a98ef5f0bae0d861aa604a63cfe2"
+    },
+    {
+      "module": "test_vault_upload.py",
+      "command": [
+        "/workspace/scratch/9a82163d809e/qualification-venv/bin/python",
+        "/workspace/scratch/86d4770bae26/backend/service/tests/test_vault_upload.py"
+      ],
+      "exit_code": 0,
+      "status": "pass",
+      "seconds": 0.266,
+      "source_sha256": "23d45bb14e8c9e24c762965cc89b4c592c47a5c03bd575728cf8d1e2ffda38bf"
+    }
+  ]
+}

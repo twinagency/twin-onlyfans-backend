@@ -1,0 +1,143 @@
+{
+  "checked_at": "2026-11-02T13:31:40.678768+00:00",
+  "command_id": "b8ad119e-1948-4d27-ac5c-3d3b1d9d293a",
+  "status": "Success",
+  "response_code": 0,
+  "roles": [
+    {
+      "name": "twin-onlyfans-api-1",
+      "image_id": "sha256:87bc296eb275e2c220c3daa2726d34c5e9d8c4faa77455b5bf7fd77e8c00f439",
+      "image_ref": "sha256:87bc296eb275e2c220c3daa2726d34c5e9d8c4faa77455b5bf7fd77e8c00f439",
+      "status": "running",
+      "started_at": "2026-11-02T13:23:38.242755771Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-recent-history@sha256:87bc296eb275e2c220c3daa2726d34c5e9d8c4faa77455b5bf7fd77e8c00f439"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "9d6756b20063dc7d481f59acfb1f26c65336c357"
+      }
+    },
+    {
+      "name": "twin-onlyfans-fastt-supervisor-1",
+      "image_id": "sha256:64952d348f482a4b40ccd212a5a55d773cab4d322eeea0f1d3eda2e5c9c867b7",
+      "image_ref": "twin-repair:conversation-integrity-596087b",
+      "status": "created",
+      "started_at": "0001-01-01T00:00:00Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-repair@sha256:64952d348f482a4b40ccd212a5a55d773cab4d322eeea0f1d3eda2e5c9c867b7"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "596087b65dfdcdc9283cb63a037d474ad69e2749"
+      }
+    },
+    {
+      "name": "twin-onlyfans-history-importer-1",
+      "image_id": "sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2",
+      "image_ref": "sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2",
+      "status": "running",
+      "started_at": "2026-11-02T13:23:54.495189531Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-recent-history@sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "9d6756b20063dc7d481f59acfb1f26c65336c357"
+      }
+    },
+    {
+      "name": "twin-onlyfans-profile-learner",
+      "image_id": "sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2",
+      "image_ref": "sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2",
+      "status": "running",
+      "started_at": "2026-11-02T13:23:54.497177331Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-recent-history@sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "9d6756b20063dc7d481f59acfb1f26c65336c357"
+      }
+    },
+    {
+      "name": "twin-onlyfans-worker-1",
+      "image_id": "sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2",
+      "image_ref": "sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2",
+      "status": "running",
+      "started_at": "2026-11-02T13:23:38.245197223Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-recent-history@sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "9d6756b20063dc7d481f59acfb1f26c65336c357"
+      }
+    }
+  ],
+  "db_output_truncated": false,
+  "database_summary": {
+    "schema": "0110_recent_history",
+    "accounts": 8,
+    "delivery_modes": {
+      "gap": 8
+    },
+    "throttle_seconds": 20,
+    "new_conversation_auto_enabled": 0,
+    "runtime_enabled": 5,
+    "connection_statuses": {
+      "verified": 6,
+      "paused": 2
+    },
+    "live_vault_aggregate_missing_accounts": 2,
+    "ledger_statuses": {
+      "idle": 6,
+      "running": 2
+    },
+    "scope": "Summarised from the complete bounded read; saved runtime switches do not establish effective per-fan sending eligibility or sale-ready inventory."
+  },
+  "current_source_hash_availability": [
+    {
+      "path": "service/native_pilot/budget.py",
+      "sha256": "3b7cada3e98b12eadbe634601e9520bc01240240508ce482fd23b1a3ec0fab16",
+      "blob": "6e4618d1f2cb08abf73a2b7eea7c3ca08ac1a13d",
+      "repository_available": false
+    },
+    {
+      "path": "service/onlyfans_read/earnings.py",
+      "sha256": "6d0d3e7e1b3eec748264ba1cc2c5edf6b11b7ccb426d0dd03ffaa0439e7c7be4",
+      "blob": "27cb1d895a1650dae67993ce22b9c162abf6b4f5",
+      "repository_available": false
+    },
+    {
+      "path": "service/onlyfans_runtime/profile_learning/evidence.py",
+      "sha256": "60e814eb8f3eabe104cfeaa225e3495543f77c094d003f256528ed0c4ed407fe",
+      "blob": "b56b9dac61d523b53f39cf93f36b45da0a57b9cf",
+      "repository_available": false
+    },
+    {
+      "path": "service/onlyfans_runtime/profile_learning/worker.py",
+      "sha256": "d562843a1e0bf61e073eef2380f1b70af90ca1450b2617e99ac7dc3340c440be",
+      "blob": "a0ef73b23cb6107c9fc453d36ff1f79c5db3612b",
+      "repository_available": false
+    },
+    {
+      "path": "service/onlyfans_worker.py",
+      "sha256": "c3c9f4943e24b4e7df3b9efea6d1a6626cab674c9504710aaf8b10b30cd6a266",
+      "blob": "efe744bb11c737bb33b2a2071401a3fbb2d5e324",
+      "repository_available": false
+    },
+    {
+      "path": "service/db/schema.py",
+      "sha256": "15b006fe04b0c29850242bf6f03b94ed18ac6bd591da376a4d81dd4be7c32e54",
+      "blob": "ff79958e62805dd4f9a97cd60141eec1918dffbf",
+      "repository_available": true
+    }
+  ],
+  "evidence_provenance": "Summarised from completed read of resume-r0-bounded-result.json, SSM success response 0; private raw file retained on authorised laptop."
+}

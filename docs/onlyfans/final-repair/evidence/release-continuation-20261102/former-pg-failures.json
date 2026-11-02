@@ -1,0 +1,87 @@
+[
+  {
+    "module": "test_native_pilot_load_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_content_sync_delivery_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_http_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_ledger_history_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_loopback_transport_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_media_upgrade_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_native_connector_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_native_memory_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_native_planning_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_native_upgrade_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_provider_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_recovery_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_release_rehearsal_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_sync_retry_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_vault_media_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_onlyfans_worker_entry_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  },
+  {
+    "module": "test_r3r7_native_planning_pg.py",
+    "old_frozen_status": "fail",
+    "final_status": "pass"
+  }
+]

@@ -1,0 +1,112 @@
+{
+  "source_commit": "1b4bbf646adab11e5cdfee4eff25b772cee37dc9",
+  "runtime_change_commit": "5760c3cfedb9893e06862903bd50d99bc0b58cd5",
+  "base_commit": "766a7992908e5706d024b90e083d6a260f93a8c5",
+  "final_sweep_counts": {
+    "pass": 282,
+    "fail": 3
+  },
+  "skipped_or_empty_modules": {},
+  "failed_modules": [
+    "test_twin_bridge_contract.py",
+    "test_twin_bridge_roundtrip.py",
+    "test_twin_bridge_runner.py"
+  ],
+  "actual_model_calls": 0,
+  "actual_model_cost_usd": 0,
+  "release_qualified": false,
+  "scope": "No merge, deployment, production configuration, activation, purchase or customer message",
+  "files": [
+    {
+      "path": "capacity-raw.json.gz",
+      "bytes": 432575,
+      "sha256": "191973d0780dca8062fc841ff426ee8aec1b18aab0c8603161d9ff7e4d6a0fc2"
+    },
+    {
+      "path": "capacity-summary.json",
+      "bytes": 30392,
+      "sha256": "877ac014f07b20692da3af8c01e6378511c51da1250485a113651dc993978a4d"
+    },
+    {
+      "path": "focused-and-retained-failures.json.gz",
+      "bytes": 70680,
+      "sha256": "6595d32920b020fd0a6ac74d8c932f43088e0077eb883247ca5ba49cbd8cd487"
+    },
+    {
+      "path": "former-pg-failures.json",
+      "bytes": 2035,
+      "sha256": "be08bc1f46b8ccb32ec5931451b4ef0e2de8581f7d77f07bcab514f1640d5d73"
+    },
+    {
+      "path": "interrupted-diagnostic.json.gz",
+      "bytes": 65908,
+      "sha256": "b226d21564d6254870aab33479f23370969f5b9175e6d264e56f5b846039b902"
+    },
+    {
+      "path": "live-host-summary.json",
+      "bytes": 3421,
+      "sha256": "55f13e0d133d2519d7fe09ac8a3e4af95f9512f8675a356cc735b81f210c2242"
+    },
+    {
+      "path": "live-readonly-summary.json",
+      "bytes": 5674,
+      "sha256": "c09516ffd05f588dfdbe19ff8c48d89f4d2711aeec5c089758bb3172f74f648b"
+    },
+    {
+      "path": "managed-proxy.json.gz",
+      "bytes": 2411,
+      "sha256": "ea0cf7e0f07a8578bb3af3d83c0b78c22d9613f65f2cb88c358c904adfb46d15"
+    },
+    {
+      "path": "onboarding-upgrade.json",
+      "bytes": 388,
+      "sha256": "fe46dcb314580a52e96330f744a9e6c9e2ab47c7106fc1c3e574c47c5e886214"
+    },
+    {
+      "path": "profile-summary.json",
+      "bytes": 2926,
+      "sha256": "e045f7e53186c35e8d509cb922810a2ffbea296d21287b6be596ff3b42432b5e"
+    },
+    {
+      "path": "runners/README.md",
+      "bytes": 1001,
+      "sha256": "13c01cc9fd7facb71aa5eddc861e1c9b2ded7e5b772c911c161a00f3278b1e1e"
+    },
+    {
+      "path": "runners/capacity.py",
+      "bytes": 4141,
+      "sha256": "d99a88f08351fe596abefa2b450f8de3e0f921cff87e0c6b36a8bfcfd10c8062"
+    },
+    {
+      "path": "runners/managed_proxy.py",
+      "bytes": 2786,
+      "sha256": "e800543d7957dfc4a8f31ca19b4590ca7cae1104a411146a458415a409062e7f"
+    },
+    {
+      "path": "runners/service_sweep.py",
+      "bytes": 7061,
+      "sha256": "e57c536e7143442d7519114176688decfa553e3fa2c462a235a56d6ccfbc2d40"
+    },
+    {
+      "path": "service-module-logs.json.gz",
+      "bytes": 54693,
+      "sha256": "bc215476989e797d0d9a148357d91176ccb6e31c5dba69809916a05db71b757e"
+    },
+    {
+      "path": "service-results.json",
+      "bytes": 135929,
+      "sha256": "e1820ddd2deadbd9fe1e5150352be07df1d67adb1a75a88e3a5b60222b298c44"
+    },
+    {
+      "path": "source-manifest.json",
+      "bytes": 112788,
+      "sha256": "3dc43ec6cc7f647ad60dbba13b7967d65cd4871c3df165318433473168e73720"
+    },
+    {
+      "path": "windows-runner.json",
+      "bytes": 346,
+      "sha256": "c5602effa11adb04ae3b019144b5697ec554d7a74912805e4185dc93efd0b97c"
+    }
+  ],
+  "focused_source_manifest_encoding": "Lossless base + updates/removed; reconstruct and verify source_manifest_sha256. All original command/exit/status/log data retained."
+}

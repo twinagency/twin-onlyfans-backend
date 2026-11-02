@@ -95,3 +95,26 @@ def test_bounded_parallel_fan_preparation_measures_fixture_latency(database,monk
     print('MOXY_LOAD='+json.dumps(report))
     assert elapsed<180
     second_store.close();store.close()
+
+
+def test_view_exposes_unresolved_media_states_and_operator_case_on_held(database,monkeypatch):
+    from onlyfans_runtime import operator_cases
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    with Session(engine) as s,s.begin():
+        s.get(VaultItem,(ACCOUNT,7102)).describe_status='failed'
+        s.get(VaultItem,(ACCOUNT,7103)).describe_status=None
+        s.get(VaultItem,(ACCOUNT,7104)).removed_at=utcnow()
+        operator_cases.open_case(s,ACCOUNT,101,'hardship',reason='fixture',evidence={},owner='fixture-operator')
+    identity,_=run(service,engine,decision('offer','x','first'),key='held-1')   # blocked decision -> held
+    v=view(store,TENANT,ACCOUNT)
+    keys={u['key'] for u in v['unresolved']}
+    assert any(k.startswith('creator:amelia:') for k in keys) and 'outreach:welcome_offer' in keys
+    assert all(u['reason'] for u in v['unresolved'])
+    md=v['mediaDescriptions']
+    assert md['first']['state']=='described' and md['second']['state']=='failed'
+    assert md['third']['state']=='pending' and md['fourth']['state']=='missing'
+    assert {'readiness','customs','settings','decisions'}<=set(v)          # existing fields unchanged
+    d=[x for x in v['decisions'] if x['id']==identity][0]
+    if d['status']=='held':
+        assert d['operatorCase']['owner']=='fixture-operator' and d['operatorCase']['category']=='hardship'
+    store.close()

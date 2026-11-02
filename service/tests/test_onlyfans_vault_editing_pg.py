@@ -127,6 +127,17 @@ def test_api_auth_exact_commands_and_historical_acknowledgements(database,monkey
     assert client.post(path,headers=headers,json=body).json()==first.json()
     assert client.get(path+"?unknown=true",headers=headers).status_code==400
     assert client.get(path.replace("11","99"),headers=headers).status_code==404
+    created=edit_folder(store,TENANT,ACCOUNT,None,action="create",name="Compatibility folder",media_ids=None,
+        expected_fingerprint=None,command_key="c"*64,actor=ACTOR)
+    folders=f"/onlyfans/content/v1/accounts/{ACCOUNT}/vault/folders"
+    legacy=client.get(folders,headers=headers).json()["folders"]
+    assert legacy==[{"folderId":created["targetId"],"name":"Compatibility folder","count":0}]
+    rich=client.get(folders+"?covers=1",headers=headers).json()["folders"]
+    assert {k:rich[0].pop(k) for k in ("coverMediaId","coverKind","automatic")}=={
+        "coverMediaId":None,"coverKind":None,"automatic":False}
+    assert rich==legacy
+    assert client.get(folders+"?covers=1&covers=1",headers=headers).status_code==400
+    assert client.get(folders+"/"+created["targetId"]+"?covers=1",headers=headers).status_code==400
     store.close()
 
 

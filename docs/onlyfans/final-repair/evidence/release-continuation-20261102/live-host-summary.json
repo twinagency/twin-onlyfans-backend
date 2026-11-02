@@ -1,0 +1,84 @@
+{
+  "checked_at": "2026-11-02T13:11:37.108630+00:00",
+  "command_id": "7b8b3dad-ae1e-41d9-913a-8f79b9ede377",
+  "status": "Success",
+  "response_code": 0,
+  "roles": [
+    {
+      "name": "twin-onlyfans-api-1",
+      "image_id": "sha256:60cbff853ce2142e58728429c8aa350def2ce7ee0f288babaca3e8a35c4ec265",
+      "image_ref": "sha256:60cbff853ce2142e58728429c8aa350def2ce7ee0f288babaca3e8a35c4ec265",
+      "status": "running",
+      "started_at": "2026-11-02T12:19:17.175768674Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-recent-history@sha256:60cbff853ce2142e58728429c8aa350def2ce7ee0f288babaca3e8a35c4ec265"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "91c260ba54451ba51525cd3cc2ab0737bedc1592"
+      }
+    },
+    {
+      "name": "twin-onlyfans-fastt-supervisor-1",
+      "image_id": "sha256:64952d348f482a4b40ccd212a5a55d773cab4d322eeea0f1d3eda2e5c9c867b7",
+      "image_ref": "twin-repair:conversation-integrity-596087b",
+      "status": "created",
+      "started_at": "0001-01-01T00:00:00Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-repair@sha256:64952d348f482a4b40ccd212a5a55d773cab4d322eeea0f1d3eda2e5c9c867b7"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "596087b65dfdcdc9283cb63a037d474ad69e2749"
+      }
+    },
+    {
+      "name": "twin-onlyfans-history-importer-1",
+      "image_id": "sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319",
+      "image_ref": "sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319",
+      "status": "running",
+      "started_at": "2026-11-02T12:19:33.808995099Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-recent-history@sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "91c260ba54451ba51525cd3cc2ab0737bedc1592"
+      }
+    },
+    {
+      "name": "twin-onlyfans-profile-learner",
+      "image_id": "sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319",
+      "image_ref": "sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319",
+      "status": "running",
+      "started_at": "2026-11-02T12:19:33.807132404Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-recent-history@sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "91c260ba54451ba51525cd3cc2ab0737bedc1592"
+      }
+    },
+    {
+      "name": "twin-onlyfans-worker-1",
+      "image_id": "sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319",
+      "image_ref": "sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319",
+      "status": "running",
+      "started_at": "2026-11-02T12:19:17.177680096Z",
+      "restarts": 0,
+      "repo_digests": [
+        "twin-recent-history@sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319"
+      ],
+      "revision_labels": {
+        "com.docker.compose.version": "2.40.3",
+        "org.opencontainers.image.revision": "91c260ba54451ba51525cd3cc2ab0737bedc1592"
+      }
+    }
+  ],
+  "db_output_truncated": true
+}

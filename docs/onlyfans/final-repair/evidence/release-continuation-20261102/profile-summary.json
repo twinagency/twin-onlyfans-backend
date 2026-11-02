@@ -1,0 +1,86 @@
+{
+  "baseline-profile20.prof": {
+    "total_calls": 13599173,
+    "total_self_seconds": 36.00978033999993,
+    "selected": [
+      {
+        "file": "/workspace/scratch/86d4770bae26/release-baseline/service/db/schema.py",
+        "line": 125,
+        "function": "check_schema",
+        "primitive_calls": 6,
+        "total_calls": 23,
+        "self_seconds": 0.037652378,
+        "cumulative_seconds": 4.597271482
+      },
+      {
+        "file": "/workspace/scratch/86d4770bae26/release-baseline/service/onlyfans_runtime/store.py",
+        "line": 144,
+        "function": "__init__",
+        "primitive_calls": 4,
+        "total_calls": 21,
+        "self_seconds": 0.00025016700000000003,
+        "cumulative_seconds": 1.5300449150000002
+      },
+      {
+        "file": "/workspace/scratch/9a82163d809e/qualification-venv/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/base.py",
+        "line": 3538,
+        "function": "get_columns",
+        "primitive_calls": 1965,
+        "total_calls": 3526,
+        "self_seconds": 0.050675419000000006,
+        "cumulative_seconds": 22.115885989000002
+      },
+      {
+        "file": "/workspace/scratch/9a82163d809e/qualification-venv/lib/python3.12/site-packages/sqlalchemy/engine/reflection.py",
+        "line": 841,
+        "function": "get_columns",
+        "primitive_calls": 1965,
+        "total_calls": 3526,
+        "self_seconds": 0.041102275,
+        "cumulative_seconds": 29.283805456000003
+      }
+    ]
+  },
+  "optimized-profile20.prof": {
+    "total_calls": 7476894,
+    "total_self_seconds": 18.84741052299998,
+    "selected": [
+      {
+        "file": "/workspace/scratch/86d4770bae26/backend/service/db/schema.py",
+        "line": 125,
+        "function": "check_schema",
+        "primitive_calls": 3,
+        "total_calls": 3,
+        "self_seconds": 0.054877406000000004,
+        "cumulative_seconds": 5.718976808000001
+      },
+      {
+        "file": "/workspace/scratch/86d4770bae26/backend/service/onlyfans_runtime/store.py",
+        "line": 144,
+        "function": "__init__",
+        "primitive_calls": 1,
+        "total_calls": 1,
+        "self_seconds": 4.9635e-05,
+        "cumulative_seconds": 1.9053807930000002
+      },
+      {
+        "file": "/workspace/scratch/9a82163d809e/qualification-venv/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/base.py",
+        "line": 3538,
+        "function": "get_columns",
+        "primitive_calls": 406,
+        "total_calls": 406,
+        "self_seconds": 0.004728484000000001,
+        "cumulative_seconds": 0.845391039
+      },
+      {
+        "file": "/workspace/scratch/9a82163d809e/qualification-venv/lib/python3.12/site-packages/sqlalchemy/engine/reflection.py",
+        "line": 841,
+        "function": "get_columns",
+        "primitive_calls": 406,
+        "total_calls": 406,
+        "self_seconds": 0.004188261,
+        "cumulative_seconds": 0.873795863
+      }
+    ]
+  }
+}

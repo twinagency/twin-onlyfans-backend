@@ -145,3 +145,16 @@ def test_reordered_admissions_cannot_refill_the_same_elapsed_time_twice():
     assert tokens==4 and stamp==start+timedelta(seconds=10)
     tokens,stamp=refill_state(tokens-1,stamp,start+timedelta(seconds=11),1,5)
     assert tokens==4
+
+
+def test_fans_share_one_schema_validated_control_pool():
+    from concurrent.futures import ThreadPoolExecutor
+    svc=parent();a,b=svc.child(1001),svc.child(1002)
+    shared=SimpleNamespace(engine='same validated pool')
+    with patch('onlyfans_runtime.store.Store',return_value=shared) as factory:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results=list(pool.map(lambda child:child.control_store('postgresql://synthetic'),[a,b]*8))
+        assert all(result is shared for result in results)
+        factory.assert_called_once_with('postgresql://synthetic')
+        with pytest.raises(Refused,match='control-store-target-changed'):
+            a.control_store('postgresql://different')

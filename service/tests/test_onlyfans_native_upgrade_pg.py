@@ -31,7 +31,14 @@ def test_populated_one_use_sender_upgrade_retains_unknowns_caps_and_controls(dat
     now = utcnow()
     with Session(engine) as s, s.begin():
         s.add(Account(id="old", nickname="Synthetic retained account")); s.flush()
-        s.add(Fan(account_id="old", fan_id=1)); s.flush()
+        # Insert the frozen 0070 fan shape, without newer ORM profile columns.
+        s.execute(text("""INSERT INTO fans (
+            account_id,fan_id,is_name_real,recent_events,likes_boobs,likes_ass,
+            family_names,pets,communication_style,tags,custom_fields,
+            lifetime_spend_cents,is_bot,turn_counter,is_followed,
+            deep_convo_state,deep_convo_skip_level,deep_convo_skip_remaining,source
+        ) VALUES ('old',1,false,'[]',false,false,'{}','[]','{}','[]','{}',
+            0,false,0,false,'missing',0,0,'onlyfans')""")); s.flush()
         s.add(OfCreatorBinding(id="retained-binding", tenant_id="tenant-a", account_id="old", creator_id="old-creator",
                                creator_name="Synthetic Creator", handle="synthetic", channel="onlyfans")); s.flush()
         s.execute(OfRuntime.__table__.insert().values(account_id="old", binding_id="retained-binding", activated_at=now,
@@ -41,8 +48,9 @@ def test_populated_one_use_sender_upgrade_retains_unknowns_caps_and_controls(dat
         s.add(GrokCall(purpose="ai_chatter",account_id="old",fan_id=1,model="grok-4-1-fast-non-reasoning",
             provider="grok",endpoint="synthetic://onlyfans-native-text",prompt_json="[]",
             status="pending",cost_cents=10000,was_dry_run=True,called_at=now))
-        s.add(OfConversationState(account_id="old", fan_id=1, mode="no_contact", revision=9,
-                                  input_revision=17, unresolved_attempt_id="retained-attempt", requires_attention=True))
+        s.execute(text("""INSERT INTO of_conversation_state
+            (account_id,fan_id,mode,revision,input_revision,takeover_state,unresolved_attempt_id,requires_attention)
+            VALUES ('old',1,'no_contact',9,17,'none','retained-attempt',true)"""))
         s.execute(OfDeliveryPolicy.__table__.insert().values(account_id="old", revision=4, enabled=False, used_units=2,
                                limit_units=5, queued_count=0, throttle_seconds=60))
         s.add(Message(account_id="old", fan_id=1, message_id=90, direction="out", body="Retained evidence", created_at=now))
@@ -93,7 +101,8 @@ def test_populated_one_use_sender_upgrade_retains_unknowns_caps_and_controls(dat
     if with_native_plan:
         for row in after["of_native_plan"]: assert row.pop("sale_json") is None
     for row in after["of_runtime"]: assert row.pop("configuration_revision") == 0
-    assert after == before, "migration may add a plan link, but cannot reset authority or rewrite evidence"
+    from onlyfans_upgrade_fixture import assert_original_rows_preserved
+    assert_original_rows_preserved(before, after)
     with Session(engine) as s:
         if not with_native_plan:
             assert list(s.scalars(select(OfNativePlan))) == [], "schema upgrade never invokes or activates a planner"
@@ -130,7 +139,8 @@ def test_populated_budget_upgrade_retains_cost_evidence_and_cannot_regenerate_ol
         for row in after["of_delivery_policy"]: assert row.pop("media_enabled") is False
         for row in after["of_native_plan"]: assert row.pop("sale_json") is None
         for row in after.get("of_runtime",[]): assert row.pop("configuration_revision")==0
-        assert after==before
+        from onlyfans_upgrade_fixture import assert_original_rows_preserved
+        assert_original_rows_preserved(before, after)
         assert c.scalar(text("SELECT count(*) FROM of_native_memory_change"))==0
     model=SyntheticNativeModel()
     assert planner.prepare(TENANT,claim,model)==identity and model.calls==[]

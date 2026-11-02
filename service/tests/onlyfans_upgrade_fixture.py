@@ -2,6 +2,24 @@
 from sqlalchemy import text
 
 
+def assert_original_rows_preserved(before, after):
+    """Compare every original field and row while allowing additive columns.
+
+    Callers separately validate the complete upgraded shape with check_schema.
+    A migration may add columns; it must never change any original value.
+    """
+    assert after.keys() == before.keys()
+    for table, rows in before.items():
+        assert len(after[table]) == len(rows), table
+        remaining = list(after[table])
+        for original in rows:
+            match = next((i for i, current in enumerate(remaining)
+                          if all(key in current and current[key] == value
+                                 for key, value in original.items())), None)
+            assert match is not None, (table, original)
+            remaining.pop(match)
+
+
 def restore_pre95_content_vault_shape(connection):
     assert connection.scalar(text('select current_database()')).startswith('of_test_')
     # The fixture starts at today's schema. Remove the later policy columns

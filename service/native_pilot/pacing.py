@@ -8,7 +8,7 @@ import statistics
 from datetime import datetime, timedelta
 
 from twin_bridge import store
-from onlyfans_runtime.reply_settings import SWITCHES, enabled
+from onlyfans_runtime.reply_settings import SWITCHES, enabled, DELAY_MAX_KEY, delay_max
 from .ledger import Refused, _dt, _hash
 
 PACING = "native_reply_pacing_enabled"
@@ -27,7 +27,11 @@ def _settings(con, account):
     value = json.loads(row[0], object_pairs_hook=unique) if row and row[0] else {}
     if type(value) is not dict:
         raise ValueError("configuration-object-required")
-    return {key: enabled(value, key) for key in SWITCHES.values()}
+    flags = {key: enabled(value, key) for key in SWITCHES.values()}
+    if flags[PACING]:
+        try: flags[DELAY_MAX_KEY] = delay_max(value)
+        except ValueError: raise Refused("reply-delay-configuration-invalid") from None
+    return flags
 
 
 def settings(path, account):
@@ -62,7 +66,7 @@ def authority(con, account, fan):
                            "AND after_json LIKE ? ORDER BY revision DESC LIMIT 1", (account, '%"'+PACING+'"%')).fetchall()
         if rows:
             epoch = rows[0]['revision']
-    generation = _hash([account, fan, r['binding_id'], _dt(r['activated_at']), c['revision'], s['revision'], epoch])
+    generation = _hash([account, fan, r['binding_id'], _dt(r['activated_at']), c['revision'], s['revision'], epoch] + ([flags[DELAY_MAX_KEY]] if flags.get(DELAY_MAX_KEY, 90) != 90 else []))
     since = _dt(c['automation_starts_at'] or r['activated_at'])
     if store.has_table(con, "of_control_audit"):
         row = con.execute("SELECT max(created_at) FROM of_control_audit WHERE account_id=? AND fan_id=?",
@@ -230,8 +234,9 @@ def prepare(ledger, pilot, snapshot, *, now, quiet_s=7.0, rng=None):
                 raise Refused("input-already-claimed")
             first = min(unhandled, key=lambda s: (_dt(s['ingested_at']),s['message_id']))
             received = _dt(first['ingested_at'])
-            delay = float(rng.triangular(25.0,90.0,35.0 if active else 60.0))
-            if not 25 <= delay <= 90:
+            maximum = expected["flags"].get(DELAY_MAX_KEY, 90)
+            delay = float(rng.triangular(25.0,float(maximum),35.0 if active else 60.0))
+            if not 25 <= delay <= maximum:
                 raise Refused("reply-delay-invalid")
             key = _hash([p['account_id'],p['fan_id'],expected['generation'],first['message_id']])
             target = _dt(datetime.fromisoformat(received)+timedelta(seconds=delay))

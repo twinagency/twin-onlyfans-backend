@@ -1,0 +1,11 @@
+{
+  "status": "pass",
+  "from": "0108_commercial_progress",
+  "to": "0110_recent_history",
+  "upgrade_repetitions": 2,
+  "original_tables_preserved": 155,
+  "proxy_evidence_preserved": true,
+  "read_only_recovery_source": "/workspace/scratch/86d4770bae26/onboarding-compatibility",
+  "immutable_image_qualified": false,
+  "accepted_unknown_intents_and_stopped_runtimes_preserved": true
+}

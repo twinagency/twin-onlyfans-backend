@@ -253,7 +253,27 @@ def test_api_content_purpose_strict_json_scope_and_no_provider_on_request(databa
     result = client.post(base + "/vault/sync", headers=headers, json=body)
     assert result.status_code == 200 and result.json()["commandKey"] == body["commandKey"]
     assert result.json()["sync"]["status"] == "pending"
+    assert set(result.json()["sync"]) == {"jobId","commandKey","status","pagesRead","itemsSeen",
+        "lastError","requestedAt","updatedAt","completedAt"}
+    rich=client.post(base+"/vault/sync?progress=1",headers=headers,json=body).json()["sync"]
+    assert rich.pop("retryAt") is None and rich.pop("pageOffset")==0
+    assert rich==result.json()["sync"]
+    legacy=client.get(base+"/vault",headers=headers).json()["vault"]["sync"]
+    extended=client.get(base+"/vault?progress=1",headers=headers).json()["vault"]["sync"]
+    assert extended.pop("retryAt") is None and extended.pop("pageOffset")==0
+    assert extended==legacy
+    assert client.get(base+"/vault?progress=yes",headers=headers).status_code==400
+    assert client.post(base+"/vault/sync?progress=1&progress=1",headers=headers,json=body).status_code==400
     assert client.post(base + "/vault/sync", headers=headers, json=body).json() == result.json()
+    with Session(database[1]) as session, session.begin():
+        job=session.get(OfVaultSyncJob,(account,result.json()["sync"]["jobId"]))
+        job.last_error="provider_read_deferred:provider_rate_limit"
+        job.lease_until=utcnow()+timedelta(seconds=30)
+    legacy=client.get(base+"/vault",headers=headers).json()["vault"]["sync"]
+    extended=client.get(base+"/vault?progress=1",headers=headers).json()["vault"]["sync"]
+    assert legacy["lastError"]=="provider_read_deferred"
+    assert extended["lastError"]=="provider_read_deferred:provider_rate_limit"
+    assert extended["retryAt"] is not None and extended["pageOffset"]==0
     assert client.post(base + "/vault/sync", headers={**headers, "content-type": "application/json"}, content='{"actor":1,"actor":2}').status_code == 400
     assert client.post(base + "/vault/sync", headers={**headers, "content-type": "application/json"}, content=b" " * 65537).status_code == 413
     assert client.post(base + "/items", headers=headers, json={"product": product(), "commandKey": "d" * 64, "actor": ACTOR}).status_code == 404

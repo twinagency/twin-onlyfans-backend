@@ -21,7 +21,7 @@ from onlyfans_runtime.native_worker import NativeWorker, WorkerAccount
 from onlyfans_runtime.native_planning import NativeTextPlanner, SyntheticNativeModel
 from onlyfans_runtime.provider_connector import NativeProviderConnector
 from onlyfans_runtime.provider_model import NativeProviderModel
-from onlyfans_runtime.store import Refused
+from onlyfans_runtime.store import Refused, utcnow
 from onlyfans_runtime.text_delivery import SyntheticTextTransport
 
 
@@ -129,12 +129,22 @@ def test_account_model_credential_is_reusable_for_distinct_inputs_without_replay
 @pytest.mark.parametrize("mode",["timeout","wrong_text","wrong_owner"])
 def test_native_send_uncertainty_holds_without_second_model_or_post(database,monkeypatch,mode):
     store,_=native_start(database,monkeypatch);calls,requests=fake_requests(database,monkeypatch,wire_mode=mode)
-    worker=runtime(store);assert worker.step().unknown==1
+    worker=runtime(store)
+    report=worker.step()
+    assert (report.not_accepted,report.unknown)==((1,0) if mode=="wrong_owner" else (0,1))
     for _ in range(3):worker.step()
     assert len(calls)==1 and sum(method=="POST" for method,_,_ in requests)==int(mode!="wrong_owner")
     with Session(database[1]) as s:
         intent=s.scalar(select(OfTextIntent));policy=s.get(OfDeliveryPolicy,ACCOUNT)
-        assert intent.status=="unknown" and policy.active_intent_id==intent.intent_id and policy.used_units==1
+        if mode=="wrong_owner":
+            # Identity is checked before the one-use wire marker. A definite
+            # owner failure sends no POST and releases the unused reservation.
+            assert intent.status=="not_accepted" and intent.wire_started_at is None
+            assert policy.active_intent_id is None and policy.used_units==0
+            assert policy.delivery_mode=="gap"
+            assert policy.next_dispatch_at>utcnow()+timedelta(seconds=240)
+        else:
+            assert intent.status=="unknown" and policy.active_intent_id==intent.intent_id and policy.used_units==1
         assert s.scalar(select(GrokCall)).status=="done"
         assert s.scalar(select(func.count()).select_from(Message).where(Message.direction=="out"))==0
     store.close()

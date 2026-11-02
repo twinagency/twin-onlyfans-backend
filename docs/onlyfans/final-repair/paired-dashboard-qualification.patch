@@ -1,0 +1,14 @@
+diff --git a/scripts/check-onlyfans-http-browser.mjs b/scripts/check-onlyfans-http-browser.mjs
+--- a/scripts/check-onlyfans-http-browser.mjs
++++ b/scripts/check-onlyfans-http-browser.mjs
+@@ -71,6 +71,8 @@
+   const syncWarning = page.locator("[data-of-sync-warning]");
+   assert.equal(await syncWarning.count(), 1);
+-  assert.match(await syncWarning.innerText(), /sync|history|recovery/i);
+-  assert.match(await syncWarning.innerText(), /missing|incomplete|not.*recorded/i);
++  // The PostgreSQL fixture intentionally has no provider connection. That
++  // stronger blocker takes precedence over its incomplete history state.
++  assert.match(await syncWarning.innerText(), /Connection needs attention/);
++  assert.match(await syncWarning.innerText(), /No verified connection record/);
+   assert.match(await syncWarning.getByRole("link").getAttribute("href"), /account=acc-a/);
+   assert.equal(external.length, 0, "UI attempted an external request");

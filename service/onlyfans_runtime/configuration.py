@@ -16,7 +16,7 @@ from .activation import activation_view
 from .contextual_mode import FIELD as CONTEXTUAL_FIELD, KEY as CONTEXTUAL_KEY, MODES, mode as contextual_mode
 from .safety_mode import FIELD as SAFETY_FIELD, KEY as SAFETY_KEY, MODES as SAFETY_MODES, mode as safety_mode
 from . import commercial_controls
-from .reply_settings import SWITCHES as REPLY_SWITCHES, enabled as reply_enabled
+from .reply_settings import SWITCHES as REPLY_SWITCHES, enabled as reply_enabled, DELAY_MAX_FIELD, DELAY_MAX_KEY, delay_max
 
 def fact_fields():
     from automations._persona_contract import PERSONA_FACT_FIELDS
@@ -132,6 +132,7 @@ def editable(row,runtime,session,*,include_activation=False):
         CONTEXTUAL_FIELD:contextual_mode(sales) if sales_valid else "off",
         SAFETY_FIELD:safety_mode(sales) if sales_valid else "shadow",
         **commercial_controls.view(sales, sales_valid),
+        DELAY_MAX_FIELD: delay_max(sales),
         "onRequestSalesEnabled":on_request_sales_enabled(sales, valid=sales_valid),
         **{name:sales_valid and reply_enabled(sales,key) for name,key in FASTT_SWITCHES.items()},
         **({"activation": activation_view(session,row.account_id,sales,binding_id=runtime.binding_id,model_id=resolved)} if include_activation else {})}
@@ -146,9 +147,12 @@ def get_configuration(store,tenant_id,account_id,*,include_activation=False):
 
 
 def validate_patch(patch):
-    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort","fasttScope",CONTEXTUAL_FIELD,SAFETY_FIELD,*commercial_controls.FIELDS,*FASTT_SWITCHES}:
+    if type(patch) is not dict or not patch or not set(patch)<= {"persona","creatorFacts","inheritCreatorFacts","defaultModel","replyModelOverride","onRequestSalesEnabled","dailyCostCapCents","reasoningEffort","fasttScope",CONTEXTUAL_FIELD,SAFETY_FIELD,DELAY_MAX_FIELD,*commercial_controls.FIELDS,*FASTT_SWITCHES}:
         raise InvalidConfiguration("Only creator persona, facts, model, budget, reasoning and on-request sales settings may be edited here.")
     result={}
+    if DELAY_MAX_FIELD in patch:
+        try: result[DELAY_MAX_FIELD] = delay_max({DELAY_MAX_KEY: patch[DELAY_MAX_FIELD]})
+        except ValueError as exc: raise InvalidConfiguration(str(exc)) from None
     if CONTEXTUAL_FIELD in patch:
         value = patch[CONTEXTUAL_FIELD]
         if type(value) is not str or value not in MODES:
@@ -266,6 +270,18 @@ def update_configuration(store,tenant_id,account_id,*,patch,expected_revision,ex
             changed=changed or previous_sales!=canonical(sales)
             if previous_sales!=canonical(sales):
                 row.ai_chatter_config_json=canonical(sales)
+        if DELAY_MAX_FIELD in patch:
+            sales, valid = sales_settings(row)
+            if not valid:
+                raise InvalidConfiguration("Saved sales configuration needs review before it can be edited.")
+            before[DELAY_MAX_FIELD] = delay_max(sales)
+            after[DELAY_MAX_FIELD] = patch[DELAY_MAX_FIELD]
+            if DELAY_MAX_KEY not in sales or before[DELAY_MAX_FIELD] != patch[DELAY_MAX_FIELD]:
+                from native_pilot.pacing import invalidate_settings
+                invalidate_settings(s, account_id)
+                changed = True
+            sales[DELAY_MAX_KEY] = patch[DELAY_MAX_FIELD]
+            row.ai_chatter_config_json = canonical(sales)
         if any(name in patch for name in FASTT_SWITCHES):
             sales, valid = sales_settings(row)
             if not valid:

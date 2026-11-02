@@ -1,0 +1,8 @@
+{
+  "exit_code": 0,
+  "test_sha256": "831A2253348126D999A5048E9687BB2F5AEABC0027310A87616E9AF82845079D",
+  "runner_sha256": "EADBE9C2E9E1CE141B633473D7E3EBF58B5C2EACD180E053EF33D40F209F0F4C",
+  "source_matches_final": true,
+  "platform": "Windows on LAPTOP-PKFJ7M3I",
+  "scope": "Native command runner marker/exit probes; no provider or model"
+}

@@ -25,5 +25,13 @@
     "passed": 3,
     "seconds": 6.655
   },
-  "currentReleaseStatus": "compatibility fix committed for qualification, not deployed"
+  "currentReleaseStatus": "maile_backend_pilot_live_measurement_repair_not_deployed",
+  "deployedApplicationCommit": "9870b64889833b16a36397c8ffa45dc7e236cea3",
+  "reportingRepairCommit": "c8216d33ef409be5bc99aed0f654b1ccfe3023b3",
+  "initialQualification": {
+    "passed": 66,
+    "seconds": 336.5251062660245
+  },
+  "baselineCapturedBeforePilotJobs": false,
+  "baselineReconstructionVerified": false
 }

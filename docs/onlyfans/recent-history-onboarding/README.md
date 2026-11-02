@@ -1,126 +1,106 @@
-# Recent-history onboarding, 2 November 2026
+# Recent-history onboarding release, 2 November 2026
 
-Release status: **Maile-only backend pilot deployed; AI replies confirmed disabled**. Application/build source `9870b64889833b16a36397c8ffa45dc7e236cea3` passed 66 exact-base checks and was deployed at 19:44 Brisbane on 2 November. Both dashboards remain unchanged. The pilot is incomplete. A reporting repair is being qualified after a 10-second receipt-query timeout and an empty pre-pilot snapshot caused by missing Docker stdin attachment. The private pre-pilot database dump is intact; a committed isolated reconstruction procedure preserves explicit snapshot-time bounds. The original deployment manifest's claim that the baseline was captured is incorrect and is superseded by this record. No fresh onboarding time or model-cost saving is claimed. Earlier checkpoints below are historical, not current deployment status.
+**Maile's backend pilot is deployed and running. AI replies are confirmed disabled. The pilot and full dashboard release are not complete.** No fresh onboarding duration, 90-minute result, or numeric time/cost saving is claimed.
 
-The complete frontend release remains blocked by missing source for the exact running OF dashboard. The existing dashboard stays unchanged and must retain conservative lifetime reporting. The new recent-history card cannot be claimed live.
+## Current deployed release
 
-## Source integration
+| Item | Verified value |
+| --- | --- |
+| Application/build source | `9870b64889833b16a36397c8ffa45dc7e236cea3` |
+| Deployment scripts | `be42c3120aa75c402514a1dbeef89b0908da230e`, packaged from `21edbb880a563748db71a38d9b81a38be5b3fd32` |
+| Worker, importer, learner image | `sha256:9a70ed1001e221fc4a9171112b3ac49112cfa7cdbe11dd209e0267e59271330e` |
+| API image | `sha256:a0aa29f506aa0f81f1a4cfb275ca7d185ce1a771f9489c91254311ac28e87934` |
+| Schema | `0110_recent_history` |
+| Pilot account | Maile, `of-323358988` only |
+| Deployment completed | 2 November 2026, 19:44 Brisbane |
+| Policy start / fixed cutoff | `2026-11-02T09:44:23.165525Z` / `2026-10-03T09:44:23.165525Z` |
+| Existing provider capacity | 2 requests/second, 8 in-flight slots; unchanged |
+| AI controls | Maile paused through existing audited control; reply supervisor remains stopped |
+| Dashboards | Both original containers and images preserved |
 
-The dedicated branch is `codex/recent-history-onboarding-20261102`.
+The API, worker, importer and learner were read back running on the expected revision-labelled images with zero restarts. The additive production migration and API health check succeeded. The actual compiled OF dashboard label passed two checks; its legacy response cannot label an incomplete lifetime archive complete.
 
-- Original/concurrent-release parent: `d3a702262abd918588587c12f67c5fb9611100d7` on `codex/of-original-completion-20261102`.
-- History/capacity/memory parent: `e3f033c3bffcd037696a82e79ef50ccc86e939c6` on `codex/parallel-history-capacity-20261101`.
+Private pre-pilot backup: 750,543,194 bytes, SHA256 `8dd2fcd543acbba784c8c8e1b2d4c268cfcf90739489bcfbeff323f207621337`. Configuration/container snapshots, backup and rollback configuration remain on the operational host. No database restore or destructive migration was performed in production.
+
+## Reporting repair and measurement limitation
+
+Reporting repair **`c8216d33ef409be5bc99aed0f654b1ccfe3023b3` is committed but not deployed**. It addresses two observed failures:
+
+1. The initial promotion's `docker run` omitted `-i`. The Python stdin baseline command did not run, leaving an empty snapshot. The original deployment manifest's `baselineCapturedBeforePilotJobs=true` claim is incorrect. `evidence/pilot-deployment.json` corrects it. Future promotion attaches stdin and validates the complete JSON snapshot before starting pilot jobs.
+2. The progress receipt query omitted the tenant column at the front of the receipt primary key. On Maile it hit the existing 10-second statement timeout. The tenant-scoped query completed in **1.068 seconds** in a read-only production check. The repair also scopes measurement receipts and error/hold reporting to the tenant. A new PostgreSQL regression verifies that another tenant's receipt cannot complete this tenant's memory.
+
+The intact pre-pilot dump can supply source, receipt and model-call evidence. `recover-pilot-baseline.py` restores it into a disposable PostgreSQL container on an internal network with no production credentials or external access, migrates that copy, applies the live frozen cutoff only to the copy, and produces private fingerprints. It keeps the original empty snapshot and records the dump snapshot's lower/upper timing bounds and live-arrival gap. **Recovery has not been confirmed executed.** A reconstructed result must never be presented as an original start-of-pilot capture or fresh onboarding benchmark.
+
+The repair artifact was prepared and the remote staging command was attempted, but its submission/completion is unconfirmed after the control device stopped responding. A subsequent AWS list returned no matching `source-c821` command in the latest 20 commands. Do not resubmit blindly: inspect command records and host files first. No reporting-repair promotion command has been submitted.
+
+- Repair artifact SHA256: `38ccaab934c9981e2e3ede85edc7951054082501d93e44495049169ff6c98ba8` (15,459 bytes).
+- Intended S3 key: `onlyfans/releases/recent-history/c8216d33ef409be5bc99aed0f654b1ccfe3023b3/repair.zip` in the existing private transfer bucket.
+- Intended host source: `/var/lib/twin-release/recent-history-20261102-resume/source-c821`.
+- Intended qualified build: `/var/lib/twin-release/recent-history-20261102-resume/repair-c8216d33ef40`.
+
+The last small readback showed 6,648 recent conversations needed and two running; discovery was still running without a recorded discovery error. These are an intermediate cursor checkpoint, not complete fan coverage. A separate query counted 30 incoming sources still lacking matching receipts. Neither observation establishes completed memory or onboarding.
+
+`MAILE-MEASUREMENT.json` distinguishes these facts from the earlier provisional stored-archive snapshot. Final recent-window fan/message counts, provider requests, import duration, memory duration and new actual model charges remain unmeasured. The older 87,646-message / 16,571-fan observation used a different provisional cutoff and is not the pilot result.
+
+## Source integration and dashboard provenance
+
+Dedicated branch: `codex/recent-history-onboarding-20261102`.
+
+- Backend PR: https://github.com/twinagency/twin-onlyfans-backend/pull/78
+- Dashboard companion PR: https://github.com/twinagency/twin-dashboard/pull/345
+- Original/concurrent lineage: `d3a702262abd918588587c12f67c5fb9611100d7`, with later `cfab868e2c87706ddce4ff6cfb2bbeffd76c720f` integrated.
+- History/capacity lineage: `e3f033c3bffcd037696a82e79ef50ccc86e939c6`.
 - Shared base: `7616ec92bf01a6b7f3beb45bd45b943309c17285`.
-- Both remote heads were reread before publication and remained unchanged. A three-way integration retains the capacity governor, adaptive page sizes, error classification, memory quality and billing repairs alongside the original release's bounded-starvation read lane. Existing capacity settings and daily model caps are unchanged.
-- The two historical migration lines have overlapping numeric prefixes. A real Alembic merge revision, `0109_history_release_merge`, joins them; `0110_recent_history` follows. Schema checks now use migration ancestry as well as rank. Both populated upgrade paths are tested.
-- The separately running concurrent-reply repair checkout and its unfinished files were not changed. This branch does not include those uncommitted edits. Reconcile its subsequently published commits before any release. No sender, conversation engine or Moxy redesign is added.
-- The last **documented**, not freshly inspected, production overlay is recorded in `deploy/memory-accounting-20261102/README.md`: worker `sha256:f728669d70d9fcb89e34ced38e7efe808311293d0b175422b004a46114284fe5`, API `sha256:04532a2d90349893407c08c77a883a6cc62c9ed8386d4eb29b21ab3fc9ef9975`, schema `0106_parallel_history_reads`. Current production source/image/schema still require a host check. Do not deploy a whole older branch over the running engine.
 
-The dashboard companion branch has the same name in `twinagency/twin-dashboard`, based on `86691f86b06baacf4a1b058f79bf4dd529f07d12`. The new field is now explicitly negotiated with `history=recent`; existing callers retain the original exact shape. While lifetime coverage is incomplete, the legacy sync projection forces `recoveryRequired=true` and clears the projected `lastCompleteSyncAt`, without deleting the stored timestamp. The compiled running bundle has the matching completion predicate. The separate new card requires the matching frontend source and deployment. The new card separates recent coverage, memory processing, older jobs, lifetime completeness, charges and reservations. No lifetime percentage is invented. Browser rendering and production dashboard deployment remain unverified.
+Production builds apply committed task-only contexts/additions over the exact existing immutable API/worker images. They do not replace the whole conversation engine from an older branch. Context/hash mismatches abort. Existing production overlays, concurrent reply work and Moxy remain separate. Alembic merge `0109_history_release_merge` joins the existing migration lines before additive `0110_recent_history`.
 
-## Behavior
+| Running dashboard | Identity |
+| --- | --- |
+| OF image / ECR digest | `sha256:22be6bc89bf7308e2c2214e03d63313bfc32f2edb6c831bddcd1a06a28258049` |
+| Reported OF source | `3d0ee2e3e2848f9cd5019399a82fe27a67f435c2` |
+| Next build ID | `xvlzKe6xnQRSavfQQmgfM` |
+| Image creation | 1 November 2026, 14:39:35 +10:00 |
+| OCI source/revision labels | Absent |
+| Separate main dashboard image | `sha256:ab10c2335b9771af12403b64a7db9982e134ac5e421d76b14840fedcb4fca9e4` |
+| Main dashboard reported source | `2c6ac02f8b76b5cc6d22a690dd5fb047f3cc6844` |
 
-The deployment allowlist `ONLYFANS_RECENT_HISTORY_ACCOUNTS` defaults to `[]`. A current-binding durable policy freezes the cutoff when onboarding/import first starts. Reconnecting or restarting preserves it. It is an import boundary, never a deletion rule.
+The exact OF Git object still returns 404. None of 357 inspected branch heads matched. Existing release directories retain environment/previous-image records, not the source; the located checkout is substantially older. Available CodeBuild/S3 records and the other release host did not recover the matching build context. The reported GIT_SHA alone is not source-provenance proof. **Missing:** the Git objects or protected source archive/build context used by the original builder of this exact image.
 
-Independent recent scan and per-fan cursor tables leave all existing lifetime cursor positions, messages, receipts, purchases, memories, manual corrections and reply controls intact. The initial import saves both incoming and outgoing events inside the window, including the existing canonical media metadata. The small live-head bootstrap uses the same cutoff. Every thread is independently traversed. Old threads cannot stop discovery of other fans.
+The backend now adds `recentHistory` only when requested with `history=recent`. Legacy callers receive the original exact shape. For an incomplete lifetime archive, the projected legacy `sync.recoveryRequired` is true and `lastCompleteSyncAt` is null; stored timestamps and lifetime cursors are preserved. The real compiled label function was executed, not inferred from an old branch.
 
-Discovery uses full offset sweeps and requires identical ordered identity sequences on two complete passes, independent of page partitioning. After stable discovery, completed threads are scheduled for another head catch-up. Per-thread import also has a durable initial/head-catch-up cutover. Applied canonical message identities deduplicate overlap with live intake. Claims, pagination, backoff, retry state and processing receipts survive restarts. Invalid, inaccessible or interrupted pages do not complete their cursors.
+The new dashboard card has four component-level Chromium checks and 12 parser checks, but no qualified complete Next build on the matching live source. It is **not live**. Smallest safe route: finish the compatible backend pilot while preserving both dashboards, then recover the original frontend source and integrate the card there. Do not reconstruct the frontend from the older companion base.
 
-### Provider ordering limitation
+## Policy behavior
 
-The current connector requests `order=desc` and validates descending message IDs. That is **not proof of descending creation timestamps**, and it exposes no implemented date filter or stable snapshot cursor. Therefore the safe default is exhaustive ID traversal with date-filtered persistence. It can reduce model extraction work, but it may still need the full provider traversal and adds discovery/catch-up overhead. It does not prove faster download completion.
+The deployment allowlist `ONLYFANS_RECENT_HISTORY_ACCOUNTS` defaults to `[]`. The durable policy freezes a 30-day cutoff per current binding. Reconnection/restart preserves it. This is an import boundary, never a deletion policy.
 
-Date-based early stopping is enabled only with an explicit verified-order flag plus recorded ordering evidence. Incoming pages must remain timestamp-descending, including across page boundaries; violations fail closed. Merely seeing one old message never enables the optimization. The operator must verify the real adapter/provider contract and record evidence before selecting it. Offset discovery remains subject to the provider's available, accessible conversation list; inaccessible threads remain blockers. Continuous list churn can prevent the required stable passes from completing.
+Independent recent scans/cursors preserve lifetime positions, messages, receipts, purchases, memories and manual corrections. Import persists both directions and canonical attachment metadata inside the window. Every thread is traversed independently. Discovery requires matching full ordered identity sweeps, followed by finite known-fan coverage and head catch-up. Live arrivals and overlapping pages deduplicate against canonical identities. Failed/inaccessible/interrupted pages remain incomplete; reaching the cutoff never completes lifetime history.
 
-Previously completed, validated lifetime coverage can terminate overlapping recent reads once that stored coverage is reached. Older stored sources remain available immediately. Activated older jobs wait for eligible stored older extraction receipts before requesting further older pages when the learner is enabled. Unknown gaps are not bridged by advancing to an arbitrary minimum stored ID.
+**Provider limitation:** the connector requests descending IDs, which do not prove descending timestamps. No supported date filter or snapshot cursor is assumed. The safe default exhaustively traverses ID pages and filters persistence by date. It may reduce extraction work but does not prove fewer provider requests or faster download completion. Date-based stopping requires explicit verified timestamp-order evidence, with cross-page validation. Stored validated lifetime coverage can terminate overlapping reads; arbitrary minimum stored IDs cannot bridge gaps.
 
-### Memory and creator knowledge
+Both paid `profile_learning` and deterministic `launch_history_memory` respect the fixed scope and activated older jobs. Bounded batches include outgoing context and reuse fingerprinted receipts, including fact-free results. Recent work precedes activated older work. Old jobs remain stored. The optional `ONLYFANS_PROFILE_ACCOUNTS` cohort restricts seeding, claiming, maintenance and reconciliation to Maile while preserving existing behavior when unset.
 
-Both the paid `profile_learning` queue and deterministic `launch_history_memory` processor respect the fixed cutoff and activated older jobs. The paid learner retains relevant preceding outgoing context, bounded batches/chunks, and fingerprinted receipts, including valid fact-free results. Old jobs and manual corrections remain stored. Recent sources precede activated old sources within a paid extraction batch. Scoped-processing completion is explicitly distinguished from all stored history.
+Approved onboarding uses the existing immutable review/approval workflow. It separates public biography/talking points, private information, writing style/examples, boundaries/approval requirements and pricing/operating notes. Private information is excluded from fan-facing prompts. Authoritative catalogue prices, purchases, entitlement checks and operating controls retain authority. Routine creator-archive extraction is disabled for opted-in accounts; an explicitly configured sample is bounded to 100 outgoing messages and still requires approval. Placeholders and mixed PG/PG-13 plus explicit-sexting instructions block approval rather than being resolved automatically. The conservative linter is not proof that every semantic conflict can be detected.
 
-The existing immutable personality review/approval workflow accepts five separate onboarding sections: fan-facing biography/talking points, private information, writing style/examples, boundaries/approval requirements, and pricing/operating notes. Only approved public sections enter native and FASTT prompts. Private information is excluded. Current catalogue prices, eligibility, ledger checks and runtime controls retain authority; narrative pricing notes cannot grant permission or override them.
+A returning fan's live inbound message activates one durable creator/fan older-history job. Repeated triggers preserve cursors and may raise priority for earlier references, commitments or missing purchase context. Stored older sources are reused before further reads. Existing bounded admission/backoff, aging and periodic older turns preserve live priority and eventual progress within available capacity. Chat text never establishes payment. The engine is instructed to use available evidence and the existing verification/review path; older history is not promised before the first reply.
 
-Routine creator archive extraction is disabled for opted-in accounts. Existing creator-profile queues remain in place. An explicitly configured writing sample of at most 100 outgoing messages can be used through the existing review workflow when writing examples are missing. Samples remain drafts requiring approval. Placeholder text and mixed PG/PG-13 plus explicit/sexting instructions are flagged and block approval. This conservative linter is not a semantic proof that all possible conflicting wording has been caught. Existing approved configuration remains the runtime authority.
+## Checks and release continuation
 
-A live inbound message activates one durable older-history job per account/fan pair. Repeated triggers preserve cursors and can raise retrieval priority for prior references, promises or missing payment context. These priority hints never establish payment. Existing bounded provider admission, cooldowns and account model caps still apply. One periodic older turn and aging prevent ordinary queue starvation within available configured capacity. Live fan work retains its existing priority. The engine is told to use only available evidence and to take the existing verification/review path for unavailable payment, access or fulfilment evidence. Older completion is not promised before the first reply.
+- Initial deployed exact-base candidate: **66 passed**, 333.14 seconds pytest / 336.525 seconds wall. SSM `db69d054-c32c-44a7-87b0-3934d88765a7`.
+- Original promotion: SSM `7ede05c8-6637-403e-8461-8c45f6bc0ba7` succeeded, including backup, audited Maile pause, migration, health and actual-dashboard label checks. The empty-baseline defect is explicitly corrected above.
+- Reporting repair local PostgreSQL: **22 passed**, 44.28 seconds pytest / 46.332 seconds wall.
+- Earlier broad/targeted PostgreSQL checks: 211 passed plus later 56 and two capacity cases; counts overlap and are not a distinct-test total. Local compatibility 57 and earlier measurement three also passed.
+- Four component Chromium checks and 12 strict-parser checks passed. Full live frontend build remains unverified.
+- GitHub runs ended in `startup_failure`; no GitHub CI pass is claimed. One stale ledger fixture also fails on the untouched original baseline and remains explicit; this change does not qualify the separate concurrent-reply R9 gates.
 
-## Measurement and rollout
+On restored control access:
 
-See `MAILE-MEASUREMENT.json` for honest current availability and `evidence/` for isolated test results. Maile is the first intended reference account, `of-323358988`.
+1. Inspect AWS records and the intended repair directory before retrying staging. The initial deployed images above remain the last verified live state.
+2. Run the committed reporting build/qualification and isolated baseline recovery if not already completed. Never reset pilot cursors or delete imported data.
+3. Require a passing repair qualification and a valid reconstructed baseline before invoking `promote-reporting-repair.py`. It checks image/configuration leases and release locks, preserves all environment values, cutoff, stopped supervisor and dashboards, and makes no schema change.
+4. Run the committed `measure.py`. It keeps private fingerprints on the host and publishes only aggregates: unchanged reused sources, new/edited sources, reused/new receipts, history-page canonical additions, HTTP attempts, and new calls separately from pre-existing-call settlement changes. Provider-reported charges, token estimates and active/unresolved reservations stay separate. Receipt span and cumulative model latency are not end-to-end memory duration.
+5. Declare recent readiness only after successful discovery and every relevant thread. Expand only after Maile's coverage, controls and measurement checks pass. No expansion is authorized by this checkpoint.
 
-1. On the operational host, first record current source/image/schema and reconcile the active concurrent-reply release. Capture canonical counts, receipts, purchases, enabled/muted/takeover settings, caps and read capacity. Rehearse the actual current schema upgrade and check role/RLS behavior on a disposable copy. New recent-history tables have RLS enabled and no public/anon/authenticated grants; existing server authority remains in use.
-2. Integrate the two reviewed code lines and the dashboard companion. Drain import/learner work before the schema upgrade. Apply the Alembic merge and additive migration; retain the existing separately provisioned `deploy/profile-learning/schema.sql` tables and receipts. Do not start a reply supervisor or enable any replies.
-3. Keep the existing capacity map, rates, concurrency and cost caps. Set the allowlist to **Maile only** on the cooperating API/importer/learner/worker services. Existing accounts use the first cutover time as the fixed initial-import start; the original archive progress is not reset. New accounts freeze at connection/import bootstrap.
-4. Keep `timestamp_order_verified=false` until real provider ordering evidence has passed review and testing. The exhaustive fallback must be reported honestly.
-5. Before and during the run, use the read-only report with the existing worker role/tenant/database configuration:
+## Rollback
 
-   `python -m tools.history_onboarding_report --account of-323358988`
-
-   Save before, during and after outputs privately. Compare current-binding stored source volume and receipts; record transport-attempt counts, elapsed import time, actual provider-reported model charges, estimates, active/unresolved reservations, memory receipt timestamps and cumulative model latency separately. Unknown lifetime counts remain null. Returning-fan processing can contribute to account memory cost after policy start and is labelled accordingly.
-6. Declare recent readiness only when discovery and every recent thread succeed. Memory readiness is a separate receipt/error/budget check. Compare complete, comparable runs or appropriately bounded stored-workload counts. A source-character fraction is not a measured token, cost or time saving. Expand only after Maile passes coverage, control preservation, purchase verification and budget gates.
-
-### Rollback
-
-Remove the account from the allowlist, or explicitly disable its durable policy, on all cooperating services. Drain in-flight scoped work first. Keep the integrated schema-compatible binary while using the legacy lifetime scheduler. All data, receipts, recent cursors and old cursors remain available. The migration deliberately refuses a destructive downgrade. An old schema-HEAD-checking binary is **not** an image-only rollback from `0110_recent_history`; prepare a schema-compatible rollback build. Turning the flag back on reuses the original cutoff and progress.
-
-## Remaining gates
-
-- Operational access and live-base qualification are complete. Maile live run is blocked by the paired dashboard source issue below.
-- Real provider timestamp-order proof before date-based early stop.
-- Actual Maile recent-window fan/message counts, request counts, import duration, memory duration, charges and full-history comparison.
-- Full dashboard build/deployment and integrated UI checks; four component-level Chromium checks pass.
-- A stale ledger reconstruction test also fails on the untouched original baseline; it attempts to drop an already absent `daily_limit_units` column. Its fixture is not repaired in this scoped change. Keep its result explicit when evaluating whole-release readiness.
-- These checks do not qualify the separate concurrent-reply release or remove its existing R9 gates.
-
-## Executed verification
-
-- Broad isolated PostgreSQL run: **211 passed**, two PostgreSQL-only capacity cases initially skipped, 249.53 seconds. This candidate preceded small discovery-digest, priority and reporting refinements.
-- Final targeted PostgreSQL run after those refinements: **56 passed**, 70.94 seconds. Includes all 16 new recent-onboarding cases, the approved-onboarding/native/FASTT checks, both current release-line upgrades, and the two read-lane fairness suites.
-- The two skipped capacity cases were then executed on real isolated PostgreSQL: **2 passed**, 1.07 seconds, covering simultaneous admission and migration/cursor preservation. Counts overlap; they must not be added as a distinct-test total.
-- Dashboard strict-parser checks: **12 passed** on Node 24. Four subsequent component-level Chromium checks pass; the full deployed Next build remains unverified.
-- The original ledger reconstruction failure was separately reproduced on the untouched original source baseline: **1 failed**, 6.15 seconds. It remains a whole-release qualification issue, not a claimed pass.
-
-The evidence directory contains raw logs, limitations, and hashes of final relevant source files. All records are synthetic. No live fan messages were sent and no paid model calls were made. Test runtime does not measure Maile onboarding.
-
-GitHub publication check: both draft PRs are cleanly mergeable and both source parents are retained. The newly triggered backend runs `41387702674` / `41387666936` and dashboard runs `41387741369` / `41387736177` ended in `startup_failure`. No GitHub CI pass is claimed; this is an additional release blocker. Local PostgreSQL/contract evidence remains separate.
-
-## Follow-up: operational access recovered
-
-Read-only AWS SSM access was recovered through the existing `jesse-gpt` profile. The 2 November 05:39 UTC snapshot is in `evidence/live-maile-baseline.json`. It confirms the documented API/worker image prefixes and live schema `0106_parallel_history_reads`. Maile had 94,571 stored messages, including 87,646 inside the provisional last-30-day window across 16,571 stored fans. Coverage was incomplete: 161 archive cursors complete, 23,731 needed and five running/expired checkpoints. The dedicated history importer and memory learner were exited; the reply supervisor had never started. No service was restarted.
-
-A later fixed-cutoff query found 2,947 of 3,535 stored incoming messages inside the window. This excludes 588 stored incoming sources from initial extraction, about 16.6% of that stored incoming workload; it is not a lifetime or measured billing reduction. Routine creator extraction would also be removed, but no numeric saving is asserted. Existing same-day memory ledger rows total 16,270 units settled and 1,316 units unresolved (one unit is US$0.0001); settled ledger amounts are not necessarily provider-reported invoice charges. No new paid model calls were made.
-
-An exact task-hunk check on the running worker found all contexts in 13 of 14 files. The native-planning context differs, so a blind production patch was not applied. The subsequent exact-live-image overlay and copied-schema migration rehearsal pass; no production migration has run. The newer concurrent-reply commit `cfab868e2c87706ddce4ff6cfb2bbeffd76c720f` was integrated without conflict; its focused combined suite passed 24 tests in 33.94 seconds.
-
-### Exact live-image qualification
-
-The task-specific overlay now passes 22 PostgreSQL/approval/cohort tests on the actual worker image (105.46 seconds), and an upgrade from a private schema-only copy of production succeeds to `0110_recent_history`. The earlier staged test packaging error was a missing fixture file and was corrected before the complete rerun. No production schema or service has changed at this checkpoint. Four Chromium checks of the actual new React component pass at 375 and 1280 pixels; this does not qualify the full Next build.
-
-`ONLYFANS_PROFILE_ACCOUNTS` is an optional process cohort: absent preserves existing behavior, an empty JSON array disables work, and the rollout process selects only Maile. Seeding, claiming, silent completion, maintenance and accounting reconciliation respect the same cohort. This permits measuring Maile without restarting extraction for other creators. Existing rates, model configuration and daily caps are reused.
-
-### Release checkpoint: blocked before production activation
-
-The private host backup is complete (726,457,491 bytes, SHA256 `5fafcbf5d02469c231a56e56c4d79b2b3013fda993b7bdbd22d8be6191571c52`). Production remains on its original images/schema; the stopped importer, learner and reply supervisor remain stopped. No paid feature calls or fan sends have been made. The final fan-scoped readiness regression also passes on PostgreSQL: account discovery must succeed before the initial-window ready state can be emitted, preserving the paired strict UI contract.
-
-The live OF dashboard reports source `3d0ee2e3e2848f9cd5019399a82fe27a67f435c2`, image `sha256:22be6bc89bf7308e2c2214e03d63313bfc32f2edb6c831bddcd1a06a28258049`. GitHub Contents and commit search cannot find this commit in the connected repository. The located host checkout is from a much older release and has no current connection contract. Its release directory retains environment/previous-image records, not the matching source. Available AWS build records did not establish this live source. The main dashboard is a separate image/revision and must remain separate.
-
-**Required input to unblock:** the repository/branch or protected source archive corresponding to the live OF dashboard image. Do not deploy the current dashboard PR wholesale over an unqualified live base. The strict connection contract in the paired source requires the frontend update; enabling an unverified response risks breaking connection parsing, so backend activation and the Maile benchmark are deferred together. This is a source-provenance blocker, not a missing deployment permission.
-
-No end-to-end import elapsed time, feature model charge or numeric speedup has been demonstrated. The 87,646-message / 16,571-fan observation is a stored lower bound at a provisional cutoff, not complete new import coverage.
-
-A further final-image staging rebuild/rerun was submitted after the discovery-readiness fix. Its completion result was not retrieved after the remote connection stopped returning output. It is not counted as a passing check. The last confirmed live-base run remains 22 tests; the final readiness change has the separately recorded 2-test local PostgreSQL pass. All submitted operations remain staging-only.
-
-## Resumed release procedure and precise current blocker
-
-The recheck confirmed running OF dashboard image `sha256:22be6bc89bf7308e2c2214e03d63313bfc32f2edb6c831bddcd1a06a28258049`, ECR repository digest with the same hash, Next build `xvlzKe6xnQRSavfQQmgfM`, and reported `GIT_SHA=3d0ee2e3e2848f9cd5019399a82fe27a67f435c2`. Its image was created 1 November at 14:39:35 +10:00 and has no OCI source/revision labels. Git object lookup returns 404 and none of 357 branch heads match. The earlier checkouts/release records have not supplied its exact source. Image identity and reported commit are established; source provenance is not established by a reported environment variable alone. The deployment configuration and original containers remain preserved on the host.
-
-The current running bundle's actual `Last import complete` predicate was read, rather than inferred from an older branch. It requires a last-complete timestamp and no recovery flag, among other conditions. The backend's legacy projection cannot satisfy it for an incomplete lifetime archive. `legacy-ui-check.cjs` must execute that exact pure compiled label function before promotion. The full frontend is not reconstructed or replaced.
-
-- `build.py` reproduces the onboarding overlay on pinned production base images, using committed before-context checks and explicit source additions. Unknown base changes abort the build. Existing production engine overlays remain in the pinned base.
-- `qualify.py` uses synthetic fixtures and an internal disposable PostgreSQL container, with no production credentials or mounts.
-- `promote.py` requires passing exact-base qualification, the already successful copied-schema rehearsal, matching original images/configuration and release locks. It creates a fresh private DB backup, pauses Maile through the existing audited control, migrates additively, and captures a private baseline before starting the Maile-only importer/learner. It preserves existing environment values, provider capacity (2 rps / 8 slots), daily caps, both dashboards and the stopped reply supervisor. Failure keeps Maile paused and uses schema-compatible flag-off images; no destructive downgrade or DB restore occurs.
-- `measure.py` compares source fingerprints and receipts with the baseline, distinguishes history-page canonical additions from new sources including concurrent live arrivals, and separates new model-call amounts from settlements of pre-existing calls. Receipt commit span and cumulative model latency are explicitly separate from end-to-end duration. Keep private snapshots on the host; publish aggregates only.
-
-The local compatibility suite passed 57 PostgreSQL tests in 99.956 seconds. The new measurement suite passed 3 in 6.655 seconds. An earlier final live-base rerun was recovered and passed 23 in 110.11 seconds; that is not the result of the latest build job. GitHub CI startup failures remain separate.
-
-The Remote Desktop service advertised maintenance from 08:00 to 09:00 UTC (18:00 to 19:00 Brisbane) and then calls timed out; the connected device's heartbeat also became stale. No deployment command has been submitted. Smallest safe route: restore the existing SSM control path, read the submitted qualification result, and execute the committed guarded promotion only if its checks pass. This does not require replacing the dashboard or raising provider/model caps. Full frontend completion still requires the source archive or Git objects/build context for the exact 3d0ee2e3 image, ideally from its original builder.
+A private schema-compatible flag-off configuration is retained. Stop pilot importer/learner work, remove Maile from the rollout allowlist on cooperating services, and retain compatible binaries and all data/cursors/receipts. Turning the flag on again reuses the fixed cutoff and progress. Old binaries pinned to schema HEAD `0106_parallel_history_reads` cannot be used as an image-only rollback after `0110_recent_history`. The migration refuses destructive downgrade. Never automatically re-enable Maile replies or start the stopped supervisor.

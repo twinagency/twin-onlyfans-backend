@@ -1,8 +1,8 @@
 {
   "accountId": "of-323358988",
   "referenceAccount": "Maile",
-  "releaseStatus": "committed_pilot_not_deployed_control_path_unavailable",
-  "rolloutEnabled": false,
+  "releaseStatus": "maile_backend_pilot_live_measurement_repair_not_deployed",
+  "rolloutEnabled": true,
   "recentWindowMessages": null,
   "recentWindowFans": null,
   "recentWindowCoverageComplete": false,
@@ -14,10 +14,12 @@
   "measuredSpeedup": null,
   "demonstratedNinetyMinuteOnboarding": false,
   "blockers": [
-    "Latest exact-base qualification result cannot be retrieved after remote control timeouts. Promotion was not executed; policy and audited reply pause are not applied.",
-    "Exact frontend source for running 3d0ee2e3 image remains unavailable. Backend pilot no longer requires frontend replacement, but the new dashboard card is not deployed.",
-    "Native timestamp ordering remains unverified; exhaustive traversal cannot guarantee provider request savings.",
-    "Maile pilot has not run; fresh requests, new receipts, elapsed time and actual new model cost remain unmeasured."
+    "Reporting repair is committed and locally tested but its exact-base build submission/completion is unconfirmed after the remote device stopped responding; no repair promotion was submitted.",
+    "The original pre-pilot snapshot is empty because Docker stdin was not attached. The verified pre-pilot database dump is intact. The committed isolated baseline reconstruction has not been confirmed executed; no fresh onboarding performance claim is valid.",
+    "The original progress receipt query times out at 10 seconds on Maile. A read-only tenant-scoped query completed in 1.068 seconds; this repair is not yet deployed.",
+    "Initial conversation discovery and lifetime coverage remain incomplete. Final request counts, duration and new actual model cost are unmeasured.",
+    "The exact source for running dashboard revision 3d0ee2e3 is still unavailable (Git object lookup again returned 404). Existing dashboards remain unchanged; the new progress card is not live.",
+    "Provider timestamp ordering is unverified. Exhaustive traversal may not save provider requests."
   ],
   "comparison": {
     "measuredFullHistoryRun": null,
@@ -78,8 +80,8 @@
     "productionChangesMade": false
   },
   "qualification": {
-    "liveBaseTargetedTestsPassed": 22,
-    "liveBaseSeconds": 105.46,
+    "liveBaseTargetedTestsPassed": 66,
+    "liveBaseSeconds": 336.5251062660245,
     "productionSchemaCopyUpgradePassed": true,
     "localFinalReadinessRegression": {
       "passed": 2,
@@ -89,12 +91,12 @@
     "fullDashboardBuildVerified": false,
     "databaseBackup": {
       "privateHostOnly": true,
-      "bytes": 726457491,
-      "sha256": "5fafcbf5d02469c231a56e56c4d79b2b3013fda993b7bdbd22d8be6191571c52"
+      "bytes": 750543194,
+      "sha256": "8dd2fcd543acbba784c8c8e1b2d4c268cfcf90739489bcfbeff323f207621337"
     },
-    "perAccountPilot": "Maile only, not enabled; existing 2rps/8 slots and US$6 daily model cap preserved",
-    "actualFeatureRun": false,
-    "additionalFinalImageRerun": "Recovered from host: earlier final-image run passed 23 tests in 110.11 seconds. The subsequent 9870 compatibility build is a different job and remains unverified.",
+    "perAccountPilot": "Maile only, enabled; AI replies disabled; existing 2 rps / 8 slots and daily model cap preserved",
+    "actualFeatureRun": true,
+    "additionalFinalImageRerun": "Initial 9870 exact-base qualification passed 66 tests; the reporting repair is a distinct, not yet verified build.",
     "newCompatibilityTests": {
       "passed": 57,
       "seconds": 99.956
@@ -109,11 +111,41 @@
     },
     "latestBuild": {
       "ssmCommand": "db69d054-c32c-44a7-87b0-3934d88765a7",
-      "result": "unverified",
+      "result": "passed",
       "sourceCommit": "9870b64889833b16a36397c8ffa45dc7e236cea3",
-      "artifactSha256": "544a71d0ba10bfa7ae47aa7ed1524e00b2db9d6d1349b9525be91a9dc4c294cd"
+      "artifactSha256": "544a71d0ba10bfa7ae47aa7ed1524e00b2db9d6d1349b9525be91a9dc4c294cd",
+      "passed": 66,
+      "seconds": 336.5251062660245
+    },
+    "reportingRepairLocalTests": {
+      "passed": 22,
+      "wallSeconds": 46.332,
+      "pytestSeconds": 44.28
     }
   },
   "applicationCommit": "9870b64889833b16a36397c8ffa45dc7e236cea3",
-  "deploymentConfigurationCommit": "be42c3120aa75c402514a1dbeef89b0908da230e"
+  "deploymentConfigurationCommit": "be42c3120aa75c402514a1dbeef89b0908da230e",
+  "repairCommit": "c8216d33ef409be5bc99aed0f654b1ccfe3023b3",
+  "fixedCutoffAt": "2026-10-03T09:44:23.165525Z",
+  "policyStartedAt": "2026-11-02T09:44:23.165525Z",
+  "aiRepliesEnabled": false,
+  "baselineSnapshot": {
+    "captured": false,
+    "originalDeploymentManifestClaimWasIncorrect": true,
+    "recoveryStatus": "committed_procedure_not_verified_executed",
+    "recoverySource": "verified pre-pilot private PostgreSQL dump",
+    "timingLimitation": "Reconstructed comparison must include explicit dump snapshot bounds and live arrivals between backup and policy activation."
+  },
+  "observedRecentCursorCheckpoint": {
+    "complete": 0,
+    "running": 2,
+    "needed": 6648,
+    "discoveryState": "running",
+    "discoveryError": null,
+    "isFinalMeasurement": false
+  },
+  "images": {
+    "worker": "sha256:9a70ed1001e221fc4a9171112b3ac49112cfa7cdbe11dd209e0267e59271330e",
+    "api": "sha256:a0aa29f506aa0f81f1a4cfb275ca7d185ce1a771f9489c91254311ac28e87934"
+  }
 }

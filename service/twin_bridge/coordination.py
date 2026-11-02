@@ -877,7 +877,7 @@ async def wait_for_quiescence(account_id: object, fan_id: object, *, timeout_s: 
 
 
 async def wait_for_quiescence_all(account_id: object, fan_id: object, *, timeout_s: float,
-                                  poll_s: float = 0.02) -> bool:
+                                  poll_s: float = 0.02, io_offload: bool = False) -> bool:
     """Wait until no writer is in flight in THIS process OR a sibling process.
 
     A durable in-flight marker (see `_durable_write_*`) is written by whichever
@@ -887,9 +887,11 @@ async def wait_for_quiescence_all(account_id: object, fan_id: object, *, timeout
     """
     deadline = _monotonic() + max(0.0, timeout_s)
     while True:
-        if in_flight_count(account_id, fan_id) == 0 \
-                and not _durable_write_fresh(account_id, fan_id):
-            return True
+        if in_flight_count(account_id, fan_id) == 0:
+            fresh = (await asyncio.to_thread(_durable_write_fresh, account_id, fan_id)
+                     if io_offload else _durable_write_fresh(account_id, fan_id))
+            if not fresh:
+                return True
         if _monotonic() >= deadline:
             return False
         await asyncio.sleep(poll_s)
@@ -1003,6 +1005,7 @@ def _reserve_atomic(account_id: object, fan_id: object, owner_token: str,
 async def reserve_ownership(
     *, account_id: str, fan_id: int, owner_token: str, now: datetime,
     ttl_s: float = DEFAULT_OWNER_TTL_S, quiesce_timeout_s: float = 5.0,
+    io_offload: bool = False,
 ) -> bool:
     """Take the durable bridge reservation for one conversation.
 
@@ -1017,7 +1020,8 @@ async def reserve_ownership(
     process replacement - so an unchanged, already-accepted draft survives a
     restart instead of being parked as obsolete.
     """
-    if not await wait_for_quiescence_all(account_id, fan_id, timeout_s=quiesce_timeout_s):
+    if not await wait_for_quiescence_all(account_id, fan_id, timeout_s=quiesce_timeout_s,
+                                       io_offload=io_offload):
         return False
     # ADMISSION: take the token atomically with the in-flight re-check. An older
     # writer that entered transport after the wait above, or that enters now,
@@ -1031,7 +1035,18 @@ async def reserve_ownership(
     # process's writer registration serialises against this instead of racing
     # between a separate read and write. A missing coordination store returns
     # None and is refused: an ENABLED bridge never silently degrades.
-    got = _reserve_atomic(account_id, fan_id, owner_token, now, expires)
+    if io_offload:
+        pending = asyncio.create_task(asyncio.to_thread(_reserve_atomic, account_id, fan_id, owner_token, now, expires))
+        try:
+            got = await asyncio.shield(pending)
+        except BaseException:
+            try:
+                await asyncio.shield(pending)
+            finally:
+                _end_admission(account_id, fan_id)
+            raise
+    else:
+        got = _reserve_atomic(account_id, fan_id, owner_token, now, expires)
     if not got:
         _end_admission(account_id, fan_id)
         return False

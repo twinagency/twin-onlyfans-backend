@@ -34,7 +34,10 @@ import copy
 import json
 import os
 import random
-import resource
+try:
+    import resource
+except ImportError:  # Windows: the qualification host has no Unix resource module.
+    resource = None
 import statistics
 import subprocess
 import sys
@@ -453,6 +456,8 @@ def rss_kb():
 
 
 def cpu_s():
+    if resource is None:
+        return time.process_time()
     r = resource.getrusage(resource.RUSAGE_SELF)
     return r.ru_utime + r.ru_stime
 

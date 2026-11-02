@@ -57,7 +57,8 @@ class SendGate:
         return self._held
 
     async def acquire(self, should_abort, wait_max_s: float, priority=None, key=None) -> None:
-        if key is not None and key in self._active:
+        if key is not None and (key in self._active or any(
+                e[2] == key and not e[3].done() for e in self._queue)):
             raise Refused("conversation-busy")
         if self._held < self._max and not self._queue:
             self._held += 1
@@ -74,9 +75,8 @@ class SendGate:
             while True:
                 done, _ = await asyncio.wait({fut}, timeout=self.poll_s)
                 if done:
+                    fut.result()  # cancellation is never a granted slot
                     self.acquired += 1
-                    if key is not None:
-                        self._active.add(key)
                     return
                 reason = should_abort()
                 if reason:
@@ -86,6 +86,8 @@ class SendGate:
                     raise Refused("send-queue-timeout")
         except BaseException:
             if fut.done() and not fut.cancelled():
+                if key is not None:
+                    self._active.discard(key)
                 self._release_handoff()       # we were handed the gate just as we left: pass it on
             else:
                 try:
@@ -115,5 +117,7 @@ class SendGate:
                 fut.cancel()
                 continue
             self._held += 1
+            if key is not None:
+                self._active.add(key)  # reserve before waking the waiter
             fut.set_result(True)
             return

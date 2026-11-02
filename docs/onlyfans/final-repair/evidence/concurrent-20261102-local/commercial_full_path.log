@@ -1,0 +1,256 @@
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:58: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:58: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now = datetime.utcnow()
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:217: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=120), ingested_at=datetime.utcnow()-timedelta(seconds=119)))
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:219: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=30), ingested_at=datetime.utcnow()-timedelta(seconds=29)))
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 3, "provider_message_id": "3001"}
+Automation employee not found (migration 0011 not run?); writing message 3001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 4, "provider_message_id": "3002"}
+Automation employee not found (migration 0011 not run?); writing message 3002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:251: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  scan = await s.get(OfLedgerScan, case[0]); scan.window_end = datetime.utcnow()-timedelta(hours=1)
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:254: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  await s.execute(update(VaultItem).where(VaultItem.account_id == case[0]).values(removed_at=datetime.utcnow()))
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:268: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  is_paid=True, purchased_at=datetime.utcnow()))
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:273: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=120), ingested_at=datetime.utcnow()-timedelta(seconds=119)))
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:277: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  updated_at_of=datetime.utcnow().isoformat(), description="Creator alone in a gym workout mirror portrait",
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:278: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  search_text="Creator alone in a gym workout mirror portrait", tags="[]", created_at=datetime.utcnow()-timedelta(days=1)))
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:280: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=30), ingested_at=datetime.utcnow()-timedelta(seconds=29)))
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 3, "provider_message_id": "3001"}
+Automation employee not found (migration 0011 not run?); writing message 3001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 4, "provider_message_id": "3002"}
+Automation employee not found (migration 0011 not run?); writing message 3002 with sent_by_employee_id=NULL
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:302: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=55-n), ingested_at=datetime.utcnow()-timedelta(seconds=54-n)))
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:304: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=20), ingested_at=datetime.utcnow()-timedelta(seconds=19)))
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+OnlyFans commercial progress held account=900515 fan=910515
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/automations/ai_chatter.py", line 10765, in run
+    await _sales_turn.before_response(lane, c, f, bubbles=len(parts),
+  File "/workspace/scratch/86d4770bae26/backend/service/automations/sales_turn.py", line 238, in before_response
+    raise progress.ProgressRefused("commercial-progress-review-required")
+onlyfans_runtime.commercial_progress.ProgressRefused: commercial-progress-review-required
+ai_chatter send failed account=900516 fan=910516
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/engine.py", line 115, in send_message
+    result = self.engine._send(fan_id, text, kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/runner.py", line 353, in send
+    return asyncio.run_coroutine_threadsafe(self._send(no_dashes(text), terms), self.loop).result()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/runner.py", line 384, in _send
+    return await self._send_inner(text, terms)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/runner.py", line 621, in _send_inner
+    raise Refused(self.stopped_reason) from None
+native_pilot.ledger.Refused: fan-case-complaint
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/automations/ai_chatter.py", line 10895, in run
+    result = await asyncio.to_thread(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/automations/ai_chatter.py", line 10896, in <lambda>
+    lambda p=part, kw=kwargs: client.send_message(fan_id, p, **kw))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/engine.py", line 119, in send_message
+    self.engine._refuse("native-send-interrupted")
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/engine.py", line 265, in _refuse
+    raise PilotBoundaryError(reason)
+native_pilot.engine.PilotBoundaryError: native-send-interrupted
+ai_chatter send failed account=900517 fan=910517
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/engine.py", line 115, in send_message
+    result = self.engine._send(fan_id, text, kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/runner.py", line 353, in send
+    return asyncio.run_coroutine_threadsafe(self._send(no_dashes(text), terms), self.loop).result()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/runner.py", line 384, in _send
+    return await self._send_inner(text, terms)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/runner.py", line 621, in _send_inner
+    raise Refused(self.stopped_reason) from None
+native_pilot.ledger.Refused: source-changed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/automations/ai_chatter.py", line 10895, in run
+    result = await asyncio.to_thread(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/automations/ai_chatter.py", line 10896, in <lambda>
+    lambda p=part, kw=kwargs: client.send_message(fan_id, p, **kw))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/engine.py", line 119, in send_message
+    self.engine._refuse("native-send-interrupted")
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/engine.py", line 265, in _refuse
+    raise PilotBoundaryError(reason)
+native_pilot.engine.PilotBoundaryError: native-send-interrupted
+ai_chatter send failed account=900518 fan=910518
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/engine.py", line 115, in send_message
+    result = self.engine._send(fan_id, text, kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/runner.py", line 353, in send
+    return asyncio.run_coroutine_threadsafe(self._send(no_dashes(text), terms), self.loop).result()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 456, in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/_base.py", line 401, in __get_result
+    raise self._exception
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/runner.py", line 384, in _send
+    return await self._send_inner(text, terms)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/runner.py", line 621, in _send_inner
+    raise Refused(self.stopped_reason) from None
+native_pilot.ledger.Refused: fan-takeover
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/automations/ai_chatter.py", line 10895, in run
+    result = await asyncio.to_thread(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/automations/ai_chatter.py", line 10896, in <lambda>
+    lambda p=part, kw=kwargs: client.send_message(fan_id, p, **kw))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/engine.py", line 119, in send_message
+    self.engine._refuse("native-send-interrupted")
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/engine.py", line 265, in _refuse
+    raise PilotBoundaryError(reason)
+native_pilot.engine.PilotBoundaryError: native-send-interrupted
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:396: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=120), ingested_at=datetime.utcnow()-timedelta(seconds=119)))
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:399: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=20), ingested_at=datetime.utcnow()-timedelta(seconds=19)))
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 3, "provider_message_id": "3001"}
+Automation employee not found (migration 0011 not run?); writing message 3001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 4, "provider_message_id": "3002"}
+Automation employee not found (migration 0011 not run?); writing message 3002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 3, "provider_message_id": "3001"}
+Automation employee not found (migration 0011 not run?); writing message 3001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 3, "provider_message_id": "3001"}
+Automation employee not found (migration 0011 not run?); writing message 3001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 3, "provider_message_id": "3001"}
+Automation employee not found (migration 0011 not run?); writing message 3001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 4, "provider_message_id": "3002"}
+Automation employee not found (migration 0011 not run?); writing message 3002 with sent_by_employee_id=NULL
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:446: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=120), ingested_at=datetime.utcnow()-timedelta(seconds=119)))
+/workspace/scratch/86d4770bae26/backend/service/tests/test_commercial_full_path.py:449: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  created_at=datetime.utcnow()-timedelta(seconds=20),ingested_at=datetime.utcnow()-timedelta(seconds=19)))
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 5, "provider_message_id": "5001"}
+Automation employee not found (migration 0011 not run?); writing message 5001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 6, "provider_message_id": "5002"}
+Automation employee not found (migration 0011 not run?); writing message 5002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 1, "provider_message_id": "1001"}
+Automation employee not found (migration 0011 not run?); writing message 1001 with sent_by_employee_id=NULL
+{"engine": "fastt-native", "event": "sent", "limit": 20, "pilot_sent": 2, "provider_message_id": "1002"}
+Automation employee not found (migration 0011 not run?); writing message 1002 with sent_by_employee_id=NULL
+{"transport": "synthetic_model_and_http_only", "scenarios": [{"case": "proactive_with_complete_answer", "cards": 1, "real_authority": true}, {"case": "off", "cards": 0, "real_authority": true}, {"case": "shadow", "cards": 0, "real_authority": true}, {"case": "short_acceptance", "cards": 1, "real_authority": true}, {"case": "immediate_direct_request", "cards": 1, "real_authority": true}, {"case": "complaint", "cards": 0, "real_authority": true}, {"case": "stale_purchase_coverage", "cards": 0, "real_authority": true}, {"case": "missing_inventory", "cards": 0, "real_authority": true}, {"case": "purchase_then_different_requested_item", "cards": 1, "real_authority": true}, {"case": "opportunity_before_reference", "cards": 1, "real_authority": true}, {"case": "opportunity_after_reference", "cards": 1, "real_authority": true}, {"case": "no_opportunity_beyond_reference", "cards": 0, "real_authority": true}, {"case": "boundary_explore_becomes_specific_invitation", "cards": 0, "real_authority": true}, {"case": "one_necessary_clarification", "cards": 0, "real_authority": true}, {"case": "second_extension_refused_and_recorded_for_review", "cards": 0, "real_authority": true}, {"case": "invitation_hold_race", "cards": 0, "real_authority": true}, {"case": "edit", "cards": 0, "real_authority": true}, {"case": "human_takeover", "cards": 0, "real_authority": true}, {"case": "budget", "cards": 0, "real_authority": true}, {"case": "develop_then_fan_request", "cards": 1, "real_authority": true}, {"case": "rejected_invitation", "cards": 0, "real_authority": true}, {"case": "ignored_invitation", "cards": 0, "real_authority": true}, {"case": "ambiguous_invitation_one_clarification_then_acceptance", "cards": 1, "real_authority": true}, {"case": "shadow_preserves_separate_existing_direct_permission", "cards": 1, "real_authority": true}, {"case": "affordable_stated_budget_preserves_eligible_offer", "cards": 1, "real_authority": true}, {"case": "confirmed_native_pointer_allows_own_following_bubbles_without_releasing_lease", "cards": 1, "real_authority": true}], "reports": {"900501": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 2, "by_outcome": {"acted": 2}, "by_action": {"proactive_offer": 1, "direct_offer": 1}, "no_offer_reasons": {}, "pacing": {"first": {"turns": 1, "proposed_cards": 1, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 1, "proposed_cards": 1, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 2, "delivered_cards": 2, "confirmed_purchases": 1, "failed_deliveries": 0, "attempts_by_state": {"offered": 2}, "attempt_pacing": {"first": [{"status": "offered", "raw_bubbles": 1, "grouped_replies": 1, "extension_used": false, "reason": "confirmed_paid_card"}], "repeat": [{"status": "offered", "raw_bubbles": 1, "grouped_replies": 1, "extension_used": false, "reason": "confirmed_paid_card"}]}}, "900502": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 0, "by_outcome": {}, "by_action": {}, "no_offer_reasons": {}, "pacing": {"first": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {}, "attempt_pacing": {"first": [], "repeat": []}}, "900503": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"proactive_offer": 1}, "no_offer_reasons": {}, "pacing": {"first": {"turns": 1, "proposed_cards": 1, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 1, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {}, "attempt_pacing": {"first": [], "repeat": []}}, "900504": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 2, "by_outcome": {"acted": 2}, "by_action": {"invite": 1, "direct_offer": 1}, "no_offer_reasons": {"current_interest_gentle": 1}, "pacing": {"first": {"turns": 2, "proposed_cards": 1, "invitations": 1, "grouped_turns": [0, 1], "raw_bubbles": [0, 2]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {"accepted": 1}, "shadow_turns": 0, "delivered_invitations": 1, "undelivered_invitations": 0, "planned_cards": 1, "delivered_cards": 1, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"offered": 1}, "attempt_pacing": {"first": [{"status": "offered", "raw_bubbles": 3, "grouped_replies": 2, "extension_used": false, "reason": "confirmed_paid_card"}], "repeat": []}}, "900505": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"direct_offer": 1}, "no_offer_reasons": {}, "pacing": {"first": {"turns": 1, "proposed_cards": 1, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 1, "delivered_cards": 1, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"offered": 1}, "attempt_pacing": {"first": [{"status": "offered", "raw_bubbles": 1, "grouped_replies": 1, "extension_used": false, "reason": "confirmed_paid_card"}], "repeat": []}}, "900506": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"blocked": 1}, "by_action": {"answer": 1}, "no_offer_reasons": {"sales_eligibility_refused": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"active": 1}, "attempt_pacing": {"first": [{"status": "active", "raw_bubbles": 1, "grouped_replies": 1, "extension_used": false, "reason": null}], "repeat": []}}, "900507": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"blocked": 1}, "by_action": {"answer": 1}, "no_offer_reasons": {"purchase_freshness_refused": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"active": 1}, "attempt_pacing": {"first": [{"status": "active", "raw_bubbles": 1, "grouped_replies": 1, "extension_used": false, "reason": null}], "repeat": []}}, "900508": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"excluded": 1}, "by_action": {"answer": 1}, "no_offer_reasons": {"no_matching_media": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"active": 1}, "attempt_pacing": {"first": [{"status": "active", "raw_bubbles": 1, "grouped_replies": 1, "extension_used": false, "reason": null}], "repeat": []}}, "900510": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"proactive_offer": 1}, "no_offer_reasons": {}, "pacing": {"first": {"turns": 1, "proposed_cards": 1, "invitations": 0, "grouped_turns": [1], "raw_bubbles": [1]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 1, "delivered_cards": 1, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"offered": 1}, "attempt_pacing": {"first": [{"status": "offered", "raw_bubbles": 2, "grouped_replies": 2, "extension_used": false, "reason": "confirmed_paid_card"}], "repeat": []}}, "900511": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"proactive_offer": 1}, "no_offer_reasons": {}, "pacing": {"first": {"turns": 1, "proposed_cards": 1, "invitations": 0, "grouped_turns": [1], "raw_bubbles": [7]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 1, "delivered_cards": 1, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"offered": 1}, "attempt_pacing": {"first": [{"status": "offered", "raw_bubbles": 8, "grouped_replies": 2, "extension_used": false, "reason": "confirmed_paid_card"}], "repeat": []}}, "900512": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"excluded": 1}, "by_action": {"answer": 1}, "no_offer_reasons": {"no_interest": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 0, "grouped_turns": [1], "raw_bubbles": [7]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"closed_no_offer": 1}, "attempt_pacing": {"first": [{"status": "closed_no_offer", "raw_bubbles": 8, "grouped_replies": 2, "extension_used": false, "reason": "no_current_interest"}], "repeat": []}}, "900513": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"invite": 1}, "no_offer_reasons": {"specific_item_invitation": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 1, "grouped_turns": [1], "raw_bubbles": [5]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {"open": 1}, "shadow_turns": 0, "delivered_invitations": 1, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"awaiting_answer": 1}, "attempt_pacing": {"first": [{"status": "awaiting_answer", "raw_bubbles": 7, "grouped_replies": 2, "extension_used": false, "reason": null}], "repeat": []}}, "900514": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"clarify": 1}, "no_offer_reasons": {"necessary_product_clarification": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 0, "grouped_turns": [1], "raw_bubbles": [5]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"clarification_pending": 1}, "attempt_pacing": {"first": [{"status": "clarification_pending", "raw_bubbles": 7, "grouped_replies": 2, "extension_used": true, "reason": null}], "repeat": []}}, "900515": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"excluded": 1}, "by_action": {"answer": 1}, "no_offer_reasons": {"commercial-clarification-extension-exhausted": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 0, "grouped_turns": [1], "raw_bubbles": [6]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"closed_no_offer": 1}, "attempt_pacing": {"first": [{"status": "closed_no_offer", "raw_bubbles": 6, "grouped_replies": 1, "extension_used": true, "reason": "review_required"}], "repeat": []}}, "900516": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"invite": 1}, "no_offer_reasons": {"current_interest_gentle": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 1, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {"open": 1}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 1, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"awaiting_answer": 1}, "attempt_pacing": {"first": [{"status": "awaiting_answer", "raw_bubbles": 0, "grouped_replies": 0, "extension_used": false, "reason": null}], "repeat": []}}, "900517": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"blocked": 1}, "by_action": {"answer": 1}, "no_offer_reasons": {"evaluation_internal_failure": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"active": 1}, "attempt_pacing": {"first": [{"status": "active", "raw_bubbles": 0, "grouped_replies": 0, "extension_used": false, "reason": null}], "repeat": []}}, "900518": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"blocked": 1}, "by_action": {"answer": 1}, "no_offer_reasons": {"sales_eligibility_refused": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"held": 1}, "attempt_pacing": {"first": [{"status": "held", "raw_bubbles": 0, "grouped_replies": 0, "extension_used": false, "reason": "takeover"}], "repeat": []}}, "900519": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"excluded": 1}, "by_action": {"clarify": 1}, "no_offer_reasons": {"quote_over_budget": 1}, "pacing": {"first": {"turns": 1, "proposed_cards": 0, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"closed_no_offer": 1}, "attempt_pacing": {"first": [{"status": "closed_no_offer", "raw_bubbles": 1, "grouped_replies": 1, "extension_used": false, "reason": "unavailable"}], "repeat": []}}, "900520": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 2, "by_outcome": {"acted": 2}, "by_action": {"develop": 1, "direct_offer": 1}, "no_offer_reasons": {"explore_interest": 1}, "pacing": {"first": {"turns": 2, "proposed_cards": 1, "invitations": 0, "grouped_turns": [0, 1], "raw_bubbles": [0, 2]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 1, "delivered_cards": 1, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"offered": 1}, "attempt_pacing": {"first": [{"status": "offered", "raw_bubbles": 3, "grouped_replies": 2, "extension_used": false, "reason": "confirmed_paid_card"}], "repeat": []}}, "900521": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 2, "by_outcome": {"acted": 1, "blocked": 1}, "by_action": {"invite": 1, "answer": 1}, "no_offer_reasons": {"current_interest_gentle": 1, "sales_eligibility_refused": 1}, "pacing": {"first": {"turns": 2, "proposed_cards": 0, "invitations": 1, "grouped_turns": [0, 1], "raw_bubbles": [0, 2]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {"declined": 1}, "shadow_turns": 0, "delivered_invitations": 1, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"closed_no_offer": 1}, "attempt_pacing": {"first": [{"status": "closed_no_offer", "raw_bubbles": 3, "grouped_replies": 2, "extension_used": false, "reason": "refused_item"}], "repeat": []}}, "900522": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 2, "by_outcome": {"acted": 1, "excluded": 1}, "by_action": {"invite": 1, "answer": 1}, "no_offer_reasons": {"current_interest_gentle": 1, "no_interest": 1}, "pacing": {"first": {"turns": 2, "proposed_cards": 0, "invitations": 1, "grouped_turns": [0, 1], "raw_bubbles": [0, 2]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {"ignored": 1}, "shadow_turns": 0, "delivered_invitations": 1, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 0, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"closed_no_offer": 1}, "attempt_pacing": {"first": [{"status": "closed_no_offer", "raw_bubbles": 3, "grouped_replies": 2, "extension_used": false, "reason": "no_current_interest"}], "repeat": []}}, "900523": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 3, "by_outcome": {"acted": 3}, "by_action": {"invite": 1, "clarify": 1, "direct_offer": 1}, "no_offer_reasons": {"current_interest_gentle": 1, "necessary_product_clarification": 1}, "pacing": {"first": {"turns": 3, "proposed_cards": 1, "invitations": 1, "grouped_turns": [0, 1, 2], "raw_bubbles": [0, 2, 4]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {"accepted": 1}, "shadow_turns": 0, "delivered_invitations": 1, "undelivered_invitations": 0, "planned_cards": 1, "delivered_cards": 1, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"offered": 1}, "attempt_pacing": {"first": [{"status": "offered", "raw_bubbles": 5, "grouped_replies": 3, "extension_used": true, "reason": "confirmed_paid_card"}], "repeat": []}}, "900524": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"direct_offer": 1}, "no_offer_reasons": {}, "pacing": {"first": {"turns": 1, "proposed_cards": 1, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 1, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 0, "delivered_cards": 1, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {}, "attempt_pacing": {"first": [], "repeat": []}}, "900525": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"direct_offer": 1}, "no_offer_reasons": {}, "pacing": {"first": {"turns": 1, "proposed_cards": 1, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 1, "delivered_cards": 1, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"offered": 1}, "attempt_pacing": {"first": [{"status": "offered", "raw_bubbles": 1, "grouped_replies": 1, "extension_used": false, "reason": "confirmed_paid_card"}], "repeat": []}}, "900526": {"scope": {"decisions_since": null, "delivery_and_attempt_totals": "all_retained_history"}, "turns_evaluated": 1, "by_outcome": {"acted": 1}, "by_action": {"proactive_offer": 1}, "no_offer_reasons": {}, "pacing": {"first": {"turns": 1, "proposed_cards": 1, "invitations": 0, "grouped_turns": [0], "raw_bubbles": [0]}, "repeat": {"turns": 0, "proposed_cards": 0, "invitations": 0, "grouped_turns": [], "raw_bubbles": []}}, "invitations_by_state": {}, "shadow_turns": 0, "delivered_invitations": 0, "undelivered_invitations": 0, "planned_cards": 1, "delivered_cards": 1, "confirmed_purchases": 0, "failed_deliveries": 0, "attempts_by_state": {"offered": 1}, "attempt_pacing": {"first": [{"status": "offered", "raw_bubbles": 1, "grouped_replies": 1, "extension_used": false, "reason": "confirmed_paid_card"}], "repeat": []}}}}

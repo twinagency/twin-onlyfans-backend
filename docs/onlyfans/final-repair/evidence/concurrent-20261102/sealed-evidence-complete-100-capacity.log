@@ -1,0 +1,22 @@
+/workspace/scratch/86d4770bae26/backend/service/native_pilot/tools/concurrent_benchmark.py:190: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now=datetime.utcnow()
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/tools/concurrent_benchmark.py", line 520, in <module>
+    if __name__=='__main__':main()
+                            ^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/tools/concurrent_benchmark.py", line 509, in main
+    db.bootstrap();result=asyncio.run(exercise(args,db))
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/native_pilot/tools/concurrent_benchmark.py", line 340, in exercise
+    event.listen(async_engine.sync_engine,'before_cursor_execute',sql_start)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Engine' object has no attribute 'sync_engine'

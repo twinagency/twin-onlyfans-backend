@@ -1,0 +1,23 @@
+ledger level ok 57
+{"event": "finished", "persistent": true}
+Traceback (most recent call last):
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 2229, in <module>
+    main()
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 2218, in main
+    asyncio.run(loop_level(backend, root))
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 610, in loop_level
+    await replied(f, http, 2, "second reply")
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 563, in replied
+    await until(lambda: len(http.posts) == n and
+  File "/workspace/scratch/86d4770bae26/backend/service/tests/test_native_pilot_service.py", line 409, in until
+    raise AssertionError("timeout waiting for " + label + "; last events: " + json.dumps(events[-6:], default=str))
+AssertionError: timeout waiting for second reply; last events: [{"event": "sent", "engine": "fastt-native", "provider_message_id": "1001", "pilot_sent": 1, "limit": 2}, {"event": "turn-stats", "stats": {}}, {"event": "turn-timing", "account": "176774528", "fan_id": 318022380, "outcome": "sent", "first_input_at": null, "claimed_at": "2026-11-02 05:15:51.123000", "generation_started_at": "2026-11-02 05:15:51.123000", "generation_done_at": "2026-11-02 05:15:51.123000", "decision_at": "2026-11-02 05:15:51.123000", "provider_first_send_at": "2026-11-02 05:15:51.123000", "provider_last_send_at": "2026-11-02 05:15:51.123000", "reconciled_at": "2026-11-02 05:15:51.123000", "user_visible_s": null, "queue_before_claim_s": null, "generation_s": 0.0, "decision_to_send_s": 0.0, "bubbles_sent": 1, "requeues": 0, "model": {"calls": 0, "failed": 0, "truncated": 0, "latency_ms": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "purposes": {}}}, {"event": "generating", "source_message_id": "5001", "engine": "fastt-native"}, {"event": "turn-timing", "account": "176774528", "fan_id": 318022380, "outcome": "error:external-outbound", "first_input_at": null, "claimed_at": "2026-11-02 05:16:11.123000", "generation_started_at": "2026-11-02 05:16:11.123000", "generation_done_at": "2026-11-02 05:16:11.123000", "decision_at": null, "provider_first_send_at": null, "provider_last_send_at": null, "reconciled_at": "2026-11-02 05:16:11.123000", "user_visible_s": null, "queue_before_claim_s": null, "generation_s": 0.0, "decision_to_send_s": null, "bubbles_sent": 0, "requeues": 0, "model": {"calls": 0, "failed": 0, "truncated": 0, "latency_ms": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "purposes": {}}}, {"event": "turn-abandoned", "reason": "external-outbound"}]

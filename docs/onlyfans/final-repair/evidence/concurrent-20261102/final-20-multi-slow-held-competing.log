@@ -1,0 +1,4 @@
+/workspace/scratch/86d4770bae26/backend/service/native_pilot/tools/concurrent_benchmark.py:181: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  now=datetime.utcnow()
+{"event": "inbound-persisted", "message_id": 10000001, "verified": true}
+{"name": "final-20-multi-slow-held-competing", "eligible": 19, "completed": 19, "outstanding": 0, "latency_s": {"p50": 19.3191, "p95": 35.3103, "p99": 35.3103}, "elapsed_s": 41.415, "reasons": {"runner-lease-held": 1, "disabled_blocked_or_stale_input": 19}}

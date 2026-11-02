@@ -1,0 +1,8 @@
+.                                                                        [100%]
+=============================== warnings summary ===============================
+service/tests/test_r8_oldest_need_first.py: 60 warnings
+  /workspace/scratch/86d4770bae26/backend/service/twin_bridge/coordination.py:279: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return (datetime.utcnow() + timedelta(seconds=_write_ttl_s() if ttl_s is None else ttl_s)).isoformat()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 60 warnings in 16.17s

@@ -75,7 +75,8 @@ class Measurements:
     def exception(self, label, exc):
         if len(self.exceptions)<30:
             self.exceptions.append(dict(stage=label,type=type(exc).__name__,
-                code=getattr(exc,'pgcode',None),detail=str(exc)[:500]))
+                code=getattr(exc,'pgcode',None),detail=str(exc)[:500],
+                fixed_detail=getattr(exc,'detail',None),cause=repr(exc.__cause__)[:300]))
 
     def record(self, label, elapsed):
         with self.lock:
@@ -127,7 +128,16 @@ class Measurements:
 
 async def exercise(args, db):
     import httpx
-    from db.engine import engine as async_engine
+    import importlib
+    engine_module=importlib.import_module("db.engine")
+    async_engine=engine_module.engine
+    if args.fleet_db_pool:
+        from sqlalchemy.ext.asyncio import create_async_engine,async_sessionmaker
+        await async_engine.dispose()
+        async_engine=create_async_engine(db.async_url,pool_size=args.fleet_db_pool,max_overflow=0,
+                                         pool_timeout=10,pool_pre_ping=True)
+        engine_module.engine=async_engine
+        engine_module.async_session_factory=async_sessionmaker(async_engine,expire_on_commit=False)
     from db.models import AccountAiConfig
     from sqlalchemy.orm import Session
     from native_pilot import service, runner, model, connection, attribution, pacing
@@ -478,6 +488,7 @@ def main():
     p.add_argument('--model-latency',type=float,default=.2);p.add_argument('--provider-latency',type=float,default=.12)
     p.add_argument('--read-latency',type=float,default=.02);p.add_argument('--poll',type=float,default=2)
     p.add_argument('--duration',type=float,default=190);p.add_argument('--paced',action='store_true')
+    p.add_argument('--fleet-db-pool',type=int,default=0)
     p.add_argument('--multi',action='store_true');p.add_argument('--held',action='store_true')
     p.add_argument('--media',action='store_true')
     p.add_argument('--fault',choices=['429','401','timeout_lost','timeout_accepted'])
@@ -488,6 +499,10 @@ def main():
     if os.environ.get('LOAD_TEST_REUSE_DB'):raise RuntimeError('fresh disposable DB required')
     os.environ.update(PYTHON_DOTENV_DISABLED='1',TWIN_FASTT_CONFIG_ISOLATED='1',
                       TWIN_BRIDGE_ENABLED='0',TWIN_BRIDGE_SEND_ENABLED='0',ONLYFANS_WORKER_TENANT='synthetic-tenant')
+    if args.fleet_db_pool:
+        if args.creators<2 or not 4<=args.fleet_db_pool<=128:
+            raise RuntimeError('fleet DB pool must be bounded 4..128 for a multi-creator simulation')
+        # One process aggregates creator services; size only its shared test pool.
     db=H.Db(os.environ['ONLYFANS_TEST_PG_URL']);os.environ['DATABASE_URL']=db.async_url
     logging.disable(logging.CRITICAL)
     db.create()

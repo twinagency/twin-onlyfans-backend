@@ -1,0 +1,31 @@
+.....                                                                    [100%]
+=============================== warnings summary ===============================
+../../9a82163d809e/qualification-venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /workspace/scratch/9a82163d809e/qualification-venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+service/tests/test_iso45_isolation_pg.py: 54 warnings
+  /workspace/scratch/86d4770bae26/backend/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+service/tests/test_iso45_isolation_pg.py::test_pause_account_a_leaves_account_b_able_to_send
+service/tests/test_iso45_isolation_pg.py::test_pause_account_a_leaves_account_b_able_to_send
+service/tests/test_iso45_isolation_pg.py::test_pause_account_a_leaves_account_b_able_to_send
+service/tests/test_iso45_isolation_pg.py::test_pause_account_a_leaves_account_b_able_to_send
+service/tests/test_iso45_isolation_pg.py::test_pause_account_a_leaves_account_b_able_to_send
+service/tests/test_iso45_isolation_pg.py::test_pause_account_a_leaves_account_b_able_to_send
+service/tests/test_iso45_isolation_pg.py::test_pause_account_a_leaves_account_b_able_to_send
+service/tests/test_iso45_isolation_pg.py::test_pause_account_a_leaves_account_b_able_to_send
+  /workspace/scratch/86d4770bae26/backend/service/native_pilot/ledger.py:1012: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now_s = _dt(now or datetime.utcnow())
+
+service/tests/test_iso45_isolation_pg.py::test_a_runner_for_a_selects_and_reads_only_account_a
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_iso45_isolation_pg.py:150: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+service/tests/test_iso45_isolation_pg.py::test_twin_context_never_crosses_accounts
+  /workspace/scratch/86d4770bae26/backend/service/tests/test_iso45_isolation_pg.py:186: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5 passed, 65 warnings in 14.98s

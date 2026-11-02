@@ -371,6 +371,8 @@ class Store:
                     consent_ref=f"connection:{connection.revision}",action="initial_automation",
                     takeover_from="none",takeover_to="none",created_at=now))
         if event.direction == "in" and not historical:
+            from .history_policy import activate_older
+            activate_older(s, runtime, event)
             if fan.last_message_received_at is None or stamp > fan.last_message_received_at:
                 fan.last_message_received_at = stamp
             chat.unread_count += 1

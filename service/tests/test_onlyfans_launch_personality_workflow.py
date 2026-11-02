@@ -457,3 +457,45 @@ def test_exact_migration_evidence_trigger_rejects_update_and_delete(env):
     for statement in ("UPDATE of_personality_revision SET state='approved'", "DELETE FROM of_personality_revision"):
         with pytest.raises(DBAPIError, match="append-only"):
             with store.engine.begin() as connection: connection.execute(text(statement))
+
+
+def test_structured_approved_onboarding_excludes_private_data_and_beats_archive_claims(env, monkeypatch):
+    store,w=env
+    monkeypatch.setenv('ONLYFANS_RECENT_HISTORY_ACCOUNTS',json.dumps([ACCOUNT]))
+    from onlyfans_runtime.history_policy import OfHistoryPolicy, ensure
+    OfHistoryPolicy.__table__.create(store.engine,checkfirst=True)
+    with Session(store.engine) as s,s.begin():ensure(s,s.get(OfRuntime,ACCOUNT))
+    doc={'fanFacingBiography':'My approved favourite hobby is sailing.',
+         'privateInformation':'INTERNAL-ADDRESS-DO-NOT-SHOW',
+         'writingStyle':'Warm, brief and natural.', 'boundaries':'Approval required for custom requests.',
+         'pricingAndOperations':'Use current catalogue prices and verified entitlements.'}
+    reviewed(w,onboarding=doc)
+    assert approve(w)['state']=='approved'
+    with Session(store.engine) as s:
+        _,ctx=versions(s,ACCOUNT,101)
+        assert 'privateInformation' not in ctx['approvedOnboarding']
+    ctx['messages']=[{'direction':'in','body':'What is your hobby?','message_id':99,'created_at':'2026-10-22T10:00:00'}]
+    rendered=json.dumps(_native_messages(ctx))
+    assert 'approved favourite hobby is sailing' in rendered
+    assert 'INTERNAL-ADDRESS' not in rendered
+    from native_pilot.twin_context import _build
+    with Session(store.engine) as s:
+        fastt = _build(s, ACCOUNT, 101, 'What is your hobby?')
+        assert 'approved favourite hobby is sailing' in fastt.persona
+        assert 'INTERNAL-ADDRESS' not in fastt.persona
+        assert 'Do not claim to remember unavailable history' in fastt.persona
+    assert 'Use these approved creator details over historical chatter claims' in rendered
+    with Session(store.engine) as s:assert not s.get(OfRuntime,ACCOUNT).enabled
+
+
+def test_structured_onboarding_conflicts_block_existing_approval_atomically(env):
+    store,w=env
+    doc={'fanFacingBiography':'Hello', 'privateInformation':'', 'writingStyle':'Natural',
+         'boundaries':'PG-13 only. Explicit sexting permitted.', 'pricingAndOperations':''}
+    data=reviewed(w,onboarding=doc)
+    assert data['document']['onboardingReviewIssues']==['onboarding_content_permissions_conflict']
+    with pytest.raises(InvalidConfiguration,match='conflicts'):
+        approve(w)
+    with Session(store.engine) as s:
+        assert s.get(AccountAiConfig,ACCOUNT).persona=='Original synthetic personality.'
+        assert s.scalar(select(func.count()).select_from(OfConfigurationChange))==0

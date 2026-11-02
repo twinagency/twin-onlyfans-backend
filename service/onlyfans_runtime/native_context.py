@@ -40,6 +40,16 @@ def versions(session, account_id, fan_id):
     # Source-backed older history and operator corrections join the fenced snapshot (generation, queue and egress).
     from .launch_history_memory.memory import enrich_snapshot
     snapshot = enrich_snapshot(session, account_id, fan_id, snapshot)
+    from .history_policy import memory_notice
+    from db.onlyfans_models import OfRuntime
+    runtime = session.get(OfRuntime, account_id)
+    notice = memory_notice(session, account_id, runtime.binding_id, fan_id) if runtime else None
+    if notice is not None:
+        snapshot['historyAvailability'] = notice
+        from .history_policy import approved_onboarding
+        onboarding = approved_onboarding(session, account_id, runtime.binding_id)
+        if onboarding:
+            snapshot['approvedOnboarding'] = {k:v for k,v in onboarding.items() if k != 'privateInformation'}
     return hashlib.sha256(canonical(snapshot).encode()).hexdigest(), snapshot
 
 

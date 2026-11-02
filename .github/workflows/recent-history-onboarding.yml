@@ -1,0 +1,50 @@
+name: Recent history onboarding
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'service/onlyfans_runtime/history_*.py'
+      - 'service/onlyfans_runtime/creator_onboarding.py'
+      - 'service/onlyfans_runtime/launch_history_memory/**'
+      - 'service/onlyfans_runtime/profile_learning/**'
+      - 'service/onlyfans_runtime/launch_personality/**'
+      - 'service/tests/test_recent_history_onboarding_pg.py'
+      - '.github/workflows/recent-history-onboarding.yml'
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U synthetic -d postgres'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PYTHONPATH: service:service/tests
+      DATABASE_URL: postgresql+asyncpg://synthetic:synthetic@127.0.0.1:5432/postgres
+      ONLYFANS_TEST_PG_URL: postgresql+psycopg2://synthetic:synthetic@127.0.0.1:5432/postgres
+      ONLYFANS_CAPACITY_TEST_URL: postgresql+psycopg2://synthetic:synthetic@127.0.0.1:5432/postgres
+      ONLYFANS_TEST_PG_EMPTY_TEMPLATE: '1'
+      TWIN_FASTT_CONFIG_ISOLATED: '1'
+      PYTHON_DOTENV_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements-onlyfans-test.txt
+      - run: >-
+          python -m pytest -q
+          service/tests/test_recent_history_onboarding_pg.py
+          service/tests/test_onlyfans_launch_personality_workflow.py
+          service/tests/test_profile_learning_pg.py
+          service/tests/test_profile_quality_accounting.py
+          service/tests/test_parallel_import_capacity.py
+          service/tests/test_onlyfans_launch_history_memory_recent_pg.py
+          service/tests/test_onlyfans_connections_pg.py
+          service/tests/test_onlyfans_launch_history_memory_recovery_pg.py

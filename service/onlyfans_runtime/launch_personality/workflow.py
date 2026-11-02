@@ -27,7 +27,7 @@ from .models import PersonalityHead, PersonalityRevision
 from .policy import conflicts, readiness
 
 VERSION = "of-personality.v1"
-REVIEW_FIELDS = {"persona", "creatorFacts", "defaultModel", "replyModelOverride"}
+REVIEW_FIELDS = {"persona", "creatorFacts", "defaultModel", "replyModelOverride", "onboarding"}
 ACKS = {"mixedAuthorship", "runtimeRules", "factsVerified"}
 
 
@@ -41,7 +41,11 @@ def _identity(expected, command, actor):
 def _review(value):
     if type(value) is not dict or not value or not set(value) <= REVIEW_FIELDS:
         raise InvalidConfiguration("Review only personality, supported facts and existing model choices.")
-    return validate_patch(value)
+    result = validate_patch({k:v for k,v in value.items() if k != "onboarding"})
+    if "onboarding" in value:
+        from onlyfans_runtime.creator_onboarding import validate
+        result["onboarding"] = validate(value["onboarding"])
+    return result
 
 
 def _annotate(draft):
@@ -118,6 +122,9 @@ class PersonalityWorkflow:
 
     def _view(self, s, row, runtime, config, credentials=None):
         document = json.loads(row.document_json)
+        from onlyfans_runtime.creator_onboarding import issues
+        onboarding = (document.get("review") or {}).get("onboarding")
+        document["onboardingReviewIssues"] = issues(onboarding) if onboarding else []
         current_facts, source = effective(s, config)
         unverified_keys = self._unverified_fact_keys(s, runtime, config)
         if unverified_keys:
@@ -271,12 +278,18 @@ class PersonalityWorkflow:
                 OfIngress.account_id == account, OfIngress.binding_id == runtime.binding_id,
                 OfIngress.status == "applied").order_by(
                     OfIngress.received_at.desc(), OfIngress.event_key.desc()).limit(10000).cte("personality_evidence")
+            from onlyfans_runtime.history_policy import policy, approved_onboarding
+            recent_policy = policy(s, account, runtime.binding_id)
+            sample_limit = (recent_policy.writing_sample_limit if recent_policy else 5001)
+            approved = approved_onboarding(s, account, runtime.binding_id) if recent_policy else None
+            if approved and approved.get("writingStyle", "").strip(): sample_limit = 0
+            if not 0 <= sample_limit <= 100: sample_limit = 100 if recent_policy else 5001
             rows = s.execute(select(Message.fan_id, Message.message_id, Message.body, Message.created_at,
                 Message.automation_kind, Message.sent_by_employee_id).join(proof,
                     and_(proof.c.fan_id == Message.fan_id, proof.c.message_id == Message.message_id))
                 .where(Message.account_id == account, Message.direction == "out",
                     Message.is_unsent.is_(False), Message.body != "").distinct()
-                .order_by(Message.created_at.desc(), Message.message_id.desc(), Message.fan_id.desc()).limit(5001)).all()
+                .order_by(Message.created_at.desc(), Message.message_id.desc(), Message.fan_id.desc()).limit(sample_limit)).all()
             messages, skipped, omitted, used_bytes = [], 0, 0, 0
             for m in rows[:5000]:
                 if len(m.body.encode()) > 8000 or not m.body.strip():
@@ -295,7 +308,8 @@ class PersonalityWorkflow:
                 messages.append(candidate)
                 used_bytes += size
             draft = _annotate(build_draft(profile, messages))
-            draft["coverage"].update({"historyWindow": "up_to_5000_outgoing_from_latest_10000_current_binding_ingress",
+            draft["coverage"].update({"historyWindow": "explicit_bounded_style_sample" if recent_policy else "up_to_5000_outgoing_from_latest_10000_current_binding_ingress",
+                "configuredWritingSampleLimit":sample_limit,
                 "ingressWindowLimit": 10000, "fullHistoryCoverage": False,
                 "olderRowsNotScanned": len(rows) > 5000, "excludedOversizeOrBlank": skipped,
                 "omittedForByteBudget": omitted,
@@ -341,6 +355,12 @@ class PersonalityWorkflow:
             # Join the existing writer to THIS transaction. Session.commit in
             # update_configuration cannot commit an externally-owned Connection.
             # This preserves its checks, merges, audit and invalidation exactly.
+            onboarding = patch.pop("onboarding", None)
+            if onboarding is not None:
+                from onlyfans_runtime.creator_onboarding import issues
+                if issues(onboarding):
+                    raise InvalidConfiguration("Resolve onboarding placeholders and content-permission conflicts before approval.")
+                document["approvedOnboarding"] = onboarding
             config_key = digest([VERSION, account, runtime.binding_id, command_key])
             try:
                 # A savepoint isolates the existing writer's no-change refusal

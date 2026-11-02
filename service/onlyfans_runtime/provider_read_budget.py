@@ -4,15 +4,17 @@ Acquire and release are short database transactions. The caller performs I/O
 after acquire returns and must check ``current`` before committing its result.
 Background work leaves two tokens available for recent-message intake.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 import os
 import uuid
 
+from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
 
 from db.onlyfans_connection_models import OfProviderConnection
-from db.onlyfans_content_sync_progress_models import OfProviderReadBudget
+from db.onlyfans_content_sync_progress_models import OfProviderReadBudget, OfProviderReadLease
+from .import_capacity import capacity, refill as refill_tokens
 from .store import Refused, utcnow
 
 LEASE_SECONDS = 45
@@ -22,6 +24,7 @@ LIVE_REPLY_RESERVE = 4        # extra tokens kept for live work while replies wa
 BACKGROUND_KINDS = {"discovery", "history", "offer_refresh", "posts", "vault"}   # ledger (money) and recent (intake) are not background
 LEDGER_RETRY_SECONDS = 2  # existing LedgerWorker tick cadence
 KINDS = {"recent", "discovery", "history", "ledger", "offer_refresh", "posts", "vault", "connection_check"}
+PARALLEL_TOKEN = 'parallel-read-leases'
 LEDGER_TURN_RESERVED = "provider_read_deferred:ledger-turn-reserved"
 
 
@@ -57,6 +60,7 @@ class ReadClaim:
     token: str
     until: object
     kind: str = 'recent'
+    parallel: bool = False
 
 
 def _valid(store, s, tenant, account, revision, now, kind):
@@ -150,6 +154,8 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
             or type(connection_revision) is not int or connection_revision<1):
         raise Refused("provider read worker authority required")
     now = now or utcnow()
+    policy = capacity(account)
+    parallel = policy.inflight > 1
     deferred_at = None
     deferred_reason = 'provider ledger turn due'
     claim = None
@@ -158,14 +164,33 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
         row = s.get(OfProviderReadBudget, account, with_for_update=True)
         if row is None:
             row = OfProviderReadBudget(account_id=account, binding_id=runtime.binding_id,
-                connection_revision=connection_revision, tokens=CAPACITY, refilled_at=now)
+                connection_revision=connection_revision, tokens=policy.burst, refilled_at=now)
             s.add(row)
         elif (row.binding_id, row.connection_revision) != (runtime.binding_id, connection_revision):
             # A changed session fences the old lease immediately; backoff is
             # retained because a new cookie is not a new provider rate budget.
             row.binding_id, row.connection_revision = runtime.binding_id, connection_revision
             row.lease_token = row.lease_until = None
-        if row.lease_token and row.lease_until > now:
+        if parallel and row.rate_ceiling is not None:
+            policy = replace(policy, rps=min(policy.rps, max(1, row.rate_ceiling)))
+        # The sentinel also excludes older single-lease workers during rollout.
+        # Every mode observes outstanding parallel claims before admitting work.
+        active = []
+        if parallel or row.lease_token == PARALLEL_TOKEN:
+            s.execute(delete(OfProviderReadLease).where(
+                OfProviderReadLease.account_id == account,
+                (OfProviderReadLease.lease_until <= now) |
+                (OfProviderReadLease.connection_revision != connection_revision) |
+                (OfProviderReadLease.binding_id != runtime.binding_id)))
+            active = s.scalars(select(OfProviderReadLease).where(
+                OfProviderReadLease.account_id == account)).all()
+            if not active and row.lease_token == PARALLEL_TOKEN:
+                row.lease_token = row.lease_until = None
+        # Leave separate concurrent slots for recent and financial reads.
+        slot_limit = max(1, policy.inflight - 2) if kind in BACKGROUND_KINDS else max(1, policy.inflight - 1) if kind == 'recent' else policy.inflight
+        if parallel and len(active) >= slot_limit:
+            raise ReadDeferred(now + timedelta(milliseconds=100), 'provider read slots occupied')
+        if row.lease_token and row.lease_until > now and not (parallel and row.lease_token == PARALLEL_TOKEN):
             # A successful read normally releases well before its crash lease
             # expires. Recheck at the worker cadence, without stealing the lease.
             raise ReadDeferred(min(row.lease_until, now + timedelta(seconds=LEDGER_RETRY_SECONDS)), "provider read lease occupied",
@@ -173,15 +198,14 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
         if row.backoff_until and row.backoff_until > now:
             raise ReadDeferred(row.backoff_until, "provider read backoff")
         if (kind not in {'ledger', 'connection_check'}
-                and _reserve_due_ledger_turn(
+                and not parallel and _reserve_due_ledger_turn(
                     s, account, runtime, connection_revision, now, row.last_kind)):
             # Commit the scan reservation before refusing this read. Raising
             # inside this transaction would roll the reservation back, which is
             # exactly how an always-due ledger lost priority to inbox reads.
             deferred_at = now + timedelta(seconds=LEDGER_RETRY_SECONDS)
         else:
-            refill = max(0, int((now - row.refilled_at).total_seconds()))
-            available = min(CAPACITY, row.tokens + refill)
+            available, refilled_at = refill_tokens(row.tokens, row.refilled_at, now, policy)
             # Deep archive recovery may be continuously due. Leave one additional
             # maintenance token for ledger/content work as well as the recent head
             # reserve; the outer scheduler rotates those maintenance lanes.
@@ -192,11 +216,10 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
                 # refresh, posts and vault analysis yield. A lane denied for STARVE_GRACE_SECONDS is owed one turn and
                 # pays no live-reply reserve, so saturating intake can no longer starve it outright.
                 reserve += LIVE_REPLY_RESERVE
+            cost = 2 if parallel and kind != 'connection_check' else 1
             if kind == "recent" and owed is not None:
-                # Intake leaves the starved lane the tokens it needs; the pause is a few seconds of refill, bounded by
-                # the 45 s self-expiry above, and ends the moment that lane acquires.
-                reserve = max(reserve, _base_reserve(owed) + 1)
-            if available <= reserve:
+                reserve = max(reserve, _base_reserve(owed) + cost)
+            if available < reserve + cost:
                 if kind in BACKGROUND_KINDS and kind != owed:
                     if (not row.starved_kind or row.starved_since is None
                             or now >= row.starved_since + timedelta(seconds=STARVE_GRACE_SECONDS + LEASE_SECONDS)):
@@ -205,15 +228,22 @@ def acquire(store, tenant, account, *, connection_revision, kind, now=None):
                 deferred_reason = ("provider read reserved for starved lane" if kind == "recent" and owed is not None
                                    else "provider read budget exhausted")
             else:
-                if refill:
-                    row.refilled_at += timedelta(seconds=refill)
-                row.tokens = available - 1
-                row.lease_token, row.lease_until = str(uuid.uuid4()), now + timedelta(seconds=LEASE_SECONDS)
+                row.refilled_at = refilled_at
+                row.tokens = available - cost
+                token, until = str(uuid.uuid4()), now + timedelta(seconds=LEASE_SECONDS)
+                if parallel:
+                    s.add(OfProviderReadLease(token=token, account_id=account,
+                        binding_id=runtime.binding_id, connection_revision=connection_revision,
+                        kind=kind, lease_until=until))
+                    row.lease_token = PARALLEL_TOKEN
+                    row.lease_until = max([until] + [v.lease_until for v in active])
+                else:
+                    row.lease_token, row.lease_until = token, until
                 row.last_kind = kind
                 if kind == row.starved_kind:
                     row.starved_kind = row.starved_since = None
-                claim = ReadClaim(account, runtime.binding_id, connection_revision,
-                                  row.lease_token, row.lease_until, kind)
+                claim = ReadClaim(account, runtime.binding_id, connection_revision, token, until, kind, parallel)
+
     if deferred_at is not None:
         raise ReadDeferred(deferred_at, deferred_reason)
     return claim
@@ -229,6 +259,15 @@ def current_in_session(store, s, tenant, claim, *, now=None):
     now = now or utcnow()
     runtime = _valid(store, s, tenant, claim.account, claim.revision, now, claim.kind)
     row = s.get(OfProviderReadBudget, claim.account, with_for_update=True)
+    if claim.parallel:
+        lease = s.get(OfProviderReadLease, claim.token)
+        if (row is None or row.binding_id != runtime.binding_id or row.binding_id != claim.binding
+                or row.connection_revision != claim.revision or row.lease_token != PARALLEL_TOKEN
+                or lease is None or lease.account_id != claim.account or lease.binding_id != claim.binding
+                or lease.connection_revision != claim.revision or lease.kind != claim.kind
+                or lease.lease_until <= now):
+            raise Refused('stale provider read claim')
+        return True
     if (row is None or row.binding_id != runtime.binding_id or row.binding_id != claim.binding
             or row.connection_revision != claim.revision or row.lease_token != claim.token or row.last_kind!=claim.kind
             or row.lease_until is None or row.lease_until <= now):
@@ -250,17 +289,47 @@ def native_reader(reader):
         and isinstance(getattr(reader, '_handle', None), NativeProviderSession))
 
 
-def release(store, tenant, claim, *, retry_after=None, now=None):
+def is_rate_limit(error):
+    """A provider timeout is not evidence of upstream throttling."""
+    from .provider_connector import NativeRateLimitError
+    return isinstance(error, NativeRateLimitError)
+
+
+def release(store, tenant, claim, *, retry_after=None, rate_limited=False, now=None):
     now = now or utcnow()
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, claim.account)
         row = s.get(OfProviderReadBudget, claim.account, with_for_update=True)
         if (row is None or row.binding_id != runtime.binding_id or row.binding_id != claim.binding
-                or row.connection_revision != claim.revision or row.lease_token != claim.token):
+                or row.connection_revision != claim.revision):
+            return False
+        if claim.parallel:
+            lease = s.get(OfProviderReadLease, claim.token)
+            if (lease is None or lease.account_id != claim.account or lease.binding_id != claim.binding
+                    or lease.connection_revision != claim.revision or lease.kind != claim.kind
+                    or row.lease_token != PARALLEL_TOKEN):
+                return False
+            s.delete(lease)
+            s.flush()
+            remaining = s.scalars(select(OfProviderReadLease).where(
+                OfProviderReadLease.account_id == claim.account,
+                OfProviderReadLease.lease_until > now)).all()
+            row.lease_until = max(v.lease_until for v in remaining) if remaining else None
+            row.lease_token = PARALLEL_TOKEN if remaining else None
+        elif row.lease_token == claim.token:
+            row.lease_token = row.lease_until = None
+        else:
             return False
         if retry_after is not None:
             seconds = min(3600, max(1, int(retry_after)))
             until = now + timedelta(seconds=seconds)
             row.backoff_until = max(row.backoff_until or until, until)
-        row.lease_token = row.lease_until = None
+            if claim.parallel and rate_limited:
+                target = capacity(claim.account).rps
+                row.rate_ceiling = max(1, min(target, row.rate_ceiling or target) // 2)
+                row.rate_recover_at = until + timedelta(minutes=5)
+        elif claim.parallel and row.rate_ceiling is not None and row.rate_recover_at is not None and row.rate_recover_at <= now:
+            target = capacity(claim.account).rps
+            row.rate_ceiling = min(target, row.rate_ceiling + 1)
+            row.rate_recover_at = now + timedelta(minutes=5)
     return True

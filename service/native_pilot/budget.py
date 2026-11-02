@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 
 from .scope import AccountScope
 
@@ -148,7 +148,12 @@ class DailyBudget:
     def actual_units(self, *, cost_usd, tokens_in, tokens_out) -> int | None:
         """Provider-reported cost when present, else registry rates x reported tokens."""
         if cost_usd is not None:
-            units = int((Decimal(str(cost_usd)) * USD_TO_UNITS).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+            try:
+                cost=Decimal(str(cost_usd))
+                if not cost.is_finite() or cost < 0: return None
+                units = int((cost * USD_TO_UNITS).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+            except (InvalidOperation, ValueError, OverflowError):
+                return None
             return units if 0 <= units <= MAX_UNITS else None
         if type(tokens_in) is int and type(tokens_out) is int and tokens_in >= 0 and tokens_out >= 0:
             units = self._units(tokens_in, tokens_out)
@@ -191,4 +196,3 @@ class DailyBudget:
                 GrokCall.id == reservation.call_id, GrokCall.account_id == self.scope.db_id).with_for_update())
             if call is not None and call.status == "pending":
                 call.status = "unknown"
-

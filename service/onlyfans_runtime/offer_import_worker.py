@@ -7,6 +7,7 @@ checkpointed atomically with its observations. Finding one source verifies
 only that source. A target not reached within budget is unresolved, never
 verified or deleted.
 """
+from .provider_read_budget import is_rate_limit
 from datetime import timedelta, timezone
 import json
 import os
@@ -134,11 +135,11 @@ def process_refresh_jobs(store, tenant, *, limit=1, stop=None, transport_factory
                 if row is not None and row.lease_token == token:
                     _terminal(row, "superseded", "connection_changed")
             continue
-        page, error, retry_after = None, None, None
+        page, error, retry_after, was_rate_limited = None, None, None, False
         try:
             page = transport.messages(fan_id=fan, before_id=before, limit=PAGE_LIMIT)
         except NativeRateLimitError as exc:
-            error, retry_after = "provider_rate_limit", exc.retry_after
+            error, retry_after, was_rate_limited = "provider_rate_limit", exc.retry_after, True
         except NativeProtocolError as exc:
             from .provider_connector import NativeAuthenticationError
             error = "authentication_rejected" if isinstance(exc, NativeAuthenticationError) else "unsupported_history"
@@ -149,7 +150,7 @@ def process_refresh_jobs(store, tenant, *, limit=1, stop=None, transport_factory
                 current(store, tenant, read_claim)
         except Refused:
             if read_claim is not None:
-                release(store, tenant, read_claim, retry_after=retry_after)
+                release(store, tenant, read_claim, retry_after=retry_after, rate_limited=was_rate_limited)
             continue
         try:
             with Session(store.engine) as s, s.begin():
@@ -208,7 +209,7 @@ def process_refresh_jobs(store, tenant, *, limit=1, stop=None, transport_factory
                 _finish(job, s)
         finally:
             if read_claim is not None:
-                release(store, tenant, read_claim, retry_after=retry_after)
+                release(store, tenant, read_claim, retry_after=retry_after, rate_limited=was_rate_limited)
     from .content_sync import dispatch_refresh_queue
     for account, actor in touched.items():
         dispatch_refresh_queue(store, tenant, account, actor)

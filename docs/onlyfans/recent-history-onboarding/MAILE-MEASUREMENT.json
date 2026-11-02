@@ -1,0 +1,32 @@
+{
+  "accountId": "of-323358988",
+  "referenceAccount": "Maile",
+  "releaseStatus": "draft_not_deployed",
+  "rolloutEnabled": false,
+  "recentWindowMessages": null,
+  "recentWindowFans": null,
+  "recentWindowCoverageComplete": null,
+  "providerHttpAttempts": null,
+  "elapsedImportSeconds": null,
+  "memoryProcessingSeconds": null,
+  "actualProviderReportedModelCostUsd": null,
+  "unresolvedReservationsUsd": null,
+  "measuredSpeedup": null,
+  "demonstratedNinetyMinuteOnboarding": false,
+  "blockers": [
+    "Operational OnlyFans PostgreSQL host is not accessible through the connected Supabase project; that project's schema contains no of_runtime, messages or profile-learning tables.",
+    "Current operational image/schema must be inspected before any rollout.",
+    "Native timestamp ordering is unverified. Safe exhaustive traversal may not reduce provider requests.",
+    "Dashboard browser rendering and production deployment are unverified."
+  ],
+  "comparison": {
+    "measuredFullHistoryRun": null,
+    "interpretation": "No defensible numeric speedup or cost reduction is available yet. The report tool compares verified stored workload without claiming an unknown lifetime total. Synthetic regression duration is not onboarding duration."
+  },
+  "productionAccess": {
+    "supabaseProject": "aouaenqayfltoqrmpitg",
+    "readOnlyConnectionEventuallySucceeded": true,
+    "operationalTablesPresent": false,
+    "personalDeviceDiscovery": "Automatic approval review rejected broad user-directory discovery on the connected personal device because this repository task did not authorize inspecting that device. No remote device command ran; work continued in the isolated workspace."
+  }
+}

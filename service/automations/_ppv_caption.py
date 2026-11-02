@@ -445,6 +445,18 @@ async def caption_for(account_id: str, fan_id: int, media_ids: list[int], *,
     return line
 
 
+async def _moxy_owned(account_id: str) -> bool:
+    """True when the account is Moxy-owned OR its owner cannot be determined.
+
+    The Moxy writer is the only caption author for a migrated account, so this
+    legacy rewrite (an LLM call) never runs for one; an undeterminable owner is
+    treated the same way (fail closed), costing only a nicer sentence."""
+    import asyncio
+    from moxy_replacement import routing
+    state = await asyncio.to_thread(routing.owner_state, account_id)
+    return state != routing.NOT_SELECTED
+
+
 async def line_for(base: str, cfg: dict, account_id: str, fan_id: int,
                    media: list[int], *, price_cents: int | None = None,
                    was_cents: int | None = None,
@@ -471,7 +483,7 @@ async def line_for(base: str, cfg: dict, account_id: str, fan_id: int,
     sentence for the sale.
     """
     written = ""
-    if enabled(cfg) and media:
+    if enabled(cfg) and media and not await _moxy_owned(account_id):
         try:
             written = await caption_for(
                 account_id, fan_id, list(media),

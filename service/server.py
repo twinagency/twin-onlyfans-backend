@@ -5344,6 +5344,9 @@ async def send_message(
             # (media_cotag) covers the automated senders, which have no operator
             # to make it. Flip to True to auto-tag the composer too.
             auto_tag=False,
+            # A human composer: the Moxy fence refuses automated legacy
+            # writers only, never an operator's own send.
+            purpose="manual",
         ),
     )
 
@@ -7058,6 +7061,7 @@ async def of_schedule_message(chat_id: int, request: Request,
         previews=body.previews,
         tagged_users=body.tagged_users,
         auto_tag=False,   # same composer, same operator — see of_send_message
+        purpose="manual",  # human composer: not fenced by the Moxy owner
     ))
 
 

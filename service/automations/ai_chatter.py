@@ -189,6 +189,15 @@ from .welcome_chatter_for_info import (
 log = logging.getLogger("of-relay.automation.ai_chatter")
 
 
+async def _send_bubble(client, fan_id, text, **kwargs):
+    """One outbound bubble. A client with a coroutine send (the native pilot's) is awaited on the loop, so a reply
+    queued at its send gate holds no worker thread; every other client keeps the blocking call on a thread."""
+    send_async = getattr(client, "send_message_async", None)
+    if send_async is not None and asyncio.iscoroutinefunction(send_async):
+        return await send_async(fan_id, text, **kwargs)
+    return await asyncio.to_thread(lambda: client.send_message(fan_id, text, **kwargs))
+
+
 # Telegram channel seam.  These wrappers are the only channel-aware additions
 # to the native engine: without an active capability snapshot they call the
 # original owners exactly as before.  With one installed, ai_chatter still owns
@@ -4222,8 +4231,7 @@ async def _maybe_discount_resend(client, account_id: str, cfg: dict,
                 # Names the ONE card to remove first; the DELETE runs at the wire, then the replacement is posted, all in
                 # one ledger attempt (an uncertain outcome is the ledger's delivery-unknown, never replayed).
                 await asyncio.to_thread(client.unsend_message, orig_msg, fan_id)
-            result = await asyncio.to_thread(
-                lambda: client.send_message(fan_id, line, **kwargs))
+            result = await _send_bubble(client, fan_id, line, **kwargs)
         except Exception as e:
             if vault is not None:
                 # Confirmed removal is the only thing that retires the original, whether or not the replacement landed.
@@ -4872,8 +4880,7 @@ async def _run_nudge(account_id: str, payload: dict, cfg: dict) -> dict:
             await _runtime_hold(account_id, fan_id,
                                    typing_delay_seconds(line, typing_wpm),
                                    typing_indicator=typing_indicator)
-            result = await asyncio.to_thread(
-                lambda p=line: client.send_message(fan_id, p))
+            result = await _send_bubble(client, fan_id, line)
             msg_id = result.get("id") if isinstance(result, dict) else None
             if msg_id:
                 await write_outbound_attribution(
@@ -5169,8 +5176,7 @@ async def _fire_post_buy_rung(client, account_id: str, cfg: dict, fan_id: int,
             stalled=bool(cfg.get("filming_stall_enabled"))),
             typing_indicator=typing_indicator)
     try:
-        result = await asyncio.to_thread(
-            lambda: client.send_message(fan_id, line, **kwargs))
+        result = await _send_bubble(client, fan_id, line, **kwargs)
     except Exception as e:
         if _is_price_error(e):
             log.warning("ai_chatter post_buy rung price error account=%s fan=%s",
@@ -10892,8 +10898,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                     wire_stopped = True
                     break
                 try:
-                    result = await asyncio.to_thread(
-                        lambda p=part, kw=kwargs: client.send_message(fan_id, p, **kw))
+                    result = await _send_bubble(client, fan_id, part, **kwargs)
                 except Exception as e:
                     errors += 1
                     # spec §4.1 — a PRICE-VALIDATION 400 is NOT an undeliverable fan.
@@ -10907,8 +10912,7 @@ async def run(account_id: str, payload: dict, *, run_id: int) -> dict:
                         offer_item = None      # no offer row, no ladder write downstream
                         price_errors += 1
                         try:
-                            result = await asyncio.to_thread(
-                                lambda p=part: client.send_message(fan_id, p))
+                            result = await _send_bubble(client, fan_id, part)
                         except Exception:
                             log.warning("ai_chatter unpriced resend failed account=%s "
                                         "fan=%s", account_id, fan_id, exc_info=True)

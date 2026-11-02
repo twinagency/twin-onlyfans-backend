@@ -190,12 +190,12 @@ def test_a_fan_with_its_first_bubble_sent_frees_a_preparation_slot_within_a_boun
         assert svc.has_preparation_slot()                # fan 1 now only waits to send its remaining bubbles
         svc.child(3);svc.tasks[3]=waiter
         assert not svc.has_preparation_slot()            # two still preparing again
-        cap=2*LIVE_TURNS_PER_SLOT
-        for fan in range(3,cap+1):
+        for fan in range(3,40):
             svc.child(fan);svc.tasks[fan]=waiter;svc.children[fan].first_bubble_sent=True
         svc.children[2].first_bubble_sent=True
-        assert len(svc.tasks)==cap and not svc.has_preparation_slot()   # never more live turns than the pool is sized for
-        del svc.tasks[cap];assert svc.has_preparation_slot()
+        assert svc.has_preparation_slot()        # parked continuations hold no thread: only preparing fans are bounded
+        svc.child(99);svc.tasks[99]=waiter;svc.child(98);svc.tasks[98]=waiter
+        assert not svc.has_preparation_slot()    # two preparing again
     asyncio.run(run())
 
 
@@ -224,3 +224,59 @@ def test_a_throttled_continuation_gives_the_slot_to_a_waiting_first_bubble():
         assert order==['first','continuation']
         assert gate.held==0 and not gate._active
     asyncio.run(run())
+
+
+def test_a_reply_waiting_at_the_send_gate_holds_no_worker_thread():
+    async def run():
+        from concurrent.futures import ThreadPoolExecutor
+        loop=asyncio.get_running_loop()
+        pool=ThreadPoolExecutor(max_workers=1);loop.set_default_executor(pool)
+        release=threading.Event();loop.run_in_executor(None,release.wait)   # the only worker is busy elsewhere
+        gate=SendGate(poll_s=.001)
+        gateway=object.__new__(Gateway)
+        gateway.send_gate=gate;gateway.pilot=SimpleNamespace(fan_id=1);gateway.send_priority='a';gateway.content=None
+        gateway.abort_reason=lambda:None;gateway.send_wait_max_s=5;gateway.throttled_retries=3
+        gateway.stopped_reason=None;gateway.turn_sends=0
+        async def inner(text,terms=None):return 'sent:'+text
+        gateway._send_inner=inner
+        await gate.acquire(lambda:None,1,key='blocker')
+        waiting=asyncio.create_task(gateway.send_async(1,'hi',{}))
+        await asyncio.sleep(.05)
+        assert not waiting.done()                       # queued at the gate while the sole worker thread is still busy
+        gate.release('blocker')
+        assert await asyncio.wait_for(waiting,2)=='sent:hi'
+        release.set();pool.shutdown()
+    asyncio.run(run())
+
+
+def test_the_text_client_sends_through_the_coroutine_path_and_marks_a_card():
+    async def run():
+        sent=[]
+        async def send_async(fan,text,kwargs):sent.append((fan,text,kwargs));return 'ok'
+        svc=parent();svc.content=VaultPlan(svc.db,'*')
+        native=NativeEngine(svc.db,1001,chat=None,send=None,send_async=send_async,content=None)
+        client=native.make_client(svc.db)
+        assert await client.send_message_async(1001,'hello there')=='ok'
+        assert sent==[(1001,'hello there',{})] and not native._card_sent
+        with pytest.raises(Exception):
+            await client.send_message_async(1002,'wrong fan')   # same scope refusal as the blocking call
+    asyncio.run(run())
+
+
+def test_a_bubble_to_a_client_without_a_coroutine_send_keeps_the_threaded_call():
+    from automations.ai_chatter import _send_bubble
+    async def run():
+        calls=[]
+        class Plain:
+            def send_message(self,fan,text,**kw):calls.append((fan,text,kw,threading.current_thread() is not threading.main_thread()));return 'plain'
+        class Native:
+            async def send_message_async(self,fan,text,**kw):calls.append((fan,text,kw,'async'));return 'native'
+        assert await _send_bubble(Plain(),7,'a',price=3)=='plain'
+        assert await _send_bubble(Native(),7,'b')=='native'
+        assert calls==[(7,'a',{'price':3},True),(7,'b',{},'async')]
+    asyncio.run(run())
+
+
+
+def test_thread_pool_and_live_turn_factor_are_the_original_values():
+    assert LIVE_TURNS_PER_SLOT==3 and 8*LIVE_TURNS_PER_SLOT+12==36

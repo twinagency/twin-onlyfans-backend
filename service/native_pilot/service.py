@@ -304,9 +304,8 @@ class ServiceGateway(runner.Gateway):
             waited += step
 
 
-# Live turns per preparation slot: one preparing, the rest only waiting in the send queue for their remaining
-# bubbles. Each waiting reply blocks one pool thread, so the thread pool is sized from the same number.
-LIVE_TURNS_PER_SLOT = 6
+# Thread pool sizing factor (unchanged from before the send-order work): preparation slots x this + 12 threads.
+LIVE_TURNS_PER_SLOT = 3
 
 
 class Service:
@@ -845,10 +844,11 @@ class Service:
             self.board.set(fan, state, reason, **kw)
 
     def has_preparation_slot(self):
-        """A fan whose first bubble is out only waits to send the rest, so it stops counting against the
-        preparation bound. Total live turns stay within the thread pool sizing (_size_thread_pool: LIVE_TURNS_PER_SLOT x + 12)."""
+        """A fan whose first bubble is out only waits at the send gate for the rest of its bubbles. That wait is a
+        parked coroutine (no worker thread, see Gateway.send_async), so it no longer counts against the preparation
+        bound, and the live-turn count is not what limits the thread pool any more."""
         preparing = sum(1 for f in self.tasks if not getattr(self.children.get(f), "first_bubble_sent", False))
-        return preparing < self.tuning.concurrency and len(self.tasks) < self.tuning.concurrency * LIVE_TURNS_PER_SLOT
+        return preparing < self.tuning.concurrency
 
     async def _run_fan(self, fan, first=None):
         """One fan's whole turn as a task. Never raises: every outcome becomes a hold / board state."""
@@ -1377,7 +1377,7 @@ class Service:
         try:
             unanswered = await runner.database_call(self.ledger, ledger.unanswered_reply_ids, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
                                                      input_key=key, now=runner.now()) if job is None else ()
-            with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
+            with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, send_async=gateway.send_async, emit=runner.emit,
                               content=self.content, context=self.context, contextual=contextual,
                               **({"reply_format": True} if job is None and self.reply_decision
                                  and self.reply_decision["authority"]["flags"].get("native_reply_format_enabled") else {}),

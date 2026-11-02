@@ -352,12 +352,20 @@ class Gateway:
     def limit_label(self):
         return self.pilot.end_limit - self.pilot.baseline_used
 
-    def send(self, fan, text, kwargs):
+    def _scoped(self, fan, text, kwargs):
         if type(fan) is not int or fan != self.pilot.fan_id or (kwargs and not self.content) or not isinstance(text, str) or not text.strip():
             self.stopped_reason = "send-scope-refused"
             raise Refused(self.stopped_reason)
-        terms = self.content.terms(kwargs) if self.content else None
+        return self.content.terms(kwargs) if self.content else None
+
+    def send(self, fan, text, kwargs):
+        terms = self._scoped(fan, text, kwargs)
         return asyncio.run_coroutine_threadsafe(self._send(no_dashes(text), terms), self.loop).result()
+
+    async def send_async(self, fan, text, kwargs):
+        """``send`` for a caller already on the event loop: waiting at the send gate holds no worker thread."""
+        terms = self._scoped(fan, text, kwargs)
+        return await self._send(no_dashes(text), terms)
 
     def stopped(self):
         if self.stopped_reason:

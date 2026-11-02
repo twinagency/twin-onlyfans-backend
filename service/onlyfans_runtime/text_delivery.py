@@ -594,6 +594,11 @@ class TextAuthority:
                     self._hold_unknown(s, intent, "legacy_dispatch_unverified", tenant_id)
                 return intent.status
             policy = s.scalar(select(OfDeliveryPolicy).where(OfDeliveryPolicy.account_id == account_id).with_for_update())
+            # Another worker may have admitted/settled this intent while we waited for the policy lock. The
+            # intent row loaded above is a pre-lock (stale) read: re-read it under the lock before reserving.
+            s.refresh(intent)
+            if intent.status != "queued":
+                return intent.status
             state = s.get(OfConversationState, (account_id, intent.fan_id))
             fan = s.get(Fan, (account_id, intent.fan_id))
             work = s.get(OfWork, (account_id, intent.fan_id)) if intent.work_generation is not None else None

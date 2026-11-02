@@ -12,6 +12,7 @@ legacy LLMResult integer cost field alone must not be used as a billing ledger.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import math
 import time
@@ -194,7 +195,9 @@ class NativePilotModel:
         call_number = self.calls
         try:
             if self._reserve_call is not None:
-                self._reserve_call()
+                reserved = self._reserve_call()
+                if inspect.isawaitable(reserved):
+                    await reserved
         except Exception:
             self._fail("model-call-reservation-refused")
         reservation = None

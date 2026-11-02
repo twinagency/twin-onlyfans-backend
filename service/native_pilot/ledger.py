@@ -288,6 +288,20 @@ class Ledger:
                     con.execute(statement)
             yield con
 
+    @contextmanager
+    def _view(self) -> Iterator[object]:
+        """Consistent metadata reads do not need the account writer lock.
+
+        In particular a model/gateway status callback runs on the async loop;
+        waiting there on a writer which needs that loop can deadlock admission.
+        Quarantine and target checks remain identical to the write boundary.
+        """
+        self._check_target()
+        with store.readonly(self.path) as con:
+            if self.pg and con.execute("SELECT to_regnamespace('onlyfans_restore')").fetchone()[0]:
+                raise Refused("restore-quarantined")
+            yield con
+
     @staticmethod
     def _pilot(row) -> Pilot:
         return Pilot(**{key: row[key] for key in Pilot.__dataclass_fields__})
@@ -793,15 +807,16 @@ class Ledger:
         bucket = con.execute("SELECT tokens,updated_at FROM engine_provider_bucket WHERE account_id=?", (account,)).fetchone()
         if bucket is None:
             tokens = float(capacity)
+            bucket_clock = now_dt
         else:
-            tokens = admission.refill(float(bucket["tokens"]), datetime.fromisoformat(_dt(bucket["updated_at"])),
+            tokens, bucket_clock = admission.refill_state(float(bucket["tokens"]), datetime.fromisoformat(_dt(bucket["updated_at"])),
                                       now_dt, rate, capacity)
         if tokens < 1.0:
             raise Refused("allowance-throttled")
         tokens -= 1.0
         con.execute("INSERT INTO engine_provider_bucket(account_id,tokens,updated_at) VALUES(?,?,?) "
                     "ON CONFLICT(account_id) DO UPDATE SET tokens=excluded.tokens,updated_at=excluded.updated_at",
-                    (account, str(tokens), now_s))
+                    (account, str(tokens), _dt(bucket_clock)))
         # A reply can contain several bubbles. ``now_s`` alone is not unique at
         # second precision, so the input and bubble are part of the slot identity;
         # otherwise a fast second bubble would collide with the first slot.
@@ -1894,7 +1909,7 @@ class Ledger:
 
     def status(self, pilot_id: str) -> dict:
         """Return only public metadata/counters, never owner tokens or message text."""
-        with self._tx() as con:
+        with self._view() as con:
             p = con.execute("SELECT pilot_id,account_id,fan_id,cutoff,deadline,baseline_used,end_limit,revision,state,reason,model_calls "
                             "FROM native_pilots WHERE pilot_id=?", (pilot_id,)).fetchone()
             if p is None:
@@ -1911,7 +1926,7 @@ class Ledger:
 
     def receipts(self, *, pilot_id: str, input_key: str | None = None) -> list[dict]:
         """Metadata only; confirmed IDs may be used for live-history reconciliation."""
-        with self._tx() as con:
+        with self._view() as con:
             query = ("SELECT attempt_id,input_key,bubble_no,state,provider_message_id,created_at,updated_at "
                      "FROM native_pilot_receipts WHERE pilot_id=?")
             args: tuple = (pilot_id,)

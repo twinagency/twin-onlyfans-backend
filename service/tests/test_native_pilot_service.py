@@ -438,9 +438,12 @@ async def loop_level(backend, root):
         pass
 
     async def fast_idle(self, seconds):
-        clock.add(seconds)  # virtual time passes while the process waits
+        # A PostgreSQL heartbeat observes time; it does not independently
+        # advance the shared clock while a different thread owns a transaction.
+        if not backend.pg or asyncio.current_task() is not self._renew_task:
+            clock.add(seconds)
         try:
-            await asyncio.wait_for(self.stop.wait(), 0.002)
+            await asyncio.wait_for(self.stop.wait(), 0.02 if backend.pg else 0.002)
         except asyncio.TimeoutError:
             pass
 
@@ -556,9 +559,11 @@ async def loop_level(backend, root):
         return mid
 
     async def replied(f, http, n, label, outs=None):
-        """n POSTs AND the stored outbound rows (the engine's attribution write follows the POST)."""
+        """Wait for POST, attribution and terminal claim persistence separately."""
         await until(lambda: len(http.posts) == n and
                     f.sql("SELECT count(*) FROM messages WHERE direction='out'")[0][0] == (n if outs is None else outs), label, events)
+        await until(lambda: not f.sql("SELECT 1 FROM native_pilot_inputs WHERE state='generating'"),
+                    label + " claim settled", events)
 
     def kinds(name):
         return [e for e in events if e.get("event") == name]
@@ -1229,9 +1234,10 @@ async def multi_level(backend, root):
         pass
 
     async def fast_idle(self, seconds):
-        clock.add(seconds)
+        if not backend.pg or asyncio.current_task() is not self._renew_task:
+            clock.add(seconds)
         try:
-            await asyncio.wait_for(self.stop.wait(), 0.002)
+            await asyncio.wait_for(self.stop.wait(), 0.02 if backend.pg else 0.002)
         except asyncio.TimeoutError:
             pass
 
@@ -1860,7 +1866,7 @@ async def followup_loop_level(backend, root):
         if seconds != RENEW:      # the lease renewals do not advance virtual time (keeps the scenarios arrangeable)
             clock.add(seconds)
         try:
-            await asyncio.wait_for(self.stop.wait(), 0.002)
+            await asyncio.wait_for(self.stop.wait(), 0.02 if backend.pg else 0.002)
         except asyncio.TimeoutError:
             pass
 

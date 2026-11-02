@@ -177,8 +177,9 @@ def admit(session, tenant_id: str, policy, *, account_id: str, fan_id: int, hold
         {"a": account_id}).mappings().first()
     if bucket is None:
         tokens = float(capacity)
+        bucket_clock = now
     else:
-        tokens = admission.refill(float(bucket["tokens"]), _dt(bucket["updated_at"]), now, rate, capacity)
+        tokens, bucket_clock = admission.refill_state(float(bucket["tokens"]), _dt(bucket["updated_at"]), now, rate, capacity)
     if tokens < 1.0:
         return None, "account_throttled"
     tokens -= 1.0
@@ -202,7 +203,7 @@ def admit(session, tenant_id: str, policy, *, account_id: str, fan_id: int, hold
         f"INSERT INTO {t}engine_provider_bucket(account_id,tokens,updated_at) "
         "VALUES(:a,:tokens,:now) ON CONFLICT(account_id) DO UPDATE "
         "SET tokens=excluded.tokens,updated_at=excluded.updated_at"),
-        {"a": account_id, "tokens": str(tokens), "now": now_s})
+        {"a": account_id, "tokens": str(tokens), "now": _iso(bucket_clock)})
     slot_id = "engine-slot-" + holder + ":" + attempt_id
     session.execute(text(
         f"INSERT INTO {t}engine_dispatch_slot"

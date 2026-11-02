@@ -279,6 +279,13 @@ def _refusal(exc):
     return None
 
 
+async def database_call(ledger, function, *args, **kwargs):
+    """Offload PostgreSQL lock waits; retain the SQLite execution contract."""
+    if getattr(ledger, "pg", False):
+        return await asyncio.to_thread(function, *args, **kwargs)
+    return function(*args, **kwargs)
+
+
 class Gateway:
     # Bounded pilots retain their history veto. The dashboard service opts in
     # only when its durable conversation mode is required at the send boundary.
@@ -367,7 +374,8 @@ class Gateway:
     # Transient admission refusals raised before any attempt row exists: the account's gate was taken a moment
     # earlier by another sender (another process, a human send) or the throttle moved. Nothing was written.
     ADMISSION_RETRY = frozenset({"allowance-throttled", "allowance-busy", "allowance-changed",
-                                 "provider-concurrency-limit", "conversation-busy", "conversation-throttled"})
+                                 "provider-concurrency-limit", "conversation-busy", "conversation-throttled",
+                                 "admission-contended"})
     send_gate = None            # engine v2: the account's SendGate (service-owned); None = bounded pilot, no gate
     send_wait_max_s = 900.0
     tolerate_newer = False      # engine v2: set for a burst past the hard maximum wait (see Service.turn)
@@ -405,6 +413,31 @@ class Gateway:
     def _dispatch_hold(self, terms, attempt):
         check = self._hold_for(terms)
         return check() if check is not None else None
+
+    async def _begin_attempt(self, **kwargs):
+        """A contended SQL admission must not block the loop that releases it.
+
+        If cancelled while SQL commits, wait for that result and record the
+        definite pre-wire non-send. No dispatch token or POST exists yet.
+        """
+        pending = asyncio.create_task(database_call(self.ledger, self.ledger.begin_attempt, **kwargs))
+        try:
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            try:
+                admitted = await pending
+            except Exception:
+                raise asyncio.CancelledError from None
+            await asyncio.shield(database_call(self.ledger, self.ledger.record_not_sent,
+                pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                attempt_id=admitted.id, now=now()))
+            raise
+        except store.DB_ERRORS as exc:
+            # The transaction rolled back before any wire attempt. Only these
+            # explicit contention outcomes may re-enter bounded admission.
+            if getattr(exc, "pgcode", None) in {"55P03", "40P01", "40001"}:
+                raise Refused("admission-contended") from None
+            raise
 
     async def _send_inner(self, text, terms=None):
         from twin_bridge.coordination import authorize_dispatch, revoke_dispatch, guarded_send
@@ -464,21 +497,22 @@ class Gateway:
                         if (str(asset.get("id")) != str(media_id) or asset.get("type") != terms["media_types"][str(media_id)]
                                 or asset.get("canView") is not True):
                             raise Refused("content-asset-unavailable")
-            self.bubble += 1
+            bubble = self.bubble + 1
             dispatch_kwargs = {}
             if self.tolerate_newer and not self.followup:
                 dispatch_kwargs["tolerate_newer"] = True
             if getattr(self, "reply_decision", None):
                 dispatch_kwargs["reply_authority"] = self.reply_decision["authority"]
-            attempt = self.ledger.begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
-                input_key=self.input_key, bubble_no=self.bubble, revision=self.pilot.revision, now=now(),
+            attempt = await self._begin_attempt(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                input_key=self.input_key, bubble_no=bubble, revision=self.pilot.revision, now=now(),
                 **dispatch_kwargs)
+            self.bubble = bubble  # refused admission did not create a bubble
             from .recovery import freeze
             try:
                 if terms and getattr(self, "contextual", None) is not None and self.contextual.armed is not None:
-                    contextual_metadata = await asyncio.to_thread(self.contextual.reserve, terms, attempt.id)
+                    contextual_metadata = await database_call(self.ledger, self.contextual.reserve, terms, attempt.id)
                     terms = {**terms, "contextual": contextual_metadata}
-                freeze(self.ledger, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                await database_call(self.ledger, freeze, self.ledger, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                        attempt_id=attempt.id, body=text, terms=terms)
             except Exception:
                 raise NotSent("dispatch-proof-not-saved", retry=True) from None
@@ -551,12 +585,12 @@ class Gateway:
                     any(raw.get(k) for k in ("media", "mediaFiles", "mediaCount", "previews", "lockedText", "isTip", "isUnsent")) or
                     isinstance(raw.get("price"), bool) or raw.get("price") not in (None, 0, 0.0, "0", "0.00")):
                 raise Refused("provider-response-contradicts-text-send")
-            self.ledger.record_sent(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+            await database_call(self.ledger, self.ledger.record_sent, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                 attempt_id=attempt.id, provider_message_id=validated.provider_message_id,
                 validated_response=raw, evidence={**validated.evidence, **({"content": content_evidence} if terms else {})}, now=now())
             settled = True
             if contextual_metadata is not None:
-                self.contextual.outcome("sent", int(validated.provider_message_id))
+                await database_call(self.ledger, self.contextual.outcome, "sent", int(validated.provider_message_id))
             decision = getattr(self, "reply_decision", None)
             if decision and decision["schedule"] and not known:
                 from .pacing import delivery_event
@@ -579,18 +613,18 @@ class Gateway:
                 certain = False
                 if isinstance(exc, NotSent):
                     try:
-                        self.ledger.record_not_sent(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                        await database_call(self.ledger, self.ledger.record_not_sent, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                                                     attempt_id=attempt.id, now=now())
                         certain, self.not_sent = True, exc
                     except Exception:
                         pass   # could not settle it as certain: keep the old, safe reading below
                 if not certain:
-                    self.ledger.record_unknown(pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
+                    await database_call(self.ledger, self.ledger.record_unknown, pilot_id=self.pilot.pilot_id, owner_token=self.pilot.owner_token,
                                                attempt_id=attempt.id, now=now())
                     self.stopped_reason = "delivery-unknown"
             if contextual_metadata is not None and not settled:
                 # A failed evidence write is not proof that nothing went out.
-                self.contextual.outcome("cancelled" if self.not_sent else "unknown")
+                await database_call(self.ledger, self.contextual.outcome, "cancelled" if self.not_sent else "unknown")
             raise Refused(self.stopped_reason) from None
 
 
@@ -618,15 +652,15 @@ async def report_to_twin(ledger, pilot, run_error=None):
 
 def begin_native_run(path, account):
     """Create the native audit row without invoking the automation scheduler."""
-    with store.transaction(path) as con:
+    with store.transaction(path, account) as con:
         return store.insert_id(con, "INSERT INTO automation_runs(account_id,kind,started_at,status) VALUES(?,'ai_chatter',?,'running')",
                                (account, now().isoformat(sep=" ")))
 
 
-def finish_native_run(path, run_id, stats, reason=None):
+def finish_native_run(path, run_id, stats, reason=None, *, account=None):
     # Only aggregate counters/fixed reasons, never native prompt/error text.
     counters = {k: v for k, v in (stats or {}).items() if isinstance(k, str) and type(v) in (int, bool)}
-    with store.transaction(path) as con:
+    with store.transaction(path, account) as con:
         con.execute("UPDATE automation_runs SET completed_at=?,status=?,stats_json=?,error_text=? WHERE id=?",
                     (now().isoformat(sep=" "), "error" if reason else "done", json.dumps(counters), reason, run_id))
 

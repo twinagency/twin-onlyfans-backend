@@ -81,3 +81,17 @@ Remove the account from the allowlist, or explicitly disable its durable policy,
 The evidence directory contains raw logs, limitations, and hashes of final relevant source files. All records are synthetic. No live fan messages were sent and no paid model calls were made. Test runtime does not measure Maile onboarding.
 
 GitHub publication check: both draft PRs are cleanly mergeable and both source parents are retained. The newly triggered backend runs `41387702674` / `41387666936` and dashboard runs `41387741369` / `41387736177` ended in `startup_failure`. No GitHub CI pass is claimed; this is an additional release blocker. Local PostgreSQL/contract evidence remains separate.
+
+## Follow-up: operational access recovered
+
+Read-only AWS SSM access was recovered through the existing `jesse-gpt` profile. The 2 November 05:39 UTC snapshot is in `evidence/live-maile-baseline.json`. It confirms the documented API/worker image prefixes and live schema `0106_parallel_history_reads`. Maile had 94,571 stored messages, including 87,646 inside the provisional last-30-day window across 16,571 stored fans. Coverage was incomplete: 161 archive cursors complete, 23,731 needed and five running/expired checkpoints. The dedicated history importer and memory learner were exited; the reply supervisor had never started. No service was restarted.
+
+A later fixed-cutoff query found 2,947 of 3,535 stored incoming messages inside the window. This excludes 588 stored incoming sources from initial extraction, about 16.6% of that stored incoming workload; it is not a lifetime or measured billing reduction. Routine creator extraction would also be removed, but no numeric saving is asserted. Existing same-day memory ledger rows total 16,270 units settled and 1,316 units unresolved (one unit is US$0.0001); settled ledger amounts are not necessarily provider-reported invoice charges. No new paid model calls were made.
+
+An exact task-hunk check on the running worker found all contexts in 13 of 14 files. The native-planning context differs, so a blind production patch was not applied. Current migration/rollback qualification remains required. The newer concurrent-reply commit `cfab868e2c87706ddce4ff6cfb2bbeffd76c720f` was integrated without conflict; its focused combined suite passed 24 tests in 33.94 seconds.
+
+### Exact live-image qualification
+
+The task-specific overlay now passes 22 PostgreSQL/approval/cohort tests on the actual worker image (105.46 seconds), and an upgrade from a private schema-only copy of production succeeds to `0110_recent_history`. The earlier staged test packaging error was a missing fixture file and was corrected before the complete rerun. No production schema or service has changed at this checkpoint. Four Chromium checks of the actual new React component pass at 375 and 1280 pixels; this does not qualify the full Next build.
+
+`ONLYFANS_PROFILE_ACCOUNTS` is an optional process cohort: absent preserves existing behavior, an empty JSON array disables work, and the rollout process selects only Maile. Seeding, claiming, silent completion, maintenance and accounting reconciliation respect the same cohort. This permits measuring Maile without restarting extraction for other creators. Existing rates, model configuration and daily caps are reused.

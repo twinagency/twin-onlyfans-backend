@@ -58,6 +58,8 @@ def reconcile_known(store,tenant,*,limit=25):
     with Session(store.engine) as s:
         accounts=set(s.scalars(select(OfCreatorBinding.account_id).where(OfCreatorBinding.tenant_id==tenant,
             OfCreatorBinding.revoked_at.is_(None),OfCreatorBinding.channel=='onlyfans')).all())
+        from .cohort import includes
+        accounts = {account for account in accounts if includes(account)}
         calls=s.scalars(select(GrokCall).where(GrokCall.account_id.in_(accounts),GrokCall.purpose=='gen_info',
             GrokCall.provider=='openrouter',GrokCall.status=='unknown').order_by(GrokCall.id).limit(5000)).all()
         identified=[(c.id,c.account_id,c.model,metadata(c)) for c in calls if metadata(c).get('generation_id') and metadata(c).get('reconciliation_attempts',0)<5][:limit]

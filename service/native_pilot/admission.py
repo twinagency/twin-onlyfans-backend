@@ -113,6 +113,16 @@ def refill(tokens: float, updated_at: datetime, now: datetime, rate: float, capa
     return min(float(capacity), float(tokens) + elapsed * float(rate))
 
 
+def refill_state(tokens: float, updated_at: datetime, now: datetime, rate: float, capacity: int):
+    """Do not move the shared bucket clock backwards after reordered callers.
+
+    Threads can reach the account lock in a different order from their captured
+    admission timestamps. Rewinding updated_at would grant elapsed time twice.
+    """
+    clock = max(updated_at, now)
+    return refill(tokens, updated_at, clock, rate, capacity), clock
+
+
 def token_wait(tokens: float, rate: float) -> float:
     """Seconds until one token is available (zero when one already is)."""
     if tokens >= 1.0:

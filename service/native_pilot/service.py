@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import logging
 import os
 import secrets
@@ -457,11 +458,11 @@ class Service:
             await ensure_fan_conversation(self.scope, self.args.fan)
             self.ensured = True
         token = "native-" + secrets.token_hex(24)
-        pilot = self.ledger.activate_service(pilot_id=self.pilot_id, account_id=self.db, fan_id=self.args.fan,
+        pilot = await runner.database_call(self.ledger, self.ledger.activate_service, pilot_id=self.pilot_id, account_id=self.db, fan_id=self.args.fan,
                                              owner_token=token, now=runner.now(), ttl_s=self.ttl_s, cutoff=self.cutoff)
         if not await reserve_ownership(account_id=self.db, fan_id=self.args.fan, owner_token=token,
-                                       now=runner.now(), ttl_s=self.ttl_s):
-            self.ledger.release_service(pilot_id=self.pilot_id, owner_token=token, now=runner.now())
+                                       now=runner.now(), ttl_s=self.ttl_s, io_offload=self.ledger.pg):
+            await runner.database_call(self.ledger, self.ledger.release_service, pilot_id=self.pilot_id, owner_token=token, now=runner.now())
             raise Refused("ownership-unavailable")
         self.pilot, self.lease = pilot, Lease(pilot.deadline)
         if self.content:
@@ -510,8 +511,9 @@ class Service:
             if self.stop.is_set():
                 return
             try:
-                deadline = self.ledger.renew(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
-                                             now=runner.now(), ttl_s=self.ttl_s)
+                renew = dict(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
+                             now=runner.now(), ttl_s=self.ttl_s)
+                deadline = await runner.database_call(self.ledger, self.ledger.renew, **renew)
                 self.lease.deadline = deadline
                 register_owner(pilot.account_id, pilot.fan_id, pilot.owner_token, datetime.fromisoformat(deadline))
             except Refused as exc:
@@ -561,8 +563,13 @@ class Service:
         if getattr(self, "_twin_store", None) is None:
             self._twin_store = Store(url)
         store = self._twin_store
-        for fan in ([self.args.fan] if not self.all_fans else (fans or [])):
+        controlled = [self.args.fan] if not self.all_fans else (fans or [])
+        candidates = (store.runtime_stop_candidates(self.db, controlled)
+                      if self.all_fans and hasattr(store, "runtime_stop_candidates") else None)
+        for fan in controlled:
             if not self._owned(fan):
+                continue
+            if candidates is not None and fan not in candidates:
                 continue
             try:
                 if self.all_fans:
@@ -683,7 +690,12 @@ class Service:
             child.strict, child.cutoff = True, self.started_at
             child.send_gate, child.tuning = self.send_gate, self.tuning
             child.path, child.ledger, child.context = self.path, self.ledger, self.context
-            child.content, child.catalog_owner = self.content, self
+            # NativeEngine/ContextualAuthority bind a turn's quote, inventory
+            # revision and commercial hold to this object. Sharing the account
+            # plan lets another fan reset those fields while this one sends.
+            child.content, child.catalog_owner = copy.deepcopy(self.content), self
+            if child.content is not None and getattr(child.content, "vault_mode", False):
+                child.content.fan = fan
             child.followups = self.followups
             self.children[fan] = child
         child.client, child.conn, child.sentinels = self.client, self.conn, self.sentinels
@@ -705,7 +717,7 @@ class Service:
         if pilot is not None:
             try:
                 if self.lease is not None and not self.lease.lost:
-                    self.ledger.release_service(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
+                    await runner.database_call(self.ledger, self.ledger.release_service, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
             except Refused:
                 pass
             clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
@@ -791,6 +803,26 @@ class Service:
         for fan in fans:
             try:
                 held = fan_hold_reason(self.path, self.db, fan, True)
+                child = self.children.get(fan)
+                if held == "fan-unresolved-delivery" and child is not None and child.phase == "sending" and child.pilot is not None:
+                    # Admission itself sets the unresolved pointer. Re-read an
+                    # exact active owner/receipt pair before excluding that own
+                    # pointer; uncertainty or another sender still holds.
+                    with runner.readonly(self.path) as con:
+                        own = con.execute("SELECT r.attempt_id FROM native_pilot_receipts r "
+                            "JOIN native_pilots p ON p.pilot_id=r.pilot_id "
+                            "JOIN twin_bridge_send_attempts a ON a.id=r.attempt_id "
+                            "WHERE p.pilot_id=? AND p.owner_token=? AND p.state='active' "
+                            "AND p.account_id=? AND p.fan_id=? AND r.state='dispatching' "
+                            "AND a.state='dispatching' AND a.owner_token=p.owner_token "
+                            "AND a.account_id=p.account_id AND a.fan_id=p.fan_id",
+                            (child.pilot.pilot_id, child.pilot.owner_token, self.db, fan)).fetchall()
+                    if len(own) == 1:
+                        held = fan_hold_reason(self.path, self.db, fan, True, own_attempt=own[0][0])
+                    else:
+                        # It may have settled between the first policy read
+                        # and the owner lookup. Do not cancel on that stale read.
+                        held = fan_hold_reason(self.path, self.db, fan, True)
             except Exception:
                 held = None
             if held:
@@ -981,7 +1013,7 @@ class Service:
             runner.emit({"event": "send-stall-check-failed", "reason": type(exc).__name__})
 
     async def tick_all(self):
-        self.renew_runner_lease()
+        await runner.database_call(self.ledger, self.renew_runner_lease)
         if self.runner_lost:
             await self.cancel_inflight("runner-lease-lost")
             self.stop.set()
@@ -1200,7 +1232,7 @@ class Service:
 
     async def turn(self):
         pilot, ledger, args = self.pilot, self.ledger, self.args
-        snap = ledger.snapshot(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
+        snap = await runner.database_call(self.ledger, ledger.snapshot, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
         self.reply_decision = None
         self.tolerate_newer = False
         if snap is None or ledger.input_claimed(pilot_id=pilot.pilot_id, message_id=snap.message_id):
@@ -1209,7 +1241,7 @@ class Service:
         flags = pacing.settings(self.path, self.db)
         if any(flags.values()):
             try:
-                self.reply_decision = pacing.prepare(ledger, pilot, snap, now=runner.now(), quiet_s=self.quiet_s)
+                self.reply_decision = await runner.database_call(self.ledger, pacing.prepare, ledger, pilot, snap, now=runner.now(), quiet_s=self.quiet_s)
             except Refused as exc:
                 if exc.reason == "source-changed":
                     return await self.wait(self.poll_s)
@@ -1218,6 +1250,11 @@ class Service:
         if paced:
             if runner.now() < self.reply_decision["eligible_at"]:
                 self.note("reply-target-wait")
+                # Waiting for a durable due time is not preparation work. Leave
+                # the bounded slot free for other fans, retaining the original
+                # schedule/earliest input rather than polling the oldest few.
+                self.backoff_s = (self.reply_decision["eligible_at"] - runner.now()).total_seconds()
+                self.release_reason = "reply-target-wait"
                 return await self.wait(self.poll_s)
         else:
             quiet_for = (runner.now() - datetime.fromisoformat(snap.ingested_at)).total_seconds()
@@ -1235,7 +1272,7 @@ class Service:
             return await self.wait(min(wait + 0.5, self.poll_s * 10))
         try:
             sources = runner.read_sources(self.path, self.db, args.fan, getattr(snap, "member_ids", (snap.message_id,)))
-            key = ledger.claim_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now(),
+            key = await runner.database_call(self.ledger, ledger.claim_input, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, snapshot=snap, now=runner.now(),
                                      **({"reply_authority": self.reply_decision["authority"]} if self.reply_decision else {}))
         except Refused as exc:
             if exc.reason in ("input-already-claimed", "source-changed"):
@@ -1249,26 +1286,26 @@ class Service:
             from .identity import HUMAN_REQUESTED, wants_human
             asked_for_human = any(wants_human((src or {}).get("body")) for src in questions.values())
             await self.identity_handoff("fan-asked", attention=HUMAN_REQUESTED if asked_for_human else "identity-question")
-            ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+            await runner.database_call(self.ledger, ledger.finish_input, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
             # The handoff answers nothing: close this schedule so the fan's next message gets a fresh admission budget
             # instead of re-using this one (3 admissions, then reply-regeneration-budget-held on every later message).
             if self.reply_decision:
-                pacing.finish(ledger, self.reply_decision, now=runner.now(), sent=False)
+                await runner.database_call(self.ledger, pacing.finish, ledger, self.reply_decision, now=runner.now(), sent=False)
             return
         held = await self.safety_check()
         if held:
             # R1: a stop-contact / distress / consent concern is now an enforced hold (case + audited control). The AI
             # answers nothing; a person owns the case. Same close-out as the identity hand-off above.
-            ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+            await runner.database_call(self.ledger, ledger.finish_input, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
             if self.reply_decision:
-                pacing.finish(ledger, self.reply_decision, now=runner.now(), sent=False)
+                await runner.database_call(self.ledger, pacing.finish, ledger, self.reply_decision, now=runner.now(), sent=False)
             return
         if self.reply_decision:
             self.reply_decision["admitted_at"] = runner.now()
         error = await self.execute(key, sources, source_id=snap.message_id)
         if self.reply_decision:
             receipts = ledger.receipts(pilot_id=pilot.pilot_id, input_key=key)
-            pacing.finish(ledger, self.reply_decision, now=runner.now(), error=error,
+            await runner.database_call(self.ledger, pacing.finish, ledger, self.reply_decision, now=runner.now(), error=error,
                           sent=any(r["state"] == "sent" for r in receipts))
 
     async def _note_unlabelled(self, snap):
@@ -1316,13 +1353,13 @@ class Service:
         model = NativePilotModel(
             api_key=self.conn.model_api_key, account_id=self.db, fan_id=args.fan, deadline=time.monotonic() + TURN_MAX_S,
             should_stop=gateway.stopped, on_event=lambda event: timing.on_event(event, runner.now()),
-            reserve_call=lambda: ledger.count_model_call(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now()),
+            reserve_call=lambda: runner.database_call(ledger, ledger.count_model_call, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now()),
             budget=DailyBudget(self.scope, self.conn.model_id, endpoint=ENDPOINT))
         runner.emit({"event": "generating", "source_message_id": str(source_id), "engine": "fastt-native"})
-        run_id = runner.begin_native_run(self.path, self.db)
+        run_id = await runner.database_call(self.ledger, runner.begin_native_run, self.path, self.db)
         stats = error = None
         try:
-            unanswered = ledger.unanswered_reply_ids(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
+            unanswered = await runner.database_call(self.ledger, ledger.unanswered_reply_ids, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
                                                      input_key=key, now=runner.now()) if job is None else ()
             with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
                               content=self.content, context=self.context, contextual=contextual,
@@ -1360,7 +1397,7 @@ class Service:
                 # real cause; the existing release/backoff handling then gives the claim back (nothing is on the wire).
                 error = self.cancel_reason
         finally:
-            runner.finish_native_run(self.path, run_id, stats, error)
+            await runner.database_call(self.ledger, runner.finish_native_run, self.path, run_id, stats, error, account=self.db)
             if isinstance(stats, dict):
                 # FASTT's own per-turn counters (sell lane, offers, packs, skips): operator visibility only.
                 runner.emit({"event": "turn-stats", "stats": {k: v for k, v in stats.items()
@@ -1415,12 +1452,12 @@ class Service:
             runner.verify_attribution(self.path, self.db, args.fan, receipts, content=self.content,
                                       automation_employee_id=self.sentinels.automation)
         except Refused as exc:
-            ledger.stop(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, reason=exc.reason, now=runner.now())
+            await runner.database_call(self.ledger, ledger.stop, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, reason=exc.reason, now=runner.now())
             await runner.report_to_twin(ledger, pilot, exc.reason)
             await self.drop_pilot()
             raise
         await runner.report_to_twin(ledger, pilot)
-        ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
+        await runner.database_call(self.ledger, ledger.finish_input, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now())
         if getattr(args, "stop_after_card", False) and await self.card_delivered(receipts):
             await self.stop_after_card()
         if not any(r["state"] == "sent" for r in receipts):
@@ -1797,7 +1834,7 @@ class Service:
                 backoff = min(MODEL_BACKOFF_MAX_S, MODEL_BACKOFF_MIN_S * 2 ** prior)
                 if reason == "media-claim-unbacked":      # a regenerate, not an outage: twice at most, straight away
                     backoff, retry_limit = 5.0, 2 + provider_attempts
-            count = ledger.requeue_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now(),
+            count = await runner.database_call(self.ledger, ledger.requeue_input, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key, now=runner.now(),
                                          max_requeues=retry_limit,
                                          not_before=runner.now() + timedelta(seconds=backoff)
                                          if provider_defer or account_defer else None)
@@ -1819,7 +1856,7 @@ class Service:
             raise Refused(state["reason"] or reason)
         # Preserve an unsent terminal outcome instead of calling it a completed reply.
         # These states remain claimed, so no sent/unknown/failed input is replayed.
-        ledger.finish_input(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key,
+        await runner.database_call(self.ledger, ledger.finish_input, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, input_key=key,
                             now=runner.now(), outcome="no_reply" if reason.startswith("native-no-reply") else "failed")
         runner.emit({"event": "turn-abandoned", "reason": reason, **({"fan_id": self.args.fan} if self.strict else {})})
         await self.wait(self.hold_s)
@@ -1893,7 +1930,7 @@ class Service:
         self.runner_lease = RunnerLease(self.ledger, self.db, f"{socket.gethostname()}:{os.getpid()}", self.tuning.runner_lease_ttl_s)
         while not self.stop.is_set():
             try:
-                gen = self.runner_lease.acquire(runner.now())
+                gen = await runner.database_call(self.ledger, self.runner_lease.acquire, runner.now())
                 runner.emit({"event": "runner-lease-acquired", "generation": gen})
                 return
             except Refused as exc:
@@ -1928,14 +1965,14 @@ class Service:
             if pilot is not None:
                 try:
                     if not self.lease.lost:
-                        self.ledger.release_service(pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
+                        await runner.database_call(self.ledger, self.ledger.release_service, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token, now=runner.now())
                 except Refused:
                     pass
                 clear_owner(pilot.account_id, pilot.fan_id, pilot.owner_token)
             self.restore_catalog()
             if self.runner_lease is not None:
                 try:
-                    self.runner_lease.release(runner.now())
+                    await runner.database_call(self.ledger, self.runner_lease.release, runner.now())
                 except Exception:
                     pass
             runner.emit({"event": "finished", "persistent": True})

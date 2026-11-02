@@ -769,7 +769,9 @@ def guarded_send(account_id: object, fan_id: object, *, purpose: str,
       the reservation is in this process or only in the database (a restart).
     """
     from moxy_replacement.routing import refuse_legacy
-    refuse_legacy(account_id)
+    # Fail closed: a Moxy-selected (or undeterminable) account refuses every
+    # automated legacy write; only a manual operator send passes.
+    refuse_legacy(account_id, purpose)
     key = _key(account_id, fan_id)
     with _REGISTRY_LOCK:
         process_reserved = key in _RESERVED

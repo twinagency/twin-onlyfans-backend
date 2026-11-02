@@ -540,6 +540,47 @@ async def of_write_paced(account_id, fn, *, min_gap_s: float = _OF_WRITE_GAP_S,
     return await of_write_with_retry(fn, tries=tries, pause_s=pause_s)
 
 
+# ── Moxy ownership fence ─────────────────────────────────────────────
+#
+# Exactly one engine may own a migrated (Moxy-selected) account. Every legacy
+# fan-messaging automation is refused HERE, before any model call, state write,
+# cooldown/lease or caption rewrite, rather than dying at the final send. The
+# kind list and the fail-closed lookup live in moxy_replacement.routing.
+
+_MOXY_FENCE_RECORDED: set[tuple[str, str]] = set()
+
+
+def _fenced_kinds() -> frozenset[str]:
+    from moxy_replacement import routing
+    return routing.MOXY_FENCED_KINDS
+
+
+async def _moxy_fence_reason(account_id: str, kind: str,
+                             payload: dict | None = None,
+                             cache: dict | None = None) -> str | None:
+    """Why this (account, kind) must not run, or None. Only fenced kinds pay for
+    the (blocking) owner lookup, which runs off the event loop; `cache` shares
+    one lookup per account across a whole rule sweep."""
+    from moxy_replacement import routing
+    if canonical_kind(kind) not in routing.MOXY_FENCED_KINDS:
+        return None
+    if cache is not None and account_id in cache:
+        state = cache[account_id]
+    else:
+        state = await asyncio.to_thread(routing.owner_state, account_id)
+        if cache is not None:
+            cache[account_id] = state
+    return routing.job_fence_reason(account_id, canonical_kind(kind), payload, state=state)
+
+
+async def _record_moxy_fence(account_id: str, kind: str, reason: str) -> int:
+    """Write the visible 'skipped' run row that explains the refusal."""
+    run_id = await _open_run(account_id, kind)
+    await _finalize_run(run_id, "skipped",
+                        {"moxy_fenced": True, "reason": reason}, reason)
+    return run_id
+
+
 # ── scheduled_jobs queue ─────────────────────────────────────────────
 
 class _ClaimedJob(NamedTuple):
@@ -746,6 +787,8 @@ async def _materialize_due_rules() -> int:
     load_automation_plugins()  # runners self-register on import; idempotent
     now = datetime.utcnow()
     enqueued = 0
+    fenced_rules: list[tuple[str, str, str]] = []   # (account, kind, reason) — Moxy fence
+    owner_cache: dict[str, str] = {}                # one Moxy owner lookup per account per sweep
     offsets: dict[str, int | None] = {}   # account_id → creator-local MINUTES (quiet hours)
     async with get_session() as s:
         rules = (
@@ -786,6 +829,18 @@ async def _materialize_due_rules() -> int:
                             rule.id, rule.account_id, rule.kind,
                         )
                 if not failed:
+                    continue
+            # Moxy-owned (or undeterminable) account: a legacy fan-messaging
+            # rule must not even enqueue work. Recorded once per process below.
+            if canonical_kind(rule.kind) in _fenced_kinds():
+                try:
+                    rule_payload = json.loads(rule.steps_json or "{}")
+                except Exception:
+                    rule_payload = {}
+                why = await _moxy_fence_reason(rule.account_id, rule.kind, rule_payload,
+                                               cache=owner_cache)
+                if why is not None:
+                    fenced_rules.append((rule.account_id, canonical_kind(rule.kind), why))
                     continue
             try:
                 trigger = json.loads(rule.trigger_json or "{}")
@@ -921,6 +976,15 @@ async def _materialize_due_rules() -> int:
                 )
             )
             enqueued += 1
+    for acct, k, why in fenced_rules:
+        if (acct, k) in _MOXY_FENCE_RECORDED:
+            continue
+        _MOXY_FENCE_RECORDED.add((acct, k))
+        log.warning("automation_rule_moxy_fenced account=%s kind=%s reason=%s", acct, k, why)
+        try:
+            await _record_moxy_fence(acct, k, why)
+        except Exception:
+            log.warning("moxy_fence_record_failed account=%s kind=%s", acct, k, exc_info=True)
     if enqueued:
         log.info("automation_rules_materialized count=%d", enqueued)
     return enqueued
@@ -1651,6 +1715,19 @@ async def run_once(
                     payload = {}
                 job_id = claimed.id
         payload = payload or {}
+
+        # Moxy fence: BEFORE the run row's work, the lease, any LLM call or any
+        # state write. The claimed job is consumed (canceled), never retried or
+        # handed to the legacy writer.
+        fence = await _moxy_fence_reason(account_id, kind, payload)
+        if fence is not None:
+            log.warning("automation_moxy_fenced account=%s kind=%s reason=%s",
+                        account_id, kind, fence)
+            run_id = await _record_moxy_fence(account_id, kind, fence)
+            if job_id is not None:
+                await _mark_job(job_id, "canceled", fence)
+            return {"status": "skipped", "reason": fence, "run_id": run_id,
+                    "job_id": job_id}
 
         run_id = await _open_run(account_id, kind)
         t0 = time.monotonic()

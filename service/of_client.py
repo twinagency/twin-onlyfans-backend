@@ -2319,7 +2319,8 @@ class OFClient:
                          media_files: list[int] | None = None,
                          previews: list[int] | None = None,
                          tagged_users: list[int] | None = None,
-                         auto_tag: bool = True) -> Any:
+                         auto_tag: bool = True,
+                         purpose: str = "scheduled") -> Any:
         """POST /api2/v2/messages/queue — schedule a message for future delivery.
 
         VERIFIED LIVE. The right path is `/messages/queue`, NOT
@@ -2339,7 +2340,7 @@ class OFClient:
             "userIds": [int(chat_id)],
         }
         retry_plan = self._apply_cotags(body, media_files, tagged_users, auto_tag)
-        with self._bridge_boundary(chat_id, purpose="scheduled"):
+        with self._bridge_boundary(chat_id, purpose=purpose):
             return self._post_dropping_auto_cotag(
                 f"{API_BASE}/messages/queue", body, retry_plan)
 

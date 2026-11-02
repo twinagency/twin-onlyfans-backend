@@ -11,7 +11,7 @@ from native_pilot.content import VaultPlan
 from native_pilot.engine import NativeEngine
 from native_pilot.ledger import Refused
 from native_pilot.send_gate import SendGate
-from native_pilot.service import Service
+from native_pilot.service import Service, LIVE_TURNS_PER_SLOT
 from native_pilot.runner import Gateway
 
 
@@ -190,10 +190,12 @@ def test_a_fan_with_its_first_bubble_sent_frees_a_preparation_slot_within_a_boun
         assert svc.has_preparation_slot()                # fan 1 now only waits to send its remaining bubbles
         svc.child(3);svc.tasks[3]=waiter
         assert not svc.has_preparation_slot()            # two still preparing again
-        svc.children[2].first_bubble_sent=svc.children[3].first_bubble_sent=True
-        for fan in (4,5,6):
+        cap=2*LIVE_TURNS_PER_SLOT
+        for fan in range(3,cap+1):
             svc.child(fan);svc.tasks[fan]=waiter;svc.children[fan].first_bubble_sent=True
-        assert len(svc.tasks)==6 and not svc.has_preparation_slot()   # never more than 3x the preparation bound
+        svc.children[2].first_bubble_sent=True
+        assert len(svc.tasks)==cap and not svc.has_preparation_slot()   # never more live turns than the pool is sized for
+        del svc.tasks[cap];assert svc.has_preparation_slot()
     asyncio.run(run())
 
 

@@ -71,15 +71,22 @@ One bounded real-media check succeeded for Cristina: media 4773415574, call 4355
 
 No persistent scoped-key flag or bulk model-analysis job was started.
 
-## New evidence and explicit approval block
+## Approved graphics inspection completed
 
-Amelia's current vault metadata exposes folder 27540040, named "vip vault graphs". A scoped provider GET verified three photo IDs in that folder:
-4294360357, 4294360356, 4294360354. hasMore was true.
-The folder may help recover sequence instructions; its name alone does not establish its contents, approval or current applicability.
+Jesse explicitly approved the previously blocked three-image OpenRouter read with "Yes go". The approval applies to this bounded inspection, not unlimited background analysis.
 
-Automatic approval review rejected executing an OCR request that would send those three private graphics to the account's OpenRouter model. Reason: launch/testing authorisation did not explicitly authorise that sensitive media disclosure. The OCR command was NOT submitted to AWS and the three images were NOT sent. Do not retry through another execution path. Ask Jesse explicitly before that external OCR step, or use a genuinely safer approved source.
+A single model call read Amelia's folder 27540040 ("vip vault graphs") images 4294360357, 4294360356 and 4294360354. Result: call 43558, OpenRouter Qwen3-VL-30B, recorded cost 7 millicents (US$0.0007), maximum output 1024 tokens, one model attempt. SSM evidence: 3e2c5979-1ee0-4505-b317-84aee94e4ed5.
 
-Prepared but unexecuted request is on the connected Windows device at Temp/moxy-vault-graph-ocr.json. It is a bounded single-call inspection, not a new background job. It contains code, not credential values. Revalidate the source and current connection before any authorised execution.
+The machine extraction found marketing/progress artwork:
+- "Invite Only Stripping", 50% complete.
+- "Invite Only Stripping", 25% complete.
+- "Invite Only Amelia's Locker Room", "Vault Unlocked", with four broad category names.
+
+No exact content IDs, prices, bundle membership or ordered four-item paid-message level were extracted. The model labelled the third image "ordered_four_ppv: true" despite returning only category names. That unsupported interpretation is NOT accepted as a sequence mapping. These results do not authorise products or resolve creator-sheet ambiguities.
+
+Two preliminary executions stopped before model I/O because the inspection helper called the synchronous native transport inside an async loop. Diagnostic trace identified the existing guard; transport calls were correctly moved to asyncio.to_thread. The guard was preserved. The request log showed no Amelia describe_media calls before the successful bounded call. No customer messages, payments, account activation or persistent model-analysis flag changes occurred.
+
+The exact commercial sequence is still unresolved. Retrieve Moxy's existing VIP Vault/Locker Room scripts or sequence export showing which actual content belongs to each step and its price. Do not ask Jesse to create a new strategy or manually catalogue the entire vault; map existing authoritative source material. Current fan ownership, labels, operator responsibility and provider qualification remain independent release gates.
 
 ## Remaining launch gates
 

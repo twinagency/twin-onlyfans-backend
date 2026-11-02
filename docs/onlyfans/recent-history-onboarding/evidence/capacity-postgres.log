@@ -1,0 +1,11 @@
+..                                                                       [100%]
+=============================== warnings summary ===============================
+service/tests/test_parallel_import_capacity.py::test_postgresql_simultaneous_claims_do_not_oversubscribe
+service/tests/test_parallel_import_capacity.py::test_postgresql_simultaneous_claims_do_not_oversubscribe
+service/tests/test_parallel_import_capacity.py::test_postgresql_migration_roundtrip_preserves_cursors
+service/tests/test_parallel_import_capacity.py::test_postgresql_migration_roundtrip_preserves_cursors
+  /workspace/scratch/8c1a07a232eb/backend/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2 passed, 4 warnings in 1.07s

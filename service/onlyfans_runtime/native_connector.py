@@ -85,6 +85,8 @@ class NativeLoopbackConnector:
     def _call(self, method, path, body=b""):
         self._ready()
         headers = _synthetic_headers(self._handle.peer.port, path, self._handle.owner_id)
+        from .history_telemetry import dispatched
+        dispatched()
         return asyncio.run(_request_once(self._handle.peer, method, path, body,
             timeout=self._http._timeout, max_bytes=self._http._max_bytes, headers=headers))
 

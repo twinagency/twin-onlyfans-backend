@@ -18,6 +18,7 @@ from db.onlyfans_models import OfIngress, OfRuntime
 from onlyfans_runtime.store import Store, Refused
 from .evidence import digest, merge, project, summary, validate, FIELD_LOCKS
 from .storage import SCOPE, identity, valid_observation
+from . import cohort
 
 INTERVAL=timedelta(hours=2)
 PAGE=40
@@ -34,7 +35,8 @@ CONFIG_RETRY=timedelta(minutes=15)
 HOT,WARM,COLD=0,1,2
 # Account-level problems: one account-wide pause, not a per-fan retry storm.
 ACCOUNT_CODES={'model-credential-missing','model-credential-mismatch','model-credential-unavailable',
-    'profile-model-config-missing','profile-credential-changed','profile-connection-scope','profile-budget-exhausted'}
+    'profile-model-config-missing','profile-credential-changed','profile-connection-scope','profile-budget-exhausted',
+    'profile-model-request-failed','profile-model-usage-unavailable'}
 
 
 def scoped(store,s,tenant,account,binding):
@@ -47,22 +49,25 @@ def scoped(store,s,tenant,account,binding):
 
 def seed(store,tenant):
     """Repeated bounded discovery reaches every fan, independent of AI/session state."""
+    batch=int(os.environ.get('ONLYFANS_PROFILE_SEED_BATCH','500'))
+    if not 1 <= batch <= 10000: raise ValueError('profile seed batch must be 1–10000')
     with Session(store.engine) as s,s.begin():
         s.execute(text('SELECT pg_advisory_xact_lock(hashtext(:k))'),{'k':'profile-seed:'+tenant})
         bindings=s.scalars(select(OfCreatorBinding).join(OfRuntime,
             OfRuntime.binding_id==OfCreatorBinding.id).where(OfCreatorBinding.tenant_id==tenant,
             OfCreatorBinding.channel=='onlyfans',OfCreatorBinding.revoked_at.is_(None))).all()
         for b in bindings:
+            if not cohort.includes(b.account_id): continue
             scoped(store,s,tenant,b.account_id,b.id)
             p={'tenant':tenant,'account':b.account_id,'binding':b.id}
             s.execute(text('INSERT INTO of_profile_accounts(tenant_id,account_id,binding_id) VALUES (:tenant,:account,:binding) ON CONFLICT DO NOTHING'),p)
             s.execute(text('''INSERT INTO of_profile_learning(tenant_id,account_id,binding_id,fan_id)
-                VALUES (:tenant,:account,:binding,0) ON CONFLICT DO NOTHING'''),p)
+                VALUES (:tenant,:account,:binding,0) ON CONFLICT DO NOTHING'''),{**p,'batch':batch})
             s.execute(text('''INSERT INTO of_profile_learning(tenant_id,account_id,binding_id,fan_id)
                 SELECT :tenant,f.account_id,:binding,f.fan_id FROM fans f WHERE f.account_id=:account
                 AND NOT EXISTS (SELECT 1 FROM of_profile_learning p WHERE p.tenant_id=:tenant
                 AND p.account_id=f.account_id AND p.binding_id=:binding AND p.fan_id=f.fan_id)
-                ORDER BY f.fan_id LIMIT 500 ON CONFLICT DO NOTHING'''),p)
+                ORDER BY f.fan_id LIMIT :batch ON CONFLICT DO NOTHING'''),{**p,'batch':batch})
             s.execute(text('''INSERT INTO fan_profiles(account_id,fan_id,message_count_at_gen,
                 total_spend_at_gen_cents,notes_applied_successfully)
                 SELECT p.account_id,p.fan_id,0,0,false FROM of_profile_learning p
@@ -100,13 +105,17 @@ def source_page(store,job):
     p={k:job[k] for k in ('tenant_id','account_id','binding_id','fan_id')}
     with Session(store.engine) as s,s.begin():
         scoped(store,s,job['tenant_id'],job['account_id'],job['binding_id'])
+        from onlyfans_runtime.history_policy import source_filter
+        clause, parameters = source_filter(s, job['account_id'], job['binding_id'], job['fan_id'])
+        p.update(parameters)
+        source_order = "CASE WHEN m.created_at>=:recent_cutoff THEN 0 ELSE 1 END," if "recent_cutoff" in p else ""
         ids=s.execute(text(f'''SELECT m.fan_id,m.message_id FROM messages m
-            WHERE m.account_id=:account_id AND (:fan_id=0 OR m.fan_id=:fan_id)
+            WHERE ({clause}) AND m.account_id=:account_id AND (:fan_id=0 OR m.fan_id=:fan_id)
             AND m.direction=(CASE WHEN :fan_id=0 THEN 'out' ELSE 'in' END) AND EXISTS (SELECT 1 FROM of_ingress i
                 WHERE i.account_id=m.account_id AND i.binding_id=:binding_id AND i.fan_id=m.fan_id
                 AND i.message_id=m.message_id AND i.status='applied')
             AND NOT EXISTS (SELECT 1 FROM of_profile_receipts r WHERE {receipt_match(job)})
-            ORDER BY m.ingested_at,m.message_id,m.fan_id LIMIT {PAGE+1}'''),p).all()
+            ORDER BY {source_order} m.ingested_at,m.message_id,m.fan_id LIMIT {PAGE+1}'''),p).all()
         sources={}; progress=[]; size=0
         for fid,mid in ids[:PAGE]:
             m=s.get(Message,(job['account_id'],fid,mid))
@@ -156,6 +165,9 @@ def source_page(store,job):
 
 def publish_creator(store,job,document):
     from onlyfans_runtime.launch_personality.workflow import PersonalityWorkflow
+    with Session(store.engine) as s:
+        from onlyfans_runtime.history_policy import policy
+        if policy(s, job['account_id'], job['binding_id']): return
     wf=PersonalityWorkflow(store); current=wf.get(job['tenant_id'],job['account_id'])
     if current['bindingId']!=job['binding_id']: raise Refused('profile-binding-changed')
     if (current.get('document') or {}).get('review'): return
@@ -202,11 +214,15 @@ def claim_job(store,tenant,stop):
             ORDER BY a.last_claimed_at,a.account_id'''),{'tenant':tenant,'now':now}).all()
         job=None
         for account,binding in accounts:
+            if not cohort.includes(account): continue
+            from onlyfans_runtime.history_policy import policy
+            skip_creator = policy(s, account, binding) is not None
             job=s.execute(text('''SELECT p.* FROM of_profile_learning p
                 WHERE p.tenant_id=:tenant AND p.account_id=:account AND p.binding_id=:binding
+                AND (:skip_creator=false OR p.fan_id>0)
                 AND p.next_at<=:now AND (p.lease_until IS NULL OR p.lease_until<:now)
                 ORDER BY p.priority,p.next_at,p.fan_id LIMIT 1'''+suffix),
-                {'tenant':tenant,'account':account,'binding':binding,'now':now}).mappings().first()
+                {'tenant':tenant,'account':account,'binding':binding,'now':now,'skip_creator':skip_creator}).mappings().first()
             if job: break
         if not job or stop.is_set(): return None
         job=dict(job);job['lease_token']=str(uuid.uuid4())
@@ -237,6 +253,7 @@ def finalize_silent(store,tenant,stop,*,limit=SILENT_BATCH):
             ORDER BY a.account_id'''),{'tenant':tenant}).all()
     suffix=' FOR UPDATE OF p SKIP LOCKED' if store.engine.dialect.name=='postgresql' else ''
     for account,binding in accounts:
+        if not cohort.includes(account): continue
         if stop.is_set(): break
         with Session(store.engine) as s,s.begin():
             keys=s.execute(text('''SELECT p.fan_id FROM of_profile_learning p
@@ -321,12 +338,16 @@ def _persist(store,job,sources,progress,additions,more,count,call_id):
                 memory_key,field,status,kind,document_json) VALUES(:tenant_id,:account_id,:binding_id,:fan_id,
                 :key,:field,:status,:kind,:doc)'''),{**p,'key':f['memory_key'],'field':f['field'],
                 'status':f['status'],'kind':f['kind'],'doc':json.dumps(f,ensure_ascii=False)})
-        remaining=s.execute(text(f'''SELECT 1 FROM messages m WHERE m.account_id=:account_id
+        from onlyfans_runtime.history_policy import source_filter
+        clause, parameters = source_filter(s, job['account_id'], job['binding_id'], job['fan_id'])
+        p.update(parameters)
+        remaining=s.execute(text(f'''SELECT 1 FROM messages m WHERE ({clause}) AND m.account_id=:account_id
             AND (:fan_id=0 OR m.fan_id=:fan_id) AND m.direction=(CASE WHEN :fan_id=0 THEN 'out' ELSE 'in' END)
             AND EXISTS(SELECT 1 FROM of_ingress i WHERE i.account_id=m.account_id AND i.binding_id=:binding_id
                 AND i.fan_id=m.fan_id AND i.message_id=m.message_id AND i.status='applied')
             AND NOT EXISTS(SELECT 1 FROM of_profile_receipts r WHERE {receipt_match(job)}) LIMIT 1'''),p).first()
         more=remaining is not None
+        document['processing_scope'] = 'recent_window_and_activated_older' if parameters else 'all_stored_history'
         document.pop('facts',None)  # V1's arbitrary six-per-field store is replaced, not carried into replies.
         document.update(schema_version='of-profile-memory.v2',summary=summary(facts,creator=not bool(job['fan_id'])),
             memory_count=len(facts),history_complete=not more,summary_locked=bool(locks & {'short_bio','bullet_points'}),
@@ -343,23 +364,34 @@ def _persist(store,job,sources,progress,additions,more,count,call_id):
         return document
 
 
+async def database_call(store, fn, *args, **kwargs):
+    if store.engine.dialect.name == 'postgresql':
+        return await asyncio.to_thread(fn, *args, **kwargs)
+    return fn(*args, **kwargs)
+
+
+def release_job(store, p, token):
+    with store.engine.begin() as c:
+        c.execute(text(f'UPDATE of_profile_learning SET lease_token=NULL,lease_until=NULL WHERE {SCOPE} AND lease_token=:token'),
+            {**p, 'token': token})
+
+
 async def step(store,tenant,stop,*,extractor=None):
     if extractor is None:
         from .model import extract
         extractor=extract
-    job=claim_job(store,tenant,stop)
+    job=await database_call(store,claim_job,store,tenant,stop)
     if not job: return False
     p={k:job[k] for k in ('tenant_id','account_id','binding_id','fan_id')}
     try:
-        sources,progress,more,count=source_page(store,job)
+        sources,progress,more,count=await database_call(store,source_page,store,job)
         additions=[];call_id=None
         if any(not v.get('context_only') for v in sources.values()):
             result,call_id=await extractor(store,tenant,job['account_id'],job['binding_id'],job['fan_id'],sources,creator=not bool(job['fan_id']))
             additions=validate(result,sources,creator=not bool(job['fan_id']))
-        document=_persist(store,job,sources,progress,additions,more,count,call_id)
-        if not job['fan_id']: publish_creator(store,job,document)
-        with store.engine.begin() as c:
-            c.execute(text(f'UPDATE of_profile_learning SET lease_token=NULL,lease_until=NULL WHERE {SCOPE} AND lease_token=:token'),{**p,'token':job['lease_token']})
+        document=await database_call(store,_persist,store,job,sources,progress,additions,more,count,call_id)
+        if not job['fan_id']: await database_call(store,publish_creator,store,job,document)
+        await database_call(store,release_job,store,p,job['lease_token'])
         return True
     except Exception as exc:
         from native_pilot.budget import BudgetRefused
@@ -379,6 +411,8 @@ async def step(store,tenant,stop,*,extractor=None):
         attempts=int(job.get('attempts',0))+1
         account_wide=code in ACCOUNT_CODES
         delay=CONFIG_RETRY if account_wide else timedelta(minutes=min(120,5*2**min(attempts,5)))
+        if attempts >= 3 and code.startswith('profile-model-'):
+            delay=max(delay,timedelta(days=1))  # at most three automatic attempts before daily review
         with Session(store.engine) as s,s.begin():
             s.execute(text(f'''UPDATE of_profile_learning SET error_code=:error,next_at=:due,
                 lease_token=NULL,lease_until=NULL,attempts=:attempts WHERE {SCOPE} AND lease_token=:token'''),
@@ -400,11 +434,15 @@ def transient_database_error(exc):
 
 
 def daily_maintenance(store,tenant):
-    """Re-evaluation is also performed on every read. Daily sweep rebuilds cold summaries."""
+    """Only the selected process cohort is re-evaluated during a rollout."""
+    selected = cohort.accounts()
+    if selected == frozenset(): return
     with Session(store.engine) as s,s.begin():
-        s.execute(text('''UPDATE of_profile_learning SET next_at=CURRENT_TIMESTAMP WHERE tenant_id=:tenant
-            AND error_code IS NULL AND next_at>CURRENT_TIMESTAMP AND (maintenance_at IS NULL OR maintenance_at<:yesterday)'''),
-            {'tenant':tenant,'yesterday':datetime.utcnow()-timedelta(days=1)})
+        statement = text("""UPDATE of_profile_learning SET next_at=CURRENT_TIMESTAMP WHERE tenant_id=:tenant
+            AND (:scope_all OR account_id IN :scope_accounts)
+            AND error_code IS NULL AND next_at>CURRENT_TIMESTAMP AND (maintenance_at IS NULL OR maintenance_at<:yesterday)""").bindparams(bindparam('scope_accounts', expanding=True))
+        s.execute(statement, {'tenant':tenant, 'yesterday':datetime.utcnow()-timedelta(days=1),
+            'scope_all':selected is None, 'scope_accounts':list(selected or [])})
 
 
 def main():
@@ -412,28 +450,42 @@ def main():
     if os.environ.get('ONLYFANS_PROCESS_ROLE')!='worker' or not tenant or tenant=='deployment':
         raise SystemExit('Explicit worker role and tenant required')
     concurrency=int(os.environ.get('ONLYFANS_PROFILE_CONCURRENCY','2'))
-    if not 1<=concurrency<=4: raise SystemExit('Profile concurrency must be 1–4')
+    if not 1<=concurrency<=128: raise SystemExit('Profile concurrency must be 1–128')
     stop=threading.Event()
     for sig in (signal.SIGINT,signal.SIGTERM): signal.signal(sig,lambda *_:stop.set())
-    store=Store(os.environ['DATABASE_URL'])
+    store=Store(os.environ['DATABASE_URL'],pool_size=min(16,max(2,concurrency)))
     async def run():
+        async def consume():
+            while not stop.is_set():
+                try:
+                    worked=await step(store,tenant,stop)
+                except Exception as exc:
+                    print(json.dumps({'component':'profile-learning','state':'unavailable','kind':type(exc).__name__}),flush=True)
+                    worked=False
+                await asyncio.sleep(.01 if worked else 2)
+        tasks=[asyncio.create_task(consume()) for _ in range(concurrency)]
         last_maintenance=datetime.min
         last_seed=0.0
+        last_reconcile=0.0
         try:
             while not stop.is_set():
                 try:
+                    if time.monotonic()-last_reconcile>=300:
+                        from .accounting import reconcile_known
+                        last_reconcile=time.monotonic()
+                        await database_call(store,reconcile_known,store,tenant,limit=5)
                     if time.monotonic()-last_seed>=SEED_EVERY:
-                        seed(store,tenant);last_seed=time.monotonic()
+                        await database_call(store,seed,store,tenant);last_seed=time.monotonic()
                     if datetime.utcnow()-last_maintenance>timedelta(days=1):
-                        daily_maintenance(store,tenant);last_maintenance=datetime.utcnow()
-                    try: silent=await asyncio.to_thread(finalize_silent,store,tenant,stop)
-                    except Exception as exc:
-                        print(json.dumps({'component':'profile-learning','state':'silent-batch-failed','kind':type(exc).__name__}),flush=True);silent=0
-                    worked=any(await asyncio.gather(*(step(store,tenant,stop) for _ in range(concurrency)))) or bool(silent)
+                        await database_call(store,daily_maintenance,store,tenant);last_maintenance=datetime.utcnow()
+                    await database_call(store,finalize_silent,store,tenant,stop)
                 except Exception as exc:
-                    print(json.dumps({'component':'profile-learning','state':'unavailable','kind':type(exc).__name__}),flush=True);worked=False
-                await asyncio.sleep(1 if worked else 30)
+                    print(json.dumps({'component':'profile-learning','state':'maintenance-deferred','kind':type(exc).__name__}),flush=True)
+                await asyncio.sleep(1)
         finally:
+            # Finish acquired jobs and their receipts before database shutdown.
+            stop.set()
+            await asyncio.gather(*tasks)
             from db.engine import engine
             await engine.dispose()
     try: asyncio.run(run())

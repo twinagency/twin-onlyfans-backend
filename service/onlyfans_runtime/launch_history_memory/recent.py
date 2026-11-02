@@ -115,6 +115,14 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
         if boot and (boot.binding_id != runtime.binding_id
                      or boot.before_id is not None and any(i >= boot.before_id for i in ids)):
             raise Refused("recent bootstrap cursor or binding changed")
+        from onlyfans_runtime.history_policy import policy
+        window = policy(s, claim.account_id, runtime.binding_id)
+        if window is not None:
+            # Recent head bootstrap has its own small live-read bound. Deep
+            # coverage belongs to the independent recent-window cursor.
+            normalized = [e for e in normalized if datetime.fromisoformat(e.created_at).replace(tzinfo=None) >= window.cutoff_at]
+            kept = {e.message_id for e in normalized}
+            offers = [o for o in offers if o.source_id in kept]
         if runtime.pending_events + len(normalized) > MAX_PENDING:
             return "backpressure"
         for event in normalized:
@@ -158,7 +166,7 @@ def commit_recent_page(store, tenant_id, claim, events, *, has_more,
             row.lease_token = row.lease_until = None
             return "continue"
         if has_more:
-            HistoryRecovery._ensure_fan(s, runtime, claim.fan_id, before_id=boot.before_id)
+            HistoryRecovery._ensure_fan(s, runtime, claim.fan_id, before_id=None if window else boot.before_id)
         row.high_water = boot.upper_id
         row.upper_bound = row.before_id = None
         row.status, row.last_complete_at = "complete", utcnow()

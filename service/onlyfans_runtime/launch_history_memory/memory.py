@@ -274,9 +274,11 @@ class HistoricalMemory:
         if type(limit) is not int or not 1 <= limit <= MAX_BATCH:
             raise Refused("invalid memory processing bound")
         with Session(self.store.engine) as s, s.begin():
-            self.store._runtime(s, tenant_id, account_id)
+            runtime = self.store._runtime(s, tenant_id, account_id)
+            from onlyfans_runtime.history_policy import allowed_messages
+            allowed = allowed_messages(s, account_id, runtime.binding_id)
             pending = select(Message.message_id).where(Message.account_id == Fan.account_id,
-                Message.fan_id == Fan.fan_id,
+                Message.fan_id == Fan.fan_id, allowed,
                 ~select(MemoryReceipt.message_id).where(_receipt_matches()).exists()).exists()
             busy = select(OfWork.fan_id).where(OfWork.account_id == Fan.account_id,
                 OfWork.fan_id == Fan.fan_id, OfWork.status == "claimed", OfWork.lease_until > utcnow()).exists()
@@ -301,7 +303,10 @@ class HistoricalMemory:
             state = _state(s, account_id, fan_id)
             # A source-based anti-join also catches older messages imported after
             # a prior pass. A monotonically increasing message cursor would miss them.
-            query = select(Message).where(Message.account_id == account_id,
+            from onlyfans_runtime.history_policy import allowed_messages
+            from db.onlyfans_models import OfRuntime
+            runtime = s.get(OfRuntime, account_id)
+            query = select(Message).where(allowed_messages(s, account_id, runtime.binding_id), Message.account_id == account_id,
                 Message.fan_id == fan_id,
                 ~select(MemoryReceipt.message_id).where(_receipt_matches()).exists())
             sources = s.scalars(query.order_by(Message.created_at, Message.message_id)

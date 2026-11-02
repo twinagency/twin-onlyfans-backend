@@ -34,6 +34,8 @@ def ensure_started(store, tenant, account, *, connection_revision):
         runtime = store._runtime(s, tenant, account)
         store._read_connection(s, runtime, connection_revision)
         connection = s.get(OfProviderConnection, account)
+        from .history_policy import ensure
+        ensure(s, runtime)
         sync = s.get(OfContentSyncAccount, account)
         if sync is not None:
             return False

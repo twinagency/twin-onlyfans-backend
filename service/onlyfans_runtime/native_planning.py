@@ -114,6 +114,12 @@ def _native_messages(context):
     from automations import _of_integrity
     if messages and messages[0].get("role") == "system":
         messages[0] = {**messages[0], "content": messages[0]["content"] + _of_integrity.onlyfans_rules()}
+    if messages and messages[0].get("role") == "system":
+        if context.get("historyAvailability"):
+            messages[0]["content"] += "\n" + context["historyAvailability"]["instruction"]
+        if context.get("approvedOnboarding"):
+            from .creator_onboarding import prompt
+            messages[0]["content"] += prompt(context["approvedOnboarding"])
     memory = context.get("historicalMemory")
     # Older source excerpts and operator overrides only; canonical facts already reach the composer above.
     if memory and (memory.get("learnedProfile") or memory["interactions"] or memory["overrides"]

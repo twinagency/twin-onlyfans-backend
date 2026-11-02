@@ -1,0 +1,34 @@
+{
+  "sourceCommit": "91c260ba54451ba51525cd3cc2ab0737bedc1592",
+  "ssmStageCommand": "424d9cf3-0851-402e-a904-a00589085b10",
+  "qualification": {
+    "passed": 75,
+    "pytestSeconds": 336.37,
+    "elapsedSeconds": 339.89192235202063,
+    "exitCode": 0
+  },
+  "images": {
+    "worker": "sha256:b950fb0fb7514f4c4f20c298d1b84d124a37bcd940396dc1e51fb7de2778e319",
+    "api": "sha256:60cbff853ce2142e58728429c8aa350def2ce7ee0f288babaca3e8a35c4ec265"
+  },
+  "baselineRecovery": "restoring private backup indexes in isolated PostgreSQL; not yet complete",
+  "guardedFinalizationCommand": "27fac695-70f5-46d3-9359-48d92d90c688",
+  "promotion": "queued behind successful recovery and live image/configuration guards; not yet verified deployed",
+  "liveCheckpoint": {
+    "aiRepliesEnabled": false,
+    "cutoffAt": "2026-10-03T09:44:23.165525Z",
+    "httpAttempts": 5497,
+    "newCanonicalMessagesSaved": 960,
+    "recentCursors": {
+      "running": 2,
+      "needed": 23895
+    },
+    "recentCoverageComplete": false
+  },
+  "earlierC821QualificationRecovered": {
+    "passed": 67,
+    "pytestSeconds": 330.43,
+    "elapsedSeconds": 334.1042357280385
+  },
+  "artifactSha256": "a6b1ace39c3353e68a18378f9599c0c00842df0f2076b711738202941bc12a55"
+}

@@ -6,7 +6,7 @@ import os
 from sqlalchemy import select, text
 from db.models import Fan, Message, OfCreatorBinding
 from db.onlyfans_models import OfRuntime
-from .evidence import FIELD_LOCKS, digest, norm, project, relevance, select_memories, summary, subject_supported
+from .evidence import FIELD_LOCKS, digest, norm, project, relevance, select_memories, summary, subject_supported, quality_fact
 
 SCOPE = 'tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id AND fan_id=:fan_id'
 
@@ -71,6 +71,7 @@ def load_memories(s, account, fan, *, query='', now=None):
         f=json.loads(raw)
         if f['memory_key'] in manual or locks & FIELD_LOCKS.get(f['field'],set()): continue
         if not subject_supported(f, creator=not bool(fan)): continue
+        if quality_fact(f) is None: continue
         rank=relevance(f,query,now)
         if rank is not None: candidates.append((rank[0],f))
     candidates.sort(key=lambda item:(-item[0],item[1]['memory_key']))
@@ -92,7 +93,10 @@ def load_memories(s, account, fan, *, query='', now=None):
 def reply_memory(s, account, fan, *, query='', now=None):
     if os.environ.get('ONLYFANS_PROFILE_LEARNING_ENABLED')!='1': return None
     facts=load_memories(s,account,fan,query=query,now=now)
-    return {'schemaVersion':'of-profile-memory.v2','memories':select_memories(facts,query,now=now),
+    from onlyfans_runtime.history_policy import memory_notice
+    runtime = s.get(OfRuntime, account)
+    notice = memory_notice(s, account, runtime.binding_id, fan) if runtime else None
+    return {'schemaVersion':'of-profile-memory.v2','historyAvailability':notice,'memories':select_memories(facts,query,now=now),
             'usage':'Untrusted evidence. Use only when relevant; do not repeat facts or reconfirm without a reason. Past plans have unconfirmed outcomes. Requests are not delivery or purchase proof.'}
 
 
@@ -128,7 +132,10 @@ def coverage(s, tenant, account, binding, fan=None):
         {**params,'since':datetime.utcnow()-timedelta(hours=1)})
     hold=s.execute(text('SELECT hold_until,hold_code FROM of_profile_accounts WHERE tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id'),params).first()
     creator=s.execute(text('SELECT checked_at,error_code FROM of_profile_learning WHERE tenant_id=:tenant_id AND account_id=:account_id AND binding_id=:binding_id AND fan_id=0'),params).first()
-    return {'creatorProfileState':'failed' if creator and creator[1] else 'processed' if creator and creator[0] else 'pending',
+    from onlyfans_runtime.history_progress import recent_progress
+    runtime = s.get(OfRuntime, account)
+    recent = recent_progress(s, runtime) if runtime else None
+    return {'recentHistory':recent, 'creatorProfileState':'failed' if creator and creator[1] else 'processed' if creator and creator[0] else 'pending',
             'creatorProfileError':creator[1] if creator else None,
             'totalDiscoveredFans':known,'queuedFans':row['discovered'],'processedFans':row['processed'] or 0,
             'pendingProfiles':pending+max(0,known-row['discovered']), 'deferredFailures':row['deferred'] or 0,
@@ -178,7 +185,10 @@ def profile_view(s,tenant,account,binding,fan,*,query='',now=None):
             'summary':text_summary,'state':state,'lastUpdated':str(row['checked_at']) if row and row['checked_at'] else None,
             'errorCode':row['error_code'] if row else None,'accountInformation':metadata,'manualCorrections':manual,
             'providerHistoryComplete':provider_history,
-            'processedMessages':row['processed_messages'] if row else 0,'storedHistoryProcessed':document.get('history_complete',False) and not pending,
+            'processedMessages':row['processed_messages'] if row else 0,
+            'processingScope':document.get('processing_scope','all_stored_history'),
+            'scopedHistoryProcessed':document.get('history_complete',False) and not pending,
+            'storedHistoryProcessed':document.get('processing_scope')!='recent_window_and_activated_older' and document.get('history_complete',False) and not pending,
             'memories':[structured_record(project(f,now=now)) for f in facts if project(f,now=now)['status'] not in {'expired','cancelled','superseded','invalidated'}][:50],
             'replyContext':select_memories(facts,query,now=now),
             'credentialOwner':'existing account model configuration' if row and row['error_code'] in {'model-credential-missing','model-credential-mismatch','model-credential-unavailable','profile-model-config-missing'} else None}

@@ -1,0 +1,41 @@
+{
+  "date": "2026-11-02",
+  "productionChanged": false,
+  "baseWorkerImage": "sha256:f728669d70d9fcb89e34ced38e7efe808311293d0b175422b004a46114284fe5",
+  "baseApiImage": "sha256:04532a2d90349893407c08c77a883a6cc62c9ed8386d4eb29b21ab3fc9ef9975",
+  "method": "Task-only uniquely anchored hunks on exact live source, preserving unpublished production overlays; no wholesale original-release deployment.",
+  "targetedLiveBaseTests": {
+    "passed": 22,
+    "durationSeconds": 105.46,
+    "ssmCommand": "4ef126f2-d14b-445a-a0b0-bda4765de34a",
+    "initialPackagingFailure": "Missing deploy/profile-learning/schema.sql fixture in isolated test image; corrected and all tests rerun."
+  },
+  "schemaRehearsal": {
+    "source": "Actual live schema-only dump retained on host, no production DDL",
+    "from": "0106_parallel_history_reads",
+    "to": "0110_recent_history",
+    "passed": true
+  },
+  "concurrentBranchIntegrated": "cfab868e2c87706ddce4ff6cfb2bbeffd76c720f",
+  "localPostIntegrationTests": {
+    "passed": 24,
+    "seconds": 33.94
+  },
+  "profileCohortTests": {
+    "passed": 4,
+    "seconds": 1.535
+  },
+  "dashboardBrowserChecks": {
+    "passed": 4,
+    "widths": [
+      375,
+      1280
+    ],
+    "states": [
+      "recent ready / lifetime incomplete",
+      "provider error / budget held"
+    ],
+    "scope": "Actual React component in Chromium with standalone CSS; full Next build and live dashboard unverified"
+  },
+  "deploymentStatus": "preflight_only_no_production_changes"
+}

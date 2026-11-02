@@ -44,6 +44,19 @@ def _build(session, account_id: str, fan_id: int, last_inbound: str) -> PromptCo
                            voice=getattr(cfg, "voice", None),
                            persona_facts_json=canonical(facts) if facts else None)
     persona = compose_persona(view, fallback="", fact_value_clip=16000)
+    from onlyfans_runtime.history_policy import configured, approved_onboarding, memory_notice
+    if configured(account_id):
+        from db.onlyfans_models import OfRuntime
+        runtime = session.get(OfRuntime, account_id)
+        if runtime is not None:
+            notice = memory_notice(session, account_id, runtime.binding_id, fan_id)
+            if notice:
+                persona += "\n" + notice['instruction']
+                onboarding = approved_onboarding(session, account_id, runtime.binding_id)
+                if onboarding:
+                    from onlyfans_runtime.creator_onboarding import prompt
+                    persona += prompt(onboarding)
+
     # The persona and the creator facts above are genuine holds (identity and claims). Fan MEMORY is evidence
     # added when it exists: an incomplete history import, a refresh in progress or an unreadable memory row
     # must never stop an ordinary text reply, so a failure here answers without it.

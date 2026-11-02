@@ -1,0 +1,17 @@
+{
+  "deployed": true,
+  "sourceCommit": "9d6756b20063dc7d481f59acfb1f26c65336c357",
+  "images": {
+    "worker": "sha256:6afd1ad6bfc1030cbb0c7cd72d675753cde487b9de64bf0e333b02d89b4831f2",
+    "api": "sha256:87bc296eb275e2c220c3daa2726d34c5e9d8c4faa77455b5bf7fd77e8c00f439"
+  },
+  "deployedAt": 1793625834.6224477,
+  "deploymentInterruptionSeconds": 33.78865122795105,
+  "schemaChanged": false,
+  "cutoffChanged": false,
+  "aiRepliesEnabled": false,
+  "dashboardReplaced": false,
+  "baselineCapturedBeforePilotJobs": false,
+  "baselineReconstructedFromPrePilotBackup": true,
+  "originalManifestBaselineClaimCorrectedHere": true
+}

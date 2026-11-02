@@ -7,6 +7,7 @@ A paid post has an int id, postedAt, a decimal price, ordered media and
 text is public on the feed, so it is recorded as an explicit False. Free posts
 (no price) are not offers. Nothing here sends, publishes or edits a post.
 """
+from .provider_read_budget import is_rate_limit
 from datetime import datetime, timedelta, timezone
 import json
 
@@ -147,7 +148,7 @@ def verify_cursor_contract(store, tenant, account, *, command_key, actor, transp
         revision, binding, owner = connection.revision, runtime.binding_id, connection.owner_id
         s.expunge(connection)
     transport, pages, marker = transport_factory(connection, tenant, account), [], None
-    read_claim, retry_after = None, None
+    read_claim, retry_after, was_rate_limited = None, None, False
     try:
         for index in range(2):
             read_claim = acquire(store, tenant, account, connection_revision=revision, kind="posts") if native_reader(transport) else None
@@ -209,10 +210,11 @@ def verify_cursor_contract(store, tenant, account, *, command_key, actor, transp
             return result
     except Exception as exc:
         retry_after = getattr(exc, "retry_after", None)
+        was_rate_limited = is_rate_limit(exc)
         raise
     finally:
         if read_claim is not None:
-            release(store, tenant, read_claim, retry_after=retry_after)
+            release(store, tenant, read_claim, retry_after=retry_after, rate_limited=was_rate_limited)
 
 
 def _claim(store, tenant, account, now):
@@ -310,7 +312,7 @@ def _revisit_posts(store, tenant, account, token, revision, binding, owner, tran
             .order_by(OfContentSyncSource.last_checked_at.asc().nulls_first(), OfContentSyncSource.source_id)
             .limit(DETAILS_PER_PASS)).all()
     for post_id in wanted:
-        read_claim, retry_after = None, None
+        read_claim, retry_after, was_rate_limited = None, None, False
         try:
             read_claim = acquire(store, tenant, account, connection_revision=revision, kind="posts") if native_reader(transport) else None
             status, raw = transport.post_by_id(post_id)
@@ -326,10 +328,11 @@ def _revisit_posts(store, tenant, account, token, revision, binding, owner, tran
                 unavailable_ids=absent, unavailable_reason=reason)
         except Exception as exc:
             retry_after = getattr(exc, "retry_after", None)
+            was_rate_limited = is_rate_limit(exc)
             raise
         finally:
             if read_claim is not None:
-                release(store, tenant, read_claim, retry_after=retry_after)
+                release(store, tenant, read_claim, retry_after=retry_after, rate_limited=was_rate_limited)
 
 
 def process_posts(store, tenant, *, limit=1, stop=None, transport_factory=_transport, now=None):
@@ -378,7 +381,7 @@ def process_posts(store, tenant, *, limit=1, stop=None, transport_factory=_trans
             for page_index in range(max(2, PAGES_PER_PASS)):
                 if stop is not None and stop.is_set():
                     break
-                read_claim, retry_after = None, None
+                read_claim, retry_after, was_rate_limited = None, None, False
                 try:
                     read_claim = acquire(store, tenant, account, connection_revision=revision, kind="posts") if native_reader(transport) else None
                     raw = transport.posts_page(before_marker=marker)
@@ -409,7 +412,7 @@ def process_posts(store, tenant, *, limit=1, stop=None, transport_factory=_trans
                     error = "shared_provider_read_budget"
                     break
                 except NativeRateLimitError as exc:
-                    error, retry_after = "provider_rate_limit", exc.retry_after
+                    error, retry_after, was_rate_limited = "provider_rate_limit", exc.retry_after, True
                     break
                 except NativeProtocolError:
                     error = "unsupported_posts_response"
@@ -422,7 +425,7 @@ def process_posts(store, tenant, *, limit=1, stop=None, transport_factory=_trans
                     break
                 finally:
                     if read_claim is not None:
-                        release(store, tenant, read_claim, retry_after=retry_after)
+                        release(store, tenant, read_claim, retry_after=retry_after, rate_limited=was_rate_limited)
             with Session(store.engine) as s, s.begin():
                 runtime = store._runtime(s, tenant, account)
                 progress = s.get(OfContentPostProgress, account, with_for_update=True)

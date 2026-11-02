@@ -87,7 +87,7 @@ async def get(request:Request,account_id:str):
     context=authenticate(request,account_id)
     if isinstance(context,JSONResponse):return context
     store,tenant=context
-    try:return response({'ok':True,'connection':await asyncio.to_thread(get_connection,store,tenant,account_id,include_sync=request.query_params.get('progress')=='1',include_runner=request.query_params.get('runner')=='1',include_policy=request.query_params.get('policy')=='1')})
+    try:return response({'ok':True,'connection':await asyncio.to_thread(get_connection,store,tenant,account_id,include_sync=request.query_params.get('progress')=='1',include_runner=request.query_params.get('runner')=='1',include_policy=request.query_params.get('policy')=='1',include_recent=request.query_params.get('history')=='recent')})
     except Exception as exc:return failure(exc)
 
 @router.post('/accounts/{account_id}')

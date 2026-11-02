@@ -17,7 +17,7 @@ from db.onlyfans_connection_models import OfProviderConnection,OfConnectionChang
 from onlyfans_read.contract import ID_PATTERN
 from .store import NEW_CONVERSATION_AUTOMATION_LOCKED,Refused,utcnow
 from .native_context import canonical
-from .provider_connector import session_from_capture,NativeProviderConnector,NativeAuthenticationError,NativeProtocolError
+from .provider_connector import session_from_capture,NativeProviderConnector,NativeAuthenticationError,NativeProtocolError,NativeRateLimitError
 
 # The stored deadline is a renewable verification lease, not a forced logout.
 # Short in-memory transport deadlines and all existing send gates remain intact.
@@ -92,7 +92,10 @@ def provision_account(store,tenant,*,creator_id,creator_name,owner_id,handle,com
         s.add(Account(id=account,nickname=creator_name));s.flush()
         s.add(OfCreatorBinding(id=binding_id,tenant_id=tenant,creator_id=creator_id,creator_name=creator_name,
             account_id=account,handle=handle,channel='onlyfans'));s.flush()
-        s.add(OfRuntime(account_id=account,binding_id=binding_id,activated_at=utcnow(),enabled=False))
+        runtime=OfRuntime(account_id=account,binding_id=binding_id,activated_at=utcnow(),enabled=False)
+        s.add(runtime);s.flush()
+        from .history_policy import ensure
+        ensure(s,runtime,new_account=True)
         from .contextual_mode import new_account_settings
         s.add(AccountAiConfig(account_id=account,
             ai_chatter_config_json=canonical(new_account_settings())));s.flush()
@@ -126,7 +129,7 @@ def get_capture_context(store,tenant,creator,account=None):
     return {'accountId':account,'ownerId':owner,'proxyUrl':proxy,'fingerprint':capture_network_fingerprint(proxy)}
 
 
-def get_connection(store,tenant,account,*,include_sync=False,include_runner=False,include_policy=False,runner_status_path=None):
+def get_connection(store,tenant,account,*,include_sync=False,include_runner=False,include_policy=False,include_recent=False,runner_status_path=None):
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account)
         row=s.get(OfProviderConnection,account);policy=s.get(OfDeliveryPolicy,account)
@@ -145,6 +148,14 @@ def get_connection(store,tenant,account,*,include_sync=False,include_runner=Fals
             'policyRevision':policy.revision if policy else 0,'usedUnits':policy.used_units if policy else 0,
             'limitUnits':policy.limit_units if policy else 0,'mediaEnabled':bool(policy and policy.media_enabled),
             'automateNewConversations':bool(row and row.automate_new_conversations and not NEW_CONVERSATION_AUTOMATION_LOCKED)}
+        recent = None
+        if include_sync or include_recent:
+            from .history_progress import recent_progress
+            recent = recent_progress(s, runtime)
+            # Existing dashboard clients enforce exact connection keys.
+            # Only callers explicitly negotiating recent history receive it.
+            if include_recent and recent is not None:
+                result['recentHistory'] = recent
         if include_policy:
             result['throttleSeconds']=policy.throttle_seconds if policy else None
         if include_runner:
@@ -161,6 +172,11 @@ def get_connection(store,tenant,account,*,include_sync=False,include_runner=Fals
                 'conversationsComplete':recovery.get('complete',0),'conversationsRemaining':sum(count for state,count in recovery.items() if state!='complete'),
                 'pendingMessages':runtime.pending_events,'quarantinedMessages':quarantined,'recoveryRequired':runtime.recovery_needed,
                 'lastCompleteSyncAt':runtime.last_sync_at.isoformat()+'Z' if runtime.last_sync_at else None}
+            if recent is not None and not recent['lifetimeHistory']['complete']:
+                # The old UI's "Last import complete" condition must not be
+                # satisfied by a completed recent-window/live catch-up pass.
+                result['sync']['recoveryRequired'] = True
+                result['sync']['lastCompleteSyncAt'] = None
         return result
 
 def personality_credential_status(s,account,binding_id,*,_unavailable_as_none=False,_lock_runtime=True):
@@ -493,7 +509,8 @@ def load_worker_cohort(store,tenant,*,limit=32,after_account=None,stop=None,fact
                     check_error=error
                     raise
                 finally:
-                    if budget is not None:release(store,tenant,budget,retry_after=getattr(check_error,'retry_after',None))
+                    if budget is not None:release(store,tenant,budget,retry_after=getattr(check_error,'retry_after',None),
+                        rate_limited=isinstance(check_error,NativeRateLimitError))
                 if check_due:
                     transport=NativeProviderConnector(session_from_capture(account_id=account,owner_id=clear['ownerId'],policy_revision=policy_revision,
                         capture=clear['capture'],x_hash=clear['xHash'],proxy_url=clear['proxyUrl'],expires_at=expires))

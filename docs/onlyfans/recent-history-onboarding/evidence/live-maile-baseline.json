@@ -1,0 +1,47 @@
+{
+  "status": "read_only_baseline_observed_not_deployed",
+  "ssmInstance": "i-09a9dd3bd749643a5",
+  "measuredAt": "2026-11-02T05:39:53.550451Z",
+  "fixedComparisonCutoff": "2026-10-03T05:39:53.550451Z",
+  "accountId": "of-323358988",
+  "storedMessagesAtFirstQuery": 94571,
+  "storedRecentMessagesAtFirstQuery": 87646,
+  "storedRecentFansAtFirstQuery": 16571,
+  "storedRecentIncomingAtFirstQuery": 2947,
+  "coverageComplete": false,
+  "historyCursorStates": {
+    "complete": 161,
+    "needed": 23731,
+    "running": 5
+  },
+  "historyImporterRunning": false,
+  "profileLearnerRunning": false,
+  "replySupervisorRunning": false,
+  "schema": "0106_parallel_history_reads",
+  "workerImagePrefix": "f728669d70d9",
+  "apiImagePrefix": "04532a2d9034",
+  "laterSnapshot": {
+    "storedIncomingAll": 3535,
+    "storedIncomingInFixedWindow": 2947,
+    "storedOutgoingAll": 91123,
+    "storedOutgoingInFixedWindow": 84786,
+    "note": "A separate query after the first snapshot; live data continued changing. Counts are not a complete lifetime inventory."
+  },
+  "memoryCostCurrentUtcDay": {
+    "settledLedgerUnits": 16270,
+    "settledCalls": 853,
+    "unresolvedReservationUnits": 1316,
+    "unresolvedCalls": 17,
+    "usdPerUnit": "0.0001",
+    "note": "Existing accounting ledger amounts before this feature. Settled amounts may include token estimates. These are not measured feature cost or verified provider invoice charges."
+  },
+  "patchCompatibility": {
+    "matchedFiles": 13,
+    "checkedFiles": 14,
+    "mismatch": "service/onlyfans_runtime/native_planning.py",
+    "basis": "Exact uniqueness of before-contexts for task-specific changes; not a complete semantic or migration qualification."
+  },
+  "featureImportDurationSeconds": null,
+  "featureActualModelCostUsd": null,
+  "productionChangesMade": false
+}

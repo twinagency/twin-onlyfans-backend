@@ -4,6 +4,7 @@ The process cache is only a scheduling optimization. On restart the newest
 page is read again; canonical ingress provides durable deduplication. Archive
 cursors and high-water marks are never advanced by this lane.
 """
+from .provider_read_budget import is_rate_limit
 from collections import deque
 from dataclasses import dataclass, field
 import hashlib
@@ -77,7 +78,7 @@ def _read(store, tenant, account, revision, callback, consume):
         error = exc
         raise
     finally:
-        release(store, tenant, claim, retry_after=getattr(error, "retry_after", None))
+        release(store, tenant, claim, retry_after=getattr(error, "retry_after", None), rate_limited=is_rate_limit(error))
 
 
 def _missing(store, tenant, account, revision, page, claim):

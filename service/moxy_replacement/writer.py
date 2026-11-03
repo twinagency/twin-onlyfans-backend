@@ -80,6 +80,9 @@ def messages(snapshot):
         'When the fan flirts, uses innuendo or says what he wants to see, follow that thread in the creator voice instead of '
         'returning to an unrelated literal topic or repeating an ignored question such as his name; where sexting is not '
         'permitted keep it suggestive, not explicit, and turn the interest into an invite or offer of a matching eligible product. '
+        'Chatters move to a card quickly: when the fan shows sexual or content interest, accepts an invitation or asks to see something, '
+        'and a relevant eligible item exists, a card in this turn or the next is the norm; several flirty text-only turns without one is a failure. '
+        'Vary openings and emoji; never reuse an emoji from your last few messages. '
         'When the fan wants content and a relevant eligible item exists under the applicable creator/tier rules and no fan restriction applies, '
         'invite or offer it by product_id; otherwise answer honestly or ask one necessary clarification. Keep it brief, no lecture. A restriction on one requested '
         'category is not a ban on all eligible products or ordinary warmth. '
@@ -102,6 +105,32 @@ def messages(snapshot):
         'not fixed phrases, old availability, prices or fan preferences. Current instructions and verified inventory govern. '
         'No tool calls, marker syntax, HTML, commentary or alternative drafts.\n'+canonical(cfg)+'\nWriting references:\n'+canonical(examples)},
         {'role':'user','content':canonical(project(snapshot))}]
+
+
+import re as _re
+_EMOJI=_re.compile('(?:[\U0001F000-\U0001FAFF]|[\u2600-\u27BF])\ufe0f?')
+
+
+def dedupe_emoji(decision, history, *, recent=3):
+    """Drop any emoji the account already used in its last few outgoing messages.
+
+    Cosmetic only: wording, action, product and media placement are unchanged;
+    a part that would become empty keeps its original text.
+    """
+    outs=[m.get('text') or '' for m in history if m.get('direction')=='out'][-recent:]
+    used={e.rstrip('\ufe0f') for t in outs for e in _EMOJI.findall(t)}
+    if not used:return decision
+    def clean(t):
+        if not isinstance(t,str):return t
+        new=_EMOJI.sub(lambda m:'' if m.group(0).rstrip('\ufe0f') in used else m.group(0),t)
+        new=_re.sub(r'[ \t]{2,}',' ',new).strip()
+        return new or t
+    decision['text']=clean(decision['text'])
+    if isinstance(decision.get('messages'),list):
+        for m in decision['messages']:
+            if isinstance(m,dict):m['text']=clean(m.get('text'))
+        if decision['messages'] and isinstance(decision['messages'][0],dict):decision['text']=decision['messages'][0]['text']
+    return decision
 
 
 def parse(raw, *, defer_sales_pause=False):

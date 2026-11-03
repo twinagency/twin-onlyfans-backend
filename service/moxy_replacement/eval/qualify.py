@@ -624,6 +624,11 @@ def real_setup(args,out):
     # The known false historical flags are excluded ONLY from synthetic scenarios.
     # No fan facts, controls, purchases or holds are changed in the real database.
     base['fan_state'].update(ordinary_chat_only=False,sales_refused=False,boundary_hold=False)
+    # EVALUATION ONLY, in memory: an unrelated unlinked ledger purchase can hold all commerce on the
+    # account (known separate blocker). It is recorded here and lifted only inside this isolated snapshot
+    # so the writer's commercial behaviour can be evaluated; live state and reconciliation are untouched.
+    base['_eval_lifted_commerce_hold']=base['fan_state'].get('commerce_uncertain') is not False
+    base['fan_state']['commerce_uncertain']=False
     base['invitation']=None
     cfg,pa=configuration(settings)
     return SimpleNamespace(base=base,settings=settings,cfg=cfg,pa=pa,dry_run=False,chosen=chosen,engine=engine,

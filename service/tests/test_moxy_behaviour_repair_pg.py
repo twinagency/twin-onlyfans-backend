@@ -376,3 +376,11 @@ def test_examples_give_both_creators_sales_flow_and_stay_compact():
         assert all('—' not in t and '–' not in t for e in r['examples'] for d,t in e['lines'] if d=='out')
     assert any('[paid card' in t for e in references('amelia')['examples'] for d,t in e['lines'])
     assert 'failure' in [e['kind'] for e in references('amelia')['examples']]
+
+
+def test_recent_emoji_is_not_reused_and_parts_stay_consistent():
+    h=[{'direction':'out','text':'hey you 😏'},{'direction':'in','text':'hi'},{'direction':'out','text':'lol 😂'}]
+    d={'text':'oh you 😏 bad 😈','messages':[{'text':'oh you 😏 bad 😈','media':False},{'text':'😂','media':True}]}
+    out=writer.dedupe_emoji(d,h)
+    assert out['text']=='oh you bad 😈' and out['messages'][0]['text']==out['text']
+    assert out['messages'][1]['text']=='😂'  # a part is never emptied

@@ -566,7 +566,7 @@ class MoxyService:
             async with asyncio.timeout(timeout):return await model.generate(prompts)
         # Keep structurally valid input observations even when the proposed
         # sale is refused. Authority still gates preparation and every send.
-        try:result=writer.parse(asyncio.run(generate()),defer_sales_pause=True)
+        try:result=writer.dedupe_emoji(writer.parse(asyncio.run(generate()),defer_sales_pause=True),snap['history'])
         except (TimeoutError,asyncio.TimeoutError):reason='moxy_model_unknown'
         except Exception as exc:reason=str(exc) if isinstance(exc,ActionBlocked) else 'moxy_draft_refused'
         with Session(self.engine) as s,s.begin():

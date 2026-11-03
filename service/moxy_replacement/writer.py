@@ -155,6 +155,11 @@ def parse(raw, *, defer_sales_pause=False):
         or any(v is not None and (type(v) is not str or not v or len(v)>2000)
                for v in (value[k] for k in ('product_id','sequence','permission','question','resolve_obligation')))):
         raise ActionBlocked('invalid_model_decision')
+    msgs=value.get('messages')
+    if (isinstance(msgs,list) and msgs and isinstance(msgs[0],dict) and isinstance(msgs[0].get('text'),str)
+            and msgs[0]['text'].strip() and msgs[0]['text']!=value['text']):
+        # The ordered message plan is what is sent; the summary text field is derived from it.
+        value['text']=msgs[0]['text']
     kind=value.get('request_kind','none');quote=value.get('request_quote')
     if kind not in {'none','direct','resend','accept'} or (quote is not None and (type(quote) is not str or not quote or len(quote)>2000)):
         raise ActionBlocked('invalid_request_evidence')

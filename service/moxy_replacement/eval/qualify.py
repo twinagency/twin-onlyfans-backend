@@ -35,7 +35,7 @@ LIVE_PRODUCT='moxy-37ce6f1b28be64a23db6ca4b'      # the $75 card actually sent o
 
 # Combined caps over this run PLUS every imported earlier journal (operator to confirm the numbers).
 MAX_CALLS_TOTAL=90
-MAX_MILLICENTS_TOTAL=5000
+MAX_MILLICENTS_TOTAL=10000
 DEFAULT_JOURNAL='/var/lib/twin-release/moxy-qualification/budget.json'
 IMPORT_GLOBS=['/var/lib/twin-release/moxy-gervonta-repair-*/qual*/**/budget.json',
               '/var/lib/twin-release/moxy-behaviour-qualification-20261103/**/budget.json']
@@ -206,6 +206,16 @@ def build_unpaid_b(ctx):
         note='The earlier bot reply is the real false one from the incident (dash replaced by a full stop, ellipsis as in the handoff), kept so the model must not repeat or build on it.')
 
 
+def build_correction(ctx):
+    """The live correction path: same unpaid-card chat, the re-offer of the sent card was already rejected."""
+    built=build_unpaid_b(ctx)
+    if getattr(built,'skip',None):return built
+    key=next(iter(built.prior_products))
+    built.payload={'correction_of':'qualification-synthetic','rejected':{'reason':'media_previously_sent_requires_explicit_resend','action':'offer','product_id':key}}
+    built.note='Correction attempt: the previous decision re-offered the already-sent card and was rejected; payload.rejected is set as the runtime does.'
+    return built
+
+
 def canned_unpaid_a(ctx,built):
     return _dec('reply',"mmm you're bad \U0001f60f keep talking like that and see what happens")
 
@@ -359,6 +369,7 @@ CASES=[
  ('affection','affection','Sup baby, I love you',build_affection,canned_affection,None),
  ('ordinary_chat','ordinary_chat','Just talk for now, no offers please.',build_ordinary,canned_ordinary,None),
  ('repeat_no_restart','repeat_no_restart','Finished training. What photos have you got?',build_repeat,canned_repeat,None),
+ ('correction_after_resend_block','unpaid_card_followups',None,build_correction,canned_unpaid_a,None),
 ]
 GROUPS={c[1] for c in CASES}|{c[0] for c in CASES}
 
@@ -389,7 +400,7 @@ def assemble(ctx,case):
     snap['history']=items
     snap['fan_state'].update(deepcopy(built.fan_state))
     snap['invitation']=deepcopy(built.invitation)
-    snap['event']={'kind':'turn','payload':{'qualification_only':True}}
+    snap['event']={'kind':'turn','payload':{'qualification_only':True,**deepcopy(getattr(built,'payload',None) or {})}}
     built.commercial_state='unavailable'
     try:
         from ..state import commercial_state

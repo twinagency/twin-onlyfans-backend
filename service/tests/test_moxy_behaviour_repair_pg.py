@@ -384,3 +384,10 @@ def test_recent_emoji_is_not_reused_and_parts_stay_consistent():
     out=writer.dedupe_emoji(d,h)
     assert out['text']=='oh you bad 😈' and out['messages'][0]['text']==out['text']
     assert out['messages'][1]['text']=='😂'  # a part is never emptied
+
+
+def test_message_plan_is_the_source_of_truth_for_text():
+    d={'action':'reply','text':'old summary','product_id':None,'sequence':None,'flags':[],'reason':'x',
+       'permission':None,'question':None,'resolve_obligation':None,'messages':[{'text':'hey there','media':False},{'text':'how was it','media':False}]}
+    v=writer.parse(json.dumps(d))
+    assert v['text']=='hey there' and v['messages'][0]['text']=='hey there'

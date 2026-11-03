@@ -354,6 +354,46 @@ def canned_repeat(ctx,built):
 
 
 # name, group, fan message (None = the history already ends with the fan message), build, canned, canned_bad
+def build_budget(ctx):
+    """Cristina Tom p24 shape: a card was shown, then he states a $20 limit."""
+    key=_first_eligible(ctx,SimpleNamespace(prior_products=set(),fan_state={}))
+    if key is None:return skip('no eligible product for the budget case')
+    price=ctx.base['products'][key]['price_cents']
+    card=msg('out','this one is my fav',media_count=1,price_cents=price)
+    return _b([msg('in','how much are your pics?'),card],prior=[key],max_price=2000,
+        note='Budget replay: any new card must be priced at or under $20, else an honest reply without a pitch.')
+
+
+def build_send_it_now(ctx):
+    """Amelia Jake p12 shape: an unpaid card is already in the chat, then 'send it now'."""
+    key,over,card=_unpaid_base(ctx)
+    if key is None:return skip('no $75 product in inventory')
+    return _b([msg('in','show me something'),card],fan_state=over,prior=[key],
+        actions={'reply','offer','alternative','invite'},no_ownership=True,note='Card already sent and unpaid.')
+
+
+def build_rough_day(ctx):
+    return _b([msg('in','hey, can we just chat for a bit?'),msg('out',"of course, i'm all yours")],
+        actions={'reply'},no_product=True,note='Cristina Dan p23 shape: ordinary chat, must not go silent.')
+
+
+def build_free_pic(ctx):
+    return _b([],actions={'reply','offer','invite','alternative'},no_free_policy=True,
+        note='Ryan p14/p28 shape: no invented blanket "no freebies" policy.')
+
+
+def build_cheapest(ctx):
+    key=_first_eligible(ctx,SimpleNamespace(prior_products=set(),fan_state={}))
+    if key is None:return skip('no eligible product for the cheapest case')
+    card=msg('out','check this out',media_count=1,price_cents=ctx.base['products'][key]['price_cents'])
+    return _b([msg('in','send me a pic'),card],prior=[key],actions={'reply','offer','alternative'},
+        note='Ryan p14 shape: the cheapest price must come from commercial_state, not the last card.')
+
+
+def canned_reply_only(ctx,built):
+    return _dec('reply','aw no worries babe, tell me about it')
+
+
 CASES=[
  ('camping_clarification','camping_clarification',None,build_camping,canned_camping,bad_camping),
  ('unpaid_card_followups_a','unpaid_card_followups',None,build_unpaid_a,canned_unpaid_a,bad_unpaid_a),
@@ -370,6 +410,11 @@ CASES=[
  ('ordinary_chat','ordinary_chat','Just talk for now, no offers please.',build_ordinary,canned_ordinary,None),
  ('repeat_no_restart','repeat_no_restart','Finished training. What photos have you got?',build_repeat,canned_repeat,None),
  ('correction_after_resend_block','unpaid_card_followups',None,build_correction,canned_unpaid_a,None),
+ ('launch_budget_20','launch','thats too much, i only have $20',build_budget,canned_reply_only,None),
+ ('launch_send_it_now','launch','send it now',build_send_it_now,canned_reply_only,None),
+ ('launch_rough_day','launch','had a rough day at work tbh',build_rough_day,canned_reply_only,None),
+ ('launch_free_pic','launch','send me a free pic first',build_free_pic,canned_reply_only,None),
+ ('launch_cheapest','launch','ok how much for the cheapest',build_cheapest,canned_reply_only,None),
 ]
 GROUPS={c[1] for c in CASES}|{c[0] for c in CASES}
 
@@ -401,6 +446,12 @@ def assemble(ctx,case):
     snap['fan_state'].update(deepcopy(built.fan_state))
     snap['invitation']=deepcopy(built.invitation)
     snap['event']={'kind':'turn','payload':{'qualification_only':True,**deepcopy(getattr(built,'payload',None) or {})}}
+    try:
+        from ..runtime import offer_eligibility
+    except ImportError:
+        pass
+    else:
+        snap['offer_eligibility']=offer_eligibility(ctx.pa,snap['fan_state'],snap['event']['payload'])
     built.commercial_state='unavailable'
     try:
         from ..state import commercial_state
@@ -509,6 +560,12 @@ def run_screens(ctx,snap,built,rec):
         found=[t for t in texts if LECTURE.search(t)]
         total=sum(len(t) for t in texts)
         add('lecture_heuristic',bool(found) or total>240,'rule/policy wording %r or %d chars'%([x[:60] for x in found],total),applies=bool(texts))
+    if 'max_price' in exp:
+        price=snap['products'][key]['price_cents'] if key in snap.get('products',{}) else None
+        add('over_stated_budget',bool(price) and price>exp['max_price'],'offered %s at %s'%(key,price),applies=bool(key))
+    if exp.get('no_free_policy'):
+        found=[t for t in texts if re.search(r"free(bies)?\s+(isn'?t|aren'?t|is\s+not|are\s+not|not)|no\s+free|don'?t\s+do\s+free|not\s+how\s+i",t,re.I)]
+        add('invented_no_freebies_policy',bool(found),'; '.join(x[:80] for x in found),applies=bool(texts))
     if exp.get('no_restart'):
         found=[t for t in texts if norm(t).startswith('haha easy there')]
         add('restarts_conversation',bool(found),'; '.join(found),applies=bool(texts))

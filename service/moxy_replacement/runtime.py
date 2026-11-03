@@ -278,7 +278,7 @@ def snapshot(s,account,fan,event):
         'history':history,'memory':memory,'invitation':memo.get('invitation'),
         'obligations':memo.get('obligations',[]),'products':{k:pa.products[k] for k in inventory},
         'inventory':inventory,'sequences':pa.sequences,'operational':settings['operational'],
-        'approved_remedies':settings.get('approved_remedies',{}),'native_fingerprint':digest(native)}
+        'approved_remedies':settings.get('approved_remedies',{}),'native_fingerprint':digest(json.loads(canonical(native)))}
     from .campaigns import context as campaign_context
     result['campaign']=campaign_context(s,account,fan,json.loads(event.payload_json))
     return json.loads(canonical(result))

@@ -561,3 +561,22 @@ def test_repeating_a_recent_outgoing_line_gets_one_correction(database,monkeypat
     service.prepare(TENANT,ACCOUNT,fix.event_id,model(decision('reply','mm say it then, what kind of rough')))
     assert status(engine,fix.event_id)=='ready' and not _cases(engine)
     store.close()
+
+
+@pytest.mark.parametrize('line',['no freebies babe, but i have something better','free isnt really how i roll',"haha i don't do free stuff",
+    'free stuff is not a thing here'])
+def test_invented_free_content_policy_gets_one_correction(database,monkeypatch,line):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'send me a free pic first')
+    first,_=run(service,engine,decision('reply',line),payload={'source_message_id':2})
+    with Session(engine) as s:assert s.get(MoxyEvent,(ACCOUNT,first)).reason=='invented_policy_claim'
+    fix=_corrections(engine)[0]
+    service.prepare(TENANT,ACCOUNT,fix.event_id,model(decision('reply','ha nice try, i can send you something though')))
+    assert status(engine,fix.event_id)=='ready' and not _cases(engine)
+    store.close()
+
+
+def test_ordinary_lines_with_free_in_them_are_not_policy_claims():
+    from moxy_replacement.runtime import INVENTED_POLICY
+    for ok in ['im free later tonight','feel free to tell me more','free tonight babe?','gluten free lol']:
+        assert not INVENTED_POLICY.search(ok),ok

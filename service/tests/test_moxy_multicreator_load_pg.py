@@ -162,9 +162,10 @@ def make_stub(ctx, c):
         for t in others:
             if 'Synth' + t in blob:
                 ctx.violations.append(('prompt_has_other_creator_token', c.tag, fan, t))
-        for key, terms in snap['inventory'].items():
-            if terms['price_cents'] != c.prices[key] or terms['media_ids'] != [c.media[key]] \
-                    or terms['item']['account_id'] != c.account or terms['item']['id'] != c.items[key]:
+        # Current writer projection preserves verified facts under products.
+        for key, terms in snap['products'].items():
+            if (terms['price_cents'] != c.prices[key] or terms['media_ids'] != [c.media[key]]
+                    or terms['catalogue_item_id'] != c.items[key]):
                 ctx.violations.append(('prompt_inventory_not_own', c.tag, fan, key))
         mark = ' (%s-%d)' % (c.tag, fan)
         kind = snap['event']['kind']
@@ -205,6 +206,10 @@ def make_stub(ctx, c):
             elif scn == 'takeover_mid':
                 ctx.set_mode(c.account, fan, 'human_controlled')
             d = decision('reply', 'Aw that sounds lovely, tell me more' + mark)
+        if d['flags'] and incoming:
+            kinds={'refusal':'sales_refused','hardship':'financial_hardship'}
+            d['observations']=[{'kind':kinds[flag],'active':True,'message_id':incoming[-1]['id'],
+                'quote':last,'product_id':None} for flag in d['flags'] if flag in kinds]
         m.completed = True
         return json.dumps(d)
 
@@ -251,7 +256,7 @@ def build_creator(ctx, url, engine, c, base_docs):
             s.flush()
             ref = 'asset:' + digest({'media_id': mid, 'content_hash': v.content_hash, 'description': desc,
                                      'updated_at': now.isoformat()})
-            products.append({'id': name, 'revision': 1, 'category': 'nude_booty', 'price_cents': c.prices[name],
+            products.append({'id': name, 'revision': 1, 'category': 'bikini_lingerie_booty', 'price_cents': c.prices[name],
                              'currency': 'USD', 'assets': [{'id': mid, 'revision': 1, 'facts': [desc], 'evidence_ref': ref}],
                              'source': {'document': '03_Cristina.pdf' if c.key == 'cristina' else '01_Amelia.pdf', 'pages': [2]},
                              'approval_ref': 'fixture:approved-' + name, 'available': True, 'requires': {},

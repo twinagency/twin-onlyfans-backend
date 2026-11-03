@@ -20,7 +20,10 @@ from onlyfans_runtime.store import Refused,utcnow
 def test_configuration_only_third_creator_runs_real_writer_and_delivery_plan(database,monkeypatch):
     engine,store,service,authority,claim,settings=setup(database,monkeypatch)
     third=deepcopy(load('amelia').creator)
-    third['creator_key']='synthetic_third';third['rules']=[];third['unresolved']=[]
+    third['creator_key']='synthetic_third'
+    # The synthetic creator still needs its own explicit product/pricing authority.
+    third['rules']=[rule for rule in third['rules'] if rule['key']=='product:bikini_lingerie_booty']
+    third['unresolved']=[]
     settings['creator_document']=third
     service.configure(TENANT,ACCOUNT,expected_revision=1,mode='on',settings=settings,actor='fixture-operator')
     identity,m=run(service,engine,decision())
@@ -117,4 +120,14 @@ def test_view_exposes_unresolved_media_states_and_operator_case_on_held(database
     d=[x for x in v['decisions'] if x['id']==identity][0]
     if d['status']=='held':
         assert d['operatorCase']['owner']=='fixture-operator' and d['operatorCase']['category']=='hardship'
+    store.close()
+
+
+def test_third_creator_without_product_authority_cannot_enable_sales(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    third=deepcopy(load('amelia').creator)
+    third['creator_key']='synthetic_unpriced';third['rules']=[];third['unresolved']=[]
+    settings['creator_document']=third
+    with pytest.raises(Refused,match='real_inventory_mapping_incomplete'):
+        service.configure(TENANT,ACCOUNT,expected_revision=1,mode='on',settings=settings,actor='fixture-operator')
     store.close()

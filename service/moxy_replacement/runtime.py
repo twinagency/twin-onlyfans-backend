@@ -686,11 +686,15 @@ def delivered(s,intent):
     if not intent.moxy_event_id:return
     e=s.get(MoxyEvent,(intent.account_id,intent.moxy_event_id))
     if e.status=='done':return
-    from .parts import active, has_remaining, continuation_unchanged
+    from .parts import active, has_remaining, continuation_unchanged, plan, index
     d=active(e)
-    before=json.loads(e.snapshot_json)
-    after=snapshot(s,intent.account_id,intent.fan_id,e)
-    continuation_ok=continuation_unchanged(before,after,intent.provider_message_id,d)
+    continuation_ok=True
+    # A completed single-message reply needs no continuation snapshot. Keep the
+    # extra consistency read only for a tail we may actually dispatch.
+    if index(e)+1<len(plan(json.loads(e.decision_json))):
+        before=json.loads(e.snapshot_json)
+        after=snapshot(s,intent.account_id,intent.fan_id,e)
+        continuation_ok=continuation_unchanged(before,after,intent.provider_message_id,d)
     payload=json.loads(e.payload_json)
     progress=payload.setdefault('_moxy_delivery',{'receipts':[]})
     progress['receipts'].append({'intent_id':intent.intent_id,'message_id':intent.provider_message_id})

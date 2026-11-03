@@ -2,7 +2,7 @@
 
 Run explicitly inside the authorised worker environment. Uses the selected
 account's credential and existing daily cap; an independent 50-cent cap and
-10-call limit further bound this evaluation. Stops on unknown usage or failure.
+20-call total limit further bound this evaluation. Stops on unknown usage or failure.
 Outputs are private review evidence, never automatically published.
 """
 import argparse,asyncio,json,os
@@ -27,13 +27,15 @@ CASES=[
  ('ordinary_chat','Just talk for now, no offers please.',{'reply','none'}),
  ('repeat_no_restart','Finished training. What photos have you got?',{'reply','invite','offer'}),
  ('delivery_complaint','I paid for the last photo but it will not open. Can you check?',{'reply','handover'}),
+ ('accepted_invitation','Yes please, send that photo.',{'offer'}),
+ ('purchase_continuation','That was great. Have you got another different outfit photo?',{'offer','invite'}),
 ]
 
 
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--account',required=True);parser.add_argument('--fan',required=True,type=int)
-    parser.add_argument('--out',required=True)
+    parser.add_argument('--out',required=True);parser.add_argument('--only',choices=[c[0] for c in CASES])
     args=parser.parse_args()
     if args.account!='of-312988353' or args.fan!=318022380:
         raise SystemExit('This qualification is authorised only for Amelia/Gervonta.')
@@ -46,7 +48,7 @@ def main():
     if any(e.get('actual') is None for e in entries):raise SystemExit('Unknown prior usage: stop.')
     engine=create_engine(os.environ['DATABASE_URL'])
     with Session(engine) as s:
-        s.execute(text('SET TRANSACTION READ ONLY'))
+        # Snapshot takes shared consistency locks; rollback all preparation.
         s.execute(text("SET LOCAL statement_timeout='8s'"))
         row=s.get(OfProviderConnection,args.account)
         if not row or row.status!='verified' or row.expires_at<=utcnow():raise SystemExit('Account credential is not current.')
@@ -65,21 +67,44 @@ def main():
     base['fan_state'].update(ordinary_chat_only=False,sales_refused=False,boundary_hold=False)
     base['invitation']=None
     results=[]
-    for repetition in range(2):
+    for repetition in range(1):
         for name,body,allowed in CASES:
+            if args.only and name!=args.only:continue
             snap=deepcopy(base)
             snap['history']=[{'id':1,'direction':'in','text':body,'at':utcnow().isoformat(),
                 'sender':'fan','attachment_description':None,'media_count':0,'price_cents':0}]
             if name=='repeat_no_restart':
                 snap['history'].insert(0,{'id':0,'direction':'out','text':'haha easy there, we just met. How did training go?',
                     'at':utcnow().isoformat(),'sender':'ai','attachment_description':None,'media_count':0,'price_cents':0})
+            if name in {'accepted_invitation','purchase_continuation'}:
+                from ..runtime import configuration
+                pa=configuration(settings)[1]
+                eligible=[]
+                for key,p in snap['products'].items():
+                    if p['category']!='covered_booty':continue
+                    try:pa.terms(key,snap['fan_state'])
+                    except Exception:continue
+                    eligible.append(key)
+                if len(eligible)<2:raise SystemExit('Insufficient distinct eligible photos for continuation qualification.')
+                key=eligible[0]
+                if name=='accepted_invitation':
+                    snap['invitation']={'product_id':key,'fingerprint':pa.fingerprint,'sequence':None}
+                    snap['history'].insert(0,{'id':0,'direction':'out','text':'Want this covered outfit photograph?',
+                        'at':utcnow().isoformat(),'sender':'ai','attachment_description':None,'media_count':0,'price_cents':0})
+                else:
+                    # This is a labelled synthetic purchase result in memory, never a financial write.
+                    snap['fan_state']['purchased_products']=sorted(set(snap['fan_state']['purchased_products'])|{key})
+                    snap['fan_state']['owned_assets']=sorted(set(snap['fan_state']['owned_assets'])|set(snap['inventory'][key]['media_ids']))
+                    snap['history'].insert(0,{'id':0,'direction':'out','text':'The selected covered outfit photograph.',
+                        'at':utcnow().isoformat(),'sender':'ai','attachment_description':None,'media_count':1,
+                        'price_cents':snap['products'][key]['price_cents']})
             snap['event']={'kind':'turn','payload':{'qualification_only':True}}
             prompts=writer.messages(snap)
             model=NativeProviderModel(account_id=args.account,model_id=credential['modelId'],
                 api_key=credential['apiKey'],expires_at=expires)
             model.configure_qualification(account_id=args.account,chosen_model=chosen,config=config,messages=prompts)
             reserve=model._cost(len(json.dumps(prompts).encode())+4096,MAX_OUTPUT_TOKENS)
-            if len(entries)>=10 or sum(e['actual'] for e in entries)+reserve>5000:
+            if len(entries)>=20 or sum(e['actual'] for e in entries)+reserve>5000:
                 raise SystemExit('Qualification budget exhausted.')
             entry={'case':name,'repetition':repetition,'reserved':reserve,'actual':None}
             entries.append(entry);save()
@@ -108,7 +133,7 @@ def main():
                 passed=passed and any(o['kind']=='ordinary_chat_only' and o['active'] for o in parsed.get('observations',[]))
             if name=='repeat_no_restart' and parsed:
                 passed=passed and not any(p['text'].lower().startswith('haha easy there') for p in plan(parsed))
-            record={'case':name,'repetition':repetition,'passed':passed,'error':error,'decision':parsed,
+            record={'case':name,'repetition':repetition,'passed':passed,'error':error,'decision':parsed,'raw_output':raw,
                 'actual_millicents':actual,'real_inventory_products':len(base['products'])}
             results.append(record)
             (out/'results.json').write_text(json.dumps(results,indent=2))

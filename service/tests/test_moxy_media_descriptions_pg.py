@@ -60,9 +60,11 @@ def test_changed_description_leaves_selection_until_rebound_then_reaches_caption
     rebind(engine, service, settings, 1)
     identity, m = offer(service, engine, 'after', 'The red dress one, just for you.')
     snap = json.loads(m.calls[0][1]['content'])
-    first = snap['inventory']['first']
-    assert first['item']['description_for_ai'] == new                  # not the stale catalogue note
-    assert snap['products']['first']['assets'][0]['facts'] == [new]
+    first = snap['products']['first']
+    assert first['assets'][0]['facts'] == [new]
+    with Session(engine) as session:
+        durable=json.loads(session.get(MoxyEvent,(ACCOUNT,identity)).snapshot_json)
+        assert durable['inventory']['first']['item']['description_for_ai']==new
     intent = service.queue(TENANT, ACCOUNT, identity)
     transport = SyntheticTextTransport(ACCOUNT)
     assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'accepted'

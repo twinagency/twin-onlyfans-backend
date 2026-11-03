@@ -11,8 +11,10 @@ def plan(decision):
     if values is None:
         return [] if decision['action'] in {'none','handover'} else [
             {'text':decision['text'],'media':decision['action'] in MEDIA_ACTIONS}]
-    if (type(values) is not list or not 1<=len(values)<=8
-            or decision['action'] in {'none','handover'}):
+    if decision['action'] in {'none','handover'}:
+        if values==[]:return []
+        raise ActionBlocked('handover_must_not_have_messages')
+    if (type(values) is not list or not 1<=len(values)<=8):
         raise ActionBlocked('invalid_message_plan')
     for part in values:
         if (type(part) is not dict or set(part)!={'text','media'} or type(part['text']) is not str

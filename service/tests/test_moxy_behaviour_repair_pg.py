@@ -176,3 +176,12 @@ def test_paid_qualification_has_no_live_fan_event_or_delivery(database,monkeypat
         assert s.scalar(select(func.count()).select_from(OfTextIntent))==0
         assert json.loads(s.get(MoxyFan,(ACCOUNT,101)).state_json)=={}
     store.close()
+
+
+@pytest.mark.parametrize('action',['none','handover'])
+def test_empty_message_plan_represents_no_outbound_delivery(action):
+    result=writer.parse(json.dumps(decision(action,'',messages=[])))
+    from moxy_replacement.parts import plan
+    assert plan(result)==[]
+    with pytest.raises(ActionBlocked):
+        writer.parse(json.dumps(decision(action,'',messages=[{'text':'Must not send','media':False}])))

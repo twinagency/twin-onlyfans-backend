@@ -291,13 +291,32 @@ def _norm(text):
 
 COMMERCIAL_ACTIONS={'invite','offer','resend','alternative','continue','correct','fulfil'}
 
+# Validation failures about the chosen product or its current eligibility, where a different
+# eligible product or a text-only answer may still be right. Everything else (stop controls,
+# human ownership, safety, identity, timing, campaign and remedy authority, config) is final.
+RECOVERABLE_REASONS={'media_previously_sent_requires_explicit_resend','acceptance_product_mismatch','real_inventory_missing_or_stale',
+    'product_unavailable','product_mapping_missing','current_request_evidence_missing','request_quote_required',
+    'unexpected_product_reference','obligation_cannot_resolve_without_fulfilment','creator_content_prohibited',
+    'exact_purchase_links_missing','sequence_mapping_missing','no_push','sales_state_held:ordinary_chat_only',
+    'sales_state_held:sales_refused','sales_state_held:boundary_hold','commerce_needs_reconciliation','ownership_evidence_missing',
+    'already_owned_use_existing_access','product_previously_rejected','resend_not_requested','continuation_sequence_missing',
+    'sequence_context_missing','sequence_step_not_current','price_exceeds_budget','offer_already_pending',
+    'invitation_stale_or_ambiguous','product_terms_unresolved','price_below_authorised_minimum',
+    'price_differs_from_authorised_fixed','product_media_format_mismatch','product_photo_count_mismatch'}
+RECOVERABLE_PREFIXES=('condition_not_met:','condition_unknown:')
+
+
+def recoverable(reason):
+    return reason in RECOVERABLE_REASONS or reason.startswith(RECOVERABLE_PREFIXES)
+
 
 def validate_decision(settings,snap,decision):
     from .pilot import decision as pilot_decision
     pilot_decision(settings,snap,decision)
-    if snap.get('event',{}).get('payload',{}).get('blocked_hint') and (decision['action'] in COMMERCIAL_ACTIONS or decision['product_id'] is not None):
-        # A fallback turn exists only so the fan is not left in silence; it never sells.
-        raise ActionBlocked('fallback_must_be_plain_reply')
+    rejected=snap.get('event',{}).get('payload',{}).get('rejected')
+    if type(rejected) is dict and rejected.get('product_id') is not None and decision['product_id']==rejected['product_id']:
+        # A bounded correction may pick another product or answer in text, never the refused one again.
+        raise ActionBlocked('correction_repeated_rejected_choice')
     cfg,pa=configuration(settings)
     if (set(decision['flags']) & {'hardship','refusal','boundary_reset'}
             and decision['action'] in {'invite','offer','resend','alternative','continue'}):
@@ -548,12 +567,22 @@ class MoxyService:
             except (ActionBlocked,InvalidConfiguration) as exc:
                 event.status='held';event.reason=str(exc);event.decision_json=canonical(result)
                 payload=json.loads(event.payload_json)
-                # A blocked sale must not leave the fan in silence: queue exactly one
-                # plain-reply turn for the same input (never for a fallback, never in preview).
-                if (isinstance(exc,ActionBlocked) and owner.mode=='on' and event.kind=='turn' and not payload.get('blocked_hint')
-                        and payload.get('source_message_id') and result['action'] in COMMERCIAL_ACTIONS):
-                    enqueue(s,account,event.fan_id,'turn','fallback:'+event_id,
-                        {'source_message_id':payload['source_message_id'],'blocked_hint':str(exc)[:120]})
+                if payload.get('correction_of'):
+                    # The one bounded correction was itself refused: no further regeneration, a person takes over.
+                    if owner.mode=='on':
+                        from onlyfans_runtime.operator_cases import open_case
+                        first=s.get(MoxyEvent,(account,payload['correction_of']))
+                        open_case(s,account,event.fan_id,'other',reason='moxy_correction_failed',
+                            evidence={'event_id':event_id,'correction_of':payload['correction_of'],'reason':str(exc)[:120],
+                                'rejected_reason':first.reason if first is not None else None},
+                            origin='detector',scope='all',owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
+                elif (isinstance(exc,ActionBlocked) and owner.mode=='on' and event.kind=='turn' and payload.get('source_message_id')
+                        and recoverable(str(exc)) and (result['action'] in COMMERCIAL_ACTIONS or result['product_id'] is not None)):
+                    # One bounded corrective planning attempt through the normal worker path (model reservation,
+                    # spending limits, stale-input and eligibility checks all apply again). The rejected choice stays held.
+                    enqueue(s,account,event.fan_id,'turn','correction:'+event_id,
+                        {'source_message_id':payload['source_message_id'],'correction_of':event_id,
+                         'rejected':{'reason':str(exc)[:120],'action':result['action'],'product_id':result['product_id']}})
                 return event_id
             event.decision_json=canonical(result)
             if owner.mode=='preview':event.status='preview';return event_id

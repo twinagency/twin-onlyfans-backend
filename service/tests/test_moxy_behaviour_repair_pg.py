@@ -258,29 +258,83 @@ def test_em_and_en_dashes_are_stripped_from_fan_text():
     assert '—' not in v['text'] and '–' not in v['text'] and v['messages'][0]['text']==v['text']
 
 
-def _fallbacks(engine):
+def _corrections(engine):
     from sqlalchemy import select
     with Session(engine) as s:
-        return [e for e in s.scalars(select(MoxyEvent)) if 'blocked_hint' in json.loads(e.payload_json)]
+        return [e for e in s.scalars(select(MoxyEvent)) if 'correction_of' in json.loads(e.payload_json)]
 
 
-def test_blocked_sale_queues_one_plain_reply_fallback_so_fan_is_not_silent(database,monkeypatch):
-    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+def _cases(engine):
+    from sqlalchemy import select
+    from db.onlyfans_case_models import OfOperatorCase
+    with Session(engine) as s:
+        return [c for c in s.scalars(select(OfOperatorCase)) if c.reason=='moxy_correction_failed']
+
+
+def _blocked_first(engine,store,service):
     incoming(store,'would you suck me until I cum')
     first,_=run(service,engine,decision('offer','Here it is again.','missing-product',sequence='fixture_level'),payload={'source_message_id':2})
-    assert status(engine,first)=='held'
-    fb=_fallbacks(engine);assert len(fb)==1 and fb[0].status=='pending'
-    # The fallback may not sell, and a refused fallback never spawns another one.
-    service.prepare(TENANT,ACCOUNT,fb[0].event_id,model(decision('offer','Buy this.','first',sequence='fixture_level')))
-    assert status(engine,fb[0].event_id)=='held' and len(_fallbacks(engine))==1
+    return first
+
+
+def test_recoverable_block_queues_exactly_one_bounded_correction(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    first=_blocked_first(engine,store,service)
+    with Session(engine) as s:e=s.get(MoxyEvent,(ACCOUNT,first));assert e.status=='held' and e.reason=='real_inventory_missing_or_stale'
+    c=_corrections(engine);assert len(c)==1 and c[0].status=='pending'
+    p=json.loads(c[0].payload_json)
+    assert p['source_message_id']==2 and p['correction_of']==first
+    assert p['rejected']=={'reason':'real_inventory_missing_or_stale','action':'offer','product_id':'missing-product'}
+    assert not _cases(engine)
     store.close()
 
 
-def test_fallback_plain_reply_is_sent(database,monkeypatch):
+def test_correction_repeating_rejected_product_is_held_and_escalated_once(database,monkeypatch):
     engine,store,service,authority,claim,settings=setup(database,monkeypatch)
-    incoming(store,'would you suck me until I cum')
-    first,_=run(service,engine,decision('offer','Here it is again.','missing-product',sequence='fixture_level'),payload={'source_message_id':2})
-    fb=_fallbacks(engine)[0]
-    service.prepare(TENANT,ACCOUNT,fb.event_id,model(decision('reply','ha, bold. tell me more about your day first')))
-    assert status(engine,fb.event_id)=='ready'
+    first=_blocked_first(engine,store,service);c=_corrections(engine)[0]
+    service.prepare(TENANT,ACCOUNT,c.event_id,model(decision('offer','Again.','missing-product',sequence='fixture_level')))
+    with Session(engine) as s:e=s.get(MoxyEvent,(ACCOUNT,c.event_id));assert e.status=='held' and e.reason=='correction_repeated_rejected_choice'
+    assert len(_corrections(engine))==1
+    cases=_cases(engine);assert len(cases)==1 and cases[0].owner=='fixture-operator' and cases[0].category=='other'
+    ev=json.loads(cases[0].evidence_json)
+    assert ev['event_id']==c.event_id and ev['correction_of']==first
+    assert ev['reason']=='correction_repeated_rejected_choice' and ev['rejected_reason']=='real_inventory_missing_or_stale'
+    store.close()
+
+
+def test_correction_may_choose_a_different_eligible_product(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    _blocked_first(engine,store,service);c=_corrections(engine)[0]
+    service.prepare(TENANT,ACCOUNT,c.event_id,model(decision('offer','This one is close.','first',sequence='fixture_level')))
+    assert status(engine,c.event_id)=='ready' and not _cases(engine)
+    store.close()
+
+
+def test_correction_may_be_a_genuine_text_reply(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    _blocked_first(engine,store,service);c=_corrections(engine)[0]
+    m=model(decision('reply','ha, bold. tell me more about your day first'))
+    service.prepare(TENANT,ACCOUNT,c.event_id,m)
+    assert status(engine,c.event_id)=='ready' and not _cases(engine)
+    assert 'event.payload.rejected' in json.dumps(m.calls[0]) and 'missing-product' in json.dumps(m.calls[0])
+    store.close()
+
+
+def test_non_recoverable_block_creates_no_correction(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'Do not offer me any more content.')
+    first,_=run(service,engine,decision('offer','Buy this.','first',sequence='fixture_level',flags=['refusal'],
+        observations=[evidence('sales_refused','Do not offer me any more content.')]),payload={'source_message_id':2})
+    with Session(engine) as s:e=s.get(MoxyEvent,(ACCOUNT,first));assert e.status=='held' and e.reason=='sales_paused_by_current_input'
+    assert not _corrections(engine) and not _cases(engine)
+    store.close()
+
+
+def test_correction_for_superseded_input_is_stale_and_opens_no_case(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    _blocked_first(engine,store,service);c=_corrections(engine)[0]
+    incoming(store,'newer',mid=3)
+    service.prepare(TENANT,ACCOUNT,c.event_id,model(decision('reply','hey you')))
+    with Session(engine) as s:e=s.get(MoxyEvent,(ACCOUNT,c.event_id));assert e.status=='stale' and e.reason=='moxy_input_superseded'
+    assert not _cases(engine)
     store.close()

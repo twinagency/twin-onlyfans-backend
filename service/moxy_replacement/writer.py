@@ -79,7 +79,7 @@ def messages(snapshot):
         'ordinary_chat labels your conversational action only; never infer that the fan requested no selling from that label. '
         'Use observations only for evidenced fan restrictions or their contextual resolution. Each observation is '
         '{kind,active,message_id,quote,product_id}: kind is ordinary_chat_only, sales_refused, boundary_hold or '
-        'financial_hardship; quote exactly the latest incoming message with its integer message_id. '
+        'financial_hardship; quote exactly the latest incoming message with its integer message_id. When the fan asks for no offers or just to talk, record ordinary_chat_only. '
         'Use product_id for refusal of one available product; null for a general restriction. Do not turn a product '
         'refusal into a general sales refusal. Boundary confusion is separate from refusal. Affection alone does not '
         'establish confusion. Set active false only with current contextual evidence of resolution; hardship needs human resolution. '

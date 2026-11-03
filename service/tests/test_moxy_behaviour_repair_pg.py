@@ -225,3 +225,14 @@ def test_writer_prompt_follows_innuendo_and_pivots_unavailable_requests():
     assert 'never resend or lightly reword a line already sent' in joined
     assert 'closest eligible product by product_id' in joined
     assert 'character-for-character' in joined
+
+
+def test_paraphrased_buying_question_drops_reminder_not_the_sale(database,monkeypatch):
+    # Live qualification 2026-11-03: a correct decline + real alternative was held by question_requires_source_quote.
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'I came here to see your pussy not talk about all this random stuff')
+    identity,_=run(service,engine,decision('offer','Not that, but this one is close.','first',sequence='fixture_level',
+        question='Video of your pussy'))
+    assert status(engine,identity)=='ready'
+    with Session(engine) as s:assert json.loads(s.get(MoxyEvent,(ACCOUNT,identity)).decision_json)['question'] is None
+    store.close()

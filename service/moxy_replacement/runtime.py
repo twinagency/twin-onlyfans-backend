@@ -305,8 +305,9 @@ def validate_decision(settings,snap,decision):
     facts=dict(snap['fan_state']);action=decision['action'];key=decision['product_id']
     from .observations import observations, apply
     facts=apply(facts,observations(decision,snap))
-    if decision['question'] is not None and not any(m['direction']=='in' and decision['question'] in m['text'] for m in snap['history']):
-        raise ActionBlocked('question_requires_source_quote')
+    if decision['question'] is not None and not any(m['direction']=='in' and _norm(decision['question']) in _norm(m['text']) for m in snap['history']):
+        # An unquoted buying question only loses its reminder obligation; it never holds the turn.
+        decision['question']=None
     if decision['permission']:
         if cfg.resolve(decision['permission'],facts).value is False: raise ActionBlocked('permission_refused')
     if facts.get('talker_label') is True and facts.get('currently_spending') is False:

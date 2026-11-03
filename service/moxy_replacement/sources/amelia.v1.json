@@ -151,7 +151,13 @@
       "key": "product:long_video",
       "value": {
         "minimum_cents": 6000,
-        "requires": {}
+        "requires": {},
+        "media_kinds": [
+          "video"
+        ],
+        "required_kinds": [
+          "video"
+        ]
       },
       "requires": {},
       "source": {
@@ -165,8 +171,11 @@
     {
       "key": "product:feet_photos",
       "value": {
-        "minimum_cents": 2000,
-        "requires": {}
+        "requires": {},
+        "exact_cents": 2000,
+        "media_kinds": [
+          "photo"
+        ]
       },
       "requires": {},
       "source": {
@@ -180,8 +189,16 @@
     {
       "key": "product:feet_photos_video",
       "value": {
-        "minimum_cents": 3000,
-        "requires": {}
+        "requires": {},
+        "exact_cents": 3000,
+        "media_kinds": [
+          "photo",
+          "video"
+        ],
+        "required_kinds": [
+          "photo",
+          "video"
+        ]
       },
       "requires": {},
       "source": {
@@ -225,11 +242,11 @@
     {
       "key": "product:nipples",
       "value": {
-        "minimum_cents": 20000,
         "requires": {
           "vip": true,
           "high_spender": true
-        }
+        },
+        "exact_cents": 20000
       },
       "requires": {},
       "source": {
@@ -243,8 +260,8 @@
     {
       "key": "product:covered_booty",
       "value": {
-        "minimum_cents": 3000,
-        "requires": {}
+        "requires": {},
+        "exact_cents": 3000
       },
       "requires": {},
       "source": {
@@ -253,7 +270,7 @@
           2
         ]
       },
-      "instruction": "Covered booty $30+; no prohibited explicit areas."
+      "instruction": "Covered booty $30; no prohibited explicit areas."
     },
     {
       "key": "product:bikini_lingerie_booty",
@@ -273,8 +290,8 @@
     {
       "key": "product:nude_booty",
       "value": {
-        "minimum_cents": 7500,
-        "requires": {}
+        "requires": {},
+        "exact_cents": 7500
       },
       "requires": {},
       "source": {
@@ -288,10 +305,11 @@
     {
       "key": "product:used_underwear",
       "value": {
-        "minimum_cents": 100000,
         "requires": {
           "vip": true
-        }
+        },
+        "exact_cents": 100000,
+        "delivery_kind": "service"
       },
       "requires": {},
       "source": {

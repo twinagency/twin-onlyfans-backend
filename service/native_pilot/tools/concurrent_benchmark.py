@@ -68,6 +68,7 @@ class Measurements:
         self.fan = contextvars.ContextVar('benchmark-fan', default=None)
         self.marks = defaultdict(dict)
         self.events = Counter()
+        self.pacing_receipts = []     # diagnostic: per first reply, how far past its pacing target it landed
         self.reasons = Counter()
         self.error_samples = []
         self.exceptions = []
@@ -112,6 +113,11 @@ class Measurements:
 
     def emit(self, event):
         self.events[event.get('event')] += 1
+        if event.get('event') == 'reply-pacing-receipt':
+            self.pacing_receipts.append(dict(fan=event.get('fan_id'), miss_s=round(event['target_miss_s'], 2),
+                from_input_s=round(event['verified_receipt_to_receipt_s'], 2),
+                late=event.get('observed_late_components'),
+                components={k: round(v, 1) for k, v in (event.get('components') or {}).items() if v >= 1}))
         if event.get('reason'): self.reasons[str(event['reason'])] += 1
         if event.get('event') in ('held', 'turn-abandoned', 'turn-released', 'turn-requeued') and len(self.error_samples)<15:
             self.error_samples.append(event)
@@ -162,7 +168,7 @@ async def exercise(args, db):
            dict(mode=args.mode, rate=args.rate, burst=args.burst, max=args.send))
     settings = {'native_reply_pacing_enabled': args.paced,
                 'native_reply_format_enabled': True, 'language': 'en',
-                'split_reply_max_parts': 3}
+                'split_reply_max_parts': 3,'native_reply_delay_max_seconds':args.pacing_max}
     if args.media:
         from onlyfans_runtime.configuration import SALES_FLAGS
         settings.update({k:True for k in SALES_FLAGS})
@@ -279,7 +285,7 @@ async def exercise(args, db):
         # No WebSocket network. handle(), dedupe and transcoder stay unchanged.
         def start(self,client): pass
 
-    services=[]; tasks=[]; samples=[]; lag=[]; monitor_stop=asyncio.Event()
+    services=[]; tasks=[]; samples=[]; timeline=[]; lag=[]; monitor_stop=asyncio.Event()
     takeover_at={}; contenders=[]; wire_calls=[]; lock_samples=[]
     main_thread=threading.get_ident()
     def lock_watch():
@@ -316,6 +322,13 @@ async def exercise(args, db):
                 rows=await asyncio.to_thread(db.run,
                     "SELECT count(*),count(*) FILTER(WHERE state='active'),"
                     "count(*) FILTER(WHERE wait_event_type='Lock') FROM pg_stat_activity WHERE datname=current_database()")
+                if services and (not timeline or t-timeline[-1]['t']>=5):
+                    svc=services[0]
+                    timeline.append(dict(t=t,at_s=round(t-t0,1),tasks=len(svc.tasks),
+                        preparing=sum(1 for f in svc.tasks if not getattr(svc.children.get(f),'first_bubble_sent',False)),
+                        gate_held=svc.send_gate.held,gate_waiting=svc.send_gate.waiting,
+                        first_waiting=sum(1 for e in svc.send_gate._queue if not e[3].done() and not e[4]),
+                        posts=len(w.posts)))
                 samples.append(dict(t=t,rss_mb=rss_mb(),threads=threading.active_count(),
                                     connections=rows[0][0],active=rows[0][1],lock_waiters=rows[0][2]))
                 if rows[0][2] and len(lock_samples)<20:
@@ -327,7 +340,7 @@ async def exercise(args, db):
         # those services in one process, so give their blocking send bridges the
         # aggregate bounded executor they would otherwise have separately.
         # Account admission/rates and per-fan ownership are unchanged.
-        fleet_threads=3*min(args.creators*args.prepare,args.creators*args.fans)+12
+        fleet_threads=service.LIVE_TURNS_PER_SLOT*min(args.creators*args.prepare,args.creators*args.fans)+12
         if args.creators>1:
             from concurrent.futures import ThreadPoolExecutor
             asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(
@@ -356,6 +369,9 @@ async def exercise(args, db):
         m.wrap(stack,OnlyFansTextAdapter,'preflight_history','provider_preflight')
         m.wrap(stack,runner,'read_sources','context_sources')
         m.wrap(stack,pacing,'prepare','reply_schedule')
+        m.wrap(stack,service.Service,'safety_check','safety_scan')
+        import db.schema as schema_module
+        m.wrap(stack,schema_module,'check_schema','schema_validation')
         m.wrap(stack,store.PgConnection,'execute','database_statement')
         m.wrap(stack,NativeEngine,'load_config','engine_config')
         m.wrap(stack,NativeEngine,'_no_obligations','engine_obligations')
@@ -441,7 +457,7 @@ async def exercise(args, db):
             result=dict(name=args.name,config=vars(args),clock='real wall clock; no time scaling',
                 transports='synthetic model HTTP and synthetic provider HTTP; real NativeEngine and PostgreSQL',
                 fleet_simulation=dict(service_processes=1,creator_services=args.creators,
-                                      executor_bound=fleet_threads if args.creators>1 else 3*args.prepare+12),
+                                      executor_bound=fleet_threads if args.creators>1 else service.LIVE_TURNS_PER_SLOT*args.prepare+12),
                 eligible=len(eligible),completed=len(complete),outstanding=len(censored),
                 full_reply_completed=len(full_complete),full_reply_outstanding=len(eligible)-len(full_complete),
                 full_reply_latency_s=quantiles(full_lats),full_reply_within_20=sum(x<=20 for x in full_lats),
@@ -450,6 +466,9 @@ async def exercise(args, db):
                 within_20=sum(x<=20 for x in lat),within_180=sum(x<=180 for x in lat),
                 share_within_180=round(sum(x<=180 for x in lat)/len(eligible),4),
                 latency_s=quantiles(lat),right_censored_age_s=quantiles(censored),
+                late_first_replies=sorted([r for r in m.pacing_receipts if r['miss_s']>2],key=lambda r:-r['miss_s'])[:25],
+                target_miss_s=quantiles([r['miss_s'] for r in m.pacing_receipts]),
+                timeline=[{k:v for k,v in r.items() if k!='t'} for r in timeline],
                 completion_or_censor_s=quantiles(lat+censored),elapsed_s=round(elapsed,3),
                 throughput_turns_s=round(len(complete)/elapsed,4),posts=len(w.posts),
                 receipt_states=dict(Counter(r[2] for r in receipts)),
@@ -489,6 +508,7 @@ def main():
     p.add_argument('--read-latency',type=float,default=.02);p.add_argument('--poll',type=float,default=2)
     p.add_argument('--duration',type=float,default=190);p.add_argument('--paced',action='store_true')
     p.add_argument('--fleet-db-pool',type=int,default=0)
+    p.add_argument('--pacing-max',type=int,choices=[90,180],default=90)
     p.add_argument('--multi',action='store_true');p.add_argument('--held',action='store_true')
     p.add_argument('--media',action='store_true')
     p.add_argument('--fault',choices=['429','401','timeout_lost','timeout_accepted'])

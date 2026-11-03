@@ -45,7 +45,7 @@ def setup(database,monkeypatch,creator='amelia',mode='on',sequence=False):
                 media_ids=json.dumps([mid]),preview_media_ids='[]',price_cents=7500,pricing_mode='fixed',
                 enabled=True,is_free_teaser=False,created_at=now,updated_at=now);s.add(item);s.flush()
             ref='asset:'+digest({'media_id':mid,'content_hash':v.content_hash,'description':desc,'updated_at':now.isoformat()})
-            products.append({'id':key,'revision':1,'category':'nude_booty','price_cents':7500,'currency':'USD',
+            products.append({'id':key,'revision':1,'category':'bikini_lingerie_booty','price_cents':7500,'currency':'USD',
                 'assets':[{'id':mid,'revision':1,'facts':[desc],'evidence_ref':ref}],
                 'source':{'document':'01_Amelia.pdf' if creator=='amelia' else '03_Cristina.pdf','pages':[2]},
                 'approval_ref':'fixture:approved-'+key,'available':True,'requires':{},'caption_instructions':'Accurate outfit photograph; no unsupported promise.'})

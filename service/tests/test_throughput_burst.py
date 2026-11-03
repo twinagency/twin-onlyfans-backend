@@ -66,7 +66,14 @@ async def scenario(sim):
     # ── rate and bounds ────────────────────────────────────────────────────────────────────────────────────────
     check(p.rate_violations == 0 and p.min_gap is not None and p.min_gap >= GAP - 0.01, f"never under the {GAP} s gap ({p.min_gap})")
     q = sim.kinds("engine-queue", A)
-    check(q and max(e["in_flight"] for e in q) <= sim.tuning.concurrency, "in-flight bounded by the concurrency")
+    from native_pilot.service import LIVE_TURNS_CAP_PER_SLOT
+    live_cap = sim.tuning.concurrency * LIVE_TURNS_CAP_PER_SLOT
+    print("  max in_flight %d, max preparing %s (concurrency %d, live-turn cap %d)" % (
+        max(e["in_flight"] for e in q), max(e.get("preparing", -1) for e in q), sim.tuning.concurrency, live_cap), flush=True)
+    # Turns that already sent their first bubble only wait at the send gate for later bubbles (no worker thread), so
+    # in-flight is bounded by the hard live-turn cap; the turns still PREPARING stay bounded by the concurrency itself.
+    check(q and max(e["in_flight"] for e in q) <= live_cap, "live turns bounded by the live-turn cap")
+    check(q and max(e["preparing"] for e in q) <= sim.tuning.concurrency, "turns still preparing bounded by the concurrency")
     check(max(e["pending"] for e in q) <= sim.tuning.queue_max, f"queue window bounded by queue_max ({max(e['pending'] for e in q)})")
     check(sim.sql("SELECT queued_count FROM of_delivery_policy WHERE account_id=?", (A,))[0][0] <= 1000, "policy queued_count within its 1000 cap")
     check(max(e["pending"] for e in q) >= min(N, sim.tuning.queue_max) * 0.5 if N > 50 else True, "the window really filled (backpressure, not a trickle)")

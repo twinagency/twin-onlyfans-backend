@@ -11,6 +11,7 @@ from db.models import Transaction,OfCreatorBinding
 from db.onlyfans_models import OfRuntime
 from db.onlyfans_connection_models import OfProviderConnection
 from db.onlyfans_ledger_models import OfLedgerEvidence,OfLedgerScan,OfLedgerHistory
+from db.onlyfans_earnings_total_models import OfEarningsTotal
 from onlyfans_runtime.text_delivery import _stamp
 from onlyfans_runtime.store import Refused as InvalidStamp
 from .errors import BadRequest,Unavailable
@@ -74,7 +75,7 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False,incl
     result={"schemaVersion":SCHEMA,"window":{"start":stamp(begin),"end":stamp(finish)},"asOf":stamp(now),
         "accountCount":len(ids),"coveredAccountCount":0,"status":"unavailable","reasons":[],"currency":"USD",
         "clearedGrossCents":None,"clearedNetCents":None,"clearedCount":None,"pendingCount":None,"refundedCount":None,
-        "recentLedgerAt":None,"fullLedgerAt":None}
+        "recentLedgerAt":None,"fullLedgerAt":None,"providerTotals":[]}
     if account_ids is not None:result["scope"]={"accountIds":sorted(ids)}  # echo what was applied; absent means agency-wide
     if include_pending:
         result["recorded"]=None
@@ -82,6 +83,13 @@ async def read_earnings(session,*,tenant_id,start,end,include_pending=False,incl
         result["statistics"]=None
         result["history"]={"accountCount":len(ids),"completedAccountCount":0,"accounts":[]}
     if not ids:result["reasons"]=["no_bound_accounts"];return result
+    # Provider-reported period totals: independent of ledger coverage, so they stay readable while history imports.
+    current={b.account_id:(b.id) for b in bindings}
+    result["providerTotals"]=[{"accountId":t.account_id,"period":t.period,"grossCents":safe_integer(int(t.gross_cents)),
+        "netCents":safe_integer(int(t.net_cents)),"windowStart":stamp(t.window_start),"windowEnd":stamp(t.window_end),
+        "fetchedAt":stamp(t.fetched_at)} for t in await session.scalars(select(OfEarningsTotal)
+        .where(OfEarningsTotal.account_id.in_(ids)).order_by(OfEarningsTotal.account_id,OfEarningsTotal.period))
+        if t.binding_id==current.get(t.account_id)]
     rows=(await session.execute(select(OfLedgerScan,OfRuntime.binding_id.label("runtime_binding"),
         OfProviderConnection.binding_id.label("connection_binding"),OfProviderConnection.owner_id.label("connection_owner"),
         OfProviderConnection.revision.label("connection_revision"))

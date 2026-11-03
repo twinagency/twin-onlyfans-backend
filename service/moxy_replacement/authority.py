@@ -91,10 +91,8 @@ class ProductAuthority:
             if type(state[key]) is not type(expected) or state[key] != expected:
                 raise ActionBlocked('condition_not_met:' + key)
         permission = self.configuration.resolve('product:' + p['category'], state).value
-        if type(permission) is not dict or type(permission.get('minimum_cents')) is not int:
-            raise ActionBlocked('product_terms_unresolved')
-        if p['price_cents'] < permission['minimum_cents']:
-            raise ActionBlocked('price_below_authorised_minimum')
+        from .pricing import validate_price
+        validate_price(permission, p['price_cents'])
         for key, expected in permission.get('requires', {}).items():
             if state.get(key) is None:
                 raise ActionBlocked('condition_unknown:' + key)
@@ -138,14 +136,14 @@ class ProductAuthority:
         return self.terms(invitation['product_id'], state, sequence=invitation['sequence'])
 
 
-def readiness(configuration, *, account_bound, products, sequences, operational, coordination_verified):
+def readiness(configuration, *, account_bound, products, sequences, operational, coordination_verified, pilot=None):
     """No account enablement is inferred from a green readiness result."""
     blockers = []
     if account_bound is not True:
         blockers.append('account_binding_missing')
     if not products:
         blockers.append('authorised_product_asset_mapping_missing')
-    if not sequences:
+    if not sequences and pilot is None:
         blockers.append('authorised_vault_sequence_missing')
     try:
         ProductAuthority(configuration, products, sequences)
@@ -154,6 +152,8 @@ def readiness(configuration, *, account_bound, products, sequences, operational,
     if coordination_verified is not True:
         blockers.append('external_automation_coordination_unverified')
     for field in configuration.creator.get('required_operational_fields', []):
+        if field == 'vault_sequences' and pilot is not None and not sequences:
+            continue  # Only standalone pilot products; sequence actions remain blocked.
         if operational.get(field) is None or operational.get(field) == '':
             blockers.append('operational_field_missing:' + field)
     return {'ready': not blockers, 'blockers': blockers, 'configuration_fingerprint': configuration.fingerprint,

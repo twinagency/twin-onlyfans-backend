@@ -161,8 +161,9 @@
     {
       "key": "product:text_rating",
       "value": {
-        "minimum_cents": 3500,
-        "requires": {}
+        "requires": {},
+        "exact_cents": 3500,
+        "delivery_kind": "service"
       },
       "requires": {},
       "source": {
@@ -177,7 +178,14 @@
       "key": "product:boobs_photos",
       "value": {
         "minimum_cents": 9000,
-        "requires": {}
+        "requires": {},
+        "media_kinds": [
+          "photo"
+        ],
+        "photo_count": [
+          4,
+          5
+        ]
       },
       "requires": {},
       "source": {
@@ -195,7 +203,14 @@
         "requires": {
           "vip": true,
           "high_spender": true
-        }
+        },
+        "media_kinds": [
+          "photo"
+        ],
+        "photo_count": [
+          4,
+          5
+        ]
       },
       "requires": {},
       "source": {
@@ -214,7 +229,14 @@
         "requires": {
           "vip": true,
           "high_spender": true
-        }
+        },
+        "media_kinds": [
+          "photo"
+        ],
+        "photo_count": [
+          4,
+          5
+        ]
       },
       "requires": {},
       "source": {
@@ -229,8 +251,15 @@
     {
       "key": "product:booty_photos",
       "value": {
-        "minimum_cents": 6000,
-        "requires": {}
+        "requires": {},
+        "exact_cents": 6000,
+        "media_kinds": [
+          "photo"
+        ],
+        "photo_count": [
+          4,
+          5
+        ]
       },
       "requires": {},
       "source": {
@@ -292,7 +321,8 @@
         "minimum_cents": 100000,
         "requires": {
           "underwear_eligibility_verified": true
-        }
+        },
+        "delivery_kind": "service"
       },
       "requires": {},
       "source": {
@@ -310,7 +340,8 @@
         "requires": {
           "underwear_eligibility_verified": true,
           "negotiated_price_authorised": true
-        }
+        },
+        "delivery_kind": "service"
       },
       "requires": {},
       "source": {

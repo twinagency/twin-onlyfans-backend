@@ -70,6 +70,12 @@ async def get(request:Request,account_id:str):
     if request.query_params.get("replyPolicy") != "1":
         data.pop("nativeReplyPacingEnabled", None)
         data.pop("nativeReplyFormatEnabled", None)
+    if request.query_params.get("replyTiming") != "1":
+        data.pop("nativeReplyDelayMaxSeconds", None)
+    if request.query_params.get("commercial") != "1":
+        from onlyfans_runtime.commercial_controls import view
+        for field in view({}):
+            data.pop(field, None)
     return response({"ok":True,"accountId":account_id,"configuration":data})
 
 

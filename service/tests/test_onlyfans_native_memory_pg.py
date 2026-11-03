@@ -172,11 +172,19 @@ def test_manual_fan_language_uses_native_language_and_identity_owner(database,mo
     with Session(engine) as s,s.begin():
         fan=s.get(Fan,(ACCOUNT,101));fan.language,fan.language_source="es","manual"
         s.get(AccountAiConfig,ACCOUNT).language="en"
-    store.record(TENANT,ACCOUNT,event(mid=3,body="eres un bot"));store.drain(TENANT,ACCOUNT);due(engine)
-    model=SyntheticNativeModel("Soy un clon de chat con IA.")
+    store.record(TENANT,ACCOUNT,event(mid=3,body="como va tu dia"));store.drain(TENANT,ACCOUNT);due(engine)
+    model=SyntheticNativeModel("Gracias por preguntar.")
     identity=planner.prepare(TENANT,store.claim(TENANT),model)
     with Session(engine) as s:assert s.get(OfNativePlan,(ACCOUNT,identity)).status=="ready"
-    prompt=str(model.calls[0]);assert "OUTPUT LANGUAGE: Español (es)" in prompt and "never claim or swear to be human" in prompt
+    prompt=str(model.calls[0]);assert "OUTPUT LANGUAGE: Español (es)" in prompt
+    store.record(TENANT,ACCOUNT,event(mid=4,body="eres un bot"));store.drain(TENANT,ACCOUNT);due(engine)
+    with pytest.raises(Refused):planner.prepare(TENANT,store.claim(TENANT),model)
+    assert len(model.calls)==1
+    from db.onlyfans_case_models import OfOperatorCase
+    from db.models import OfConversationState
+    with Session(engine) as s:
+        assert s.get(OfConversationState,(ACCOUNT,101)).mode=="paused"
+        assert s.scalar(select(OfOperatorCase.category))=="identity"
     store.close()
 
 

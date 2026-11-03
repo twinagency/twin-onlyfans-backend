@@ -26,7 +26,7 @@ def policy(**kw):
 
 def test_concurrent_migration_is_the_release_head():
     from db import schema
-    assert schema.HEAD == "0108_commercial_progress"
+    assert schema.HEAD == "0110_recent_history"   # integration base: onboarding 0109/0110 sit on top of the concurrent chain
     assert schema.REVISION_RANK[schema.CONTEXTUAL_OFFERS] == 101
     assert schema.REVISION_RANK[schema.DAILY_SEND_CAP] == 102
     assert schema.REVISION_RANK[schema.CONCURRENT_DELIVERY] == 103

@@ -706,8 +706,8 @@ def documented_price_floor(creator_key):
     floors = []
     for rule in load(creator_key).public_context()["rules"]:
         value = rule["value"]
-        if rule["key"].startswith("product:") and type(value) is dict and type(value.get("minimum_cents")) is int:
-            floors.append(value["minimum_cents"])
+        if rule["key"].startswith("product:") and type(value) is dict and type(value.get("exact_cents", value.get("minimum_cents"))) is int:
+            floors.append(value.get("exact_cents", value.get("minimum_cents")))
     return min(floors) if floors else None
 
 
@@ -841,3 +841,345 @@ def recover_mappings(store, tenant, account, *, creator_key=None, sequence_evide
             "sequences": sequences["sequences"], "rejectedSequenceEvidence": sequences["rejected"],
             "priceFloorCents": floor, "approvalsCreated": 0, "pricesInvented": 0,
             "unresolved": account_level + unresolved}
+
+
+# Source-backed Moxy materialisation uses the existing catalogue and vault
+# creation receipt. It never writes OfOfferImportDecision's human approvals.
+MOXY_MATERIALIZE_BOUND = 10
+
+
+def _moxy_source_bindings():
+    from pathlib import Path
+    path=Path(__file__).resolve().parents[1]/"moxy_replacement/sources/account-bindings.v1.json"
+    return json.loads(path.read_text())["accounts"]
+
+
+def _verify_moxy_creator(s, account, creator_key):
+    from db.onlyfans_moxy_models import MoxyAccount
+    owner=s.get(MoxyAccount,account)
+    approved=_moxy_source_bindings().get(account)
+    configured=json.loads(owner.settings_json).get("creator_key") if owner else None
+    if approved is not None and configured is not None and approved != configured:
+        raise Refused("creator_source_binding_mismatch")
+    expected=approved or configured
+    if expected is None:
+        raise Refused("creator_source_binding_missing")
+    if expected != creator_key:
+        raise Refused("creator_source_binding_mismatch")
+
+
+def _moxy_candidate(s, account, runtime, observation, creator_key):
+    from moxy_replacement.configuration import load
+    from moxy_replacement.media_descriptions import item_state, effective_description, limitations
+    from moxy_replacement.pricing import asset_evidence
+    from db.models import VaultItem
+    from db.onlyfans_content_sync_progress_models import OfContentSyncSource
+    if observation is None or observation.binding_id != runtime.binding_id:
+        raise Refused("import source unavailable")
+    media = _ids(observation.media_json)
+    previews = _ids(observation.preview_json)
+    if (not media or previews is None or not set(previews) < set(media)
+            or observation.locked_text is not False or observation.currency != "USD"
+            or json.loads(observation.reasons_json)):
+        raise Refused("source_details_needed")
+    current = s.get(OfContentSyncSource, (account, runtime.binding_id,
+        observation.source_kind, observation.source_id))
+    if current is not None and (current.source_unavailable or
+            current.current_fingerprint != observation.fingerprint):
+        raise Refused("source terms changed")
+    _, reasons = _asset_state(s, account, runtime, _connection(s, runtime), media)
+    if reasons:
+        raise Refused("vault_media_not_ready:" + ",".join(sorted(reasons)))
+    assets = []
+    for mid in media:
+        v = s.get(VaultItem, (account, mid))
+        if item_state(v) != "described":
+            raise Refused("media_description_not_ready:" + str(mid))
+        assets.append({"id": mid, "kind": v.kind, "description": effective_description(v),
+            "evidence_ref": "asset-v2:" + asset_evidence(v), "basis": limitations(v)})
+    _verify_moxy_creator(s, account, creator_key)
+    cfg = load(creator_key)
+    rules = [r for r in cfg.public_context()["rules"] if r["key"].startswith("product:")
+             and r["value"].get("delivery_kind", "media") == "media"]
+    return {"account_id":account,"binding_id":runtime.binding_id, "observation_id": observation.observation_id, "fingerprint": observation.fingerprint,
+        "media_ids": media, "preview_ids": previews, "historical_price_cents": observation.price_cents,
+        "assets": assets, "rules": rules, "creator_key": creator_key,
+        "configuration_fingerprint": cfg.fingerprint}
+
+
+def moxy_candidates(store, tenant, account, *, creator_key, after=None, limit=25):
+    """Bounded current factual inputs for the existing model adapter's classifier.
+    Unknown preview/order evidence is reported, never assumed to be an empty list.
+    """
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise InvalidImport("invalid_moxy_candidate_bound")
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        query = select(OfOfferObservation).where(OfOfferObservation.account_id == account,
+            OfOfferObservation.binding_id == runtime.binding_id)
+        if after is not None:
+            query = query.where(OfOfferObservation.observation_id > after)
+        rows = s.scalars(query.order_by(OfOfferObservation.observation_id).limit(limit)).all()
+        result = []
+        for row in rows:
+            try:
+                result.append({"ready": True, **_moxy_candidate(s, account, runtime, row, creator_key)})
+            except Refused as exc:
+                result.append({"ready": False, "observation_id": row.observation_id, "reason": str(exc)})
+        return {"items": result, "next": rows[-1].observation_id if len(rows) == limit else None}
+
+
+MOXY_CATEGORY_INSTRUCTIONS = """Classify only the supplied current factual asset descriptions
+against this creator's source product rules. Return JSON with keys category, reason,
+category_quotes. category is a supported product category or null when uncertain,
+prohibited, VIP/sequence-only, mixed unsupported scope, or not sufficiently described.
+category_quotes is a list of {media_id, quote}: cite literal evidence from EVERY
+attachment description for the category. Do not use historical captions, folder names,
+fan preferences or the price to infer category. Respect more restrictive content
+visible in any attachment. Do not create products, approve reuse, invent price,
+claim unsampled video actions, or add missing facts."""
+
+
+def _materialize_moxy(store, tenant, account, *, creator_key, classification, actor):
+    from moxy_replacement.configuration import load, ActionBlocked
+    from moxy_replacement.pricing import price_bounds, validate_price, validate_format
+    from db.onlyfans_vault_models import OfVaultProductCreate
+    from db.models import VaultItem
+    from .vault_management import create_catalog_single
+    keys = {"observation_id", "fingerprint", "configuration_fingerprint", "category", "asset_evidence", "category_quotes", "reason"}
+    if (type(classification) is not dict or not keys <= set(classification)
+            or not set(classification) <= keys | {"vault_media_id"}):
+        raise InvalidImport("invalid_moxy_classification")
+    single = classification.get("vault_media_id")
+    if single is None:
+        _uuid(classification["observation_id"])
+    elif classification["observation_id"] is not None or type(single) is not int or single <= 0:
+        raise InvalidImport("invalid_vault_media_identity")
+    if not actor_allowed(actor) or type(classification["reason"]) is not str or not classification["reason"].strip():
+        raise InvalidImport("source_classification_evidence_required")
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        if single is None:
+            obs = s.get(OfOfferObservation, (account, classification["observation_id"]), with_for_update=True)
+            candidate = _moxy_candidate(s, account, runtime, obs, creator_key)
+        else:
+            from types import SimpleNamespace
+            candidate = _moxy_vault_candidate(s, account, runtime, single, creator_key)
+            from .offer_terms import media_key
+            obs = SimpleNamespace(observation_id=None, fingerprint=candidate["fingerprint"],
+                media_key=media_key([single]))
+        if candidate["fingerprint"] != classification["fingerprint"]:
+            raise Refused("source terms changed")
+        if candidate["configuration_fingerprint"] != classification["configuration_fingerprint"]:
+            raise Refused("creator_classification_stale")
+        evidence = {str(a["id"]): a["evidence_ref"] for a in candidate["assets"]}
+        if classification["asset_evidence"] != evidence:
+            raise Refused("asset_classification_stale")
+        category = classification["category"]
+        rule = next((r for r in candidate["rules"] if r["key"] == "product:" + str(category)), None)
+        if rule is None:
+            raise Refused("product_category_unresolved")
+        quotes = classification["category_quotes"]
+        if type(quotes) is not list or len(quotes) != len(evidence):
+            raise InvalidImport("every_asset_needs_category_evidence")
+        by = {a["id"]: a for a in candidate["assets"]}
+        seen = set()
+        for quote in quotes:
+            if (type(quote) is not dict or set(quote) != {"media_id", "quote"}
+                    or type(quote["media_id"]) is not int or quote["media_id"] not in by
+                    or quote["media_id"] in seen or type(quote["quote"]) is not str
+                    or not quote["quote"].strip() or quote["quote"] not in by[quote["media_id"]]["description"]):
+                raise InvalidImport("ungrounded_category_evidence")
+            seen.add(quote["media_id"])
+        cfg = load(creator_key)
+        if category in cfg.resolve("prohibited_categories", {}).value:
+            raise Refused("creator_content_prohibited")
+        permission = rule["value"]
+        paid = [s.get(VaultItem, (account, mid)) for mid in candidate["media_ids"]
+                if mid not in candidate["preview_ids"]]
+        validate_format(permission, paid)
+        lower, upper = price_bounds(permission)
+        existing = _existing(s, account, candidate["media_ids"])
+        existing_fixed = existing is not None and existing.pricing_mode == "fixed"
+        price = lower if lower == upper else (existing.price_cents if existing_fixed
+            else candidate["historical_price_cents"])
+        # For a floor/range, conflicting observed prices are not approval of a
+        # current selling price. Fixed source prices are independently authoritative.
+        if lower != upper and not existing_fixed:
+            if candidate["historical_price_cents"] is None:
+                raise Refused("current_price_unresolved")
+            observed = set(s.scalars(select(OfOfferObservation.price_cents).where(
+                OfOfferObservation.account_id == account,
+                OfOfferObservation.binding_id == runtime.binding_id,
+                OfOfferObservation.media_key == obs.media_key)))
+            if observed != {price}:
+                raise Refused("current_price_conflict")
+        validate_price(permission, price)
+        data = {"creator_key": creator_key, "category": category, "media_ids": candidate["media_ids"],
+            "preview_ids": candidate["preview_ids"], "price_cents": price, "currency": "USD",
+            "asset_evidence": evidence, "source": rule["source"], "rule_value": permission,
+            "configuration_fingerprint": cfg.fingerprint}
+        commercial_hash = digest(data)
+        command_key = digest({"kind": "moxy_source_catalogue_v1", "binding": runtime.binding_id,
+            "account": account, "media_key": obs.media_key})
+        prior = s.get(OfVaultProductCreate, (account, command_key))
+        if prior:
+            if prior.request_hash != commercial_hash:
+                raise Refused("existing_item_evidence_changed")
+            item = s.get(CatalogItem, prior.item_id)
+            if (item is None or item.account_id != account or _ids(item.media_ids) != data["media_ids"]
+                    or _ids(item.preview_media_ids) != data["preview_ids"]
+                    or item.price_cents != price or item.pricing_mode != "fixed"):
+                raise Refused("operator_catalogue_correction_preserved")
+            return json.loads(prior.acknowledgement_json)
+        if existing is not None:
+            if (_ids(existing.media_ids) != data["media_ids"]
+                    or _ids(existing.preview_media_ids) != data["preview_ids"]
+                    or existing.price_cents != price or existing.pricing_mode != "fixed"):
+                raise Refused("operator_catalogue_correction_preserved")
+            if s.scalar(select(OfVaultProductCreate.command_key).where(
+                    OfVaultProductCreate.account_id==account,
+                    OfVaultProductCreate.media_hash==digest(sorted(data["media_ids"])))):
+                raise Refused("existing_vault_receipt_requires_explicit_binding")
+            item=existing  # Preserve operator metadata and enabled state.
+        else:
+            description = "; ".join(a["description"] for a in candidate["assets"])
+            item = create_catalog_single(s, runtime, _connection(s, runtime),
+                media=data["media_ids"], previews=data["preview_ids"], label=category.replace("_", " "),
+                description=description[:6000], price_cents=price, enabled=False, pricing_mode="fixed")
+        product_id = "moxy-" + command_key[:24]
+        product = {"id": product_id, "revision": 1, "category": category,
+            "price_cents": price, "currency": "USD",
+            "assets": [{"id": a["id"], "revision": 1, "facts": [a["description"]],
+                        "evidence_ref": a["evidence_ref"]} for a in candidate["assets"]],
+            "source": rule["source"], "approval_ref": "derived-catalogue:" + command_key,
+            "available": True, "requires": dict(permission.get("requires", {})),
+            "caption_instructions": "Use the current factual asset descriptions and source rules; " +
+                "never invent unseen details, live/custom status or delivery promises."}
+        result = {"itemId": item.id, "product": product, "priceCents": price,
+            "catalogueBinding": {product_id: item.id}, "enabled": bool(item.enabled),
+            "provenance": "source_rule_and_current_descriptions", "evidence": data,
+            "itemFingerprint": item_fingerprint(item)}
+        receipt = {"commercial": data, "observation_id": obs.observation_id,
+            "observation_fingerprint": obs.fingerprint, "classification": classification}
+        s.add(OfVaultProductCreate(account_id=account, command_key=command_key, item_id=item.id,
+            request_hash=commercial_hash, media_hash=digest(sorted(data["media_ids"])), actor=actor,
+            product_json=canonical(receipt), acknowledgement_json=canonical(result), created_at=utcnow()))
+        s.flush()
+        return result
+
+
+def materialize_moxy_products(store, tenant, account, *, creator_key, classifications, actor):
+    """Independent per-offer results. No model, sends, activation or manual approvals."""
+    from moxy_replacement.configuration import ActionBlocked
+    from sqlalchemy.exc import IntegrityError
+    if type(classifications) is not list or not 1 <= len(classifications) <= MOXY_MATERIALIZE_BOUND:
+        raise InvalidImport("invalid_moxy_materialization_bound")
+    results = []
+    for classification in classifications:
+        try:
+            result = _materialize_moxy(store, tenant, account, creator_key=creator_key,
+                classification=classification, actor=actor)
+            results.append({"ok": True, **result})
+        except (InvalidImport, Refused, ActionBlocked, IntegrityError) as exc:
+            results.append({"ok": False, "observation_id": classification.get("observation_id")
+                if isinstance(classification, dict) else None,
+                "reason": "catalogue_creation_race" if isinstance(exc, IntegrityError) else str(exc)})
+    return results
+
+
+def _moxy_vault_candidate(s, account, runtime, media_id, creator_key):
+    """One current vault asset is a complete item; no historical bundle is inferred."""
+    from db.models import VaultItem
+    from moxy_replacement.configuration import load
+    from moxy_replacement.media_descriptions import item_state, effective_description, limitations
+    from moxy_replacement.pricing import asset_evidence
+    if type(media_id) is not int or media_id <= 0:
+        raise InvalidImport("invalid_vault_media_identity")
+    _, reasons = _asset_state(s, account, runtime, _connection(s, runtime), [media_id])
+    if reasons:raise Refused("vault_media_not_ready:" + ",".join(sorted(reasons)))
+    row = s.get(VaultItem, (account, media_id))
+    if item_state(row) != "described":raise Refused("media_description_not_ready:" + str(media_id))
+    _verify_moxy_creator(s, account, creator_key)
+    cfg = load(creator_key)
+    rules = [r for r in cfg.public_context()["rules"] if r["key"].startswith("product:")
+             and r["value"].get("delivery_kind", "media") == "media"]
+    asset = {"id": media_id, "kind": row.kind, "description": effective_description(row),
+             "evidence_ref": "asset-v2:" + asset_evidence(row), "basis": limitations(row)}
+    return {"account_id":account,"binding_id":runtime.binding_id, "observation_id": None, "vault_media_id": media_id,
+        "fingerprint": digest({"binding":runtime.binding_id,"asset":asset["evidence_ref"]}),
+        "media_ids":[media_id], "preview_ids":[], "historical_price_cents":None,
+        "assets":[asset], "rules":rules, "creator_key":creator_key,
+        "configuration_fingerprint":cfg.fingerprint}
+
+
+def moxy_vault_candidates(store, tenant, account, *, creator_key, after=0, limit=25):
+    from db.models import VaultItem
+    if type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 50:
+        raise InvalidImport("invalid_moxy_candidate_bound")
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        ids = list(s.scalars(select(VaultItem.media_id).where(VaultItem.account_id == account,
+            VaultItem.media_id > after, VaultItem.removed_at.is_(None),
+            VaultItem.describe_status == "described").order_by(VaultItem.media_id).limit(limit)))
+        result = []
+        for mid in ids:
+            try:result.append({"ready":True, **_moxy_vault_candidate(s,account,runtime,mid,creator_key)})
+            except Refused as exc:result.append({"ready":False,"vault_media_id":mid,"reason":str(exc)})
+        return {"items":result, "next":ids[-1] if len(ids)==limit else None}
+
+
+def moxy_classification_messages(candidate):
+    if candidate.get("ready") is False:
+        raise Refused("candidate_not_ready")
+    from moxy_replacement.configuration import load
+    cfg=load(candidate["creator_key"])
+    if cfg.fingerprint!=candidate["configuration_fingerprint"]:
+        raise Refused("creator_classification_stale")
+    return [{"role":"system","content":MOXY_CATEGORY_INSTRUCTIONS+
+             "\nTrusted creator instructions, including all content restrictions:\n"+
+             canonical(cfg.public_context())},
+            {"role":"user","content":canonical(candidate)}]
+
+
+def parse_moxy_classification(candidate, raw):
+    from .provider_model import _decode
+    value=_decode(raw.encode() if isinstance(raw,str) else raw)
+    if (set(value)!={"category","reason","category_quotes"}
+            or value["category"] is None):
+        raise InvalidImport("product_category_unresolved")
+    result={k:candidate[k] for k in ("observation_id","fingerprint","configuration_fingerprint")}
+    if "vault_media_id" in candidate:
+        result["vault_media_id"]=candidate["vault_media_id"]
+    result.update(value)
+    result["asset_evidence"]={str(a["id"]):a["evidence_ref"] for a in candidate["assets"]}
+    return result
+
+
+async def prepare_moxy_products(store,tenant,account,*,creator_key,candidates,generate,actor):
+    """Explicit bounded run using the caller's account-bound, budgeted model seam.
+    No default credential, retry, automatic activation, message or provider read.
+    The materializer independently rechecks current evidence after every call.
+    """
+    if type(candidates) is not list or not 1<=len(candidates)<=MOXY_MATERIALIZE_BOUND:
+        raise InvalidImport("invalid_moxy_materialization_bound")
+    from llm_client import LLMConfigError
+    if not actor_allowed(actor) or not callable(generate):
+        raise InvalidImport("source_classification_evidence_required")
+    results=[]
+    for candidate in candidates:
+        if candidate.get("account_id") != account or candidate.get("creator_key") != creator_key:
+            results.append({"ok":False,"reason":"candidate_account_scope_mismatch"})
+            continue
+        if candidate.get("ready") is False:
+            results.append({"ok":False,"reason":candidate["reason"]})
+            continue
+        raw=await generate(moxy_classification_messages(candidate))
+        try:
+            classification=parse_moxy_classification(candidate,raw)
+        except (InvalidImport,ValueError,LLMConfigError) as exc:
+            results.append({"ok":False,"reason":str(exc)})
+            continue
+        results.extend(materialize_moxy_products(store,tenant,account,creator_key=creator_key,
+            classifications=[classification],actor=actor))
+    return results

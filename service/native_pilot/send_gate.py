@@ -26,7 +26,7 @@ from .ledger import Refused
 class SendGate:
     def __init__(self, *, max_concurrency: int = 1, poll_s: float = 1.0):
         self._max = max(1, int(max_concurrency))
-        self._queue: list = []          # [(priority, seq, key, future)]
+        self._queue: list = []          # [(priority, seq, key, future, later)]
         self._active: set = set()       # conversation keys currently holding a slot
         self._seq = itertools.count()
         self._held = 0
@@ -48,6 +48,10 @@ class SendGate:
     def waiting(self) -> int:
         return len([e for e in self._queue if not e[3].done()])
 
+    def first_waiting(self) -> bool:
+        """True while a first bubble (not a continuation) is queued for the gate."""
+        return any(not e[3].done() and not e[4] for e in self._queue)
+
     @property
     def held(self) -> int:
         return self._held
@@ -56,7 +60,7 @@ class SendGate:
     def in_flight(self) -> int:
         return self._held
 
-    async def acquire(self, should_abort, wait_max_s: float, priority=None, key=None) -> None:
+    async def acquire(self, should_abort, wait_max_s: float, priority=None, key=None, later: bool = False) -> None:
         if key is not None and (key in self._active or any(
                 e[2] == key and not e[3].done() for e in self._queue)):
             raise Refused("conversation-busy")
@@ -67,7 +71,7 @@ class SendGate:
                 self._active.add(key)
             return
         fut = asyncio.get_running_loop().create_future()
-        entry = (priority if priority is not None else "\uffff", next(self._seq), key, fut)
+        entry = (priority if priority is not None else "\uffff", next(self._seq), key, fut, bool(later))
         self._queue.append(entry)
         self.max_waiting = max(self.max_waiting, len(self._queue))
         waited = 0.0
@@ -109,8 +113,8 @@ class SendGate:
 
     def _handoff(self) -> None:
         while self._held < self._max and self._queue:
-            self._queue.sort(key=lambda e: (e[0], e[1]))
-            _, _, key, fut = self._queue.pop(0)
+            self._queue.sort(key=lambda e: (e[4], e[0], e[1]))
+            _, _, key, fut, _ = self._queue.pop(0)
             if fut.done():
                 continue
             if key is not None and key in self._active:

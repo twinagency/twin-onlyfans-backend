@@ -96,7 +96,9 @@ def main():
             backend = Path(__file__).resolve().parents[2]
             api = stack.enter_context(process([sys.executable,"-m","uvicorn","onlyfans_app:app","--app-dir","service","--host","127.0.0.1","--port",str(api_port)], cwd=backend,env=env,log=Path(logs)/"api.log"))
             wait_http(env["ONLYFANS_API_BASE_URL"]+"/healthz", api)
-            node = os.environ.get("CODEX_PRIMARY_RUNTIME_NODE", "node")
+            node = os.environ.get("CODEX_PRIMARY_RUNTIME_NODE") or shutil.which("node")
+            if not node:
+                raise RuntimeError("Node is required for the paired dashboard rehearsal")
             # Newer harnesses share public/ through a symlink; older ones still
             # need the shell assets copied into their separate directory.
             copy_public_assets(dashboard)

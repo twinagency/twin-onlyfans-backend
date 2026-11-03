@@ -369,18 +369,40 @@ class HistoryRecovery:
             row = self._check_claim(session, runtime, claim)
             from onlyfans_runtime.profiles import apply_profiles
             apply_profiles(session, runtime, fan_ids, profiles or {}, creator_profile)
+            # Read before enrolment: a fan with no recent cursor yet is new to
+            # discovery. Used only by the recent-scope sweep check below.
+            already = set(session.scalars(select(OfRecentHistoryCursor.fan_id).where(
+                OfRecentHistoryCursor.account_id == claim.account_id,
+                OfRecentHistoryCursor.fan_id.in_(fan_ids)))) if claim.scope == "recent" and fan_ids else set()
             for fan_id in fan_ids:
                 self._ensure_fan(session, runtime, fan_id)
             row.page_count += 1
             row.cursor = next_cursor
             complete = next_cursor is None
             if claim.scope == "recent":
+                # The provider list is ordered by recent activity, so it
+                # reorders as fans message: offset paging then repeats some
+                # fans and skips others, and an ordered digest of two sweeps
+                # may never match. Order and repeats carry no meaning here.
+                # pass_digest is an order-independent hash (sum of per-id
+                # hashes mod 2**256) of the fans this sweep saw for the FIRST
+                # time, i.e. with no cursor before this page. Each fan is new
+                # at most once, so repeats cannot disturb it.
+                digest = int(row.pass_digest or "0", 16)
                 for fan_id in fan_ids:
-                    row.pass_digest = hashlib.sha256((row.pass_digest + str(fan_id) + ":").encode()).hexdigest()
+                    if fan_id not in already:
+                        digest += int(hashlib.sha256(str(fan_id).encode()).hexdigest(), 16)
+                row.pass_digest = format(digest % 2**256, "064x") if digest else row.pass_digest
                 if complete:
-                    # Offset pagination can move under arrivals. Require two
-                    # identical complete discovery sweeps, then fan head catch-up.
-                    complete = row.previous_digest == row.pass_digest
+                    # Stable = a complete sweep that finds no fan unseen so far,
+                    # after an earlier complete sweep (previous_digest set), so
+                    # two consecutive full sweeps still agree on the set of
+                    # fans. A brand-new fan arriving mid-sweep is new once,
+                    # makes that sweep unstable, and is known to the next one.
+                    # Fans skipped by reordering are not "new" later: their
+                    # cursors already exist (known-fan sweep / earlier sweeps).
+                    # Then fan head catch-up.
+                    complete = row.previous_digest is not None and int(row.pass_digest or "0", 16) == 0
                     row.previous_digest, row.pass_digest = row.pass_digest, ""
                     row.pass_number += 1
             if complete and claim.scope == "recent":

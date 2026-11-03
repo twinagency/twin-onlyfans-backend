@@ -269,6 +269,17 @@ def test_api_separate_credential_strict_contract_scope_revocation_and_no_default
     assert extended.pop("fasttContextualSalesMode")=="off"
     assert extended==legacy
     assert client.get(path+"?contextual=invalid",headers=headers).json()["configuration"]==legacy
+    from onlyfans_runtime.commercial_controls import view
+    expected_commercial=view({})
+    assert not expected_commercial.keys() & legacy.keys()
+    commercial=client.get(path+"?commercial=1",headers=headers).json()["configuration"]
+    assert {field:commercial.pop(field) for field in expected_commercial}==expected_commercial
+    assert commercial==legacy
+    assert client.get(path+"?commercial=invalid",headers=headers).json()["configuration"]==legacy
+    timing=client.get(path+"?replyTiming=1",headers=headers).json()["configuration"]
+    assert timing.pop("nativeReplyDelayMaxSeconds")==90
+    assert timing==legacy
+    assert "nativeReplyDelayMaxSeconds" not in client.get(path+"?replyPolicy=1",headers=headers).json()["configuration"]
     assert client.get(path.replace("acc-a","acc-b"),headers=headers).status_code==404
     assert client.post(path.replace("acc-a","acc-b"),headers=headers,json=body).status_code==404
     for bad in ({**body,"expectedRevision":True},{**body,"actor":"forged"},{**body,"unexpected":True},{**body,"patch":{"dailyCostCap":0}}):
@@ -319,4 +330,19 @@ def test_missing_existing_configuration_cannot_create_an_implicit_default_or_cap
         assert s.get(AccountAiConfig,ACCOUNT) is None
         assert s.scalar(select(func.count()).select_from(OfConfigurationChange))==0
         assert s.get(OfRuntime,ACCOUNT).configuration_revision==0
+    store.close()
+
+
+def test_explicit_extended_reply_pacing_uses_the_existing_audited_configuration(database):
+    from onlyfans_runtime.reply_settings import DELAY_MAX_FIELD,DELAY_MAX_KEY
+    store=setup(database)
+    before=get_configuration(store,TENANT,ACCOUNT)
+    assert before[DELAY_MAX_FIELD]==90
+    save(store,before,{DELAY_MAX_FIELD:180})
+    after=get_configuration(store,TENANT,ACCOUNT)
+    assert after[DELAY_MAX_FIELD]==180 and after['fingerprint']!=before['fingerprint']
+    with Session(database[1]) as s:
+        assert json.loads(s.get(AccountAiConfig,ACCOUNT).ai_chatter_config_json)[DELAY_MAX_KEY]==180
+        audit=s.scalar(select(OfConfigurationChange))
+        assert audit is not None
     store.close()

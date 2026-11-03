@@ -97,6 +97,18 @@ def _inventory_report(s,account,settings,pa):
             excluded[key]='catalogue_media_unreadable';continue
         if ids!=[a['id'] for a in p['assets']] or item.price_cents!=p['price_cents'] or item.pricing_mode!='fixed':
             excluded[key]='catalogue_binding_mismatch';continue
+        if p['approval_ref'].startswith('derived-catalogue:'):
+            from db.onlyfans_vault_models import OfVaultProductCreate
+            receipt=s.get(OfVaultProductCreate,(account,p['approval_ref'].split(':',1)[1]))
+            try:
+                recorded=json.loads(receipt.acknowledgement_json) if receipt else {}
+                evidence=recorded.get('evidence',{})
+                if (recorded.get('itemId')!=item.id or recorded.get('product')!=p
+                        or evidence.get('media_ids')!=ids or evidence.get('preview_ids')!=previews
+                        or evidence.get('price_cents')!=item.price_cents):
+                    raise ValueError()
+            except (ValueError,TypeError,KeyError):
+                excluded[key]='derived_catalogue_evidence_changed';continue
         files=[];reason=None;facts_by_asset=[]
         for a in p['assets']:
             v=s.get(VaultItem,(account,a['id']))
@@ -113,15 +125,25 @@ def _inventory_report(s,account,settings,pa):
             facts=effective_description(v)
             evidence=digest({'media_id':v.media_id,'content_hash':v.content_hash,
                 'description':facts,'updated_at':v.updated_at.isoformat() if v.updated_at else None})
-            if a['evidence_ref']!='asset:'+evidence or a['facts']!=[facts] or not facts:
+            from .pricing import asset_evidence
+            references={'asset:'+evidence, 'asset-v2:'+asset_evidence(v)}
+            if a['evidence_ref'] not in references or a['facts']!=[facts] or not facts:
                 reason='asset_evidence_stale:%s'%a['id'];break
             facts_by_asset.append(facts)
             files.append({'media_id':v.media_id,'kind':v.kind,'content_hash':v.content_hash,
-                'updated_at':v.updated_at,'removed_at':None,
+                'updated_at':v.updated_at if a['evidence_ref'].startswith('asset:') else None,'removed_at':None,
                 # What the description is based on (sampling limits), so a caption never
                 # claims audio, motion or detail the analysis could not have seen.
                 'description_basis':limitations(v),'operator_corrected':operator_corrected(v)})
-        if reason is None and (not ids or set(previews)==set(ids)):reason='catalogue_media_invalid'
+        if reason is None and (not ids or not set(previews) < set(ids)):reason='catalogue_media_invalid'
+        if reason is None:
+            from .pricing import validate_format, validate_price
+            try:
+                rule=pa.configuration.resolve('product:'+p['category'], {}).value
+                validate_price(rule,p['price_cents'])
+                validate_format(rule,[s.get(VaultItem,(account,mid)) for mid in ids if mid not in previews])
+            except ActionBlocked as exc:
+                reason=str(exc)
         if reason:
             excluded[key]=reason;continue
         shown={n:getattr(item,n) for n in ('id','account_id','script_id','enabled','kind','label',
@@ -143,7 +165,7 @@ def _inventory(s,account,settings,pa):
 def account_readiness(s,account,settings):
     cfg,pa=configuration(settings)
     ready=readiness(cfg,account_bound=True,products=settings['products'],sequences=settings['sequences'],
-        operational=settings['operational'],coordination_verified=settings.get('coordination_verified'))
+        operational=settings['operational'],coordination_verified=settings.get('coordination_verified'),pilot=settings.get('pilot'))
     if not settings['operational'].get('assigned_operator'):ready['blockers'].append('handover_owner_missing')
     usable,excluded=_inventory_report(s,account,settings,pa)
     if set(usable)!=set(pa.products):ready['blockers'].append('real_inventory_mapping_incomplete')

@@ -15,6 +15,17 @@ from .content_api import configured, response, refuse, HEADER, SCHEMA, PREFIX
 router = APIRouter(prefix=PREFIX, tags=["onlyfans-vault"])
 
 
+def job_contract(request, value):
+    """Keep the strict v1 shape; richer continuation evidence is an opt-in."""
+    if value is None or request.query_params.get("progress") == "1":
+        return value
+    result = {key: value[key] for key in ("jobId", "commandKey", "status", "pagesRead", "itemsSeen",
+        "lastError", "requestedAt", "updatedAt", "completedAt")}
+    if str(result["lastError"] or "").startswith("provider_read_deferred:"):
+        result["lastError"] = "provider_read_deferred"
+    return result
+
+
 def authenticate(request, account):
     config = configured()
     if config is None:
@@ -70,8 +81,10 @@ async def get(request: Request, account_id: str):
         return context
     store, tenant = context
     try:
-        if not set(request.query_params) <= {"afterMediaId", "limit", "q", "kind", "folderId", "includeSummary"} or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
+        if not set(request.query_params) <= {"afterMediaId", "limit", "q", "kind", "folderId", "includeSummary", "progress"} or any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
             raise InvalidVault("That vault page request is invalid.")
+        if request.query_params.get("progress", "0") not in {"0", "1"}:
+            raise InvalidVault("That vault progress option is invalid.")
         if request.query_params.get("includeSummary", "0") not in {"0", "1"}:
             raise InvalidVault("That vault summary option is invalid.")
         raw_limit = request.query_params.get("limit", "24")
@@ -81,6 +94,7 @@ async def get(request: Request, account_id: str):
             after_media_id=request.query_params.get("afterMediaId"), limit=int(raw_limit),
             query=request.query_params.get("q", ""), kind=request.query_params.get("kind", "all"),folder_id=request.query_params.get("folderId"),
             include_summary=request.query_params.get("includeSummary") == "1")
+        value["sync"] = job_contract(request, value["sync"])
         return response({"ok": True, "accountId": account_id, "vault": value})
     except Exception as exc:
         return failure(exc)
@@ -93,12 +107,15 @@ async def sync(request: Request, account_id: str):
         return context
     store, tenant = context
     try:
+        if request.query_params and (set(request.query_params) != {"progress"}
+            or request.query_params.getlist("progress") not in (["0"], ["1"])):
+            raise InvalidVault("That vault progress option is invalid.")
         value = await body(request, {"expectedConnectionRevision", "commandKey", "actor"})
         if isinstance(value, JSONResponse):
             return value
         job = await asyncio.to_thread(request_sync, store, tenant, account_id,
             expected_connection_revision=value["expectedConnectionRevision"], command_key=value["commandKey"], actor=value["actor"])
-        return response({"ok": True, "applied": True, "accountId": account_id, "commandKey": value["commandKey"], "sync": job})
+        return response({"ok": True, "applied": True, "accountId": account_id, "commandKey": value["commandKey"], "sync": job_contract(request, job)})
     except Exception as exc:
         return failure(exc)
 
@@ -170,9 +187,12 @@ async def folders_get(request:Request,account_id:str,folder_id:str=None):
     context=authenticate(request,account_id)
     if isinstance(context,JSONResponse):return context
     try:
-        if request.query_params:raise InvalidVault("Folder metadata does not use query parameters.")
+        if request.query_params and (folder_id is not None or set(request.query_params) != {"covers"}
+            or request.query_params.getlist("covers") not in (["0"], ["1"])):
+            raise InvalidVault("That folder cover option is invalid.")
         from onlyfans_runtime.vault_editing import get_folders
-        result=await asyncio.to_thread(get_folders,*context,account_id,folder_id)
+        result=await asyncio.to_thread(get_folders,*context,account_id,folder_id,
+            include_covers=request.query_params.get("covers")=="1")
         return response({"ok":True,"accountId":account_id,"folder" if folder_id is not None else "folders":result})
     except Exception as exc:return failure(exc)
 

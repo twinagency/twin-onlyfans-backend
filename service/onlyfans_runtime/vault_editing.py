@@ -68,7 +68,9 @@ def folder_view(s,row):
         "fingerprint":digest([row.account_id,row.id,row.name,row.deleted_at,ids])}
 
 
-def get_folders(store,tenant,account,folder_id=None):
+def get_folders(store,tenant,account,folder_id=None,*,include_covers=True):
+    if type(include_covers) is not bool:
+        raise InvalidVault("Use an explicit folder cover option.")
     with Session(store.engine) as s,s.begin():
         store._runtime(s,tenant,account)
         if folder_id is not None:return folder_view(s,_folder(s,account,folder_reference(folder_id)))
@@ -77,6 +79,8 @@ def get_folders(store,tenant,account,folder_id=None):
         if len(rows)>200:raise Refused("vault folder list exceeds editor budget")
         counts=dict(s.execute(select(VaultFolderItem.folder_id,func.count()).where(VaultFolderItem.account_id==account,
             VaultFolderItem.folder_id.in_([r.id for r in rows])).group_by(VaultFolderItem.folder_id)).all())
+        if not include_covers:
+            return [{"folderId":str(r.id),"name":r.name,"count":counts.get(r.id,0)} for r in rows]
         covers=dict(s.execute(select(VaultFolderItem.folder_id,func.min(VaultFolderItem.media_id))
             .join(VaultItem,(VaultItem.account_id==VaultFolderItem.account_id)&(VaultItem.media_id==VaultFolderItem.media_id))
             .where(VaultFolderItem.account_id==account,VaultFolderItem.folder_id.in_([r.id for r in rows]),

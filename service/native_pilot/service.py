@@ -46,6 +46,7 @@ import copy
 import logging
 import os
 import secrets
+import threading
 import signal
 import time
 from datetime import datetime, timedelta, timezone
@@ -260,6 +261,9 @@ class ServiceGateway(runner.Gateway):
             return await super()._send(text, terms)
         finally:
             self.service.phase = "preparing"
+            if self.turn_sends:
+                # The reply is out: only the remaining bubbles wait, so the fan no longer holds a preparation slot.
+                self.service.first_bubble_sent = True
 
     async def pace(self):
         """Wait out the account's throttle, then let begin_attempt spend the unit atomically."""
@@ -300,6 +304,14 @@ class ServiceGateway(runner.Gateway):
             waited += step
 
 
+# Thread pool sizing factor (unchanged from before the send-order work): preparation slots x this + 12 threads.
+LIVE_TURNS_PER_SLOT = 3
+# Hard cap on live turns (preparing + parked at the send gate) per preparation slot. Parked turns hold no worker thread,
+# but each keeps engine state and a claimed input, so their number is bounded. Only a turn that has not sent its first
+# bubble is refused at the cap; a parked turn finishing its later bubbles is never starved by it.
+LIVE_TURNS_CAP_PER_SLOT = 8
+
+
 class Service:
     tuning = Tuning()          # class default (objects built without __init__, e.g. query-only tests); __init__ sets the real one
 
@@ -334,6 +346,7 @@ class Service:
         self._stall_reported = 0.0
         self.stalled = False           # an alert is open: owed replies have waited past tuning.stall_alert_s
         self.phase = "preparing"
+        self.first_bubble_sent = False   # this turn's first bubble is on the wire: the slot is free for another fan
         self.tolerate_newer = False    # this turn answers a burst past the hard maximum wait: later fan messages do not stale it
         self.priority = None           # ISO text: when this fan's first unanswered message was ingested (send-queue order)
         self.release_reason = None
@@ -349,6 +362,7 @@ class Service:
         self.content = self.context = None
         self.followups = None      # followups.FollowupQueue when --followups, else None (every job suppressed)
         self.prior_catalog = None
+        self._control_store_lock = threading.Lock()
         self.catalog_owner = self
         self.next_conn_check = 0.0
         self._session_lock = None
@@ -560,9 +574,7 @@ class Service:
         from sqlalchemy import text as sql
         if not self.all_fans and not self._owned(self.args.fan):
             return None
-        if getattr(self, "_twin_store", None) is None:
-            self._twin_store = Store(url)
-        store = self._twin_store
+        store = self.control_store(url)
         controlled = [self.args.fan] if not self.all_fans else (fans or [])
         candidates = (store.runtime_stop_candidates(self.db, controlled)
                       if self.all_fans and hasattr(store, "runtime_stop_candidates") else None)
@@ -835,12 +847,24 @@ class Service:
         if self.board is not None:
             self.board.set(fan, state, reason, **kw)
 
+    def preparing_count(self):
+        return sum(1 for f in self.tasks if not getattr(self.children.get(f), "first_bubble_sent", False))
+
+    def has_preparation_slot(self):
+        """A fan whose first bubble is out only waits at the send gate for the rest of its bubbles. That wait is a
+        parked coroutine (no worker thread, see Gateway.send_async), so it does not count against the preparation
+        bound. Turns that have not sent their first bubble are refused at the hard live-turn cap
+        (LIVE_TURNS_CAP_PER_SLOT x concurrency); parked turns finishing their bubbles are never refused by it."""
+        return (self.preparing_count() < self.tuning.concurrency
+                and len(self.tasks) < self.tuning.concurrency * LIVE_TURNS_CAP_PER_SLOT)
+
     async def _run_fan(self, fan, first=None):
         """One fan's whole turn as a task. Never raises: every outcome becomes a hold / board state."""
         child = self.child(fan)
         child.last_active = runner.now()
         child.cancel_reason = None
         child.phase = "preparing"
+        child.first_bubble_sent = False
         child.priority = first
         before = child.turns_started
         try:
@@ -936,7 +960,7 @@ class Service:
         self.next_queue_event = now + self.tuning.status_every_s
         self.queue_stats = {"pending": len(ready) + len(waiting), "ready": len(ready), "quiet": len(waiting),
                             "in_flight": len(self.tasks), "send_waiting": self.send_gate.waiting,
-                            "oldest_wait_s": round(oldest_s, 1), "concurrency": self.tuning.concurrency}
+                            "preparing": self.preparing_count(), "oldest_wait_s": round(oldest_s, 1), "concurrency": self.tuning.concurrency}
         runner.emit({"event": "engine-queue", **self.queue_stats})
 
     @classmethod
@@ -1085,7 +1109,7 @@ class Service:
             if blocked:
                 self._status(fan, "blocked", blocked, message_id=mid, waiting_since=first)
                 continue
-            if len(self.tasks) >= self.tuning.concurrency:
+            if not self.has_preparation_slot():
                 self._status(fan, "waiting", "concurrency-limit", message_id=mid, waiting_since=first)
                 continue
             # A durable hold is not preparation work. Otherwise an older held
@@ -1361,7 +1385,7 @@ class Service:
         try:
             unanswered = await runner.database_call(self.ledger, ledger.unanswered_reply_ids, pilot_id=pilot.pilot_id, owner_token=pilot.owner_token,
                                                      input_key=key, now=runner.now()) if job is None else ()
-            with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, emit=runner.emit,
+            with NativeEngine(self.db, args.fan, chat=model.chat, send=gateway.send, send_async=gateway.send_async, emit=runner.emit,
                               content=self.content, context=self.context, contextual=contextual,
                               **({"reply_format": True} if job is None and self.reply_decision
                                  and self.reply_decision["authority"]["flags"].get("native_reply_format_enabled") else {}),
@@ -1679,6 +1703,21 @@ class Service:
         pending = self.ledger.unhandled_source_ids(pilot_id=self.pilot_id, source_ids=questions)
         return {mid: src for mid, src in questions.items() if mid in pending}
 
+    def control_store(self, url):
+        """Reuse one schema-validated pool; every control operation reads fresh rows."""
+        owner = getattr(self, "catalog_owner", self)
+        if not hasattr(owner, "_control_store_lock"):
+            owner._control_store_lock = threading.Lock()
+        with owner._control_store_lock:
+            current = getattr(owner, "_twin_store", None)
+            if current is None:
+                from onlyfans_runtime.store import Store
+                current = owner._twin_store = Store(url)
+                owner._control_store_url = url
+            elif getattr(owner, "_control_store_url", url) != url:
+                raise Refused("control-store-target-changed")
+            return current
+
     async def safety_check(self):
         """Run the shared inbound detectors (``operator_cases.scan``) for this fan; True when a hold is now enforced.
 
@@ -1692,7 +1731,7 @@ class Service:
         def run():
             from onlyfans_runtime import operator_cases
             from onlyfans_runtime.store import Store
-            return operator_cases.scan(Store(url), tenant, self.db, self.args.fan)
+            return operator_cases.scan(self.control_store(url), tenant, self.db, self.args.fan)
         try:
             enforced = await asyncio.to_thread(run)
         except Exception as exc:  # noqa: BLE001 - existing holds stay in force; detection never becomes a send path
@@ -1726,7 +1765,7 @@ class Service:
                 raise RuntimeError("twin-control-unavailable")
 
             def pause():
-                store = Store(url)
+                store = self.control_store(url)
                 with Session(store.engine) as s:
                     row = s.get(OfConversationState, (self.db, fan))
                     if row is None or row.mode != "automated":
@@ -1740,7 +1779,7 @@ class Service:
             await asyncio.to_thread(pause)
             from onlyfans_runtime import operator_cases
             await asyncio.to_thread(lambda: operator_cases.hold(
-                Store(url), tenant, self.db, fan, "identity", reason=attention[:64],
+                self.control_store(url), tenant, self.db, fan, "identity", reason=attention[:64],
                 evidence={"trigger": trigger, "attention": attention}, origin="detector"))
         except Exception as exc:  # fail closed: the runtime stop is still written
             async with get_session() as session:
@@ -1773,7 +1812,7 @@ class Service:
                 raise RuntimeError("twin-control-unavailable")
 
             def pause():
-                store = Store(url)
+                store = self.control_store(url)
                 with Session(store.engine) as s:
                     row = s.get(OfConversationState, (self.db, self.args.fan))
                     if row is None or row.mode != "automated":
@@ -1919,7 +1958,7 @@ class Service:
         be larger than the concurrency bound or the sender that would free the queue could never get a thread."""
         from concurrent.futures import ThreadPoolExecutor
         asyncio.get_running_loop().set_default_executor(
-            ThreadPoolExecutor(max_workers=max(self.tuning.concurrency * 3 + 12,
+            ThreadPoolExecutor(max_workers=max(self.tuning.concurrency * LIVE_TURNS_PER_SLOT + 12,
                                                self.tuning.send_concurrency * 2 + 12),
                                thread_name_prefix="fastt"))
 
@@ -1986,7 +2025,13 @@ class Service:
                         from of_client import close_client_http
                         close_client_http(self.client)
                 finally:
-                    await engine.dispose()
+                    try:
+                        control = getattr(self, "_twin_store", None)
+                        if control is not None and callable(getattr(control, "close", None)):
+                            await asyncio.to_thread(control.close)
+                            self._twin_store = None
+                    finally:
+                        await engine.dispose()
 
 
 async def preflight(args):

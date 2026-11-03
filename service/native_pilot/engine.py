@@ -85,7 +85,7 @@ class _TextClient:
     def __init__(self, engine):
         self.engine = engine
 
-    def send_message(self, fan_id, text, **kwargs):
+    def _check_send(self, fan_id, text, kwargs):
         # Native plain-text calls have no keyword arguments. Refuse even an
         # empty media/price/quote argument, rather than guessing its semantics.
         if (type(fan_id) is not int or fan_id != self.engine.fan_id
@@ -111,17 +111,36 @@ class _TextClient:
             self.engine._refuse(held)
         if self.engine.content:
             self.engine.content.terms(kwargs)
+
+    def send_message(self, fan_id, text, **kwargs):
+        self._check_send(fan_id, text, kwargs)
         try:
             result = self.engine._send(fan_id, text, kwargs)
         except Exception:
             # The native loop intentionally catches send exceptions. Preserve a
             # stop signal outside that loop, without logging raw transport text.
             self.engine._refuse("native-send-interrupted")
+        self._sent(kwargs)
+        return result
+
+    async def send_message_async(self, fan_id, text, **kwargs):
+        """The same send as ``send_message``, awaited on the event loop instead of from a pool thread: a reply that
+        waits at the account's send gate parks as a coroutine and holds no worker thread while it waits."""
+        if self.engine._send_async is None:
+            return await asyncio.to_thread(self.send_message, fan_id, text, **kwargs)
+        self._check_send(fan_id, text, kwargs)
+        try:
+            result = await self.engine._send_async(fan_id, text, kwargs)
+        except Exception:
+            self.engine._refuse("native-send-interrupted")
+        self._sent(kwargs)
+        return result
+
+    def _sent(self, kwargs):
         if kwargs:
             self.engine._card_sent = True      # a priced card (media + price) reached the wire
             if getattr(self.engine, "contextual", None) is not None and self.engine.contextual.armed is not None:
                 self.engine._contextual_card_sent = True
-        return result
 
     def mark_chat_read(self, fan_id):
         if type(fan_id) is not int or fan_id != self.engine.fan_id:
@@ -204,7 +223,7 @@ class NativeEngine:
     def __init__(self, account_id, fan_id, *, chat, send, emit=None, model=MODEL, content=None, context=None,
                  own_offers_only=False, followups=None, arm_unsend=None, unsent=None, card_of=None,
                  unanswered_reply_ids=(), unlinked_paid=None, contextual=None, reply_format=False,
-                 open_offers_ok=False):
+                 open_offers_ok=False, send_async=None):
         # ``account_id`` is the DB-side id ai_chatter queries with: Twin's
         # ``of-<owner>`` or a bare decimal (see native_pilot.scope).
         if not AccountScope.valid(account_id) or type(fan_id) is not int or fan_id <= 0:
@@ -237,6 +256,7 @@ class NativeEngine:
         self.followups = followups
         self._chat = chat
         self._send = send
+        self._send_async = send_async     # optional coroutine twin of ``send`` (see _TextClient.send_message_async)
         # Discounted resend only: the gateway's guarded removal (see _TextClient.unsend_message) and the ids it confirmed gone.
         self._arm_unsend, self._unsent = arm_unsend, unsent
         # Runner-owned read: True when THIS fan has a paid ppv_message no message explains (postsale.unlinked_paid_fans).

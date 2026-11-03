@@ -214,3 +214,53 @@ def test_removed_asset_is_missing_description_exclusion(database,monkeypatch):
         r=account_readiness(s,ACCOUNT,settings)
     assert r['excluded_products']=={'second':'media_description_missing:7102'}
     store.close()
+
+
+def _unlinked(s,fan_id,tx_id,amount=6900):
+    """An unresolved paid PPV with no provider message identity, after the current binding."""
+    from db.models import Transaction
+    s.add(Transaction(id=tx_id,account_id=ACCOUNT,fan_id=fan_id,kind='ppv_message',message_id=None,amount_cents=amount,
+        currency='USD',occurred_at=utcnow(),source='ledger',status='pending',provider_transaction_id='fixture-%d'%tx_id))
+
+
+def test_other_fans_unlinked_purchases_do_not_freeze_this_fans_card_at_prepare_or_dispatch(database,monkeypatch):
+    """Launch acceptance: 485092/485096-shaped rows for other known fans stay unresolved; fan 101 still gets a card."""
+    from onlyfans_runtime.commerce import held
+    from onlyfans_runtime import media_delivery
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    with Session(engine) as s,s.begin():
+        _unlinked(s,15599495,485092);_unlinked(s,601923768,485096,1200)
+    with Session(engine) as s:
+        assert held(s,ACCOUNT),'the account view still shows the unresolved purchases'
+        assert held(s,ACCOUNT,15599495) and held(s,ACCOUNT,601923768),'each buyer keeps its protection'
+        assert not held(s,ACCOUNT,101)
+        with pytest.raises(Refused,match='commerce evidence needs review'):
+            media_delivery.assert_unowned(s,ACCOUNT,15599495,{'media_ids':[7101],'preview_ids':[]})
+    d=decision('offer','Here’s that outfit photo you asked about.','first',sequence='fixture_level')
+    identity,m=run(service,engine,d)
+    assert status(engine,identity)!='held'
+    intent=service.queue(TENANT,ACCOUNT,identity)
+    # A new unlinked sale for another known fan lands between queueing and dispatch.
+    with Session(engine) as s,s.begin():_unlinked(s,777001,485200,1500)
+    transport=SyntheticTextTransport(ACCOUNT)
+    assert authority.dispatch(TENANT,ACCOUNT,intent,transport)=='accepted'
+    assert transport.calls[0].media_ids==(7101,) and transport.calls[0].price_cents==7500
+    from db.models import Transaction
+    with Session(engine) as s:
+        rows=s.scalars(select(Transaction).order_by(Transaction.id)).all()
+        assert [(r.id,r.fan_id,r.message_id,r.status) for r in rows]==[
+            (485092,15599495,None,'pending'),(485096,601923768,None,'pending'),(485200,777001,None,'pending')]
+    store.close()
+
+
+def test_unknown_buyer_unlinked_purchase_still_holds_this_fans_card(database,monkeypatch):
+    from onlyfans_runtime.commerce import held
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    with Session(engine) as s,s.begin():_unlinked(s,None,485300)
+    with Session(engine) as s:assert held(s,ACCOUNT,101)
+    d=decision('offer','Here’s that outfit photo you asked about.','first',sequence='fixture_level')
+    identity,m=run(service,engine,d)
+    with Session(engine) as s:
+        e=s.get(MoxyEvent,(ACCOUNT,identity))
+        assert e.status!='done' or s.scalar(select(func.count()).select_from(OfTextIntent).where(OfTextIntent.catalog_item_id.is_not(None)))==0
+    store.close()

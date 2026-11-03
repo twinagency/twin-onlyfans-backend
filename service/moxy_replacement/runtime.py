@@ -328,6 +328,11 @@ RECOVERABLE_REASONS={'media_previously_sent_requires_explicit_resend','acceptanc
     'invitation_stale_or_ambiguous','product_terms_unresolved','price_below_authorised_minimum',
     'price_differs_from_authorised_fixed','product_media_format_mismatch','product_photo_count_mismatch'}
 RECOVERABLE_PREFIXES=('condition_not_met:','condition_unknown:')
+RECOVERABLE_REASONS|={'pilot_specialist_handover_required'}
+# Unusable model output (format) for the same input: one bounded correction too, so the fan is not left silent.
+FORMAT_REASONS={'invalid_model_json','invalid_model_decision','invalid_message_plan','invalid_message_part',
+    'message_plan_media_mismatch','message_plan_text_mismatch','empty_model_reply','duplicate_model_key',
+    'invalid_request_evidence','unsupported_output_markup_or_link','handover_must_not_have_messages'}
 
 
 def recoverable(reason):
@@ -582,6 +587,11 @@ class MoxyService:
             if reason:
                 event.status='unknown' if reason.endswith('unknown') else 'held';event.reason=reason
                 payload=json.loads(event.payload_json)
+                if (event.status=='held' and not payload.get('correction_of') and owner.mode=='on' and event.kind=='turn'
+                        and payload.get('source_message_id') and reason in FORMAT_REASONS):
+                    enqueue(s,account,event.fan_id,'turn','correction:'+event_id,
+                        {'source_message_id':payload['source_message_id'],'correction_of':event_id,
+                         'rejected':{'reason':reason[:120],'action':None,'product_id':None}})
                 if event.status=='held' and payload.get('correction_of') and owner.mode=='on':
                     # The bounded correction produced no usable decision: a person takes over, no regeneration.
                     from onlyfans_runtime.operator_cases import open_case

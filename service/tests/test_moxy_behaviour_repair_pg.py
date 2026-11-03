@@ -391,3 +391,16 @@ def test_message_plan_is_the_source_of_truth_for_text():
        'permission':None,'question':None,'resolve_obligation':None,'messages':[{'text':'hey there','media':False},{'text':'how was it','media':False}]}
     v=writer.parse(json.dumps(d))
     assert v['text']=='hey there' and v['messages'][0]['text']=='hey there'
+
+
+def test_unusable_model_output_gets_one_correction_not_silence(database,monkeypatch):
+    from onlyfans_runtime.native_planning import SyntheticNativeModel
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'would you suck me until I cum')
+    identity=service.add_event(TENANT,ACCOUNT,101,'turn','fmt-1',{'source_message_id':2})
+    service.prepare(TENANT,ACCOUNT,identity,SyntheticNativeModel(raw_output='not json'))
+    assert status(engine,identity)=='held'
+    fix=_corrections(engine);assert len(fix)==1 and json.loads(fix[0].payload_json)['rejected']['product_id'] is None
+    service.prepare(TENANT,ACCOUNT,fix[0].event_id,model(decision('reply','ha, bold. not that one babe')))
+    assert status(engine,fix[0].event_id)=='ready' and _cases(engine)==[]
+    store.close()

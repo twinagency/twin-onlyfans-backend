@@ -37,8 +37,10 @@ class SyntheticCommerceEvent:
     payout_status: str = "cleared"
 
 
-def _unlinked_paid(account_id, fan_id=None, *, excluded=True):
-    """Paid, unlinked ppv_message ledger rows since the current binding; ``excluded=False`` hides audited exclusions."""
+def _unlinked_paid(account_id, fan_id=None, *, excluded=True, unknown_recipient=False):
+    """Paid, unlinked ppv_message ledger rows since the current binding; ``excluded=False`` hides audited exclusions.
+
+    ``unknown_recipient`` limits the rows to those whose fan is not established (fan_id NULL)."""
     from db.onlyfans_ledger_models import OfLedgerExclusion
     from db.onlyfans_models import OfRuntime
     from .ledger import PAID
@@ -50,6 +52,8 @@ def _unlinked_paid(account_id, fan_id=None, *, excluded=True):
         Transaction.occurred_at >= OfCreatorBinding.created_at))
     if fan_id is not None:
         query = query.where(Transaction.fan_id == fan_id)
+    if unknown_recipient:
+        query = query.where(Transaction.fan_id.is_(None))
     if not excluded:
         query = query.where(~select(OfLedgerExclusion.id).where(
             OfLedgerExclusion.account_id == Transaction.account_id,
@@ -59,7 +63,11 @@ def _unlinked_paid(account_id, fan_id=None, *, excluded=True):
 
 
 def held(s, account_id, fan_id=None):
-    """Commerce hold. Account-wide unless ``fan_id`` is given, which adds that fan's own unlinked paid purchases.
+    """Commerce hold. Account-wide when ``fan_id`` is None; for a given fan it is that fan's own scope.
+
+    An unlinked paid purchase with a verified fan holds only that fan (excluded or not). One whose recipient is
+    unknown (fan_id NULL) cannot be scoped, so it keeps holding every fan until an audited exclusion or a link
+    resolves it. Coverage/freshness failures and evidence conflicts stay account-wide for every fan.
 
     An audited exclusion (of_ledger_exclusion) removes one unlinked purchase from the account-wide hold only;
     it still holds its own fan, so that fan is never sold or discounted into a purchase we cannot link.
@@ -86,8 +94,9 @@ def held(s, account_id, fan_id=None):
                     OfLedgerResolution.binding_id==OfRuntime.binding_id).exists()).limit(1)) is not None
         # Unlinked purchases from before the current binding was created cannot
         # be sales this binding made, so they stay visible but do not hold it.
-        or s.scalar(_unlinked_paid(account_id, excluded=False)) is not None
-        or (fan_id is not None and s.scalar(_unlinked_paid(account_id, fan_id)) is not None)
+        or (fan_id is None and s.scalar(_unlinked_paid(account_id, excluded=False)) is not None)
+        or (fan_id is not None and (s.scalar(_unlinked_paid(account_id, fan_id)) is not None
+            or s.scalar(_unlinked_paid(account_id, excluded=False, unknown_recipient=True)) is not None))
         or s.scalar(select(OfLedgerScan.account_id).where(OfLedgerScan.account_id == account_id,
             ((OfLedgerScan.status == "held") | (OfLedgerScan.last_complete_at.is_(None)))).limit(1)) is not None)
 

@@ -49,7 +49,8 @@ def test_account_is_held_before_exclusion_and_only_the_unlinked_fan_after(databa
     try:
         tx_id = seed_unlinked(store, account)
         with Session(store.engine) as s:
-            assert held(s, account) and held(s, account, FAN) and held(s, account, OTHER)
+            assert held(s, account) and held(s, account, FAN), "account view and the buyer are held"
+            assert not held(s, account, OTHER), "a known buyer's unlinked purchase never holds another fan"
         before = ledger_status(store, TENANT, account)
         assert before["unresolvedTransactions"] == 1 and before["excludedTransactions"] == 0
         assert before["commerceHold"] is True
@@ -187,8 +188,12 @@ def test_native_sales_and_media_delivery_refuse_only_the_unlinked_fan(database, 
             s.add(OfDeliveryPolicy(account_id=account, transport_kind="synthetic", media_enabled=True))
         snapshot = {"media_ids": [1], "preview_ids": []}
         with Session(store.engine) as s:
-            for fan in (FAN, OTHER):
-                assert native_sales.eligible(s, account, fan, utcnow()) == (False, "commerce_evidence_conflict")
+            # Unresolved and not excluded: only the buyer is refused, at eligibility and at dispatch.
+            assert native_sales.eligible(s, account, FAN, utcnow()) == (False, "commerce_evidence_conflict")
+            assert native_sales.eligible(s, account, OTHER, utcnow())[1] != "commerce_evidence_conflict"
+            with pytest.raises(Refused, match="commerce evidence needs review"):
+                media_delivery.assert_unowned(s, account, FAN, snapshot)
+            media_delivery.assert_unowned(s, account, OTHER, snapshot)
         exclude(store, account, tx_id)
         with Session(store.engine) as s:
             assert native_sales.eligible(s, account, FAN, utcnow()) == (False, "commerce_evidence_conflict")
@@ -196,6 +201,50 @@ def test_native_sales_and_media_delivery_refuse_only_the_unlinked_fan(database, 
             with pytest.raises(Refused, match="commerce evidence needs review"):
                 media_delivery.assert_unowned(s, account, FAN, snapshot)
             media_delivery.assert_unowned(s, account, OTHER, snapshot)
+    finally:
+        store.close()
+
+
+THIRD = 103
+
+
+def test_new_unlinked_purchase_from_another_known_fan_does_not_freeze_this_fan(database, monkeypatch):
+    """Two unresolved purchases (no exclusions) from other known fans, then a third arrives: FAN stays sellable."""
+    store, account, _ = verified(database, monkeypatch)
+    try:
+        assert record(store, account, purchase(id="native-tx-a", user={"id": OTHER})) == "applied"
+        assert record(store, account, purchase(id="native-tx-b", user={"id": THIRD}, amount="12.00")) == "applied"
+        with Session(store.engine) as s, s.begin():
+            s.add(OfDeliveryPolicy(account_id=account, transport_kind="synthetic", media_enabled=True))
+        snapshot = {"media_ids": [1], "preview_ids": []}
+        with Session(store.engine) as s:
+            assert held(s, account), "the account view still reports the unresolved purchases"
+            assert held(s, account, OTHER) and held(s, account, THIRD), "each buyer keeps its own protection"
+            assert not held(s, account, FAN)
+            assert native_sales.eligible(s, account, FAN, utcnow())[1] != "commerce_evidence_conflict"
+            media_delivery.assert_unowned(s, account, FAN, snapshot)
+            for buyer in (OTHER, THIRD):
+                with pytest.raises(Refused, match="commerce evidence needs review"):
+                    media_delivery.assert_unowned(s, account, buyer, snapshot)
+        assert record(store, account, purchase(id="native-tx-c", user={"id": 104}, amount="15.00")) == "applied"
+        with Session(store.engine) as s:
+            assert not held(s, account, FAN), "a new sale for another known fan does not re-freeze FAN"
+            assert held(s, account, 104)
+            rows = s.scalars(select(Transaction).order_by(Transaction.id)).all()
+            assert [(r.fan_id, r.message_id) for r in rows] == [(OTHER, None), (THIRD, None), (104, None)], \
+                "evidence kept, nothing linked or deleted"
+    finally:
+        store.close()
+
+
+def test_unlinked_purchase_with_unknown_recipient_still_holds_every_fan(database, monkeypatch):
+    store, account, _ = verified(database, monkeypatch)
+    try:
+        tx_id = seed_unlinked(store, account)
+        with Session(store.engine) as s, s.begin():
+            s.get(Transaction, tx_id).fan_id = None
+        with Session(store.engine) as s:
+            assert held(s, account) and held(s, account, FAN) and held(s, account, OTHER)
     finally:
         store.close()
 

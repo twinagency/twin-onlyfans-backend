@@ -249,3 +249,10 @@ def test_offer_may_answer_a_buying_question_but_never_closes_an_owed_item(databa
     identity,_=run(service,engine,decision('offer','Not that, but this one is close.','first',sequence='fixture_level',resolve_obligation='ob-1'))
     assert status(engine,identity)==expected
     store.close()
+
+
+def test_em_and_en_dashes_are_stripped_from_fan_text():
+    d={'action':'reply','text':'i know — but no – ok','product_id':None,'sequence':None,'flags':[],'reason':'x',
+       'permission':None,'question':None,'resolve_obligation':None,'messages':[{'text':'i know — but no – ok','media':False}]}
+    v=writer.parse(json.dumps(d))
+    assert '—' not in v['text'] and '–' not in v['text'] and v['messages'][0]['text']==v['text']

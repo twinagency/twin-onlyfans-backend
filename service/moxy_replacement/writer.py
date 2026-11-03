@@ -70,6 +70,9 @@ def messages(snapshot):
         'Do not restart introductions or ask a question already answered. Read all recent messages, including outgoing '
         'human/unattributed messages and attachments; continue their actual flow rather than answering obsolete input. '
         'Avoid repeating recent openings, nicknames, challenges or conversational moves; never resend or lightly reword a line already sent. '
+        'Never use em dashes or en dashes. Never lecture or announce a hard no or a rule; when something is unavailable, tease or deflect '
+        'playfully in one short line and go straight to the closest eligible item, and never repeat a no already given. '
+        'Never say or imply the fan has, owns or has seen an item he has not purchased; an unpaid card is still locked for him. '
         'When the fan flirts, uses innuendo or says what he wants to see, follow that thread in the creator voice instead of '
         'returning to an unrelated literal topic or repeating an ignored question such as his name; where sexting is not '
         'permitted keep it suggestive, not explicit, and turn the interest into an invite or offer of a matching eligible product. '
@@ -127,6 +130,15 @@ def parse(raw, *, defer_sales_pause=False):
         raise ActionBlocked('owned_handover_required')
     if not defer_sales_pause and any(flag in value['flags'] for flag in ('hardship','refusal','boundary_reset')) and value['action'] in {'invite','offer','resend','alternative','continue'}:
         raise ActionBlocked('sales_paused_by_current_input')
+    # House style: never an em or en dash in fan text (prompt ban + code strip).
+    def nodash(t):
+        import re
+        t=re.sub(r'\s*[\u2014\u2013]\s*',', ',t)
+        return re.sub(r',\s*([,.!?])',r'\1',t).replace(' ,',',')
+    value['text']=nodash(value['text'])
+    if isinstance(value.get('messages'),list):
+        for m in value['messages']:
+            if isinstance(m,dict) and isinstance(m.get('text'),str):m['text']=nodash(m['text'])
     from .parts import plan
     parts=plan(value)
     from native_pilot.identity import denies_automation, discloses_ai

@@ -249,6 +249,46 @@ def run_conversation(ctx,persona,version,creator_label):
     return dict(fan_name=persona['name'],persona=persona['persona'],messages=msgs,metrics=metrics)
 
 
+def fabricate_cristina(ctx):
+    """FIXTURE ONLY. Cristina has no Moxy account or catalogue on the live box, so there is no real inventory to read.
+    Her real rule file is loaded; the products below are placeholders shaped to her sheet (4-photo bundles, $60+).
+    They are labelled as fixtures in every report. The model call and its cost accounting still run through the
+    already-configured Amelia connection (same model); nothing is read from or written to Cristina's account."""
+    from ..configuration import load
+    from ..runtime import configuration
+    cfg=load('cristina')
+    spec=[('fx-booty-1','booty_photos',6000,'Booty, black thong, 4 pictures',4),
+          ('fx-booty-2','booty_photos',6000,'Booty, grey shorts, 4 pictures',4),
+          ('fx-bikini-1','bikini_lingerie_booty',6500,'Bikini, side view',3),
+          ('fx-bikini-2','bikini_lingerie_booty',6000,'Lingerie set, red',3),
+          ('fx-boobs-1','boobs_photos',9000,'Boobs, covered, 4 pictures',4),
+          ('fx-nude-booty-1','nude_booty',7000,'Bare booty, bent over',3)]
+    products=[];inventory={};mid=8000;paid={}
+    for i,(key,category,cents,label,n) in enumerate(spec):
+        assets=[];files=[];ids=[]
+        for j in range(n):
+            mid+=1;ids.append(mid);fact='FIXTURE description (not a real vault item): %s, picture %d'%(label,j+1)
+            assets.append({'id':mid,'revision':1,'facts':[fact],'evidence_ref':'asset:fixture-%d'%mid})
+            files.append({'media_id':mid,'kind':'photo','description_basis':{},'operator_corrected':False})
+        paid[key]=ids
+        products.append({'id':key,'revision':1,'category':category,'price_cents':cents,'currency':'USD','assets':assets,
+            'source':{'document':'03_Cristina.pdf','pages':[2]},'approval_ref':'fixture:cristina','available':True,
+            'requires':{},'caption_instructions':'Accurate caption only.'})
+        inventory[key]={'item':{'id':200+i,'label':label,'description_for_ai':label,'price_cents':cents,'kind':'image_set'},
+            'source':None,'media_ids':ids,'preview_ids':[],'price_cents':cents,'files':files}
+    settings={'creator_key':'cristina','products':products,'catalogue_bindings':{},'sequences':{},
+        'operational':{f:'fixture' for f in cfg.creator['required_operational_fields']},'public_facts':{},'fixture':True}
+    settings['operational']['assigned_operator']='fixture'
+    cfg,pa=configuration(settings)
+    fan_state=dict(ctx.base['fan_state']);fan_state['paid_assets_by_product']=paid
+    base=deepcopy(ctx.base)
+    base.update(pilot=None,instructions=cfg.public_context(),fan_state=fan_state,products={p['id']:p for p in products},
+        inventory=inventory,sequences={},operational=settings['operational'],configuration_fingerprint=pa.fingerprint,
+        approved_remedies={})
+    ctx.base=base;ctx.settings=settings;ctx.cfg=cfg;ctx.pa=pa
+    return ctx
+
+
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__.split('\n')[0])
     p.add_argument('--account',required=True);p.add_argument('--fan',required=True,type=int)
@@ -261,9 +301,10 @@ def main(argv=None):
     if args.dry_run:
         raise SystemExit('dry-run is not supported here: use qualify --dry-run for the harness and run this only on the real path')
     ctx=Q.real_setup(args,out)
+    if args.creator.lower()=='cristina':ctx=fabricate_cristina(ctx)
     chosen=PERSONAS if args.personas=='all' else [PERSONAS[int(i)-1] for i in args.personas.split(',')]
     convs=[];stop=None
-    print('%s %s: %d products in real inventory, model %s'%(args.creator,args.version,len(ctx.base['products']),ctx.chosen),flush=True)
+    print('%s %s: %d products (%s), model %s'%(args.creator,args.version,len(ctx.base['products']),'FIXTURE' if args.creator.lower()=='cristina' else 'real inventory',ctx.chosen),flush=True)
     try:
         for persona in chosen:
             c=run_conversation(ctx,persona,args.version,args.creator)

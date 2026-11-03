@@ -57,7 +57,7 @@ def messages(snapshot):
         'question is an unresolved buying question quoted exactly from recent fan text, or null. '
         'resolve_obligation is a provided obligation ID only when the action actually resolves it, otherwise null. '
         'reason is a short internal rationale. handover and none have empty text. '
-        'invite must name a real product; offer/continue/resend/alternative carry the selected product. '
+        'invite must name a real product; offer/continue/resend/alternative carry the selected product. If your text describes or proposes a specific item, the action is invite/offer/alternative with that product_id, never reply. '
         'When the fan accepts the retained invitation, the action is offer with that invitation\'s product. '
         'When the selected product belongs to a sequence listed in the snapshot, set sequence to that sequence\'s name (never null); '
         'otherwise sequence is null. '

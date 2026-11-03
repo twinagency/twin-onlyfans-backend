@@ -57,7 +57,8 @@ def test_refused_sale_retains_constraint_only_outside_preview(database,monkeypat
 def test_invalid_question_cannot_create_obligation_but_keeps_refusal(database,monkeypatch):
     engine,store,service,authority,claim,settings=setup(database,monkeypatch)
     identity,_=run(service,engine,evidenced_decision(store,'none','',flags=['refusal'],question='Invented buying question'))
-    assert status(engine,identity)=='held'
+    # An unquoted question is dropped (no reminder) rather than holding the whole turn.
+    assert status(engine,identity)=='done'
     with Session(engine) as s:
         state=json.loads(s.get(MoxyFan,(ACCOUNT,101)).state_json)
         assert state['sales_refused'] is True and state.get('obligations',[])==[]

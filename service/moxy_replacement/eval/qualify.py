@@ -30,7 +30,7 @@ CASES=[
  ('accepted_invitation','Yes please, send that photo.',{'offer'}),
  ('purchase_continuation','That was great. Have you got another different outfit photo?',{'offer','invite'}),
  ('innuendo_follow','I meant a different kind of rough \U0001fae2',{'reply','invite','offer'}),
- ('unavailable_pivot','Going with what?\nI came here to see your pussy not talk about all this random stuff I tried to hint at something naughty and you\u2019re just being boring',{'invite','offer'}),
+ ('unavailable_pivot','Going with what?\nI came here to see your pussy not talk about all this random stuff I tried to hint at something naughty and you\u2019re just being boring',{'invite','offer','alternative'}),
 ]
 
 

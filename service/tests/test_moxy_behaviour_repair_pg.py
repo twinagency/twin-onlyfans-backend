@@ -56,7 +56,8 @@ def test_evidenced_constraints_persist_and_block_later_offers(database,monkeypat
 def test_invented_quote_cannot_create_a_fan_constraint(database,monkeypatch):
     engine,store,service,authority,claim,settings=setup(database,monkeypatch)
     identity,_=run(service,engine,decision('none','',observations=[evidence('sales_refused','Invented refusal')]))
-    assert status(engine,identity)=='held'
+    # The unsupported annotation is dropped (no silent held turn) and never becomes fan state.
+    assert status(engine,identity)=='done'
     with Session(engine) as s:assert json.loads(s.get(MoxyFan,(ACCOUNT,101)).state_json)=={}
     store.close()
 
@@ -378,14 +379,6 @@ def test_examples_give_both_creators_sales_flow_and_stay_compact():
     assert 'failure' in [e['kind'] for e in references('amelia')['examples']]
 
 
-def test_recent_emoji_is_not_reused_and_parts_stay_consistent():
-    h=[{'direction':'out','text':'hey you 😏'},{'direction':'in','text':'hi'},{'direction':'out','text':'lol 😂'}]
-    d={'text':'oh you 😏 bad 😈','messages':[{'text':'oh you 😏 bad 😈','media':False},{'text':'😂','media':True}]}
-    out=writer.dedupe_emoji(d,h)
-    assert out['text']=='oh you bad 😈' and out['messages'][0]['text']==out['text']
-    assert out['messages'][1]['text']=='😂'  # a part is never emptied
-
-
 def test_message_plan_is_the_source_of_truth_for_text():
     d={'action':'reply','text':'old summary','product_id':None,'sequence':None,'flags':[],'reason':'x',
        'permission':None,'question':None,'resolve_obligation':None,'messages':[{'text':'hey there','media':False},{'text':'how was it','media':False}]}
@@ -404,3 +397,150 @@ def test_unusable_model_output_gets_one_correction_not_silence(database,monkeypa
     service.prepare(TENANT,ACCOUNT,fix[0].event_id,model(decision('reply','ha, bold. not that one babe')))
     assert status(engine,fix[0].event_id)=='ready' and _cases(engine)==[]
     store.close()
+
+
+# ---- Launch regressions: the five silent simulated turns, budget, cheapest, standalone continue ----
+
+def _sent_card(engine,mid,media,price=7500,paid=False):
+    from db.models import Message
+    from onlyfans_runtime.store import utcnow
+    with Session(engine) as s,s.begin():
+        s.add(Message(account_id=ACCOUNT,fan_id=101,message_id=mid,direction='out',body='locked',media_ids=json.dumps([media]),
+            media_count=1,price_cents=price,is_paid=paid,purchased_at=utcnow() if paid else None,created_at=utcnow()))
+
+
+def _user(m,i=0):return json.loads(m.calls[i][1]['content'])
+
+
+def _standalone(service,settings):
+    """'fourth' becomes standalone inventory (outside the ordered sequence), like the pilot's products."""
+    service.configure(TENANT,ACCOUNT,expected_revision=1,mode='on',actor='fixture-operator',
+        settings=dict(settings,sequences={'fixture_level':['first','second','third']},
+            sequence_levels={'fixture_level':[['first','second','third']]}))
+
+
+@pytest.mark.parametrize('text',['send it now','ill take that one too','so what do you have for me'])
+def test_correction_cannot_see_the_refused_or_already_sent_card_as_offerable(database,monkeypatch,text):
+    """Amelia Jake/Luke, Cristina Greg: the retry re-picked the refused card. It is now marked not offerable."""
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    _standalone(service,settings)
+    _sent_card(engine,7000,7101)
+    incoming(store,text,mid=3)
+    first,_=run(service,engine,decision('offer','here you go','first',sequence='fixture_level'),payload={'source_message_id':3})
+    with Session(engine) as s:assert s.get(MoxyEvent,(ACCOUNT,first)).reason=='media_previously_sent_requires_explicit_resend'
+    fix=_corrections(engine)[0]
+    m=model(decision('offer','try this one instead','fourth'))
+    service.prepare(TENANT,ACCOUNT,fix.event_id,m)
+    products=_user(m)['products']
+    assert products['first']['no_offer']=='refused' and 'no_offer' not in products['fourth']
+    assert _user(m)['commercial_state']['sent_unpaid_cards'][0]['product_id']=='first', 'kept in history for answers'
+    assert status(engine,fix.event_id)=='ready' and not _cases(engine)
+    store.close()
+
+
+def test_already_owned_product_is_shown_as_owned_for_a_factual_reply(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    _standalone(service,settings)
+    _sent_card(engine,7000,7101,paid=True)
+    incoming(store,'ill take that one too',mid=3)
+    m=model(decision('reply','you already have that one babe, check your chat'))
+    identity=service.add_event(TENANT,ACCOUNT,101,'turn','owned-1',{'source_message_id':3})
+    service.prepare(TENANT,ACCOUNT,identity,m)
+    p=_user(m)['products']
+    assert p['first'].get('no_offer') in {'owned','sent'} and 'no_offer' not in p['fourth']
+    assert status(engine,identity)=='ready'
+    store.close()
+
+
+def test_unsupported_constraint_on_ordinary_chat_is_dropped_not_held(database,monkeypatch):
+    """Cristina Dan: 'had a rough day at work' with an annotation that quoted nothing he said."""
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'had a rough day at work tbh')
+    identity,_=run(service,engine,decision('reply','aw no, what happened?',flags=['hardship'],
+        observations=[evidence('financial_hardship','I lost my job')]),payload={'source_message_id':2})
+    assert status(engine,identity)=='ready' and not _corrections(engine)
+    with Session(engine) as s:
+        assert json.loads(s.get(MoxyFan,(ACCOUNT,101)).state_json).get('financial_hardship') is None
+        assert json.loads(s.get(MoxyEvent,(ACCOUNT,identity)).decision_json)['flags']==[]
+    store.close()
+
+
+def test_unsupported_annotation_never_clears_a_real_restriction_or_permits_an_offer(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'Just chat with me, no offers please.')
+    run(service,engine,decision('none','',observations=[evidence('ordinary_chat_only','Just chat with me, no offers please.')]))
+    incoming(store,'what did you do today?',mid=3)
+    later,_=run(service,engine,decision('offer','buy this','first',sequence='fixture_level',
+        observations=[evidence('ordinary_chat_only','invented resolution',active=False,mid=3)]),key='later',payload={'source_message_id':3})
+    assert status(engine,later)=='held'
+    with Session(engine) as s:assert json.loads(s.get(MoxyFan,(ACCOUNT,101)).state_json)['ordinary_chat_only'] is True
+    store.close()
+
+
+def test_harmless_message_part_shape_slips_are_normalised():
+    """Cristina Luke: invalid_message_part twice. Extra keys, bare strings and blank text parts no longer lose the reply."""
+    v=writer.parse(json.dumps(decision('reply','yes baby',messages=[{'text':'yes baby','media':False,'tone':'warm'},
+        {'text':'  ','media':False},'its all yours'])))
+    assert v['messages']==[{'text':'yes baby','media':False},{'text':'its all yours','media':False}]
+    with pytest.raises(ActionBlocked):
+        writer.parse(json.dumps(decision('reply','x',messages=[{'text':'x','media':'yes'}])))
+
+
+def test_stated_budget_is_recorded_and_no_over_budget_card_is_sent(database,monkeypatch):
+    """Cristina Tom: '$20' then a $60 card. Budget is evidence-backed state; over-budget products are not offerable."""
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    _standalone(service,settings)
+    quote='thats too much, i only have $20'
+    incoming(store,quote)
+    first,_=run(service,engine,decision('offer','how about this one','fourth',
+        observations=[dict(evidence('budget',quote),amount_cents=2000)]),payload={'source_message_id':2})
+    with Session(engine) as s:
+        e=s.get(MoxyEvent,(ACCOUNT,first))
+        assert e.status=='held' and e.reason=='price_exceeds_budget'
+        assert json.loads(s.get(MoxyFan,(ACCOUNT,101)).state_json)['budget_cents']==2000
+    fix=_corrections(engine)[0]
+    m=model(decision('reply','aw thats okay, nothing that low right now but i still love chatting with you'))
+    service.prepare(TENANT,ACCOUNT,fix.event_id,m)
+    u=_user(m)
+    assert u['products']['fourth']['no_offer']=='refused' and u['products']['first']['no_offer']=='over_budget'
+    assert u['commercial_state']['stated_budget_cents']==2000 and 'cheapest_offerable_cents_by_category' not in u['commercial_state']
+    assert status(engine,fix.event_id)=='ready' and not _cases(engine)
+    store.close()
+
+
+def test_budget_amount_must_be_what_the_fan_wrote(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    quote='i only have $20'
+    incoming(store,quote)
+    identity,_=run(service,engine,decision('reply','okay babe',observations=[dict(evidence('budget',quote),amount_cents=6000)]))
+    assert status(engine,identity)=='ready'
+    with Session(engine) as s:assert 'budget_cents' not in json.loads(s.get(MoxyFan,(ACCOUNT,101)).state_json)
+    store.close()
+
+
+def test_cheapest_comes_from_offerable_inventory_not_the_last_card(database,monkeypatch):
+    """Amelia Ryan: told the last card was the cheapest. The real lowest offerable price per category is supplied."""
+    from moxy_replacement.state import commercial_state
+    snap={'history':[],'fan_state':{},'products':{'a':{'category':'booty','price_cents':3000},'b':{'category':'booty','price_cents':2000},
+        'c':{'category':'feet','price_cents':1500},'d':{'category':'booty','price_cents':1000}},
+        'offer_eligibility':{'a':'ok','b':'ok','c':'ok','d':'already_owned_use_existing_access'}}
+    cs=commercial_state(snap)
+    assert cs['cheapest_offerable_cents_by_category']=={'booty':2000,'feet':1500} and cs['owned_products']==['d']
+
+
+def test_continue_from_standalone_inventory_is_an_ordinary_offer(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    _standalone(service,settings)
+    incoming(store,'nice, got more?')
+    identity,_=run(service,engine,decision('continue','got more for you','fourth'),payload={'source_message_id':2})
+    with Session(engine) as s:e=s.get(MoxyEvent,(ACCOUNT,identity));assert e.status=='ready',e.reason
+    store.close()
+
+
+def test_writer_prompt_drops_invented_cadence_and_emoji_rules():
+    from moxy_replacement.writer import messages
+    import inspect
+    src=inspect.getsource(messages)
+    assert 'this turn or the next' not in src and 'is a failure' not in src and 'never reuse an emoji' not in src
+    assert 'no em or en dashes' in src.lower() and 'Affection alone' in src
+    assert not hasattr(writer,'dedupe_emoji')

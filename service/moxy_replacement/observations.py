@@ -2,7 +2,15 @@
 from copy import deepcopy
 from .configuration import ActionBlocked
 
-KINDS={'ordinary_chat_only','sales_refused','boundary_hold','financial_hardship'}
+import re
+KINDS={'ordinary_chat_only','sales_refused','boundary_hold','financial_hardship','budget'}
+BASE={'kind','active','message_id','quote','product_id'}
+COMMERCIAL={'invite','offer','resend','alternative','continue'}
+
+
+def _amounts(quote):
+    """Dollar amounts the fan actually wrote in the quote, in cents."""
+    return {round(float(n)*100) for n in re.findall(r'(?<![\d.])(\d{1,5}(?:\.\d{1,2})?)(?![\d.])',quote)}
 
 
 def observations(decision, snapshot):
@@ -13,12 +21,18 @@ def observations(decision, snapshot):
     latest=incoming[-1] if incoming else None
     result=[];seen=set()
     for o in values:
-        if (type(o) is not dict or set(o)!={'kind','active','message_id','quote','product_id'}
-                or o['kind'] not in KINDS or type(o['active']) is not bool
+        if (type(o) is not dict or o.get('kind') not in KINDS
+                or set(o)!=(BASE|{'amount_cents'} if o.get('kind')=='budget' else BASE)
+                or type(o['active']) is not bool
                 or type(o['message_id']) is not int or type(o['quote']) is not str
                 or not o['quote'].strip() or not latest or o['message_id']!=latest['id']
                 or o['quote'] not in latest['text']):
-            raise ActionBlocked('constraint_requires_current_fan_evidence')
+            # An annotation the current fan message does not evidence is dropped, not a held turn.
+            # Retained restrictions live in fan state and are unaffected by dropping a new claim.
+            continue
+        if o['kind']=='budget' and (o['product_id'] is not None or type(o.get('amount_cents')) is not int
+                or not 0<o['amount_cents']<=10000000 or (o['active'] and o['amount_cents'] not in _amounts(o['quote']))):
+            continue
         product=o['product_id']
         if product is not None and (o['kind']!='sales_refused' or product not in snapshot['products']):
             raise ActionBlocked('invalid_constraint_scope')
@@ -30,7 +44,10 @@ def observations(decision, snapshot):
     required={'hardship':'financial_hardship','refusal':'sales_refused','boundary_reset':'boundary_hold'}
     for flag,kind in required.items():
         if flag in decision['flags'] and not any(o['kind']==kind and o['active'] for o in result):
-            raise ActionBlocked('constraint_flag_requires_evidence:'+flag)
+            if decision.get('action') in COMMERCIAL:
+                raise ActionBlocked('constraint_flag_requires_evidence:'+flag)
+            # A non-commercial reply loses only the unsupported pause flag; nothing is sold because of it.
+            decision['flags']=[f for f in decision['flags'] if f!=flag]
     return result
 
 
@@ -42,6 +59,9 @@ def apply(state, values, *, event_id=None):
             if o['active']:rejected.add(o['product_id'])
             else:rejected.discard(o['product_id'])
             result['rejected_products']=sorted(rejected)
+        elif o['kind']=='budget':
+            if o['active']:result['budget_cents']=o['amount_cents']
+            else:result.pop('budget_cents',None)
         else:result[o['kind']]=o['active']
         ref=o['kind']+(':'+o['product_id'] if o['product_id'] else '')
         result.setdefault('constraint_evidence',{})[ref]={**o,'event_id':event_id}

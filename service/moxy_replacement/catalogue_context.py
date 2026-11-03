@@ -5,8 +5,18 @@ Only repeated catalogue/audit fields are removed from the model projection.
 """
 from copy import deepcopy
 
+SHORT={'already_owned_use_existing_access':'owned','media_previously_sent_requires_explicit_resend':'sent',
+    'refused_in_this_turn':'refused','price_exceeds_budget':'over_budget','product_previously_rejected':'he_declined',
+    'offer_already_pending':'pending_card'}
+
+
 def project(snapshot):
-    result=deepcopy({k:v for k,v in snapshot.items() if k not in {'instructions','products','inventory'}})
+    result=deepcopy({k:v for k,v in snapshot.items() if k not in {'instructions','products','inventory','offer_eligibility'}})
+    eligibility=snapshot.get('offer_eligibility') or {}
+    # A reason that blocks every product (e.g. a fan-wide sales hold) is stated once, not per product.
+    reasons=set(eligibility.values())
+    shared=reasons if len(reasons)==1 and 'ok' not in reasons else set()
+    if shared:result['no_new_offers']=SHORT.get(next(iter(shared)),'blocked')
     inventory=snapshot.get('inventory',{})
     products=snapshot.get('products',{})
     captions={p.get('caption_instructions','') for p in products.values()}
@@ -23,6 +33,10 @@ def project(snapshot):
         entry['media_ids']=deepcopy(terms['media_ids'])
         entry['preview_ids']=deepcopy(terms['preview_ids'])
         entry['catalogue_item_id']=terms['item']['id']
+        reason=eligibility.get(key,'ok')
+        if reason!='ok' and reason not in shared:
+            # Absent = may be offered now. Otherwise a short code: discuss only, never a new card.
+            entry['no_offer']=SHORT.get(reason,'blocked')
         entry['label']=terms['item']['label']
         entry['assets']=[]
         for asset in p['assets']:

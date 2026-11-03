@@ -228,6 +228,30 @@ def _card_facts(r,inventory,offers):
     return facts
 
 
+def offer_eligibility(pa,facts,payload):
+    """Per product: 'ok' when ProductAuthority would allow a new offer to this fan now, else the blocking reason.
+
+    Read-only projection of the same authority used at validation. In a bounded correction the
+    refused product is reported as not offerable so the writer cannot pick it again; it stays in
+    history and the products map so the writer can still answer questions about it.
+    """
+    rejected=payload.get('rejected') if isinstance(payload,dict) else None
+    refused=rejected.get('product_id') if isinstance(rejected,dict) else None
+    result={}
+    for key in pa.products:
+        if key==refused:
+            result[key]='refused_in_this_turn';continue
+        memberships=[name for name,steps in pa.sequences.items() if key in steps] or [None]
+        reason=None
+        for sequence in memberships:
+            try:
+                pa.terms(key,facts,purpose='offer',sequence=sequence);reason='ok';break
+            except ActionBlocked as exc:
+                reason=reason or str(exc)
+        result[key]=reason
+    return result
+
+
 def snapshot(s,account,fan,event):
     owner=s.get(MoxyAccount,account)
     settings=json.loads(owner.settings_json)
@@ -273,6 +297,7 @@ def snapshot(s,account,fan,event):
         'requested_resend_product':memo.get('requested_resend_product'),
         'ownership_verified':verified.get('ownership_verified',False),
         'purchase_links_verified':verified.get('purchase_links_verified',False)}
+    offerable=offer_eligibility(pa,facts,json.loads(event.payload_json))
     rows=s.scalars(select(Message).where(Message.account_id==account,Message.fan_id==fan,Message.is_unsent.is_(False))
         .order_by(Message.created_at.desc(),Message.message_id.desc()).limit(100)).all()
     from db.models import OfMessageDelivery
@@ -298,6 +323,7 @@ def snapshot(s,account,fan,event):
         'fan_state':facts,'fan_revision':mf.revision,'control':state_view,'event':{'kind':event.kind,'payload':json.loads(event.payload_json)},
         'history':history,'memory':memory,'invitation':memo.get('invitation'),
         'obligations':memo.get('obligations',[]),'products':{k:pa.products[k] for k in inventory},
+        'offer_eligibility':{k:offerable.get(k,'product_mapping_missing') for k in inventory},
         'inventory':inventory,'sequences':pa.sequences,'operational':settings['operational'],
         'approved_remedies':settings.get('approved_remedies',{}),'native_fingerprint':digest(json.loads(canonical(native)))}
     from .campaigns import context as campaign_context
@@ -406,6 +432,10 @@ def validate_decision(settings,snap,decision):
             if snap['event']['payload'].get('direct_request_product')==key: facts['direct_request_product']=key
             if snap['event']['payload'].get('requested_resend_product')==key: facts['requested_resend_product']=key
             purpose={'invite':'offer','continue':'continuation'}.get(action,action)
+            if (action=='continue' and decision['sequence'] is None
+                    and not any(key in steps for steps in pa.sequences.values())):
+                # A follow-up sale from standalone inventory is an ordinary offer; it never needs a sequence.
+                purpose='offer'
             if action=='offer' and snap.get('invitation'):
                 if key!=snap['invitation']['product_id']:raise ActionBlocked('acceptance_product_mismatch')
                 pa.accepted_invitation(snap['invitation'],facts)
@@ -571,7 +601,7 @@ class MoxyService:
             async with asyncio.timeout(timeout):return await model.generate(prompts)
         # Keep structurally valid input observations even when the proposed
         # sale is refused. Authority still gates preparation and every send.
-        try:result=writer.dedupe_emoji(writer.parse(asyncio.run(generate()),defer_sales_pause=True),snap['history'])
+        try:result=writer.parse(asyncio.run(generate()),defer_sales_pause=True)
         except (TimeoutError,asyncio.TimeoutError):reason='moxy_model_unknown'
         except Exception as exc:reason=str(exc) if isinstance(exc,ActionBlocked) else 'moxy_draft_refused'
         with Session(self.engine) as s,s.begin():

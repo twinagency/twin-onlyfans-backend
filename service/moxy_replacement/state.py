@@ -58,6 +58,21 @@ def commercial_state(snap):
     if already:
         # Paid media of these products was already sent to this fan (card or exposure): not to be offered again unless he asks for a resend.
         result['previously_sent_products']=already
+    eligibility=snap.get('offer_eligibility') or {}
+    products=snap.get('products') or {}
+    offerable=[k for k,v in eligibility.items() if v=='ok' and k in products]
+    if eligibility:
+        cheapest={}
+        for k in offerable:
+            p=products[k];cat=p.get('category')
+            if type(p.get('price_cents')) is int and (cat not in cheapest or p['price_cents']<cheapest[cat]):cheapest[cat]=p['price_cents']
+        if cheapest:
+            # Lowest price among products he can actually be offered now, per category; not an account-wide minimum.
+            result['cheapest_offerable_cents_by_category']=cheapest
+        owned=sorted(k for k,v in eligibility.items() if v=='already_owned_use_existing_access')
+        if owned:result['owned_products']=owned
+    if type(fan_state.get('budget_cents')) is int:
+        result['stated_budget_cents']=fan_state['budget_cents']
     if fan_state.get('rejected_products'):
         result['rejected_products']=list(fan_state['rejected_products'])
     # Compact: absent means none/unknown, never guessed.

@@ -80,9 +80,19 @@ def messages(snapshot):
         'When the fan flirts, uses innuendo or says what he wants to see, follow that thread in the creator voice instead of '
         'returning to an unrelated literal topic or repeating an ignored question such as his name; where sexting is not '
         'permitted keep it suggestive, not explicit, and turn the interest into an invite or offer of a matching eligible product. '
-        'Chatters move to a card quickly: when the fan shows sexual or content interest, accepts an invitation or asks to see something, '
-        'and a relevant eligible item exists, a card in this turn or the next is the norm; several flirty text-only turns without one is a failure. '
-        'Vary openings and emoji; never reuse an emoji from your last few messages. '
+        'When the fan asks to see something or accepts an invitation and a relevant offerable item exists, fulfil it promptly; '
+        'when interest is contextual, an offer is welcome but judge the whole exchange, not a turn count. Affection alone '
+        'neither requires a boundary reset nor calls for a sale. Do not repeat your previous message, opener or conversational move. '
+        'A product with no_offer may only be discussed, never invited/offered as a new card (no_new_offers applies to all): '
+        'owned = he already has it, say so; sent or pending_card = point him to the card already in the chat (resend only if he asks); '
+        'refused = do not pick it; over_budget = above his stated budget; he_declined = he turned it down. '
+        'If he states a budget, record a budget observation {kind:"budget",active:true,message_id,quote,product_id:null,amount_cents} '
+        'with the amount exactly as he wrote it, and never offer above it; if nothing offerable fits, answer honestly without a new pitch '
+        'and never invent a discount. For "cheapest" use commercial_state.cheapest_offerable_cents_by_category for what he asked about, '
+        'never the last card price. Make no current-activity claims (gym, bed, shower, just posted/added a fresh one) without evidence; '
+        '"new to you" is not "newly uploaded". Never claim the whole vault lacks something: say what you can send right now. '
+        'Never invent a policy such as no freebies or free samples: offer a mapped allowed preview if one exists, otherwise say what is '
+        'available now. Never say you are checking or fixing something unless the action is a handover. '
         'Never offer a product listed in commercial_state.previously_sent_products unless he explicitly asks for a resend. '
         'Reference lines in parentheses marked placeholder are not text; never write brackets, parentheses placeholders or descriptions of a card: '
         'every part, including the media part, is the exact short message the fan reads. '
@@ -92,7 +102,8 @@ def messages(snapshot):
         'ordinary_chat labels your conversational action only; never infer that the fan requested no selling from that label. '
         'Use observations only for evidenced fan restrictions or their contextual resolution. Each observation is '
         '{kind,active,message_id,quote,product_id}: kind is ordinary_chat_only, sales_refused, boundary_hold or '
-        'financial_hardship; quote exactly the latest incoming message with its integer message_id. When the fan asks for no offers or just to talk, record ordinary_chat_only. '
+        'financial_hardship (or budget, which adds amount_cents); quote exactly the latest incoming message with its integer message_id. '
+        'When the fan asks for no offers or just to talk, record ordinary_chat_only; a recorded restriction stays in force without him repeating it. '
         'Use product_id for refusal of one available product; null for a general restriction. Do not turn a product '
         'refusal into a general sales refusal. Boundary confusion is separate from refusal. Affection alone does not '
         'establish confusion. Set active false only with current contextual evidence of resolution; hardship needs human resolution. '
@@ -101,39 +112,12 @@ def messages(snapshot):
         'One media true part carries the selected paid/owed card for offer/continue/resend/alternative/correct/fulfil; '
         'all other parts are text-only. reply/invite have no media. Use complete conversational units, not a word-count split. '
         'One message is fine when sufficient. Do not add filler to create multiple messages. '
-        'Style facts measured from the creators\' real messages: a typical message is 4 to 11 words (median about 7 to 8); '
-        'emoji appear in roughly 6% of Amelia\'s and 11% of Cristina\'s messages; no em or en dashes; often 1 to 3 short bubbles; '
-        'long captions belong to campaign cards, not everyday replies. These are observations, not quotas. '
+        'Descriptive style examples from the creators\' real messages (not quotas): messages are usually short (median about 7 to 8 words), '
+        'emoji are occasional, often 1 to 3 short bubbles; long captions belong to campaign cards. No em or en dashes. '
         'Selected labelled historical writing references follow the instructions; kind failure marks what NOT to do. Learn their decisions and segmentation, '
         'not fixed phrases, old availability, prices or fan preferences. Current instructions and verified inventory govern. '
         'No tool calls, marker syntax, HTML, commentary or alternative drafts.\n'+canonical(cfg)+'\nWriting references:\n'+canonical(examples)},
         {'role':'user','content':canonical(project(snapshot))}]
-
-
-import re as _re
-_EMOJI=_re.compile('(?:[\U0001F000-\U0001FAFF]|[\u2600-\u27BF])\ufe0f?')
-
-
-def dedupe_emoji(decision, history, *, recent=3):
-    """Drop any emoji the account already used in its last few outgoing messages.
-
-    Cosmetic only: wording, action, product and media placement are unchanged;
-    a part that would become empty keeps its original text.
-    """
-    outs=[m.get('text') or '' for m in history if m.get('direction')=='out'][-recent:]
-    used={e.rstrip('\ufe0f') for t in outs for e in _EMOJI.findall(t)}
-    if not used:return decision
-    def clean(t):
-        if not isinstance(t,str):return t
-        new=_EMOJI.sub(lambda m:'' if m.group(0).rstrip('\ufe0f') in used else m.group(0),t)
-        new=_re.sub(r'[ \t]{2,}',' ',new).strip()
-        return new or t
-    decision['text']=clean(decision['text'])
-    if isinstance(decision.get('messages'),list):
-        for m in decision['messages']:
-            if isinstance(m,dict):m['text']=clean(m.get('text'))
-        if decision['messages'] and isinstance(decision['messages'][0],dict):decision['text']=decision['messages'][0]['text']
-    return decision
 
 
 def parse(raw, *, defer_sales_pause=False):
@@ -156,6 +140,20 @@ def parse(raw, *, defer_sales_pause=False):
                for v in (value[k] for k in ('product_id','sequence','permission','question','resolve_obligation')))):
         raise ActionBlocked('invalid_model_decision')
     msgs=value.get('messages')
+    if isinstance(msgs,list):
+        # Normalise harmless shape slips so a usable reply is not lost: a bare string is a text part,
+        # extra keys on a part are ignored, blank text-only parts are dropped. Media count, card
+        # placement and every content check still apply to the result.
+        clean=[]
+        for part in msgs:
+            if isinstance(part,str):part={'text':part,'media':False}
+            if isinstance(part,dict) and isinstance(part.get('text'),str) and type(part.get('media',False)) is bool:
+                part={'text':part['text'],'media':part.get('media',False)}
+                if not part['text'].strip() and not part['media']:continue
+            clean.append(part)
+        value['messages']=msgs=clean
+        if not clean and msgs is not None and value.get('action') not in {'none','handover'}:
+            value.pop('messages');msgs=None  # nothing left: the single text field is the reply
     if (isinstance(msgs,list) and msgs and isinstance(msgs[0],dict) and isinstance(msgs[0].get('text'),str)
             and msgs[0]['text'].strip() and msgs[0]['text']!=value['text']):
         # The ordered message plan is what is sent; the summary text field is derived from it.

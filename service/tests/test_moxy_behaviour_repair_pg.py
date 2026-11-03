@@ -256,3 +256,31 @@ def test_em_and_en_dashes_are_stripped_from_fan_text():
        'permission':None,'question':None,'resolve_obligation':None,'messages':[{'text':'i know — but no – ok','media':False}]}
     v=writer.parse(json.dumps(d))
     assert '—' not in v['text'] and '–' not in v['text'] and v['messages'][0]['text']==v['text']
+
+
+def _fallbacks(engine):
+    from sqlalchemy import select
+    with Session(engine) as s:
+        return [e for e in s.scalars(select(MoxyEvent)) if 'blocked_hint' in json.loads(e.payload_json)]
+
+
+def test_blocked_sale_queues_one_plain_reply_fallback_so_fan_is_not_silent(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'would you suck me until I cum')
+    first,_=run(service,engine,decision('offer','Here it is again.','missing-product',sequence='fixture_level'),payload={'source_message_id':2})
+    assert status(engine,first)=='held'
+    fb=_fallbacks(engine);assert len(fb)==1 and fb[0].status=='pending'
+    # The fallback may not sell, and a refused fallback never spawns another one.
+    service.prepare(TENANT,ACCOUNT,fb[0].event_id,model(decision('offer','Buy this.','first',sequence='fixture_level')))
+    assert status(engine,fb[0].event_id)=='held' and len(_fallbacks(engine))==1
+    store.close()
+
+
+def test_fallback_plain_reply_is_sent(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'would you suck me until I cum')
+    first,_=run(service,engine,decision('offer','Here it is again.','missing-product',sequence='fixture_level'),payload={'source_message_id':2})
+    fb=_fallbacks(engine)[0]
+    service.prepare(TENANT,ACCOUNT,fb.event_id,model(decision('reply','ha, bold. tell me more about your day first')))
+    assert status(engine,fb.event_id)=='ready'
+    store.close()

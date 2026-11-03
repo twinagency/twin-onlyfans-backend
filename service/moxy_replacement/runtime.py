@@ -295,6 +295,9 @@ COMMERCIAL_ACTIONS={'invite','offer','resend','alternative','continue','correct'
 def validate_decision(settings,snap,decision):
     from .pilot import decision as pilot_decision
     pilot_decision(settings,snap,decision)
+    if snap.get('event',{}).get('payload',{}).get('blocked_hint') and (decision['action'] in COMMERCIAL_ACTIONS or decision['product_id'] is not None):
+        # A fallback turn exists only so the fan is not left in silence; it never sells.
+        raise ActionBlocked('fallback_must_be_plain_reply')
     cfg,pa=configuration(settings)
     if (set(decision['flags']) & {'hardship','refusal','boundary_reset'}
             and decision['action'] in {'invite','offer','resend','alternative','continue'}):
@@ -543,7 +546,15 @@ class MoxyService:
                 if owner.mode!='preview':observe_input(s,event,result)
                 validate_decision(json.loads(owner.settings_json),snap,result)
             except (ActionBlocked,InvalidConfiguration) as exc:
-                event.status='held';event.reason=str(exc);event.decision_json=canonical(result);return event_id
+                event.status='held';event.reason=str(exc);event.decision_json=canonical(result)
+                payload=json.loads(event.payload_json)
+                # A blocked sale must not leave the fan in silence: queue exactly one
+                # plain-reply turn for the same input (never for a fallback, never in preview).
+                if (isinstance(exc,ActionBlocked) and owner.mode=='on' and event.kind=='turn' and not payload.get('blocked_hint')
+                        and payload.get('source_message_id') and result['action'] in COMMERCIAL_ACTIONS):
+                    enqueue(s,account,event.fan_id,'turn','fallback:'+event_id,
+                        {'source_message_id':payload['source_message_id'],'blocked_hint':str(exc)[:120]})
+                return event_id
             event.decision_json=canonical(result)
             if owner.mode=='preview':event.status='preview';return event_id
             # Our own newly recorded input constraints are part of the frozen

@@ -60,7 +60,7 @@
           2
         ]
       },
-      "instruction": "Warmth, pet names and present fantasy are permitted. No real relationship, exclusivity, meeting, marriage, pregnancy or shared-future promises; no encouragement of cheating or secrecy."
+      "instruction": "Warmth, pet names and present fantasy are permitted. No real relationship, exclusivity, meeting, marriage, pregnancy or shared-future promises; no encouragement of cheating or secrecy. A fan saying I love you alone is not a violation and is not a reason to go cold; do not infer real-world confusion from affection alone."
     },
     {
       "key": "emotional_pressure",
@@ -111,11 +111,12 @@
       "source": {
         "document": "02_GFE_Boundaries.pdf",
         "pages": [
+          2,
           5,
           6
         ]
       },
-      "instruction": "Recognise real-relationship confusion, pause selling, acknowledge warmly, state a clear boundary once and document. Resume only when the fan is okay; repeated dependency or distress escalates."
+      "instruction": "A fan saying I love you alone is not a reason to go cold or pause selling. Reset only evidenced real-world relationship confusion: acknowledge warmly, give a short clear boundary once, pause selling during that reset, and document. Resume when context shows the fan understands and is okay; repeated dependency or distress escalates. A relationship boundary is not a sales refusal."
     },
     {
       "key": "safety",
@@ -204,7 +205,7 @@
           2
         ]
       },
-      "instruction": "Respect a request to just talk; do not turn every exchange into a pitch."
+      "instruction": "Respect a request to just talk; do not turn every exchange into a pitch. This applies to an actual fan request, not to an ordinary conversational reply chosen by the writer."
     },
     {
       "key": "ownership",

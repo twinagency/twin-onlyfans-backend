@@ -10,7 +10,8 @@ def prepare_decision(s,account,fan,event_id,body):
         raise Refused('moxy_decision_not_current')
     if event.charged_millicents is None or digest(snapshot(s,account,fan,event))!=event.snapshot_hash:
         raise Refused('moxy_snapshot_changed')
-    decision=json.loads(event.decision_json)
+    from .parts import active
+    decision=active(event)
     from .campaigns import validate
     validate(s,account,fan,event)
     if decision['text']!=body:raise Refused('moxy_writer_text_changed')
@@ -32,7 +33,8 @@ def media_current(s,row):
     if not current(s,row):return False
     event=s.get(MoxyEvent,(row.account_id,row.moxy_event_id))
     try:
-        decision=json.loads(event.decision_json)
+        from .parts import active
+        decision=active(event)
         terms=validate_decision(json.loads(s.get(MoxyAccount,row.account_id).settings_json),
             json.loads(event.snapshot_json),decision)
         if terms:
@@ -42,3 +44,4 @@ def media_current(s,row):
                 and row.price_cents==terms['price_cents'] and json.loads(row.preview_json)==terms['preview_ids'])
         return row.catalog_item_id is None and row.price_cents==0 and row.media_json=='[]'
     except (ValueError,TypeError,KeyError):return False
+

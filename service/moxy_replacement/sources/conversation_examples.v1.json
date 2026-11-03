@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "scope": "Selected locally reviewed exchanges only. Not a complete commercial example corpus.",
+  "examples": [
+    {
+      "key": "unavailable_with_specific_alternative",
+      "creator": "cristina",
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          5
+        ]
+      },
+      "lesson": "Answer unavailable requests directly; describe a specific alternative only if it exists in CURRENT eligible inventory. Historical product availability is not current authority. The invitation should identify an actual selected product.",
+      "context": [
+        {
+          "message_id": "11890061142120",
+          "direction": "in",
+          "text": "Do you do b/g pov?"
+        },
+        {
+          "message_id": "11890065541661",
+          "direction": "in",
+          "text": "Or b/g missionary?"
+        },
+        {
+          "message_id": "11890129105504",
+          "direction": "out",
+          "text": "hmm no sorry i dont"
+        },
+        {
+          "message_id": "11890131356302",
+          "direction": "out",
+          "text": "but i have lots of other fun videos that arent bg"
+        },
+        {
+          "message_id": "11890133065183",
+          "direction": "out",
+          "text": "should i give you a taste?"
+        },
+        {
+          "message_id": "11890146046893",
+          "direction": "in",
+          "text": "Like what?"
+        },
+        {
+          "message_id": "11890198895662",
+          "direction": "out",
+          "text": "how about i give you a body tour then"
+        }
+      ]
+    },
+    {
+      "key": "honest_availability",
+      "creator": "cristina",
+      "source": {
+        "document": "04_Authenticity_Protocol.pdf",
+        "pages": [
+          5
+        ]
+      },
+      "lesson": "Warmth, a direct honest availability answer and short complete bubbles can coexist. Do not reuse historical availability as a present-day product fact.",
+      "context": [
+        {
+          "message_id": "9547559087459",
+          "direction": "in",
+          "text": "And does that include bg?"
+        },
+        {
+          "message_id": "9547575764586",
+          "direction": "out",
+          "text": "im gonna be honest with youu"
+        },
+        {
+          "message_id": "9547576830198",
+          "direction": "out",
+          "text": "i dont have any BG content"
+        },
+        {
+          "message_id": "9547578204076",
+          "direction": "out",
+          "text": "i do have spicy contents thoo"
+        },
+        {
+          "message_id": "9547580704005",
+          "direction": "in",
+          "text": "I appreciate the honesty"
+        }
+      ]
+    },
+    {
+      "key": "respect_explicit_chat_preference",
+      "creator": "amelia",
+      "source": {
+        "document": "05_Response_Playbook.pdf",
+        "pages": [
+          2
+        ]
+      },
+      "lesson": "This fan explicitly requests waiting. Honour that preference, without inferring the same preference for other fans merely because a reply is conversational.",
+      "context": [
+        {
+          "message_id": "11861717210181",
+          "direction": "in",
+          "text": "I know you don’t! I’ll let you know when I’m ready for content. I just don’t want to possibly expose you to the wrong eyes at work. I appreciate you so much"
+        },
+        {
+          "message_id": "11861754476862",
+          "direction": "out",
+          "text": "no worries bestie"
+        },
+        {
+          "message_id": "11861758626042",
+          "direction": "out",
+          "text": "whenever you're ready just let me know"
+        }
+      ]
+    }
+  ]
+}
+

@@ -8,7 +8,7 @@ the reservation and never causes a retry. No model/provider defaults change.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_CEILING
 import hashlib
 import json
@@ -83,6 +83,7 @@ class NativeProviderModel:
         self.completed, self.reported_cost_millicents = False, None
         self.tokens_in = self.tokens_out = self.cache_hit_tokens = None
         self.sales_enabled = False
+        self._qualification = False
 
     def __repr__(self):
         return f"NativeProviderModel(account_id={self.account_id!r}, model_id={self.model_id!r})"
@@ -121,12 +122,18 @@ class NativeProviderModel:
         body.update(self._model.reasoning_keys())
         if effort:
             body["reasoning_effort"] = effort
+        self._qualification = False
         self._body = canonical(body).encode()
         self._prompt_hash = hashlib.sha256(raw).hexdigest()
         self._engine, self._call_id = None, None
         self._invoked = False
         self.completed, self.reported_cost_millicents = False, None
         self.tokens_in = self.tokens_out = self.cache_hit_tokens = None
+
+    def configure_qualification(self, *, account_id, chosen_model, config, messages):
+        """Account-scoped paid evaluation with a cost record, never fan work/state."""
+        self.configure_call(account_id=account_id, chosen_model=chosen_model, config=config, messages=messages)
+        self._qualification = True
 
     def _cost(self, tokens_in, tokens_out, hit=0):
         rates = [Decimal(str(self._model.input_per_1k_cents)),
@@ -174,7 +181,7 @@ class NativeProviderModel:
             ledger.cost_cents += reserve
             ledger.call_count += 1
             ledger.updated_at = now
-        call = GrokCall(purpose="ai_chatter", account_id=account_id, fan_id=fan_id,
+        call = GrokCall(purpose="moxy_qualification" if self._qualification else "ai_chatter", account_id=account_id, fan_id=fan_id,
             model=model, provider=self.provider, endpoint=self.endpoint,
             prompt_json=self._body.decode(), status="pending", cost_cents=reserve,
             was_dry_run=False, called_at=now, temperature=.7)
@@ -237,6 +244,13 @@ class NativeProviderModel:
                 if event is not None and call is not None:
                     plan = SimpleNamespace(status=event.status, resolved_model_id=call.model,
                         expires_at=event.lease_until, fan_id=event.fan_id)
+            if (plan is None and self._qualification and call is not None
+                    and call.purpose == "moxy_qualification" and call.prompt_json == self._body.decode()):
+                # Qualification owns only its bounded cost record. It never creates
+                # a MoxyEvent/OfNativePlan, so interruption cannot hold live fan replies.
+                from types import SimpleNamespace
+                plan = SimpleNamespace(status="generating", resolved_model_id=call.model,
+                    expires_at=call.called_at + timedelta(seconds=60), fan_id=call.fan_id)
             if (call is None or call.account_id != self.account_id or call.status != "pending"
                     or call.was_dry_run or call.endpoint != self.endpoint or call.model != self.model_id
                     or plan is None or plan.status != "generating" or plan.resolved_model_id != self.model_id
@@ -315,3 +329,4 @@ class NativeProviderModel:
             raise
         except Exception:
             raise TimeoutError("native model request outcome is uncertain") from None
+

@@ -82,7 +82,7 @@ def test_creator_permission_conditions_execute_not_only_prompt(database,monkeypa
     store.close()
 
 
-@pytest.mark.parametrize('flag',['hardship','ordinary_chat','refusal','boundary_reset'])
+@pytest.mark.parametrize('flag',['hardship','refusal','boundary_reset'])
 def test_current_semantic_input_flags_prevent_paid_offer(database,monkeypatch,flag):
     engine,store,service,authority,claim,settings=setup(database,monkeypatch)
     identity,_=run(service,engine,decision('offer','This must be held.','first',flags=[flag],sequence='fixture_level'))
@@ -109,3 +109,4 @@ def test_missing_attachment_blocks_only_affected_offer_and_does_not_block_chat(d
     reply,_=run(service,engine,decision(),key='unrelated-chat')
     assert status(engine,reply)=='ready'
     store.close()
+

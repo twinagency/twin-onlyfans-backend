@@ -74,8 +74,8 @@ class ProductAuthority:
             raise ActionBlocked('ownership_evidence_missing')
         if state.get('commerce_uncertain') is not False:
             raise ActionBlocked('commerce_needs_reconciliation')
-        for flag in ('human_owned', 'safety_hold', 'financial_hardship', 'ordinary_chat_only', 'sales_refused'):
-            if state.get(flag) is not False:
+        for flag in ('human_owned', 'safety_hold', 'financial_hardship', 'ordinary_chat_only', 'sales_refused', 'boundary_hold'):
+            if state.get(flag, False if flag=='boundary_hold' else None) is not False:
                 raise ActionBlocked('sales_state_held:' + flag)
         if state.get('no_push') is not False and purpose != 'resend':
             # A no-push exception permits an explicit direct request, never an
@@ -158,3 +158,4 @@ def readiness(configuration, *, account_bound, products, sequences, operational,
             blockers.append('operational_field_missing:' + field)
     return {'ready': not blockers, 'blockers': blockers, 'configuration_fingerprint': configuration.fingerprint,
             'scope': 'source_configuration_only_not_runtime_or_release_readiness', 'activates_account': False}
+

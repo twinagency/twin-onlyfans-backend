@@ -59,10 +59,10 @@ def view(store,tenant,account):
 
 
 def update_fan(store,tenant,account,fan,*,state,actor,evidence_ref):
-    allowed={'obligations','ordinary_chat_only','sales_refused','financial_hardship','rejected_products','budget_cents','requested_resend_product'}
+    allowed={'obligations','ordinary_chat_only','sales_refused','financial_hardship','boundary_hold','rejected_products','budget_cents','requested_resend_product'}
     if not actor or not evidence_ref or type(state) is not dict or not set(state)<=allowed:
         raise Refused('verified_operator_state_required')
-    for flag in ('ordinary_chat_only','sales_refused','financial_hardship'):
+    for flag in ('ordinary_chat_only','sales_refused','financial_hardship','boundary_hold'):
         if flag in state and type(state[flag]) is not bool:raise Refused('invalid_fan_control')
     for o in state.get('obligations',[]):
         if not {'id','status','owner','source_ref'}<=set(o) or o['status'] not in {'open','fulfilled'} or not o['source_ref'] or not o['owner']:
@@ -76,3 +76,4 @@ def update_fan(store,tenant,account,fan,*,state,actor,evidence_ref):
             before_json=canonical({'fan':fan,'state':json.loads(before)}),
             after_json=canonical({'fan':fan,'state':json.loads(mf.state_json),'evidence_ref':evidence_ref}),created_at=utcnow()))
         return mf.revision
+

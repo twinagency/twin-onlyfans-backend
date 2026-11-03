@@ -154,7 +154,7 @@
     {
      "message_id": "11869278114796",
      "direction": "out",
-     "text": "[paid card: real selected product; historical caption, price and media omitted]"
+     "text": "(placeholder, not text: paid card: real selected product; historical caption, price and media omitted)"
     },
     {
      "message_id": "11869279586058",
@@ -208,7 +208,7 @@
     {
      "message_id": "11874532437962",
      "direction": "out",
-     "text": "[paid card: real selected product; historical caption, price and media omitted]"
+     "text": "(placeholder, not text: paid card: real selected product; historical caption, price and media omitted)"
     },
     {
      "message_id": "11874534982407",
@@ -297,7 +297,7 @@
     {
      "message_id": "9221728773633",
      "direction": "out",
-     "text": "[short statement of the offered category]"
+     "text": "(placeholder, not text: short statement of the offered category)"
     },
     {
      "message_id": "9221738030840",
@@ -307,7 +307,7 @@
     {
      "message_id": "9221740992068",
      "direction": "out",
-     "text": "[paid card: real selected product; historical caption, price and media omitted]"
+     "text": "(placeholder, not text: paid card: real selected product; historical caption, price and media omitted)"
     },
     {
      "message_id": "9221741494725",
@@ -336,7 +336,7 @@
     {
      "message_id": "11863188749646",
      "direction": "out",
-     "text": "[resend of the same paid card he asked for]"
+     "text": "(placeholder, not text: resend of the same paid card he asked for)"
     },
     {
      "message_id": "11863195210611",
@@ -449,27 +449,27 @@
     {
      "message_id": "11760678280325",
      "direction": "out",
-     "text": "[paid card A]"
+     "text": "(placeholder, not text: paid card A)"
     },
     {
      "message_id": "11760683066924",
      "direction": "out",
-     "text": "[one short line continuing the moment]"
+     "text": "(placeholder, not text: one short line continuing the moment)"
     },
     {
      "message_id": "ledger:2026-10-23T15:53:53",
      "direction": "event",
-     "text": "[verified purchase recorded for an amount matching card A]"
+     "text": "(placeholder, not text: verified purchase recorded for an amount matching card A)"
     },
     {
      "message_id": "11760701716906",
      "direction": "out",
-     "text": "[next paid card B, the next step]"
+     "text": "(placeholder, not text: next paid card B, the next step)"
     },
     {
      "message_id": "11760702618486",
      "direction": "out",
-     "text": "[short excited follow-up]"
+     "text": "(placeholder, not text: short excited follow-up)"
     }
    ]
   }

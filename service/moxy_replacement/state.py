@@ -52,6 +52,12 @@ def commercial_state(snap):
         'open_obligations':obligations,
         'active_restrictions':restrictions,
     }
+    sent=set(fan_state.get('previously_sent_assets') or [])
+    by_product=fan_state.get('paid_assets_by_product') or {}
+    already=sorted(k for k,assets in by_product.items() if sent and sent & set(assets or []))
+    if already:
+        # Paid media of these products was already sent to this fan (card or exposure): not to be offered again unless he asks for a resend.
+        result['previously_sent_products']=already
     if fan_state.get('rejected_products'):
         result['rejected_products']=list(fan_state['rejected_products'])
     # Compact: absent means none/unknown, never guessed.

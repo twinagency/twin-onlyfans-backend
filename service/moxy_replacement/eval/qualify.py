@@ -34,7 +34,7 @@ FAN=318022380
 LIVE_PRODUCT='moxy-37ce6f1b28be64a23db6ca4b'      # the $75 card actually sent on 3 Nov
 
 # Combined caps over this run PLUS every imported earlier journal (operator to confirm the numbers).
-MAX_CALLS_TOTAL=60
+MAX_CALLS_TOTAL=90
 MAX_MILLICENTS_TOTAL=5000
 DEFAULT_JOURNAL='/var/lib/twin-release/moxy-qualification/budget.json'
 IMPORT_GLOBS=['/var/lib/twin-release/moxy-gervonta-repair-*/qual*/**/budget.json',
@@ -451,6 +451,10 @@ def run_screens(ctx,snap,built,rec):
         'action %s not in expected %s'%(d and d['action'],sorted(exp.get('actions',[]))),applies=d is not None and 'actions' in exp)
     hits=[s for s in raw_strings(rec['raw_output']) if DASH.search(s)] if rec['raw_output'] else []
     add('no_em_en_dash_in_model_output',bool(hits),'model emitted a dash (parser strips it before send): %r'%hits[:2],applies=bool(rec['raw_output']))
+    ph=[t for t in texts if t and ('[' in t or ']' in t or 'placeholder' in t.lower() or 'paid card' in t.lower())]
+    add('placeholder_or_bracket_text',bool(ph),'fan-facing text looks like a placeholder: %r'%ph[:2],applies=bool(texts))
+    sent=set((snap.get('commercial_state') or {}).get('previously_sent_products') or [])
+    add('offers_previously_sent_product',bool(d) and d.get('product_id') in sent,'re-offered %s'%(d and d.get('product_id')),applies=bool(d) and bool(sent))
     prior=[h for h in snap['history'] if h['direction']=='out']
     repeated=[]
     for t in texts:

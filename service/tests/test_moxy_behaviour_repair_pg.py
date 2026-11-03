@@ -374,7 +374,7 @@ def test_examples_give_both_creators_sales_flow_and_stay_compact():
         assert kinds.count('positive')>=4 and len(canonical(r).encode())<4096
         assert all('message_id' not in str(e) for e in r['examples'])  # provenance stays in the file
         assert all('—' not in t and '–' not in t for e in r['examples'] for d,t in e['lines'] if d=='out')
-    assert any('[paid card' in t for e in references('amelia')['examples'] for d,t in e['lines'])
+    assert any('placeholder, not text' in t for e in references('amelia')['examples'] for d,t in e['lines'])
     assert 'failure' in [e['kind'] for e in references('amelia')['examples']]
 
 

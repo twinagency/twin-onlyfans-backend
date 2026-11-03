@@ -60,6 +60,8 @@ def continuation_unchanged(before, after, own_message_id, decision):
     a.pop('native_fingerprint',None);b.pop('native_fingerprint',None)
     # Derived from history/fan_state, which are compared below; own append changes it.
     a.pop('commercial_state',None);b.pop('commercial_state',None)
+    # Offer eligibility is derived from fan_state/products (compared below); our own card changes it.
+    a.pop('offer_eligibility',None);b.pop('offer_eligibility',None)
     old=a.pop('history');new=b.pop('history')
     filtered=[m for m in new if m['id']!=own_message_id]
     # Snapshot history is bounded at 100. One own append may evict one oldest row.

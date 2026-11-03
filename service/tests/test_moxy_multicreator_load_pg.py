@@ -167,7 +167,8 @@ def make_stub(ctx, c):
             if (terms['price_cents'] != c.prices[key] or terms['media_ids'] != [c.media[key]]
                     or terms['catalogue_item_id'] != c.items[key]):
                 ctx.violations.append(('prompt_inventory_not_own', c.tag, fan, key))
-        mark = ' (%s-%d)' % (c.tag, fan)
+        # The line differs on every turn for a fan: an identical repeat of a recent outgoing line is refused by design.
+        mark = ' (%s-%d-%d)' % (c.tag, fan, sum(1 for h in snap['history'] if h['direction'] == 'out'))
         kind = snap['event']['kind']
         incoming = [h for h in snap['history'] if h['direction'] == 'in']
         last = incoming[-1]['text'] if incoming else ''
@@ -603,7 +604,7 @@ def test_three_creators_concurrent_mixed_load(database, monkeypatch, tmp_path):
     scn_of = {k: scenario(i) for k, i in fan_index.items()}
     transient = {(i.account_id, i.fan_id) for i in intents if i.status == 'refused'
                  and i.reason in ('history_not_current', 'prewire_history_not_current')}
-    marker = re.compile(r'\((AM|CR|TH)-(\d+)\)$')
+    marker = re.compile(r'\((AM|CR|TH)-(\d+)(?:-\d+)?\)$')
 
     # 1. wrong fan / account
     bad = []

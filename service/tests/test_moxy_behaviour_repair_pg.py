@@ -236,3 +236,16 @@ def test_paraphrased_buying_question_drops_reminder_not_the_sale(database,monkey
     assert status(engine,identity)=='ready'
     with Session(engine) as s:assert json.loads(s.get(MoxyEvent,(ACCOUNT,identity)).decision_json)['question'] is None
     store.close()
+
+
+@pytest.mark.parametrize('kind,expected',[('buying_question','ready'),('owed','held')])
+def test_offer_may_answer_a_buying_question_but_never_closes_an_owed_item(database,monkeypatch,kind,expected):
+    from moxy_replacement.controls import update_fan
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    ob={'id':'ob-1','status':'open','owner':'moxy','source_ref':'fixture:records'}
+    ob.update({'kind':'buying_question','question':'Video of your pussy'} if kind=='buying_question' else {'product_id':'second'})
+    update_fan(store,TENANT,ACCOUNT,101,state={'obligations':[ob]},actor='fixture-operator',evidence_ref='fixture:records')
+    incoming(store,'I came here to see your pussy not talk about all this random stuff')
+    identity,_=run(service,engine,decision('offer','Not that, but this one is close.','first',sequence='fixture_level',resolve_obligation='ob-1'))
+    assert status(engine,identity)==expected
+    store.close()

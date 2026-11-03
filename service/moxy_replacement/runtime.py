@@ -363,7 +363,7 @@ def validate_decision(settings,snap,decision):
     elif key is not None:raise ActionBlocked('unexpected_product_reference')
     if decision['resolve_obligation']:
         owed=next((o for o in snap['obligations'] if o['id']==decision['resolve_obligation'] and o.get('status')=='open'),None)
-        if owed is None or (action not in {'correct','fulfil'} and not (action=='reply' and owed.get('kind')=='buying_question')):
+        if owed is None or (action not in {'correct','fulfil'} and not (action in {'reply','invite','offer','alternative'} and owed.get('kind')=='buying_question')):
             raise ActionBlocked('obligation_cannot_resolve_without_fulfilment')
     if terms and campaign and campaign['catalogue_item_id'] is not None:
         if (terms['item']['id']!=campaign['catalogue_item_id'] or campaign['terms'] is None

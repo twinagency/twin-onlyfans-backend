@@ -284,6 +284,14 @@ def snapshot(s,account,fan,event):
     return json.loads(canonical(result))
 
 
+def _norm(text):
+    # Quote evidence tolerates only case, whitespace and typographic quote differences.
+    return ' '.join(str(text).translate(str.maketrans('\u2018\u2019\u201c\u201d','\'\'""')).lower().split())
+
+
+COMMERCIAL_ACTIONS={'invite','offer','resend','alternative','continue','correct','fulfil'}
+
+
 def validate_decision(settings,snap,decision):
     from .pilot import decision as pilot_decision
     pilot_decision(settings,snap,decision)
@@ -317,7 +325,12 @@ def validate_decision(settings,snap,decision):
     quote=decision.get('request_quote')
     if request_kind!='none':
         incoming=[m for m in snap['history'] if m['direction']=='in']
-        if not incoming or not quote or quote not in incoming[-1]['text']:raise ActionBlocked('current_request_evidence_missing')
+        if not incoming or not quote or _norm(quote) not in _norm(incoming[-1]['text']):
+            # Unverifiable request evidence never authorises commerce; a plain
+            # reply without a product is still sent, just without request effects.
+            if action in COMMERCIAL_ACTIONS or key is not None:raise ActionBlocked('current_request_evidence_missing')
+            request_kind='none'
+    if request_kind!='none':
         if request_kind in {'direct','accept'}:
             facts['direct_request_product']=key
             facts['ordinary_chat_only']=facts['sales_refused']=False

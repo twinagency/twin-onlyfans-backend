@@ -185,3 +185,43 @@ def test_empty_message_plan_represents_no_outbound_delivery(action):
     assert plan(result)==[]
     with pytest.raises(ActionBlocked):
         writer.parse(json.dumps(decision(action,'',messages=[{'text':'Must not send','media':False}])))
+
+
+def test_paraphrased_request_quote_on_plain_reply_is_sent_not_held(database,monkeypatch):
+    # Live Amelia/Gervonta 2026-11-03: a decline reply quoting an older message was held and the fan got silence.
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'I came here to see your pussy not talk about all this random stuff')
+    identity,_=run(service,engine,decision('reply','not my thing, but I have something you will like.',
+        request_kind='direct',request_quote='Video of your pussy'))
+    assert status(engine,identity)=='ready'
+    with Session(engine) as s:assert 'direct_request_product' not in json.loads(s.get(MoxyFan,(ACCOUNT,101)).state_json)
+    store.close()
+
+
+def test_paraphrased_request_quote_still_blocks_commerce(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'I came here to see your pussy not talk about all this random stuff')
+    identity,_=run(service,engine,decision('offer','Here is the closest thing I have.','first',sequence='fixture_level',
+        request_kind='direct',request_quote='Video of your pussy'))
+    assert status(engine,identity)=='held'
+    store.close()
+
+
+def test_request_quote_tolerates_case_spacing_and_typographic_quotes(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    incoming(store,'I’m  keen, send   the OUTFIT photo')
+    identity,_=run(service,engine,decision('offer','Here it is.','first',sequence='fixture_level',
+        request_kind='direct',request_quote="i'm keen, send the outfit photo"))
+    assert status(engine,identity)=='ready'
+    store.close()
+
+
+def test_writer_prompt_follows_innuendo_and_pivots_unavailable_requests():
+    from moxy_replacement.configuration import load as _load
+    snap={'instructions':_load('amelia').public_context(),'pilot':True}
+    import moxy_replacement.writer as w
+    text=w.messages.__code__.co_consts
+    joined=' '.join(c for c in text if isinstance(c,str))
+    assert 'never resend or lightly reword a line already sent' in joined
+    assert 'closest eligible product by product_id' in joined
+    assert 'character-for-character' in joined

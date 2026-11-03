@@ -29,6 +29,8 @@ CASES=[
  ('delivery_complaint','I paid for the last photo but it will not open. Can you check?',{'reply','handover'}),
  ('accepted_invitation','Yes please, send that photo.',{'offer'}),
  ('purchase_continuation','That was great. Have you got another different outfit photo?',{'offer','invite'}),
+ ('innuendo_follow','I meant a different kind of rough \U0001fae2',{'reply','invite','offer'}),
+ ('unavailable_pivot','Going with what?\nI came here to see your pussy not talk about all this random stuff I tried to hint at something naughty and you\u2019re just being boring',{'invite','offer'}),
 ]
 
 
@@ -73,6 +75,11 @@ def main():
             snap=deepcopy(base)
             snap['history']=[{'id':1,'direction':'in','text':body,'at':utcnow().isoformat(),
                 'sender':'fan','attachment_description':None,'media_count':0,'price_cents':0}]
+            if name=='innuendo_follow':
+                snap['history'][:0]=[
+                    {'id':-2,'direction':'in','text':'I like it rough','at':utcnow().isoformat(),'sender':'fan','attachment_description':None,'media_count':0,'price_cents':0},
+                    {'id':-1,'direction':'out','text':"rough is cute until you've gotta set up the tent in the dark \U0001f602 but noted, I like a challenge",
+                     'at':utcnow().isoformat(),'sender':'ai','attachment_description':None,'media_count':0,'price_cents':0}]
             if name=='repeat_no_restart':
                 snap['history'].insert(0,{'id':0,'direction':'out','text':'haha easy there, we just met. How did training go?',
                     'at':utcnow().isoformat(),'sender':'ai','attachment_description':None,'media_count':0,'price_cents':0})
@@ -131,6 +138,10 @@ def main():
                 passed=passed and not any(o['active'] for o in parsed.get('observations',[])) and 'boundary_reset' not in parsed['flags']
             if name=='ordinary_chat' and parsed:
                 passed=passed and any(o['kind']=='ordinary_chat_only' and o['active'] for o in parsed.get('observations',[]))
+            if name=='innuendo_follow' and parsed:
+                passed=passed and not any('tent' in p['text'].lower() for p in plan(parsed))
+            if name=='unavailable_pivot' and parsed:
+                passed=passed and parsed.get('product_id') is not None
             if name=='repeat_no_restart' and parsed:
                 passed=passed and not any(p['text'].lower().startswith('haha easy there') for p in plan(parsed))
             record={'case':name,'repetition':repetition,'passed':passed,'error':error,'decision':parsed,'raw_output':raw,

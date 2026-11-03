@@ -50,7 +50,7 @@ def messages(snapshot):
         'For a product with several assets, ground the caption only in that product\'s own assets and their description_basis limits; '
         'never describe a different item or claim audio, motion or detail beyond that basis. '
         'Prices/counts are displayed on cards; repeat only when useful or asked. No outside links or off-platform payment. '
-        'For direct requests, resends or acceptance, also supply request_kind (direct/resend/accept/none) and request_quote (an exact quote from the latest fan message, or null). Return JSON with these fields: action, text, product_id, sequence, flags, reason, '
+        'For direct requests, resends or acceptance, also supply request_kind (direct/resend/accept/none) and request_quote (words copied character-for-character from the latest fan message, or null). Return JSON with these fields: action, text, product_id, sequence, flags, reason, '
         'permission, question, resolve_obligation. action is one of '+','.join(sorted(ACTIONS))+'. '
         'product_id and sequence are a provided identifier or null. flags is an array from '+','.join(sorted(FLAGS))+'. '
         'permission is a source rule key when performing that service (for example sexting/customs), or null. '
@@ -69,7 +69,12 @@ def messages(snapshot):
         'using the verified inventory. '
         'Do not restart introductions or ask a question already answered. Read all recent messages, including outgoing '
         'human/unattributed messages and attachments; continue their actual flow rather than answering obsolete input. '
-        'Avoid repeating recent openings, nicknames, challenges or conversational moves. A restriction on one requested '
+        'Avoid repeating recent openings, nicknames, challenges or conversational moves; never resend or lightly reword a line already sent. '
+        'When the fan flirts, uses innuendo or says what he wants to see, follow that thread in the creator voice instead of '
+        'returning to an unrelated literal topic or repeating an ignored question such as his name; where sexting is not '
+        'permitted keep it suggestive, not explicit, and turn the interest into an invite or offer of a matching eligible product. '
+        'When requested content is unavailable or prohibited, say so briefly and in the same turn invite or offer the closest '
+        'eligible product by product_id instead of a vague offer to point him somewhere later. A restriction on one requested '
         'category is not a ban on all eligible products or ordinary warmth. '
         'ordinary_chat labels your conversational action only; never infer that the fan requested no selling from that label. '
         'Use observations only for evidenced fan restrictions or their contextual resolution. Each observation is '
@@ -111,7 +116,10 @@ def parse(raw, *, defer_sales_pause=False):
     kind=value.get('request_kind','none');quote=value.get('request_quote')
     if kind not in {'none','direct','resend','accept'} or (quote is not None and (type(quote) is not str or not quote or len(quote)>2000)):
         raise ActionBlocked('invalid_request_evidence')
-    if kind!='none' and quote is None:raise ActionBlocked('request_quote_required')
+    if kind!='none' and quote is None:
+        if value['action'] in {'invite','offer','resend','alternative','continue','correct','fulfil'} or value['product_id'] is not None:
+            raise ActionBlocked('request_quote_required')
+        value['request_kind']='none'
     if value['action'] in {'handover','none'}:
         if value['text']: raise ActionBlocked('handover_must_not_reply')
     elif not value['text'].strip(): raise ActionBlocked('empty_model_reply')

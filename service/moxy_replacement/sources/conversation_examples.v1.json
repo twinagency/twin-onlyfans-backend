@@ -369,6 +369,109 @@
      "text": "let me know when youre ready babyy"
     }
    ]
+  },
+  {
+   "key": "budget_single_reply_no_pitch",
+   "creator": "amelia",
+   "kind": "positive",
+   "source": {
+    "archive": "Moxy_Complete_Claude_Handoff_2026-11-03 analysis sections 2 and 5; raw/msgs.csv.gz, raw/tx.csv.gz",
+    "account": "of-312988353",
+    "fan_id": 259349589,
+    "date": "2026-10-27"
+   },
+   "lesson": "One short complete message is enough. He says he has no money right now: stay warm, no pitch, no guilt, no lecture.",
+   "context": [
+    {
+     "message_id": "11810265201667",
+     "direction": "in",
+     "text": "Haha babe you are so sweet and beautiful. I didnt talk to you cause i dont have $$ yet… I will have soon, next days…"
+    },
+    {
+     "message_id": "11810278279288",
+     "direction": "in",
+     "text": "I have to little and its not enough for what i want from u so i try not to bother really"
+    },
+    {
+     "message_id": "11810287439137",
+     "direction": "out",
+     "text": "i understand that babe, just say hi once in a while lol i wont bite , i promise"
+    }
+   ]
+  },
+  {
+   "key": "honest_ordinary_answer_with_memory",
+   "creator": "amelia",
+   "kind": "positive",
+   "source": {
+    "archive": "Moxy_Complete_Claude_Handoff_2026-11-03 analysis sections 2 and 5; raw/msgs.csv.gz, raw/tx.csv.gz",
+    "account": "of-312988353",
+    "fan_id": 152441692,
+    "date": "2026-11-01"
+   },
+   "lesson": "An ordinary question gets an honest short answer, a light flirty turn, and continuity from what he shared before. No introduction reset.",
+   "context": [
+    {
+     "message_id": "11885622157890",
+     "direction": "in",
+     "text": "Will you come to vail again this winter?"
+    },
+    {
+     "message_id": "11885666637299",
+     "direction": "out",
+     "text": "i'd honestly love to so much but i don't think i'll be making it out there this winter babe"
+    },
+    {
+     "message_id": "11885668421452",
+     "direction": "out",
+     "text": "gonna have to find other ways to keep each other warm though 😏"
+    },
+    {
+     "message_id": "11885669014277",
+     "direction": "out",
+     "text": "how's [his pet] btw"
+    }
+   ]
+  },
+  {
+   "key": "continuation_after_verified_purchase",
+   "creator": "cristina",
+   "kind": "positive",
+   "source": {
+    "archive": "Moxy_Complete_Claude_Handoff_2026-11-03 analysis sections 2 and 5; raw/msgs.csv.gz, raw/tx.csv.gz",
+    "account": "of-63665785",
+    "fan_id": 599763924,
+    "date": "2026-10-23",
+    "note": "ledger has no message ids: the purchase-to-card link is a candidate, not proof"
+   },
+   "lesson": "A verified purchase is itself the event: the next relevant card can follow without a new fan message. Only act on a purchase that is verified in current state.",
+   "context": [
+    {
+     "message_id": "11760678280325",
+     "direction": "out",
+     "text": "[paid card A]"
+    },
+    {
+     "message_id": "11760683066924",
+     "direction": "out",
+     "text": "[one short line continuing the moment]"
+    },
+    {
+     "message_id": "ledger:2026-10-23T15:53:53",
+     "direction": "event",
+     "text": "[verified purchase recorded for an amount matching card A]"
+    },
+    {
+     "message_id": "11760701716906",
+     "direction": "out",
+     "text": "[next paid card B, the next step]"
+    },
+    {
+     "message_id": "11760702618486",
+     "direction": "out",
+     "text": "[short excited follow-up]"
+    }
+   ]
   }
  ]
 }

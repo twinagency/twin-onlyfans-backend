@@ -295,7 +295,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 or type(body) is not bytes or len(body) > MAX_BYTES):
             raise Refused("invalid signed transport request")
         limit = self._max_bytes if max_response_bytes is None else max_response_bytes
-        if type(limit) is not int or not 1 <= limit <= 1024 * 1024:
+        if type(limit) is not int or not 1 <= limit <= MAX_HISTORY_BYTES:
             raise Refused("invalid signed transport response budget")
         url = ORIGIN + path
         sig = sign(url, self._handle.owner_id, self._handle.rules())

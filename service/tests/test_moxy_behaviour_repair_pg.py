@@ -223,7 +223,7 @@ def test_writer_prompt_follows_innuendo_and_pivots_unavailable_requests():
     text=w.messages.__code__.co_consts
     joined=' '.join(c for c in text if isinstance(c,str))
     assert 'never resend or lightly reword a line already sent' in joined
-    assert 'closest eligible product by product_id' in joined
+    assert 'relevant eligible item exists' in joined and 'MAY talk about' in joined and 'commercial_state' in joined
     assert 'character-for-character' in joined
 
 
@@ -283,4 +283,20 @@ def test_fallback_plain_reply_is_sent(database,monkeypatch):
     fb=_fallbacks(engine)[0]
     service.prepare(TENANT,ACCOUNT,fb.event_id,model(decision('reply','ha, bold. tell me more about your day first')))
     assert status(engine,fb.event_id)=='ready'
+    store.close()
+
+
+def test_prompt_carries_commercial_state_with_sent_unpaid_card(database,monkeypatch):
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    from db.models import Message
+    from onlyfans_runtime.store import utcnow
+    with Session(engine) as s,s.begin():
+        s.add(Message(account_id=ACCOUNT,fan_id=101,message_id=7000,direction='out',body='locked',media_ids='[7101]',
+            media_count=1,price_cents=7500,is_paid=False,created_at=utcnow()))
+    identity,m=run(service,engine,decision())
+    user=json.loads(m.calls[0][1]['content'])
+    cs=user['commercial_state']
+    assert cs['sent_unpaid_cards'][0]['message_id']==7000 and cs['sent_unpaid_cards'][0]['product_id']=='first'
+    assert cs['last_offer']['paid'] is False and 'verified_purchases' not in cs
+    assert 'commercial_state' in m.calls[0][0]['content']
     store.close()

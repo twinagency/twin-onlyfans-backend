@@ -265,6 +265,10 @@ def snapshot(s,account,fan,event):
     # The canonical verified memory owner is reused. No creator-private facts
     # from that owner's config/biography are copied into this prompt.
     _,native=versions(s,account,fan)
+    # Profile refresh time is polling metadata, not a change to fan evidence.
+    # Retain every actual native config/fan/profile value in the delivery fence.
+    if native.get('fan') is not None:
+        native['fan'].pop('profile_last_synced_at',None)
     memory=native.get('historicalMemory') or {}
     state_view={'revision':state.revision if state else None,'input_revision':state.input_revision if state else None,
         'mode':state.mode if state else None,'takeover':state.takeover_state if state else None}
@@ -274,7 +278,7 @@ def snapshot(s,account,fan,event):
         'history':history,'memory':memory,'invitation':memo.get('invitation'),
         'obligations':memo.get('obligations',[]),'products':{k:pa.products[k] for k in inventory},
         'inventory':inventory,'sequences':pa.sequences,'operational':settings['operational'],
-        'approved_remedies':settings.get('approved_remedies',{}),'native_fingerprint':versions(s,account,fan)[0]}
+        'approved_remedies':settings.get('approved_remedies',{}),'native_fingerprint':digest(native)}
     from .campaigns import context as campaign_context
     result['campaign']=campaign_context(s,account,fan,json.loads(event.payload_json))
     return json.loads(canonical(result))

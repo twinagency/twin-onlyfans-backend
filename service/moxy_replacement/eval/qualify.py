@@ -34,8 +34,8 @@ FAN=318022380
 LIVE_PRODUCT='moxy-37ce6f1b28be64a23db6ca4b'      # the $75 card actually sent on 3 Nov
 
 # Combined caps over this run PLUS every imported earlier journal (operator to confirm the numbers).
-MAX_CALLS_TOTAL=90
-MAX_MILLICENTS_TOTAL=10000
+MAX_CALLS_TOTAL=450
+MAX_MILLICENTS_TOTAL=30000
 DEFAULT_JOURNAL='/var/lib/twin-release/moxy-qualification/budget.json'
 IMPORT_GLOBS=['/var/lib/twin-release/moxy-gervonta-repair-*/qual*/**/budget.json',
               '/var/lib/twin-release/moxy-behaviour-qualification-20261103/**/budget.json']

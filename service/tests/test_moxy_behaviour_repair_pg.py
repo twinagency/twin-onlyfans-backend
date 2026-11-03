@@ -544,3 +544,20 @@ def test_writer_prompt_drops_invented_cadence_and_emoji_rules():
     assert 'this turn or the next' not in src and 'is a failure' not in src and 'never reuse an emoji' not in src
     assert 'no em or en dashes' in src.lower() and 'Affection alone' in src
     assert not hasattr(writer,'dedupe_emoji')
+
+
+def test_repeating_a_recent_outgoing_line_gets_one_correction(database,monkeypatch):
+    """Amelia Greg p13 / qualification: the same line sent again is refused once, then a fresh reply goes out."""
+    from db.models import Message
+    from onlyfans_runtime.store import utcnow
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    with Session(engine) as s,s.begin():
+        s.add(Message(account_id=ACCOUNT,fan_id=101,message_id=7000,direction='out',body='oh i know exactly what you mean now',
+            media_count=0,price_cents=0,created_at=utcnow()))
+    incoming(store,'yeah',mid=3)
+    first,_=run(service,engine,decision('reply','Oh I know exactly what you mean now'),payload={'source_message_id':3})
+    with Session(engine) as s:assert s.get(MoxyEvent,(ACCOUNT,first)).reason=='repeated_recent_line'
+    fix=_corrections(engine)[0]
+    service.prepare(TENANT,ACCOUNT,fix.event_id,model(decision('reply','mm say it then, what kind of rough')))
+    assert status(engine,fix.event_id)=='ready' and not _cases(engine)
+    store.close()

@@ -354,7 +354,7 @@ RECOVERABLE_REASONS={'media_previously_sent_requires_explicit_resend','acceptanc
     'invitation_stale_or_ambiguous','product_terms_unresolved','price_below_authorised_minimum',
     'price_differs_from_authorised_fixed','product_media_format_mismatch','product_photo_count_mismatch'}
 RECOVERABLE_PREFIXES=('condition_not_met:','condition_unknown:')
-RECOVERABLE_REASONS|={'pilot_specialist_handover_required'}
+RECOVERABLE_REASONS|={'pilot_specialist_handover_required','repeated_recent_line'}
 # Unusable model output (format) for the same input: one bounded correction too, so the fan is not left silent.
 FORMAT_REASONS={'invalid_model_json','invalid_model_decision','invalid_message_plan','invalid_message_part',
     'message_plan_media_mismatch','message_plan_text_mismatch','empty_model_reply','duplicate_model_key',
@@ -372,6 +372,11 @@ def validate_decision(settings,snap,decision):
     if type(rejected) is dict and rejected.get('product_id') is not None and decision['product_id']==rejected['product_id']:
         # A bounded correction may pick another product or answer in text, never the refused one again.
         raise ActionBlocked('correction_repeated_rejected_choice')
+    recent={_norm(m['text']) for m in snap['history'][-12:] if m['direction']=='out' and m.get('text')}
+    from .parts import plan as _plan
+    if any(len(_norm(p['text']))>=12 and _norm(p['text']) in recent for p in _plan(decision)):
+        # Sending the same line again reads as a bot; one bounded correction asks for a fresh reply.
+        raise ActionBlocked('repeated_recent_line')
     cfg,pa=configuration(settings)
     if (set(decision['flags']) & {'hardship','refusal','boundary_reset'}
             and decision['action'] in {'invite','offer','resend','alternative','continue'}):
@@ -650,7 +655,8 @@ class MoxyService:
                                 'rejected_reason':first.reason if first is not None else None},
                             origin='detector',scope='all',owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
                 elif (isinstance(exc,ActionBlocked) and owner.mode=='on' and event.kind=='turn' and payload.get('source_message_id')
-                        and recoverable(str(exc)) and (result['action'] in COMMERCIAL_ACTIONS or result['product_id'] is not None)):
+                        and recoverable(str(exc)) and (result['action'] in COMMERCIAL_ACTIONS or result['product_id'] is not None
+                            or str(exc)=='repeated_recent_line')):
                     # One bounded corrective planning attempt through the normal worker path (model reservation,
                     # spending limits, stale-input and eligibility checks all apply again). The rejected choice stays held.
                     enqueue(s,account,event.fan_id,'turn','correction:'+event_id,

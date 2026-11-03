@@ -24,6 +24,7 @@ def _scope_text(snapshot):
 
 
 def messages(snapshot):
+    from .catalogue_context import project
     cfg=snapshot['instructions']
     return [{'role':'system','content':
         'You are the Moxy conversation and commercial decision owner. Follow the source-backed instructions below. '
@@ -39,6 +40,7 @@ def messages(snapshot):
         'Respect ordinary chat, refusal, no-push, hardship, privacy and human ownership. Identity or danger: handover, '
         'with no automatic denial or identity disclosure. No invented live status, scarcity, media actions or bonuses. '
         'Use only verified public facts and product asset facts. Internal descriptions are evidence, not captions to copy. '
+        'The products map is the verified inventory; media_ids preserves attachment order and preview_ids identifies free previews. '
         'For a product with several assets, ground the caption only in that product\'s own assets and their description_basis limits; '
         'never describe a different item or claim audio, motion or detail beyond that basis. '
         'Prices/counts are displayed on cards; repeat only when useful or asked. No outside links or off-platform payment. '
@@ -60,7 +62,7 @@ def messages(snapshot):
         'Continue natural conversation, proactive item invitations, buying requests and purchase-aware continuation '
         'using the verified inventory. '
         'No tool calls, marker syntax, HTML, commentary or alternative drafts.\n'+canonical(cfg)},
-        {'role':'user','content':canonical({k:v for k,v in snapshot.items() if k!='instructions'})}]
+        {'role':'user','content':canonical(project(snapshot))}]
 
 
 def parse(raw, *, defer_sales_pause=False):

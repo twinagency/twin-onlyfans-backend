@@ -466,8 +466,9 @@ class MoxyService:
                             case.owner=case.owner or assigned
                 event.status='held';event.reason=reason;return event_id
             snap=snapshot(s,account,event.fan_id,event)
-            if len(canonical(snap).encode())>65000:raise Refused('moxy_context_budget_exceeded')
+            if len(canonical(snap).encode())>1048576:raise Refused('moxy_snapshot_budget_exceeded')
             prompts=writer.messages(snap)
+            if len(canonical(prompts).encode())>81920:raise Refused('moxy_context_budget_exceeded')
             config=s.get(AccountAiConfig,account)
             from automations._common import resolve_model_from_config
             chosen=resolve_model_from_config(config,'ai_chatter',account_id=account,require_explicit=True)

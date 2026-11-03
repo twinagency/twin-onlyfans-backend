@@ -208,6 +208,26 @@ def observe_input(s,event,decision):
             settings['operational'].get('assigned_operator'))
 
 
+def _card_facts(r,inventory,offers):
+    """Paid status and (only when evidenced) product of an outgoing priced card.
+
+    Paid is true only with is_paid and purchased_at (the same test used for
+    purchased_products), false for an explicit unpaid PPV, otherwise unknown.
+    The product comes from the recorded offer for that message, else from a
+    unique match of the sent media against a product's paid assets.
+    """
+    if r.direction!='out' or not (r.price_cents or 0)>0: return {}
+    paid=True if (r.is_paid is True and r.purchased_at is not None) else False if r.is_paid is False else None
+    facts={'paid':paid}
+    keys=[k for k,t in inventory.items() for o in offers if o.offer_message_id==r.message_id and o.item_id==t['item']['id']]
+    if not keys:
+        try: sent=set(json.loads(r.media_ids or '[]'))
+        except (TypeError,ValueError): sent=set()
+        keys=[k for k,t in inventory.items() if sent and sent==set(t['media_ids'])-set(t['preview_ids'])]
+    if len(set(keys))==1: facts['product_id']=keys[0]
+    return facts
+
+
 def snapshot(s,account,fan,event):
     owner=s.get(MoxyAccount,account)
     settings=json.loads(owner.settings_json)
@@ -245,6 +265,7 @@ def snapshot(s,account,fan,event):
         'ordinary_chat_only':memo.get('ordinary_chat_only',False),'sales_refused':memo.get('sales_refused',False),
         'boundary_hold':memo.get('boundary_hold',False),
         'no_push':verified.get('no_push',False),'owned_assets':owned,
+        **({'constraint_evidence':memo['constraint_evidence']} if memo.get('constraint_evidence') else {}),
         'previously_sent_assets':exposed,'paid_assets_by_product':paid_assets,
         'exposure_history_verified':exposure_verified,'purchased_products':sorted(set(purchased)),
         'pending_products':sorted(set(pending)),'rejected_products':memo.get('rejected_products',[]),
@@ -261,7 +282,7 @@ def snapshot(s,account,fan,event):
         'attachment_description':r.image_desc,'media_count':r.media_count,
         'sender':('fan' if r.direction=='in' else 'ai' if receipts.get(r.message_id)=='ai' else
             'human' if r.sent_by_employee_id or receipts.get(r.message_id)=='human' else 'unattributed'),
-        'price_cents':r.price_cents} for r in reversed(rows)]
+        'price_cents':r.price_cents,**_card_facts(r,inventory,offers)} for r in reversed(rows)]
     # The canonical verified memory owner is reused. No creator-private facts
     # from that owner's config/biography are copied into this prompt.
     _,native=versions(s,account,fan)
@@ -281,7 +302,10 @@ def snapshot(s,account,fan,event):
         'approved_remedies':settings.get('approved_remedies',{}),'native_fingerprint':digest(json.loads(canonical(native)))}
     from .campaigns import context as campaign_context
     result['campaign']=campaign_context(s,account,fan,json.loads(event.payload_json))
-    return json.loads(canonical(result))
+    result=json.loads(canonical(result))
+    from .state import commercial_state
+    result['commercial_state']=commercial_state(result)
+    return result
 
 
 def _norm(text):

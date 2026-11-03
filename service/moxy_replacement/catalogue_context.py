@@ -19,6 +19,7 @@ def project(snapshot):
         files={f['media_id']:f for f in terms.get('files',[])}
         entry={name:deepcopy(p[name]) for name in
                ('category','price_cents','currency','available','requires','source')}
+        if not entry['requires']: del entry['requires']  # absent means no extra condition; keeps 100 products in budget
         entry['media_ids']=deepcopy(terms['media_ids'])
         entry['preview_ids']=deepcopy(terms['preview_ids'])
         entry['catalogue_item_id']=terms['item']['id']

@@ -225,7 +225,7 @@ def reserve_scoped_synthetic_call(session, *, account_id, fan_id, model, message
         raise LLMConfigError("an explicit valid daily model cap is required")
     prompt = json.dumps(messages, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     size = len(prompt.encode())
-    if not 0 < size <= 81920:
+    if not 0 < size <= 131072:
         raise LLMConfigError("synthetic prompt exceeds its byte budget")
     rates = [Decimal(str(mdl.input_per_1k_cents)), Decimal(str(mdl.output_per_1k_cents))]
     if any(not rate.is_finite() or rate <= 0 for rate in rates):

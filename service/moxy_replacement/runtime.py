@@ -599,7 +599,7 @@ class MoxyService:
                     event.status='done';event.reason='external_reply_after_input';return event_id
             if len(canonical(snap).encode())>1048576:raise Refused('moxy_snapshot_budget_exceeded')
             prompts=writer.messages(snap)
-            if len(canonical(prompts).encode())>81920:raise Refused('moxy_context_budget_exceeded')
+            if len(canonical(prompts).encode())>131072:raise Refused('moxy_context_budget_exceeded')
             config=s.get(AccountAiConfig,account)
             from automations._common import resolve_model_from_config
             chosen=resolve_model_from_config(config,'ai_chatter',account_id=account,require_explicit=True)

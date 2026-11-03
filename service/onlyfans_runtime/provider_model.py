@@ -106,7 +106,7 @@ class NativeProviderModel:
         if type(config) is not dict or type(messages) is not list:
             raise LLMConfigError("native model configuration is unavailable")
         raw = canonical(messages).encode()
-        if not 0 < len(raw) <= 81920:
+        if not 0 < len(raw) <= 131072:
             raise LLMConfigError("native prompt exceeds its byte budget")
         saved = config.get("reasoning_effort") or ""
         if type(saved) is not str:

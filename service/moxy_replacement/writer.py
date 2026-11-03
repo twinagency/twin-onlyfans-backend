@@ -74,7 +74,7 @@ def messages(snapshot):
         'playfully in one short line and go straight to the closest eligible item, and never repeat a no already given. '
         'Never say or imply the fan has, owns or has seen an item he has not purchased; an unpaid card is still locked for him. '
         'Never offer again a product already sent to this fan as a card unless he explicitly asks for a resend; choose a different eligible product or simply reply. '
-        'If event.payload.blocked_hint is present, your earlier proposal for this same message was refused: answer with action reply and product_id null, naturally in voice, never mentioning a refusal, rule or system. '
+        'If event.payload.rejected is present, your earlier proposal for this same message was refused for the stated reason: never choose that rejected product_id again; choose a different relevant eligible product or give a genuine text-only answer, naturally in voice, and never mention a refusal, rule or system to the fan. '
         'When the fan flirts, uses innuendo or says what he wants to see, follow that thread in the creator voice instead of '
         'returning to an unrelated literal topic or repeating an ignored question such as his name; where sexting is not '
         'permitted keep it suggestive, not explicit, and turn the interest into an invite or offer of a matching eligible product. '

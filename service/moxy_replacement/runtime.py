@@ -555,7 +555,16 @@ class MoxyService:
             if cost is None:reason='moxy_model_usage_unknown'
             if event.snapshot_hash!=digest(snapshot(s,account,event.fan_id,event)):
                 event.status='stale';event.reason='moxy_snapshot_changed';return event_id
-            if reason:event.status='unknown' if reason.endswith('unknown') else 'held';event.reason=reason;return event_id
+            if reason:
+                event.status='unknown' if reason.endswith('unknown') else 'held';event.reason=reason
+                payload=json.loads(event.payload_json)
+                if event.status=='held' and payload.get('correction_of') and owner.mode=='on':
+                    # The bounded correction produced no usable decision: a person takes over, no regeneration.
+                    from onlyfans_runtime.operator_cases import open_case
+                    open_case(s,account,event.fan_id,'other',reason='moxy_correction_failed',
+                        evidence={'event_id':event_id,'correction_of':payload['correction_of'],'reason':reason[:120]},
+                        origin='detector',scope='all',owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
+                return event_id
             from .pilot import route_specialist
             result=route_specialist(json.loads(owner.settings_json),result)
             try:

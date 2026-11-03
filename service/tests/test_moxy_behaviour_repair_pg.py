@@ -338,3 +338,13 @@ def test_correction_for_superseded_input_is_stale_and_opens_no_case(database,mon
     with Session(engine) as s:e=s.get(MoxyEvent,(ACCOUNT,c.event_id));assert e.status=='stale' and e.reason=='moxy_input_superseded'
     assert not _cases(engine)
     store.close()
+
+
+def test_correction_with_unusable_model_output_is_held_and_escalated(database,monkeypatch):
+    from onlyfans_runtime.native_planning import SyntheticNativeModel
+    engine,store,service,authority,claim,settings=setup(database,monkeypatch)
+    _blocked_first(engine,store,service)
+    fix=_corrections(engine)[0]
+    service.prepare(TENANT,ACCOUNT,fix.event_id,SyntheticNativeModel(raw_output='not json'))
+    assert status(engine,fix.event_id)=='held' and len(_corrections(engine))==1 and len(_cases(engine))==1
+    store.close()

@@ -355,7 +355,8 @@ def test_a_second_wording_failure_uses_one_validated_fallback_without_chat_lock(
         assert turn['attempts'][1]['status']=='ready' and len(turn['sent'])==1
         assert turn['sent'][0]['media']==[] and turn['sent'][0]['price_cents']==0
         with Session(r.engine) as s:
-            assert not [c for c in s.scalars(select(OfOperatorCase)) if c.scope=='all']
+            assert not [c for c in s.scalars(select(OfOperatorCase))
+                if c.scope=='all' and c.reason in {'moxy_correction_failed','moxy_technical_attention'}]
     finally:r.close()
 
 

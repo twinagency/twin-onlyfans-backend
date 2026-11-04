@@ -8,7 +8,7 @@ import asyncio
 from datetime import timedelta
 import json
 import uuid
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
 from sqlalchemy.orm import Session
 from db.models import (AccountAiConfig, Fan, Message, CatalogItem, VaultItem, ContentOffer,
     OfConversationState, GrokCall, GrokDailyCost)
@@ -392,7 +392,7 @@ RECOVERABLE_REASONS={'media_previously_sent_requires_explicit_resend','acceptanc
     'price_differs_from_authorised_fixed','product_media_format_mismatch','product_photo_count_mismatch'}
 RECOVERABLE_PREFIXES=('condition_not_met:','condition_unknown:')
 RECOVERABLE_REASONS|={'pilot_specialist_handover_required','repeated_recent_line','invented_policy_claim',
-    'repeated_recent_phrase','content_status_wording','asks_known_name'}
+    'repeated_recent_phrase','content_status_wording','asks_known_name','known_name_not_used','unsupported_profile_visibility_claim'}
 # Unusable model output (format) for the same input: one bounded correction too, so the fan is not left silent.
 FORMAT_REASONS={'invalid_model_json','invalid_model_decision','invalid_message_plan','invalid_message_part',
     'message_plan_media_mismatch','message_plan_text_mismatch','empty_model_reply','duplicate_model_key',
@@ -411,7 +411,8 @@ INVENTED_POLICY=_policy_re.compile(
 
 # Wording failures: the product decision may be fine, only the words are refused. A correction for these
 # rewrites the wording and keeps an otherwise valid offer; every other recoverable reason is a product failure.
-WORDING_REASONS={'repeated_recent_line','repeated_recent_phrase','invented_policy_claim','content_status_wording','asks_known_name'}
+WORDING_REASONS={'repeated_recent_line','repeated_recent_phrase','invented_policy_claim','content_status_wording','asks_known_name',
+    'known_name_not_used','unsupported_profile_visibility_claim'}
 
 _VIEWED_CLAIM=_policy_re.compile(
     r"\byou(?:'ve|\s+have)?\s+(?:already\s+)?(?:opened|unlocked|seen|watched|viewed|checked\s+out|looked\s+at|peeked)\b"
@@ -425,6 +426,10 @@ _ASKS_NAME=_policy_re.compile(
     r"|\bwho\s+(?:am\s+i\s+talking\s+to|are\s+you)\b|\bremind\s+me\s+(?:of\s+)?your\s+name\b",_policy_re.I)
 _UNUSABLE_NAMES={'guest','user','fan','anonymous','unknown','daddy','sir','man','dude','null','none','nan','na'}
 _UNUSABLE_CHARS=_policy_re.compile(r"[@/\\_]|https?:|www\.|\.com",_policy_re.I)
+_NAME_LOOKUP=_policy_re.compile(r"\bwhat(?:'?s|\s+is)\s+my\s+name\b|\b(?:remember|know)\s+my\s+name\b",_policy_re.I)
+_PROFILE_VISIBILITY=_policy_re.compile(
+    r"\b(?:can'?t|cannot|don'?t|doesn'?t|unable\s+to)\s+(?:see|read|show)(?:\s+\w+){0,6}\s+names?\b"
+    r"|\b(?:my\s+side|it)\s+(?:just\s+)?(?:shows?\s+me\s+(?:a\s+)?number|doesn'?t\s+show\s+me\s+names)",_policy_re.I)
 
 
 def clean_name(value):
@@ -482,10 +487,28 @@ def content_status_violation(snap,texts):
     incoming=[m.get('text') or '' for m in history if m.get('direction')=='in']
     for text in texts:
         if not _VIEWED_CLAIM.search(text):continue
+        preview_available=any(m.get('direction')=='out' and m.get('media_count',0)>0
+            and not (m.get('price_cents') or 0)>0 for m in history)
+        preview_available=preview_available or any(snap.get('inventory',{}).get(c.get('product_id'),{}).get('preview_ids')
+            for c in cards)
+        # A question about an accessible free preview does not assert that the
+        # separate locked/full item was bought or watched.
+        if (preview_available and _policy_re.search(r'\bdid\s+you\s+(?:like|enjoy|see|watch).*\bpreview\b',text,_policy_re.I)
+                and not _policy_re.search(r'\b(?:full|paid|unlocked|bought|own)\b',text,_policy_re.I)):
+            continue
         targets=references(text) or (references(incoming[-1]) if incoming else [])
         if not targets and _policy_re.search(r'\b(?:earlier|previous|first)\b',text,_policy_re.I):
             targets=cards[:1]
         if not targets:targets=cards[-1:]
+        reported=incoming[-1] if incoming else ''
+        positive_report=_policy_re.search(r"\bi(?:'ve|\s+have)?\s+(?:just\s+|already\s+)?(?:opened|unlocked|watched|viewed|bought)\s+(?:it|that|this)\b",reported,_policy_re.I)
+        negated=_policy_re.search(r"\b(?:not|never|haven'?t|hasn'?t|didn'?t|cannot|can'?t)\b",reported,_policy_re.I)
+        assertion=_policy_re.search(r"\byou(?:'ve|\s+have)?\s+(?:already\s+)?(?:opened|unlocked|own|have|watched|seen|viewed)\b|\bsince\s+you\b",text,_policy_re.I)
+        # Acknowledge an explicit report about this card without promoting that
+        # report to a verified purchase or an assertion of ownership/opening.
+        reported_targets=references(reported) or cards[-1:]
+        if (positive_report and not negated and not assertion
+                and {c.get('id') for c in targets}=={c.get('id') for c in reported_targets}):continue
         # A paid receipt establishes access, not proof of watching. The existing
         # guard allows conversational questions about purchased media.
         if any(card.get('paid') is not True for card in targets):return True
@@ -510,6 +533,14 @@ def wording_problem(snap,decision):
         return 'invented_policy_claim'
     if decision['action'] not in {'correct','fulfil'} and content_status_violation(snap,texts):return 'content_status_wording'
     if snap.get('fan_name') and any(_ASKS_NAME.search(t) for t in texts):return 'asks_known_name'
+    if (snap.get('fan_name') and _NAME_LOOKUP.search(_latest_fan_text(snap))
+            and not any(_policy_re.search(r'(?<!\w)'+_policy_re.escape(snap['fan_name'])+r'(?!\w)',t,_policy_re.I) for t in texts)):
+        return 'known_name_not_used'
+    if any(_PROFILE_VISIBILITY.search(t) for t in texts):return 'unsupported_profile_visibility_claim'
+    if (_NAME_LOOKUP.search(_latest_fan_text(snap)) and any(_policy_re.search(
+            r"\b(?:can'?t|cannot|don'?t|doesn'?t|unable\s+to)\s+(?:actually\s+)?(?:see|read|access)\b",t,_policy_re.I)
+            for t in texts)):
+        return 'unsupported_profile_visibility_claim'
     return None
 
 
@@ -526,13 +557,16 @@ def correction_brief(reason,result,snap):
     refused and can not be picked again. Both keep the fan's actual message in view.
     """
     brief={'reason':reason[:120],'fan_message':_latest_fan_text(snap)}
+    if reason in {'known_name_not_used','asks_known_name','unsupported_profile_visibility_claim'}:
+        brief['known_name']=snap.get('fan_name')
     if reason in WORDING_REASONS:
         brief.update(kind='wording',action=None,product_id=None,
             avoid=[p['text'][:300] for p in _plan(result)][:4])
         if result.get('product_id') is not None and result['action'] in COMMERCIAL_ACTIONS:
             brief['keep']={'action':result['action'],'product_id':result['product_id'],'sequence':result.get('sequence')}
-            brief['keep_terms']={k:snap['inventory'][result['product_id']][k]
-                for k in ('price_cents','media_ids','preview_ids')}
+            item=snap.get('inventory',{}).get(result['product_id'],{})
+            if all(k in item for k in ('price_cents','media_ids','preview_ids')):
+                brief['keep_terms']={k:item[k] for k in ('price_cents','media_ids','preview_ids')}
             brief['media_positions']=[i for i,p in enumerate(_plan(result)) if p['media']]
     else:
         brief.update(kind='product',action=result['action'],product_id=result['product_id'])
@@ -545,14 +579,6 @@ def validate_decision(settings,snap,decision,*,planning=False):
     rejected=snap.get('event',{}).get('payload',{}).get('rejected')
     fallback=(decision.get('action')=='reply' and decision.get('product_id') is None
         and decision.get('reason')=='moxy_validated_technical_fallback')
-    if planning and type(rejected) is dict and rejected.get('kind')=='wording' and rejected.get('keep') and not fallback:
-        if any(decision.get(k)!=v for k,v in rejected['keep'].items()):
-            raise ActionBlocked('correction_changed_valid_plan')
-        item=snap['inventory'].get(decision.get('product_id'),{})
-        if any(item.get(k)!=v for k,v in rejected.get('keep_terms',{}).items()):
-            raise ActionBlocked('correction_product_terms_changed')
-        if [i for i,p in enumerate(_plan(decision)) if p['media']]!=rejected.get('media_positions'):
-            raise ActionBlocked('correction_changed_media_binding')
     if type(rejected) is dict and rejected.get('product_id') is not None and decision['product_id']==rejected['product_id']:
         # A bounded correction may pick another product or answer in text, never the refused one again.
         raise ActionBlocked('correction_repeated_rejected_choice')
@@ -635,6 +661,15 @@ def validate_decision(settings,snap,decision,*,planning=False):
                 or terms['price_cents']!=campaign['terms']['price_cents']
                 or terms['media_ids']!=campaign['terms']['media_ids']):
             raise ActionBlocked('moxy_campaign_product_changed')
+    if planning and type(rejected) is dict and rejected.get('kind')=='wording' and rejected.get('keep') and not fallback:
+        if any(decision.get(k)!=v for k,v in rejected['keep'].items()):
+            raise ActionBlocked('correction_changed_valid_plan')
+        item=snap['inventory'].get(decision.get('product_id'),{})
+        if any(item.get(k)!=v for k,v in rejected.get('keep_terms',{}).items()):
+            raise ActionBlocked('correction_product_terms_changed')
+        if ('media_positions' in rejected and
+                [i for i,p in enumerate(_plan(decision)) if p['media']]!=rejected['media_positions']):
+            raise ActionBlocked('correction_changed_media_binding')
     # Wording is judged last: a product failure always takes precedence over a wording failure.
     problem=wording_problem(snap,decision)
     if problem:raise ActionBlocked(problem)
@@ -923,6 +958,9 @@ class MoxyService:
                 'messages':[{'text':"I'm having trouble replying right now. Could you give me a moment?",'media':False}],
                 'product_id':None,'sequence':None,'flags':[],'reason':'moxy_validated_technical_fallback',
                 'permission':None,'question':None,'resolve_obligation':None}
+            if fresh.get('fan_name') and _NAME_LOOKUP.search(_latest_fan_text(fresh)):
+                fallback['text']='I have you as '+fresh['fan_name']+' here.'
+                fallback['messages']=[{'text':fallback['text'],'media':False}]
             try:validate_decision(json.loads(owner.settings_json),fresh,fallback,planning=True)
             except (ActionBlocked,InvalidConfiguration):pass
             else:
@@ -947,7 +985,7 @@ class MoxyService:
             (MoxyEvent.status=='unknown')|
             ((MoxyEvent.status=='generating')&(MoxyEvent.lease_until<utcnow()))|
             ((MoxyEvent.status=='held')&(MoxyEvent.reason=='moxy_generation_reconciliation_required')))
-            .order_by(MoxyEvent.created_at).limit(32)).all()
+            .order_by(case((MoxyEvent.status=='held',1),else_=0),MoxyEvent.updated_at).limit(32)).all()
         for event in rows:
             event.lease_until=None
             if event.intent_id:

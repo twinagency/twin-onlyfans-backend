@@ -105,6 +105,21 @@ def test_unknown_access_is_not_ownership(paid):
         ['Did you like the preview?'])
 
 
+def test_free_preview_with_unpaid_card_is_separate_access():
+    snap={'history':[{'id':1,'direction':'out','price_cents':0,'media_count':1},
+        {'id':2,'direction':'out','price_cents':1000,'paid':False,'media_count':1}]}
+    assert not content_status_violation(snap,['Did you like the preview?'])
+    assert content_status_violation(snap,['You already watched the full video'])
+
+
+def test_fan_report_allows_acknowledgement_without_becoming_verified_ownership():
+    snap={'history':[{'id':1,'direction':'out','price_cents':1000,'paid':False},
+        {'id':2,'direction':'in','text':'I just opened it'}]}
+    assert not content_status_violation(snap,['so glad you liked it, did you enjoy it?'])
+    assert content_status_violation(snap,['You already own it'])
+    assert snap['history'][0]['paid'] is False
+
+
 def test_card_evidence_survives_beyond_history_window(database,monkeypatch):
     engine,store,service,_,_,_=setup(database,monkeypatch)
     with Session(engine) as s,s.begin():
@@ -219,6 +234,107 @@ def test_late_completion_after_recovery_is_accounted_but_never_sent(database,mon
         assert s.get(GrokCall,row(engine,identity).model_call_id).status=='done'
         assert s.scalar(select(GrokDailyCost)).cost_cents==1
         assert not s.scalar(select(OfTextIntent.intent_id))
+    store.close()
+
+
+def test_waiting_fan_does_not_prevent_another_fan(database,monkeypatch):
+    engine,store,service,_,_,_=setup(database,monkeypatch)
+    waiting=add(service)
+    original=service.authority._eligibility
+    def gate(*args,**kwargs):
+        return 'history_not_current' if args[4].fan_id==101 else original(*args,**kwargs)
+    monkeypatch.setattr(service.authority,'_eligibility',gate)
+    service.prepare(TENANT,ACCOUNT,waiting,model(decision()))
+    with Session(engine) as s,s.begin():
+        s.add(Fan(account_id=ACCOUNT,fan_id=102))
+        s.flush()
+        s.add(OfConversationState(account_id=ACCOUNT,fan_id=102,mode='automated',revision=0,
+            takeover_state='none',requires_attention=False))
+    store.record(TENANT,ACCOUNT,event(mid=2,fan=102,body='How was your afternoon?'));store.drain(TENANT,ACCOUNT)
+    eligible=add(service,key='other-fan',mid=2,fan=102)
+    assert service.step(TENANT,ACCOUNT,model(decision(text='What have you been up to today?')))==1
+    assert row(engine,eligible).status=='queued' and row(engine,waiting).status=='pending'
+    store.close()
+
+
+def test_wording_repair_preserves_offer_and_media_through_three_bubble_restart(database,monkeypatch):
+    engine,store,service,authority,_,_=setup(database,monkeypatch)
+    opening='What a difficult commute you had this morning.'
+    with Session(engine) as s,s.begin():
+        s.add(Message(account_id=ACCOUNT,fan_id=101,message_id=30,direction='out',body=opening,
+            created_at=utcnow()-timedelta(minutes=5)))
+    identity=add(service)
+    def offer(text,media_at=1):
+        return decision('offer',text,'first',sequence='fixture_level',messages=[
+            {'text':text,'media':media_at==0},
+            {'text':'Here is the outfit photograph.','media':media_at==1},
+            {'text':'How did the rest of your day go?','media':False}])
+    service.prepare(TENANT,ACCOUNT,identity,model(offer(opening)))
+    retry=correction(engine)
+    brief=json.loads(row(engine,retry).payload_json)['rejected']
+    assert brief['keep_terms']['media_ids']==[7101] and brief['keep_terms']['price_cents']==7500
+    assert brief['media_positions']==[1]
+    service.prepare(TENANT,ACCOUNT,retry,model(offer('That journey sounded exhausting.')))
+    assert row(engine,retry).status=='ready'
+    wires=[]
+    for i in range(3):
+        outcome,wire,_=send(MoxyService(store),authority,engine,retry,mid=9001+i)
+        assert outcome=='accepted'
+        wires.append(wire.calls[0])
+    assert [w.media_ids for w in wires]==[(),(7101,),()]
+    assert [w.price_cents for w in wires]==[0,7500,0]
+    assert row(engine,retry).status=='done'
+    store.close()
+
+
+def test_worker_due_failure_has_scoped_evidence_without_exception_body(database,monkeypatch):
+    from types import SimpleNamespace
+    from onlyfans_runtime.native_worker import NativeWorker
+    engine,store,service,_,_,_=setup(database,monkeypatch)
+    identity=add(service)
+    worker=object.__new__(NativeWorker);worker.store=store
+    worker.accounts=[SimpleNamespace(account_id=ACCOUNT)]
+    def broken():raise RuntimeError('private password should never appear')
+    monkeypatch.setattr(worker,'_moxy_due',broken)
+    assert worker.moxy_work_due() is False
+    with Session(engine) as s:
+        raw=[a.after_json for a in s.scalars(select(MoxyAudit)) if a.actor=='moxy-reply-diagnostic']
+        assert len(raw)==1 and 'private password' not in raw[0]
+        evidence=json.loads(raw[0]);assert evidence['boundary']=='due_query' and evidence['event_id']==identity
+        assert evidence['error_type']=='RuntimeError'
+    store.close()
+
+
+@pytest.mark.parametrize('wrong',["I still don't have your name.","my side doesn't show me names, so just tell me"])
+def test_known_name_failure_repairs_or_uses_a_factual_name_fallback(database,monkeypatch,wrong):
+    engine,store,service,authority,_,_=setup(database,monkeypatch)
+    with Session(engine) as s,s.begin():
+        fan=s.get(Fan,(ACCOUNT,101));fan.real_name='Gervonta';fan.is_name_real=True
+    store.record(TENANT,ACCOUNT,event(mid=2,body='Do you remember my name?'));store.drain(TENANT,ACCOUNT)
+    identity=add(service,mid=2)
+    service.prepare(TENANT,ACCOUNT,identity,model(decision(text=wrong)))
+    assert row(engine,identity).reason=='known_name_not_used'
+    retry=correction(engine)
+    service.prepare(TENANT,ACCOUNT,retry,model(decision(text=wrong)))
+    assert row(engine,retry).status=='ready'
+    outcome,wire,_=send(service,authority,engine,retry)
+    assert outcome=='accepted' and wire.calls[0].body=='I have you as Gervonta here.'
+    assert not wire.calls[0].media_ids
+    store.close()
+
+
+def test_unknown_name_does_not_authorise_a_profile_visibility_claim(database,monkeypatch):
+    engine,store,service,authority,_,_=setup(database,monkeypatch)
+    with Session(engine) as s,s.begin():
+        fan=s.get(Fan,(ACCOUNT,101));fan.real_name=None;fan.of_display_name=None
+    store.record(TENANT,ACCOUNT,event(mid=2,body='What is my name?'));store.drain(TENANT,ACCOUNT)
+    identity=add(service,mid=2)
+    service.prepare(TENANT,ACCOUNT,identity,model(decision(text="I can't actually see it from here.")))
+    assert row(engine,identity).reason=='unsupported_profile_visibility_claim'
+    retry=correction(engine)
+    service.prepare(TENANT,ACCOUNT,retry,model(decision(text="I don't have a name to use for you here yet.")))
+    assert row(engine,retry).status=='ready'
+    assert send(service,authority,engine,retry)[0]=='accepted'
     store.close()
 
 

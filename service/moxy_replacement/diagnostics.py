@@ -39,13 +39,21 @@ def record(s, account, phase, *, event=None, raw=None, **data):
     while len(canonical(evidence).encode())>48000 and evidence.get('raw'):
         evidence['raw']=evidence['raw'][:len(evidence['raw'])//2]
         evidence['raw_complete']=False
-    s.add(MoxyAudit(audit_id=str(uuid.uuid4()), account_id=account, actor=ACTOR,
+    identity=(str(uuid.uuid5(uuid.NAMESPACE_URL,'moxy:provider_result:'+account+':'+event.event_id+':'+str(event.model_call_id)))
+        if phase=='provider_result' and event is not None else str(uuid.uuid4()))
+    if s.get(MoxyAudit,identity) is not None:return
+    s.add(MoxyAudit(audit_id=identity, account_id=account, actor=ACTOR,
                    before_json='{}', after_json=canonical(evidence), created_at=utcnow()))
 
 
 def completion(s, event):
+    identity=str(uuid.uuid5(uuid.NAMESPACE_URL,'moxy:provider_result:'+event.account_id+':'+event.event_id+':'+str(event.model_call_id)))
+    direct=s.get(MoxyAudit,identity)
+    if direct is not None and direct.actor==ACTOR:
+        data=json.loads(direct.after_json)
+        if data.get('phase')=='provider_result' and data.get('model_call_id')==event.model_call_id:return data
     rows = s.scalars(select(MoxyAudit).where(MoxyAudit.account_id == event.account_id,
-        MoxyAudit.actor == ACTOR).order_by(MoxyAudit.created_at.desc()))
+        MoxyAudit.actor == ACTOR,MoxyAudit.after_json.like('%'+event.event_id+'%')).order_by(MoxyAudit.created_at.desc()))
     for row in rows:
         try:
             data = json.loads(row.after_json)

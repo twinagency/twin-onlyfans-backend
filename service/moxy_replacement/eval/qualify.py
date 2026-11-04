@@ -781,7 +781,13 @@ def main(argv=None):
     parser.add_argument('--reps',type=int,default=1)
     parser.add_argument('--journal',default=DEFAULT_JOURNAL,help='shared budget journal, independent of --out')
     parser.add_argument('--dry-run',action='store_true',help='offline: canned decisions, fabricated snapshot, no journal')
+    parser.add_argument('--preserve-state-bundle',help='private read-only export; no state clearing and no delivery')
+    parser.add_argument('--budget-summary',help='verified cumulative summaries of existing qualification journals')
     args=parser.parse_args(argv)
+    if args.preserve_state_bundle:
+        if not args.budget_summary or args.dry_run:raise SystemExit('Preserve-state replay needs existing budget provenance and a real model')
+        from .preserve_state import run
+        return run(args)
     if args.account!=ACCOUNT or args.fan!=FAN:
         raise SystemExit('This qualification is authorised only for Amelia/Gervonta.')
     if args.reps<1 or args.reps>5:raise SystemExit('--reps must be 1..5')

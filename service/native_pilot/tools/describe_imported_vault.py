@@ -302,9 +302,11 @@ async def run(args):
 
 _ERROR_TYPES = frozenset({
     "Refused", "ReadDeferred", "RuntimeError", "ValueError", "TypeError",
-    "KeyError", "AttributeError", "ImportError", "ModuleNotFoundError",
+    "KeyError", "AttributeError", "NameError", "UnboundLocalError", "AssertionError",
+    "JSONDecodeError", "ImportError", "ModuleNotFoundError",
     "TimeoutError", "OSError", "FileNotFoundError", "OperationalError",
     "ProgrammingError", "IntegrityError", "DBAPIError", "InvalidTag",
+    "InvalidRequestError", "MissingGreenlet", "ResourceClosedError", "PendingRollbackError",
     "LLMError", "LLMConfigError", "LLMHTTPError", "LLMCapExceeded",
 })
 _ERROR_STAGES = {

@@ -344,7 +344,7 @@ def test_product_failure_outranks_wording_failure(database,monkeypatch):
     finally:r.close()
 
 
-def test_a_second_wording_failure_escalates_to_a_person_once(database,monkeypatch):
+def test_a_second_wording_failure_uses_one_validated_fallback_without_chat_lock(database,monkeypatch):
     from db.onlyfans_case_models import OfOperatorCase
     r=Replay(database,monkeypatch)
     try:
@@ -352,9 +352,10 @@ def test_a_second_wording_failure_escalates_to_a_person_once(database,monkeypatc
         again=reply('ok but gym bros are the real sprint workout, i just lift boats 😂')
         turn=r.turn('show me something then',again,again,again)
         assert [a['kind'] for a in turn['attempts']]==['first','correction']          # one bounded correction only
-        assert turn['attempts'][1]['status']=='held' and turn['sent']==[]
+        assert turn['attempts'][1]['status']=='ready' and len(turn['sent'])==1
+        assert turn['sent'][0]['media']==[] and turn['sent'][0]['price_cents']==0
         with Session(r.engine) as s:
-            assert len([c for c in s.scalars(select(OfOperatorCase)) if c.reason=='moxy_correction_failed'])==1
+            assert not [c for c in s.scalars(select(OfOperatorCase)) if c.scope=='all']
     finally:r.close()
 
 

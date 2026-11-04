@@ -114,6 +114,10 @@ def continuation_unchanged(before, after, own_message_id, decision):
     # Offer eligibility is derived from fan_state/products (compared below); our own card changes it.
     a.pop('offer_eligibility',None);b.pop('offer_eligibility',None)
     old=a.pop('history');new=b.pop('history')
+    # The same accepted card can enter the all-history card evidence projection.
+    # Only this receipt is exempted; changes to older purchase facts cancel the tail.
+    old_cards=a.pop('card_state',[]);new_cards=b.pop('card_state',[])
+    if [c for c in new_cards if c['id']!=own_message_id]!=old_cards:return False
     filtered=[m for m in new if m['id']!=own_message_id]
     # Snapshot history is bounded at 100. One own append may evict one oldest row.
     if filtered!=old[-len(filtered):] or not any(m['id']==own_message_id for m in new):return False

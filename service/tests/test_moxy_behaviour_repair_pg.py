@@ -269,7 +269,7 @@ def _cases(engine):
     from sqlalchemy import select
     from db.onlyfans_case_models import OfOperatorCase
     with Session(engine) as s:
-        return [c for c in s.scalars(select(OfOperatorCase)) if c.reason=='moxy_correction_failed']
+        return [c for c in s.scalars(select(OfOperatorCase)) if c.reason=='moxy_technical_attention']
 
 
 def _blocked_first(engine,store,service):
@@ -297,7 +297,8 @@ def test_correction_repeating_rejected_product_is_held_and_escalated_once(databa
     service.prepare(TENANT,ACCOUNT,c.event_id,model(decision('offer','Again.','missing-product',sequence='fixture_level')))
     with Session(engine) as s:e=s.get(MoxyEvent,(ACCOUNT,c.event_id));assert e.status=='held' and e.reason=='correction_repeated_rejected_choice'
     assert len(_corrections(engine))==1
-    cases=_cases(engine);assert len(cases)==1 and cases[0].owner=='fixture-operator' and cases[0].category=='other'
+    cases=_cases(engine);assert len(cases)==1 and cases[0].owner=='fixture-operator' and cases[0].category=='moxy_technical'
+    assert cases[0].scope=='offer'
     ev=json.loads(cases[0].evidence_json)
     assert ev['event_id']==c.event_id and ev['correction_of']==first
     assert ev['reason']=='correction_repeated_rejected_choice' and ev['rejected_reason']=='real_inventory_missing_or_stale'

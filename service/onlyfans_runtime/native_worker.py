@@ -45,6 +45,9 @@ def moxy_due(engine,account_ids=None):
             (OfWork.status=="waiting")|((OfWork.status=="claimed")&(OfWork.lease_until<=now))).distinct()))
         due|=set(s.scalars(select(OfTextIntent.account_id).where(OfTextIntent.account_id.in_(owned),
             OfTextIntent.status=="queued",OfTextIntent.moxy_event_id.is_not(None)).distinct()))
+        due|=set(s.scalars(select(MoxyEvent.account_id).where(MoxyEvent.account_id.in_(owned),
+            (MoxyEvent.status=='unknown')|((MoxyEvent.status=='generating')&(MoxyEvent.lease_until<=now))|
+            ((MoxyEvent.status=='held')&(MoxyEvent.reason=='history_not_current'))).distinct()))
         return due
 
 
@@ -282,7 +285,31 @@ class NativeWorker:
     def moxy_work_due(self):
         """True when reactive Moxy work is waiting; lets slow maintenance yield. Never raises."""
         try:return bool(self._moxy_due())
-        except Exception:return False
+        except Exception as exc:
+            self._moxy_failure('due_query',exc)
+            return False
+
+    def _moxy_failure(self,phase,exc,account=None):
+        """Private scoped evidence. Public health retains counts only, never bodies or SQL."""
+        import logging
+        from moxy_replacement.diagnostics import record
+        from db.onlyfans_moxy_models import MoxyAccount,MoxyEvent
+        accounts=[account] if account is not None else self.accounts
+        for item in accounts:
+            logging.getLogger(__name__).error('Moxy worker failure phase=%s account=%s type=%s',
+                phase,item.account_id,type(exc).__name__)
+            try:
+                with Session(self.store.engine) as s,s.begin():
+                    owner=s.get(MoxyAccount,item.account_id)
+                    if owner is None:continue
+                    recent=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==item.account_id)
+                        .order_by(MoxyEvent.updated_at.desc()).limit(4)).all()
+                    for event in recent or [None]:
+                        record(s,item.account_id,'worker_failure',event=event,boundary=phase,
+                            error_type=type(exc).__name__,configuration_revision=owner.revision)
+            except Exception:
+                # The metadata-only log above remains available through a DB outage.
+                logging.getLogger(__name__).error('Moxy diagnostic persistence unavailable account=%s',item.account_id)
 
     def _moxy_fast_lane(self,report,stop,*,skip=()):
         """Serve due Moxy accounts between the slow per-account turns of a cycle.
@@ -293,16 +320,21 @@ class NativeWorker:
         ordinary turn. Each account is served at most once per MOXY_FAST_LANE_GAP seconds."""
         if os.environ.get("ONLYFANS_MOXY_FAST_LANE","1")!="1":return
         try:due=self._moxy_due(skip)
-        except Exception:return
+        except Exception as exc:
+            self._moxy_failure('fast_due_query',exc)
+            return
         for account in due:
             if stop.is_set():break
             if time.monotonic()-self._fast_at.get(account.account_id,-1e9)<MOXY_FAST_LANE_GAP:continue
             try:
                 self._role()
                 self._moxy_turn(account,report)
-            except Refused:report.held+=1
-            except SQLAlchemyError:report.errors+=1;break
-            except Exception:report.errors+=1
+            except Refused as exc:
+                report.held+=1;self._moxy_failure('fast_lane_refused',exc,account)
+            except SQLAlchemyError as exc:
+                report.errors+=1;self._moxy_failure('fast_lane_database',exc,account);break
+            except Exception as exc:
+                report.errors+=1;self._moxy_failure('fast_lane',exc,account)
             finally:self._fast_at[account.account_id]=time.monotonic()   # gap counts from the end of the turn
 
     def step(self,stop=None):
@@ -431,16 +463,19 @@ class NativeWorker:
                         self.store.hold_claim(self.tenant_id,claim);report.held+=1
                     if stop.is_set():break
                     self._deliver(account,report)
-                except Refused:report.held+=1
-                except SQLAlchemyError:
+                except Refused as exc:
+                    report.held+=1;self._moxy_failure('account_refused',exc,account)
+                except SQLAlchemyError as exc:
                     report.errors+=1
+                    self._moxy_failure('account_database',exc,account)
                     # Stop this cycle on DB loss. A later cycle reopens normal
                     # pooled connections; no speculative model/send replay.
                     break
-                except Exception:
+                except Exception as exc:
                     # Keep private bodies/SQL/credential-bearing exceptions out
                     # of public health. Durable leases/markers handle recovery.
                     report.errors+=1
+                    self._moxy_failure('account_processing',exc,account)
                 finally:
                     try:self._heartbeat(account,failed=report.errors>account_errors)
                     except (Refused,SQLAlchemyError):pass

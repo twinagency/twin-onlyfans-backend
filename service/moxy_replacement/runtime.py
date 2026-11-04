@@ -11,7 +11,7 @@ import uuid
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from db.models import (AccountAiConfig, Fan, Message, CatalogItem, VaultItem, ContentOffer,
-    OfConversationState, GrokCall)
+    OfConversationState, GrokCall, GrokDailyCost)
 from db.onlyfans_models import OfWork
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_moxy_models import MoxyAccount, MoxyFan, MoxyEvent, MoxyAudit
@@ -21,6 +21,7 @@ from .configuration import load, load_foundation, CreatorConfiguration, ActionBl
 from .authority import ProductAuthority, readiness
 from .parts import plan as _plan, reused_wording
 from . import writer
+from .diagnostics import record as diagnose
 
 EVENTS={'turn','welcome','invitation','scheduled','campaign','purchase','refund','chargeback','fulfilment'}
 
@@ -326,6 +327,13 @@ def snapshot(s,account,fan,event):
     offerable=offer_eligibility(pa,facts,json.loads(event.payload_json))
     rows=s.scalars(select(Message).where(Message.account_id==account,Message.fan_id==fan,Message.is_unsent.is_(False))
         .order_by(Message.created_at.desc(),Message.message_id.desc()).limit(100)).all()
+    # Card state is evidence, not a sliding conversation window. Preserve old cards
+    # separately, so a recent unrelated locked card cannot overwrite a paid item.
+    card_rows=s.scalars(select(Message).where(Message.account_id==account,Message.fan_id==fan,
+        Message.is_unsent.is_(False),Message.direction=='out',Message.price_cents>0)
+        .order_by(Message.created_at,Message.message_id)).all()
+    card_state=[{'id':r.message_id,'direction':'out','text':r.body,'at':r.created_at,
+        'price_cents':r.price_cents,**_card_facts(r,inventory,offers)} for r in card_rows]
     from db.models import OfMessageDelivery
     receipts={x.message_id:x.origin for x in s.scalars(select(OfMessageDelivery).where(
         OfMessageDelivery.account_id==account,OfMessageDelivery.fan_id==fan))}
@@ -347,7 +355,7 @@ def snapshot(s,account,fan,event):
     result={'fan_id':fan,'pilot':settings.get('pilot'),'account_revision':owner.revision,'binding_id':owner.binding_id,'configuration_fingerprint':pa.fingerprint,
         'instructions':cfg.public_context(),'public_facts':settings.get('public_facts',{}),
         'fan_state':facts,'fan_revision':mf.revision,'control':state_view,'event':{'kind':event.kind,'payload':json.loads(event.payload_json)},
-        'history':history,'memory':memory,'invitation':memo.get('invitation'),
+        'history':history,'card_state':card_state,'memory':memory,'invitation':memo.get('invitation'),
         'obligations':memo.get('obligations',[]),'products':{k:pa.products[k] for k in inventory},
         'offer_eligibility':{k:offerable.get(k,'product_mapping_missing') for k in inventory},
         'inventory':inventory,'sequences':pa.sequences,'operational':settings['operational'],
@@ -412,7 +420,6 @@ _VIEWED_CLAIM=_policy_re.compile(
     r"|\bdid\s+you\s+(?:like|love|enjoy|open|unlock|see|watch|view)\s+(?:it|that|this|them|the\s+\w+|my\s+\w+)"
     r"|\bwhat\s+did\s+you\s+think\s+(?:of|about)\s+(?:it|that|this|them|the\s+\w+|my\s+\w+)"
     r"|\byou\s+(?:already\s+)?(?:own|have)\s+(?:it|that|this|them)\b",_policy_re.I)
-_FAN_SAYS_OPENED=_policy_re.compile(r"\b(opened|unlocked|bought|paid|got\s+it|saw|seen|watched|viewed|just\s+did)\b",_policy_re.I)
 _ASKS_NAME=_policy_re.compile(
     r"\bwhat(?:'?s|s|\s+is)?\s+(?:your|ur)\s+name\b|\bwhat\s+(?:should|can|do)\s+i\s+call\s+you\b|\bwhat\s+do\s+you\s+go\s+by\b"
     r"|\bwho\s+(?:am\s+i\s+talking\s+to|are\s+you)\b|\bremind\s+me\s+(?:of\s+)?your\s+name\b",_policy_re.I)
@@ -449,13 +456,40 @@ def usable_fan_name(fan,memory):
 
 
 def content_status_violation(snap,texts):
-    """True when final wording claims he opened, saw or owns a card that is still locked for him."""
+    """Ground a viewing/ownership reference in that item's evidence, never a keyword in fan text.
+
+    Questions about an identified paid item remain allowed. A fan's own report is
+    conversational evidence only, never verified access or a purchase projection.
+    """
     history=snap.get('history') or []
-    if not any(m.get('direction')=='out' and type(m.get('price_cents')) is int and m['price_cents']>0 and m.get('paid') is not True
-            for m in history[-10:]):return False
-    incoming=[m.get('text') or '' for m in history if m.get('direction')=='in'][-3:]
-    if any(_FAN_SAYS_OPENED.search(t) for t in incoming):return False     # his own report is evidence
-    return any(_VIEWED_CLAIM.search(t) for t in texts)
+    cards=snap.get('card_state')
+    if cards is None:
+        cards=[m for m in history if m.get('direction')=='out' and (m.get('price_cents') or 0)>0]
+    if not cards:return False
+    def references(text):
+        found=[]
+        for card in cards:
+            pid=card.get('product_id')
+            # Explicit product/card ids are strongest; a distinctive caption can
+            # identify a historical card even when it no longer has a catalogue binding.
+            labels=[str(card['id'])] if card.get('id') is not None else []
+            if pid:labels.append(pid.replace('_',' '))
+            caption=(card.get('text') or '').strip()
+            if len(caption)>=6:labels.append(caption)
+            if any(_policy_re.search(r'(?<!\w)'+_policy_re.escape(label)+r'(?!\w)',text,_policy_re.I)
+                   for label in labels):found.append(card)
+        return found
+    incoming=[m.get('text') or '' for m in history if m.get('direction')=='in']
+    for text in texts:
+        if not _VIEWED_CLAIM.search(text):continue
+        targets=references(text) or (references(incoming[-1]) if incoming else [])
+        if not targets and _policy_re.search(r'\b(?:earlier|previous|first)\b',text,_policy_re.I):
+            targets=cards[:1]
+        if not targets:targets=cards[-1:]
+        # A paid receipt establishes access, not proof of watching. The existing
+        # guard allows conversational questions about purchased media.
+        if any(card.get('paid') is not True for card in targets):return True
+    return False
 
 
 def wording_problem(snap,decision):
@@ -497,15 +531,28 @@ def correction_brief(reason,result,snap):
             avoid=[p['text'][:300] for p in _plan(result)][:4])
         if result.get('product_id') is not None and result['action'] in COMMERCIAL_ACTIONS:
             brief['keep']={'action':result['action'],'product_id':result['product_id'],'sequence':result.get('sequence')}
+            brief['keep_terms']={k:snap['inventory'][result['product_id']][k]
+                for k in ('price_cents','media_ids','preview_ids')}
+            brief['media_positions']=[i for i,p in enumerate(_plan(result)) if p['media']]
     else:
         brief.update(kind='product',action=result['action'],product_id=result['product_id'])
     return brief
 
 
-def validate_decision(settings,snap,decision):
+def validate_decision(settings,snap,decision,*,planning=False):
     from .pilot import decision as pilot_decision
     pilot_decision(settings,snap,decision)
     rejected=snap.get('event',{}).get('payload',{}).get('rejected')
+    fallback=(decision.get('action')=='reply' and decision.get('product_id') is None
+        and decision.get('reason')=='moxy_validated_technical_fallback')
+    if planning and type(rejected) is dict and rejected.get('kind')=='wording' and rejected.get('keep') and not fallback:
+        if any(decision.get(k)!=v for k,v in rejected['keep'].items()):
+            raise ActionBlocked('correction_changed_valid_plan')
+        item=snap['inventory'].get(decision.get('product_id'),{})
+        if any(item.get(k)!=v for k,v in rejected.get('keep_terms',{}).items()):
+            raise ActionBlocked('correction_product_terms_changed')
+        if [i for i,p in enumerate(_plan(decision)) if p['media']]!=rejected.get('media_positions'):
+            raise ActionBlocked('correction_changed_media_binding')
     if type(rejected) is dict and rejected.get('product_id') is not None and decision['product_id']==rejected['product_id']:
         # A bounded correction may pick another product or answer in text, never the refused one again.
         raise ActionBlocked('correction_repeated_rejected_choice')
@@ -702,10 +749,20 @@ class MoxyService:
             if busy:return event_id
             control=s.get(OfConversationState,(account,event.fan_id));policy=s.get(OfDeliveryPolicy,account)
             reason=self.authority._eligibility(s,runtime,policy,control,s.get(Fan,(account,event.fan_id)),'automated',utcnow(),action='chat')
-            if reason=='history_not_current' and event.created_at and utcnow()-event.created_at<timedelta(minutes=5):
-                # The fan's own catch-up usually lands seconds after the message. Retry the same
-                # turn shortly instead of giving up; every retry rechecks every gate from scratch.
-                event.not_before=utcnow()+timedelta(seconds=3);event.updated_at=utcnow();return event_id
+            if reason=='history_not_current':
+                # Keep the durable event resumable beyond the old five-minute cutoff.
+                # Age-based backoff survives restarts without mutating its input payload.
+                age=max(0,(utcnow()-event.created_at).total_seconds())
+                source=json.loads(event.payload_json).get('source_message_id')
+                latest=s.scalar(select(Message.message_id).where(Message.account_id==account,
+                    Message.fan_id==event.fan_id,Message.direction=='in',Message.is_unsent.is_(False))
+                    .order_by(Message.created_at.desc(),Message.message_id.desc()).limit(1))
+                if source and latest!=source:
+                    event.status='stale';event.reason='moxy_input_superseded';return event_id
+                event.reason='history_not_current'
+                event.not_before=utcnow()+timedelta(seconds=min(60,3*2**min(5,int(age//60))));event.updated_at=utcnow()
+                diagnose(s,account,'history_wait',event=event,elapsed_seconds=int(age),retry_at=event.not_before)
+                return event_id
             if reason:
                 if reason in {'contact_blocked','case_identity','case_distress','safety_hold'}:
                     from db.onlyfans_case_models import OfOperatorCase
@@ -726,9 +783,15 @@ class MoxyService:
                     event.status='held';event.reason='moxy_input_context_missing';return event_id
                 if any(m['direction']=='out' and m['sender'] in {'human','unattributed'} for m in snap['history'][location+1:]):
                     event.status='done';event.reason='external_reply_after_input';return event_id
-            if len(canonical(snap).encode())>1048576:raise Refused('moxy_snapshot_budget_exceeded')
-            prompts=writer.messages(snap)
-            if len(canonical(prompts).encode())>131072:raise Refused('moxy_context_budget_exceeded')
+            try:
+                if len(canonical(snap).encode())>1048576:raise Refused('moxy_snapshot_budget_exceeded')
+                prompts=writer.messages(snap)
+                if len(canonical(prompts).encode())>131072:raise Refused('moxy_context_budget_exceeded')
+            except Exception as exc:
+                event.status='held';event.reason=(str(exc) if isinstance(exc,Refused) else 'moxy_prompt_build_failed')[:128]
+                diagnose(s,account,'context_failure',event=event,error_type=type(exc).__name__)
+                self._technical_attention(s,owner,event)
+                return event_id
             config=s.get(AccountAiConfig,account)
             from automations._common import resolve_model_from_config
             chosen=resolve_model_from_config(config,'ai_chatter',account_id=account,require_explicit=True)
@@ -740,20 +803,37 @@ class MoxyService:
             event.model_call_id=call.id;event.reserved_millicents=units;event.budget_day=day
             event.snapshot_json=canonical(snap);event.snapshot_hash=digest(snap)
             event.status='generating';event.lease_until=utcnow()+timedelta(seconds=60);event.updated_at=utcnow()
+            call_id=call.id;reserved=units
         result=reason=None
         async def generate():
             async with asyncio.timeout(timeout):return await model.generate(prompts)
         # Keep structurally valid input observations even when the proposed
         # sale is refused. Authority still gates preparation and every send.
-        try:result=writer.parse(asyncio.run(generate()),defer_sales_pause=True)
+        try:
+            raw=asyncio.run(generate())
+            # Commit evidence BEFORE parsing: malformed output and a worker crash
+            # after generation must both be diagnosable and recoverable.
+            with Session(self.engine) as s,s.begin():
+                saved=s.get(MoxyEvent,(account,event_id))
+                diagnose(s,account,'provider_result',event=saved,raw=raw,
+                    actual_millicents=model.reported_cost_millicents if model.completed else None,
+                    tokens_in=getattr(model,'tokens_in',None),tokens_out=getattr(model,'tokens_out',None),
+                    cache_hit_tokens=getattr(model,'cache_hit_tokens',None),
+                    configuration_fingerprint=snap.get('configuration_fingerprint'))
+            result=writer.parse(raw,defer_sales_pause=True)
         except (TimeoutError,asyncio.TimeoutError):reason='moxy_model_unknown'
         except Exception as exc:reason=str(exc) if isinstance(exc,ActionBlocked) else 'moxy_draft_refused'
         with Session(self.engine) as s,s.begin():
             self.store._runtime(s,tenant,account);owner=s.get(MoxyAccount,account);event=s.get(MoxyEvent,(account,event_id))
             from llm_client import settle_scoped_synthetic_call
             settle=model.settle if live else settle_scoped_synthetic_call
-            cost=settle(s,account_id=account,call_id=event.model_call_id,reserved_millicents=event.reserved_millicents,
+            cost=settle(s,account_id=account,call_id=call_id,reserved_millicents=reserved,
                 actual_millicents=model.reported_cost_millicents if model.completed else None,now=utcnow())
+            # Recovery may already have fenced this invocation. Settle its cost
+            # evidence, but a late result cannot revive or deliver the old event.
+            if event.status!='generating' or event.model_call_id!=call_id:
+                diagnose(s,account,'late_generation_fenced',event=event,completed_call_id=call_id)
+                return event_id
             event.charged_millicents=cost
             if cost is None:reason='moxy_model_usage_unknown'
             if event.snapshot_hash!=digest(snapshot(s,account,event.fan_id,event)):
@@ -761,63 +841,168 @@ class MoxyService:
             if reason:
                 event.status='unknown' if reason.endswith('unknown') else 'held';event.reason=reason
                 payload=json.loads(event.payload_json)
-                if (event.status=='held' and not payload.get('correction_of') and owner.mode=='on' and event.kind=='turn'
+                if (event.status=='held' and not payload.get('correction_of') and owner.mode=='on' and event.kind in {'turn','welcome'}
                         and payload.get('source_message_id') and reason in FORMAT_REASONS):
-                    enqueue(s,account,event.fan_id,'turn','correction:'+event_id,
+                    enqueue(s,account,event.fan_id,event.kind,'correction:'+event_id,
                         {'source_message_id':payload['source_message_id'],'correction_of':event_id,
                          'rejected':{'reason':reason[:120],'kind':'format','action':None,'product_id':None,
                                      'fan_message':_latest_fan_text(snap)}})
                 if event.status=='held' and payload.get('correction_of') and owner.mode=='on':
-                    # The bounded correction produced no usable decision: a person takes over, no regeneration.
-                    from onlyfans_runtime.operator_cases import open_case
-                    open_case(s,account,event.fan_id,'other',reason='moxy_correction_failed',
-                        evidence={'event_id':event_id,'correction_of':payload['correction_of'],'reason':reason[:120]},
-                        origin='detector',scope='all',owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
+                    self._correction_exhausted(s,owner,event,reason)
+                diagnose(s,account,'generation_outcome',event=event)
                 return event_id
-            from .pilot import route_specialist
-            result=route_specialist(json.loads(owner.settings_json),result)
-            try:
-                # Validate evidence before retaining a fan constraint, including no-send turns.
-                from .observations import observations
-                observations(result,snap)
-                if owner.mode!='preview':observe_input(s,event,result)
-                validate_decision(json.loads(owner.settings_json),snap,result)
-            except (ActionBlocked,InvalidConfiguration) as exc:
-                event.status='held';event.reason=str(exc);event.decision_json=canonical(result)
-                payload=json.loads(event.payload_json)
-                if payload.get('correction_of'):
-                    # The one bounded correction was itself refused: no further regeneration, a person takes over.
-                    if owner.mode=='on':
-                        from onlyfans_runtime.operator_cases import open_case
-                        first=s.get(MoxyEvent,(account,payload['correction_of']))
-                        open_case(s,account,event.fan_id,'other',reason='moxy_correction_failed',
-                            evidence={'event_id':event_id,'correction_of':payload['correction_of'],'reason':str(exc)[:120],
-                                'rejected_reason':first.reason if first is not None else None},
-                            origin='detector',scope='all',owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
-                elif (isinstance(exc,ActionBlocked) and owner.mode=='on' and event.kind=='turn' and payload.get('source_message_id')
-                        and recoverable(str(exc)) and (result['action'] in COMMERCIAL_ACTIONS or result['product_id'] is not None
-                            or str(exc) in WORDING_REASONS)):
-                    # One bounded corrective planning attempt through the normal worker path (model reservation,
-                    # spending limits, stale-input and eligibility checks all apply again). The rejected choice stays held.
-                    enqueue(s,account,event.fan_id,'turn','correction:'+event_id,
-                        {'source_message_id':payload['source_message_id'],'correction_of':event_id,
-                         'rejected':correction_brief(str(exc),result,snap)})
-                return event_id
-            event.decision_json=canonical(result)
-            if owner.mode=='preview':event.status='preview';return event_id
-            # Our own newly recorded input constraints are part of the frozen
-            # decision. Future independent input still invalidates this version.
-            snap=snapshot(s,account,event.fan_id,event)
-            event.snapshot_json=canonical(snap);event.snapshot_hash=digest(snap)
-            if result['action']=='handover':
-                from onlyfans_runtime.operator_cases import open_case
-                category=('identity' if 'identity' in result['flags'] else 'distress' if 'danger' in result['flags']
-                    else 'complaint' if 'complaint' in result['flags'] else 'other')
-                open_case(s,account,event.fan_id,category,reason='moxy_owned_handover',evidence={'event_id':event_id},origin='detector',scope='all',owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
-                event.status='done';return event_id
-            if result['action']=='none':event.status='done';return event_id
-            event.status='ready'
+            self._finish_decision(s,owner,event,snap,result)
         return event_id
+
+    def _finish_decision(self,s,owner,event,snap,result):
+        account,event_id=event.account_id,event.event_id
+        from .pilot import route_specialist
+        result=route_specialist(json.loads(owner.settings_json),result)
+        try:
+            # Validate evidence before retaining a fan constraint, including no-send turns.
+            from .observations import observations
+            observations(result,snap)
+            if owner.mode!='preview':observe_input(s,event,result)
+            validate_decision(json.loads(owner.settings_json),snap,result,planning=True)
+        except (ActionBlocked,InvalidConfiguration) as exc:
+            event.status='held';event.reason=str(exc);event.decision_json=canonical(result)
+            payload=json.loads(event.payload_json)
+            if payload.get('correction_of'):
+                if owner.mode=='on':
+                    self._correction_exhausted(s,owner,event,str(exc))
+            elif (isinstance(exc,ActionBlocked) and owner.mode=='on' and event.kind in {'turn','welcome'} and payload.get('source_message_id')
+                    and recoverable(str(exc)) and (result['action'] in COMMERCIAL_ACTIONS or result['product_id'] is not None
+                        or str(exc) in WORDING_REASONS)):
+                # One bounded corrective planning attempt through the normal worker path (model reservation,
+                # spending limits, stale-input and eligibility checks all apply again). The rejected choice stays held.
+                enqueue(s,account,event.fan_id,event.kind,'correction:'+event_id,
+                    {'source_message_id':payload['source_message_id'],'correction_of':event_id,
+                     'rejected':correction_brief(str(exc),result,snap)})
+            diagnose(s,account,'validation_outcome',event=event,validation_reason=str(exc))
+            return event_id
+        event.decision_json=canonical(result)
+        if owner.mode=='preview':event.status='preview';return event_id
+        # Our own newly recorded input constraints are part of the frozen
+        # decision. Future independent input still invalidates this version.
+        snap=snapshot(s,account,event.fan_id,event)
+        event.snapshot_json=canonical(snap);event.snapshot_hash=digest(snap)
+        if result['action']=='handover':
+            from onlyfans_runtime.operator_cases import open_case
+            category=('identity' if 'identity' in result['flags'] else 'distress' if 'danger' in result['flags']
+                else 'complaint' if 'complaint' in result['flags'] else 'other')
+            open_case(s,account,event.fan_id,category,reason='moxy_owned_handover',evidence={'event_id':event_id},origin='detector',scope='all',owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
+            event.status='done';return event_id
+        if result['action']=='none':event.status='done';return event_id
+        event.status='ready';event.reason=None;event.lease_until=None
+        diagnose(s,account,'decision_ready',event=event)
+
+    def _technical_attention(self,s,owner,event):
+        from onlyfans_runtime.operator_cases import open_case
+        payload=json.loads(event.payload_json)
+        first=s.get(MoxyEvent,(event.account_id,payload['correction_of'])) if payload.get('correction_of') else None
+        open_case(s,event.account_id,event.fan_id,'moxy_technical',reason='moxy_technical_attention',
+            evidence={'event_id':event.event_id,'model_call_id':event.model_call_id,'reason':event.reason,
+                'correction_of':payload.get('correction_of'),'rejected_reason':first.reason if first is not None else None},
+            origin='detector',scope='offer',
+            owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
+
+    def _correction_exhausted(self,s,owner,event,reason):
+        payload=json.loads(event.payload_json)
+        rejected=payload.get('rejected') or {}
+        # Only format/wording failures permit a factual technical fallback.
+        # Product/permission refusals and deliberate human/contact holds remain held.
+        eligible=(reason in FORMAT_REASONS|WORDING_REASONS and rejected.get('kind') in {'format','wording'})
+        prior=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==event.account_id,
+            MoxyEvent.fan_id==event.fan_id,MoxyEvent.event_id!=event.event_id,
+            MoxyEvent.status.in_(('ready','queued','done')))).all()
+        duplicate=any(json.loads(e.payload_json).get('source_message_id')==payload.get('source_message_id')
+            and json.loads(e.decision_json or '{}').get('reason')=='moxy_validated_technical_fallback' for e in prior)
+        if eligible and not duplicate and event.charged_millicents is not None:
+            fresh=snapshot(s,event.account_id,event.fan_id,event)
+            fallback={'action':'reply','text':"I'm having trouble replying right now. Could you give me a moment?",
+                'messages':[{'text':"I'm having trouble replying right now. Could you give me a moment?",'media':False}],
+                'product_id':None,'sequence':None,'flags':[],'reason':'moxy_validated_technical_fallback',
+                'permission':None,'question':None,'resolve_obligation':None}
+            try:validate_decision(json.loads(owner.settings_json),fresh,fallback,planning=True)
+            except (ActionBlocked,InvalidConfiguration):pass
+            else:
+                event.decision_json=canonical(fallback);event.snapshot_json=canonical(fresh);event.snapshot_hash=digest(fresh)
+                event.status='ready';event.reason='moxy_safe_fallback';event.lease_until=None
+                diagnose(s,event.account_id,'validated_fallback',event=event,validation_reason=reason)
+                return
+        event.status='held';event.reason=('moxy_technical_failure:'+reason[:100]) if eligible else reason[:128]
+        self._technical_attention(s,owner,event)
+        diagnose(s,event.account_id,'technical_attention',event=event,validation_reason=reason)
+
+    def _recover_generations(self,s,account):
+        """Fence expired calls, reuse persisted completions, otherwise surface an operator outcome.
+
+        Unknown accounting keeps its reservation. There is no blind regeneration,
+        and delivery uncertainty continues through the existing intent reconciler.
+        The caller holds the existing account lock, serialising competing workers.
+        """
+        from .diagnostics import completion
+        owner=s.get(MoxyAccount,account)
+        rows=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,
+            (MoxyEvent.status=='unknown')|
+            ((MoxyEvent.status=='generating')&(MoxyEvent.lease_until<utcnow()))|
+            ((MoxyEvent.status=='held')&(MoxyEvent.reason=='moxy_generation_reconciliation_required')))
+            .order_by(MoxyEvent.created_at).limit(32)).all()
+        for event in rows:
+            event.lease_until=None
+            if event.intent_id:
+                # An existing intent, especially after one accepted bubble, is
+                # never a licence to generate/send a replacement.
+                event.status='held';event.reason='moxy_delivery_reconciliation_required'
+                self._technical_attention(s,owner,event)
+                diagnose(s,account,'delivery_reconciliation_required',event=event)
+                continue
+            call=s.scalar(select(GrokCall).where(GrokCall.id==event.model_call_id).with_for_update())
+            proof=completion(s,event)
+            if call is not None and proof and proof.get('raw_complete'):
+                units=proof.get('actual_millicents')
+                # Reconcile ONLY the immutable completion's recorded cost against
+                # the original reservation/day/provider, without replaying the call.
+                if (call.status in {'pending','unknown'} and type(units) is int and 0<=units<=100000000
+                        and call.account_id==account and call.fan_id==event.fan_id
+                        and call.cost_cents==event.reserved_millicents):
+                    ledger=s.scalar(select(GrokDailyCost).where(GrokDailyCost.account_id==account,
+                        GrokDailyCost.provider==call.provider,GrokDailyCost.day==call.called_at.strftime('%Y-%m-%d'))
+                        .with_for_update())
+                    if ledger is not None and ledger.cost_cents>=event.reserved_millicents:
+                        ledger.cost_cents+=units-event.reserved_millicents;ledger.updated_at=utcnow()
+                        call.cost_cents=units;call.status='done'
+                        for field in ('tokens_in','tokens_out','cache_hit_tokens'):
+                            value=proof.get(field)
+                            if type(value) is int and value>=0:setattr(call,field,value)
+                if call.status=='done' and call.account_id==account and call.fan_id==event.fan_id:
+                    event.charged_millicents=call.cost_cents
+                    if proof.get('status')!='generating':
+                        # A result persisted after recovery fenced the invocation
+                        # can settle accounting, but cannot acquire send authority.
+                        event.status='held';event.reason='moxy_late_generation_fenced'
+                        diagnose(s,account,'late_completion_cost_reconciled',event=event)
+                        continue
+                    fresh=snapshot(s,account,event.fan_id,event)
+                    if event.snapshot_hash!=digest(fresh):
+                        event.status='stale';event.reason='moxy_snapshot_changed'
+                    else:
+                        try:result=writer.parse(proof['raw'],defer_sales_pause=True)
+                        except ActionBlocked as exc:
+                            event.status='held';event.reason='moxy_technical_failure:'+str(exc)[:100]
+                            self._technical_attention(s,owner,event)
+                        else:self._finish_decision(s,owner,event,fresh,result)
+                    diagnose(s,account,'generation_recovered',event=event)
+                    continue
+            # Unknown usage is not released or charged twice to clear the event.
+            if call is not None and call.status=='pending':call.status='unknown'
+            first=event.reason!='moxy_generation_reconciliation_required'
+            event.status='held';event.reason='moxy_generation_reconciliation_required'
+            event.updated_at=utcnow()
+            if first:
+                self._technical_attention(s,owner,event)
+                diagnose(s,account,'generation_reconciliation_required',event=event,
+                    reservation_retained=event.reserved_millicents)
 
     def queue(self,tenant,account,event_id):
         with Session(self.engine) as s,s.begin():
@@ -843,9 +1028,13 @@ class MoxyService:
         if type(limit) is not int or not 1<=limit<=16:raise Refused('invalid_moxy_batch')
         with Session(self.engine) as s,s.begin():
             self.store._runtime(s,tenant,account)
-            # A restart never repeats a possibly paid model invocation.
-            for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='generating',MoxyEvent.lease_until<utcnow())):
-                e.status='unknown';e.reason='interrupted_moxy_generation'
+            # Upgrade already-stranded history waits from the old five-minute
+            # policy without touching intentional holds or uncertain delivery.
+            for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,
+                    MoxyEvent.status=='held',MoxyEvent.reason=='history_not_current',
+                    MoxyEvent.model_call_id.is_(None))):
+                e.status='pending';e.not_before=utcnow()
+            self._recover_generations(s,account)
             for e in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.status=='queued')):
                 intent=s.get(OfTextIntent,(account,e.intent_id))
                 if intent and intent.status=='not_accepted':

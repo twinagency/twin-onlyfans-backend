@@ -110,11 +110,15 @@ class VaultDescriptionWorker:
                     self.child.kill()
                     self.child.communicate()
                     output = ""
-                if self.child.returncode == 0 and output:
-                    # The child emits one fixed-shape summary, never model text or URLs.
-                    result = json.loads(output[-4096:].splitlines()[-1])
-                    if result.get("schemaVersion") == "of-vault-description.v1":
-                        self.observe(result)
+                result = None
+                if output:
+                    # A failed child emits safe diagnostic labels before exiting.
+                    try:
+                        result = json.loads(output[-4096:].splitlines()[-1])
+                    except (ValueError, IndexError):
+                        pass
+                if isinstance(result, dict) and result.get("schemaVersion") == "of-vault-description.v1":
+                    self.observe(result)
                 else:
                     self.observe({"schemaVersion": "of-vault-description.v1", "account": account,
                                   "state": "retry_pending"})
@@ -169,4 +173,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

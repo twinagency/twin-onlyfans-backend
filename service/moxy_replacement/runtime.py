@@ -1042,7 +1042,10 @@ class MoxyService:
         snap=snapshot(s,account,event.fan_id,event)
         event.snapshot_json=canonical(snap);event.snapshot_hash=digest(snap)
         if result['action']=='handover':
-            if result.get('reason')=='card_context_unavailable':
+            from .grounding import unverified_card_question
+            if (result.get('reason','').partition(':')[0]=='card_context_unavailable'
+                    and not set(result['flags']) & {'identity','danger','complaint','hardship','boundary_reset'}
+                    and unverified_card_question(snap)):
                 event.reason='card_context_unavailable'
                 self._technical_attention(s,owner,event)
                 event.status='done'

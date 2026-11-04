@@ -82,13 +82,19 @@ def test_failed_recovery_has_owned_visible_handover_and_next_offer_is_not_blocke
 
 def test_unknown_card_handover_is_visible_and_question_scoped(database,monkeypatch):
  engine,store,service,_,_,_=setup(database,monkeypatch)
- identity=add(service)
- service.prepare(TENANT,ACCOUNT,identity,model(decision('handover','',messages=[],reason='card_context_unavailable')))
+ with Session(engine) as s,s.begin():s.add(Message(account_id=ACCOUNT,fan_id=101,message_id=110,direction='out',body='Old card with unverified content',price_cents=999,is_paid=None,created_at=utcnow()-timedelta(days=2)))
+ store.record(TENANT,ACCOUNT,event(mid=2,body='What is in old card110?'));store.drain(TENANT,ACCOUNT)
+ identity=add(service,mid=2)
+ service.prepare(TENANT,ACCOUNT,identity,model(decision('handover','',messages=[],reason='card_context_unavailable: message110 has no verified product mapping or description')))
  final=row(engine,identity);outcome=json.loads(final.payload_json)['recovery_outcome']
  assert final.status=='done' and outcome['assigned_operator']=='fixture-operator'
  with Session(engine) as s:
   case=s.get(OfOperatorCase,(ACCOUNT,outcome['case_id']));assert case.status=='open' and case.scope=='offer'
   assert not s.scalar(select(OfTextIntent.intent_id))
+ store.record(TENANT,ACCOUNT,event(mid=3,body='Send the sports outfit photo please'));store.drain(TENANT,ACCOUNT)
+ next_id=add(service,key='offer-after-card-handover',mid=3)
+ service.prepare(TENANT,ACCOUNT,next_id,model(decision('offer','Here is the outfit photo.','first',sequence='fixture_level',request_kind='direct',request_quote='Send the sports outfit photo please')))
+ assert row(engine,next_id).status=='ready'
  store.close()
 
 

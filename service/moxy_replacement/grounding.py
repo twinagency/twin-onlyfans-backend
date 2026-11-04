@@ -140,3 +140,11 @@ def explicit_sexting(snapshot,texts):
         if re.search(r"\b(?:stroke|stroking|suck|sucking|lick|licking)\b.{0,45}\b(?:cock|dick|penis|pussy)\b",text,re.I):return True
         if sexual_context and re.search(r"\b(?:hand|hands)\b.{0,80}\b(?:wrapped|around|moving|stroking|feeling)\b.{0,70}\b(?:hard|harder|harden|cock|dick|penis)\b|\b(?:hold|holding|hands on)\b.{0,70}\b(?:get hard|hard for me|harden)\b",text,re.I):return True
     return False
+
+
+def unverified_card_question(snapshot):
+    import re
+    text=(snapshot.get('commercial_state',{}).get('current_input') or {}).get('text','')
+    return any(type(c.get('id')) is int and re.search(r'(?<!\d)'+str(c['id'])+r'(?!\d)',text)
+        and c.get('price_cents',0)>0 and c.get('product_id') not in snapshot.get('inventory',{})
+        for c in snapshot.get('card_state',[]))

@@ -17,16 +17,16 @@ def observations(decision, snapshot):
     values=decision.get('observations',[])
     if type(values) is not list or len(values)>8:
         raise ActionBlocked('invalid_constraint_observations')
-    incoming=[m for m in snapshot['history'] if m['direction']=='in']
-    latest=incoming[-1] if incoming else None
-    result=[];seen=set()
+    from .conversation import pending_messages
+    incoming={m['id']:m for m in pending_messages(snapshot)}
+    result=[]
     for o in values:
         if (type(o) is not dict or o.get('kind') not in KINDS
                 or set(o)!=(BASE|{'amount_cents'} if o.get('kind')=='budget' else BASE)
                 or type(o['active']) is not bool
                 or type(o['message_id']) is not int or type(o['quote']) is not str
-                or not o['quote'].strip() or not latest or o['message_id']!=latest['id']
-                or o['quote'] not in latest['text']):
+                or not o['quote'].strip() or o['message_id'] not in incoming
+                or o['quote'] not in incoming[o['message_id']]['text']):
             # An annotation the current fan message does not evidence is dropped, not a held turn.
             # Retained restrictions live in fan state and are unaffected by dropping a new claim.
             continue
@@ -38,9 +38,9 @@ def observations(decision, snapshot):
             raise ActionBlocked('invalid_constraint_scope')
         if o['kind']=='financial_hardship' and not o['active']:
             raise ActionBlocked('hardship_requires_owned_resolution')
-        identity=(o['kind'],product)
-        if identity in seen:raise ActionBlocked('conflicting_constraint_observations')
-        seen.add(identity);result.append(deepcopy(o))
+        result.append(deepcopy(o))
+    from .input_batch import chronological
+    result=chronological(result,list(incoming.values()))
     required={'hardship':'financial_hardship','refusal':'sales_refused','boundary_reset':'boundary_hold'}
     for flag,kind in required.items():
         if flag in decision['flags'] and not any(o['kind']==kind and o['active'] for o in result):

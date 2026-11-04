@@ -207,6 +207,12 @@ def make_stub(ctx, c):
             elif scn == 'takeover_mid':
                 ctx.set_mode(c.account, fan, 'human_controlled')
             d = decision('reply', 'Aw that sounds lovely, tell me more' + mark)
+        # The repair's reuse detector also refuses a shared run of 5+ words with an earlier line, so every turn
+        # gets a unique token after each 3 words: no two turns for a fan share a long phrase (the (tag-fan-n) mark stays last).
+        if d['text']:
+            words = d['text'].split(' ')
+            n_out = sum(1 for h in snap['history'] if h['direction'] == 'out')
+            d['text'] = ' '.join(w + (' t%d' % n_out if i % 3 == 2 and i < len(words) - 1 else '') for i, w in enumerate(words))
         if d['flags'] and incoming:
             kinds={'refusal':'sales_refused','hardship':'financial_hardship'}
             d['observations']=[{'kind':kinds[flag],'active':True,'message_id':incoming[-1]['id'],

@@ -42,7 +42,9 @@ def setup(database, monkeypatch):
     import llm_client, vault_frames
     from onlyfans_runtime import vault_previews
     monkeypatch.setattr(connections, "_open", lambda *a: {"capture": {}, "xHash": "synthetic", "proxyUrl": None})
-    fake_client = SimpleNamespace(_http_call=lambda *a, **k: None, http=SimpleNamespace(close=lambda: None))
+    fake_client = SimpleNamespace(_http_call=lambda *a, **k: None,
+        vault_media_by_id=lambda mid: {"id": mid, "type": "photo", "userId": 900001, "files": {}},
+        http=SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(connection, "build_client", lambda conn: fake_client)
     monkeypatch.setattr(caption_vault, "install_client_adapter", lambda *a: None)
     monkeypatch.setattr(caption_vault, "install_llm_adapter", lambda: None)
@@ -177,8 +179,8 @@ def test_fresh_urls_do_not_rewrite_native_raw_evidence(database, monkeypatch):
     resolved=[]
     def resolve(*a):
         resolved.append(True)
-        return vault_stills._Resolved({"id":MID,"type":"video","userId":900001,"files":{}}, False)
-    monkeypatch.setattr(vault_stills, "_resolve_fresh_sync", resolve)
+        return {"id":MID,"type":"video","userId":900001,"files":{}}
+    monkeypatch.setattr(client, "vault_media_by_id", resolve)
     async def collect(account, item, raw, want):
         fresh = await vault_stills.resolve_fresh(account, item.media_id, client)
         assert fresh.media["id"] == MID
@@ -259,3 +261,58 @@ def test_caption_permission_is_task_local_and_cannot_send_to_fans(monkeypatch):
             llm_client._vault_caption_account.reset(token)
         await unprivileged()
     asyncio.run(run())
+
+
+
+@pytest.mark.parametrize("phase", ["preview", "frames"])
+def test_provider_deferral_preserves_item_and_later_batch_completes(database, monkeypatch, phase):
+    args, calls, engine, client = setup(database, monkeypatch)
+    from datetime import timedelta
+    from onlyfans_runtime.provider_read_budget import ReadDeferred
+    from onlyfans_runtime import vault_previews
+    import vault_frames
+    deferred = ReadDeferred(utcnow() + timedelta(seconds=10), "provider read backoff")
+    if phase == "frames":
+        with Session(database[1]) as s, s.begin():
+            item = s.get(VaultItem, (ACCOUNT, MID))
+            item.kind = "video"
+            raw = json.loads(item.raw_json)
+            raw["type"] = "video"
+            item.raw_json = canonical(raw)
+            s.get(OfVaultObservation, (ACCOUNT, MID)).raw_hash = digest(item.raw_json)
+        monkeypatch.setattr(client, "vault_media_by_id", lambda mid: {"id": mid, "type": "video", "userId": 900001, "files": {}})
+    normal_fetch = client.vault_media_by_id
+    normal_collect = vault_frames.collect
+    if phase == "frames":
+        async def normal_collect(*a, **k):
+            return vault_frames.Collected(["data:image/jpeg;base64," + str(i) for i in range(6)], "ok", source="storyboard")
+    if phase == "preview":
+        monkeypatch.setattr(vault_previews, "promote_cached", lambda *a: False)
+        def read(*a):
+            raise deferred
+        monkeypatch.setattr(client, "vault_media_by_id", read)
+    else:
+        monkeypatch.setattr(vault_previews, "promote_cached", lambda *a: True)
+        async def collect(*a, **k):
+            raise deferred
+        monkeypatch.setattr(vault_frames, "collect", collect)
+    async def run():
+        try:
+            result = await child.run(args)
+            assert result["state"] == "retry_pending"
+            assert result["reason"] == "provider_read_deferred"
+            assert result["failed"] == 0 and result["described"] == 0
+            with Session(database[1]) as s:
+                item = s.get(VaultItem, (ACCOUNT, MID))
+                assert item.describe_status is None
+                assert item.describe_generated_at is None
+                assert "_describe_failure" not in (item.ai_fields_json or "")
+            monkeypatch.setattr(client, "vault_media_by_id", normal_fetch)
+            monkeypatch.setattr(vault_frames, "collect", normal_collect)
+            result = await child.run(args)
+            assert result["described"] == 1 and result["failed"] == 0
+        finally:
+            await engine.dispose()
+    asyncio.run(run())
+
+

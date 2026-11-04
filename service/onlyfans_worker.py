@@ -90,9 +90,17 @@ def _process_content_sync(store, tenant, *, limit, stop):
     return processed + content_sync_media.process_uploads(store, tenant, limit=limit, stop=stop, transport_for=transport_for)
 
 
+MAINTENANCE_MAX_YIELDS = 2
+
+
+def _moxy_due_probe(store):
+    from onlyfans_runtime.native_worker import moxy_due
+    return lambda: moxy_due(store.engine)
+
+
 def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
              load_cohort=None, worker_type=None, observe=None, vault_jobs=None, ledger_jobs=None,facts_reader=None,enrollment_jobs=None,
-             offer_jobs=None, content_sync_jobs=None, worker_options=None):
+             offer_jobs=None, content_sync_jobs=None, worker_options=None, moxy_due=None):
     """Refresh bounded ordered cohorts without starving accounts after row 32.
 
     ``worker_options`` carries the launch feature flags (history_recovery, history_memory, engagement);
@@ -113,12 +121,25 @@ def run_loop(store, tenant, stop, *, once=False, refresh_seconds=15,
     cursor = None
     maintenance_cursor = 0
     maintenance_backoff = {}
+    maintenance_yields = {}
 
     def maintain(job, phase):
         nonlocal failed
         count, due = maintenance_backoff.get(phase, (0, 0))
         if time.monotonic() < due:
             return
+        # A slow maintenance job (provider reads, uploads) must not sit in front of a ready Moxy reply.
+        # Skip it for this pass when one is waiting, at most MAINTENANCE_MAX_YIELDS passes in a row.
+        if moxy_due is not None:
+            if maintenance_yields.get(phase, 0) < MAINTENANCE_MAX_YIELDS:
+                try:
+                    waiting = bool(moxy_due())
+                except Exception:
+                    waiting = False
+                if waiting:
+                    maintenance_yields[phase] = maintenance_yields.get(phase, 0) + 1
+                    return
+            maintenance_yields[phase] = 0
         try:
             job(store, tenant, limit=1, stop=stop)
         except Exception as exc:
@@ -338,7 +359,8 @@ def main(argv=None):
                         offer_jobs=_process_offer_jobs if os.environ.get("ONLYFANS_OFFER_IMPORT_ENABLED") == "1" else None,
                         content_sync_jobs=(_process_content_sync if os.environ.get("ONLYFANS_CONTENT_SYNC_ENABLED") == "1"
                             else _process_import_sync if os.environ.get("ONLYFANS_AUTOMATIC_IMPORTS_ENABLED") == "1" else None),
-                        worker_options=worker_options)
+                        worker_options=worker_options,
+                        moxy_due=(_moxy_due_probe(store) if os.environ.get("ONLYFANS_MOXY_FAST_LANE", "1") == "1" and not args.once else None))
     finally:
         stop.set()
         if description_worker is not None:

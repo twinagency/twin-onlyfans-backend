@@ -23,6 +23,28 @@ from . import writer
 
 EVENTS={'turn','welcome','invitation','scheduled','campaign','purchase','refund','chargeback','fulfilment'}
 
+# Artificial reply pause (seconds). The floor keeps a reply from ever being instant; the
+# ceiling keeps a bad setting from silently stalling conversations.
+REPLY_DELAY_DEFAULTS={'MOXY_REPLY_DELAY_ACTIVE':(8.0,25.0,12.0),'MOXY_REPLY_DELAY_IDLE':(15.0,40.0,25.0)}
+REPLY_DELAY_FLOOR=5.0
+REPLY_DELAY_CEILING=300.0
+
+
+def reply_delay_bounds(active):
+    """(low, high, mode) for random.triangular. Env value is "low,high,mode"; anything malformed,
+    below the 5 s floor, above 300 s or out of order falls back to the default (never raises)."""
+    import os
+    name='MOXY_REPLY_DELAY_ACTIVE' if active else 'MOXY_REPLY_DELAY_IDLE'
+    default=REPLY_DELAY_DEFAULTS[name]
+    raw=os.environ.get(name)
+    if not raw:return default
+    try:
+        low,high,mode=(float(part) for part in raw.split(','))
+    except ValueError:
+        return default
+    if not (REPLY_DELAY_FLOOR<=low<=mode<=high<=REPLY_DELAY_CEILING):return default
+    return low,high,mode
+
 
 def selected(s, account):
     return s.get(MoxyAccount, account) is not None
@@ -64,13 +86,16 @@ def enqueue(s, account, fan, kind, key, payload):
         saved=json.loads(cfg.ai_chatter_config_json or '{}') if cfg else {}
         if saved.get('native_reply_pacing_enabled') is True:
             import random
-            # Same approved 25..90s triangular reply setting as native_pilot.pacing.
+            # Human-like pause, counted from the moment the fan message was ingested.
+            # Defaults triangular(8,25,12) in a live conversation, (15,40,25) otherwise;
+            # tunable with MOXY_REPLY_DELAY_ACTIVE / MOXY_REPLY_DELAY_IDLE ("low,high,mode").
             active=s.scalar(select(MoxyEvent.event_id).where(MoxyEvent.account_id==account,
                 MoxyEvent.fan_id==fan,MoxyEvent.status=='done',MoxyEvent.updated_at>=now-timedelta(minutes=5)).limit(1)) is not None
             source=s.get(Message,(account,fan,payload.get('source_message_id'))) if payload.get('source_message_id') else None
             received=source.ingested_at if source is not None and source.ingested_at is not None else now
             if isinstance(received,str):received=__import__('datetime').datetime.fromisoformat(received)
-            row.not_before=received+timedelta(seconds=random.triangular(25,90,35 if active else 60))
+            low,high,mode=reply_delay_bounds(active)
+            row.not_before=received+timedelta(seconds=random.triangular(low,high,mode))
     s.add(row);s.flush()
     return row.event_id
 

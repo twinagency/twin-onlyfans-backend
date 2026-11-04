@@ -18,8 +18,34 @@ from sqlalchemy.orm import Session
 
 from db.onlyfans_delivery_models import OfDeliveryPolicy,OfNativePlan,OfTextIntent
 from onlyfans_read.contract import ID_PATTERN
-from .store import Refused,Store
+from .store import Refused,Store,utcnow
 from .text_delivery import SyntheticTextTransport,TextAuthority,MAX_SYNC_AGE_SECONDS
+
+
+MOXY_FAST_LANE_GAP=2.0   # seconds between fast-lane turns for one account
+
+
+def moxy_due(engine,account_ids=None):
+    """Accounts (optionally limited to account_ids) with Moxy reply work ready to run right now.
+
+    One cheap read-only query set, no row locks. Due means: a waiting/expired-lease fan input, a
+    pending/ready turn or welcome event past its not_before, or a queued Moxy text awaiting delivery."""
+    from db.onlyfans_models import OfWork
+    from db.onlyfans_moxy_models import MoxyAccount,MoxyEvent
+    with Session(engine) as s:
+        now=utcnow()
+        owned=select(MoxyAccount.account_id).where(MoxyAccount.mode=="on")
+        if account_ids is not None:owned=owned.where(MoxyAccount.account_id.in_(list(account_ids)))
+        owned=set(s.scalars(owned))
+        if not owned:return set()
+        due=set(s.scalars(select(MoxyEvent.account_id).where(MoxyEvent.account_id.in_(owned),
+            MoxyEvent.status.in_(("pending","ready")),MoxyEvent.kind.in_(("turn","welcome")),
+            (MoxyEvent.not_before.is_(None))|(MoxyEvent.not_before<=now)).distinct()))
+        due|=set(s.scalars(select(OfWork.account_id).where(OfWork.account_id.in_(owned),OfWork.due_at<=now,
+            (OfWork.status=="waiting")|((OfWork.status=="claimed")&(OfWork.lease_until<=now))).distinct()))
+        due|=set(s.scalars(select(OfTextIntent.account_id).where(OfTextIntent.account_id.in_(owned),
+            OfTextIntent.status=="queued",OfTextIntent.moxy_event_id.is_not(None)).distinct()))
+        return due
 
 
 @dataclass(frozen=True)
@@ -97,6 +123,7 @@ class NativeWorker:
         self.campaigns=CampaignService(store)
         self.accounts_per_cycle,self.model_timeout=accounts_per_cycle,model_timeout_seconds
         self._cursor=0
+        self._fast_at={}
         self._lock=threading.Lock()
         from .creator_facts import TwinFactsReader
         if facts_reader is not None and type(facts_reader) is not TwinFactsReader:
@@ -229,6 +256,55 @@ class NativeWorker:
             # backoff. Skip planning this turn; other accounts still get work.
             return None
 
+    def _moxy_turn(self,account,report):
+        """Reactive Moxy work for one migrated account: claims -> events -> model -> delivery.
+
+        Used by the ordinary account turn and by the fast lane; every authority fence (eligibility,
+        stale-input, model budget, one-use delivery, per-account send throttle) is inside these calls."""
+        from moxy_replacement.runtime import MoxyService
+        service = MoxyService(self.store)
+        for _ in range(4):
+            claim = self.store.claim(self.tenant_id, account_ids=(account.account_id,))
+            if claim is None:break
+            service.from_claim(self.tenant_id, claim); report.claims += 1
+        if account.model is not None:
+            report.queued += service.step(self.tenant_id, account.account_id, account.model)
+        self._deliver(account, report)
+
+    def _moxy_due(self,skip=()):
+        """Worker accounts whose Moxy reply work is ready right now. Accounts this worker cannot plan or
+        send for (read-only revision, no model) are never due."""
+        ids=[a.account_id for a in self.accounts if a.model is not None and a.read_connection_revision is None
+             and a.account_id not in skip]
+        due=moxy_due(self.store.engine,ids) if ids else set()
+        return [a for a in self.accounts if a.account_id in due]
+
+    def moxy_work_due(self):
+        """True when reactive Moxy work is waiting; lets slow maintenance yield. Never raises."""
+        try:return bool(self._moxy_due())
+        except Exception:return False
+
+    def _moxy_fast_lane(self,report,stop,*,skip=()):
+        """Serve due Moxy accounts between the slow per-account turns of a cycle.
+
+        Without this a fan's reply waits for every other account's turn in the cohort (6-15 s each).
+        Same serial lane and the same _moxy_turn authority path: no extra thread, no extra provider
+        read, no new send path. Campaigns, archive recovery, intake and housekeeping stay on the
+        ordinary turn. Each account is served at most once per MOXY_FAST_LANE_GAP seconds."""
+        if os.environ.get("ONLYFANS_MOXY_FAST_LANE","1")!="1":return
+        try:due=self._moxy_due(skip)
+        except Exception:return
+        for account in due:
+            if stop.is_set():break
+            if time.monotonic()-self._fast_at.get(account.account_id,-1e9)<MOXY_FAST_LANE_GAP:continue
+            try:
+                self._role()
+                self._moxy_turn(account,report)
+            except Refused:report.held+=1
+            except SQLAlchemyError:report.errors+=1;break
+            except Exception:report.errors+=1
+            finally:self._fast_at[account.account_id]=time.monotonic()   # gap counts from the end of the turn
+
     def step(self,stop=None):
         """Bounded work, no waits; stop is cooperative between durable phases."""
         self._role()
@@ -242,6 +318,9 @@ class NativeWorker:
             selected=[self.accounts[(self._cursor+i)%len(self.accounts)] for i in range(count)]
             self._cursor=(self._cursor+count)%len(self.accounts)
             for account in selected:
+                if stop.is_set():break
+                # Due Moxy replies go first; this account's own turn follows in the normal order.
+                self._moxy_fast_lane(report,stop)
                 if stop.is_set():break
                 account_errors=report.errors
                 try:
@@ -292,17 +371,10 @@ class NativeWorker:
                         self.store._runtime(scope_session, self.tenant_id, account.account_id)
                         migrated = selected(scope_session, account.account_id)
                     if migrated:
-                        service = MoxyService(self.store)
                         # Existing campaigns enter Moxy as decisions; their old
                         # body can never dispatch directly for a migrated account.
                         self.campaigns.queue_due(self.tenant_id, account.account_id)
-                        for _ in range(4):
-                            claim = self.store.claim(self.tenant_id, account_ids=(account.account_id,))
-                            if claim is None:break
-                            service.from_claim(self.tenant_id, claim); report.claims += 1
-                        if account.model is not None:
-                            report.queued += service.step(self.tenant_id, account.account_id, account.model)
-                        self._deliver(account, report)
+                        self._moxy_turn(account, report)
                         continue
                     queued,retired=self.planner.recover(self.tenant_id,account.account_id,limit=4)
                     report.queued+=queued;report.held+=retired

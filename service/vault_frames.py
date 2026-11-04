@@ -41,6 +41,7 @@ import vault_storyboard
 import vision
 from db.models import VaultItem  # the mirror row `collect` is handed (annotation)
 from of_shapes import still_url  # shared OF payload-shape reader
+from onlyfans_runtime.provider_read_budget import ReadDeferred
 
 log = logging.getLogger("of-relay.vault_frames")
 
@@ -334,7 +335,7 @@ async def collect(account_id: str, item: VaultItem, raw: dict,
     that crop is what made the vision model over-report `fully_nude`. `pick_image`
     is `describe_image_of`, so this is the same variant describe has always sent.
 
-    NEVER raises. Every caller is a bulk sweep walking a vault, and a media that
+    Raises only for a deferred provider read. For other exceptions, a media that
     explodes has to cost that one media — the callers each stamp `reason` onto the
     row and move on, which is strictly more useful than an exception, because a
     raise leaves no row at all and the item looks untouched forever."""
@@ -346,6 +347,9 @@ async def collect(account_id: str, item: VaultItem, raw: dict,
                     COLLECT_TIMEOUT_S, account_id, item.media_id, item.kind)
         return Collected([], "fetch_failed",
                          f"gave up reading the media after {COLLECT_TIMEOUT_S}s")
+    except ReadDeferred:
+        # The scheduled worker retries this after the shared provider backoff.
+        raise
     except Exception as e:  # noqa: BLE001
         log.exception("collect failed account=%s media=%s kind=%s",
                       account_id, item.media_id, item.kind)

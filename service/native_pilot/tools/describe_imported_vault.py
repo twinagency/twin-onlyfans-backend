@@ -83,6 +83,7 @@ async def run(args):
     from db.onlyfans_connection_models import OfProviderConnection
     from db.onlyfans_vault_models import OfVaultObservation, OfVaultSyncJob
     from onlyfans_runtime.store import Store, Refused, utcnow
+    from onlyfans_runtime.provider_read_budget import ReadDeferred
     from onlyfans_runtime.vault_management import _connection, _provenance
     from onlyfans_runtime.connections import _open
     from onlyfans_runtime.vault_description_worker import pending
@@ -223,8 +224,12 @@ async def run(args):
                         await guard(session, media_id)
                         item = await session.get(VaultItem, (args.account, media_id))
                         kind = item.kind
-                    fresh = await asyncio.to_thread(vault_stills._resolve_fresh_sync, client, media_id)
-                    media = fresh.media
+                    try:
+                        media = await asyncio.to_thread(client.vault_media_by_id, media_id)
+                    except ReadDeferred:
+                        raise
+                    except Exception:
+                        return vault_stills.Fresh(None, "fetch_failed")
                     if (not isinstance(media, dict) or media.get("id") != media_id
                         or media.get("type") != kind or media.get("isDeleted") is True
                         or media.get("isHidden") is True or media.get("canView") is False):
@@ -279,6 +284,10 @@ async def run(args):
                         summary["state"] = "budget_paused" if result["category"] == "budget" else "retry_pending"
                         summary["reason"] = result["category"]
                         break
+                return summary
+            except ReadDeferred:
+                summary["state"] = "retry_pending"
+                summary["reason"] = "provider_read_deferred"
                 return summary
             finally:
                 lease.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})

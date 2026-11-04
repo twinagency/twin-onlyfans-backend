@@ -135,9 +135,12 @@ def fan_history_current(s, account_id, fan_id):
     quarantined = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account_id,
         OfIngress.fan_id == fan_id, OfIngress.status == "quarantined").limit(1)) if hasattr(OfIngress, "fan_id") else None
     # The fan's own ingress must be fully applied (account-wide pending events
-    # from other fans do not block this fan).
+    # from other fans do not block this fan). ck_of_ingress_status allows only
+    # pending/applied/quarantined, so IN (pending, quarantined) is exactly "!= applied" but
+    # can use ix_of_ingress_pending; "!= applied" forced a parallel seq scan of the whole
+    # ~1.7M-row table (1-3 s) while holding the account's of_runtime row lock.
     unapplied = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account_id,
-        OfIngress.fan_id == fan_id, OfIngress.status != "applied").limit(1))
+        OfIngress.fan_id == fan_id, OfIngress.status.in_(("pending", "quarantined"))).limit(1))
     return row is not None and row.status == "complete" and quarantined is None and unapplied is None
 
 class Store:

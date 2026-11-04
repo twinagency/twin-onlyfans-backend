@@ -300,18 +300,63 @@ async def run(args):
         store.close()
 
 
-def failure_reason(exc):
-    """Fixed vocabulary only: auth | budget | changed | scope | error."""
-    text = str(exc).lower()
-    if "credential" in text:
-        return "auth"
-    if "budget" in text or "cap" in text.split():
-        return "budget"
-    if "changed" in text or "paused" in text:
-        return "changed"
-    if "scope" in text or "unavailable" in text:
-        return "scope"
-    return "error"
+_ERROR_TYPES = frozenset({
+    "Refused", "ReadDeferred", "RuntimeError", "ValueError", "TypeError",
+    "KeyError", "AttributeError", "ImportError", "ModuleNotFoundError",
+    "TimeoutError", "OSError", "FileNotFoundError", "OperationalError",
+    "ProgrammingError", "IntegrityError", "DBAPIError", "InvalidTag",
+    "LLMError", "LLMConfigError", "LLMHTTPError", "LLMCapExceeded",
+})
+_ERROR_STAGES = {
+    "native_pilot/tools/describe_imported_vault.py": {
+        "main": "entrypoint", "run": "batch", "guard": "scope_guard",
+        "fresh_media": "metadata_refresh", "warm_preview": "preview",
+        "bounded_read": "provider_read", "caption_chat": "model_authority",
+        "describe_item": "item", "scoped_caption_key": "model_credential",
+    },
+    "native_pilot/connection.py": {"*": "client_setup"},
+    "onlyfans_runtime/connections.py": {"*": "connection_open"},
+    "onlyfans_runtime/store.py": {"*": "account_scope"},
+    "onlyfans_runtime/provider_read_budget.py": {"*": "provider_budget"},
+    "onlyfans_runtime/vault_previews.py": {"*": "preview"},
+    "vault_frames.py": {"*": "frame_collection"},
+    "vault_storyboard.py": {"*": "storyboard"},
+    "vault_stills.py": {"*": "media_fetch"},
+    "vault_ai_api.py": {"*": "description"},
+    "llm_client.py": {"*": "model"},
+    "db/engine.py": {"*": "database"},
+}
+
+
+def safe_error_fields(exc):
+    """Only fixed labels from exception type and trusted source locations.
+
+    Never inspect exception text, args, locals, context, URLs or provider data.
+    Third-party and unknown source paths cannot introduce output strings.
+    """
+    name = type(exc).__name__
+    error_type = name if name in _ERROR_TYPES else "OtherError"
+    stage = "unknown"
+    root = Path(__file__).resolve().parents[2]
+    trace = exc.__traceback__
+    while trace is not None:
+        try:
+            path = Path(trace.tb_frame.f_code.co_filename).resolve().relative_to(root).as_posix()
+        except (ValueError, OSError):
+            path = ""
+        stages = _ERROR_STAGES.get(path, {})
+        stage = stages.get(trace.tb_frame.f_code.co_name, stages.get("*", stage))
+        trace = trace.tb_next
+    reason = "error"
+    if error_type in {"LLMConfigError", "InvalidTag"} or stage == "model_credential":
+        reason = "auth"
+    elif error_type == "LLMCapExceeded":
+        reason = "budget"
+    elif error_type == "ReadDeferred":
+        reason = "provider_read_deferred"
+    elif error_type == "Refused":
+        reason = "changed" if stage == "scope_guard" else "scope"
+    return {"reason": reason, "errorType": error_type, "errorStage": stage}
 
 
 def main(argv=None):
@@ -327,10 +372,8 @@ def main(argv=None):
     try:
         result = asyncio.run(run(args))
     except Exception as exc:
-        # Never expose model replies, authenticated URLs, captures or keys: only a
-        # fixed category derived from the exception's message.
         print(json.dumps({"schemaVersion": "of-vault-description.v1", "account": args.account,
-                          "state": "retry_pending", "reason": failure_reason(exc)}), flush=True)
+                          "state": "retry_pending", **safe_error_fields(exc)}), flush=True)
         return 1
     print(json.dumps(result), flush=True)
     return 0

@@ -85,9 +85,13 @@ def main():
     parser.add_argument("--postgres", action="store_true")
     parser.add_argument("--report", type=Path, help="write per-module exit codes and source hashes as JSON")
     parser.add_argument("--module-timeout", type=int, default=300, help="seconds allowed per isolated module")
+    parser.add_argument("--shard-count",type=int,default=1,help="disjoint module shards; use a separate checkout and disposable PG server for each")
+    parser.add_argument("--shard-index",type=int,default=0,help="zero-based shard index")
     args = parser.parse_args()
     if args.module_timeout < 1:
         parser.error("--module-timeout must be positive")
+    if not 1<=args.shard_count<=16 or not 0<=args.shard_index<args.shard_count:
+        parser.error("invalid shard index/count")
     if args.postgres and not os.environ.get("ONLYFANS_TEST_PG_URL"):
         parser.error("--postgres requires ONLYFANS_TEST_PG_URL for a disposable server")
     env = dict(os.environ)
@@ -96,16 +100,18 @@ def main():
     )
     hosted_smoke = os.environ.get("GITHUB_ACTIONS") == "true" and not args.postgres
     with hosted_test_database(hosted_smoke, env):
-        return run_modules(args.postgres, hosted_smoke, env, report=args.report, module_timeout=args.module_timeout)
+        return run_modules(args.postgres, hosted_smoke, env, report=args.report, module_timeout=args.module_timeout,
+            shard_index=args.shard_index,shard_count=args.shard_count)
 
 
-def run_modules(all_postgres, hosted_smoke, env, *, report=None, module_timeout=300):
+def run_modules(all_postgres, hosted_smoke, env, *, report=None, module_timeout=300,shard_index=0,shard_count=1):
     results = []
     failures = []
     skipped = 0
     paths = sorted((ROOT / "service" / "tests").glob("test_*.py"))
     if hosted_smoke and NATIVE_PG_SMOKE - {path.name for path in paths}:
         raise RuntimeError("Required native PostgreSQL smoke module is missing")
+    paths=[path for i,path in enumerate(paths) if i%shard_count==shard_index]
     for path in paths:
         if path.name.endswith("_pg.py") and not (all_postgres or hosted_smoke and path.name in NATIVE_PG_SMOKE):
             skipped += 1
@@ -143,6 +149,10 @@ def run_modules(all_postgres, hosted_smoke, env, *, report=None, module_timeout=
         command = [sys.executable]
         if uses_pytest:
             command += ["-m", "pytest", "-q"]
+            if report:
+                junit=report.parent/'junit'/f'{path.stem}.xml'
+                junit.parent.mkdir(parents=True,exist_ok=True)
+                command += ['--junitxml',str(junit.resolve())]
         command.append(str(path))
         print(f"Running {path.relative_to(ROOT)}", flush=True)
         started = time.monotonic()
@@ -158,11 +168,13 @@ def run_modules(all_postgres, hosted_smoke, env, *, report=None, module_timeout=
             failures.append(path.name)
         if report:
             report.parent.mkdir(parents=True, exist_ok=True)
-            report.write_text(json.dumps({"module_timeout_seconds": module_timeout, "results": results}, indent=2)+"\n")
+            report.write_text(json.dumps({"module_timeout_seconds": module_timeout,
+                "shard_index":shard_index,"shard_count":shard_count,"results": results}, indent=2)+"\n")
     if skipped:
         print(f"{skipped} other PostgreSQL modules excluded; use --postgres with a disposable server to include them.")
     if report:
-        report.write_text(json.dumps({"module_timeout_seconds": module_timeout, "results": results}, indent=2)+"\n")
+        report.write_text(json.dumps({"module_timeout_seconds": module_timeout,
+            "shard_index":shard_index,"shard_count":shard_count,"results": results}, indent=2)+"\n")
     if failures:
         print("Failed: " + ", ".join(failures), file=sys.stderr)
     return bool(failures)

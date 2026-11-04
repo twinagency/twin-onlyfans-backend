@@ -1,0 +1,102 @@
+{
+ "id": "6_bubbles",
+ "title": "Intended separate bubbles reach the fan in order",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "I’m not feeling frisky tonight, but you look really good",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "17ce5e46-e273-4437-be18-9bbeca5f9f5e",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "i understandd bestiee",
+      "you always make me blush with these compliments lol",
+      "sweet and lovely smile you have there!"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "I’m not feeling frisky tonight, but you look really good"
+      },
+      "first_offer": "offerable",
+      "situation": [
+       "compliment",
+       "declined_offer",
+       "delayed_purchase",
+       "not_in_mood",
+       "personal_chat"
+      ],
+      "reference_situations": [
+       "declined_offer",
+       "personal_chat",
+       "spending_limit"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "i understandd bestiee",
+     "media": [],
+     "price_cents": 0
+    },
+    {
+     "body": "you always make me blush with these compliments lol",
+     "media": [],
+     "price_cents": 0
+    },
+    {
+     "body": "sweet and lovely smile you have there!",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  },
+  {
+   "fan": "thanks, you too",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "456b3b0f-ff40-40b2-860d-90078fe2bafa",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "aw you are so sweet"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 101,
+       "text": "thanks, you too"
+      },
+      "first_offer": "offerable",
+      "situation": [],
+      "reference_situations": [
+       "declined_offer",
+       "honest_unavailable_alternative"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "aw you are so sweet",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  }
+ ]
+}

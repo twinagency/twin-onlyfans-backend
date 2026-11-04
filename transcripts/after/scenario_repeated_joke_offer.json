@@ -1,0 +1,100 @@
+{
+ "id": "5_repeated_joke",
+ "title": "Repeated joke with a new ending; a valid offer must survive the rewrite",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "show me something then",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "f2214893-4eaf-4e6a-8288-5bb6cd4191ba",
+     "status": "held",
+     "reason": "repeated_recent_phrase",
+     "draft": [
+      "ok but gym bros are the real sprint workout, i just lift fridges 😂",
+      "this one is for you babe"
+     ],
+     "draft_action": "offer",
+     "draft_product": "first",
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "show me something then"
+      },
+      "first_offer": "offerable",
+      "situation": [
+       "content_request",
+       "honest_unavailable_alternative"
+      ],
+      "reference_situations": [
+       "honest_unavailable_alternative",
+       "declined_offer"
+      ]
+     }
+    },
+    {
+     "kind": "correction",
+     "event_id": "03717f9a-deeb-4930-8e16-4cc0c832635c",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "fine you win, here you go",
+      "this one is all yours"
+     ],
+     "draft_action": "offer",
+     "draft_product": "first",
+     "rejected": {
+      "action": null,
+      "avoid": [
+       "ok but gym bros are the real sprint workout, i just lift fridges 😂",
+       "this one is for you babe"
+      ],
+      "fan_message": "show me something then",
+      "keep": {
+       "action": "offer",
+       "product_id": "first",
+       "sequence": "fixture_level"
+      },
+      "kind": "wording",
+      "product_id": null,
+      "reason": "repeated_recent_phrase"
+     },
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "show me something then"
+      },
+      "first_offer": "offerable",
+      "situation": [
+       "content_request",
+       "honest_unavailable_alternative"
+      ],
+      "reference_situations": [
+       "honest_unavailable_alternative",
+       "declined_offer"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "fine you win, here you go",
+     "media": [],
+     "price_cents": 0
+    },
+    {
+     "body": "this one is all yours",
+     "media": [
+      7101
+     ],
+     "price_cents": 7500
+    }
+   ]
+  }
+ ]
+}

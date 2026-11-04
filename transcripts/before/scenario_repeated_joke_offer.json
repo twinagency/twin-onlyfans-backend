@@ -1,0 +1,57 @@
+{
+ "id": "5_repeated_joke",
+ "title": "Repeated joke with a new ending; a valid offer must survive the rewrite",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "show me something then",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "23dd0fbd-1352-4011-9c9b-57d605fef859",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "ok but gym bros are the real sprint workout, i just lift fridges 😂",
+      "this one is for you babe"
+     ],
+     "draft_action": "offer",
+     "draft_product": "first",
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "show me something then"
+      },
+      "first_offer": "offerable",
+      "situation": null,
+      "reference_situations": [
+       "positive",
+       "positive",
+       "positive",
+       "failure",
+       "positive",
+       "positive"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "ok but gym bros are the real sprint workout, i just lift fridges 😂",
+     "media": [],
+     "price_cents": 0
+    },
+    {
+     "body": "this one is for you babe",
+     "media": [
+      7101
+     ],
+     "price_cents": 7500
+    }
+   ]
+  }
+ ]
+}

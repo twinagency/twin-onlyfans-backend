@@ -1,0 +1,99 @@
+{
+ "id": "1_clarification",
+ "title": "Fan clarifies; the bot repeats its earlier interpretation",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "no no i meant what do you do for work, not the gym set",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "2ee8c9f6-1bfe-4238-b61c-3485afa668bb",
+     "status": "held",
+     "reason": "repeated_recent_phrase",
+     "draft": [
+      "oh i know exactly what you mean, you wanna see the gym set right? 😏"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "no no i meant what do you do for work, not the gym set"
+      },
+      "first_offer": "offerable",
+      "situation": [
+       "clarification",
+       "availability_question",
+       "content_request",
+       "honest_unavailable_alternative",
+       "personal_chat"
+      ],
+      "reference_situations": [
+       "honest_unavailable_alternative",
+       "personal_chat",
+       "declined_offer"
+      ]
+     }
+    },
+    {
+     "kind": "correction",
+     "event_id": "97e28505-6a90-4167-8af9-dedbc1196057",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "ha my bad",
+      "i coach a few sessions and film a bit on the side, what about you?"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": {
+      "action": null,
+      "avoid": [
+       "oh i know exactly what you mean, you wanna see the gym set right? 😏"
+      ],
+      "fan_message": "no no i meant what do you do for work, not the gym set",
+      "kind": "wording",
+      "product_id": null,
+      "reason": "repeated_recent_phrase"
+     },
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "no no i meant what do you do for work, not the gym set"
+      },
+      "first_offer": "offerable",
+      "situation": [
+       "clarification",
+       "availability_question",
+       "content_request",
+       "honest_unavailable_alternative",
+       "personal_chat"
+      ],
+      "reference_situations": [
+       "honest_unavailable_alternative",
+       "personal_chat",
+       "declined_offer"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "ha my bad",
+     "media": [],
+     "price_cents": 0
+    },
+    {
+     "body": "i coach a few sessions and film a bit on the side, what about you?",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  }
+ ]
+}

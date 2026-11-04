@@ -1,0 +1,280 @@
+MOXY CONVERSATION REPAIR: REPORT FOR JESSE
+Branch claude/moxy-convo-repair-20261104 (worktree ~/twin/moxy-convo-repair-wt), one patch commit on top of 83074e1 (live baseline).
+Nothing deployed, nothing pushed, no production or live setting touched. Sending is disabled in every test.
+
+==================== HIGH LEVEL ====================
+
+WHAT CHANGED (your 6 steps)
+1. Base: 83074e1 (the version running, incl. your store.py). Before-transcripts were produced on that exact tree.
+2. Example bank: the old 11-example bank is replaced by exactly the 8 approved TOP93 sections (#2 #4 #6 #45 #55 #64 #70 #89),
+   byte-checked against APPROVED-EXCERPTS.txt, bubbles/punctuation/emoji intact, each labelled by situation. The selector now reads
+   the recent fan messages (newest counts most) plus the creator. Amelia (PG account) is never given #2 or #89.
+3. writer.py: the contradictory instruction passages were replaced by one ordered set (answer the latest message and any
+   clarification first, then references for voice, creator rules only where they apply, offers only when relevant, content described
+   only from verified asset info).
+4. runtime.py: his usable name is passed to the writer and the writer may never ask for it; unpaid cards cannot be described as opened or
+   seen; the wording-vs-product correction split is fixed (a repeated line / repeated phrase / invented policy / status wording failure no
+   longer marks the offered product as rejected, so a valid offer survives the rewrite).
+5. parts.py + writer.parse: the ordered messages array is the normal output (a bare text reply is normalised into a one-message plan);
+   repetition detection now catches a substantial reused phrase and the same joke with a different ending; pet names, common words and emoji stay usable.
+   No emoji quota, no bubble-count requirement.
+6. Tests: new file service/tests/test_moxy_conversation_repair_pg.py runs the six step-6 cases on the real path (snapshot -> writer prompt ->
+   model -> parse -> validate -> bounded correction -> queue -> simulated delivery), state carried between turns, sending off.
+
+TEST RESULTS
+Run on this branch (sending disabled, Postgres 55432), repair-touched suites:
+ test_moxy_conversation_repair_pg.py   NEW   96 passed, 0 failed, 6 skipped (the skips are the transcript-dump tests, which only run when MOXY_REPAIR_TRANSCRIPT_OUT is set; they were run separately: 6 passed on 83074e1 and 6 passed on the patch)
+ test_moxy_behaviour_repair_pg.py            57 passed, 0 failed
+ test_moxy_integrated_pg.py                  21 passed, 0 failed
+ test_moxy_catalogue_context_pg.py            2 passed, 0 failed (after the guard change in section 6d)
+ test_moxy_replacement_configuration.py      40 passed, 0 failed
+ test_moxy_chat_engine.py                     9 passed, 0 failed
+ test_moxy_fence.py                          73 passed, 0 failed
+ test_moxy_commercial_state.py                2 passed, 0 failed
+ Total: 300 passed, 0 failed, 6 skipped. The earlier failures of the WIP commit (9 in the new file) are explained in section 6.
+FULL SUITE COUNTS: pending (split run)
+
+READY FOR REVIEW: YES for the code and scripted transcripts. NOT yet proven on the real model (see "Real-model replay" below);
+deploy to the test chats only after you approve, rollback = redeploy 83074e1 (no schema or settings change in this patch).
+
+BEFORE / AFTER (scripted model, see LOW LEVEL section 8 for full text; scripted means the model's drafts are fixed lines written for each case,
+so this proves what the code accepts, refuses, briefs and delivers, not how well the real model writes)
+ 1 clarification   BEFORE: repeats "you wanna see the gym set right?" delivered.   AFTER: refused (repeated phrase), correction briefed with his message, clarification answered.
+ 2 question        BEFORE: sales nudge re-sent.                                    AFTER: refused, question answered, no second card.
+ 3 unpaid as seen  BEFORE: "you already opened it right?" delivered on a locked card. AFTER: refused (status wording), "still locked" delivered.
+ 4 known name      BEFORE: "whats your name?" delivered.                           AFTER: name Matthew reaches the writer; asking refused; "hey Matthew" delivered.
+ 5 repeated joke   BEFORE: joke with new ending delivered.                         AFTER: refused as wording only, the $75 offer is kept and delivered with fresh wording.
+ 6 bubbles         BEFORE and AFTER: 3 bubbles delivered in order, text intact (regression guard).
+
+==================== LOW LEVEL ====================
+
+1. FILES CHANGED (diff vs 83074e1)
+ service/moxy_replacement/sources/conversation_examples.v1.json  bank rewritten: 8 records with turns, situation, matches, allowed_creators, held_back, verbatim sha256
+ service/moxy_replacement/examples.py   selector: situation signals from the last fan burst + fan_state, creator hard filter, verbatim integrity helpers, model projection
+ service/moxy_replacement/writer.py     one consistent instruction set; parse() normalises a bare reply into a one-message array; correction instructions (wording/product/format)
+ service/moxy_replacement/runtime.py    usable_fan_name/clean_name, wording_problem (repeat, phrase, policy, status, asks-name), correction_brief, WORDING_REASONS, recoverable list
+ service/moxy_replacement/parts.py      shared_wording / reused_wording repetition detector
+ service/tests/test_moxy_conversation_repair_pg.py  new (replay harness + 100 tests)
+ service/tests/test_moxy_behaviour_repair_pg.py     3 assertions updated (section 6)
+ transcripts/ (before/, after/, before-after.txt, render.py)  evidence
+
+2. EXAMPLE BANK MAPPING (record -> source -> situation -> creators allowed -> use)
+ #2  Cristina  L388-444   sales_flow                    cristina, emma, emma_karter  (explicit sexting) responsive scene + cards inside the flow; accept "something came up" without arguing
+ #4  Maile     L944-955   money_trouble_rapport         any   acknowledge money trouble, ordinary chat, no pitch
+ #6  Amelia    L1174-1180 declined_offer                any   "not in the mood" accepted, compliment answered warmly
+ #45 Cristina  L8898-8918 personal_chat   HELD BACK     any   follow his own topics (gym, plans, birthday)
+ #55 Cristina  L10422-28  complaint_recovery            any   already owns bundle: apologise, make it right (replacement only where approved_remedies allows)
+ #64 Cristina  L12079-94  spending_limit                any   accept his limit, no counter-offer, stay friendly
+ #70 Amelia    L12983-13005 honest_unavailable_alternative any honest "I do not offer that", closest real alternative
+ #89 Emma K.   L15800-23  sales_flow          HELD BACK cristina, emma, emma_karter  (explicit) short teasing questions between cards
+ Excluded context honoured: only the quoted line ranges are stored; none of the later pressure, custom-content promises, exclusivity,
+ guilt-buying or countdown text exists in the bank. Historical names, prices, media counts, availability and payment markers are reference-only:
+ the bank scope text says so to the model, the payment markers are rewritten to neutral notes, and the instructions forbid copying them.
+ Unknown creators never receive the explicit excerpts. Production shows all 8; the two held-back records are hidden only
+ when a test (or the replay) passes exclude_held_back / sets examples.EXCLUDE_HELD_BACK.
+ HELD-BACK SET (generalisation): #45 (personal chat) and #89 (explicit sales flow). Tests replay each one's last exchange with
+ its text hidden from the model and check the approved bubbles pass every detector in order. Open question: Jesse may prefer other records withheld.
+
+3. CORRECTION SPLIT (the confirmed bug)
+ Before: on repeated_recent_line the retry payload was rejected={reason, action, product_id=<the offered product>}, so validate_decision refused that product
+ and the snapshot marked it refused_in_this_turn; a valid offer was lost with the wording.
+ After: runtime.correction_brief(): WORDING_REASONS (repeated_recent_line, repeated_recent_phrase, invented_policy_claim, content_status_wording, asks_known_name)
+ produce kind=wording with product_id=None, the lines to avoid, and keep={action,product_id,sequence} so the offer survives; the product stays offerable.
+ Every other recoverable reason is kind=product (product refused, never choosable again, still carries fan_message). Format failures are kind=format.
+ Wording checks now run LAST in validate_decision, so a product failure always outranks a wording failure. A wording rewrite that smuggles in a bad product
+ is still refused as a product failure (tested). A second failure still goes to a person once (moxy_correction_failed case), no loop.
+ Bug fixed during testing: the three new wording reasons were not in RECOVERABLE_REASONS, so no correction was queued at all.
+
+4. NAME, STATUS, REPETITION
+ Name: usable_fan_name prefers verified memory, a name he chose, a real name, then profile display name; handles, ids, initials, labels (u12345, Redddd1, YC, C. A. A., @x) are unusable.
+ No usable name: nothing is sent and the writer is told never to ask; a draft that asks a KNOWN name is refused (asks_known_name); asking when no name is known is not blocked.
+ Status: a sent, unpaid, priced card cannot be called opened/seen/enjoyed/owned; his own "i just opened it" is accepted as evidence; paid or free media unaffected.
+ Repetition: a shared run of 5+ words with 2+ content words, or the same 4+ word opening in two longer messages. Pet names (babe, baby, bestie, daddy ...), common words and emoji are ignored.
+ The approved chatter bubbles themselves are asserted to pass the detectors (so the approved voice is never blocked).
+
+5. WRITER INSTRUCTIONS
+ Removed contradictions: "Actively develop opportunities" vs ordinary chat/no-push; "median 7 to 8 words / 1 to 3 bubbles" statistics vs no quota;
+ "say it playfully" vs plain kind answer; "turn the interest into an invite or offer" for every flirt vs "affection alone does not call for a sale";
+ "never say you are checking or fixing" vs "you will look into it"; two duplicate-card rules and two reference-kind rules. Each rule now appears once
+ (tested). Restrictions kept: remedies only from approved_remedies, free-content wording rule, no dashes, previously sent products, budget, owned/sent/pending states,
+ handover rules. Creator-rule scope: sexting condition governs explicit text only; customs/category/price rules apply only to that service.
+ Source check: the creator rule text itself (cfg) is untouched and still appended verbatim; this patch changes only the general writer instructions. I could not
+ re-verify each restriction against the creator source PDFs in this run; the creator rules were not edited, so none was loosened. Flag if you want that audit.
+
+6. EXISTING TESTS CHANGED (all in test_moxy_behaviour_repair_pg.py) AND WHY
+ a. test_writer_prompt_follows_innuendo_and_pivots_unavailable_requests: expected the exact strings "never resend or lightly reword a line already sent" and "MAY talk about".
+    The consolidated prompt says "lightly reword or reshape a line ... already sent" and "may talk about". Same rules, one wording. Intended change (step 3).
+ b. test_recoverable_block_queues_exactly_one_bounded_correction: the rejected payload now also carries kind='product' and fan_message (the fan's real question stays in view).
+    Intended change (step 4); action/product_id/reason assertions kept.
+ c. test_examples_give_both_creators_sales_flow_and_stay_compact -> test_examples_are_the_approved_bank_and_stay_compact: the old test required >=4 positive and 1 failure example and a
+    4 KiB size. The bank is now the 8 approved sections, 2 to 3 chosen per turn, under 16 KiB, no dashes. Intended change (step 2).
+ Everything else in the existing files was left as is. Two further assertions in the NEW file were corrected during the run (fixture gave the fan a known name 'Synthetic Sam' so the
+ test now clears it; a provenance check was matching the word "record" inside an excerpt, now checks the key; the model-facing scope no longer names the TOP93 review).
+
+ d. test_moxy_catalogue_context_pg.py::test_hundred_products_reach_model_and_last_item_can_deliver: asserted the 100-product model call is <= 81920 bytes.
+    On 83074e1 it passes with only 54 bytes of headroom (81866). The patch adds fuller approved exchanges (+1.4 KB references) and about 0.5 KB instructions: 83816.
+    The runtime cap is 131072 (raised in 7653103; this guard still said 80 KiB), so the guard is now 98304 (96 KiB). This is the one existing assertion I loosened;
+    it is a real size increase caused by the patch, not a bug. A worst case (Cristina, 7 KB of references) is about 89 KB. Say so if you want a tighter bank (limit 2 excerpts) instead.
+
+PRE-EXISTING FAILURES: none found in the suites above (none failed on the patch except item d, which passes on 83074e1 and is therefore the patch's doing).
+ Proof method: 83074e1 checked out at a second worktree (/tmp/claude-1000/convo-base); catalogue_context run there: 2 passed.
+ The remaining ~300 existing tests in the other test_moxy_*_pg.py, native_reply_pacing and text_delivery files were NOT run by me (coordinator is running them split across machines).
+
+7. CONTEXT SIZE
+ The writer prompt grew by about 0.5 KB of instructions; references are 2 to 7 KB depending on creator and situation (old bank about 3 KB). The runtime cap is 128 KiB. 
+Measured on the 100-product test: total 81866 bytes on 83074e1, 83816 on the patch (system 26616 -> 28539, user prompt unchanged).
+
+8. BEFORE / AFTER TRANSCRIPTS (scripted drafts; full text in transcripts/before-after.txt; raw JSON in transcripts/before and transcripts/after)
+
+=== BEFORE ===
+6_bubbles: Intended separate bubbles reach the fan in order [amelia]
+  FAN: I’m not feeling frisky tonight, but you look really good
+    first draft (reply): i understandd bestiee | you always make me blush with these compliments lol | sweet and lovely smile you have there!
+      checked -> ready
+      writer saw: fan_name=None, offer=offerable, reads_as=None
+    DELIVERED (done): i understandd bestiee || you always make me blush with these compliments lol || sweet and lovely smile you have there!
+  FAN: thanks, you too
+    first draft (reply): aw you are so sweet
+      checked -> ready
+      writer saw: fan_name=None, offer=offerable, reads_as=None
+    DELIVERED (done): aw you are so sweet
+
+1_clarification: Fan clarifies; the bot repeats its earlier interpretation [amelia]
+  FAN: no no i meant what do you do for work, not the gym set
+    first draft (reply): oh i know exactly what you mean, you wanna see the gym set right? 😏
+      checked -> ready
+      writer saw: fan_name=None, offer=offerable, reads_as=None
+    DELIVERED (done): oh i know exactly what you mean, you wanna see the gym set right? 😏
+
+4_known_name: Known name ignored; the bot restarts introductions [amelia]
+  FAN: hey
+    first draft (reply): hey you, i dont think we have met yet, whats your name? 😊
+      checked -> ready
+      writer saw: fan_name=None, offer=offerable, reads_as=None
+    DELIVERED (done): hey you, i dont think we have met yet, whats your name? 😊
+
+2_question_not_nudge: Fan asks a question; the bot sends its sales nudge again [amelia]
+  FAN: what time do you usually go live?
+    first draft (reply): btw dont you wanna open what i recently sent you babe?? you can open more 🍑
+      checked -> ready
+      writer saw: fan_name=None, offer=sent, reads_as=None
+    DELIVERED (done): btw dont you wanna open what i recently sent you babe?? you can open more 🍑
+  FAN: ok ill be there
+    first draft (reply): see you there babe
+      checked -> ready
+      writer saw: fan_name=None, offer=sent, reads_as=None
+    DELIVERED (done): see you there babe
+
+5_repeated_joke: Repeated joke with a new ending; a valid offer must survive the rewrite [amelia]
+  FAN: show me something then
+    first draft (offer product=first): ok but gym bros are the real sprint workout, i just lift fridges 😂 | this one is for you babe
+      checked -> ready
+      writer saw: fan_name=None, offer=offerable, reads_as=None
+    DELIVERED (done): ok but gym bros are the real sprint workout, i just lift fridges 😂 || this one is for you babe [CARD $75.00]
+
+3_unpaid_viewed: Unpaid content described as already viewed [amelia]
+  FAN: hey you there?
+    first draft (reply): hope you enjoyed it babe, you already opened it right? 😏
+      checked -> ready
+      writer saw: fan_name=None, offer=sent, reads_as=None
+    DELIVERED (done): hope you enjoyed it babe, you already opened it right? 😏
+
+=== AFTER ===
+6_bubbles: Intended separate bubbles reach the fan in order [amelia]
+  FAN: I’m not feeling frisky tonight, but you look really good
+    first draft (reply): i understandd bestiee | you always make me blush with these compliments lol | sweet and lovely smile you have there!
+      checked -> ready
+      writer saw: fan_name=None, offer=offerable, reads_as=['compliment', 'declined_offer', 'delayed_purchase', 'not_in_mood', 'personal_chat']
+    DELIVERED (done): i understandd bestiee || you always make me blush with these compliments lol || sweet and lovely smile you have there!
+  FAN: thanks, you too
+    first draft (reply): aw you are so sweet
+      checked -> ready
+      writer saw: fan_name=None, offer=offerable, reads_as=[]
+    DELIVERED (done): aw you are so sweet
+
+1_clarification: Fan clarifies; the bot repeats its earlier interpretation [amelia]
+  FAN: no no i meant what do you do for work, not the gym set
+    first draft (reply): oh i know exactly what you mean, you wanna see the gym set right? 😏
+      checked -> held (repeated_recent_phrase)
+      writer saw: fan_name=None, offer=offerable, reads_as=['clarification', 'availability_question', 'content_request', 'honest_unavailable_alternative', 'personal_chat']
+    correction draft (reply): ha my bad | i coach a few sessions and film a bit on the side, what about you?
+      checked -> ready
+      correction brief: kind=wording product_id=None keep=None
+      writer saw: fan_name=None, offer=offerable, reads_as=['clarification', 'availability_question', 'content_request', 'honest_unavailable_alternative', 'personal_chat']
+    DELIVERED (done): ha my bad || i coach a few sessions and film a bit on the side, what about you?
+
+4_known_name: Known name ignored; the bot restarts introductions [amelia]
+  FAN: hey
+    first draft (reply): hey you, i dont think we have met yet, whats your name? 😊
+      checked -> held (asks_known_name)
+      writer saw: fan_name=Matthew, offer=offerable, reads_as=[]
+    correction draft (reply): hey Matthew, good to see you | how was the gym today?
+      checked -> ready
+      correction brief: kind=wording product_id=None keep=None
+      writer saw: fan_name=Matthew, offer=offerable, reads_as=[]
+    DELIVERED (done): hey Matthew, good to see you || how was the gym today?
+
+2_question_not_nudge: Fan asks a question; the bot sends its sales nudge again [amelia]
+  FAN: what time do you usually go live?
+    first draft (reply): btw dont you wanna open what i recently sent you babe?? you can open more 🍑
+      checked -> held (repeated_recent_phrase)
+      writer saw: fan_name=None, offer=sent, reads_as=['question', 'honest_unavailable_alternative', 'personal_chat']
+    correction draft (reply): usually in the evenings, whenever i finish at the gym | i post on tiktok right before i go on
+      checked -> ready
+      correction brief: kind=wording product_id=None keep=None
+      writer saw: fan_name=None, offer=sent, reads_as=['question', 'honest_unavailable_alternative', 'personal_chat']
+    DELIVERED (done): usually in the evenings, whenever i finish at the gym || i post on tiktok right before i go on
+  FAN: ok ill be there
+    first draft (reply): see you there babe
+      checked -> ready
+      writer saw: fan_name=None, offer=sent, reads_as=[]
+    DELIVERED (done): see you there babe
+
+5_repeated_joke: Repeated joke with a new ending; a valid offer must survive the rewrite [amelia]
+  FAN: show me something then
+    first draft (offer product=first): ok but gym bros are the real sprint workout, i just lift fridges 😂 | this one is for you babe
+      checked -> held (repeated_recent_phrase)
+      writer saw: fan_name=None, offer=offerable, reads_as=['content_request', 'honest_unavailable_alternative']
+    correction draft (offer product=first): fine you win, here you go | this one is all yours
+      checked -> ready
+      correction brief: kind=wording product_id=None keep={'action': 'offer', 'product_id': 'first', 'sequence': 'fixture_level'}
+      writer saw: fan_name=None, offer=offerable, reads_as=['content_request', 'honest_unavailable_alternative']
+    DELIVERED (done): fine you win, here you go || this one is all yours [CARD $75.00]
+
+3_unpaid_viewed: Unpaid content described as already viewed [amelia]
+  FAN: hey you there?
+    first draft (reply): hope you enjoyed it babe, you already opened it right? 😏
+      checked -> held (content_status_wording)
+      writer saw: fan_name=None, offer=sent, reads_as=['question', 'honest_unavailable_alternative', 'personal_chat']
+    correction draft (reply): hey! yep im here | the one i sent is still locked for you, open it whenever you feel like it
+      checked -> ready
+      correction brief: kind=wording product_id=None keep=None
+      writer saw: fan_name=None, offer=sent, reads_as=['question', 'honest_unavailable_alternative', 'personal_chat']
+    DELIVERED (done): hey! yep im here || the one i sent is still locked for you, open it whenever you feel like it
+
+
+
+9. HOW TO RERUN
+ Scripted before/after (no network). Run from the service directory of each tree; PG env as for all pg tests:
+   export ONLYFANS_TEST_PG_URL=postgresql://postgres:moxytest@127.0.0.1:55432/postgres ONLYFANS_TEST_PG_EMPTY_TEMPLATE=1
+   # BEFORE: copy tests/test_moxy_conversation_repair_pg.py into a checkout of 83074e1/service/tests, then
+   MOXY_REPAIR_TRANSCRIPT_OUT=/tmp/before python -m pytest -q tests/test_moxy_conversation_repair_pg.py -k dump_transcripts
+   # AFTER (this branch):
+   MOXY_REPAIR_TRANSCRIPT_OUT=/tmp/after  python -m pytest -q tests/test_moxy_conversation_repair_pg.py -k dump_transcripts
+   python transcripts/render.py <dir containing before/ and after/>
+ Real-model replay, offline (nothing is sent; spends real money through the budget journal of moxy_replacement/eval/smoke.py, cap $1 / 20 calls):
+   MOXY_REPAIR_REAL_MODEL=1 MOXY_TEST_MODEL_API_KEY=<key> MOXY_REPAIR_BUDGET_JOURNAL=/tmp/repair-budget.json \
+   MOXY_REPAIR_TRANSCRIPT_OUT=/tmp/real-after python -m pytest -q tests/test_moxy_conversation_repair_pg.py -k dump_transcripts
+   NOT RUN by me (no key, and no spend without approval). In that mode the model writes every draft, so the scenarios no longer force a failure; the
+   transcript shows what the real model does with the same fan messages and state. Written but untried code path: treat the first run as a smoke test.
+
+10. RISKS AND OPEN QUESTIONS
+ - The after-transcripts are scripted; real-model quality (does it actually answer the clarification in voice?) is unproven until the real replay above is run.
+ - Selector is keyword based (regex signals on the last 3 fan messages); a fan phrasing that matches no signal falls back to the creator-fit defaults (still 2 to 3 excerpts).
+ - repeated_recent_phrase is stricter than before: a model that keeps reusing a 5-word phrase gets one correction then a person (moxy_correction_failed case). Watch the case volume in the test chats.
+ - asks_known_name: a draft that asks "whats your name" when a usable name exists is refused. A profile display name counts as usable (e.g. "Matthew Campbell" -> Matthew); a wrong profile name would be used.
+ - content_status_wording is regex based (opened/seen/enjoyed/own); it only fires when the last 10 messages hold an unpaid priced outgoing card and he has not said he opened it.
+ - Held-back set (#45, #89) is my choice; production shows all 8, so those two are not held out in production, only in the generalisation tests.
+ - Explicit excerpts #2/#89 reach only cristina, emma, emma_karter; Amelia gets #6 #70 #4 #64 #55 #45 only. Confirm that is your intent.
+ - Prompt is about 2 KB larger (section 6d). Nothing else changed in cost or latency.
+ - Creator rules (cfg) and all settings are untouched; no schema change, so rollback is simply redeploying 83074e1.

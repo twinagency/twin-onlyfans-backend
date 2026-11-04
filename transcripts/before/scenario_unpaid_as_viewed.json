@@ -1,0 +1,49 @@
+{
+ "id": "3_unpaid_viewed",
+ "title": "Unpaid content described as already viewed",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "hey you there?",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "64d1376a-8665-43c3-97df-6dd9ca2fed03",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "hope you enjoyed it babe, you already opened it right? 😏"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "hey you there?"
+      },
+      "first_offer": "sent",
+      "situation": null,
+      "reference_situations": [
+       "positive",
+       "positive",
+       "positive",
+       "failure",
+       "positive",
+       "positive"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "hope you enjoyed it babe, you already opened it right? 😏",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  }
+ ]
+}

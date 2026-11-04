@@ -69,7 +69,9 @@ def test_hundred_products_reach_model_and_last_item_can_deliver(database,monkeyp
     assert status(engine,identity)=='ready'
     payload=json.loads(model.calls[0][1]['content'])
     assert set(payload['products'])==set(bindings)
-    assert len(canonical(model.calls[0]).encode())<=81920
+    # Was 81920 (80 KiB, 54 bytes of headroom on 83074e1). The approved exchanges are fuller than the old bank (+1.4 KB references, +0.5 KB
+    # instructions); the runtime cap is 131072 (7653103), so the guard now sits 32 KiB under it.
+    assert len(canonical(model.calls[0]).encode())<=98304
     with Session(engine) as s:
         e=s.get(MoxyEvent,(ACCOUNT,identity))
         assert len(e.snapshot_json.encode())>65000

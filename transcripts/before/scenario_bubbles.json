@@ -1,0 +1,103 @@
+{
+ "id": "6_bubbles",
+ "title": "Intended separate bubbles reach the fan in order",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "I’m not feeling frisky tonight, but you look really good",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "0ff214a3-d2a5-4f4e-937a-ecc7773651a9",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "i understandd bestiee",
+      "you always make me blush with these compliments lol",
+      "sweet and lovely smile you have there!"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "I’m not feeling frisky tonight, but you look really good"
+      },
+      "first_offer": "offerable",
+      "situation": null,
+      "reference_situations": [
+       "positive",
+       "positive",
+       "positive",
+       "failure",
+       "positive",
+       "positive"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "i understandd bestiee",
+     "media": [],
+     "price_cents": 0
+    },
+    {
+     "body": "you always make me blush with these compliments lol",
+     "media": [],
+     "price_cents": 0
+    },
+    {
+     "body": "sweet and lovely smile you have there!",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  },
+  {
+   "fan": "thanks, you too",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "648b60cb-0eb9-455a-b49b-4c26e8ddaeb3",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "aw you are so sweet"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 101,
+       "text": "thanks, you too"
+      },
+      "first_offer": "offerable",
+      "situation": null,
+      "reference_situations": [
+       "positive",
+       "positive",
+       "positive",
+       "failure",
+       "positive",
+       "positive"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "aw you are so sweet",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  }
+ ]
+}

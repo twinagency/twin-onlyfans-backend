@@ -1,0 +1,95 @@
+{
+ "id": "3_unpaid_viewed",
+ "title": "Unpaid content described as already viewed",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "hey you there?",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "db328f91-d103-40ef-8ae8-1c14ec5951bb",
+     "status": "held",
+     "reason": "content_status_wording",
+     "draft": [
+      "hope you enjoyed it babe, you already opened it right? 😏"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "hey you there?"
+      },
+      "first_offer": "sent",
+      "situation": [
+       "question",
+       "honest_unavailable_alternative",
+       "personal_chat"
+      ],
+      "reference_situations": [
+       "honest_unavailable_alternative",
+       "personal_chat",
+       "declined_offer"
+      ]
+     }
+    },
+    {
+     "kind": "correction",
+     "event_id": "e890b71d-9167-4d4f-9a6a-21a8dc63739b",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "hey! yep im here",
+      "the one i sent is still locked for you, open it whenever you feel like it"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": {
+      "action": null,
+      "avoid": [
+       "hope you enjoyed it babe, you already opened it right? 😏"
+      ],
+      "fan_message": "hey you there?",
+      "kind": "wording",
+      "product_id": null,
+      "reason": "content_status_wording"
+     },
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "hey you there?"
+      },
+      "first_offer": "sent",
+      "situation": [
+       "question",
+       "honest_unavailable_alternative",
+       "personal_chat"
+      ],
+      "reference_situations": [
+       "honest_unavailable_alternative",
+       "personal_chat",
+       "declined_offer"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "hey! yep im here",
+     "media": [],
+     "price_cents": 0
+    },
+    {
+     "body": "the one i sent is still locked for you, open it whenever you feel like it",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  }
+ ]
+}

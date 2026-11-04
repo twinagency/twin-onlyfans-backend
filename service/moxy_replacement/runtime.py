@@ -19,6 +19,7 @@ from onlyfans_runtime.store import Refused, utcnow
 from onlyfans_runtime.native_context import canonical, versions
 from .configuration import load, load_foundation, CreatorConfiguration, ActionBlocked, InvalidConfiguration, digest
 from .authority import ProductAuthority, readiness
+from .parts import plan as _plan, reused_wording
 from . import writer
 
 EVENTS={'turn','welcome','invitation','scheduled','campaign','purchase','refund','chargeback','fulfilment'}
@@ -326,6 +327,9 @@ def snapshot(s,account,fan,event):
         'offer_eligibility':{k:offerable.get(k,'product_mapping_missing') for k in inventory},
         'inventory':inventory,'sequences':pa.sequences,'operational':settings['operational'],
         'approved_remedies':settings.get('approved_remedies',{}),'native_fingerprint':digest(json.loads(canonical(native)))}
+    # His usable name goes to the writer; with none it is simply absent and never asked for.
+    name=usable_fan_name(native.get('fan'),memory)
+    if name:result['fan_name']=name
     from .campaigns import context as campaign_context
     result['campaign']=campaign_context(s,account,fan,json.loads(event.payload_json))
     result=json.loads(canonical(result))
@@ -354,7 +358,8 @@ RECOVERABLE_REASONS={'media_previously_sent_requires_explicit_resend','acceptanc
     'invitation_stale_or_ambiguous','product_terms_unresolved','price_below_authorised_minimum',
     'price_differs_from_authorised_fixed','product_media_format_mismatch','product_photo_count_mismatch'}
 RECOVERABLE_PREFIXES=('condition_not_met:','condition_unknown:')
-RECOVERABLE_REASONS|={'pilot_specialist_handover_required','repeated_recent_line','invented_policy_claim'}
+RECOVERABLE_REASONS|={'pilot_specialist_handover_required','repeated_recent_line','invented_policy_claim',
+    'repeated_recent_phrase','content_status_wording','asks_known_name'}
 # Unusable model output (format) for the same input: one bounded correction too, so the fan is not left silent.
 FORMAT_REASONS={'invalid_model_json','invalid_model_decision','invalid_message_plan','invalid_message_part',
     'message_plan_media_mismatch','message_plan_text_mismatch','empty_model_reply','duplicate_model_key',
@@ -371,6 +376,107 @@ INVENTED_POLICY=_policy_re.compile(
     r"|\bdon'?t\s+(really\s+)?do\s+(any\s+)?free|\bnot\s+how\s+i\s+(work|roll|operate)\b|\bnever\s+(send|give|do)\s+free",_policy_re.I)
 
 
+# Wording failures: the product decision may be fine, only the words are refused. A correction for these
+# rewrites the wording and keeps an otherwise valid offer; every other recoverable reason is a product failure.
+WORDING_REASONS={'repeated_recent_line','repeated_recent_phrase','invented_policy_claim','content_status_wording','asks_known_name'}
+
+_VIEWED_CLAIM=_policy_re.compile(
+    r"\byou(?:'ve|\s+have)?\s+(?:already\s+)?(?:opened|unlocked|seen|watched|viewed|checked\s+out|looked\s+at|peeked)\b"
+    r"|\bsince\s+you\s+(?:opened|unlocked|saw|watched|viewed)\b"
+    r"|\b(?:hope|glad|happy|love|loved)\s+(?:that\s+)?you\s+(?:enjoyed|liked|loved|opened|unlocked|saw|watched)\b"
+    r"|\bdid\s+you\s+(?:like|love|enjoy|open|unlock|see|watch|view)\s+(?:it|that|this|them|the\s+\w+|my\s+\w+)"
+    r"|\bwhat\s+did\s+you\s+think\s+(?:of|about)\s+(?:it|that|this|them|the\s+\w+|my\s+\w+)"
+    r"|\byou\s+(?:already\s+)?(?:own|have)\s+(?:it|that|this|them)\b",_policy_re.I)
+_FAN_SAYS_OPENED=_policy_re.compile(r"\b(opened|unlocked|bought|paid|got\s+it|saw|seen|watched|viewed|just\s+did)\b",_policy_re.I)
+_ASKS_NAME=_policy_re.compile(
+    r"\bwhat(?:'?s|s|\s+is)?\s+(?:your|ur)\s+name\b|\bwhat\s+(?:should|can|do)\s+i\s+call\s+you\b|\bwhat\s+do\s+you\s+go\s+by\b"
+    r"|\bwho\s+(?:am\s+i\s+talking\s+to|are\s+you)\b|\bremind\s+me\s+(?:of\s+)?your\s+name\b",_policy_re.I)
+_UNUSABLE_NAMES={'guest','user','fan','anonymous','unknown','daddy','sir','man','dude','null','none','nan','na'}
+_UNUSABLE_CHARS=_policy_re.compile(r"[@/\\_]|https?:|www\.|\.com",_policy_re.I)
+
+
+def clean_name(value):
+    """A fan's first name when the value reads as a name; None for handles, ids, initials and labels."""
+    if type(value) is not str or _UNUSABLE_CHARS.search(value):return None
+    cleaned=_policy_re.sub(r"[^\w\s'.\-]",' ',value.replace('_',' '))
+    if _policy_re.search(r"\d",cleaned):return None            # Redddd1, bigobj7, u12345
+    words=[w.strip(".-'") for w in cleaned.split()]
+    words=[w for w in words if w]
+    if not words:return None
+    first=words[0]
+    if len(first)<2 or len(first)>20 or (first.isupper() and len(first)<=3) or first.lower() in _UNUSABLE_NAMES:return None
+    if not all(c.isalpha() or c in "'-" for c in first):return None
+    return first.capitalize() if first.islower() or first.isupper() else first
+
+
+def usable_fan_name(fan,memory):
+    """Best usable name: verified memory, a name he chose, a real name, then his profile display name."""
+    facts=(memory or {}).get('facts') or {}
+    remembered=facts.get('real_name') if isinstance(facts,dict) else None
+    candidates=[remembered.get('value') if isinstance(remembered,dict) else None]
+    if fan:
+        candidates+=[fan.get('fan_chosen_nickname'),fan.get('real_name') if fan.get('is_name_real') is not False else None,
+            fan.get('of_display_name')]
+    for value in candidates:
+        name=clean_name(value)
+        if name:return name
+    return None
+
+
+def content_status_violation(snap,texts):
+    """True when final wording claims he opened, saw or owns a card that is still locked for him."""
+    history=snap.get('history') or []
+    if not any(m.get('direction')=='out' and type(m.get('price_cents')) is int and m['price_cents']>0 and m.get('paid') is not True
+            for m in history[-10:]):return False
+    incoming=[m.get('text') or '' for m in history if m.get('direction')=='in'][-3:]
+    if any(_FAN_SAYS_OPENED.search(t) for t in incoming):return False     # his own report is evidence
+    return any(_VIEWED_CLAIM.search(t) for t in texts)
+
+
+def wording_problem(snap,decision):
+    """The wording reason that refuses this decision's text, or None. Product checks run before this."""
+    parts=_plan(decision)
+    texts=[p['text'] for p in parts]
+    payload=snap.get('event',{}).get('payload',{})
+    # The decision's own already-delivered parts are not "recent lines" for its later parts.
+    own={r.get('message_id') for r in payload.get('_moxy_delivery',{}).get('receipts',[])}
+    recent=[m['text'] for m in snap['history'][-20:] if m['direction']=='out' and m.get('text') and m['id'] not in own]
+    norm_recent={_norm(t) for t in recent[-12:]}
+    if any(len(_norm(t))>=12 and _norm(t) in norm_recent for t in texts):
+        # Sending the same line again reads as a bot; one bounded correction asks for a fresh reply.
+        return 'repeated_recent_line'
+    if reused_wording(parts,recent):return 'repeated_recent_phrase'
+    if any(INVENTED_POLICY.search(t) for t in texts):
+        # No source states a blanket free-content policy; inventing one is refused once, then a person decides.
+        return 'invented_policy_claim'
+    if decision['action'] not in {'correct','fulfil'} and content_status_violation(snap,texts):return 'content_status_wording'
+    if snap.get('fan_name') and any(_ASKS_NAME.search(t) for t in texts):return 'asks_known_name'
+    return None
+
+
+def _latest_fan_text(snap):
+    incoming=[m for m in snap.get('history',[]) if m['direction']=='in']
+    return (incoming[-1].get('text') or '')[:400] if incoming else ''
+
+
+def correction_brief(reason,result,snap):
+    """What the single bounded retry is told. Wording and product failures are repaired separately.
+
+    wording: only the words were refused, so the valid offer is NOT marked rejected (product_id stays
+    null, the product stays offerable) and is handed back in `keep`. product: the chosen product is
+    refused and can not be picked again. Both keep the fan's actual message in view.
+    """
+    brief={'reason':reason[:120],'fan_message':_latest_fan_text(snap)}
+    if reason in WORDING_REASONS:
+        brief.update(kind='wording',action=None,product_id=None,
+            avoid=[p['text'][:300] for p in _plan(result)][:4])
+        if result.get('product_id') is not None and result['action'] in COMMERCIAL_ACTIONS:
+            brief['keep']={'action':result['action'],'product_id':result['product_id'],'sequence':result.get('sequence')}
+    else:
+        brief.update(kind='product',action=result['action'],product_id=result['product_id'])
+    return brief
+
+
 def validate_decision(settings,snap,decision):
     from .pilot import decision as pilot_decision
     pilot_decision(settings,snap,decision)
@@ -378,15 +484,6 @@ def validate_decision(settings,snap,decision):
     if type(rejected) is dict and rejected.get('product_id') is not None and decision['product_id']==rejected['product_id']:
         # A bounded correction may pick another product or answer in text, never the refused one again.
         raise ActionBlocked('correction_repeated_rejected_choice')
-    recent={_norm(m['text']) for m in snap['history'][-12:] if m['direction']=='out' and m.get('text')}
-    from .parts import plan as _plan
-    if any(len(_norm(p['text']))>=12 and _norm(p['text']) in recent for p in _plan(decision)):
-        # Sending the same line again reads as a bot; one bounded correction asks for a fresh reply.
-        raise ActionBlocked('repeated_recent_line')
-    import re as _re
-    if any(INVENTED_POLICY.search(p['text']) for p in _plan(decision)):
-        # No source states a blanket free-content policy; inventing one is refused once, then a person decides.
-        raise ActionBlocked('invented_policy_claim')
     cfg,pa=configuration(settings)
     if (set(decision['flags']) & {'hardship','refusal','boundary_reset'}
             and decision['action'] in {'invite','offer','resend','alternative','continue'}):
@@ -466,6 +563,9 @@ def validate_decision(settings,snap,decision):
                 or terms['price_cents']!=campaign['terms']['price_cents']
                 or terms['media_ids']!=campaign['terms']['media_ids']):
             raise ActionBlocked('moxy_campaign_product_changed')
+    # Wording is judged last: a product failure always takes precedence over a wording failure.
+    problem=wording_problem(snap,decision)
+    if problem:raise ActionBlocked(problem)
     return terms
 
 
@@ -636,7 +736,8 @@ class MoxyService:
                         and payload.get('source_message_id') and reason in FORMAT_REASONS):
                     enqueue(s,account,event.fan_id,'turn','correction:'+event_id,
                         {'source_message_id':payload['source_message_id'],'correction_of':event_id,
-                         'rejected':{'reason':reason[:120],'action':None,'product_id':None}})
+                         'rejected':{'reason':reason[:120],'kind':'format','action':None,'product_id':None,
+                                     'fan_message':_latest_fan_text(snap)}})
                 if event.status=='held' and payload.get('correction_of') and owner.mode=='on':
                     # The bounded correction produced no usable decision: a person takes over, no regeneration.
                     from onlyfans_runtime.operator_cases import open_case
@@ -666,12 +767,12 @@ class MoxyService:
                             origin='detector',scope='all',owner=json.loads(owner.settings_json)['operational'].get('assigned_operator'))
                 elif (isinstance(exc,ActionBlocked) and owner.mode=='on' and event.kind=='turn' and payload.get('source_message_id')
                         and recoverable(str(exc)) and (result['action'] in COMMERCIAL_ACTIONS or result['product_id'] is not None
-                            or str(exc) in {'repeated_recent_line','invented_policy_claim'})):
+                            or str(exc) in WORDING_REASONS)):
                     # One bounded corrective planning attempt through the normal worker path (model reservation,
                     # spending limits, stale-input and eligibility checks all apply again). The rejected choice stays held.
                     enqueue(s,account,event.fan_id,'turn','correction:'+event_id,
                         {'source_message_id':payload['source_message_id'],'correction_of':event_id,
-                         'rejected':{'reason':str(exc)[:120],'action':result['action'],'product_id':result['product_id']}})
+                         'rejected':correction_brief(str(exc),result,snap)})
                 return event_id
             event.decision_json=canonical(result)
             if owner.mode=='preview':event.status='preview';return event_id

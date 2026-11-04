@@ -1,0 +1,49 @@
+{
+ "id": "4_known_name",
+ "title": "Known name ignored; the bot restarts introductions",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "hey",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "3ec73bf4-01f2-4bf7-9fcf-d101726d1bb7",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "hey you, i dont think we have met yet, whats your name? 😊"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "hey"
+      },
+      "first_offer": "offerable",
+      "situation": null,
+      "reference_situations": [
+       "positive",
+       "positive",
+       "positive",
+       "failure",
+       "positive",
+       "positive"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "hey you, i dont think we have met yet, whats your name? 😊",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  }
+ ]
+}

@@ -1,5 +1,6 @@
 """One durable Moxy decision, ordered through the existing one-use intents."""
 import json
+import re
 from copy import deepcopy
 from .configuration import ActionBlocked
 
@@ -25,6 +26,56 @@ def plan(decision):
     if values[0]['text']!=decision['text'] or sum(len(p['text'].encode()) for p in values)>12000:
         raise ActionBlocked('message_plan_text_mismatch')
     return values
+
+
+# ---- Repetition: substantial reused wording, not common words, pet names or emoji.
+def _squash(word):
+    return re.sub(r'(.)\1+',r'\1',word)          # babyyy -> baby, heyyy -> hey
+
+PET_NAMES={_squash(w) for w in ('babe','baby','bby','bb','babes','babyy','bestie','bestiee','daddy','handsome','honey','hun','sweetie',
+    'cutie','love','papi','boo','darling','sexy')}
+COMMON={_squash(w) for w in ('i','you','me','my','your','the','a','an','and','to','of','it','is','are','am','was','in','on','at','for','so',
+    'do','did','what','how','that','this','with','just','be','im','u','ur','we','can','if','or','but','not','no','yes','ok','okay','lol','omg','hey','hi')}
+
+
+def _tokens(text):
+    words=re.sub(r"[^\w\s']",' ',str(text).lower().replace('\u2019',"'")).split()
+    return [w for w in (_squash(x.replace("'",'')) for x in words) if w and w not in PET_NAMES]
+
+
+def _content(tokens):
+    return sum(1 for t in tokens if t not in COMMON)
+
+
+def shared_wording(new_text, old_text):
+    """True when new_text reuses a substantial phrase of old_text.
+
+    A shared run of 5 or more words that carries real content, or the same opening of 4 or more words
+    in two longer messages (the same joke with a different ending). Pet names, common words and emoji
+    never count, so ordinary vocabulary stays usable.
+    """
+    a=_tokens(new_text);b=_tokens(old_text)
+    if len(a)<4 or len(b)<4:return False
+    best=0;best_start=0;prefix=0
+    previous=[0]*(len(b)+1)
+    for i in range(1,len(a)+1):
+        row=[0]*(len(b)+1)
+        for j in range(1,len(b)+1):
+            if a[i-1]==b[j-1]:
+                row[j]=previous[j-1]+1
+                if row[j]>best:best=row[j];best_start=i-row[j]
+        previous=row
+    while prefix<min(len(a),len(b)) and a[prefix]==b[prefix]:prefix+=1
+    if best>=5 and _content(a[best_start:best_start+best])>=2:return True
+    return prefix>=4 and min(len(a),len(b))>=6 and _content(a[:prefix])>=2
+
+
+def reused_wording(parts, recent_texts):
+    """The first recent line whose wording a new part substantially reuses, else None."""
+    for part in parts:
+        for old in recent_texts:
+            if shared_wording(part['text'],old):return old
+    return None
 
 
 def index(event):

@@ -1,0 +1,133 @@
+{
+ "id": "2_question_not_nudge",
+ "title": "Fan asks a question; the bot sends its sales nudge again",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "what time do you usually go live?",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "a2e10060-4c4f-48f5-a292-f3978445fd3b",
+     "status": "held",
+     "reason": "repeated_recent_phrase",
+     "draft": [
+      "btw dont you wanna open what i recently sent you babe?? you can open more 🍑"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "what time do you usually go live?"
+      },
+      "first_offer": "sent",
+      "situation": [
+       "question",
+       "honest_unavailable_alternative",
+       "personal_chat"
+      ],
+      "reference_situations": [
+       "honest_unavailable_alternative",
+       "personal_chat",
+       "declined_offer"
+      ]
+     }
+    },
+    {
+     "kind": "correction",
+     "event_id": "52bb5034-cd0e-4e29-8203-0477c8e17404",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "usually in the evenings, whenever i finish at the gym",
+      "i post on tiktok right before i go on"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": {
+      "action": null,
+      "avoid": [
+       "btw dont you wanna open what i recently sent you babe?? you can open more 🍑"
+      ],
+      "fan_message": "what time do you usually go live?",
+      "kind": "wording",
+      "product_id": null,
+      "reason": "repeated_recent_phrase"
+     },
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "what time do you usually go live?"
+      },
+      "first_offer": "sent",
+      "situation": [
+       "question",
+       "honest_unavailable_alternative",
+       "personal_chat"
+      ],
+      "reference_situations": [
+       "honest_unavailable_alternative",
+       "personal_chat",
+       "declined_offer"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "usually in the evenings, whenever i finish at the gym",
+     "media": [],
+     "price_cents": 0
+    },
+    {
+     "body": "i post on tiktok right before i go on",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  },
+  {
+   "fan": "ok ill be there",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "704e1077-38a9-4e72-8339-76c4d8f42a9a",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "see you there babe"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 101,
+       "text": "ok ill be there"
+      },
+      "first_offer": "sent",
+      "situation": [],
+      "reference_situations": [
+       "declined_offer",
+       "honest_unavailable_alternative"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "see you there babe",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  }
+ ]
+}

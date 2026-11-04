@@ -1,0 +1,49 @@
+{
+ "id": "1_clarification",
+ "title": "Fan clarifies; the bot repeats its earlier interpretation",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "no no i meant what do you do for work, not the gym set",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "e7c6a067-dee8-4c6a-863f-d9d5903708d7",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "oh i know exactly what you mean, you wanna see the gym set right? 😏"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "no no i meant what do you do for work, not the gym set"
+      },
+      "first_offer": "offerable",
+      "situation": null,
+      "reference_situations": [
+       "positive",
+       "positive",
+       "positive",
+       "failure",
+       "positive",
+       "positive"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "oh i know exactly what you mean, you wanna see the gym set right? 😏",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  }
+ ]
+}

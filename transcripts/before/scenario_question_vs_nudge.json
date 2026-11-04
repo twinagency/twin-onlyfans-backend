@@ -1,0 +1,91 @@
+{
+ "id": "2_question_not_nudge",
+ "title": "Fan asks a question; the bot sends its sales nudge again",
+ "creator": "amelia",
+ "turns": [
+  {
+   "fan": "what time do you usually go live?",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "00c43296-a72b-4677-a9ea-b73d017fd2fb",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "btw dont you wanna open what i recently sent you babe?? you can open more 🍑"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 100,
+       "text": "what time do you usually go live?"
+      },
+      "first_offer": "sent",
+      "situation": null,
+      "reference_situations": [
+       "positive",
+       "positive",
+       "positive",
+       "failure",
+       "positive",
+       "positive"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "btw dont you wanna open what i recently sent you babe?? you can open more 🍑",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  },
+  {
+   "fan": "ok ill be there",
+   "attempts": [
+    {
+     "kind": "first",
+     "event_id": "963d463a-4546-4ecf-a31f-3c686c52c1ed",
+     "status": "ready",
+     "reason": null,
+     "draft": [
+      "see you there babe"
+     ],
+     "draft_action": "reply",
+     "draft_product": null,
+     "rejected": null,
+     "prompt": {
+      "fan_name": null,
+      "current_input": {
+       "id": 101,
+       "text": "ok ill be there"
+      },
+      "first_offer": "sent",
+      "situation": null,
+      "reference_situations": [
+       "positive",
+       "positive",
+       "positive",
+       "failure",
+       "positive",
+       "positive"
+      ]
+     }
+    }
+   ],
+   "final_status": "done",
+   "sent": [
+    {
+     "body": "see you there babe",
+     "media": [],
+     "price_cents": 0
+    }
+   ]
+  }
+ ]
+}

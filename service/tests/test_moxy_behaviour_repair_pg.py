@@ -223,8 +223,8 @@ def test_writer_prompt_follows_innuendo_and_pivots_unavailable_requests():
     import moxy_replacement.writer as w
     text=w.messages.__code__.co_consts
     joined=' '.join(c for c in text if isinstance(c,str))
-    assert 'never resend or lightly reword a line already sent' in joined
-    assert 'relevant eligible item exists' in joined and 'MAY talk about' in joined and 'commercial_state' in joined
+    assert 'lightly reword or reshape a line' in joined and 'already sent' in joined
+    assert 'relevant eligible item exists' in joined and 'may talk about' in joined and 'commercial_state' in joined
     assert 'character-for-character' in joined
 
 
@@ -285,7 +285,8 @@ def test_recoverable_block_queues_exactly_one_bounded_correction(database,monkey
     c=_corrections(engine);assert len(c)==1 and c[0].status=='pending'
     p=json.loads(c[0].payload_json)
     assert p['source_message_id']==2 and p['correction_of']==first
-    assert p['rejected']=={'reason':'real_inventory_missing_or_stale','action':'offer','product_id':'missing-product'}
+    assert {k:p['rejected'][k] for k in ('reason','action','product_id','kind')}=={'reason':'real_inventory_missing_or_stale','action':'offer','product_id':'missing-product','kind':'product'}
+    assert p['rejected']['fan_message']=='would you suck me until I cum'
     assert not _cases(engine)
     store.close()
 
@@ -367,16 +368,13 @@ def test_prompt_carries_commercial_state_with_sent_unpaid_card(database,monkeypa
     store.close()
 
 
-def test_examples_give_both_creators_sales_flow_and_stay_compact():
+def test_examples_are_the_approved_bank_and_stay_compact():
     from moxy_replacement.examples import references
     from moxy_replacement.configuration import canonical
     for creator in ('amelia','cristina'):
-        r=references(creator);kinds=[e['kind'] for e in r['examples']]
-        assert kinds.count('positive')>=4 and len(canonical(r).encode())<4096
-        assert all('message_id' not in str(e) for e in r['examples'])  # provenance stays in the file
-        assert all('—' not in t and '–' not in t for e in r['examples'] for d,t in e['lines'] if d=='out')
-    assert any('placeholder, not text' in t for e in references('amelia')['examples'] for d,t in e['lines'])
-    assert 'failure' in [e['kind'] for e in references('amelia')['examples']]
+        r=references(creator);assert 2<=len(r['examples'])<=3 and len(canonical(r).encode())<16384
+        assert all(set(e)=={'situation','lesson','lines'} for e in r['examples'])      # provenance stays in the file
+        assert all('—' not in t and '–' not in t for e in r['examples'] for d,t in e['lines'])
 
 
 def test_message_plan_is_the_source_of_truth_for_text():

@@ -262,7 +262,7 @@ def test_migration_downgrade_drops_only_the_exclusion_table_and_upgrade_restores
     with engine.begin() as c:
         # Later manual-media releases deliberately prohibit a whole-chain
         # rollback below 0100. Prove that guard, without bypassing it.
-        with pytest.raises(RuntimeError, match="Preserve free-media"):
+        with pytest.raises(RuntimeError, match="retain event, purchase and obligation evidence|Preserve free-media"):
             with c.begin_nested():
                 command.downgrade(_config(c), "0097_release_controls")
         check_schema(c)

@@ -77,6 +77,8 @@ class FakeHTTP:
         self.closed = False
 
     def get(self, url, **kwargs):
+        if urlsplit(url).path == f"/api2/v2/chats/{self.fan}":
+            return FakeResponse({"withUser":{"id":self.fan},"unreadMessagesCount":0,"hasUnreadMessages":False})
         assert urlsplit(url).path == f"/api2/v2/chats/{self.fan}/messages"
         self.gets.append(url)
         return FakeResponse({"list": copy.deepcopy(self.history), "hasMore": False})

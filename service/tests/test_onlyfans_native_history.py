@@ -2,6 +2,7 @@
 import json
 import os
 import unittest
+import tempfile
 from unittest.mock import patch
 from onlyfans_native_protocol_fixture import native_message, OWNER
 from onlyfans_runtime.native_protocol import NativeProtocolError, message, load, MAX_BYTES, MAX_HISTORY_BYTES
@@ -10,6 +11,13 @@ from test_onlyfans_vault_response_limits import session
 
 
 class NativeHistory(unittest.TestCase):
+    def setUp(self):
+        self.journal=tempfile.TemporaryDirectory(prefix='native-history-unread-')
+        self.addCleanup(self.journal.cleanup)
+        self.environment=patch.dict(os.environ,{'ONLYFANS_UNREAD_JOURNAL_DIR':self.journal.name})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
     def test_link_history_retains_visible_text_without_link_authority(self):
         raw = native_message(10, owner=OWNER, outgoing=True,
             text='<p>Read <a href="https://synthetic.invalid/private" target="_blank">the &lt;update&gt;</a><br/>Today</p><p>Thanks &amp; bye</p>')
@@ -47,6 +55,8 @@ class NativeHistory(unittest.TestCase):
         def read(method, path, body=b'', **options):
             records.append((method, path, options.get('max_response_bytes', MAX_BYTES)))
             if path.endswith('/users/me'): return json.dumps({'id': 7001}).encode()
+            if path == '/api2/v2/chats/101':
+                return json.dumps({'withUser':{'id':101},'unreadMessagesCount':0,'hasUnreadMessages':False}).encode()
             if '/chats/101/messages?' in path:
                 row = {**native_message(10, owner=7001, outgoing=True), 'isFromQueue': True}
                 row['padding'] = 'x' * 70000
@@ -58,7 +68,7 @@ class NativeHistory(unittest.TestCase):
             self.assertEqual(wire.chats(cursor=None, limit=2).fan_ids, [101])
             self.assertEqual(wire.messages(fan_id=101, before_id=None, limit=2).events[0].message_id, 10)
             wire._call('POST', '/api2/v2/chats/101/messages', b'{}')
-        self.assertEqual([r[2] for r in records], [MAX_BYTES, MAX_HISTORY_BYTES, MAX_BYTES, MAX_HISTORY_BYTES, MAX_BYTES])
+        self.assertEqual([r[2] for r in records], [MAX_BYTES, MAX_HISTORY_BYTES, MAX_BYTES, MAX_BYTES, MAX_BYTES, MAX_HISTORY_BYTES, MAX_BYTES])
         with self.assertRaises(NativeProtocolError): load(b' ' * (MAX_HISTORY_BYTES + 1), max_bytes=MAX_HISTORY_BYTES)
         with self.assertRaises(NativeProtocolError): load(b' ' * (MAX_BYTES + 1))
 

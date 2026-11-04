@@ -140,7 +140,7 @@ def scenario_clarification(r):
     return {'id':'1_clarification','title':'Fan clarifies; the bot repeats its earlier interpretation','creator':'amelia',
         'turns':[r.turn('no no i meant what do you do for work, not the gym set',
             reply('oh i know exactly what you mean, you wanna see the gym set right? 😏'),
-            reply('ha my bad','i coach a few sessions and film a bit on the side, what about you?'))]}
+            reply('ha my bad','i keep my work routine private, but im happy to chat here'))]}
 
 
 def scenario_question_vs_nudge(r):
@@ -149,7 +149,7 @@ def scenario_question_vs_nudge(r):
     return {'id':'2_question_not_nudge','title':'Fan asks a question; the bot sends its sales nudge again','creator':'amelia',
         'turns':[r.turn('what time do you usually go live?',
             reply('btw dont you wanna open what i recently sent you babe?? you can open more 🍑'),
-            reply('usually in the evenings, whenever i finish at the gym','i post on tiktok right before i go on')),
+            reply('i dont have a confirmed live time to share right now','keep an eye on the page for an announcement')),
           r.turn('ok ill be there',reply('see you there babe'))]}
 
 
@@ -225,7 +225,7 @@ def test_clarification_is_answered_not_repeated(database,monkeypatch):
     assert fix['rejected']['kind']=='wording' and fix['rejected']['fan_message'].startswith('no no i meant what do you do for work')
     assert fix['prompt']['current_input']['text']==turn['fan']            # the writer is shown the clarification as the current input
     assert 'clarification' in fix['prompt']['situation']
-    assert [x['body'] for x in turn['sent']]==['ha my bad','i coach a few sessions and film a bit on the side, what about you?']
+    assert [x['body'] for x in turn['sent']]==['ha my bad','i keep my work routine private, but im happy to chat here']
     assert turn['final_status']=='done'
 
 
@@ -235,7 +235,7 @@ def test_question_is_answered_and_nudge_not_repeated(database,monkeypatch):
     turn=t['turns'][0];first,fix=turn['attempts']
     assert first['reason']=='repeated_recent_phrase' and fix['prompt']['current_input']['text']=='what time do you usually go live?'
     assert 'question' in fix['prompt']['situation']
-    assert [x['body'] for x in turn['sent']]==['usually in the evenings, whenever i finish at the gym','i post on tiktok right before i go on']
+    assert [x['body'] for x in turn['sent']]==['i dont have a confirmed live time to share right now','keep an eye on the page for an announcement']
     assert all(x['price_cents']==0 and not x['media'] for turn in t['turns'] for x in turn['sent'])   # no second card
     # State carried forward: the second turn is written against a history that contains the answer.
     assert t['turns'][1]['final_status']=='done' and t['turns'][1]['sent'][0]['body']=='see you there babe'

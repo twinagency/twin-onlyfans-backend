@@ -9,8 +9,10 @@ from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from onlyfans_runtime.native_protocol import MAX_BYTES, NativeProtocolError, load
+from onlyfans_runtime.native_protocol import MAX_BYTES, MAX_HISTORY_BYTES, NativeProtocolError, load
 from onlyfans_runtime.vault_management import parse_vault_page
+# Keep the ORM telemetry owner loaded outside temporary sys.modules fixtures.
+from onlyfans_runtime import history_telemetry
 from onlyfans_runtime.provider_connector import NativeProviderConnector, session_from_capture
 from onlyfans_runtime.store import Refused
 
@@ -66,7 +68,7 @@ class TestVaultResponseLimits(unittest.TestCase):
             parse_vault_page(json.dumps(value).encode(), owner_id=OWNER)
 
     def test_invalid_json_budgets_are_refused(self):
-        for limit in [True, 0, -1, VAULT_LIMIT + 1, None]:
+        for limit in [True, 0, -1, MAX_HISTORY_BYTES + 1, None]:
             with self.subTest(limit=limit), self.assertRaises(NativeProtocolError):
                 load(b"{}", max_bytes=limit)
 

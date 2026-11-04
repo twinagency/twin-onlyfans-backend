@@ -390,9 +390,10 @@ RECOVERABLE_REASONS={'media_previously_sent_requires_explicit_resend','acceptanc
     'sequence_context_missing','sequence_step_not_current','price_exceeds_budget','offer_already_pending',
     'invitation_stale_or_ambiguous','product_terms_unresolved','price_below_authorised_minimum',
     'price_differs_from_authorised_fixed','product_media_format_mismatch','product_photo_count_mismatch'}
+RECOVERABLE_REASONS.add('product_invitation_missing_identity')
 RECOVERABLE_PREFIXES=('condition_not_met:','condition_unknown:')
 RECOVERABLE_REASONS|={'pilot_specialist_handover_required','repeated_recent_line','invented_policy_claim',
-    'repeated_recent_phrase','content_status_wording','asks_known_name','known_name_not_used','unsupported_profile_visibility_claim'}
+    'repeated_recent_phrase','content_status_wording','asks_known_name','known_name_not_used','unsupported_profile_visibility_claim','unsupported_creator_routine','unsupported_asset_gaze','verified_ownership_ignored'}
 # Unusable model output (format) for the same input: one bounded correction too, so the fan is not left silent.
 FORMAT_REASONS={'invalid_model_json','invalid_model_decision','invalid_message_plan','invalid_message_part',
     'message_plan_media_mismatch','message_plan_text_mismatch','empty_model_reply','duplicate_model_key',
@@ -412,7 +413,7 @@ INVENTED_POLICY=_policy_re.compile(
 # Wording failures: the product decision may be fine, only the words are refused. A correction for these
 # rewrites the wording and keeps an otherwise valid offer; every other recoverable reason is a product failure.
 WORDING_REASONS={'repeated_recent_line','repeated_recent_phrase','invented_policy_claim','content_status_wording','asks_known_name',
-    'known_name_not_used','unsupported_profile_visibility_claim'}
+    'known_name_not_used','unsupported_profile_visibility_claim','unsupported_creator_routine','unsupported_asset_gaze','verified_ownership_ignored'}
 
 _VIEWED_CLAIM=_policy_re.compile(
     r"\byou(?:'ve|\s+have)?\s+(?:already\s+)?(?:opened|unlocked|seen|watched|viewed|checked\s+out|looked\s+at|peeked)\b"
@@ -536,6 +537,11 @@ def wording_problem(snap,decision):
     if (snap.get('fan_name') and _NAME_LOOKUP.search(_latest_fan_text(snap))
             and not any(_policy_re.search(r'(?<!\w)'+_policy_re.escape(snap['fan_name'])+r'(?!\w)',t,_policy_re.I) for t in texts)):
         return 'known_name_not_used'
+    from .grounding import unsupported_routine,unsupported_asset_gaze,unbound_product_invitation,ignores_verified_ownership
+    if ignores_verified_ownership(snap,texts):return 'verified_ownership_ignored'
+    if unsupported_routine(snap,texts):return 'unsupported_creator_routine'
+    if unsupported_asset_gaze(snap,decision,texts):return 'unsupported_asset_gaze'
+    if unbound_product_invitation(snap,decision,texts):return 'product_invitation_missing_identity'
     if any(_PROFILE_VISIBILITY.search(t) for t in texts):return 'unsupported_profile_visibility_claim'
     if (_NAME_LOOKUP.search(_latest_fan_text(snap)) and any(_policy_re.search(
             r"\b(?:can'?t|cannot|don'?t|doesn'?t|unable\s+to)\s+(?:actually\s+)?(?:see|read|access)\b",t,_policy_re.I)
@@ -559,6 +565,14 @@ def correction_brief(reason,result,snap):
     brief={'reason':reason[:120],'fan_message':_latest_fan_text(snap)}
     if reason in {'known_name_not_used','asks_known_name','unsupported_profile_visibility_claim'}:
         brief['known_name']=snap.get('fan_name')
+    if reason=='unsupported_creator_routine':
+        brief['public_facts']=snap.get('public_facts',{})
+        brief['guidance']='No inferred job or routine. Use approved public facts or a brief privacy boundary.'
+    if reason=='verified_ownership_ignored':
+        brief['verified_last_offer']=(snap.get('commercial_state') or {}).get('last_offer')
+        brief['guidance']='The exact last card is already in verified_purchases. Answer its ownership question directly; no unverified-payment inference or further check is needed.'
+    if reason=='product_invitation_missing_identity':
+        brief['guidance']='Your text invites a specific catalogue item. Use invite and its actual product_id, without a media card, so acceptance retains its identity.'
     if reason in WORDING_REASONS:
         brief.update(kind='wording',action=None,product_id=None,
             avoid=[p['text'][:300] for p in _plan(result)][:4])
@@ -568,6 +582,7 @@ def correction_brief(reason,result,snap):
             if all(k in item for k in ('price_cents','media_ids','preview_ids')):
                 brief['keep_terms']={k:item[k] for k in ('price_cents','media_ids','preview_ids')}
             brief['media_positions']=[i for i,p in enumerate(_plan(result)) if p['media']]
+            brief['message_count']=len(_plan(result))
     else:
         brief.update(kind='product',action=result['action'],product_id=result['product_id'])
     return brief
@@ -907,7 +922,7 @@ class MoxyService:
                     self._correction_exhausted(s,owner,event,str(exc))
             elif (isinstance(exc,ActionBlocked) and owner.mode=='on' and event.kind in {'turn','welcome'} and payload.get('source_message_id')
                     and recoverable(str(exc)) and (result['action'] in COMMERCIAL_ACTIONS or result['product_id'] is not None
-                        or str(exc) in WORDING_REASONS)):
+                        or str(exc) in WORDING_REASONS or str(exc)=='product_invitation_missing_identity')):
                 # One bounded corrective planning attempt through the normal worker path (model reservation,
                 # spending limits, stale-input and eligibility checks all apply again). The rejected choice stays held.
                 enqueue(s,account,event.fan_id,event.kind,'correction:'+event_id,
@@ -960,6 +975,9 @@ class MoxyService:
                 'permission':None,'question':None,'resolve_obligation':None}
             if fresh.get('fan_name') and _NAME_LOOKUP.search(_latest_fan_text(fresh)):
                 fallback['text']='I have you as '+fresh['fan_name']+' here.'
+                fallback['messages']=[{'text':fallback['text'],'media':False}]
+            if reason=='unsupported_creator_routine':
+                fallback['text']="I keep my work routine private, but I'm happy to chat here."
                 fallback['messages']=[{'text':fallback['text'],'media':False}]
             try:validate_decision(json.loads(owner.settings_json),fresh,fallback,planning=True)
             except (ActionBlocked,InvalidConfiguration):pass
@@ -1198,7 +1216,7 @@ def delivered(s,intent):
     if index(e)+1<len(plan(json.loads(e.decision_json))):
         before=json.loads(e.snapshot_json)
         after=snapshot(s,intent.account_id,intent.fan_id,e)
-        continuation_ok=continuation_unchanged(before,after,intent.provider_message_id,d)
+        continuation_ok=continuation_unchanged(before,after,intent.provider_message_id,d,account_id=intent.account_id,session=s)
     payload=json.loads(e.payload_json)
     progress=payload.setdefault('_moxy_delivery',{'receipts':[]})
     progress['receipts'].append({'intent_id':intent.intent_id,'message_id':intent.provider_message_id})

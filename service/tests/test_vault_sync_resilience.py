@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import pytest
 from onlyfans_runtime.native_worker import NativeWorker
+# Keep the ORM telemetry owner loaded outside temporary sys.modules fixtures.
+from onlyfans_runtime import history_telemetry
 from onlyfans_runtime.provider_connector import NativeProviderConnector, NativeReadTransientError, NativeAuthenticationError
 from onlyfans_runtime.native_protocol import NativeProtocolError
 from test_onlyfans_vault_response_limits import session

@@ -105,7 +105,7 @@ def has_remaining(event):
     return index(event)<len(plan(json.loads(event.decision_json)))
 
 
-def continuation_unchanged(before, after, own_message_id, decision):
+def continuation_unchanged(before, after, own_message_id, decision, *, account_id=None, session=None):
     """Permit only our just-reconciled message; external changes cancel the tail."""
     a=deepcopy(before);b=deepcopy(after)
     a.pop('native_fingerprint',None);b.pop('native_fingerprint',None)
@@ -121,6 +121,20 @@ def continuation_unchanged(before, after, own_message_id, decision):
     filtered=[m for m in new if m['id']!=own_message_id]
     # Snapshot history is bounded at 100. One own append may evict one oldest row.
     if filtered!=old[-len(filtered):] or not any(m['id']==own_message_id for m in new):return False
+    # Our append can move exactly one unchanged source from recent history
+    # into the additive historical-memory projection. That is not external
+    # input. Every canonical fact, correction and retained excerpt stays fenced.
+    evicted=old[:len(old)-len(filtered)]
+    if evicted and session is not None:
+        # Even a source which stops matching memory retrieval must not change
+        # invisibly as it leaves the recent window during our own append.
+        if len(evicted)!=1 or not _evicted_source_current(
+                session,account_id,before.get('fan_id'),evicted[0]):return False
+    if a.get('memory')!=b.get('memory'):
+        if len(evicted)!=1 or account_id is None or not _own_memory_shift(
+                a.get('memory'),b.get('memory'),evicted[0],account_id,before.get('fan_id'),session):
+            return False
+        b['memory']=deepcopy(a['memory'])
     if decision['action'] in {'offer','continue','resend','alternative'}:
         key=decision['product_id']
         a['fan_state']['pending_products']=sorted(set(a['fan_state']['pending_products'])|{key})
@@ -128,3 +142,59 @@ def continuation_unchanged(before, after, own_message_id, decision):
             set(a['inventory'][key]['media_ids']))
     old_revision=a['control'].pop('input_revision');new_revision=b['control'].pop('input_revision')
     return new_revision==old_revision+1 and a==b
+
+
+
+def _own_memory_shift(before,after,evicted,account,fan,session=None):
+    if not isinstance(before,dict) or not isinstance(after,dict):return False
+    from datetime import datetime
+    from types import SimpleNamespace
+    from onlyfans_runtime.launch_history_memory.extraction import source_digest
+    from onlyfans_runtime.launch_history_memory.memory import _hash
+    a=deepcopy(before);b=deepcopy(after)
+    # Validate the projection's own digest before normalising its movement.
+    for memory in (a,b):
+        fingerprint=memory.pop('fingerprint',None)
+        if fingerprint!=_hash(memory):return False
+    old=a.pop('interactions',[]);new=b.pop('interactions',[])
+    if a!=b:return False
+    source=SimpleNamespace(account_id=account,fan_id=fan,message_id=evicted['id'],
+        body=evicted.get('text') or '',direction=evicted['direction'],
+        created_at=datetime.fromisoformat(evicted['at']),is_unsent=False)
+    added=[x for x in new if x.get('sourceMessageId')==str(source.message_id)]
+    if len(added)!=1:return False
+    item=added[0]
+    if (item.get('sourceDigest')!=source_digest(source)
+            or item.get('sourceAt')!=source.created_at.isoformat()
+            or item.get('direction')!=source.direction
+            or not item.get('excerpt') or item['excerpt'] not in source.body):
+        return False
+    retained=[x for x in new if x is not item]
+    # Top-k retrieval may evict its last excerpt, but cannot rewrite/reorder
+    # other sources or conceal a changed canonical fact.
+    if not (len(old)-1<=len(retained)<=len(old) and retained==old[:len(retained)]):return False
+    if len(retained)<len(old):
+        # A top-k eviction may not hide a concurrent edit/unsend of its old
+        # last source. Verify that source against the existing canonical row.
+        if session is None:return False
+        from sqlalchemy import select
+        from db.models import Message
+        item=old[-1]
+        row=session.scalar(select(Message).where(Message.account_id==account,Message.fan_id==fan,
+            Message.message_id==int(item['sourceMessageId'])).with_for_update(read=True))
+        if row is None or row.is_unsent or source_digest(row)!=item['sourceDigest']:return False
+    return True
+
+
+
+def _evicted_source_current(session,account,fan,source):
+    from sqlalchemy import select
+    from db.models import Message
+    from datetime import datetime
+    row=session.scalar(select(Message).where(Message.account_id==account,Message.fan_id==fan,
+        Message.message_id==source['id']).with_for_update(read=True))
+    return bool(row is not None and not row.is_unsent and row.body==(source.get('text') or '')
+        and row.direction==source['direction'] and row.created_at==datetime.fromisoformat(source['at'])
+        and row.media_count==source.get('media_count',0)
+        and row.price_cents==source.get('price_cents',0)
+        and row.image_desc==source.get('attachment_description'))

@@ -10,7 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from test_onlyfans_foundation_pg import database, event
-from test_onlyfans_text_delivery_pg import (
+from test_onlyfans_text_delivery_pg import (unthrottle,
     ACCOUNT, FAN, TENANT, accepted, assert_no_outbound, configured, prepare,
 )
 from db.models import Fan, Message, OfConversationState, OfCreatorBinding, OfMessageDelivery
@@ -122,11 +122,27 @@ def test_prewire_changes_cancel_once_refund_once_and_make_no_call(database, chan
     with Session(engine) as s:
         row = s.get(OfTextIntent, (ACCOUNT, intent))
         policy = s.get(OfDeliveryPolicy, ACCOUNT)
-        assert row.status in {"cancelled", "refused"} and row.reason.startswith("prewire_")
+        if change == "pending":
+            # Fresh ingress is a bounded deferral before any wire, not a
+            # permanent cancellation; the old one-use grant remains spent.
+            assert row.status == "queued" and row.reason == "history_not_current"
+            assert (policy.used_units, policy.queued_count, policy.active_intent_id) == (0, 1, None)
+        else:
+            assert row.status in {"cancelled", "refused"} and row.reason.startswith("prewire_")
+            assert (policy.used_units, policy.queued_count, policy.active_intent_id) == (0, 0, None)
         assert row.wire_started_at is None and not row.reservation_held
-        assert (policy.used_units, policy.queued_count, policy.active_intent_id) == (0, 0, None)
         pointer = s.get(OfConversationState, (ACCOUNT, FAN)).unresolved_attempt_id
         assert pointer == ("other-held-attempt" if change == "other_pointer" else None)
+    if change == "pending":
+        with Session(engine) as s, s.begin():s.get(OfRuntime, ACCOUNT).pending_events = 0
+        unthrottle(engine)
+        fresh = authority.admit(TENANT, ACCOUNT, intent)
+        assert fresh.attempt_id != grant.attempt_id and fresh.token != grant.token
+        with pytest.raises(Refused):transport.send(grant, authority=authority, tenant_id=TENANT)
+        proof = transport.send(fresh, authority=authority, tenant_id=TENANT)
+        assert authority.record_accepted(TENANT, ACCOUNT, intent, fresh.token, proof) == "accepted"
+        assert authority.materialize(TENANT, ACCOUNT, intent)
+        assert len(transport.calls) == 1
     store.close()
 
 

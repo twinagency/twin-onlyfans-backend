@@ -10,7 +10,7 @@ import random
 import time
 import uuid
 
-from sqlalchemy import bindparam, exists, select, text, tuple_, func, or_, and_
+from sqlalchemy import bindparam, exists, select, text, tuple_, func, or_, and_, String
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 from db.models import Fan, FanProfile, Message, OfCreatorBinding
@@ -440,7 +440,7 @@ def daily_maintenance(store,tenant):
     with Session(store.engine) as s,s.begin():
         statement = text("""UPDATE of_profile_learning SET next_at=CURRENT_TIMESTAMP WHERE tenant_id=:tenant
             AND (:scope_all OR account_id IN :scope_accounts)
-            AND error_code IS NULL AND next_at>CURRENT_TIMESTAMP AND (maintenance_at IS NULL OR maintenance_at<:yesterday)""").bindparams(bindparam('scope_accounts', expanding=True))
+            AND error_code IS NULL AND next_at>CURRENT_TIMESTAMP AND (maintenance_at IS NULL OR maintenance_at<:yesterday)""").bindparams(bindparam('scope_accounts', expanding=True, type_=String()))
         s.execute(statement, {'tenant':tenant, 'yesterday':datetime.utcnow()-timedelta(days=1),
             'scope_all':selected is None, 'scope_accounts':list(selected or [])})
 

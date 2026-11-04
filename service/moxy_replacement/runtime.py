@@ -567,7 +567,7 @@ def correction_brief(reason,result,snap):
         brief['known_name']=snap.get('fan_name')
     if reason=='unsupported_creator_routine':
         brief['public_facts']=snap.get('public_facts',{})
-        brief['guidance']='No inferred job or routine. Use approved public facts or a brief privacy boundary.'
+        brief['guidance']='Use approved public facts where they answer the actual question. Missing facts do not establish a privacy preference: invent neither a routine nor a privacy refusal. Preserve genuine source restrictions; leave an unanswerable factual question for human review.'
     if reason=='verified_ownership_ignored':
         brief['verified_last_offer']=(snap.get('commercial_state') or {}).get('last_offer')
         brief['guidance']='The exact last card is already in verified_purchases. Answer its ownership question directly; no unverified-payment inference or further check is needed.'
@@ -960,8 +960,10 @@ class MoxyService:
         payload=json.loads(event.payload_json)
         rejected=payload.get('rejected') or {}
         # Only format/wording failures permit a factual technical fallback.
-        # Product/permission refusals and deliberate human/contact holds remain held.
-        eligible=(reason in FORMAT_REASONS|WORDING_REASONS and rejected.get('kind') in {'format','wording'})
+        # Missing creator facts cannot ground a factual fallback. Product/permission
+        # refusals and deliberate human/contact holds also remain held.
+        eligible=(reason in FORMAT_REASONS|WORDING_REASONS and reason!='unsupported_creator_routine'
+            and rejected.get('kind') in {'format','wording'})
         prior=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==event.account_id,
             MoxyEvent.fan_id==event.fan_id,MoxyEvent.event_id!=event.event_id,
             MoxyEvent.status.in_(('ready','queued','done')))).all()
@@ -975,9 +977,6 @@ class MoxyService:
                 'permission':None,'question':None,'resolve_obligation':None}
             if fresh.get('fan_name') and _NAME_LOOKUP.search(_latest_fan_text(fresh)):
                 fallback['text']='I have you as '+fresh['fan_name']+' here.'
-                fallback['messages']=[{'text':fallback['text'],'media':False}]
-            if reason=='unsupported_creator_routine':
-                fallback['text']="I keep my work routine private, but I'm happy to chat here."
                 fallback['messages']=[{'text':fallback['text'],'media':False}]
             try:validate_decision(json.loads(owner.settings_json),fresh,fallback,planning=True)
             except (ActionBlocked,InvalidConfiguration):pass

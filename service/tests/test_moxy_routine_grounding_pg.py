@@ -17,13 +17,22 @@ from moxy_replacement.grounding import unsupported_routine
     "I'm a trainer",
     "I work as a coach",
     "I keep my day job private",
+    "I keep my work routine private, but I am happy to chat here",
+    "My work life is private",
+    "nah, this is it for me",
+    "no secret day job hiding behind the page lol",
+    "honestly i don't keep a set time, it just depends on the day",
+    "no set schedule on my end",
+    "i just go when i can, some weeks mornings, some weeks after everything else",
+
 ])
 def test_unverified_routine_is_refused_even_if_an_old_reply_claimed_it(text):
-    assert unsupported_routine({'public_facts':{},'history':[{'direction':'out','text':text}]},[text])
+    assert unsupported_routine({'public_facts':{},'history':[{'direction':'in','text':'What do you do for work and when do you work out?'},{'direction':'out','text':text}]},[text])
 
 
 @pytest.mark.parametrize('text',[
-    "I keep my work routine private, but I'm happy to chat here.",
+    "I keep my location private.",
+    "My family stays private.",
     "What do your mornings usually look like?",
     "I don't coach or train anyone.",
     "Here is the outfit photo you asked about.",
@@ -39,7 +48,7 @@ def test_only_an_exact_approved_public_fact_grounds_the_routine():
     assert unsupported_routine({'public_facts':{'approved':line}},[line+' and coach clients after'])
 
 
-def test_actual_service_corrects_routine_then_uses_factual_boundary(database,monkeypatch):
+def test_actual_service_exhausted_routine_has_no_invented_privacy_fallback(database,monkeypatch):
     engine,store,service,_,_,_=setup(database,monkeypatch)
     store.record(TENANT,ACCOUNT,event(mid=2,body='What do you do for work?'));store.drain(TENANT,ACCOUNT)
     identity=service.add_event(TENANT,ACCOUNT,101,'turn','routine-repair',{'source_message_id':2})
@@ -53,8 +62,12 @@ def test_actual_service_corrects_routine_then_uses_factual_boundary(database,mon
     service.prepare(TENANT,ACCOUNT,retry_id,model(decision(text='I usually train every morning')))
     with Session(engine) as s:
         final=s.get(MoxyEvent,(ACCOUNT,retry_id))
-        assert final.status=='ready' and final.reason=='moxy_safe_fallback'
-        assert json.loads(final.decision_json)['text']=="I keep my work routine private, but I'm happy to chat here."
+        assert final.status=='held' and final.reason=='unsupported_creator_routine'
+        assert json.loads(final.decision_json)['text']=='I usually train every morning'
+        assert final.intent_id is None
+        from db.onlyfans_case_models import OfOperatorCase
+        case=s.scalar(select(OfOperatorCase).where(OfOperatorCase.account_id==ACCOUNT))
+        assert case.scope=='offer'
     store.close()
 
 
@@ -192,3 +205,24 @@ def test_negative_gaze_fact_does_not_authorise_a_positive_caption():
     d={'product_id':'p'}
     s={'products':{'p':{'assets':[{'facts':['She is looking away from the camera.']}]}}}
     assert unsupported_asset_gaze(s,d,['looking right back at you'])
+
+
+def test_approved_fact_or_explicit_privacy_preference_is_accepted_without_biography_inference():
+    line="I keep my work routine private"
+    assert not unsupported_routine({'public_facts':{'approved_privacy':line}},[line])
+    assert unsupported_routine({'public_facts':{},'internal_biography':{'job':'Content creator, Gym'}},['I work as a coach'])
+
+
+@pytest.mark.parametrize('text',["I keep where I train private.","Where I work stays private.","I keep my gym address private."])
+def test_real_identifying_location_boundaries_are_preserved(text):
+    assert not unsupported_routine({'public_facts':{},'history':[{'direction':'in','text':'Where is your gym?'}]},[text])
+
+
+def test_general_chat_is_not_treated_as_a_creator_job_or_routine_claim():
+    snap={'public_facts':{},'history':[{'direction':'in','text':'Which outfit do you like?'}]}
+    assert not unsupported_routine(snap,['It depends on the day.'])
+    assert not unsupported_routine(snap,['This is it for me.'])
+
+
+def test_genuine_location_boundary_does_not_authorise_an_appended_routine():
+    assert unsupported_routine({'public_facts':{}},['I keep where I train private and I coach clients every morning'])

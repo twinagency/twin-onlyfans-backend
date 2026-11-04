@@ -27,12 +27,41 @@ def _norm(text):
     return ' '.join(re.findall(r"[\w']+",text.replace('’',"'").lower()))
 
 
+# Missing occupational facts do not authorise a first-person privacy preference.
+# This narrow check leaves real location/family/contact boundaries alone.
+_WORK_PRIVACY=re.compile(
+    r"\b(?:keep|keeping|prefer|rather|stay|stays?)\b.{0,65}\b(?:work(?:out)?(?: life| routine| schedule)?|day\s*job|occupation|routine)\b.{0,35}\bprivate\b"
+    r"|\b(?:work(?:out)?(?: life| routine| schedule)?|day\s*job|occupation|routine)\b.{0,45}\b(?:private|off limits|not something i (?:share|discuss))\b", re.I)
+
+
+_NEGATIVE_JOB=re.compile(
+    r"\b(?:no|not|don't|do not|haven't|never)\b.{0,35}\b(?:other|another|secret|day)\s*job\b"
+    r"|\b(?:this|that|here)\s+(?:is|'s)\s+(?:it|all)\s+(?:for me|i do)\b",re.I)
+_ROUTINE_DETAIL=re.compile(
+    r"\bi\s+(?:don't|do not|never)\s+(?:have|keep|follow|stick to)\b.{0,35}\b(?:schedule|routine|set time)\b"
+    r"|\bno\s+(?:set|fixed|regular)\s+(?:schedule|routine|time)\b"
+    r"|\b(?:it\s+)?(?:just\s+)?depends on (?:the )?day\b"
+    r"|\bi (?:just )?go when i can\b"
+    r"|\bsome (?:days|weeks)\b.{0,70}\b(?:morning|evening|done|after)\b",re.I)
+
+
+_PERSONAL_TOPIC=re.compile(r"\b(?:work|job|occupation|routine|schedule|workout|work out|gym|train)\b",re.I)
+_LOCATION_BOUNDARY=re.compile(
+    r"\bkeep (?:where i (?:work|train|live)|my (?:work|gym) (?:address|location)) private\b"
+    r"|\bwhere i (?:work|train|live) (?:stays? private|is private)\b",re.I)
+
+
 def unsupported_routine(snapshot,texts):
     facts=[_norm(f) for f in _strings(snapshot.get('public_facts',{}))]
+    incoming=[m.get('text','') for m in snapshot.get('history',[]) if m.get('direction')=='in']
+    personal=bool(incoming and _PERSONAL_TOPIC.search(incoming[-1]))
     for text in texts:
         # Questions asking about the fan's routine do not make a creator claim.
         for sentence in re.split(r'[.!?;\n]+',text):
-            if _CLAIM.search(sentence):
+            sentence=_LOCATION_BOUNDARY.sub('',sentence)
+            if (_CLAIM.search(sentence) or _WORK_PRIVACY.search(sentence)
+                    or (_NEGATIVE_JOB.search(sentence) and (personal or re.search(r'\bjob\b',sentence,re.I)))
+                    or (personal and _ROUTINE_DETAIL.search(sentence))):
                 claim=_norm(sentence)
                 if not any(claim and claim in fact for fact in facts):return True
     return False

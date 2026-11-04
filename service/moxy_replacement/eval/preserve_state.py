@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from db.models import AccountAiConfig,GrokCall
 from db.schema import bootstrap
 from .. import writer,examples
-from ..runtime import configuration,validate_decision,correction_brief,WORDING_REASONS,FORMAT_REASONS
+from ..runtime import configuration,validate_decision,correction_brief,WORDING_REASONS,FORMAT_REASONS,recoverable
 from ..parts import plan
 from ..configuration import canonical,load
 from . import qualify
@@ -195,7 +195,7 @@ def run_one(ctx,case,out,filtered):
             receipt={k:getattr(call,k) for k in ('id','model','provider','endpoint','status','was_dry_run','cost_cents',
                 'tokens_in','tokens_out','cache_hit_tokens')}
         attempts.append({'raw_output':raw,'error':error,'actual_millicents':actual,'call_receipt':receipt})
-        if attempt or actual is None or reason not in WORDING_REASONS|FORMAT_REASONS:break
+        if attempt or actual is None or not (reason in FORMAT_REASONS or (reason is not None and recoverable(reason))):break
         brief=correction_brief(reason,parsed,snap) if parsed else {'kind':'format','reason':reason,'action':None,'product_id':None}
         snap=copy.deepcopy(snap)
         snap['event']['payload'].update(correction_of='replay-attempt-0',rejected=brief)

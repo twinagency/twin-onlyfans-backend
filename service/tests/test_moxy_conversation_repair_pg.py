@@ -136,11 +136,14 @@ def offer(*bubbles,media_at=-1):
 
 # ------------------------------------------------------------------ the six failure scenarios
 def scenario_clarification(r):
+    # A labelled synthetic approved fact exercises the factual correction path.
+    r.settings['public_facts']['occupation']='I work as a graphic designer'
+    r.service.configure(TENANT,ACCOUNT,expected_revision=1,mode='on',settings=r.settings,actor='fixture-operator')
     r.out('oh i know exactly what you mean, you wanna see the gym set right?')
     return {'id':'1_clarification','title':'Fan clarifies; the bot repeats its earlier interpretation','creator':'amelia',
         'turns':[r.turn('no no i meant what do you do for work, not the gym set',
             reply('oh i know exactly what you mean, you wanna see the gym set right? 😏'),
-            reply('ha my bad','i keep my work routine private, but im happy to chat here'))]}
+            reply('ha my bad','I work as a graphic designer'))]}
 
 
 def scenario_question_vs_nudge(r):
@@ -225,7 +228,7 @@ def test_clarification_is_answered_not_repeated(database,monkeypatch):
     assert fix['rejected']['kind']=='wording' and fix['rejected']['fan_message'].startswith('no no i meant what do you do for work')
     assert fix['prompt']['current_input']['text']==turn['fan']            # the writer is shown the clarification as the current input
     assert 'clarification' in fix['prompt']['situation']
-    assert [x['body'] for x in turn['sent']]==['ha my bad','i keep my work routine private, but im happy to chat here']
+    assert [x['body'] for x in turn['sent']]==['ha my bad','I work as a graphic designer']
     assert turn['final_status']=='done'
 
 

@@ -52,3 +52,9 @@ def test_shared_behavior_is_labelled_and_never_claims_amelia_voice_coverage():
 def test_neutral_input_does_not_force_unrelated_voice_examples():
  refs=examples.references('amelia',history('hey'))
  assert refs['examples']==[] and refs['creator_voice_reference_count']==0
+
+
+def test_cristina_keeps_her_own_approved_voice_without_amelia_references():
+ chosen,_=examples.select('cristina',history('How was your day at work?'))
+ assert 45 in {e['record'] for e in chosen}
+ assert not {103601,107901,6,70,170}&{e['record'] for e in chosen}

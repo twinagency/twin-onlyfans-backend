@@ -12,9 +12,10 @@ from pathlib import Path
 
 SOURCE=Path(__file__).with_name('sources')/'conversation_examples.v1.json'
 LIMIT=3
-# Held-out exchanges are excluded by default; evaluation_only is a hard exclusion.
+# Amelia evaluation_only exchanges are always excluded. Other creators retain
+# their existing approved references unless an evaluation explicitly excludes them.
 # Missing relevant creator voice never falls back to unrelated/shared voice examples.
-EXCLUDE_HELD_BACK=True
+EXCLUDE_HELD_BACK=False
 
 # Situation signals read from the fan's recent messages. Each key is also a label used by the bank.
 SIGNALS={
@@ -110,7 +111,7 @@ def _allowed(example,creator):
     return '*' in allowed or creator in allowed
 
 
-def select(creator,history=None,fan_state=None,*,exclude_held_back=True,limit=LIMIT):
+def select(creator,history=None,fan_state=None,*,exclude_held_back=False,limit=LIMIT):
     """At most limit relevant approved references; no unrelated filler.
 
     Creator fit is a hard filter: an explicit excerpt is never offered to a creator it is not listed

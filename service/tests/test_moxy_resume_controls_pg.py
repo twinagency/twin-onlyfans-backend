@@ -152,3 +152,27 @@ def test_distinct_events_for_one_fan_cannot_generate_together(database, monkeypa
     assert sum(len(m.calls) for m in models) == 1
     assert sorted(status(engine, i) for i in ids) == ['pending', 'ready']
     store.close()
+
+
+def test_configuration_cutover_retires_old_replies_and_history_waits_without_resending(database,monkeypatch):
+    from test_moxy_integrated_pg import setup,model,decision
+    from test_onlyfans_text_delivery_pg import TENANT,ACCOUNT
+    from db.onlyfans_moxy_models import MoxyEvent
+    from sqlalchemy.orm import Session
+    engine,store,service,authority,_,settings=setup(database,monkeypatch)
+    pending=service.add_event(TENANT,ACCOUNT,101,'turn','cutover-pending',{'source_message_id':1})
+    waiting=service.add_event(TENANT,ACCOUNT,101,'turn','cutover-history',{'source_message_id':1})
+    ready=service.add_event(TENANT,ACCOUNT,101,'turn','cutover-ready',{'source_message_id':1})
+    service.prepare(TENANT,ACCOUNT,ready,model(decision(text='A saved reply that must not run after cutover.')))
+    with Session(engine) as session,session.begin():
+        event=session.get(MoxyEvent,(ACCOUNT,waiting));event.status='held';event.reason='history_not_current'
+        charged=session.get(MoxyEvent,(ACCOUNT,ready)).charged_millicents
+    result=service.configure(TENANT,ACCOUNT,expected_revision=1,mode='on',settings=settings,actor='fixture-operator',discard_obsolete_replies=True)
+    assert result['revision']==2
+    with Session(engine) as session:
+        for key in [pending,waiting,ready]:
+            event=session.get(MoxyEvent,(ACCOUNT,key));assert event.status=='stale' and event.reason=='moxy_owner_changed'
+            assert event.intent_id is None
+        assert session.get(MoxyEvent,(ACCOUNT,ready)).charged_millicents==charged
+    assert service.step(TENANT,ACCOUNT,model(decision(text='Must never be used.')))==0
+    store.close()

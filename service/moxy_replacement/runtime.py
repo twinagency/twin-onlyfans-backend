@@ -696,9 +696,10 @@ class MoxyService:
         from onlyfans_runtime.text_delivery import TextAuthority
         self.store=store; self.engine=store.engine; self.authority=TextAuthority(store)
 
-    def configure(self,tenant,account,*,expected_revision,mode,settings,actor):
+    def configure(self,tenant,account,*,expected_revision,mode,settings,actor,discard_obsolete_replies=False):
         if (type(expected_revision) is not int or expected_revision<0 or type(mode) is not str
-            or mode not in {'off','preview','on'} or type(actor) is not str or not actor or len(actor)>128):raise Refused('invalid_moxy_configuration')
+            or mode not in {'off','preview','on'} or type(actor) is not str or not actor or len(actor)>128
+                or type(discard_obsolete_replies) is not bool):raise Refused('invalid_moxy_configuration')
         cfg,pa=configuration(settings)
         with Session(self.engine) as s,s.begin():
             runtime=self.store._runtime(s,tenant,account)
@@ -728,6 +729,19 @@ class MoxyService:
                 if row.moxy_event_id:
                     old=s.get(MoxyEvent,(account,row.moxy_event_id))
                     if old:old.status='stale';old.reason='moxy_owner_changed'
+            if discard_obsolete_replies:
+                # A new owner/configuration revision also retires unqueued reply
+                # drafts and pre-cutover history waits. Otherwise the next worker
+                # pass can revive an old input before the supervised fan speaks.
+                # Uncertain/generating work, paid obligations and all receipts/costs
+                # remain with their existing recovery owners.
+                obsolete=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,
+                    MoxyEvent.kind.in_(('turn','welcome')),
+                    (MoxyEvent.status.in_(('pending','ready')))|
+                    ((MoxyEvent.status=='held')&(MoxyEvent.reason=='history_not_current')&
+                     MoxyEvent.model_call_id.is_(None)))).all()
+                for event in obsolete:
+                    event.status='stale';event.reason='moxy_owner_changed';event.updated_at=utcnow()
             # Old engagement timers have no Moxy business authority. Preserve
             # their evidence, and detach them through the existing cancellation seam.
             from onlyfans_runtime.launch_engagement.service import invalidate
@@ -737,7 +751,8 @@ class MoxyService:
                     MoxyEvent.status=='held',MoxyEvent.reason=='moxy_off',MoxyEvent.model_call_id.is_(None))):
                     event.status='pending';event.reason=None
             s.add(MoxyAudit(audit_id=str(uuid.uuid4()),account_id=account,actor=actor,
-                before_json=canonical(before),after_json=canonical({'mode':mode,'revision':owner.revision,'settings':settings}),created_at=utcnow()))
+                before_json=canonical(before),after_json=canonical({'mode':mode,'revision':owner.revision,'settings':settings,
+                    **({'discard_obsolete_replies':True} if discard_obsolete_replies else {})}),created_at=utcnow()))
             return {'revision':owner.revision,'mode':mode,'readiness':ready}
 
     def fan_facts(self,tenant,account,fan,facts,*,actor,evidence_ref):

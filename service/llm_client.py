@@ -92,6 +92,10 @@ _ASSUMED_OUTPUT_TOKENS = 1024
 _MILLICENTS_PER_CENT = 100  # internal cost unit: 1 cent = 100 millicents
 _DEFAULT_CAP_CENTS = 100  # mirrors AccountAiConfig.daily_cost_cap_cents default
 _REQUEST_TIMEOUT_S = 120.0
+# Caption jobs share a bounded worker lane. HTTPX read timeouts measure
+# inactivity, so a slowly arriving response can otherwise hold it indefinitely.
+# This bounds all HTTP attempts for one caption, retaining normal audit/cap cleanup.
+_CAPTION_TOTAL_TIMEOUT_S = 180.0
 
 # Transient-failure retry for the single fire (19 §2 step 4). Every automation
 # funnels through here, and a one-shot POST turned a flaky provider into a
@@ -1110,12 +1114,26 @@ async def chat(
     # trip repeats; a permanent failure finalizes and releases exactly once,
     # below, when the attempts run out.
     data = None
+    deadline = (time.monotonic() + _CAPTION_TOTAL_TIMEOUT_S
+                if purpose == "describe_media" else None)
     for attempt in range(_LLM_MAX_ATTEMPTS):
         last = attempt + 1 >= _LLM_MAX_ATTEMPTS
         t0 = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S) as client:
-                resp = await client.post(url, headers=headers, json=body)
+                if deadline is None:
+                    resp = await client.post(url, headers=headers, json=body)
+                else:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise httpx.ReadTimeout("caption total deadline exceeded")
+                    try:
+                        resp = await asyncio.wait_for(
+                            client.post(url, headers=headers, json=body), timeout=remaining)
+                    except asyncio.TimeoutError as exc:
+                        # Translate only the inner HTTP cancellation. The call's
+                        # existing error path finalizes its receipt and reservation.
+                        raise httpx.ReadTimeout("caption total deadline exceeded") from exc
             latency_ms = int(round((time.monotonic() - t0) * 1000))
             resp.raise_for_status()
             data = resp.json()
@@ -1125,11 +1143,14 @@ async def chat(
             # e.response.text is the provider's error body (not our prompt) → safe to keep.
             snippet = (e.response.text or "")[:500]
             msg = f"{prov.name} HTTP {e.response.status_code}: {snippet}"
-            if e.response.status_code in _RETRYABLE_STATUS and not last:
+            if (e.response.status_code in _RETRYABLE_STATUS and not last
+                    and (deadline is None or time.monotonic() < deadline)):
                 log.warning("llm_client: %s HTTP %s — retry %d/%d model=%s purpose=%s",
                             prov.name, e.response.status_code, attempt + 1,
                             _LLM_MAX_ATTEMPTS, model, purpose)
-                await asyncio.sleep(_LLM_RETRY_BACKOFF_S * (attempt + 1))
+                await asyncio.sleep(min(_LLM_RETRY_BACKOFF_S * (attempt + 1),
+                    max(0.0, deadline - time.monotonic())) if deadline is not None
+                    else _LLM_RETRY_BACKOFF_S * (attempt + 1))
                 continue
             # On an error row, upgrade the receipt to carry the image-redacted
             # body: `error_text` is the PROVIDER's sentence, not ours, so this
@@ -1146,11 +1167,13 @@ async def chat(
             # ValueError = resp.json() on a non-JSON body; a re-fire may get a clean one.
             latency_ms = int(round((time.monotonic() - t0) * 1000))
             msg = f"{prov.name} request error: {type(e).__name__}: {e}"
-            if not last:
+            if not last and (deadline is None or time.monotonic() < deadline):
                 log.warning("llm_client: %s %s — retry %d/%d model=%s purpose=%s latency=%dms",
                             prov.name, type(e).__name__, attempt + 1,
                             _LLM_MAX_ATTEMPTS, model, purpose, latency_ms)
-                await asyncio.sleep(_LLM_RETRY_BACKOFF_S * (attempt + 1))
+                await asyncio.sleep(min(_LLM_RETRY_BACKOFF_S * (attempt + 1),
+                    max(0.0, deadline - time.monotonic())) if deadline is not None
+                    else _LLM_RETRY_BACKOFF_S * (attempt + 1))
                 continue
             await _finalize_call(call_id, status="error", error_text=msg[:2000],
                                  latency_ms=latency_ms,

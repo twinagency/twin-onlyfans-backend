@@ -50,6 +50,13 @@ def project(snapshot):
         if common_caption is None:
             entry['caption_instructions']=p.get('caption_instructions','')
         compact[key]=entry
+    # Keep ineligible products as discussion evidence, outside the selectable
+    # map on a product retry. No catalogue product/state is disabled or erased.
+    rejected=snapshot.get('event',{}).get('payload',{}).get('rejected') or {}
+    refused=rejected.get('product_id') if rejected.get('kind')=='product' else None
+    result['new_card_product_ids']=[k for k in compact if eligibility.get(k,'ok')=='ok' and k!=refused]
+    if refused in compact:
+        result['rejected_product_context']={'product_id':refused,**compact.pop(refused)}
     result['products']=compact
     # These hashes/revisions are wire-time integrity data, not writing instructions.
     for key in ('account_revision','binding_id','configuration_fingerprint','fan_revision','native_fingerprint'):

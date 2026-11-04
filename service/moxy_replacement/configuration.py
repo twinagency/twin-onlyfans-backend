@@ -59,6 +59,35 @@ def _rules(rules, documents):
     return result
 
 
+def _check_conditions(rule, facts):
+    for field, expected in rule['requires'].items():
+        if field not in facts or facts[field] is None:
+            raise ActionBlocked('condition_unknown:' + field)
+        if type(facts[field]) is not type(expected) or facts[field] != expected:
+            raise ActionBlocked('condition_not_met:' + field)
+
+
+def permission_context(instructions, facts, key):
+    """Resolve a writer capability from the same effective rule/conditions.
+
+    Missing status never becomes membership or spend; this projection cannot
+    authorise an action. The complete configuration is rechecked at execution.
+    """
+    rule = next((r for r in instructions.get('rules', []) if r['key'] == key), None)
+    if rule is None:
+        return {'allowed': False, 'reason': 'instruction_missing:' + key}
+    result = {'allowed': False, 'requires': deepcopy(rule['requires']),
+              'source': deepcopy(rule['source'])}
+    try:
+        _check_conditions(rule, facts)
+    except ActionBlocked as exc:
+        result['reason'] = str(exc)
+    else:
+        result['allowed'] = rule['value'] is True
+        if not result['allowed']: result['reason'] = 'instruction_refused:' + key
+    return result
+
+
 @dataclass(frozen=True)
 class Resolution:
     key: str
@@ -93,13 +122,8 @@ class CreatorConfiguration:
             rule, authority = self.common[key], 'foundation'
         else:
             raise ActionBlocked('instruction_missing:' + key)
-        for field, expected in rule['requires'].items():
-            if field not in facts or facts[field] is None:
-                raise ActionBlocked('condition_unknown:' + field)
-            if type(facts[field]) is not type(expected) or facts[field] != expected:
-                # Conditional overrides do not fall back to a less restrictive
-                # common instruction when the creator's condition is unmet.
-                raise ActionBlocked('condition_not_met:' + field)
+        # An unmet creator override never falls back to foundation permission.
+        _check_conditions(rule, facts)
         return Resolution(key, deepcopy(rule['value']), deepcopy(rule['source']), authority)
 
     def public_context(self):

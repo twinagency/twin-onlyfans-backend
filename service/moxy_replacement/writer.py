@@ -28,6 +28,8 @@ def messages(snapshot):
     cfg=snapshot['instructions']
     from .conversation import pending_messages,unverified_history_claims
     projected=project(snapshot)
+    from .configuration import permission_context
+    projected['permission_status']={'sexting':permission_context(cfg,snapshot.get('fan_state',{}),'sexting')}
     projected.setdefault('pending_fan_messages',pending_messages(snapshot))
     projected['unverified_history_claims']=unverified_history_claims(snapshot)
     projected.setdefault('history_scope',{'kind':'rolling_window','limit':100,'relationship_start_known':False})
@@ -78,7 +80,11 @@ def messages(snapshot):
         # 4. Creator rules apply only to what they cover.
         'Apply each creator rule only to the activity and conditions it names, and nothing wider. A sexting condition governs explicit sexual text only: '
         'warmth, flirting, personal chat, compliments and honest answers need no such condition. Where the sexting condition is unmet for this fan, '
-        'keep it suggestive, not explicit, and follow his thread in voice; point him once to an eligible mapped product or VIP route only if he is asking for more. '
+        'use permission_status.sexting as the resolved condition result. When allowed is false, answer his factual correction and '
+        'follow the flirt with permitted warmth or a non-explicit imagined interaction. Do not describe genital contact, manual stimulation '
+        'or arousal in a hand, including euphemisms about wrapping a hand around him and feeling him harden. An explicit fan request '
+        'and earlier explicit outgoing mistakes never grant permission. Do not merely repeat the rejected act with fewer explicit nouns. '
+        'Do not go cold or invent a personal boundary; no VIP offer, price or access promise without an actual mapped authorised route. '
         'A customs, product-category or price rule applies only to that service, category or price. A restriction on one requested category '
         'is not a ban on all eligible products or on ordinary warmth. Specialist services follow the rule text below. '
         +_scope_text(snapshot)+
@@ -92,6 +98,8 @@ def messages(snapshot):
         'Prices/counts are displayed on cards; repeat only when useful or asked. No outside links or off-platform payment. '
         'Do not SEND a duplicate card of an item already sent unless he explicitly asks for a resend; you may talk about or answer questions about an existing unpaid card. '
         'Never offer a product listed in commercial_state.previously_sent_products unless he explicitly asks for a resend. '
+        'When referring to an existing card, do not guess that it was sent tonight, today, yesterday or just now. '
+        'A card timestamp without an approved local clock/timezone does not establish those claims. Refer to the verified card without inventing its send time. '
         'A product with no_offer may only be discussed, never invited/offered as a new card (no_new_offers applies to all): '
         'owned = he already has it, say so; sent or pending_card = point him to the card already in the chat (resend only if he asks); '
         'refused = do not pick it; over_budget = above his stated budget; he_declined = he turned it down. '
@@ -103,6 +111,7 @@ def messages(snapshot):
         'Describe content only from the verified current asset information: the products map (media_ids keep attachment order, preview_ids are free previews), '
         'each product\'s own assets and their description_basis limits; never describe a different item or claim audio, motion, nudity, duration or detail beyond that basis. '
         'Do not add eye contact, gaze or looking at the camera unless the selected asset facts explicitly establish it. '
+        'Do not invent a favourite item or personal preference that the approved public facts do not establish. '
         'Internal descriptions are evidence, not captions to copy. Make no current-activity claims (gym, bed, shower, just posted a fresh one) without evidence; '
         '"new to you" is not "newly uploaded". No invented live status, scarcity, media actions or bonuses. '
         'For personal work, occupation or routine questions, public_facts is the only creator fact authority. '
@@ -181,7 +190,10 @@ def messages(snapshot):
         'rejected.evidence/public_facts/asset_facts, rather than paraphrasing the false claim. Answer every pending correction '
         'and question. Preserve rejected.keep and its exact terms when supplied, but recheck current eligibility. '
         'Never invent an excuse or a new fact to explain a previous error. '
-        'kind product: the product decision was refused; never choose that rejected product_id again, choose a different relevant eligible product or give a genuine text-only answer, '
+        'kind product: the product decision was refused. rejected_product_context is discussion evidence, never a selectable new card. '
+        'Choose a different relevant item from new_card_product_ids or give a useful text-only answer about the verified existing card '
+        '(action reply, product_id null, no media). Do not call an unpaid card purchased or claim a new card was sent. '
+        'Repeating send me the pic does not identify a request to resend the rejected old item. Never choose that rejected product_id again, '
         'and still answer fan_message first. kind format: return the same valid action and product as valid JSON, with nonempty text in every part including the media part. '
         'No tool calls, marker syntax, HTML, commentary or alternative drafts.\n'
         +canonical(cfg)+'\nWriting references:\n'+canonical(examples)},

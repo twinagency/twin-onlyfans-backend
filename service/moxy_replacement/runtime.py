@@ -639,12 +639,15 @@ def correction_brief(reason,result,snap):
         brief['guidance']='The exact last card is already in verified_purchases. Answer its ownership question directly; no unverified-payment inference or further check is needed.'
     if reason in {'media_previously_sent_requires_explicit_resend','resend_not_requested'}:
         brief['existing_cards']=[c for c in snap.get('card_state',[]) if c.get('product_id')==result.get('product_id')]
-        brief['guidance']='This item was already sent. The current request does not establish an explicit request to RESEND that same card. Never manufacture that permission, choose the refused product again, or claim it was purchased/opened. Answer about the card already waiting without sending it, or choose a different relevant offerable product.'
+        brief['new_card_product_ids']=[k for k,v in snap.get('offer_eligibility',{}).items() if v=='ok' and k!=result.get('product_id')]
+        brief['guidance']='This item was already sent. The current request does not establish an explicit request to RESEND that same card. Never manufacture that permission, choose the refused product again, or claim it was purchased/opened. Answer about the card already waiting without sending it, or choose a different relevant offerable product. Its original sent_at/at is evidence, not permission to guess a relative local time such as earlier tonight. Do not invent when it was sent.'
     if reason=='unsupported_asset_absence':
         brief['asset_facts']=[a for p in snap.get('products',{}).values() for a in p.get('assets',[])]
         brief['guidance']='Describe only the approved asset facts. Do not add negative claims such as no toys unless the facts explicitly establish them. Do not specialize a generic garment as a particular clothing type without evidence. Answer the old-card question without another card or implying purchase.'
     if reason=='sexting_permission_unverified':
-        brief['guidance']='Answer the actual correction/question first. The creator sexting conditions are not established for this fan: his explicit request does not grant VIP/spender status. Remove the explicit sexual-act description; ordinary warmth, kissing and suggestive flirting remain allowed. Keep otherwise eligible product terms unchanged.'
+        from .configuration import permission_context
+        brief['permission_status']=permission_context(snap.get('instructions',{}),snap.get('fan_state',{}),'sexting')
+        brief['guidance']='Answer both the factual correction and the flirt. Retract the unsupported relationship date without inventing a start. The resolved source permission is false: no new spend or VIP membership exists. Replace the sexual-act description with a different non-explicit interaction; do not describe manual genital contact/arousal or reuse it in euphemism. Keep warmth and creator voice, with no invented boundary, technical excuse or unmapped VIP pitch. Recheck otherwise eligible product terms.'
     if reason=='unsupported_price_units':
         brief['guidance']='The draft used internal cents as customer-facing money. Use verified price_cents divided by100 for dollars and only current offerable prices. Do not invent a cheaper item or discount.'
         brief['verified_offerable_prices']=(snap.get('commercial_state') or {}).get('cheapest_offerable_cents_by_category',{})

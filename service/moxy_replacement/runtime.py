@@ -702,6 +702,10 @@ class MoxyService:
             if busy:return event_id
             control=s.get(OfConversationState,(account,event.fan_id));policy=s.get(OfDeliveryPolicy,account)
             reason=self.authority._eligibility(s,runtime,policy,control,s.get(Fan,(account,event.fan_id)),'automated',utcnow(),action='chat')
+            if reason=='history_not_current' and event.created_at and utcnow()-event.created_at<timedelta(minutes=5):
+                # The fan's own catch-up usually lands seconds after the message. Retry the same
+                # turn shortly instead of giving up; every retry rechecks every gate from scratch.
+                event.not_before=utcnow()+timedelta(seconds=3);event.updated_at=utcnow();return event_id
             if reason:
                 if reason in {'contact_blocked','case_identity','case_distress','safety_hold'}:
                     from db.onlyfans_case_models import OfOperatorCase

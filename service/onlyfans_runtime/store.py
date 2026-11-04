@@ -498,12 +498,25 @@ class Store:
             # takeover this happens before any manual-send state can be observed.
             from . import runtime_stop
             runtime_stop.project(s, account_id, fan_id, state, utcnow())
-            # Never clear an unresolved send or takeover as a side effect of resume.
             work = s.get(OfWork, (account_id, fan_id))
             if work:
+                # Track pending work across this takeover without reviving older blocked work.
+                if action == "request_takeover" and work.status in {"waiting", "claimed"}:
+                    work.control_revision = state.revision
+                requeue = False
+                if (action == "release_takeover" and runtime.enabled and work.status == "blocked"
+                        and work.control_revision == expected_revision
+                        and not s.get(Fan, (account_id, fan_id)).is_muted):
+                    latest = s.scalar(select(Message).where(
+                        Message.account_id == account_id, Message.fan_id == fan_id
+                    ).order_by(Message.created_at.desc(), Message.message_id.desc()).limit(1))
+                    requeue = (latest is not None and latest.direction == "in" and not latest.is_unsent
+                               and latest.message_id == work.target_message_id)
                 work.generation += 1
-                work.status = "blocked"
+                work.status = "waiting" if requeue else "blocked"
                 work.lease_token = work.lease_until = None
+                if requeue:
+                    work.control_revision = state.revision
             s.add(OfControlAudit(account_id=account_id, command_key=command_key, fan_id=fan_id, mode=mode,
                                  previous_revision=expected_revision, revision=state.revision, actor=actor,
                                  reason=reason, consent_ref=consent_ref, action=action,
@@ -631,6 +644,9 @@ class Store:
             return
         previous = state.revision
         state.takeover_state, state.revision, state.updated_at = "effective", previous + 1, utcnow()
+        work = s.get(OfWork, (account_id, fan_id))
+        if work is not None and work.status == "blocked" and work.control_revision == previous:
+            work.control_revision = state.revision
         key = hashlib.sha256(f"takeover-effective:{account_id}:{fan_id}:{previous}".encode()).hexdigest()
         s.add(OfControlAudit(account_id=account_id, command_key=key, fan_id=fan_id, mode=state.mode,
             previous_revision=previous, revision=state.revision, actor="delivery-authority",

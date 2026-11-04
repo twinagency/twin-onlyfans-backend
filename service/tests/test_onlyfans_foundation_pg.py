@@ -603,3 +603,46 @@ def test_supported_populated_0064_upgrade_preserves_identity(database):
     with Session(engine) as s:
         assert s.get(Account,"retained-0064").nickname=="Existing account"
         assert s.get(OfRuntime,"retained-0064") is None
+
+
+@pytest.mark.parametrize("scenario", ["waiting", "claimed", "during", "answered", "older_block"])
+def test_handback_requeues_only_unanswered_takeover_work(database, scenario):
+    url, engine = database
+    store = seed(url, engine)
+
+    def ingest(message):
+        store.record("tenant-a", "acc-a", message)
+        assert store.drain("tenant-a", "acc-a") == 1
+
+    def control(action, mode, revision):
+        return store.control(
+            "tenant-a", "acc-a", 101, mode=mode, expected_revision=revision,
+            command_key=action, actor="operator", reason="Synthetic handover", action=action,
+        )
+
+    if scenario != "during":
+        ingest(event())
+        due(engine)
+    if scenario == "claimed":
+        assert store.claim("tenant-a").target_message_id == 1
+    if scenario == "older_block":
+        with Session(engine) as s, s.begin():
+            s.get(OfWork, ("acc-a", 101)).status = "blocked"
+
+    assert control("request_takeover", "human_controlled", 0) == 1
+    assert store.claim("tenant-a") is None
+    if scenario == "during":
+        ingest(event())
+    if scenario == "answered":
+        ingest(Event(101, 2, datetime.now(timezone.utc).isoformat(), "out", "Human answered"))
+
+    assert control("release_takeover", "automated", 1) == 2
+    assert control("release_takeover", "automated", 1) == 2
+    due(engine)
+    claim = store.claim("tenant-a")
+    if scenario in {"waiting", "claimed", "during"}:
+        assert claim.target_message_id == 1
+        assert claim.control_revision == 2
+    else:
+        assert claim is None
+    store.close()

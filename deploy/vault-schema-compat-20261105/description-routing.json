@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "vault-description-routing.v1",
+  "recordedDate": "2026-11-05",
+  "status": "routing_applied_caption_deadline_followup_in_progress",
+  "releaseDirectory": "/var/lib/twin-release/vault-system-rollout-20261105",
+  "scope": "Automatic vault descriptions and verified folder evidence",
+  "mainWorker": {
+    "container": "twin-onlyfans-worker-1",
+    "imageAliasAtRoutingChange": "twin-repair:vault-system-main-20261105",
+    "includeAccounts": ["of-312988353", "of-63665785"],
+    "excludeAccounts": ["of-312988353", "of-63665785"],
+    "effect": "Main v2 description work is disabled for Amelia and Cristina; their other runtime responsibilities remain unchanged."
+  },
+  "genericVerifiedDescriptionWorker": {
+    "container": "twin-vault-descriptions",
+    "imageAliasAtRoutingChange": "twin-repair:vault-system-legacy-schema-20261105",
+    "includeAccounts": [],
+    "excludeAccounts": ["of-87030857", "of-210806616", "of-176774528", "of-323358988"],
+    "descriptionVersion": "v3",
+    "emptyIncludeMeaning": "All eligible verified creator accounts in the existing tenant, including future connected accounts, subject to exclusions and their existing auto-describe settings.",
+    "restoredAccounts": ["of-312988353", "of-63665785"],
+    "purpose": "Amelia and Cristina receive the existing verified visual-evidence pipeline without competing v2 description batches."
+  },
+  "dedicatedWorkers": [
+    {"container": "twin-vault-descriptions-alva", "accountId": "of-87030857", "imageAliasAtRoutingChange": "twin-repair:vault-system-legacy-schema-20261105"},
+    {"container": "twin-vault-descriptions-maile", "accountId": "of-323358988", "imageAliasAtRoutingChange": "twin-repair:vault-system-legacy-schema-20261105"},
+    {"container": "twin-vault-descriptions-katie", "accountId": "of-210806616", "imageAliasAtRoutingChange": "twin-repair:vault-system-legacy-schema-20261105"}
+  ],
+  "inactiveDefinition": {
+    "creator": "Nicky",
+    "accountId": "of-176774528",
+    "imageAliasAtRoutingChange": "twin-repair:vault-system-legacy-schema-20261105",
+    "definitionUpdated": true,
+    "started": false
+  },
+  "preservedControls": ["AI reply enablement", "connection controls", "per-account settings", "verified evidence requirements"],
+  "validationReportedByReleaseOwner": {
+    "currentSchemaPostgreSQLTestsPassed": 16,
+    "mainPostgreSQLTestsPassed": 7,
+    "safeErrorLabelTestsPassed": 10,
+    "dashboardCommits": ["ab5ee52a", "82b15531"]
+  },
+  "followup": {
+    "captionDeadline": "in_progress",
+    "imageReferences": "These aliases document the routing change, not a declaration that the final image is unchanged. Record any subsequent deadline-fix image and its validation in separate release evidence."
+  }
+}

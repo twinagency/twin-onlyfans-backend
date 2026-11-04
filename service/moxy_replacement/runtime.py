@@ -638,9 +638,12 @@ def correction_brief(reason,result,snap):
         brief['verified_last_offer']=(snap.get('commercial_state') or {}).get('last_offer')
         brief['guidance']='The exact last card is already in verified_purchases. Answer its ownership question directly; no unverified-payment inference or further check is needed.'
     if reason in {'media_previously_sent_requires_explicit_resend','resend_not_requested'}:
-        brief['existing_cards']=[c for c in snap.get('card_state',[]) if c.get('product_id')==result.get('product_id')]
+        brief['existing_cards']=[{**{k:c.get(k) for k in ('id','product_id','at','paid','price_cents')},
+            'historical_caption_claims':c.get('text'),
+            'verified_assets':snap.get('products',{}).get(c.get('product_id'),{}).get('assets',[])}
+            for c in snap.get('card_state',[]) if c.get('product_id')==result.get('product_id')]
         brief['new_card_product_ids']=[k for k,v in snap.get('offer_eligibility',{}).items() if v=='ok' and k!=result.get('product_id')]
-        brief['guidance']='This item was already sent. The current request does not establish an explicit request to RESEND that same card. Never manufacture that permission, choose the refused product again, or claim it was purchased/opened. Answer about the card already waiting without sending it, or choose a different relevant offerable product. Its original sent_at/at is evidence, not permission to guess a relative local time such as earlier tonight. Do not invent when it was sent.'
+        brief['guidance']='This item was already sent. The current request does not establish an explicit request to RESEND that same card. Never manufacture that permission, choose the refused product again, or claim it was purchased/opened. Answer about the card already waiting without sending it, or choose a different relevant offerable product. Its original sent_at/at is evidence, not permission to guess a relative local time such as earlier tonight. Do not invent when it was sent. This turn has no authority to send another copy, but that is an internal action check: do not tell him I cannot resend or invent a blanket creator/platform ban. The verified_assets of that exact existing card are the only content authority; historical_caption_claims are what was said, not proof of its pose or contents. Do not borrow another product description. He asked to receive a photo, not for a new description of an old one: when discussing the existing card, answer that actual request without adding unasked-for pose details. A different fresh eligible offer may instead fulfil the request using its own facts. A later explicit resend request can still be revalidated.'
     if reason=='unsupported_asset_absence':
         brief['asset_facts']=[a for p in snap.get('products',{}).values() for a in p.get('assets',[])]
         brief['guidance']='Describe only the approved asset facts. Do not add negative claims such as no toys unless the facts explicitly establish them. Do not specialize a generic garment as a particular clothing type without evidence. Answer the old-card question without another card or implying purchase.'
@@ -670,6 +673,12 @@ def correction_brief(reason,result,snap):
                 brief['keep_terms']={k:item[k] for k in ('price_cents','media_ids','preview_ids')}
     else:
         brief.update(kind='product',action=result['action'],product_id=result['product_id'])
+        # Product eligibility is checked before wording. The one corrective
+        # invocation must see both defects; fixing the item cannot spend a
+        # second retry merely to discover an already-evident repeated pitch.
+        brief['avoid']=[p['text'][:300] for p in _plan(result)][:4]
+        secondary=wording_problem(snap,result)
+        if secondary:brief['secondary_rejection']=secondary
     return brief
 
 

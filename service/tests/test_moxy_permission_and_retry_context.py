@@ -54,3 +54,29 @@ def test_factual_retry_keeps_valid_selected_product_in_context():
  assert 'rejected_product_context' not in out
  assert out['products']['old']['media_ids']==[100]
  assert out['event']['payload']['rejected']['keep']['product_id']=='old'
+
+
+@pytest.mark.parametrize('text,question,secondary',[
+ ("this is the closest I've got",'Send me a photo.','repeated_recent_phrase'),
+ ('Another approved angle.','Send me a photo.',None),
+ ('It costs $75.','Please repeat that price.',None),
+])
+def test_product_retry_includes_independent_wording_problem_in_its_single_correction(text,question,secondary):
+ from moxy_replacement.runtime import correction_brief
+ from test_moxy_integrated_pg import decision
+ snap=scene();snap['history']=[{'id':1,'direction':'out','text':"Here, this is the closest I've got. It costs $75."},
+  {'id':2,'direction':'in','text':question}]
+ snap['pending_fan_messages']=[snap['history'][-1]]
+ snap['event']['payload']={}
+ d=decision('offer',text,'old',messages=[{'text':text,'media':True}])
+ before=deepcopy(snap)
+ brief=correction_brief('media_previously_sent_requires_explicit_resend',d,snap)
+ assert brief['reason']=='media_previously_sent_requires_explicit_resend'
+ assert brief.get('secondary_rejection')==secondary
+ assert brief['kind']=='product' and brief['product_id']=='old' and 'keep' not in brief
+ assert brief['avoid']==[text]
+ assert brief['existing_cards'][0]['id']==9001
+ assert brief['existing_cards'][0]['paid'] is False
+ assert brief['existing_cards'][0]['verified_assets']==snap['products']['old']['assets']
+ assert 'text' not in brief['existing_cards'][0]
+ assert snap==before

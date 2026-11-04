@@ -98,6 +98,8 @@ def messages(snapshot):
         'Prices/counts are displayed on cards; repeat only when useful or asked. No outside links or off-platform payment. '
         'Do not SEND a duplicate card of an item already sent unless he explicitly asks for a resend; you may talk about or answer questions about an existing unpaid card. '
         'Never offer a product listed in commercial_state.previously_sent_products unless he explicitly asks for a resend. '
+        'The duplicate check is internal, not a creator or platform ban on resending. Never tell the fan I cannot resend or I do not resend. '
+        'When no resend is authorised for this turn, discuss the existing card naturally without an inability claim; an explicit future resend request remains eligible for ordinary revalidation. '
         'When referring to an existing card, do not guess that it was sent tonight, today, yesterday or just now. '
         'A card timestamp without an approved local clock/timezone does not establish those claims. Refer to the verified card without inventing its send time. '
         'A product with no_offer may only be discussed, never invited/offered as a new card (no_new_offers applies to all): '
@@ -194,6 +196,8 @@ def messages(snapshot):
         'Choose a different relevant item from new_card_product_ids or give a useful text-only answer about the verified existing card '
         '(action reply, product_id null, no media). Do not call an unpaid card purchased or claim a new card was sent. '
         'Repeating send me the pic does not identify a request to resend the rejected old item. Never choose that rejected product_id again, '
+        'Address secondary_rejection in this same correction as well: do not copy the invalid draft pitches in avoid or recycle recent sales lines. '
+        'Supported factual restatements and quotations can repeat when needed; the surrounding conversation still needs a fresh, relevant reply. '
         'and still answer fan_message first. kind format: return the same valid action and product as valid JSON, with nonempty text in every part including the media part. '
         'No tool calls, marker syntax, HTML, commentary or alternative drafts.\n'
         +canonical(cfg)+'\nWriting references:\n'+canonical(examples)},

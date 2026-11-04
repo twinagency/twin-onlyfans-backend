@@ -48,11 +48,37 @@ RELEASE_CONTROLS = "0097_release_controls"
 LEDGER_EXCLUSION = "0098_ledger_exclusion"
 FAN_IDENTITY_SYNC = "0099_fan_identity_sync"
 MANUAL_MEDIA = "0100_manual_free_media"
-HEAD = MANUAL_MEDIA
+CONTEXTUAL_OFFERS = "0101_contextual_offers"
+DAILY_SEND_CAP = "0102_daily_send_cap"
+CONCURRENT_DELIVERY = "0103_concurrent_delivery"
+CONTEXTUAL_ITEM_SCOPE = "0104_contextual_item_scope"
+OPERATOR_CASES = "0105_operator_cases"
+READ_LANE_FAIRNESS = "0106_read_lane_fairness"
+ACTIVE_SELLING_QUOTE = "0107_active_selling_quote"
+COMMERCIAL_PROGRESS = "0108_commercial_progress"
+EARNINGS_TOTALS = "0105_earnings_totals"
+PARALLEL_HISTORY = "0106_parallel_history_reads"
+HISTORY_RELEASE_MERGE = "0109_history_release_merge"
+RECENT_HISTORY = "0110_recent_history"
+MOXY = '0111_moxy_owner'
+HEAD = MOXY
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
 REVISION_RANK[MANUAL_MEDIA] = 100
+REVISION_RANK[CONTEXTUAL_OFFERS] = 101
+REVISION_RANK[DAILY_SEND_CAP] = 102
+REVISION_RANK[CONCURRENT_DELIVERY] = 103
+REVISION_RANK[CONTEXTUAL_ITEM_SCOPE] = 104
+REVISION_RANK[OPERATOR_CASES] = 105
+REVISION_RANK[READ_LANE_FAIRNESS] = 106
+REVISION_RANK[ACTIVE_SELLING_QUOTE] = 107
+REVISION_RANK[COMMERCIAL_PROGRESS] = 108
+REVISION_RANK[EARNINGS_TOTALS] = 105
+REVISION_RANK[PARALLEL_HISTORY] = 106
+REVISION_RANK[HISTORY_RELEASE_MERGE] = 109
+REVISION_RANK[RECENT_HISTORY] = 110
+REVISION_RANK[MOXY] = 111
 
 
 class SchemaMismatch(RuntimeError):
@@ -61,6 +87,7 @@ class SchemaMismatch(RuntimeError):
 
 def _metadata():
     from .models import Base
+    from . import onlyfans_moxy_models
     from . import onlyfans_models  # noqa: F401 — register current tables
     from . import onlyfans_delivery_models  # noqa: F401 — register current tables
     from . import onlyfans_campaign_models,onlyfans_connection_models,onlyfans_content_models  # noqa: F401
@@ -71,6 +98,12 @@ def _metadata():
     from . import onlyfans_content_sync_progress_models  # noqa: F401
     from onlyfans_runtime import launch_operations_models  # noqa: F401
     from onlyfans_runtime.launch_ledger import models as _ledger_retry_models  # noqa: F401
+    from . import onlyfans_contextual_models  # noqa: F401
+    from . import onlyfans_case_models  # noqa: F401
+    from . import onlyfans_substitution_models  # noqa: F401
+    from . import onlyfans_sales_models  # noqa: F401
+    from . import onlyfans_earnings_total_models  # noqa: F401
+    from onlyfans_runtime import history_telemetry, history_policy  # noqa: F401
     return Base.metadata
 
 
@@ -118,15 +151,25 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
     tables = set(inspector.get_table_names())
     failures = []
     expected_rank = REVISION_RANK[expected]
+    # These two valid release lines use overlapping numeric prefixes.
+    # Membership must follow Alembic ancestry, not just numeric rank.
+    from alembic.script import ScriptDirectory
+    ancestors = {r.revision for r in ScriptDirectory.from_config(_config(conn)).iterate_revisions(expected, "base")}
+    def since_rank(item, *, fallback=0):
+        since = item.info.get("onlyfans_since")
+        return 10**9 if since and since not in ancestors else _since_rank(item, fallback=fallback)
+    def table_rank(table):
+        since = table.info.get("onlyfans_since")
+        return 10**9 if since and since not in ancestors else _table_rank(table)
     for table in _metadata().sorted_tables:
-        if _table_rank(table) > expected_rank:
+        if table_rank(table) > expected_rank:
             continue
         if table.name not in tables:
             failures.append(f"missing table {table.name}")
             continue
         actual = {c["name"]: c for c in inspector.get_columns(table.name)}
         for column in table.columns:
-            if _since_rank(column) > expected_rank:
+            if since_rank(column) > expected_rank:
                 continue
             other = actual.get(column.name)
             if other is None or other["type"]._type_affinity != column.type._type_affinity:
@@ -138,7 +181,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             failures.append(f"incompatible key {table.name}")
         indexes = {i["name"]: i for i in inspector.get_indexes(table.name)}
         for index in table.indexes:
-            if _since_rank(index) > expected_rank or any(_since_rank(c) > expected_rank for c in index.columns):
+            if since_rank(index) > expected_rank or any(since_rank(c) > expected_rank for c in index.columns):
                 continue
             other = indexes.get(index.name)
             if other is None or other["unique"] != bool(index.unique) or other["column_names"] != [c.name for c in index.columns]:
@@ -150,20 +193,20 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                     failures.append(f"incompatible predicate {index.name}")
         actual_fks = {(tuple(f["constrained_columns"]), f["referred_table"], tuple(f["referred_columns"])) for f in inspector.get_foreign_keys(table.name)}
         for fk in table.foreign_key_constraints:
-            if any(_since_rank(c) > expected_rank for c in fk.columns):
+            if any(since_rank(c) > expected_rank for c in fk.columns):
                 continue
             signature = (tuple(c.name for c in fk.columns), fk.referred_table.name, tuple(e.column.name for e in fk.elements))
             if signature not in actual_fks:
                 failures.append(f"missing foreign key {table.name}")
         actual_uniques = {tuple(c["column_names"]) for c in inspector.get_unique_constraints(table.name)}
         for constraint in table.constraints:
-            if constraint.__class__.__name__ == "UniqueConstraint" and _since_rank(constraint) <= expected_rank and all(_since_rank(c) <= expected_rank for c in constraint.columns):
+            if constraint.__class__.__name__ == "UniqueConstraint" and since_rank(constraint) <= expected_rank and all(since_rank(c) <= expected_rank for c in constraint.columns):
                 if tuple(c.name for c in constraint.columns) not in actual_uniques:
                     failures.append(f"missing unique constraint {table.name}")
         if table.name == "of_content_sync_conflict" and 89 <= expected_rank < 91:
             if ("account_id", "item_id", "observation_id") not in actual_uniques:
                 failures.append("missing historical unique constraint of_content_sync_conflict")
-        expected_checks = {c.name for c in table.constraints if c.__class__.__name__ == "CheckConstraint" and c.name and _since_rank(c) <= expected_rank}
+        expected_checks = {c.name for c in table.constraints if c.__class__.__name__ == "CheckConstraint" and c.name and since_rank(c) <= expected_rank}
         actual_checks = {c["name"] for c in inspector.get_check_constraints(table.name)}
         if not expected_checks.issubset(actual_checks):
             failures.append(f"missing check constraint {table.name}")

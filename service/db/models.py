@@ -345,6 +345,9 @@ class Fan(Base):
 
     # ── Sync provenance ──────────────────────────────────────
     profile_last_synced_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Provider display lookup attempts are distinct from a successful profile.
+    of_profile_checked_at: Mapped[datetime | None] = mapped_column(DateTime, info={"onlyfans_since": "0099_fan_identity_sync"})
+    of_profile_error: Mapped[str | None] = mapped_column(String(40), info={"onlyfans_since": "0099_fan_identity_sync"})
     grok_facts_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     # ── Notes (may be written back to OF via apply_profiles) ─
@@ -1943,6 +1946,13 @@ class ContentOffer(Base):
     tips_accum_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     post_buy_started_at: Mapped[datetime | None] = mapped_column(DateTime, info={"onlyfans_since":"0094_purchase_reply"})
     delivery_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    # R6: the canonical quote lives on this one record (no second ledger). quote_json holds assets+versions,
+    # discount decision, budget, route and the lifecycle history; the scalar columns are the queryable parts.
+    quote_json: Mapped[str | None] = mapped_column(Text, info={"onlyfans_since": "0107_active_selling_quote"})
+    currency: Mapped[str | None] = mapped_column(String(3), info={"onlyfans_since": "0107_active_selling_quote"})
+    obligation_id: Mapped[str | None] = mapped_column(String(64), info={"onlyfans_since": "0107_active_selling_quote"})
+    lifecycle: Mapped[str | None] = mapped_column(String(24), info={"onlyfans_since": "0107_active_selling_quote"})
+    quote_version: Mapped[int | None] = mapped_column(Integer, info={"onlyfans_since": "0107_active_selling_quote"})
     offered_at: Mapped[datetime] = _ts_now()
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = _ts_now()
@@ -1950,6 +1960,11 @@ class ContentOffer(Base):
     __table_args__ = (
         # The watcher's hot path: the open offer for (account, fan).
         Index("ix_content_offers_open", "account_id", "fan_id", "status"),
+        # R6: one payment obligation is requested at most once while it is still unresolved.
+        Index("uq_content_offers_obligation", "account_id", "obligation_id", unique=True,
+              postgresql_where=text("obligation_id IS NOT NULL AND status IN ('open','unlocked')"),
+              sqlite_where=text("obligation_id IS NOT NULL AND status IN ('open','unlocked')"),
+              info={"onlyfans_since": "0107_active_selling_quote"}),
         # Conversion stats per item ("which content actually sells").
         Index("ix_content_offers_item", "account_id", "item_id", "offered_at"),
     )
@@ -3365,6 +3380,11 @@ class OfConversationState(Base):
     #: an unresolved attempt blocks conflicting sends regardless of mode, and
     #: resuming replies must not erase it.
     unresolved_attempt_id: Mapped[str | None] = mapped_column(String)
+    # R5 progress belongs to this conversation's existing ownership authority.
+    # No inactivity TTL: invitations, holds and unfinished attempts survive restarts.
+    commercial_state_json: Mapped[str | None] = mapped_column(
+        Text, info={"onlyfans_since": "0108_commercial_progress"}
+    )
     requires_attention: Mapped[bool] = mapped_column(
         # `false()` rather than `text("0")`: on PostgreSQL a boolean column with
         # a default of integer 0 is rejected outright ("column ... is of type

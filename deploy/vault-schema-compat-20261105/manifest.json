@@ -1,0 +1,59 @@
+{
+  "images": {
+    "source": "twin-repair:vault-system-main-20261105",
+    "base": "twin-repair:vault-system-legacy-20261105",
+    "candidate": "twin-repair:vault-system-legacy-schema-20261105"
+  },
+  "imageIds": {
+    "source": "sha256:e5f09254414516aea9b85f0c8085050733a7161a5bb5f5fd179d774e19708e17",
+    "base": "sha256:3fda71b4af22bf6c847184994d93a147e12a8ede07a4c6c223fa300488aab4dd",
+    "candidate": "sha256:5f6e4c895ad1cea4b8a08c19b5b294b20a4f074887ec9f5f2d119605fb6193cf"
+  },
+  "schemaHead": "0111_moxy_owner",
+  "metadataTables": 166,
+  "metadataContractSha256": "d85fabba70e0fae5283509049e063f71c5ca7f49b053538442b306e0837a0c0d",
+  "preserved": [
+    "db/engine.py",
+    "vault description v3 behavior",
+    "task-local model authority",
+    "photo concurrency",
+    "worker account settings"
+  ],
+  "changedFiles": {
+    "db/migrations/versions/20261030_0100_contextual_offers.py": "ea4d1094574be9b9133045192fd652975b977e5e779c97a251ed97c73bc7f16a",
+    "db/migrations/versions/20261031_0100_daily_send_cap.py": "ec56ab3a447785f1055528da092ffc23c2c5e4e90aada88bfc6b697dbc30fa74",
+    "db/migrations/versions/20261031_0200_concurrent_delivery.py": "1d16ca890dbafbf47960648d396db165b5d200ee38d91ac5bd99a5c16f825625",
+    "db/migrations/versions/20261101_0100_contextual_item_scope.py": "d94d418a2b8b9e6f98acc2de062f688425f1913356351ddcd55292b429f8a4aa",
+    "db/migrations/versions/20261101_0200_earnings_totals.py": "618eb07dd0b82f2353be82590eb106911ee2ce864cc137e053090cdf1a29f939",
+    "db/migrations/versions/20261101_0200_operator_cases.py": "f513634fcb1f5ba5ee683ce25be497a07b50a44062292409c158d551ee4ed6e0",
+    "db/migrations/versions/20261101_0200_parallel_history_reads.py": "cc0e1f6bf8baa7a01f70c45cb8ba3ea6765fe66915e8647c1df7ee2d9ba703cd",
+    "db/migrations/versions/20261101_0300_read_lane_fairness.py": "0281abe7e1e66ea98c0cbc9dbb4d418c073be7a5487192e1d2eb6c719b4ef092",
+    "db/migrations/versions/20261101_0400_active_selling_quote.py": "62816e7876fc421a7cafdcf2de46a46e520c4ab957d8a577f512689341a7922c",
+    "db/migrations/versions/20261102_0100_commercial_progress.py": "73a3f634981f6756cdafa3083adb7d7c032fc7a6e1c55df4b406296a3dfb6e03",
+    "db/migrations/versions/20261102_0200_merge_history_release.py": "1b88414061c87b56a080ac663ad6934190f17ffc8f4ddef0354e8ef5486897a4",
+    "db/migrations/versions/20261102_0300_recent_history.py": "c52f5880f77ebff6e4cfd214367dc21ded2d8a26b5016c1066f9fa70133fd153",
+    "db/migrations/versions/20261102_0400_moxy_owner.py": "b2119bf32cd2265081b4772a70447fe074bd55705c01e9f354359cfef8416b3b",
+    "db/models.py": "f4dbbc0ac349d14f16c9ce431dd407cda25ee17c0516744b5f51a0f540298bd4",
+    "db/onlyfans_case_models.py": "69987298ebc3f9e8d3967fdeb928cc808a7a0637104e925ef01c18d89f719dfa",
+    "db/onlyfans_content_sync_progress_models.py": "0afd726f18d3e1db326af1eb2d5a6406da9fe15e0508b338aed86c1624d7176a",
+    "db/onlyfans_contextual_models.py": "c294ed7869af2bb4ff8e8a3425ccc904addbfb1437727807ccec8f07ca56d93c",
+    "db/onlyfans_delivery_models.py": "4750b40906c756e8eaccf472d656372e5a4514748a14375080380c89f944dc70",
+    "db/onlyfans_earnings_total_models.py": "b8fad6a275943cf02bab73a5075fe2e5ee6beedb0cd1f6493458f92b8e037a06",
+    "db/onlyfans_moxy_models.py": "e8585f7d28b1246a09f7b14fbe1304f29881369649cea29ab494315f36ff7363",
+    "db/onlyfans_pilot_models.py": "4971936ec392411fc5596ce7b32a65affbf3e9bae94160269678087047429143",
+    "db/onlyfans_sales_models.py": "349e2dc81ca50721705eec974b8f8fa5eb7907a08bd19394789a57393572f549",
+    "db/onlyfans_substitution_models.py": "1713fe6934d401a2f9ebbdc0a2d59dacee35ff3abe0fede2548e3d392aa17b25",
+    "db/schema.py": "4ff68d9dcd2c65eddc9f04e914bdca3d8a7286cae5caa77fbecb52a90345fd09",
+    "onlyfans_runtime/history_policy.py": "933928b78082f2a5f36e3d4f235e1d583a7fa58afae12d892a7560a0fd7ee29e",
+    "onlyfans_runtime/history_telemetry.py": "161ca8615ceedd447c70e84e9954cf42f1ee44e59e3f3df0b8c037cd5e10b163",
+    "onlyfans_runtime/launch_history_memory/recovery.py": "d4fe1eafc3077b161b23f2e2750ebd4039aeddc5a665ce1babc1cdceac1554de",
+    "onlyfans_runtime/read_failures.py": "49d9fcffd43977568ec3a415c66e78283a51463ab87609848f77b502a19a1e90"
+  },
+  "evidence": {
+    "readOnlySchemaCheck": "27b891c4-0886-45c5-8e64-6665cd709146",
+    "metadataComparison": "de9e3b43-6add-4307-a192-5143d2b4c59e",
+    "liveDatabaseModified": false
+  },
+  "copiedFileCount": 166,
+  "copiedInventorySha256": "1a25f066e9393d76a8d8452335ae0b3464e4a133c64219baba9f631e24205390"
+}

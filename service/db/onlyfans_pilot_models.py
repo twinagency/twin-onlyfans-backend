@@ -1,11 +1,11 @@
 """Native FASTT pilot storage: Twin bridge control tables, writer markers, admission ledger.
 
-These nine tables (plus the runner-owned ``native_pilot_followups`` queue) are what ``native_pilot.ledger`` and ``twin_bridge.coordination`` read
-and write. They are deliberately NOT part of the application's shared metadata
-(``db.models.Base``), its alembic chain or ``db.schema.check_schema``: the live
-application schema stays at revision 0091 so the currently deployed api/worker images
-(which require exactly 0091 and only complain about MISSING tables) still start and
-rollback stays possible.
+These runtime tables (plus the runner-owned ``native_pilot_followups`` queue) are what
+``native_pilot.ledger`` and ``twin_bridge.coordination`` read and write. They are
+deliberately NOT part of the application's shared metadata (``db.models.Base``), its
+Alembic chain or ``db.schema.check_schema``. They are created additively by the
+runner/control/bridge entry points, so an older API/worker image can still start during
+a rolling deployment and the application schema remains independently versioned.
 
 * PostgreSQL: the tables live in their own schema, ``fastt_runtime``. ``ensure_tables``
   creates the schema and the tables idempotently (called by the pilot runner / control /
@@ -399,3 +399,118 @@ class NativePilotReceipt(Base):
     evidence_json = Column(Text)
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
+
+
+class EngineRunnerLease(Base):
+    """One live FASTT engine process per OnlyFans account (additive; engine v2).
+
+    ``expires_at`` is a naive-UTC ISO text the engine compares lexically, like the other runtime
+    tables. A crashed process simply stops renewing; the next starter takes the lease over once it
+    has expired (``generation`` increases on every takeover). No fan-level authority lives here:
+    the per-fan pilot lease and conversation owner token stay the send authority.
+    """
+    __tablename__ = "engine_runner_lease"
+    account_id = Column(String, primary_key=True)
+    owner_token = Column(String, nullable=False)
+    holder = Column(String, nullable=False)
+    generation = Column(Integer, nullable=False, server_default=text("1"))
+    acquired_at = Column(String, nullable=False)
+    heartbeat_at = Column(String, nullable=False)
+    expires_at = Column(String, nullable=False)
+
+
+class EngineWork(Base):
+    """Read model of what the engine is doing per fan, with an explicit reason (additive; engine v2).
+
+    Not an authority: the ledger (native_pilot_inputs / receipts) decides what may be sent. This
+    table only makes waiting visible: ``state`` is one of waiting, quiet, preparing, sending,
+    held, blocked; ``reason`` is a fixed public reason string; ``waiting_since`` is when the
+    oldest unanswered fan message of the current burst was ingested. A row is deleted when the fan
+    is answered or no longer waiting.
+    """
+    __tablename__ = "engine_work"
+    __table_args__ = (Index("ix_engine_work_account_state", "account_id", "state"),)
+    account_id = Column(String, primary_key=True)
+    fan_id = Column(BigInteger, primary_key=True)
+    state = Column(String, nullable=False)
+    reason = Column(String)
+    message_id = Column(BigInteger)
+    waiting_since = Column(String)
+    state_since = Column(String, nullable=False)
+    attempts = Column(Integer, nullable=False, server_default=text("0"))
+    updated_at = Column(String, nullable=False)
+
+
+class EngineAlert(Base):
+    """A durable, operator-visible condition on one account (additive; throughput work).
+
+    ``kind`` is a fixed public code: ``provider-throttle`` (the provider answered a send with HTTP 429; the account's send
+    gap was returned to the 20 s default and nothing lowers it again by itself) or ``send-stall`` (queued replies whose
+    oldest has waited past the threshold while nothing was sent). One row per (account, kind): ``count`` grows while the
+    condition repeats, ``state`` is ``open`` or ``cleared``. Not an authority; deleting a row changes no send decision.
+    """
+    __tablename__ = "engine_alert"
+    account_id = Column(String, primary_key=True)
+    kind = Column(String, primary_key=True)
+    state = Column(String, nullable=False)
+    first_at = Column(String, nullable=False)
+    last_at = Column(String, nullable=False)
+    count = Column(Integer, nullable=False, server_default=text("1"))
+    detail_json = Column(Text)
+
+
+class EngineConversationLease(Base):
+    """Durable send ownership for ONE fan conversation (additive; concurrent delivery).
+
+    ``(tenant_id, account_id, fan_id)`` is the ownership key, so two workers can never
+    advance the same reply sequence while different fans proceed independently. ``holder``
+    is the conversation owner token (or the text intent id for the shared text path).
+    ``state`` is held, released or unresolved; an unresolved row keeps the conversation
+    closed until receipt reconciliation, but it does not occupy an account send slot.
+    """
+    __tablename__ = "engine_conversation_lease"
+    tenant_id = Column(String, primary_key=True)
+    account_id = Column(String, primary_key=True)
+    fan_id = Column(BigInteger, primary_key=True)
+    holder = Column(String, nullable=False)
+    owner_token = Column(String, nullable=False)
+    attempt_id = Column(String)
+    state = Column(String, nullable=False)
+    acquired_at = Column(String, nullable=False)
+    heartbeat_at = Column(String, nullable=False)
+    expires_at = Column(String, nullable=False)
+    next_send_at = Column(String)
+    updated_at = Column(String, nullable=False)
+
+
+class EngineDispatchSlot(Base):
+    """One in-flight provider request counted against the account concurrency limit.
+
+    Rows are released when the attempt settles. A crashed holder stops counting once
+    ``expires_at`` passes, while the durable send attempt remains unresolved, so a dead
+    worker can never permanently consume capacity or cause a resend.
+    """
+    __tablename__ = "engine_dispatch_slot"
+    __table_args__ = (Index("ix_engine_dispatch_slot_account", "account_id", "state", "expires_at"),)
+    slot_id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    account_id = Column(String, nullable=False)
+    fan_id = Column(BigInteger, nullable=False)
+    attempt_id = Column(String)
+    state = Column(String, nullable=False)
+    admitted_at = Column(String, nullable=False)
+    expires_at = Column(String, nullable=False)
+
+
+class EngineProviderBucket(Base):
+    """Durable token bucket for provider request admission.
+
+    ``tokens`` refills at the account's configured request rate up to ``burst``.
+    ``updated_at`` is the last refill timestamp. The account row lock serialises
+    refill-and-consume, so parallel sends cannot exceed the bucket.
+    """
+    __tablename__ = "engine_provider_bucket"
+    account_id = Column(String, primary_key=True)
+    tokens = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+

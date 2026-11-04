@@ -19,7 +19,8 @@ from sqlalchemy import (BigInteger, Boolean, CheckConstraint, Column, DateTime,
 from sqlalchemy.orm import Session
 
 from db.models import Base, Fan, Message, OfCreatorBinding
-from db.onlyfans_models import OfIngress, OfRuntime, OfWork
+from db.onlyfans_models import OfIngress, OfRecovery, OfRuntime, OfWork
+from onlyfans_runtime.read_failures import ERROR_CODES as READ_ERROR_CODES, failure_code
 from onlyfans_runtime.store import Event, LEASE_SECONDS, MAX_PENDING, PAGE_LIMIT, Refused, _id, utcnow
 
 RecoveryBase = Base  # shared registry (see models.MemoryBase)
@@ -28,7 +29,7 @@ MAX_SCAN_PAGES = 10_000
 RETRY_SECONDS = 5
 LIVE_RESERVE = PAGE_LIMIT
 ERROR_CODES = frozenset({"provider_read_failed", "invalid_page", "backpressure", "live_input_pending",
-                         "conflicting_history", "discovery_budget_exhausted", "provider_read_deferred"})
+                         "conflicting_history", "discovery_budget_exhausted", "provider_read_deferred"}) | READ_ERROR_CODES
 
 
 class OfHistoryScan(RecoveryBase):
@@ -55,6 +56,7 @@ class OfHistoryCursor(RecoveryBase):
     __tablename__ = "of_launch_history_cursor"
     __table_args__ = (
         CheckConstraint("status IN ('needed','running','complete')", name="status"),
+        CheckConstraint("page_limit >= 5 AND page_limit <= 100", name="page_limit", info={"onlyfans_since":"0106_parallel_history_reads"}),
         CheckConstraint("pages_completed >= 0 AND messages_observed >= 0 AND messages_added >= 0",
                         name="counts"),
         Index("ix_launch_history_cursor_due", "account_id", "status", "retry_at", "generation", "fan_id"),
@@ -70,6 +72,65 @@ class OfHistoryCursor(RecoveryBase):
     start_before_id = Column(BigInteger)
     upper_bound = Column(BigInteger)
     before_id = Column(BigInteger)
+    page_limit = Column(Integer, nullable=False, server_default=text("20"), info={"onlyfans_since":"0106_parallel_history_reads"})
+    pages_completed = Column(Integer, nullable=False, server_default=text("0"))
+    messages_observed = Column(BigInteger, nullable=False, server_default=text("0"))
+    messages_added = Column(BigInteger, nullable=False, server_default=text("0"))
+    oldest_message_at = Column(DateTime)
+    lease_token = Column(String(36))
+    lease_until = Column(DateTime)
+    retry_at = Column(DateTime)
+    last_error = Column(String(40))
+    completed_at = Column(DateTime)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class OfRecentHistoryScan(RecoveryBase):
+    __tablename__ = "of_recent_history_scan"
+    __table_args__ = (CheckConstraint("status IN ('needed','running','complete')", name="status"),
+                      {"info": {"onlyfans_since": "0110_recent_history"}})
+    account_id = Column(String, ForeignKey(OfRuntime.account_id, ondelete="RESTRICT"), primary_key=True)
+    binding_id = Column(String, ForeignKey(OfCreatorBinding.id, ondelete="RESTRICT"), nullable=False)
+    status = Column(String(16), nullable=False, server_default=text("'needed'"))
+    generation = Column(Integer, nullable=False, server_default=text("0"))
+    cursor = Column(String(1024))
+    page_count = Column(Integer, nullable=False, server_default=text("0"))
+    pass_number = Column(Integer, nullable=False, server_default=text("0"))
+    pass_digest = Column(String(64), nullable=False, server_default=text("''"))
+    previous_digest = Column(String(64))
+    known_fan_after = Column(BigInteger, nullable=False, server_default=text("0"))
+    known_fans_complete = Column(Boolean, nullable=False, server_default=text("false"))
+    lease_token = Column(String(36))
+    lease_until = Column(DateTime)
+    retry_at = Column(DateTime)
+    last_error = Column(String(40))
+    completed_at = Column(DateTime)
+    updated_at = Column(DateTime, nullable=False)
+
+
+class OfRecentHistoryCursor(RecoveryBase):
+    __tablename__ = "of_recent_history_cursor"
+    __table_args__ = (
+        CheckConstraint("status IN ('needed','running','complete')", name="status"),
+        CheckConstraint("page_limit >= 5 AND page_limit <= 100", name="page_limit", info={"onlyfans_since":"0106_parallel_history_reads"}),
+        CheckConstraint("pages_completed >= 0 AND messages_observed >= 0 AND messages_added >= 0",
+                        name="counts"),
+        Index("ix_recent_history_cursor_due", "account_id", "status", "retry_at", "generation", "fan_id"),
+        {"info": {"onlyfans_since": "0110_recent_history"}},
+    )
+    account_id = Column(String, ForeignKey(OfRuntime.account_id, ondelete="RESTRICT"), primary_key=True)
+    fan_id = Column(BigInteger, primary_key=True)
+    binding_id = Column(String, ForeignKey(OfCreatorBinding.id, ondelete="RESTRICT"), nullable=False)
+    status = Column(String(16), nullable=False, server_default=text("'needed'"))
+    generation = Column(Integer, nullable=False, server_default=text("0"))
+    # The first request may be handed an already-committed recent-page boundary.
+    # Keeping it distinct from upper_bound makes partial coverage explicit.
+    start_before_id = Column(BigInteger)
+    upper_bound = Column(BigInteger)
+    before_id = Column(BigInteger)
+    phase = Column(String(16), nullable=False, server_default=text("'initial'"))
+    catchup_target = Column(BigInteger)
+    page_limit = Column(Integer, nullable=False, server_default=text("20"), info={"onlyfans_since":"0106_parallel_history_reads"})
     pages_completed = Column(Integer, nullable=False, server_default=text("0"))
     messages_observed = Column(BigInteger, nullable=False, server_default=text("0"))
     messages_added = Column(BigInteger, nullable=False, server_default=text("0"))
@@ -91,6 +152,8 @@ class ArchiveClaim:
     token: str
     before_id: int | None
     connection_revision: int | None = None
+    page_limit: int = 20
+    scope: str = "lifetime"
 
 
 @dataclass(frozen=True)
@@ -101,6 +164,7 @@ class ArchiveScanClaim:
     token: str
     cursor: str | None
     connection_revision: int | None = None
+    scope: str = "lifetime"
 
 
 def affects_recent_context(session, account_id, fan_id, event):
@@ -120,6 +184,14 @@ def affects_recent_context(session, account_id, fan_id, event):
     return boundary is None or (stamp, event.message_id) > tuple(boundary)
 
 
+def archive_equivalent(session, message, event):
+    """Use canonical intake's representation rules, retaining archive time proof."""
+    from onlyfans_runtime.history_repair import equivalent, saved_media
+    stamp = datetime.fromisoformat(event.created_at).replace(tzinfo=None)
+    return (message.created_at == stamp
+            and equivalent(message, event, saved_media=saved_media(session, message)))
+
+
 class HistoryRecovery:
     """Short transactions; at most one discovery and one archive page per step.
 
@@ -136,6 +208,12 @@ class HistoryRecovery:
         return runtime
 
     @staticmethod
+    def _models(session, runtime):
+        from onlyfans_runtime.history_policy import policy
+        recent = policy(session, runtime.account_id, runtime.binding_id)
+        return (OfRecentHistoryScan, OfRecentHistoryCursor) if recent else (OfHistoryScan, OfHistoryCursor)
+
+    @staticmethod
     def _binding(row, runtime):
         if row.binding_id != runtime.binding_id:
             raise Refused("historical recovery binding changed")
@@ -150,6 +228,14 @@ class HistoryRecovery:
             session.add(row)
         else:
             HistoryRecovery._binding(row, runtime)
+        from onlyfans_runtime.history_policy import policy
+        if policy(session, runtime.account_id, runtime.binding_id):
+            recent = session.get(OfRecentHistoryCursor, (runtime.account_id, fan_id))
+            if recent is None:
+                session.add(OfRecentHistoryCursor(account_id=runtime.account_id, binding_id=runtime.binding_id,
+                    fan_id=fan_id, updated_at=utcnow()))
+            else:
+                HistoryRecovery._binding(recent, runtime)
         return row
 
     def request_fan(self, tenant_id, account_id, fan_id, *, before_id=None, connection_revision=None):
@@ -172,11 +258,29 @@ class HistoryRecovery:
         """Resume discovery without erasing an in-flight offset or fan cursor."""
         with Session(self.store.engine) as session, session.begin():
             runtime = self._runtime(session, tenant_id, account_id, connection_revision)
-            row = session.get(OfHistoryScan, account_id)
+            from onlyfans_runtime.history_policy import ensure
+            ensure(session, runtime)
+            scan_model, cursor_model = self._models(session, runtime)
+            row = session.get(scan_model, account_id)
             if row is None:
-                session.add(OfHistoryScan(account_id=account_id, binding_id=runtime.binding_id, updated_at=utcnow()))
+                session.add(scan_model(account_id=account_id, binding_id=runtime.binding_id, updated_at=utcnow()))
             else:
                 self._binding(row, runtime)
+            # Discovery's initial keyset sweep is finite. New fans can arrive
+            # later (including IDs below that sweep's cursor), or through
+            # another canonical intake. Enrol every known missing identity in
+            # bounded batches without resetting existing/completed archives.
+            known = self._known_fans(account_id)
+            missing = select(known.c.fan_id).where(~select(cursor_model.fan_id).where(
+                cursor_model.account_id == account_id,
+                cursor_model.fan_id == known.c.fan_id).exists())
+            for fan_id in session.scalars(missing.order_by(known.c.fan_id).limit(PAGE_LIMIT)):
+                self._ensure_fan(session, runtime, fan_id)
+
+    @staticmethod
+    def _known_fans(account_id):
+        return select(Fan.fan_id).where(Fan.account_id == account_id).union(
+            select(OfRecovery.fan_id).where(OfRecovery.account_id == account_id)).subquery()
 
     @staticmethod
     def _eligible(model, now):
@@ -195,7 +299,9 @@ class HistoryRecovery:
         row.retry_at = utcnow() + timedelta(seconds=RETRY_SECONDS) if error else None
 
     def _check_claim(self, session, runtime, claim):
-        model = OfHistoryCursor if type(claim) is ArchiveClaim else OfHistoryScan
+        model = ((OfRecentHistoryCursor if type(claim) is ArchiveClaim else OfRecentHistoryScan)
+                 if claim.scope == "recent" else
+                 (OfHistoryCursor if type(claim) is ArchiveClaim else OfHistoryScan))
         key = (claim.account_id, claim.fan_id) if type(claim) is ArchiveClaim else claim.account_id
         row = session.get(model, key)
         if (row is None or row.binding_id != runtime.binding_id or claim.binding_id != runtime.binding_id
@@ -210,7 +316,8 @@ class HistoryRecovery:
         now = utcnow()
         with Session(self.store.engine) as session, session.begin():
             runtime = self._runtime(session, tenant_id, account_id, connection_revision)
-            row = session.get(OfHistoryScan, account_id)
+            scan_model, _ = self._models(session, runtime)
+            row = session.get(scan_model, account_id)
             if row is None:
                 return None
             self._binding(row, runtime)
@@ -233,9 +340,11 @@ class HistoryRecovery:
                 return None
             self._lease(row, now)
             return ArchiveScanClaim(account_id, runtime.binding_id, row.generation, row.lease_token,
-                                    row.cursor, connection_revision)
+                                    row.cursor, connection_revision,
+                                    "recent" if scan_model is OfRecentHistoryScan else "lifetime")
 
-    def scan_page(self, tenant_id, claim, fan_ids, *, next_cursor, provider_read_claim=None):
+    def scan_page(self, tenant_id, claim, fan_ids, *, next_cursor, profiles=None,
+                  creator_profile=None, provider_read_claim=None):
         if type(claim) is not ArchiveScanClaim:
             raise Refused("invalid historical scan claim")
         if type(fan_ids) not in {list, tuple} or len(fan_ids) > PAGE_LIMIT:
@@ -258,12 +367,55 @@ class HistoryRecovery:
                 from onlyfans_runtime.provider_read_budget import current
                 current(self.store,tenant_id,provider_read_claim,session=session)
             row = self._check_claim(session, runtime, claim)
+            from onlyfans_runtime.profiles import apply_profiles
+            apply_profiles(session, runtime, fan_ids, profiles or {}, creator_profile)
+            # Read before enrolment: a fan with no recent cursor yet is new to
+            # discovery. Used only by the recent-scope sweep check below.
+            already = set(session.scalars(select(OfRecentHistoryCursor.fan_id).where(
+                OfRecentHistoryCursor.account_id == claim.account_id,
+                OfRecentHistoryCursor.fan_id.in_(fan_ids)))) if claim.scope == "recent" and fan_ids else set()
             for fan_id in fan_ids:
                 self._ensure_fan(session, runtime, fan_id)
             row.page_count += 1
             row.cursor = next_cursor
-            row.completed_at = utcnow() if next_cursor is None else None
-            self._release(row, status="complete" if next_cursor is None else "needed")
+            complete = next_cursor is None
+            if claim.scope == "recent":
+                # The provider list is ordered by recent activity, so it
+                # reorders as fans message: offset paging then repeats some
+                # fans and skips others, and an ordered digest of two sweeps
+                # may never match. Order and repeats carry no meaning here.
+                # pass_digest is an order-independent hash (sum of per-id
+                # hashes mod 2**256) of the fans this sweep saw for the FIRST
+                # time, i.e. with no cursor before this page. Each fan is new
+                # at most once, so repeats cannot disturb it.
+                digest = int(row.pass_digest or "0", 16)
+                for fan_id in fan_ids:
+                    if fan_id not in already:
+                        digest += int(hashlib.sha256(str(fan_id).encode()).hexdigest(), 16)
+                row.pass_digest = format(digest % 2**256, "064x") if digest else row.pass_digest
+                if complete:
+                    # Stable = a complete sweep that finds no fan unseen so far,
+                    # after an earlier complete sweep (previous_digest set), so
+                    # two consecutive full sweeps still agree on the set of
+                    # fans. A brand-new fan arriving mid-sweep is new once,
+                    # makes that sweep unstable, and is known to the next one.
+                    # Fans skipped by reordering are not "new" later: their
+                    # cursors already exist (known-fan sweep / earlier sweeps).
+                    # Then fan head catch-up.
+                    complete = row.previous_digest is not None and int(row.pass_digest or "0", 16) == 0
+                    row.previous_digest, row.pass_digest = row.pass_digest, ""
+                    row.pass_number += 1
+            if complete and claim.scope == "recent":
+                # Final stable discovery is followed by another head catch-up
+                # for threads that finished while discovery was still running.
+                session.execute(__import__('sqlalchemy').update(OfRecentHistoryCursor).where(
+                    OfRecentHistoryCursor.account_id == claim.account_id,
+                    OfRecentHistoryCursor.binding_id == runtime.binding_id,
+                    OfRecentHistoryCursor.status == "complete").values(status="needed", phase="catchup",
+                    catchup_target=OfRecentHistoryCursor.upper_bound, before_id=None,
+                    oldest_message_at=None, completed_at=None))
+            row.completed_at = utcnow() if complete else None
+            self._release(row, status="complete" if complete else "needed")
 
     @staticmethod
     def _live_work(session, account_id, fan_id):
@@ -276,17 +428,57 @@ class HistoryRecovery:
             runtime = self._runtime(session, tenant_id, account_id, connection_revision)
             if runtime.pending_events >= MAX_PENDING - LIVE_RESERVE:
                 return None
-            live_work = select(OfWork.fan_id).where(OfWork.account_id == OfHistoryCursor.account_id,
-                OfWork.fan_id == OfHistoryCursor.fan_id, OfWork.status.in_(("waiting", "claimed"))).exists()
-            row = session.scalar(select(OfHistoryCursor).where(OfHistoryCursor.account_id == account_id,
-                self._eligible(OfHistoryCursor, now), ~live_work if runtime.enabled else True).order_by(
-                    OfHistoryCursor.generation, OfHistoryCursor.fan_id).limit(1))
+            from onlyfans_runtime.history_policy import policy, OfOlderHistoryJob
+            p = policy(session, account_id, runtime.binding_id)
+            model, scope = (OfRecentHistoryCursor, "recent") if p else (OfHistoryCursor, "lifetime")
+            def choose(model, older=False):
+                live = select(OfWork.fan_id).where(OfWork.account_id == model.account_id,
+                    OfWork.fan_id == model.fan_id, OfWork.status.in_(("waiting", "claimed"))).exists()
+                query = select(model).where(model.account_id == account_id,
+                    self._eligible(model, now), ~live if runtime.enabled else True)
+                if older:
+                    # Reuse/extract stored old sources before requesting another
+                    # archive page. This uses the existing learner and receipts.
+                    if __import__('os').environ.get('ONLYFANS_PROFILE_LEARNING_ENABLED') == '1':
+                        query = query.where(text("""NOT EXISTS (
+                            SELECT 1 FROM messages m WHERE m.account_id=of_launch_history_cursor.account_id
+                            AND m.fan_id=of_launch_history_cursor.fan_id AND m.direction='in'
+                            AND m.created_at<:older_cutoff AND EXISTS (
+                                SELECT 1 FROM of_ingress i WHERE i.account_id=m.account_id
+                                AND i.binding_id=:older_binding AND i.fan_id=m.fan_id AND i.message_id=m.message_id AND i.status='applied')
+                            AND NOT EXISTS (SELECT 1 FROM of_profile_receipts r WHERE r.account_id=m.account_id
+                                AND r.binding_id=:older_binding AND r.fan_id=m.fan_id AND r.source_fan=m.fan_id
+                                AND r.message_id=m.message_id AND r.body_md5=md5(m.body) AND r.source_at=m.created_at
+                                AND r.direction=m.direction AND r.unsent=m.is_unsent AND r.automation=coalesce(m.automation_kind,'')
+                                AND r.next_chunk=r.total_chunks))""")).params(older_cutoff=p.cutoff_at,older_binding=runtime.binding_id)
+                    query = query.join(OfOlderHistoryJob, and_(
+                        OfOlderHistoryJob.account_id == model.account_id,
+                        OfOlderHistoryJob.fan_id == model.fan_id,
+                        OfOlderHistoryJob.binding_id == runtime.binding_id)).order_by(
+                            __import__('sqlalchemy').case(
+                                (OfOlderHistoryJob.requested_at <= now-timedelta(minutes=5), 0),
+                                else_=OfOlderHistoryJob.priority+1), model.generation, OfOlderHistoryJob.requested_at)
+                else:
+                    query = query.order_by(model.generation, model.fan_id)
+                return session.scalar(query.limit(1).with_for_update(skip_locked=True))
+            row = None
+            # One reserved old-history turn every 30 s avoids starvation under
+            # continuous recent imports. The existing provider governor still owns admission.
+            if p and (p.last_older_at is None or p.last_older_at <= now-timedelta(seconds=30)):
+                row = choose(OfHistoryCursor, older=True)
+                if row:
+                    scope, p.last_older_at = "lifetime", now
+            if row is None:
+                row = choose(model)
+            if row is None and p:
+                row, scope = choose(OfHistoryCursor, older=True), "lifetime"
             if row is None:
                 return None
             self._binding(row, runtime)
             self._lease(row, now)
             return ArchiveClaim(account_id, runtime.binding_id, row.fan_id, row.generation,
-                                row.lease_token, row.before_id, connection_revision)
+                                row.lease_token, row.before_id, connection_revision,
+                                page_limit=row.page_limit, scope=scope)
 
     def page(self, tenant_id, claim, events, *, has_more, observations=(), provider_read_claim=None):
         if type(claim) is not ArchiveClaim:
@@ -320,6 +512,28 @@ class HistoryRecovery:
                 from onlyfans_runtime.provider_read_budget import current
                 current(self.store,tenant_id,provider_read_claim,session=session)
             row = self._check_claim(session, runtime, claim)
+            original = normalized
+            recent_done = False
+            if claim.scope == "recent":
+                from onlyfans_runtime.history_policy import policy
+                p = policy(session, claim.account_id, runtime.binding_id)
+                if p is None:
+                    raise Refused("recent-history policy disabled during read")
+                dates = [datetime.fromisoformat(e.created_at).replace(tzinfo=None) for e in original]
+                if p.timestamp_order_verified and (dates != sorted(dates, reverse=True)
+                        or row.oldest_message_at and dates and dates[0] > row.oldest_message_at):
+                    raise Refused("verified timestamp ordering violated")
+                old = session.get(OfHistoryCursor, (claim.account_id, claim.fan_id))
+                stored_coverage = bool(old and old.binding_id == runtime.binding_id and old.status == "complete"
+                    and old.start_before_id is None and old.upper_bound is not None
+                    and ids and ids[-1] <= old.upper_bound)
+                recent_done = (not has_more or stored_coverage or
+                    p.timestamp_order_verified and any(d < p.cutoff_at for d in dates))
+                if row.phase == "catchup":
+                    recent_done = not has_more or bool(ids and row.catchup_target is not None and ids[-1] <= row.catchup_target)
+                normalized = [e for e,d in zip(original,dates) if d >= p.cutoff_at]
+                kept = {e.message_id for e in normalized}
+                offers = [o for o in offers if o.source_id in kept]
             if runtime.pending_events + len(normalized) > MAX_PENDING - LIVE_RESERVE:
                 self._release(row, error="backpressure")
                 return "backpressure"
@@ -329,14 +543,13 @@ class HistoryRecovery:
             added = 0
             # Preflight the whole page before writes; an invalid last row must
             # neither advance a cursor nor partially commit earlier rows.
-            for event in normalized:
+            for event in original:
                 if datetime.fromisoformat(event.created_at).replace(tzinfo=None) > utcnow() + timedelta(minutes=5):
                     raise Refused("future historical timestamp")
+            for event in normalized:
                 existing = session.get(Message, (claim.account_id, claim.fan_id, event.message_id))
                 stamp = datetime.fromisoformat(event.created_at).replace(tzinfo=None)
-                if existing is not None and (existing.direction != event.direction or existing.body != event.body
-                        or existing.price_cents != event.price_cents or existing.created_at != stamp
-                        or json.loads(existing.media_ids or "[]") != list(event.media_ids)):
+                if existing is not None and not archive_equivalent(session, existing, event):
                     # Preserve the shared fail-closed conflict behaviour without
                     # partially importing this page. Only the offending ingress
                     # becomes durable diagnostic evidence; cursor/counts stay put.
@@ -375,23 +588,44 @@ class HistoryRecovery:
                 row.upper_bound = ids[0]
             if ids:
                 row.before_id = ids[-1]
-                oldest = min(datetime.fromisoformat(event.created_at).replace(tzinfo=None) for event in normalized)
+                oldest = min(datetime.fromisoformat(event.created_at).replace(tzinfo=None) for event in original)
                 row.oldest_message_at = min(row.oldest_message_at or oldest, oldest)
+            row.page_limit = min(PAGE_LIMIT, max(5, claim.page_limit) * 2)
             row.pages_completed += 1
-            row.messages_observed += len(normalized)
+            row.messages_observed += len(original)
             row.messages_added += added
+            if claim.scope == "recent":
+                if recent_done and row.phase == "initial":
+                    row.phase, row.catchup_target = "catchup", row.upper_bound or 0
+                    row.before_id, row.oldest_message_at = None, None
+                    recent_done = False
+                elif recent_done:
+                    row.phase = "ready"
+                row.completed_at = utcnow() if recent_done else None
+                self._release(row, status="complete" if recent_done else "needed")
+                return "complete" if recent_done else "continue"
             row.completed_at = None if has_more else utcnow()
             self._release(row, status="needed" if has_more else "complete")
             return "continue" if has_more else "complete"
 
-    def fail(self, tenant_id, claim, *, code="provider_read_failed"):
+    def fail(self, tenant_id, claim, *, code="provider_read_failed", retry_at=None, oversized=False):
         """Persist bounded retry metadata; never store provider error text/PII."""
         if type(claim) not in {ArchiveClaim, ArchiveScanClaim} or code not in ERROR_CODES:
             raise Refused("invalid historical failure")
+        if retry_at is not None and (type(retry_at) is not datetime or retry_at.tzinfo is not None):
+            raise Refused("invalid historical retry time")
         with Session(self.store.engine) as session, session.begin():
             runtime = self._runtime(session, tenant_id, claim.account_id, claim.connection_revision)
             row = self._check_claim(session, runtime, claim)
+            if oversized and type(claim) is ArchiveClaim:
+                row.page_limit = max(5, claim.page_limit // 2)
             self._release(row, error=code)
+            if retry_at is not None:
+                row.retry_at = max(row.retry_at, min(retry_at, utcnow() + timedelta(hours=1)))
+            if code == 'provider_thread_unavailable':
+                # An inaccessible thread is missing coverage, never an empty
+                # successful import. Preserve its cursor and retry hourly.
+                row.retry_at = max(row.retry_at, utcnow() + timedelta(hours=1))
 
     def progress(self, tenant_id, account_id, *, fan_id=None):
         """Counts are observed coverage, never an invented total or percentage."""
@@ -421,20 +655,41 @@ class HistoryRecovery:
             deferred = session.scalar(select(func.count()).select_from(OfHistoryCursor).where(*filters,
                 OfHistoryCursor.status != "complete", live_work)) if runtime.enabled else 0
             discovery_complete = scan is not None and scan.status == "complete" and scan.known_fans_complete
+            known = self._known_fans(account_id)
+            missing = select(known.c.fan_id).where(~select(OfHistoryCursor.fan_id).where(
+                OfHistoryCursor.account_id == account_id,
+                OfHistoryCursor.fan_id == known.c.fan_id).exists())
+            if fan_id is not None:
+                missing = missing.where(known.c.fan_id == fan_id)
+            unscheduled = session.scalar(select(func.count()).select_from(missing.subquery()))
             complete = bool(states) and not (states.get("needed", 0) or states.get("running", 0))
             if fan_id is None:
-                complete = discovery_complete and not (states.get("needed", 0) or states.get("running", 0))
+                complete = discovery_complete and not (unscheduled or states.get("needed", 0) or states.get("running", 0))
             result = {"schemaVersion": "of-history-recovery.v1", "accountId": account_id, "fanId": str(fan_id) if fan_id is not None else None,
                 "status": "complete" if complete else "incomplete", "discoveryComplete": discovery_complete,
                 "discoveryCursor": scan.cursor if scan is not None else None,
                 "discoveryLastError": scan.last_error if scan is not None else None,
                 "conversationsDiscovered": sum(states.values()), "conversationsComplete": states.get("complete", 0),
+                "conversationsUnscheduled": unscheduled,
                 "conversationsRetrying": retrying, "conversationsDeferredForLiveInput": deferred,
                 # PostgreSQL SUM(bigint) returns NUMERIC/Decimal. These are
                 # exact integral counters, not money or floating-point values.
                 "pagesCommitted": int(totals[0]), "messagesObserved": int(totals[1]), "messagesAdded": int(totals[2]),
                 "totalMessages": None, "percentComplete": None, "proof": "available_provider_history",
                 "recentRecoveryNeeded": runtime.recovery_needed}
+            fan_filter = [Fan.account_id == account_id]
+            if fan_id is not None: fan_filter.append(Fan.fan_id == fan_id)
+            named = or_(func.length(func.trim(Fan.of_display_name)) > 0,
+                        func.length(func.trim(Fan.of_username)) > 0)
+            known_count,named_count,unchecked,unavailable,retrying_profiles = session.execute(select(
+                func.count(), func.count().filter(named),
+                func.count().filter(Fan.of_profile_checked_at.is_(None)),
+                func.count().filter(Fan.of_profile_error.in_(('profile_unavailable', 'profile_fields_missing'))),
+                func.count().filter(Fan.of_profile_error.in_((*READ_ERROR_CODES, 'provider_read_failed')))
+            ).select_from(Fan).where(*fan_filter)).one()
+            result['fanProfiles'] = {'known': known_count, 'named': named_count,
+                'missingNames': known_count - named_count,
+                'unchecked': unchecked, 'unavailable': unavailable, 'retrying': retrying_profiles}
             if fan_id is not None:
                 row = session.get(OfHistoryCursor, (account_id, fan_id))
                 result.update({"beforeId": str(row.before_id) if row and row.before_id is not None else None,
@@ -445,9 +700,14 @@ class HistoryRecovery:
                     "lastError": row.last_error if row else None,
                     "retryAt": row.retry_at.isoformat() + "Z" if row and row.retry_at else None,
                     "completedAt": row.completed_at.isoformat() + "Z" if row and row.completed_at else None})
+            from onlyfans_runtime.history_progress import recent_progress
+            window = recent_progress(session, runtime, fan_id=fan_id)
+            if window is not None:
+                result["recentHistory"] = window
+                result["lifetimeHistoryComplete"] = complete
             return result
 
-    def step(self, tenant_id, account_id, reader, *, connection_revision=None):
+    def step(self, tenant_id, account_id, reader, *, connection_revision=None, archive_only=False):
         """Run after the live-input drain, with at most two injected reads.
 
         Caller coordinates provider scheduling with Claude's shared worker.
@@ -460,61 +720,53 @@ class HistoryRecovery:
         from onlyfans_runtime.provider_read_budget import ReadDeferred
         completed = 0
         scan_error = None
-        scan = self.claim_scan(tenant_id, account_id, connection_revision=connection_revision)
-        if scan is not None:
-            budget=error=None
+        # Acquire provider capacity before consuming a fan's queue turn. A busy
+        # reader must not increment generation and send this fan to the back of
+        # tens of thousands of histories without reading a single message.
+        for discovery in ((False,) if archive_only else (True, False)):
+            budget = error = claim = None
             try:
-                try:budget=_provider_claim(self.store,tenant_id,account_id,reader,connection_revision,'history')
-                except ReadDeferred:
-                    self.fail(tenant_id,scan,code='provider_read_deferred')
+                budget = _provider_claim(self.store, tenant_id, account_id, reader,
+                                         connection_revision, 'history')
+                claim = (self.claim_scan if discovery else self.claim)(
+                    tenant_id, account_id, connection_revision=connection_revision)
+                if claim is None:
+                    continue
+                try:
+                    from onlyfans_runtime.history_telemetry import measure
+                    with measure(self.store, claim, discovery=discovery):
+                        page = (reader.chats(cursor=claim.cursor, limit=PAGE_LIMIT) if discovery else
+                                reader.messages(fan_id=claim.fan_id, before_id=claim.before_id, limit=claim.page_limit))
+                except Exception as failure:
+                    self.fail(tenant_id, claim, code=failure_code(failure),
+                        retry_at=utcnow() + timedelta(seconds=getattr(failure, 'retry_after', RETRY_SECONDS)),
+                        oversized=str(failure) == 'native HTTPS response exceeded its byte budget')
                     raise
                 try:
-                    page = reader.chats(cursor=scan.cursor, limit=PAGE_LIMIT)
-                except Exception:
-                    self.fail(tenant_id, scan)
-                    raise
-                try:
-                    fenced={'provider_read_claim':budget} if budget is not None else {}
-                    self.scan_page(tenant_id, scan, page.fan_ids, next_cursor=page.next_cursor,**fenced)
+                    fenced = {'provider_read_claim': budget} if budget is not None else {}
+                    if discovery:
+                        self.scan_page(tenant_id, claim, page.fan_ids, next_cursor=page.next_cursor,
+                            profiles=page.profiles, creator_profile=page.creator_profile, **fenced)
+                        completed += 1
+                    else:
+                        result = self.page(tenant_id, claim, page.events, has_more=page.has_more,
+                            observations=page.observations, **fenced)
+                        completed += result in {'continue', 'complete'}
                 except (Refused, AttributeError):
-                    self.fail(tenant_id, scan, code="invalid_page")
+                    self.fail(tenant_id, claim, code='invalid_page')
                     raise
-                completed += 1
             except ReadDeferred:
+                # No archive claim was taken, so its saved cursor and queue
+                # position remain intact. Shared backoff still owns pacing.
                 pass
             except Exception as failure:
-                # A failed discovery offset must not starve known fan archives.
-                # Each lane still gets at most one call; propagate the error to
-                # the shared worker after committing any independent progress.
-                error=scan_error=failure
-            finally:_release_provider(self.store,tenant_id,budget,error)
-        claim = self.claim(tenant_id, account_id, connection_revision=connection_revision)
-        if claim is not None:
-            budget=error=None
-            try:
-                try:budget=_provider_claim(self.store,tenant_id,account_id,reader,connection_revision,'history')
-                except ReadDeferred:
-                    self.fail(tenant_id,claim,code='provider_read_deferred')
+                error = failure
+                if discovery:
+                    scan_error = failure
+                else:
                     raise
-                try:
-                    page = reader.messages(fan_id=claim.fan_id, before_id=claim.before_id, limit=PAGE_LIMIT)
-                except Exception:
-                    self.fail(tenant_id, claim)
-                    raise
-                try:
-                    fenced={'provider_read_claim':budget} if budget is not None else {}
-                    result = self.page(tenant_id, claim, page.events, has_more=page.has_more,
-                        observations=page.observations,**fenced)
-                except (Refused, AttributeError):
-                    self.fail(tenant_id, claim, code="invalid_page")
-                    raise
-                completed += result in {"continue", "complete"}
-            except ReadDeferred:
-                pass
-            except Exception as failure:
-                error=failure
-                raise
-            finally:_release_provider(self.store,tenant_id,budget,error)
+            finally:
+                _release_provider(self.store, tenant_id, budget, error)
         if scan_error is not None:
             raise scan_error
         return completed

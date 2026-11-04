@@ -15,13 +15,40 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 
+from sqlalchemy import case, select
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+
+def select_batch(session, account, limit):
+    """Reserve one bounded video slot so pending photos cannot starve videos.
+
+    Existing photo evidence upgrades retain priority. Video status does not
+    prefer never-attempted clips over eligible retries; both use media order.
+    """
+    from db.models import VaultItem
+    from onlyfans_runtime.store import utcnow
+    from onlyfans_runtime.vault_description_worker import pending
+
+    def pick(kind, count):
+        query = select(VaultItem.media_id).where(
+            VaultItem.account_id == account, VaultItem.kind == kind, pending(utcnow()))
+        if kind == "photo":
+            query = query.order_by(case((VaultItem.describe_status == "described", 0), else_=1))
+        return list(session.scalars(query.order_by(VaultItem.media_id).limit(count)))
+
+    video = pick("video", 1)
+    if limit == 1:
+        # Both media kinds stay reachable in a one-item diagnostic batch.
+        photo = pick("photo", 1)
+        return sorted(photo + video)[:1]
+    return pick("photo", limit - 1 if video else limit) + video
 
 
 async def run(args):
     if os.environ.get("ONLYFANS_PROCESS_ROLE") != "worker":
         raise RuntimeError("worker role required")
-    from sqlalchemy import case, select, text
+    from sqlalchemy import text
     from sqlalchemy.orm import Session
     from db.engine import get_session
     from db.models import AccountAiConfig, OfCreatorBinding, VaultItem
@@ -29,6 +56,7 @@ async def run(args):
     from db.onlyfans_connection_models import OfProviderConnection
     from db.onlyfans_vault_models import OfVaultObservation, OfVaultSyncJob
     from onlyfans_runtime.store import Store, Refused, utcnow
+    from onlyfans_runtime.provider_read_budget import ReadDeferred
     from onlyfans_runtime.vault_management import _connection, _provenance
     from onlyfans_runtime.connections import _open
     from onlyfans_runtime.vault_description_worker import pending
@@ -63,17 +91,7 @@ async def run(args):
                     # key, independently of enabling/configuring fan replies.
                     snapshot = SimpleNamespace(scope=scope, expires_at=connection.expires_at.replace(tzinfo=timezone.utc),
                         capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"])
-                    ids = list(session.scalars(select(VaultItem.media_id).where(
-                        VaultItem.account_id == args.account, pending(utcnow()))
-                        .order_by(case((VaultItem.kind == "photo", 0), else_=1),
-                            case((VaultItem.describe_status == "described", 0), else_=1), VaultItem.media_id).limit(args.limit)))
-
-                # Keep video batches bounded; photos should not wait for a long clip.
-                with Session(store.engine) as session:
-                    if ids and session.get(VaultItem, (args.account, ids[0])).kind == "video":
-                        ids = ids[:1]
-                    elif ids:
-                        ids = [mid for mid in ids if session.get(VaultItem, (args.account, mid)).kind == "photo"]
+                    ids = select_batch(session, args.account, args.limit)
                 metadata = {}
 
                 async def guard(session, media_id, *, phase="read"):
@@ -184,8 +202,12 @@ async def run(args):
                         await guard(session, media_id)
                         item = await session.get(VaultItem, (args.account, media_id))
                         kind = item.kind
-                    fresh = await asyncio.to_thread(vault_stills._resolve_fresh_sync, client, media_id)
-                    media = fresh.media
+                    try:
+                        media = await asyncio.to_thread(client.vault_media_by_id, media_id)
+                    except ReadDeferred:
+                        raise
+                    except Exception:
+                        return vault_stills.Fresh(None, "fetch_failed")
                     if (not isinstance(media, dict) or media.get("id") != media_id
                         or media.get("type") != kind or media.get("isDeleted") is True
                         or media.get("isHidden") is True or media.get("canView") is False):
@@ -248,6 +270,10 @@ async def run(args):
                     if capped.is_set():
                         break
                 return summary
+            except ReadDeferred:
+                summary["state"] = "retry_pending"
+                summary["reason"] = "provider_read_deferred"
+                return summary
             finally:
                 lease.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
     finally:
@@ -279,4 +305,5 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

@@ -11,7 +11,9 @@ RESTRICTIONS=('ordinary_chat_only','sales_refused','boundary_hold','financial_ha
 
 
 def _card(m):
-    return {'message_id':m['id'],'product_id':m.get('product_id'),'price_cents':m.get('price_cents'),
+    cents=m.get('price_cents')
+    return {'card_kind':'priced_card','price_display':f'${cents//100}.{cents%100:02d}' if type(cents) is int else None,
+            'message_id':m['id'],'product_id':m.get('product_id'),'price_cents':m.get('price_cents'),
             'sent_at':m.get('at'),'paid':m.get('paid')}
 
 
@@ -20,7 +22,15 @@ def commercial_state(snap):
     fan_state=snap.get('fan_state') or {}
     incoming=[m for m in history if m.get('direction')=='in']
     current=incoming[-1] if incoming else None
-    cards=[m for m in history if m.get('direction')=='out' and type(m.get('price_cents')) is int and m['price_cents']>0]
+    # A supplied durable projection is authoritative, including an empty one.
+    # The rolling window cannot erase an old card or overwrite its payment state.
+    source=snap['card_state'] if 'card_state' in snap else history
+    by_id={}
+    for m in source or []:
+        if (m.get('direction','out')!='out' or type(m.get('id')) is not int
+                or type(m.get('price_cents')) is not int or m['price_cents']<=0):continue
+        by_id[m['id']]=m
+    cards=sorted(by_id.values(),key=lambda m:(str(m.get('at') or ''),m['id']))
     previews=[m['id'] for m in history if m.get('direction')=='out' and m.get('media_count')
               and not (type(m.get('price_cents')) is int and m['price_cents']>0)]
     invitation=snap.get('invitation')

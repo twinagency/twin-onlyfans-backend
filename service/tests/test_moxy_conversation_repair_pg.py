@@ -249,7 +249,7 @@ def test_unpaid_card_cannot_be_described_as_opened(database,monkeypatch):
     t=run_scenario(database,monkeypatch,scenario_unpaid_as_viewed)
     turn=t['turns'][0];first,fix=turn['attempts']
     assert first['status']=='held' and first['reason']=='content_status_wording'
-    assert fix['rejected']['kind']=='wording'
+    assert fix['rejected']['kind']=='factual'
     assert 'locked' in turn['sent'][-1]['body'] and 'opened it right' not in ' '.join(x['body'] for x in turn['sent'])
 
 
@@ -347,7 +347,7 @@ def test_product_failure_outranks_wording_failure(database,monkeypatch):
     finally:r.close()
 
 
-def test_a_second_wording_failure_uses_one_validated_fallback_without_chat_lock(database,monkeypatch):
+def test_a_second_wording_failure_has_internal_attention_without_chat_lock(database,monkeypatch):
     from db.onlyfans_case_models import OfOperatorCase
     r=Replay(database,monkeypatch)
     try:
@@ -355,8 +355,10 @@ def test_a_second_wording_failure_uses_one_validated_fallback_without_chat_lock(
         again=reply('ok but gym bros are the real sprint workout, i just lift boats 😂')
         turn=r.turn('show me something then',again,again,again)
         assert [a['kind'] for a in turn['attempts']]==['first','correction']          # one bounded correction only
-        assert turn['attempts'][1]['status']=='ready' and len(turn['sent'])==1
-        assert turn['sent'][0]['media']==[] and turn['sent'][0]['price_cents']==0
+        assert turn['attempts'][1]['status']=='held' and turn['sent']==[]
+        with Session(r.engine) as s:
+            case=s.scalar(select(OfOperatorCase).where(OfOperatorCase.category=='moxy_technical'))
+            assert case is not None and case.scope=='offer'
         with Session(r.engine) as s:
             assert not [c for c in s.scalars(select(OfOperatorCase))
                 if c.scope=='all' and c.reason in {'moxy_correction_failed','moxy_technical_attention'}]
@@ -409,7 +411,7 @@ def test_approved_chatter_bubbles_pass_the_repetition_and_status_detectors():
             history.append({'id':i,'direction':'out' if t['who']=='chatter' else 'in','text':t['text'],'price_cents':0})
 
 
-@pytest.mark.parametrize('record',[45,89])
+@pytest.mark.parametrize('record',[6,45,89])
 def test_held_back_conversations_run_with_a_bank_that_excludes_them(database,monkeypatch,record):
     """Generalisation set: the held-back excerpt's own last exchange is replayed while its text is hidden from the model."""
     from moxy_replacement import examples
@@ -421,14 +423,16 @@ def test_held_back_conversations_run_with_a_bank_that_excludes_them(database,mon
     start=max(i for i,t in enumerate(turns) if t['who']=='chatter' and i>0 and turns[i-1]['who']=='fan')
     burst=[];i=start
     while i<len(turns) and turns[i]['who']=='chatter':burst.append(turns[i]['text']);i+=1
-    r=Replay(database,monkeypatch,'cristina')
+    creator='amelia' if record==6 else 'cristina'
+    r=Replay(database,monkeypatch,creator)
     try:
         turn=r.turn(turns[start-1]['text'],reply(*burst))
         a=turn['attempts'][0]
         assert a['status']=='ready' and turn['final_status']=='done'
         assert [x['body'] for x in turn['sent']]==burst                       # approved voice passes every detector, in order
-        assert len(a['prompt']['reference_situations'])>=2
-        system_text=json.dumps(examples.references('cristina',exclude_held_back=True),ensure_ascii=False)
+        # Missing relevant references are explicit; never fill with unrelated examples.
+        assert len(a['prompt']['reference_situations'])<=examples.LIMIT
+        system_text=json.dumps(examples.references(creator,exclude_held_back=True),ensure_ascii=False)
         assert not any(t['text'] in system_text for t in ex['turns'] if t['who']=='chatter' and len(t['text'])>15)
     finally:r.close()
 
@@ -449,22 +453,25 @@ def _records(refs):
     return [by_text[e['lesson']] for e in refs['examples']]
 
 
-def test_bank_is_exactly_the_eight_approved_records_and_verbatim():
+def test_bank_preserves_the_eight_approved_records_and_exact_opening_subset():
     from moxy_replacement.examples import _bank,verified,verbatim
     bank=_bank()['examples']
-    assert {e['record'] for e in bank}==APPROVED and all(verified(e) for e in bank)
+    assert {e['record'] for e in bank}==APPROVED|{170,103601,107901} and all(verified(e) for e in bank)
+    by_record={e['record']:e for e in bank}
+    assert by_record[170]['turns']==by_record[70]['turns'][:4]
+    assert by_record[170]['source']['parent_record']==70
     assert all(e['source']['sha256'].startswith('b30c585b') for e in bank)
     if APPROVED_FILE.exists():           # the inputs folder is only on the build machine
         import re
         blocks={int(m.group(1)):m.group(2).rstrip('\n') for m in re.finditer(r'RECORD #(\d+) \|[^\n]*\n(.*?)(?=\n={20,}|\Z)',APPROVED_FILE.read_text(),re.S)}
-        assert all(verbatim(e)==blocks[e['record']] for e in bank)
+        assert all(verbatim(e)==blocks[e['record']] for e in bank if e['record'] in APPROVED)
 
 
 def test_every_excerpt_is_labelled_and_chatter_bubbles_stay_separate():
     from moxy_replacement.examples import _bank
     labels={e['record']:e['situation'] for e in _bank()['examples']}
     assert labels=={2:'sales_flow',4:'money_trouble_rapport',6:'declined_offer',45:'personal_chat',55:'complaint_recovery',
-        64:'spending_limit',70:'honest_unavailable_alternative',89:'sales_flow'}
+        64:'spending_limit',70:'honest_unavailable_alternative',89:'sales_flow',170:'honest_unavailable_alternative',103601:'content_request',107901:'personal_chat'}
     ex={e['record']:e for e in _bank()['examples']}
     assert [t['text'] for t in ex[6]['turns'] if t['who']=='chatter'][:2]==[
         'did you love my collections, bestie???','you can open more bestiee if you wantt']      # two bubbles, not one blob
@@ -472,9 +479,9 @@ def test_every_excerpt_is_labelled_and_chatter_bubbles_stay_separate():
 
 def test_held_back_set_is_documented_and_excluded_on_request():
     from moxy_replacement.examples import held_back,references
-    assert held_back()==[45,89]
+    assert held_back()==[6,45,70,89]
     refs=references('cristina',_hist('you look so hot, i want to fuck you'),exclude_held_back=True)
-    assert not set(_records(refs))&{45,89}
+    assert not set(_records(refs))&{6,45,89}
 
 
 def test_projection_carries_no_provenance_and_says_names_prices_are_not_facts():
@@ -494,7 +501,8 @@ def test_amelia_never_gets_the_explicit_sexting_excerpts(fan,spender):
     from moxy_replacement.examples import references,select
     state={'vip':spender,'spender':spender,'high_spender':spender}
     chosen,_=select('amelia',_hist(fan),state)
-    assert not {e['record'] for e in chosen}&{2,89} and len(chosen)>=2
+    assert not {e['record'] for e in chosen}&{2,6,70,89} and len(chosen)<=3
+    assert not any(e['explicit'] for e in chosen)
     assert not set(_records(references('amelia',_hist(fan),state)))&{2,89}
 
 
@@ -511,23 +519,23 @@ def test_cristina_gets_the_explicit_sales_excerpt_for_a_sexting_fan():
 @pytest.mark.parametrize('fan,expected',[
     ('I cant afford that right now, sticking to cheaper ones',{64,4}),
     ('I am so behind on my finances at the moment',{4,64}),
-    ('do you make customs where you spread your cheeks?',{70}),
-    ('Do you ever sell your panties here?',{70}),
+    ('do you make customs where you spread your cheeks?',set()),
+    ('Do you ever sell your panties here?',set()),
     ('I have this bundle already',{55}),
-    ('Im not in the mood tonight but you look really good',{6}),
-    ('Yesterday was leg day, then I watched soccer all afternoon, my birthday is next week',{45,6,4}),
+    ('Im not in the mood tonight but you look really good',{107901}),
+    ('Yesterday was leg day, then I watched soccer all afternoon, my birthday is next week',{107901}),
 ])
 def test_selector_matches_the_latest_exchange(fan,expected):
     from moxy_replacement.examples import select
     chosen,_=select('amelia',_hist(fan))
-    assert chosen[0]['record'] in expected,[e['record'] for e in chosen]
+    assert (chosen and chosen[0]['record'] in expected) if expected else not chosen
 
 
 def test_selector_uses_the_latest_message_not_an_earlier_one():
     from moxy_replacement.examples import select
     history=_hist('i have this bundle already','ok no worries, how was your day at work today?')
     chosen,weights=select('amelia',history)
-    assert chosen[0]['record']!=55 and weights['personal_chat']>weights.get('complaint_recovery',0)
+    assert not any(e['record']==55 for e in chosen) and weights['personal_chat']>weights.get('complaint_recovery',0)
 
 
 def test_clarification_and_question_are_read_from_the_recent_exchange():
@@ -537,12 +545,12 @@ def test_clarification_and_question_are_read_from_the_recent_exchange():
     assert 'hardship' in situations(_hist('ok'),{'financial_hardship':True})
 
 
-def test_selector_is_deterministic_and_always_returns_two_to_three():
+def test_selector_is_deterministic_and_does_not_fill_irrelevant_references():
     from moxy_replacement.examples import select
     for creator in ('amelia','cristina'):
         for fan in ('','ok','hey','🙂','random words here'):
             a,_=select(creator,_hist(fan));b,_=select(creator,_hist(fan))
-            assert [e['record'] for e in a]==[e['record'] for e in b] and 2<=len(a)<=3
+            assert [e['record'] for e in a]==[e['record'] for e in b] and a==[]
 
 
 # ------------------------------------------------------------------ writer prompt: one consistent instruction set

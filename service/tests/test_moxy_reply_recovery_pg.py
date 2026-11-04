@@ -61,25 +61,26 @@ def send(service,authority,engine,identity,mid=9001,outcome='accepted'):
 
 
 @pytest.mark.parametrize('kind',['turn','welcome'])
-def test_malformed_then_failed_correction_fallback_and_next_input(database,monkeypatch,kind):
+def test_malformed_then_failed_correction_is_internal_attention_only(database,monkeypatch,kind):
     engine,store,service,authority,_,_=setup(database,monkeypatch)
     identity=add(service,kind)
     service.prepare(TENANT,ACCOUNT,identity,SyntheticNativeModel(raw_output='{broken'))
     retry=correction(engine)
     service.prepare(TENANT,ACCOUNT,retry,SyntheticNativeModel(raw_output='also broken'))
-    assert row(engine,retry).status=='ready'
-    outcome,wire,_=send(service,authority,engine,retry)
-    assert outcome=='accepted' and len(wire.calls)==1 and wire.calls[0].media_ids==()
-    assert row(engine,retry).status=='done'
-    # Repeating preparation/step never sends or generates the same fallback again.
-    untouched=model(decision())
-    service.prepare(TENANT,ACCOUNT,retry,untouched)
-    assert untouched.calls==[]
+    assert row(engine,retry).status=='held' and row(engine,retry).reason=='invalid_model_json'
+    assert row(engine,retry).charged_millicents is not None
+    service.prepare(TENANT,ACCOUNT,retry,model(decision()))
     with Session(engine) as s:
-        assert not s.scalar(select(OfOperatorCase.case_id).where(OfOperatorCase.scope=='all'))
+        assert not s.scalar(select(OfTextIntent.intent_id))
+        case=s.scalar(select(OfOperatorCase).where(OfOperatorCase.category=='moxy_technical'))
+        assert case is not None and case.owner=='fixture-operator'
+        ev=json.loads(case.evidence_json)
+        assert ev['original_rejection']=='invalid_model_json' and ev['correction_rejection']=='invalid_model_json'
         audits=[json.loads(a.after_json) for a in s.scalars(select(MoxyAudit)) if a.actor=='moxy-reply-diagnostic']
         assert any(a.get('raw')=='{broken' for a in audits)
-        assert any(a.get('phase')=='validated_fallback' for a in audits)
+        assert any(a.get('phase')=='correction_exhausted' and a['recovery_attempted'] is False for a in audits)
+        assert not any(a.get('phase')=='validated_fallback' for a in audits)
+    # Scoped internal attention does not silently take over ordinary chat.
     store.record(TENANT,ACCOUNT,event(mid=2,body='How was your morning?'));store.drain(TENANT,ACCOUNT)
     next_id=add(service,key='next',mid=2)
     service.prepare(TENANT,ACCOUNT,next_id,model(decision(text='What made your morning interesting?')))
@@ -273,7 +274,7 @@ def test_wording_repair_preserves_offer_and_media_through_three_bubble_restart(d
     retry=correction(engine)
     brief=json.loads(row(engine,retry).payload_json)['rejected']
     assert brief['keep_terms']['media_ids']==[7101] and brief['keep_terms']['price_cents']==7500
-    assert brief['media_positions']==[1]
+    assert 'media_positions' not in brief and 'message_count' not in brief
     service.prepare(TENANT,ACCOUNT,retry,model(offer('That journey sounded exhausting.')))
     assert row(engine,retry).status=='ready'
     wires=[]
@@ -306,7 +307,7 @@ def test_worker_due_failure_has_scoped_evidence_without_exception_body(database,
 
 
 @pytest.mark.parametrize('wrong',["I still don't have your name.","my side doesn't show me names, so just tell me"])
-def test_known_name_failure_repairs_or_uses_a_factual_name_fallback(database,monkeypatch,wrong):
+def test_known_name_repeated_failure_requires_operator_attention(database,monkeypatch,wrong):
     engine,store,service,authority,_,_=setup(database,monkeypatch)
     with Session(engine) as s,s.begin():
         fan=s.get(Fan,(ACCOUNT,101));fan.real_name='Gervonta';fan.is_name_real=True
@@ -316,10 +317,10 @@ def test_known_name_failure_repairs_or_uses_a_factual_name_fallback(database,mon
     assert row(engine,identity).reason=='known_name_not_used'
     retry=correction(engine)
     service.prepare(TENANT,ACCOUNT,retry,model(decision(text=wrong)))
-    assert row(engine,retry).status=='ready'
-    outcome,wire,_=send(service,authority,engine,retry)
-    assert outcome=='accepted' and wire.calls[0].body=='I have you as Gervonta here.'
-    assert not wire.calls[0].media_ids
+    assert row(engine,retry).status=='held'
+    with Session(engine) as s:
+        assert not s.scalar(select(OfTextIntent.intent_id))
+        assert s.scalar(select(OfOperatorCase.case_id).where(OfOperatorCase.category=='moxy_technical'))
     store.close()
 
 

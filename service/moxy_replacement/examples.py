@@ -12,9 +12,9 @@ from pathlib import Path
 
 SOURCE=Path(__file__).with_name('sources')/'conversation_examples.v1.json'
 LIMIT=3
-# Production shows all eight excerpts. The two held_back records are the generalisation test set: tests flip this
-# (or pass exclude_held_back=True) so the model never sees them there.
-EXCLUDE_HELD_BACK=False
+# Held-out exchanges are excluded by default; evaluation_only is a hard exclusion.
+# Missing relevant creator voice never falls back to unrelated/shared voice examples.
+EXCLUDE_HELD_BACK=True
 
 # Situation signals read from the fan's recent messages. Each key is also a label used by the bank.
 SIGNALS={
@@ -27,13 +27,13 @@ SIGNALS={
             r"\bduplicate|not what i (paid|expected)|\brefund|didn'?t (show|get|receive|work)|only (about )?\d+ ?(pics|photos|videos|min)|\bdisappoint",
  'availability_question':r"\bdo (you|u) (do|make|offer|sell|have|ever|take|show|send|film|use)\b|\bcan (you|u) (do|make|show|send)\b|\bcustoms?\b|"
             r"\bwould (you|u) (do|make|show|send)\b|\bany (videos?|pics?|photos?|audio)\b|\bpanties\b|\bare there any\b",
- 'content_request':r"\bshow me\b|\bsend (me|it)\b|wanna see|want to see|let me see|what do you have|\bany (new|more)\b|\bmore of (that|this)\b",
+ 'content_request':r"\b(?:can|could|would) (?:you|u) (?:please )?send (?:me )?(?:a |some |the )?(?:photo|pic|video)|\bshow me\b|\bsend (me|it)\b|wanna see|want to see|let me see|what do you have|\bany (new|more)\b|\bmore of (that|this)\b",
  'sexting_scene':r"\b(cock|dick|pussy|suck(ing)?|lick(ing)?|fuck(ing)?|cum(ming)?|horny|naughty|stroke|stroking|throat|tits|boobs?|nude|naked|booty|"
             r"spank|slut|daddy|on your knees|turn(ed)? on|so hot|hard for you)\b|😈|🍆|🥵",
  'compliment':r"beautiful|gorgeous|\bpretty\b|\bsexy\b|stunning|\bcute\b|love (you|your|seeing)|look(s|ing)? (so |really )?(good|great|amazing|beautiful|hot)",
  'personal_chat':r"\b(work|job|gym|workout|lift(ing)?|squats?|leg day|birthday|weekend|plans?|tonight|tomorrow|dinner|lunch|breakfast|ate|eat|cook(ed|ing)?|grill(ed)?|"
             r"game|football|soccer|trip|vacation|kids|family|friends|day off|tired|sleep|morning|how'?s your|how are you|what'?s up|wyd|up to|how was your)\b",
- 'clarification':r"\bi (meant|mean)\b|what i (meant|said|mean)|\bno,? (no|i)\b|not what i (meant|said|asked)|\bi was (asking|talking|saying)\b|\bi asked\b|"
+ 'clarification':r"\bwhen did i (?:say|tell|mention)|\bi (?:never|didn'?t|did not) (?:say|tell|mention)|\bi (meant|mean)\b|what i (meant|said|mean)|\bno,? (no|i)\b|not what i (meant|said|asked)|\bi was (asking|talking|saying)\b|\bi asked\b|"
             r"answer my question|didn'?t answer|that'?s not what|\bwhat do you mean\b|\bwdym\b|\bnot that\b|\bi said\b",
 }
 SIGNALS={k:re.compile(v,re.I) for k,v in SIGNALS.items()}
@@ -43,8 +43,8 @@ IMPLIES={
  'spending_limit':('spending_limit','money_trouble_rapport'),
  'declined_offer':('declined_offer','delayed_purchase','not_in_mood'),
  'owned_complaint':('complaint_recovery','owned_complaint'),
- 'availability_question':('availability_question','honest_unavailable_alternative','content_request'),
- 'content_request':('content_request','honest_unavailable_alternative'),
+ 'availability_question':('availability_question',),
+ 'content_request':('content_request',),
  'sexting_scene':('sexting_scene','sales_flow','content_request'),
  'compliment':('compliment',),
  'personal_chat':('personal_chat',),
@@ -92,7 +92,11 @@ def situations(history=None,fan_state=None):
             if pattern.search(text):
                 for label in IMPLIES[name]:add(label,w)
         if rank==0 and QUESTION.search(text):
-            for label in ('question','honest_unavailable_alternative','personal_chat'):add(label,w if label=='question' else 1)
+            add('question',w)
+        if re.search(r'\b(?:video|photo|pic|bundle|content)\b',text,re.I) and re.search(r'worth|price|cost|duration|how long|included|what.*get',text,re.I):
+            add('content_question',w)
+        if re.search(r"\b(?:unavailable|not available|sold out|do not offer|don't offer|don't have|not on (?:the|your) menu)\b",text,re.I):
+            add('honest_unavailable_alternative',w)
     fan_state=fan_state or {}
     if fan_state.get('financial_hardship'):
         for label in ('money_trouble_rapport','hardship'):add(label,2)
@@ -106,15 +110,22 @@ def _allowed(example,creator):
     return '*' in allowed or creator in allowed
 
 
-def select(creator,history=None,fan_state=None,*,exclude_held_back=False,limit=LIMIT):
-    """2 to 3 bank excerpts for the latest exchange and creator.
+def select(creator,history=None,fan_state=None,*,exclude_held_back=True,limit=LIMIT):
+    """At most limit relevant approved references; no unrelated filler.
 
     Creator fit is a hard filter: an explicit excerpt is never offered to a creator it is not listed
     for (Amelia is a PG account with sexting for spenders only). Same-source creator is a tie-break.
     """
-    pool=[e for e in _bank()['examples'] if _allowed(e,creator) and not (exclude_held_back and e['held_back'])]
+    pool=[e for e in _bank()['examples'] if _allowed(e,creator)
+        and not e.get('retrieval_excluded') and not e.get('evaluation_only')
+        and not (exclude_held_back and e['held_back'])]
     weights=situations(history,fan_state)
     def score(e):
+        gates={'declined_offer':{'declined_offer'},'money_trouble_rapport':{'hardship','money_trouble_rapport'},
+            'spending_limit':{'spending_limit','hardship'},'complaint_recovery':{'owned_complaint','complaint_recovery'},
+            'honest_unavailable_alternative':{'honest_unavailable_alternative'},'personal_chat':{'personal_chat'},
+            'sales_flow':{'content_request','sexting_scene'}}
+        if not any(weights.get(k,0)>=2 for k in gates.get(e['situation'],{e['situation']})):return 0
         s=sum(weights.get(label,0) for label in e['matches'])
         if weights.get(e['situation']):s+=1
         return s
@@ -126,9 +137,6 @@ def select(creator,history=None,fan_state=None,*,exclude_held_back=False,limit=L
         # Prefer different situations; a second excerpt of one situation only fills a gap.
         if e['situation'] in seen:continue
         chosen.append(e);seen.add(e['situation'])
-    for e in ranked:
-        if len(chosen)>=min(limit,2):break
-        if e not in chosen:chosen.append(e)
     return chosen,weights
 
 
@@ -155,5 +163,9 @@ def references(creator,history=None,fan_state=None,*,exclude_held_back=None,limi
     # A clarification or a question is what the writer must answer first, so those labels always lead.
     labels=sorted(weights,key=lambda k:(-weights[k],k not in ('clarification','question'),k))
     return {'scope':data['scope'],
+        'voice_scope':'Only creator_voice references establish this creator voice. Shared_behavior_only references illustrate decisions, never a substitute creator voice. Missing representative creator voice remains an evidence gap.',
+        'creator_voice_reference_count':sum(e['creator_in_source'].lower().startswith(creator.lower()) for e in chosen),
         'latest_exchange_reads_as':labels[:5],
-        'examples':[{'situation':e['situation'],'lesson':e['lesson'],'lines':_lines(e)} for e in chosen]}
+        'examples':[{'situation':e['situation'],'lesson':e['lesson'],'lines':_lines(e),
+            'reference_role':'creator_voice' if e['creator_in_source'].lower().startswith(creator.lower()) else 'shared_behavior_only',
+            'source_creator':e['creator_in_source']} for e in chosen]}

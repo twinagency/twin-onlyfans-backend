@@ -58,7 +58,7 @@ def test_actual_service_exhausted_routine_has_no_invented_privacy_fallback(datab
         retry=next(e for e in s.scalars(select(MoxyEvent)) if json.loads(e.payload_json).get('correction_of'))
         retry_id=retry.event_id
         brief=json.loads(retry.payload_json)['rejected']
-        assert brief['kind']=='wording' and brief['public_facts']=={'hobby':'gym; approved synthetic fixture fact'}
+        assert brief['kind']=='factual' and brief['public_facts']=={'hobby':'gym; approved synthetic fixture fact'}
     service.prepare(TENANT,ACCOUNT,retry_id,model(decision(text='I usually train every morning')))
     with Session(engine) as s:
         final=s.get(MoxyEvent,(ACCOUNT,retry_id))
@@ -80,7 +80,7 @@ def test_gaze_wording_correction_preserves_exact_valid_offer(database,monkeypatc
         assert session.get(MoxyEvent,(ACCOUNT,identity)).reason=='unsupported_asset_gaze'
         retry=next(e for e in session.scalars(select(MoxyEvent)) if json.loads(e.payload_json).get('correction_of'))
         retry_id=retry.event_id;brief=json.loads(retry.payload_json)['rejected']
-        assert brief['kind']=='wording' and brief['keep']=={'action':'offer','product_id':'first','sequence':'fixture_level'}
+        assert brief['kind']=='factual' and brief['keep']=={'action':'offer','product_id':'first','sequence':'fixture_level'}
         assert brief['keep_terms']=={'price_cents':7500,'media_ids':[7101],'preview_ids':[]}
     service.prepare(TENANT,ACCOUNT,retry_id,model(decision('offer','Here is that sports outfit photo.','first',sequence='fixture_level')))
     intent=service.queue(TENANT,ACCOUNT,retry_id)

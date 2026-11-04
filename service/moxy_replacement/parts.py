@@ -78,6 +78,67 @@ def reused_wording(parts, recent_texts):
     return None
 
 
+
+def repetition_texts(snapshot,decision):
+    """Only unsupported/ordinary text is screened for conversational looping.
+
+    Protect the exact evidenced span, never a whole reply merely because it
+    starts with an apology or contains a quote. Factual validation still runs
+    on the complete original text before these repetition-only projections.
+    """
+    from .conversation import clauses,quotes,_norm,_RETRACT,_ATTRIBUTION
+    history=snapshot.get('history',[])
+    from .conversation import pending_messages
+    pending=pending_messages(snapshot)
+    requests=' '.join(m.get('text','') for m in pending)
+    correcting=bool(re.search(r"when did i say|i (?:never|didn'?t|did not) say|what did (?:you|i) say|that'?s not what|wrong|you said|quote|repeat",requests,re.I))
+    factual_request=bool(re.search(r"\b(?:repeat|again|remind|confirm|how much|price|cost|how long|duration|minutes?|seconds?)\b",requests,re.I))
+    previous=[m.get('text','') for m in history if m.get('direction')=='out']
+    price_cents={t.get('price_cents') for t in snapshot.get('inventory',{}).values()}
+    price_cents.update(c.get('price_cents') for c in snapshot.get('card_state',[]))
+    facts=' '.join(f for p in snapshot.get('products',{}).values() for a in p.get('assets',[]) for f in a.get('facts',[]))
+    numeric=re.compile(r"\$\s*(\d+(?:\.\d{1,2})?)|\b(\d+(?:\.\d{1,2})?)\s*(dollars?|usd|minutes?|mins?|seconds?|secs?)\b",re.I)
+    def grounded_number(clause):
+        values=list(numeric.finditer(clause))
+        if not values:
+            words=re.search(r'\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|sixty)\s+(?:minutes?|seconds?)\b',clause,re.I)
+            if not words or _norm(words.group()) not in _norm(facts):return False
+        for match in values:
+            amount=match.group(1) or match.group(2);unit=(match.group(3) or 'usd').lower()
+            if unit in {'usd','dollar','dollars'}:
+                from decimal import Decimal
+                if int(Decimal(amount)*100) not in price_cents:return False
+            else:
+                stem='min' if unit.startswith('min') else 'sec'
+                if not re.search(r'(?<![\d.])'+re.escape(amount)+r'\s*'+stem+r'(?:ute|ond)?s?\b',facts,re.I):return False
+        # A factual answer is not a licence for an unrelated repeated pitch.
+        return not re.search(r"\b(?:buy|unlock|purchase|open|send|want|wanna|go get|treat yourself)\b",clause,re.I)
+    result=[]
+    all_text=' '.join(p['text'] for p in plan(decision))
+    owns_statement=bool(re.search(r"\bi (?:said|wrote|told|was the one)|\b(?:that|it) was me|\bmy (?:words|line|statement|mistake)\b",all_text,re.I))
+    for part in plan(decision):
+        kept=[]
+        for clause in clauses(part['text']):
+            # A retraction must quote/refer to actual previous outgoing words.
+            if _RETRACT.search(clause):
+                stripped=re.split(r"\b(?:said|claimed|saying)\b",clause,maxsplit=1,flags=re.I)
+                if len(stripped)==2 and any(_norm(stripped[1]) and _norm(stripped[1]) in _norm(old) for old in previous):continue
+            denial=re.search(r"\byou (?:didn'?t|did not|never) (?:say|tell me|mention|write) (.+)",clause,re.I)
+            if denial and owns_statement:
+                stop={'you','your','i','me','my','would','will','did','do','not','never','on','a','the','that','it'}
+                needed=set(_norm(denial.group(1)).split())-stop
+                # The original creator utterance must support the correction;
+                # another bot claim about the fan is not its source evidence.
+                if len(needed)>=2 and any(not _ATTRIBUTION.search(m.get('text','')) and needed<=set(_norm(m.get('text','')).split()) for m in history if m.get('direction')=='out'):continue
+            if factual_request and grounded_number(clause):continue
+            spans=quotes(clause)
+            if correcting or _RETRACT.search(clause):
+                for a,b,quote in reversed(spans):
+                    if any(_norm(quote) and _norm(quote) in _norm(m.get('text','')) for m in history):clause=clause[:a]+clause[b:]
+            kept.append(clause)
+        result.append(' '.join(kept))
+    return result
+
 def index(event):
     progress=json.loads(event.payload_json).get('_moxy_delivery',{})
     return len(progress.get('receipts',[]))

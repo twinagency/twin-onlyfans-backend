@@ -24,8 +24,8 @@ def test_commercial_state_distinguishes_unpaid_paid_and_free():
     cs=commercial_state(snap())
     assert cs['current_input']=={'id':6,'text':'what is in the first one?'}
     assert cs['last_invitation']=={'product_id':'first','sequence':'vault'}
-    assert cs['last_offer']=={'message_id':5,'product_id':None,'price_cents':2500,'sent_at':'t5','paid':None}
-    assert cs['sent_unpaid_cards']==[{'message_id':3,'product_id':'first','price_cents':7500,'sent_at':'t3'}]
+    assert cs['last_offer']=={'message_id':5,'product_id':None,'price_cents':2500,'sent_at':'t5','paid':None,'card_kind':'priced_card','price_display':'$25.00'}
+    assert cs['sent_unpaid_cards']==[{'message_id':3,'product_id':'first','price_cents':7500,'sent_at':'t3','card_kind':'priced_card','price_display':'$75.00'}]
     assert cs['verified_purchases']==['second'] and cs['owned_assets']==[7102]
     assert cs['free_previews_sent']==[2]
     assert cs['open_obligations']==[{'id':'e1','kind':'buying_question','question':'how much?'}]

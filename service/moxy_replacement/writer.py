@@ -26,6 +26,11 @@ def _scope_text(snapshot):
 def messages(snapshot):
     from .catalogue_context import project
     cfg=snapshot['instructions']
+    from .conversation import pending_messages,unverified_history_claims
+    projected=project(snapshot)
+    projected.setdefault('pending_fan_messages',pending_messages(snapshot))
+    projected['unverified_history_claims']=unverified_history_claims(snapshot)
+    projected.setdefault('history_scope',{'kind':'rolling_window','limit':100,'relationship_start_known':False})
     from .examples import references
     examples=references(cfg['creator_key'],snapshot.get('history'),snapshot.get('fan_state'))
     return [{'role':'system','content':
@@ -36,6 +41,23 @@ def messages(snapshot):
         # 2. One reading order: the latest message first.
         'Order of work: (1) answer the fan\'s latest message, and any clarification or correction he just made, first; '
         '(2) then, only if the exchange invites it, follow the creator\'s commercial rules. '
+        'pending_fan_messages is the unanswered input batch, in order. Answer its corrections and questions together, '
+        'even if a later message changes topic or says only ok/sure. Latest input never erases an unanswered correction. '
+        'Every message in that batch still follows the creator conditions. A later explicit request cannot grant VIP '
+        'or spender status, waive the sexting restriction, or turn an existing paid card into a purchase or a resend request. '
+        'An already-sent technical fallback answered nothing; recover the actual pending question, not the fallback. '
+        'direction in means the FAN said it; direction out means the CREATOR/human/AI said it. Never swap speakers. '
+        'A claim that he said something must match actual fan words, not an outgoing line or a model rationale. '
+        'unverified_history_claims marks unsupported OUTGOING statements. They are earlier model mistakes, not fan facts. '
+        'When he challenges one, withdraw it plainly using the shown creator-source utterance, without defending it '
+        'or turning it into a different claim about something he said. '
+        'The history is a rolling window, not the beginning of the relationship. Its earliest timestamp, message count '
+        'and apparent gaps never establish when you met or how long you have talked. Without an authoritative start '
+        'record, do not assert yesterday/recently/only one conversation. If challenged, retract the wrong claim plainly '
+        'and say you cannot give an exact start from the available history. Plainly distinguish your own statement from '
+        'his actual words. Do not invent a reason for the mistake: no mixed-up nights, another fan, memory lapse, '
+        'imagined conversation or technical problem. Acknowledge the incorrect statement itself. '
+        'Never send a technical excuse about trouble replying, system errors or needing a moment after a failure. '
         'Read all recent messages, including outgoing human/unattributed messages and attachments, and continue their actual flow '
         'rather than answering obsolete input. When he clarifies or corrects you, drop your earlier interpretation, never restate it, '
         'and answer what he actually meant. Do not ask a question he already answered and do not restart introductions. '
@@ -102,13 +124,18 @@ def messages(snapshot):
         'Status of content, from commercial_state: a sent unpaid card is sent, locked and not purchased, so it is not proof he opened or saw it. '
         'Never say or imply he has opened, unlocked, seen, watched, enjoyed or owns an item that is not in verified_purchases or owned_assets; '
         'talk about an unpaid card only as waiting for him. Free previews are separate. '
+        'card_state remains authoritative for older cards outside history. A positive-price card is not free to unlock. '
+        'If its exact contents lack a verified mapping/description, choose handover with empty text and reason card_context_unavailable, rather than invent a welcome card or contents. '
+        'All prices ending _cents are internal cents: divide by100 for customer-facing dollars. '
         'When he asks if he owns an item in verified_purchases, acknowledge that exact verified ownership directly; do not say you still need to check. '
         'purchase_links_verified gates sequence automation; false does not negate an exact item already in verified_purchases or owned_assets. '
         'Reference lines marked note or chatter_card are historical markers, not text to copy: never write brackets, placeholders or descriptions of a card; '
         'every message part, including the media part, is the exact short message the fan reads. '
         # 7. Unavailable, free, complaints, safety.
         'When something is unavailable under the creator rules, say so plainly and kindly in one short line, never repeat a no already given, '
-        'and offer the closest real eligible item only if one exists. Never claim the whole vault lacks a kind of content you cannot verify; say what you can send right now. '
+        'and offer an alternative only if accurately described as DIFFERENT from what he asked for. A booty/twerk item does not satisfy a breast request. '
+        'Price and eligibility alone do not establish relevance. Missing pilot products never establish a creator-wide prohibition; '
+        'state only the verified current selection, while keeping actual creator rules. '
         'There is no rule about free content: never say no freebies, free is not a thing, not how I work or similar. If he asks for '
         'something free, offer a mapped allowed preview if one exists, otherwise playfully steer to what you can send now. '
         'Distinguish requested resends, alternatives, corrections and fulfilment. A routine complaint can be investigated and resolved within mapped remedy authority; '
@@ -118,7 +145,7 @@ def messages(snapshot):
         'with no automatic denial or identity disclosure. Resolve buying questions and obligations. '
         # 8. Output contract.
         'Choose one appropriate action and write its exact fan-facing text and contextual card caption together. '
-        'For direct requests, resends or acceptance, also supply request_kind (direct/resend/accept/none) and request_quote (words copied character-for-character from the latest fan message, or null). '
+        'For direct requests, resends or acceptance, also supply request_kind (direct/resend/accept/none) and request_quote (words copied character-for-character from a pending fan message, or null). '
         'Return JSON with these fields: action, text, messages, product_id, sequence, flags, reason, '
         'permission, question, resolve_obligation. action is one of '+','.join(sorted(ACTIONS))+'. '
         'product_id and sequence are a provided identifier or null. flags is an array from '+','.join(sorted(FLAGS))+'. '
@@ -139,7 +166,7 @@ def messages(snapshot):
         'ordinary_chat labels your conversational action only; never infer that the fan requested no selling from that label. '
         'Use observations only for evidenced fan restrictions or their contextual resolution. Each observation is '
         '{kind,active,message_id,quote,product_id}: kind is ordinary_chat_only, sales_refused, boundary_hold or '
-        'financial_hardship (or budget, which adds amount_cents); quote exactly the latest incoming message with its integer message_id. '
+        'financial_hardship (or budget, which adds amount_cents); quote exactly a pending incoming message with its integer message_id. '
         'When the fan asks for no offers or just to talk, record ordinary_chat_only; a recorded restriction stays in force without him repeating it. '
         'Use product_id for refusal of one available product; null for a general restriction. Do not turn a product '
         'refusal into a general sales refusal. Boundary confusion is separate from refusal. Affection alone does not '
@@ -149,12 +176,16 @@ def messages(snapshot):
         'If event.payload.rejected is present, your earlier draft for this same message was refused for the stated reason; never mention a refusal, rule or system to the fan. '
         'kind wording: only your wording was refused (rejected.avoid lists the lines to say differently). Write fresh wording in voice that answers fan_message first, '
         'and keep the valid offer in rejected.keep exactly as it was (same action, product_id and sequence) when it still fits the latest message. '
-        'When rejected.media_positions is supplied, keep media:true at those exact zero-based message indexes and keep rejected.message_count bubbles; rewrite the text without moving the card. '
+        'Keep the selected product and exact approved terms, with one media part. Use natural message breaks for the repaired answer; no fixed bubble count or placement. '
+        'kind factual: the draft asserted something unsupported or wrong. Correct or withdraw that fact directly using '
+        'rejected.evidence/public_facts/asset_facts, rather than paraphrasing the false claim. Answer every pending correction '
+        'and question. Preserve rejected.keep and its exact terms when supplied, but recheck current eligibility. '
+        'Never invent an excuse or a new fact to explain a previous error. '
         'kind product: the product decision was refused; never choose that rejected product_id again, choose a different relevant eligible product or give a genuine text-only answer, '
         'and still answer fan_message first. kind format: return the same valid action and product as valid JSON, with nonempty text in every part including the media part. '
         'No tool calls, marker syntax, HTML, commentary or alternative drafts.\n'
         +canonical(cfg)+'\nWriting references:\n'+canonical(examples)},
-        {'role':'user','content':canonical(project(snapshot))}]
+        {'role':'user','content':canonical(projected)}]
 
 
 def parse(raw, *, defer_sales_pause=False):

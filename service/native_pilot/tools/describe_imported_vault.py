@@ -63,12 +63,15 @@ def select_batch(session, account, limit):
     from onlyfans_runtime.store import utcnow
     from onlyfans_runtime.vault_description_worker import pending
     def pick(kind, n):
-        return list(session.scalars(select(VaultItem.media_id).where(
+        query = select(VaultItem.media_id).where(
             VaultItem.account_id == account, VaultItem.kind == kind, pending(utcnow()))
-            .order_by(case((VaultItem.describe_status.is_(None), 0), else_=1), VaultItem.media_id).limit(n)))
+        if kind == "photo":
+            query = query.order_by(case((VaultItem.describe_status.is_(None), 0), else_=1))
+        # Eligible video retries keep their place among newly imported clips.
+        return list(session.scalars(query.order_by(VaultItem.media_id).limit(n)))
     video = pick("video", 1)
     if limit == 1:
-        return pick("photo", 1) or video
+        return sorted(pick("photo", 1) + video)[:1]
     return pick("photo", limit - 1 if video else limit) + video
 
 
@@ -335,5 +338,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

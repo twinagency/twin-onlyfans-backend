@@ -271,12 +271,23 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 _id(before_id)
             self.verify_identity()
             parent_messages = super().messages
+            def unread_state():
+                return load(self._signed_request("GET", API_PATH + f"/chats/{fan_id}"), max_bytes=MAX_HISTORY_BYTES)
             return preserve_unread(
                 account_id=self.account_id, fan_id=fan_id,
-                snapshot=lambda: load(self._signed_request("GET", API_PATH + f"/chats/{fan_id}"), max_bytes=MAX_HISTORY_BYTES),
+                snapshot=unread_state,
                 read=lambda: parent_messages(fan_id=fan_id, before_id=before_id, limit=limit),
-                restore=lambda target: load(self._signed_request("DELETE", API_PATH + f"/chats/{target}/mark-as-read")),
+                restore=self.restore_unread,
+                confirm=unread_state,
             )
+
+    def restore_unread(self, fan_id):
+        """Scoped undo only; the preservation owner verifies the actual chat flag."""
+        _id(fan_id)
+        if fan_id==self._handle.owner_id:raise Refused('native conversation cannot target its owner')
+        status,raw=self._signed_request('DELETE',API_PATH+f'/chats/{fan_id}/mark-as-read',
+            accepted_statuses=(200,204),with_status=True)
+        return load(raw)  # 204 is {}, never a manufactured success receipt.
 
     def verify_identity(self):
         value = load(self._call("GET", API_PATH + "/users/me"))

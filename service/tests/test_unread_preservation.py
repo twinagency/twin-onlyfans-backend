@@ -85,18 +85,20 @@ class PreservationTests(unittest.TestCase):
         method=next(n for n in cl.body if isinstance(n,ast.FunctionDef) and n.name=='messages')
         # Keep super()'s real class cell by compiling the actual method in a class.
         wrapper=ast.ClassDef(name='NativeProviderConnector',bases=[ast.Name(id='Parent',ctx=ast.Load())],keywords=[],body=[method],decorator_list=[])
-        calls=[]
+        calls=[]; state={'unread':1}
         class Parent:
-            def messages(self,**kw): calls.append(('parent',kw)); return 'parsed'
+            def messages(self,**kw): calls.append(('parent',kw)); state['unread']=0; return 'parsed'
         ns={'Parent':Parent,'API_PATH':'/api2/v2','MAX_HISTORY_BYTES':999999,'load':lambda raw,**kw:json.loads(raw),'Refused':ValueError,'_id':lambda n: n if type(n) is int and n>0 else (_ for _ in ()).throw(ValueError())}
         exec(compile(ast.fix_missing_locations(ast.Module(body=[wrapper],type_ignores=[])),'<native>','exec'),ns)
         obj=ns['NativeProviderConnector']();obj.account_id='native';obj._handle=SimpleNamespace(owner_id=99);obj._ready=lambda:None;obj._limit=lambda n:None;obj.verify_identity=lambda:calls.append('identity')
         def signed(method,path):
             calls.append((method,path))
-            return json.dumps({'withUser':{'id':7},'unreadMessagesCount':1} if method=='GET' else {'success':True})
+            if method=='DELETE':state['unread']=1
+            return json.dumps({'withUser':{'id':7},'unreadMessagesCount':state['unread']} if method=='GET' else {'success':True})
         obj._signed_request=signed
+        obj.restore_unread=lambda fan:json.loads(signed('DELETE','/api2/v2/chats/'+str(fan)+'/mark-as-read'))
         self.assertEqual(obj.messages(fan_id=7,before_id=None,limit=10),'parsed')
-        self.assertEqual(calls,['identity',('GET','/api2/v2/chats/7'),('parent',{'fan_id':7,'before_id':None,'limit':10}),('DELETE','/api2/v2/chats/7/mark-as-read')])
+        self.assertEqual(calls,['identity',('GET','/api2/v2/chats/7'),('parent',{'fan_id':7,'before_id':None,'limit':10}),('GET','/api2/v2/chats/7'),('DELETE','/api2/v2/chats/7/mark-as-read'),('GET','/api2/v2/chats/7')])
         with self.assertRaises(ValueError):obj.messages(fan_id=99,before_id=None,limit=10)
 
 if __name__ == '__main__': unittest.main()

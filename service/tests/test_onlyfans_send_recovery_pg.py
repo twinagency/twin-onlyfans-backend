@@ -68,7 +68,7 @@ def test_native_recovery_settles_takeover_without_replay_or_budget_reset(databas
     finally:store.close()
 
 
-@pytest.mark.parametrize("case",["valid","absent","duplicate","recipient","foreign_tenant"])
+@pytest.mark.parametrize("case",["valid","native_chat","native_conflict","native_duplicate","absent","duplicate","recipient","foreign_tenant"])
 def test_canonical_unknown_receipt_uses_original_authority_and_audited_command(database,case):
     store,authority=configured(database,mode="human_controlled")
     try:
@@ -78,13 +78,17 @@ def test_canonical_unknown_receipt_uses_original_authority_and_audited_command(d
         assert authority.dispatch(TENANT,ACCOUNT,identity,transport)=="unknown"
         raw=observed(transport.calls[0].body,utcnow())
         history=[raw]
+        if case.startswith('native_'):
+            raw.pop('toUser');raw['chatUserId']=FAN
+            if case=='native_conflict':raw['toUser']={'id':FAN+1}
+            elif case=='native_duplicate':history.append({**deepcopy(raw),'id':9002})
         if case=="absent":history=[]
         elif case=="duplicate":history.append({**deepcopy(raw),"id":9002})
         elif case=="recipient":raw["toUser"]["id"]=FAN+1
         tenant="another-tenant" if case=="foreign_tenant" else TENANT
         kwargs=dict(history=history,complete=True,provider_message_id=9001,command_key="c"*64,
             actor=ACTOR,reason="Offline scoped reconciliation")
-        if case!="valid":
+        if case not in {"valid","native_chat"}:
             with pytest.raises((TwinRefused,Refused)):
                 send_recovery.reconcile(authority,tenant,ACCOUNT,FAN,identity,**kwargs)
             with Session(store.engine) as s:

@@ -49,21 +49,31 @@ def _journal(account_id, fan_id):
         os.close(fd)
 
 
-def _restore(restore, fan_id):
+def _restore(restore, fan_id, confirm=None):
     try:
-        result = restore(fan_id)
-        if not isinstance(result, dict) or result.get('success') is not True:
+        # A pending undo may already have reached the provider before its
+        # response was lost. Resolve it only from an actual scoped snapshot.
+        if confirm is not None and chat_was_unread(confirm(), fan_id):return
+        try:
+            result = restore(fan_id)
+        except Exception:
+            if confirm is not None and chat_was_unread(confirm(), fan_id):return
+            raise
+        if confirm is not None:
+            if not chat_was_unread(confirm(), fan_id):
+                raise UnreadPreservationError('unconfirmed unread restoration')
+        elif not isinstance(result, dict) or result.get('success') is not True:
             raise UnreadPreservationError('unconfirmed unread restoration')
     except Exception:
         # Provider exceptions may contain session/proxy credentials.
         raise UnreadPreservationError('OnlyFans unread restoration failed; pending undo retained') from None
 
 
-def preserve_unread(*, account_id, fan_id, snapshot, read, restore):
+def preserve_unread(*, account_id, fan_id, snapshot, read, restore, confirm=None):
     with _journal(account_id, fan_id) as pending:
         # Recover an interrupted or failed undo before taking a new snapshot.
         if pending.exists():
-            _restore(restore, fan_id)
+            _restore(restore, fan_id, confirm)
             pending.unlink()
         was_unread = chat_was_unread(snapshot(), fan_id)
         if was_unread:
@@ -76,5 +86,5 @@ def preserve_unread(*, account_id, fan_id, snapshot, read, restore):
             return read()
         finally:
             if was_unread:
-                _restore(restore, fan_id)
+                _restore(restore, fan_id, confirm)
                 pending.unlink()

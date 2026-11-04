@@ -57,10 +57,22 @@ def _matches(raw,intent):
     fan=intent["fan_id"]
     validate_created_message(raw,chat_id=fan,creator_id=owner)
     event=message(raw,owner_id=owner,fan_id=fan,history=True)
-    recipient=raw.get("toUser",raw.get("withUser"))
+    # Native history uses chatUserId for the conversation recipient. Every
+    # supplied identity must agree; never fill in a missing provider object.
+    recipient_ids=[]
+    for field in ('toUser','withUser'):
+        if field in raw:
+            recipient=raw[field]
+            if type(recipient) is not dict or type(recipient.get('id')) is not int:
+                raise Refused('recovery-recipient-invalid')
+            recipient_ids.append(recipient['id'])
+    if 'chatUserId' in raw:
+        if type(raw['chatUserId']) is not int:raise Refused('recovery-recipient-invalid')
+        recipient_ids.append(raw['chatUserId'])
+    if not recipient_ids or any(value!=fan for value in recipient_ids):
+        raise Refused('recovery-recipient-mismatch')
     terms=intent["content"]
-    if (type(recipient) is not dict or recipient.get("id")!=fan
-        or event.direction!="out" or event.body!=intent["body"] or raw.get("lockedText") is not False
+    if (event.direction!="out" or event.body!=intent["body"] or raw.get("lockedText") is not False
         or event.media_ids!=tuple(terms["media_ids"] if terms else ())
         or event.price_cents!=(terms["price_cents"] if terms else 0)
         or raw.get("previews")!=(terms["preview_ids"] if terms else [])):

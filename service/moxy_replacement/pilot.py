@@ -43,6 +43,9 @@ def route_specialist(settings,result):
     """No unimplemented service promises, charges or automatic fulfilment."""
     if scope(settings) is None:return result
     if result['permission'] is not None or result['action'] in {'correct','fulfil'} or 'complaint' in result['flags']:
-        return {**result,'action':'handover','text':'','product_id':None,'sequence':None,
+        # The ordered messages array is the normal writer output now: a handover carries none, so drop the drafted ones.
+        routed={**result,'action':'handover','text':'','product_id':None,'sequence':None,
             'permission':None,'resolve_obligation':None,'reason':'pilot_specialist_handover_required'}
+        if 'messages' in routed:routed['messages']=[]
+        return routed
     return result

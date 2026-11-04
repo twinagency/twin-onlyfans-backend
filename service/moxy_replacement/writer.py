@@ -77,7 +77,7 @@ def messages(snapshot):
         'never the last card price. '
         # 6. Content truth and status.
         'Describe content only from the verified current asset information: the products map (media_ids keep attachment order, preview_ids are free previews), '
-        'each product\'s own assets and their description_basis limits. Never describe a different item or claim audio, motion, nudity, duration or detail beyond that basis. '
+        'each product\'s own assets and their description_basis limits; never describe a different item or claim audio, motion, nudity, duration or detail beyond that basis. '
         'Internal descriptions are evidence, not captions to copy. Make no current-activity claims (gym, bed, shower, just posted a fresh one) without evidence; '
         '"new to you" is not "newly uploaded". No invented live status, scarcity, media actions or bonuses. '
         'Status of content, from commercial_state: a sent unpaid card is sent, locked and not purchased, so it is not proof he opened or saw it. '

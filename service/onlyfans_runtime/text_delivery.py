@@ -317,6 +317,25 @@ class TextAuthority:
         except (ValueError, TypeError, AttributeError):
             return False
 
+    @staticmethod
+    def _verified_single_fan_pilot(s, runtime, fan, origin):
+        """Use verified recipient history for the explicitly scoped Moxy pilot."""
+        if origin != "automated" or fan is None:
+            return False
+        from db.onlyfans_moxy_models import MoxyAccount
+        from .store import fan_history_current
+
+        owner = s.get(MoxyAccount, runtime.account_id)
+        if owner is None or owner.mode != "on":
+            return False
+        try:
+            recipients = json.loads(owner.settings_json)["pilot"]["fan_ids"]
+        except (ValueError, TypeError, KeyError):
+            return False
+        return (type(recipients) is list and len(recipients) == 1
+                and type(recipients[0]) is int and recipients[0] == fan.fan_id
+                and fan_history_current(s, runtime.account_id, fan.fan_id))
+
     def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None,
                      manual_attachment=False, action=None):
         if policy is None or not policy.enabled or policy.transport_kind not in {"synthetic", "native"}:
@@ -337,9 +356,16 @@ class TextAuthority:
             human_on_fastt_fan = origin == "manual" and fan is not None and fastt_owned(runtime.account_id, fan.fan_id)
             if not (fan is not None and fan_history_current(s, runtime.account_id, fan.fan_id)) and not human_on_fastt_fan:
                 return "history_not_current"
-        if needs_history and s.scalar(select(OfIngress.event_key).where(
-                OfIngress.account_id == runtime.account_id, OfIngress.status == "quarantined").limit(1)) is not None:
-            return "history_quarantined"
+        if needs_history:
+            quarantined = select(OfIngress.event_key).where(
+                OfIngress.account_id == runtime.account_id, OfIngress.status == "quarantined")
+            if s.scalar(quarantined.limit(1)) is not None:
+                if not self._verified_single_fan_pilot(s, runtime, fan, origin):
+                    return "history_quarantined"
+                recipient_conflict = quarantined.where(
+                    OfIngress.fan_id.is_(None) | (OfIngress.fan_id == fan.fan_id))
+                if s.scalar(recipient_conflict.limit(1)) is not None:
+                    return "history_quarantined"
         # The conversation-hold policy is ONE pure function shared with the FASTT runner plane (conversation_policy).
         # Everything below this line is a caller of it: this method only reads the durable facts.
         from . import conversation_policy as policy_module, operator_cases

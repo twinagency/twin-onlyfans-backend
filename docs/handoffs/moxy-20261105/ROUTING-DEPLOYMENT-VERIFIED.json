@@ -1,0 +1,42 @@
+{
+  "at_utc": "2026-11-05T01:10:57.408725+00:00",
+  "release": "moxy-gervonta-routing-cb1726f1eb43",
+  "commit": "cb1726f1eb4368f9c2c57fc7c97672e7c883b5eb",
+  "image": "sha256:5d57a6dab8b37caeee5f614ae00b20e16f82a6382075d8f8c565c52896fa56c3",
+  "worker_started": "2026-11-05T01:10:51.210848785Z",
+  "files_verified": 23,
+  "actual_failed_draft_routing": "reply preserved, both bubbles, no handover",
+  "chat_allowed": true,
+  "fan_ids": [
+    318022380
+  ],
+  "settings_revision": 14,
+  "settings_unchanged": true,
+  "purchases_unchanged": true,
+  "api_cristina_unchanged": true,
+  "active_events": [],
+  "uncertain": [],
+  "customer_message_sent_or_requeued_by_cutover": false,
+  "model_calls_by_cutover": 0,
+  "rollback_image": "sha256:ac24f5ec3b825012757b742143a46043bb0a7767849c8e3bad552036400807e3",
+  "rollback_command": [
+    "docker",
+    "compose",
+    "-p",
+    "twin-onlyfans",
+    "-f",
+    "/etc/twin-onlyfans/media-agency-release-compose.json",
+    "-f",
+    "/var/lib/twin-release/moxy-gervonta-deploy-20261105/worker-release-override.json",
+    "-f",
+    "/var/lib/twin-release/moxy-gervonta-candidate-b1e4a05b9cc2/candidate-worker-override.json",
+    "-f",
+    "/var/lib/twin-release/moxy-gervonta-quarantine-53447117/worker-override.json",
+    "-f",
+    "/var/lib/twin-release/moxy-gervonta-routing-cb1726f1eb43/rollback-worker-override.json",
+    "up",
+    "-d",
+    "--no-deps",
+    "worker"
+  ]
+}

@@ -1,0 +1,17 @@
+a2bb80115750079888e86e2a0de982334134a971 2026-11-05T01:51:45+00:00 Resolve writer instruction scope from current creator permission
+cb1726f1eb4368f9c2c57fc7c97672e7c883b5eb 2026-11-05T01:06:52+00:00 Keep authorised conversational replies out of pilot specialist handover
+b1e4a05b9cc2f0317f8a897fe19b91fe345a18b1 2026-11-04T23:28:20+00:00 Carry simultaneous retry defects and bind old-card descriptions
+45e77a70fddea705d76efd843cdc8cd44284c59b 2026-11-04T22:52:07+00:00 Resolve writer permissions and recover duplicate-card requests usefully
+ff4982f351683803775a36519c8d3c22b7dd5adf 2026-11-04T22:07:54+00:00 Scope verified card-context human review to its question
+db35d311223056ab394892f9938036ab530978ef 2026-11-04T22:00:14+00:00 Verify captured model failures hand over and leave later offers available
+e0bce7a0e824cdd7e03c79874ca56c9b0f80c93b 2026-11-04T21:53:05+00:00 Apply chronological constraints across the pending input batch
+8ce35d1784bd62ae3e03b82fb3839cacc178131f 2026-11-04T21:46:41+00:00 Preserve Cristina references while hard-excluding Amelia evaluation exchanges
+e7a2601b60b362ba1a176fd027e9aa586910dfe1 2026-11-04T21:44:59+00:00 Repair grounded batch replies, recovery handovers and Amelia references
+b1e15637171024737f5419fc30b7db871b7ed6cf 2026-11-04T19:08:20+00:00 Retire obsolete reply drafts through explicit supervised cutover
+80c46988e221065703d009d36062d2be3cb8bb7a 2026-11-04T18:49:12+00:00 Recover genuine native recipients and confirm unread state before undo resolution
+237d7f7d46f167617bff8b3fc85819f9e9ae43f3 2026-11-04T17:42:40+00:00 Ground work replies without invented privacy or routine claims
+3c874e84abe1150a03ed93601397d840c395b8ca 2026-11-04T16:49:01+00:00 fix(moxy): ground commerce replies and preserve memory-window continuations
+78e6e956ee78bac41219093481ab37d5b516ed6e 2026-11-04T14:35:44+00:00 Verify the current evidence-preserving migration barrier
+1e89b0d2ec4e792015cc945d6bf85ea9edc1d97d 2026-11-04T14:27:26+00:00 Verify preserve-state model replay and repair factual name failures
+625440e3d5a892b492fa0c8ce5b34a19ff400be0 2026-11-04T14:11:26+00:00 Run complete service evidence in isolated disjoint shards with JUnit receipts
+27c268bdef9ca36acc9a69a980fd5cd97b5fa5d7 2026-11-04T14:04:22+00:00 Repair durable reply recovery, grounded card checks and private diagnostics

@@ -1,0 +1,56 @@
+{
+  "complete-consecutive-correction": {
+    "outcome": "useful_reply_supported_within_nonexplicit_permission",
+    "observations": [
+      "Retracts the false duration assertion without inventing a start date.",
+      "Answers the additional flirt instead of losing the correction.",
+      "Non-explicit present fantasy; no unverified VIP/spender grant, no purchase/card.",
+      "Two actual bubbles chosen by the model; no fixed count or emoji quota.",
+      "Voice remains a supervised assessment, not broad Amelia generalisation."
+    ]
+  },
+  "complete-0547-duplicate-correction": {
+    "outcome": "manual_factual_rejection",
+    "reason": "unsupported_relative_card_send_time",
+    "observations": [
+      "No second card or false purchase claim.",
+      "Reason identifies old card moxy-475e37c913d60fa4f7119376, timestamp2026-11-04T05:13:29Z.",
+      "Outgoing sent it earlier tonight is not established by the local-clock/timezone evidence.",
+      "Do not count mechanical validator acceptance as a semantic pass.",
+      "New source guidance removes the unsupported relative timing claim; one final full-context replay awaits the budget decision."
+    ]
+  },
+  "complete-0547-time-corrected": {
+    "outcome": "validator_rejected",
+    "reason": "repeated_recent_phrase",
+    "evidence": "actual-model-final/complete-0547-time-corrected/transcript.json"
+  },
+  "complete-0547-with-combined-feedback": {
+    "outcome": "manual_factual_rejection",
+    "reason": "unsupported_blanket_resend_claim",
+    "observations": [
+      "Existing card and unpaid status are supported; no new card/purchase/time invented.",
+      "Outgoing I cannot resend the same card implies a blanket restriction absent from source. Explicit requested resends remain supported."
+    ],
+    "evidence": "actual-model-final-combined-feedback/complete-0547-with-combined-feedback/transcript.json"
+  },
+  "complete-0547-no-invented-inability": {
+    "outcome": "manual_factual_rejection",
+    "reason": "wrong_card_pose",
+    "observations": [
+      "Model reason identifies card/product475e, whose verified asset is standing in a bathroom.",
+      "Outgoing calls it bent over, a different unsupported pose; no purchase/send time invented."
+    ],
+    "evidence": "actual-model-final-no-inability/complete-0547-no-invented-inability/transcript.json"
+  },
+  "complete-0547-bound-card-evidence": {
+    "outcome": "useful_reply_supported",
+    "observations": [
+      "References an existing genuinely recorded unpaid card.",
+      "No purchased/opened claim, resend prohibition, relative send-time claim or unsupported asset pose.",
+      "No new attachment or price; unchanged full20-product purchase/tier state.",
+      "Short, direct reply; no fixed bubble or emoji requirement."
+    ],
+    "evidence": "actual-model-final-bound-card/complete-0547-bound-card-evidence/transcript.json"
+  }
+}

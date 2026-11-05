@@ -1,0 +1,101 @@
+{
+  "containers": {
+    "twin-onlyfans-worker-1": {
+      "image": "sha256:772b51737c1242f6b803e0b13831ed70d07e08d9a363415b9ee9a12a1f309475",
+      "running": true,
+      "started_at": "2026-11-05T01:57:23.972107369Z",
+      "restarts": 0,
+      "release": [
+        "MOXY_RELEASE_SHA=a2bb80115750079888e86e2a0de982334134a971"
+      ]
+    },
+    "twin-onlyfans-api-1": {
+      "image": "sha256:e1f116a8266c1419695b59a0cc1b88db31d2d2e300aa665042585b40b544901d",
+      "running": true,
+      "started_at": "2026-11-04T10:47:01.609731395Z",
+      "restarts": 0,
+      "release": []
+    },
+    "twin-onlyfans-fastt-cristina-gervonta": {
+      "image": "sha256:8bdbf4d0a63e28d71ecec1b2579ef996873f8e7ee95f1f5263668ba85323885f",
+      "running": true,
+      "started_at": "2026-11-04T05:54:05.930260212Z",
+      "restarts": 0,
+      "release": []
+    }
+  },
+  "running_files": {
+    "service/moxy_replacement/pilot.py": "823a486132c7d2cc0ac936ca6c1f49bc184e54983d1c627659adac44da8a0aff",
+    "service/moxy_replacement/writer.py": "795fbc5ddd718d2b2610beed7e81934c31060cdd37400268c62c7522c98654d6",
+    "service/moxy_replacement/runtime.py": "53e81947df8b2de242524b9859c462aed603860fea00f4676cfe2562b5df2e90",
+    "service/onlyfans_runtime/text_delivery.py": "53447117454c4167217e710e8ef2c1f4a86cc37187bc749313e44d5a4143a3b9"
+  },
+  "DEPLOYMENT-VERIFIED.json": {
+    "started_at": "2026-11-05T01:57:02.948618+00:00",
+    "before": {
+      "mode": "on",
+      "revision": 14,
+      "fan_ids": [
+        318022380
+      ],
+      "products": 20,
+      "settings_hash": "324af085ebca236e0856dc8bbc107bbf3e25bf57713371b369d2169ca8758668",
+      "events": {
+        "held": 16,
+        "preview": 26,
+        "done": 42,
+        "stale": 15
+      },
+      "pending_intents": {}
+    },
+    "base_image": "sha256:5d57a6dab8b37caeee5f614ae00b20e16f82a6382075d8f8c565c52896fa56c3",
+    "api_id": "764bc83195e71453ca32305952ecd9ce69597045065dede4d66885817afa07e6",
+    "api_image": "sha256:e1f116a8266c1419695b59a0cc1b88db31d2d2e300aa665042585b40b544901d",
+    "old_hashes": {
+      "/app/service/moxy_replacement/writer.py": "1b8539a301f6520fbe17e4150c46a46228657c89f207b72e42e1da70fa81a0a2",
+      "/app/service/moxy_replacement/pilot.py": "823a486132c7d2cc0ac936ca6c1f49bc184e54983d1c627659adac44da8a0aff",
+      "/app/service/moxy_replacement/runtime.py": "53e81947df8b2de242524b9859c462aed603860fea00f4676cfe2562b5df2e90",
+      "/app/service/onlyfans_runtime/text_delivery.py": "53447117454c4167217e710e8ef2c1f4a86cc37187bc749313e44d5a4143a3b9"
+    },
+    "commit": "a2bb80115750079888e86e2a0de982334134a971",
+    "rollback": "/var/lib/twin-release/moxy-writer-scope-a2bb801/rollback.sh",
+    "completed_at": "2026-11-05T01:57:30.609350+00:00",
+    "image": "sha256:772b51737c1242f6b803e0b13831ed70d07e08d9a363415b9ee9a12a1f309475",
+    "worker_id": "a4c7ae4c4087449f1c1ecb1fc8896c824e228918376fda5f19eb88b788c0e4ab",
+    "after": {
+      "mode": "on",
+      "revision": 14,
+      "fan_ids": [
+        318022380
+      ],
+      "products": 20,
+      "settings_hash": "324af085ebca236e0856dc8bbc107bbf3e25bf57713371b369d2169ca8758668",
+      "events": {
+        "held": 16,
+        "preview": 26,
+        "done": 42,
+        "stale": 15
+      },
+      "pending_intents": {}
+    },
+    "new_hashes": {
+      "/app/service/moxy_replacement/writer.py": "795fbc5ddd718d2b2610beed7e81934c31060cdd37400268c62c7522c98654d6",
+      "/app/service/moxy_replacement/pilot.py": "823a486132c7d2cc0ac936ca6c1f49bc184e54983d1c627659adac44da8a0aff",
+      "/app/service/moxy_replacement/runtime.py": "53e81947df8b2de242524b9859c462aed603860fea00f4676cfe2562b5df2e90",
+      "/app/service/onlyfans_runtime/text_delivery.py": "53447117454c4167217e710e8ef2c1f4a86cc37187bc749313e44d5a4143a3b9"
+    },
+    "status": "deployed",
+    "production_db_writes_by_script": 0,
+    "test_messages_sent": 0,
+    "model_replay_calls": 0
+  },
+  "STARTUP-VERIFIED.json": {
+    "checked_at": "2026-11-05T01:58:22.561697+00:00",
+    "running": true,
+    "restarts": 0,
+    "image_matches": true,
+    "traceback_count": 0,
+    "error_lines": 0,
+    "log_lines": 33
+  }
+}

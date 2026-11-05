@@ -1,0 +1,95 @@
+{
+  "recorded_at_utc": "2026-11-05T01:56:52.051135+00:00",
+  "commit": "a2bb80115750079888e86e2a0de982334134a971",
+  "deployment_status": "deployed_technically_verified_by_root",
+  "candidate_image": "sha256:772b51737c1242f6b803e0b13831ed70d07e08d9a363415b9ee9a12a1f309475",
+  "base_image": "sha256:5d57a6dab8b37caeee5f614ae00b20e16f82a6382075d8f8c565c52896fa56c3",
+  "host_release_directory": "/var/lib/twin-release/moxy-writer-scope-a2bb801",
+  "focused_tests": {
+    "permission_module": {
+      "passed": 19,
+      "failed": 0,
+      "seconds": 1.95,
+      "remote_process_id": 25868
+    },
+    "permission_and_speaker_pure": {
+      "passed": 50,
+      "failed": 0,
+      "remote_process_id": 17364,
+      "pilot_database_setup_errors": 12,
+      "setup_reason": "ONLYFANS_TEST_PG_URL missing in initial SSH process"
+    },
+    "pilot_and_permission_final": {
+      "passed": 47,
+      "failed": 0,
+      "seconds": 169.7,
+      "pure_cases": 27,
+      "postgresql_cases": 20,
+      "exit_code": 0,
+      "remote_process_id": 30032,
+      "warnings": 191,
+      "warning_kind": "existing datetime.utcnow deprecation"
+    },
+    "unique_passed": 78,
+    "counts_overlap": true
+  },
+  "test_environment": {
+    "container": "moxy-reply-repair-fixed-pg-20261104",
+    "host": "work-server",
+    "restored_state": "stopped",
+    "driver": "psycopg2",
+    "database_scope": "fixture-created UUID of_test_* databases",
+    "initial_driver_attempt": "psycopg unavailable; failed before connection and rerun using installed psycopg2"
+  },
+  "candidate_projection_checks": {
+    "source": "reported by root after candidate-image read-only checks",
+    "captured_inputs": 3,
+    "allowed_branch": 3,
+    "snapshots_preserved": 3,
+    "model_calls": 0
+  },
+  "limitations": [
+    "No new actual-model behavior proof",
+    "No runtime semantic boundary detector",
+    "Prompt checks establish wiring and scope, not future output quality"
+  ],
+  "deployment_verification": {
+    "reported_at_utc": "2026-11-05T01:58:34.314831+00:00",
+    "source": "root agent report of completed SSM verification; not independently retrieved by reviewer",
+    "ssm_command_id": "7001e358-2901-4da1-8e42-25e2c0b3d630",
+    "running_image": "sha256:772b51737c1242f6b803e0b13831ed70d07e08d9a363415b9ee9a12a1f309475",
+    "commit": "a2bb80115750079888e86e2a0de982334134a971",
+    "account": "of-312988353",
+    "mode": "on",
+    "revision": 14,
+    "fan_ids": [
+      318022380
+    ],
+    "products": 20,
+    "pending_intents": 0,
+    "settings_hash_unchanged": true,
+    "unchanged_source_files": [
+      "pilot.py",
+      "runtime.py",
+      "onlyfans_runtime/text_delivery.py"
+    ],
+    "api_container_and_image_unchanged": true,
+    "host_receipt": "/var/lib/twin-release/moxy-writer-scope-a2bb801/DEPLOYMENT-VERIFIED.json",
+    "rollback": "/var/lib/twin-release/moxy-writer-scope-a2bb801/rollback.sh",
+    "rollback_behavior": "restores prior compose chain and base image 5d57a6dab8b37caeee5f614ae00b20e16f82a6382075d8f8c565c52896fa56c3",
+    "startup_log_check": "passed_root_verification",
+    "new_actual_model_reply_evaluated": false
+  },
+  "startup_verification": {
+    "source": "root agent report; not independently retrieved by reviewer",
+    "ssm_command_id": "fda7b4e5-4ca0-4674-aa4a-8640fc0a7f3b",
+    "checked_at_utc": "2026-11-05T01:58:22.561697+00:00",
+    "running": true,
+    "restarts": 0,
+    "image_matches": true,
+    "traceback_count": 0,
+    "error_lines": 0,
+    "log_lines": 33,
+    "host_receipt": "/var/lib/twin-release/moxy-writer-scope-a2bb801/STARTUP-VERIFIED.json"
+  }
+}

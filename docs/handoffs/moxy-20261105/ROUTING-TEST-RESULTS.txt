@@ -1,0 +1,9 @@
+.........................................                                [100%]
+=============================== warnings summary ===============================
+service/tests/test_moxy_pilot_conversation_permission_pg.py: 58 warnings
+service/tests/test_moxy_pilot_pg.py: 133 warnings
+  /srv/projects/moxy-reply-repair-fixed-20261104/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+41 passed, 191 warnings in 83.89s (0:01:23)

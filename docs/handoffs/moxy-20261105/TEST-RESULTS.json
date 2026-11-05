@@ -1,0 +1,38 @@
+{
+  "source_commit": "b1e4a05b9cc2f0317f8a897fe19b91fe345a18b1",
+  "completed_checks": [
+    {
+      "evidence": "focused-pure.xml",
+      "passed": 106,
+      "skipped": 0,
+      "failures": 0
+    },
+    {
+      "evidence": "affected-pg.xml",
+      "passed": 68,
+      "skipped": 0,
+      "failures": 0
+    },
+    {
+      "evidence": "bound-card-pure.xml",
+      "passed": 44,
+      "skipped": 0,
+      "failures": 0
+    },
+    {
+      "evidence": "final-bound-card-pg.xml",
+      "passed": 4,
+      "skipped": 0,
+      "failures": 0
+    }
+  ],
+  "final_image_checks": {
+    "passed": 7,
+    "evidence": "final-preserved-vault-image-tests.log",
+    "image": "sha256:00f5bf4ae8695d37e9963809e307efe153b5b100ea5980f103290a458a62040a"
+  },
+  "counts_overlap": true,
+  "full_suite_restarted": false,
+  "earlier_failed_attempts_retained": true,
+  "applicable_earlier_results_reused": true
+}

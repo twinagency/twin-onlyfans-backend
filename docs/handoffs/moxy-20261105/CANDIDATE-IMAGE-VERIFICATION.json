@@ -1,0 +1,27 @@
+{
+  "image": "sha256:00f5bf4ae8695d37e9963809e307efe153b5b100ea5980f103290a458a62040a",
+  "overlay_commit": "b1e4a05b9cc2f0317f8a897fe19b91fe345a18b1",
+  "repair_files_verified": 13,
+  "unchanged_unrelated_files_verified": {
+    "service/server.py": "06eba373ec3220cf494d1edaa821e79f238c7bb53dc43e10a9451db1d4cf5f5b",
+    "service/vault_frames.py": "ac7f4e4174b5f4b4d76ee24b0ea173cb2af3c2e03d2e3d7103b4981c5c05b806",
+    "service/vault_storyboard.py": "d5b768b7c7bd5b1f319a2a503ac1bc0352bd883b064af7bec2dd34817377f21f",
+    "service/native_pilot/tools/describe_imported_vault.py": "0a13c4b41c702f85b6cbe778f8c4b5800e1c962749364301cac36e5c5f66e84e",
+    "service/tests/test_automatic_vault_descriptions_pg.py": "e837f7898d180b9bbccebafb6617f4a128b4222aef4278a4131cf546d096facc",
+    "service/tests/test_vault_batch_selection.py": "9006a6547e3bb244dec8cca4388bc09f39907ba19703fde166c28c379e691656",
+    "service/tests/test_vault_error_observability.py": "5409c4eae97f4448332a1157605b507f6abe8f5d0767c69d07a6ab62cc878352",
+    "service/tests/test_vault_video_backoff.py": "51a48453febdb0e1867edf5bb7297664991ba37db3e2bd424ad750ef9573a9a9"
+  },
+  "base62_layer_prefix_identical": true,
+  "same_process_configuration": true,
+  "network_disabled_imports": true,
+  "preserved_vault_tests_passed": 7,
+  "complete_archive_all_blobs_hashed": true,
+  "archive_sha256": "08816d53ea9efc8f4886cd210c37b94faf5d42324e1b5e6d3d3b995f5c197004",
+  "rollback": {
+    "image": "sha256:e5f09254414516aea9b85f0c8085050733a7161a5bb5f5fd179d774e19708e17",
+    "available_on_work_server": true,
+    "same_immutable_base": true
+  },
+  "production_deployment": false
+}

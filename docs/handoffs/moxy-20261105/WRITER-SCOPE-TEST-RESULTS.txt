@@ -1,0 +1,37 @@
+Captured terminal result summaries
+
+These summaries preserve tool output. The original pytest stdout was captured in
+memory by the remote command and returned through Desktop Commander. A complete
+raw stdout file was not written during those runs.
+
+Permission/retry module, remote process 25868
+19 passed in 1.95s
+
+Permission/retry and speaker/repetition pure checks, remote process 17364
+50 passed
+The same invocation attempted 12 pilot database cases. They failed at fixture
+setup because ONLYFANS_TEST_PG_URL was absent. Those cases were rerun successfully
+in the final database invocation below.
+
+First database retry, remote process 15868
+27 passed, 20 setup errors in 2.64s
+The requested psycopg3 driver was unavailable. No database connection was made.
+The task database container was stopped after this attempt.
+
+Final database invocation, remote process 30032
+service/tests/test_moxy_pilot_pg.py
+service/tests/test_moxy_pilot_conversation_permission_pg.py
+service/tests/test_moxy_permission_and_retry_context.py
+47 passed, 191 warnings in 169.70s (0:02:49)
+pytest_exit 0
+task_test_database_restored_to_stopped
+
+The warnings were the existing datetime.datetime.utcnow() deprecation in
+service/db/models.py:80. The final invocation used installed psycopg2 and the
+existing task-owned PostgreSQL container. Test credentials were held in memory
+and supplied only to pytest's environment. Fixtures created and dropped UUID
+of_test_* databases. No production database or model provider was used.
+
+The 47 final cases comprise 20 PostgreSQL cases and 27 pure cases.
+Across the final invocation and the earlier 50 pure checks, 78 unique checks
+passed. These counts overlap and must not be added directly.

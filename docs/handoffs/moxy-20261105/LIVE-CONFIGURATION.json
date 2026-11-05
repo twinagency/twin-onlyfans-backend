@@ -1,0 +1,977 @@
+{
+  "account": "of-312988353",
+  "revision": 14,
+  "mode": "on",
+  "settings_hash": "324af085ebca236e0856dc8bbc107bbf3e25bf57713371b369d2169ca8758668",
+  "settings": {
+    "catalogue_bindings": {
+      "moxy-1e3b7c4629253d94ff5b2495": 37,
+      "moxy-2df524bd27cbab2286fd68d1": 26,
+      "moxy-37ce6f1b28be64a23db6ca4b": 15,
+      "moxy-455ac5c5a196de732d1843bb": 38,
+      "moxy-475e37c913d60fa4f7119376": 34,
+      "moxy-5546bfb00643bc887e3c9f86": 54,
+      "moxy-562027407bf6f8f2e572c13b": 41,
+      "moxy-6f9fa101f0ebd9f3393a163b": 35,
+      "moxy-7149f4d9782ec033cfa9d6c9": 29,
+      "moxy-77b0e88dfc80fc9151964377": 40,
+      "moxy-80515e43bb5d1c2a3217cbd1": 43,
+      "moxy-bb88645530108b78fa29e2d7": 47,
+      "moxy-dfb9f7ddff40e90e26063747": 42,
+      "moxy-e13516048294e1533d5bf9a0": 36,
+      "moxy-ee1e61a563cf5a11841c47ad": 45,
+      "moxy-f0e342bf959e39f5c4a9309e": 46,
+      "moxy-f212b84a412782cb31dc8c1a": 39,
+      "moxy-f2b9af99d3305ac1eed95070": 22,
+      "moxy-fcc8eeb1a57d4cb9adc4eaa1": 33,
+      "moxy-fd819bf0273032a27317ed9b": 27
+    },
+    "coordination_verified": true,
+    "creator_document": {
+      "creator_key": "amelia",
+      "required_operational_fields": [
+        "account_binding",
+        "vip_qualification",
+        "current_fan_labels",
+        "fan_exception_identity_map",
+        "vault_sequences",
+        "approved_recovery_limits"
+      ],
+      "rules": [
+        {
+          "instruction": "Sporty, chill, funny, sarcastic and direct. Gym vocabulary is a style cue, never a mandatory vocabulary list. Emoji preference is unspecified.",
+          "key": "voice",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              1
+            ]
+          },
+          "value": "sporty_chill_funny"
+        },
+        {
+          "instruction": "Operator-approved Amelia pilot setting: explicit replies are permitted without VIP or spender status. The configured pilot fan scope still applies.",
+          "key": "sexting",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              1
+            ]
+          },
+          "value": true
+        },
+        {
+          "instruction": "Never discuss customs with non-VIPs. VIP minimum $500; actual availability and acceptance authority still required.",
+          "key": "customs",
+          "requires": {
+            "vip": true
+          },
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              1
+            ]
+          },
+          "value": {
+            "minimum_cents": 50000
+          }
+        },
+        {
+          "instruction": "Do not send kitty, bootyhole or XXX content. Report prohibited material found in the vault to operations.",
+          "key": "prohibited_categories",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              1,
+              2
+            ]
+          },
+          "value": [
+            "kitty",
+            "bootyhole",
+            "xxx"
+          ]
+        },
+        {
+          "instruction": "Respect the p4 no-push fan, pinned marital/anxiety boundaries, and dislikes of pasties/toy content. The blocked fan in p5 is do-not-engage; an alternate identity requires operations review. Do not match these exceptions by name alone.",
+          "key": "fan_exceptions",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              4,
+              5
+            ]
+          },
+          "value": "verified_identity_mapping_required"
+        },
+        {
+          "instruction": "The talker label permits replies once an hour while not spending; it is not a general account sales cadence.",
+          "key": "talker_timing",
+          "requires": {
+            "currently_spending": false,
+            "talker_label": true
+          },
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              6
+            ]
+          },
+          "value": {
+            "minimum_reply_gap_seconds": 3600
+          }
+        },
+        {
+          "instruction": "The sheet asks staff to follow her active Snapchat and turn on TikTok notifications. This does not grant fans private off-platform contact.",
+          "key": "social_access",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              1
+            ]
+          },
+          "value": "snap_creator_follow_only"
+        },
+        {
+          "instruction": "May say busy and invite to an actual TikTok/OF live when verified available; dated plans alone do not prove a current live.",
+          "key": "live_invitations",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              1,
+              3,
+              4
+            ]
+          },
+          "value": "verified_live_only"
+        },
+        {
+          "instruction": "Ratings are text-only; verify requested scope and authorised product.",
+          "key": "ratings",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              1
+            ]
+          },
+          "value": "text_only"
+        },
+        {
+          "instruction": "Long videos including livestream copies start at $60.",
+          "key": "product:long_video",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "media_kinds": [
+              "video"
+            ],
+            "minimum_cents": 6000,
+            "required_kinds": [
+              "video"
+            ],
+            "requires": {}
+          }
+        },
+        {
+          "instruction": "Feet pictures $20; price according to the actual content.",
+          "key": "product:feet_photos",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "exact_cents": 2000,
+            "media_kinds": [
+              "photo"
+            ],
+            "requires": {}
+          }
+        },
+        {
+          "instruction": "Feet pictures and videos $30; price according to the actual content.",
+          "key": "product:feet_photos_video",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "exact_cents": 3000,
+            "media_kinds": [
+              "photo",
+              "video"
+            ],
+            "required_kinds": [
+              "photo",
+              "video"
+            ],
+            "requires": {}
+          }
+        },
+        {
+          "instruction": "Covered boobs $30+.",
+          "key": "product:covered_boobs",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "minimum_cents": 3000,
+            "requires": {}
+          }
+        },
+        {
+          "instruction": "Hand-bra $60+.",
+          "key": "product:hand_bra",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "minimum_cents": 6000,
+            "requires": {}
+          }
+        },
+        {
+          "instruction": "Nips $200 for high-spending VIPs only.",
+          "key": "product:nipples",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "exact_cents": 20000,
+            "requires": {
+              "high_spender": true,
+              "vip": true
+            }
+          }
+        },
+        {
+          "instruction": "Covered booty $30; no prohibited explicit areas.",
+          "key": "product:covered_booty",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "exact_cents": 3000,
+            "requires": {}
+          }
+        },
+        {
+          "instruction": "Bikini/lingerie not bare $35+.",
+          "key": "product:bikini_lingerie_booty",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "minimum_cents": 3500,
+            "requires": {}
+          }
+        },
+        {
+          "instruction": "Nude booty $75; no kitty/bootyhole content.",
+          "key": "product:nude_booty",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "exact_cents": 7500,
+            "requires": {}
+          }
+        },
+        {
+          "instruction": "VIP requested underwear price $1000/pair; inventory and fulfilment require verification.",
+          "key": "product:used_underwear",
+          "requires": {},
+          "source": {
+            "document": "01_Amelia.pdf",
+            "pages": [
+              2
+            ]
+          },
+          "value": {
+            "delivery_kind": "service",
+            "exact_cents": 100000,
+            "requires": {
+              "vip": true
+            }
+          }
+        }
+      ],
+      "unresolved": [
+        "Exact Locker Rooms/VIP Vault scripts, ordered steps, prices and actual asset IDs are not enumerated in the sheet.",
+        "XXX prohibition on p1 and VIP-only full-nude/BG wording on p2 require same-creator resolution for affected assets; do not infer permission.",
+        "Creator Basics p3 is internal context; no automatic fan-facing approval for biography, relationship, family, location or pets.",
+        "Never Say and Content Reference fields are blank placeholders, not approved values.",
+        "Current fan IDs, VIP/spender authority, hourly talker applicability and recovery authority require existing operational records.",
+        "The dated live schedule/update is not verified current availability.",
+        "Historical evidence includes welcome, promotional and free-media activity. Each such workflow still needs verified current assets, terms, eligibility and operating authority; an unmapped workflow is not a blanket prohibition on selling."
+      ],
+      "version": 1
+    },
+    "creator_key": "amelia",
+    "operational": {
+      "account_binding": "of-312988353",
+      "approved_recovery_limits": {
+        "automatic_refunds": false,
+        "automatic_replacements": false,
+        "custom_services": false
+      },
+      "assigned_operator": "Jesse",
+      "current_fan_labels": {
+        "evidence_ref": "current CRM tags + Jesse-owned test confirmation",
+        "fan_id": 318022380,
+        "labels": []
+      },
+      "fan_exception_identity_map": {
+        "identity": "Jesse-owned Gervonta; no other fans in scope",
+        "pilot_fan_id": 318022380
+      },
+      "vip_qualification": {
+        "status": "not_supported_in_this_pilot",
+        "vip_products_enabled": false
+      }
+    },
+    "pilot": {
+      "fan_ids": [
+        318022380
+      ],
+      "product_ids": [
+        "moxy-37ce6f1b28be64a23db6ca4b",
+        "moxy-f2b9af99d3305ac1eed95070",
+        "moxy-2df524bd27cbab2286fd68d1",
+        "moxy-fd819bf0273032a27317ed9b",
+        "moxy-7149f4d9782ec033cfa9d6c9",
+        "moxy-fcc8eeb1a57d4cb9adc4eaa1",
+        "moxy-475e37c913d60fa4f7119376",
+        "moxy-6f9fa101f0ebd9f3393a163b",
+        "moxy-e13516048294e1533d5bf9a0",
+        "moxy-1e3b7c4629253d94ff5b2495",
+        "moxy-455ac5c5a196de732d1843bb",
+        "moxy-f212b84a412782cb31dc8c1a",
+        "moxy-77b0e88dfc80fc9151964377",
+        "moxy-562027407bf6f8f2e572c13b",
+        "moxy-dfb9f7ddff40e90e26063747",
+        "moxy-80515e43bb5d1c2a3217cbd1",
+        "moxy-ee1e61a563cf5a11841c47ad",
+        "moxy-f0e342bf959e39f5c4a9309e",
+        "moxy-bb88645530108b78fa29e2d7",
+        "moxy-5546bfb00643bc887e3c9f86"
+      ],
+      "supervisor": "Jesse"
+    },
+    "production_verification": true,
+    "products": [
+      {
+        "approval_ref": "derived-catalogue:37ce6f1b28be64a23db6ca4b7d126576236ba94bc27688b4f7862e92225b80e9",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:620cb35c2c90e4a31f35f6493381de6a6cd3e68306e4dcd86b29cf7049ead376",
+            "facts": [
+              "A woman is kneeling on a bed, wearing a black hoodie with the bottom of the garment pulled down to expose her bare buttocks. Her face is turned toward the camera, and she is looking directly at it. The text overlay reads 'NEVER TOO LATE TO GET NASTY IN BED, DON'T YOU AGREE?'."
+            ],
+            "id": 4751620269,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-37ce6f1b28be64a23db6ca4b",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:f2b9af99d3305ac1eed950706a2807a25b0c8f788464dc0ec8b7d75df47ebbfc",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:a3edb4be2393e07c67cb9321edf227ad4822c10779dc5d0ab42faf291e201467",
+            "facts": [
+              "The woman is standing with her back to the camera, wearing a brown long-sleeved crop top and grey underwear. Her right hand is gripping the side of her top, pulling it slightly. Her underwear is pulled down to her upper thighs, exposing her buttocks and lower back. She is not touching her genitals or engaging in any sexual act."
+            ],
+            "id": 4681914005,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-f2b9af99d3305ac1eed95070",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:2df524bd27cbab2286fd68d11e0500947f900c4b51d5ded893b6f3fb5a9fcbed",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:fd1dc46857082a8226aeb5103c7ba1e63f0c42e421a6d2139ffa62689cffb836",
+            "facts": [
+              "A woman lies on her stomach on a bed, holding a phone to record herself in a mirror. Her green garment is pulled down to her thighs, exposing her bare buttocks. She is not touching her genitals or engaging in any sexual act. The image is a mirror selfie taken in a bedroom."
+            ],
+            "id": 4686233277,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-2df524bd27cbab2286fd68d1",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:fd819bf0273032a27317ed9b4a26d512df16adfb219be27f1ebaa9529b547a56",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:8c7b6eea365315dd70201e7188bfab9f9d69aeeac140902dbf77ef4928adebbf",
+            "facts": [
+              "A woman in a black hoodie is crouching with her back to the camera, her right hand gripping the hem of the hoodie and pulling it down to expose her bare buttocks. Her left hand is placed on her lower back. The hoodie is pulled down to her upper thighs, exposing her buttocks and upper legs. The text overlay reads 'feeling tempted? say hi'."
+            ],
+            "id": 4687328767,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-fd819bf0273032a27317ed9b",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:7149f4d9782ec033cfa9d6c900585b479380a75bb9d6a07e36766a14cb988791",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:187a5ba3d0697e7a9f913b6e45d723dd3498239b7ce95c1f9f2b9c32b904f4d0",
+            "facts": [
+              "A woman lies on her stomach on a bed, holding a phone in front of her face, with her green dress pulled up to expose her bare buttocks. She is positioned on all fours, with her legs spread apart, and her hand is not visible in the frame. The image is a mirror selfie taken in a bedroom setting."
+            ],
+            "id": 4689698213,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-7149f4d9782ec033cfa9d6c9",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:fcc8eeb1a57d4cb9adc4eaa133dd91491462ece0a5e7711c25747004ae4f8188",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:4e8e4f04f901bed62d5f5d189f0c3bd7c1c51cc699d7dadb92a43526606cd0c4",
+            "facts": [
+              "A woman lies on her stomach on a bed, holding a phone in front of her face, with her green dress pulled up to expose her bare buttocks. She is positioned on all fours, with her legs spread and her back arched. The phone screen displays a text message interface with a profile picture of her. Her right hand holds the phone, and her left hand is not visible."
+            ],
+            "id": 4692167952,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-fcc8eeb1a57d4cb9adc4eaa1",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:475e37c913d60fa4f711937690a2e71fe2443878255e9e3626ffc66c2e85fcbd",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:a4a01be39b3979dbb362d93becbf90e87b02b9212e94ef44b0be1ceea2255ca1",
+            "facts": [
+              "A woman stands in a bathroom, viewed from behind, wearing grey shorts and a white top. Her right hand is positioned near her lower back, with fingers touching the upper part of her right thigh. The shorts are pulled aside, exposing the upper portion of her right buttock. No penetration or direct genital contact is visible."
+            ],
+            "id": 4692395968,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "covered_booty",
+        "currency": "USD",
+        "id": "moxy-475e37c913d60fa4f7119376",
+        "price_cents": 3000,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:6f9fa101f0ebd9f3393a163b9fd6890e9e90ed008238935099d649459f6badab",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:c15b4a54c875d067e57a8e3c41f02e6dfb59f34ffb3a96e855bbabc7cbacb4f2",
+            "facts": [
+              "A woman lies on her stomach on a bed, holding a phone with a green case, taking a mirror selfie. Her green garment is pulled down to her thighs, exposing her bare buttocks. She is not touching her genitals or performing any sexual act. The phone screen shows a text message interface with a profile picture of her in a similar pose."
+            ],
+            "id": 4699328963,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-6f9fa101f0ebd9f3393a163b",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:e13516048294e1533d5bf9a0dd30529492d6b6b1f6db0493f03a15bc71923f4d",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:0a495f635ab5dec7b032a84a6b1882471d210231d5c3517c6c506542e47dbf29",
+            "facts": [
+              "A woman lies on her stomach on a bed, holding a phone with a green case, taking a mirror selfie. Her green garment is pulled down to her thighs, exposing her bare buttocks. She is not touching her genitals or breasts. The phone screen shows a messaging app with a text input field."
+            ],
+            "id": 4705100948,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-e13516048294e1533d5bf9a0",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:1e3b7c4629253d94ff5b249574158c645ce42e6a7bf63f8dc056384fafc1cae1",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:3df54b8dd6684019c500b149c1cabe57d80d1239a80568940fd0f563daac8a9b",
+            "facts": [
+              "The image shows a woman's back and buttocks with a digital overlay of white liquid splashing on her lower back and a graphic of red and blue stars. The woman is fully nude, standing with her back to the camera. The image is a still photograph with no visible sexual act occurring."
+            ],
+            "id": 4713023884,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-1e3b7c4629253d94ff5b2495",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:455ac5c5a196de732d1843bb2e4833e82965d27f4686fb6de06f17b5b615dbfd",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:9bd5cdbb647967dfdea131bff7e7d6815ff2c40f59a8dc2b1a0a9ac72a3aaba0",
+            "facts": [
+              "A woman is standing with her back to the camera, wearing a black ribbed top and light gray shorts. Her buttocks are prominently displayed, and the shorts are pulled aside to expose her right buttock. The fabric of the shorts is stretched over her buttocks, and her legs are slightly apart. The setting appears to be indoors near a window with greenery visible outside."
+            ],
+            "id": 4714921525,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "covered_booty",
+        "currency": "USD",
+        "id": "moxy-455ac5c5a196de732d1843bb",
+        "price_cents": 3000,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:f212b84a412782cb31dc8c1aa77c3521e8e6fbfafbf75c735ede9fc14ebe1bcd",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:8a33f2ea1fcc01446ae433f3834e3db925dcb8319304b69e412c8ea9ec99f672",
+            "facts": [
+              "A woman stands fully nude in a bathroom, her back to the camera, with her right hand resting on her right buttock. Her body is angled to show her ass and lower back. The scene is static with no visible movement or contact with genitals."
+            ],
+            "id": 4727203585,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-f212b84a412782cb31dc8c1a",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:77b0e88dfc80fc9151964377e17be6fe4a33469c1c1c1d25c5501e81572c6c19",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:8f4604e77d67219e9ba3fa73faab28e28790432629bfcaae78e0b6408779318a",
+            "facts": [
+              "A woman stands with her back to the camera, her bare buttocks exposed. She is wrapped in a colorful towel around her waist, which is pulled down to expose her lower back and buttocks. Her skin is wet, and she is positioned in a bathroom with a glass shower door visible. No sexual act is occurring in the frame."
+            ],
+            "id": 4727203703,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-77b0e88dfc80fc9151964377",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:562027407bf6f8f2e572c13b9591a0848abeaf348dc5fd45afb1c8553bf8e735",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:cd52b5cebe1a17a958054ae44943d309643d328282408d911b1802b706560ba1",
+            "facts": [
+              "A woman stands with her back to the camera, wrapped in a colorful woven towel around her waist. Her upper body is fully nude, and her back is visible. She is not performing any sexual act. The towel is pulled down to her waist, exposing her lower back and buttocks."
+            ],
+            "id": 4727203767,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-562027407bf6f8f2e572c13b",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:dfb9f7ddff40e90e260637472575acb06266b691ec166abe76811d3bbc73121c",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:67094c10093c4220003fefa3200dc34899017a3d58f01a65fe73ac1f219a7f3f",
+            "facts": [
+              "A woman stands in a bathroom, her back to the camera, wrapped in a colorful striped towel. Her upper body is bare, and her wet curly hair hangs down her back. The towel is wrapped around her torso and pulled down to her hips, exposing her lower back and buttocks. Her right hand is visible, gripping the towel at her hip."
+            ],
+            "id": 4727203844,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-dfb9f7ddff40e90e26063747",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:80515e43bb5d1c2a3217cbd10efa6f4cadebe4e470112feb86cbd8631b31f43d",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:3b98283ab31ce3baf8556c476c6dedf969a969c8e330c7b8ff2726ccbf4fcb39",
+            "facts": [
+              "A woman stands in a bathroom, wrapped in a multicolored woven towel. Her right hand is positioned near her lower back, pulling the towel aside to expose her right buttock. Her left hand is not visible. The towel covers her breasts and her genital area."
+            ],
+            "id": 4727203883,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-80515e43bb5d1c2a3217cbd1",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:ee1e61a563cf5a11841c47ad56e93630ed5303899026ac864cbc7f2a6902a781",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:3e6e5c067e130ac15f37258286391520a773ffb23a3d41338bca3d906edc7721",
+            "facts": [
+              "A woman is lying on her stomach on a bed, wearing a black top and leopard-print shorts. Her ass is raised and she is shaking it rhythmically. The text overlay reads 'should i twerk more?'."
+            ],
+            "id": 4742038230,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "covered_booty",
+        "currency": "USD",
+        "id": "moxy-ee1e61a563cf5a11841c47ad",
+        "price_cents": 3000,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:f0e342bf959e39f5c4a9309e94e7cbcafa67eed44e93febb0741ae5b15d32fa8",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:76ebedd36bcf831c6d602bcacd8bd632312579a2f2116811ce2c586e5e8a90e5",
+            "facts": [
+              "A woman in a leopard-print swimsuit with turquoise lace trim stands in a bathroom. Her right hand is rubbing her right thigh. Her left leg is lifted and bent, with her foot resting on her right thigh. The swimsuit covers her breasts and genitals."
+            ],
+            "id": 4744852935,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "feet_photos",
+        "currency": "USD",
+        "id": "moxy-f0e342bf959e39f5c4a9309e",
+        "price_cents": 2000,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:bb88645530108b78fa29e2d7bce5629167d2bffceeb9e5e5305cffc1f963930c",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:e22e089d9886af5b6fbf356c2a074c8ba1e41eed4ac12d9305932057b240a403",
+            "facts": [
+              "A woman stands in a bathroom, wearing a leopard-print bodysuit with turquoise lace trim. Her hands are pulling the bodysuit down at the sides, exposing her buttocks and lower back. The bodysuit is partially off, with the fabric pulled aside to reveal her skin. Her vulva is not visible, and her breasts are covered by the bodysuit."
+            ],
+            "id": 4744852941,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-bb88645530108b78fa29e2d7",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      },
+      {
+        "approval_ref": "derived-catalogue:5546bfb00643bc887e3c9f862546d02fcf7b97ffc949679c1fc1394013827dc6",
+        "assets": [
+          {
+            "evidence_ref": "asset-v2:a396dece7e50537063e30b7f70a80b9419f50bcd755b29341399eb944fe92b7a",
+            "facts": [
+              "The woman is fully nude, standing with her back to the camera. A white liquid splash is digitally added over her lower back and ass. The text 'are you ready?' is overlaid on the image. No physical contact or sexual act is visible in the frame."
+            ],
+            "id": 4767139644,
+            "revision": 1
+          }
+        ],
+        "available": true,
+        "caption_instructions": "Use the current factual asset descriptions and source rules; never invent unseen details, live/custom status or delivery promises.",
+        "category": "nude_booty",
+        "currency": "USD",
+        "id": "moxy-5546bfb00643bc887e3c9f86",
+        "price_cents": 7500,
+        "requires": {},
+        "revision": 1,
+        "source": {
+          "document": "01_Amelia.pdf",
+          "pages": [
+            2
+          ]
+        }
+      }
+    ],
+    "public_facts": {
+      "platform_role": {
+        "limits": "This establishes on-platform content creation only, not a separate job, sole occupation, gym profession, daily schedule or current activity.",
+        "source": "01_Amelia.pdf pages 1-2: named OnlyFans creator and approved content offerings, corroborated by existing approved account catalogue.",
+        "statement": "I make content here."
+      }
+    },
+    "sequences": {},
+    "verification_evidence": {
+      "activation_authorisation": "Jesse: Yes, it will be excluded okay now confirm it and let us make it live for Gervonta only",
+      "catalogue_expansion": {
+        "checked_at": "2026-11-03T01:54:36.669573",
+        "large_catalogue_regression_products": 100,
+        "products": 39,
+        "real_model_fixture_event": "bcc4c69d-7e13-4386-b3ee-df5d73941c90",
+        "release": "f60e6563abd0f2f8dab5756cc16056b0de9f54a2",
+        "tests_passed": 85
+      },
+      "checked_at": "2026-11-03T01:20:40.245163",
+      "external_coordination": "Jesse explicitly confirmed Gervonta will be excluded from human replies and Inflow campaigns during this test",
+      "real_inventory_offer_fixture_event": "90cce049-a56d-457d-9b6e-11a36505adc5",
+      "release": "8525e05273e3f2a1bd712111edf8c18c217ffe46",
+      "reply_preview_event": "72575855-139c-4b4d-8ba8-7c4fa1c869a2",
+      "schema": "0111_moxy_owner",
+      "scope": "Amelia Gervonta-only supervised pilot; first real send and reconciliation still to be observed"
+    }
+  },
+  "history_current": true,
+  "chat_allowed": true,
+  "chat_policy_reason": null,
+  "unresolved_attempt_id": null,
+  "pending_or_uncertain_intents": []
+}

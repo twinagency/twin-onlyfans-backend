@@ -1,0 +1,31 @@
+{
+  "running_image": "sha256:772b51737c1242f6b803e0b13831ed70d07e08d9a363415b9ee9a12a1f309475",
+  "source_label": "a2bb80115750079888e86e2a0de982334134a971",
+  "source_hashes": {
+    "service/moxy_replacement/catalogue_context.py": "d5e95d7215fc119800c1db4673de765fa73ba6e434d42096b728683a93efcc2c",
+    "service/moxy_replacement/configuration.py": "ac422862d159c4b7e3fbd7ea9fb9d1876f4b3feff11ff6e4c3598e9970ced66d",
+    "service/moxy_replacement/conversation.py": "d2d538e385e40da80222fe7a65a426c5392be4599421aed12c680019da8740c6",
+    "service/moxy_replacement/examples.py": "bc58a0d1b74665822e3ce31f2f40709d3553d124a4976153490dc684e3d71d7d",
+    "service/moxy_replacement/grounding.py": "89f5cd109df6c4d97779833e0471c2fd08d100b49afce69ff6a7295c4c50a605",
+    "service/moxy_replacement/input_batch.py": "d2a1188bf0d70510537ec3bad8abfb033fa65e72b47176d9d064a4924cad8d60",
+    "service/moxy_replacement/observations.py": "4cbed2c3f98d19ae2ec79f9a449b8611eeffce333d756d0b8616d3b0e075789c",
+    "service/moxy_replacement/parts.py": "3564a8dc5aa1ba0c1fde8ccf51c0981a7b5355ae45e3f4a5cbc931bdbe94c704",
+    "service/moxy_replacement/product_grounding.py": "aadf964d19e7240079b735583edec70330eaa0031300f287e6d05b687a00883d",
+    "service/moxy_replacement/runtime.py": "53e81947df8b2de242524b9859c462aed603860fea00f4676cfe2562b5df2e90",
+    "service/moxy_replacement/sources/conversation_examples.v1.json": "727b6f3556d0627977318633d72202c261539c333dd548795a8887316712252d",
+    "service/moxy_replacement/state.py": "00b4eef110a6e7d2ecc412fd7b2981ab1b2e1eb9801cc9b36f9cefb42c7c0a38",
+    "service/moxy_replacement/writer.py": "795fbc5ddd718d2b2610beed7e81934c31060cdd37400268c62c7522c98654d6",
+    "service/server.py": "06eba373ec3220cf494d1edaa821e79f238c7bb53dc43e10a9451db1d4cf5f5b",
+    "service/vault_frames.py": "ac7f4e4174b5f4b4d76ee24b0ea173cb2af3c2e03d2e3d7103b4981c5c05b806",
+    "service/vault_storyboard.py": "d5b768b7c7bd5b1f319a2a503ac1bc0352bd883b064af7bec2dd34817377f21f",
+    "service/native_pilot/tools/describe_imported_vault.py": "0a13c4b41c702f85b6cbe778f8c4b5800e1c962749364301cac36e5c5f66e84e",
+    "service/tests/test_automatic_vault_descriptions_pg.py": "e837f7898d180b9bbccebafb6617f4a128b4222aef4278a4131cf546d096facc",
+    "service/tests/test_vault_batch_selection.py": "9006a6547e3bb244dec8cca4388bc09f39907ba19703fde166c28c379e691656",
+    "service/tests/test_vault_error_observability.py": "5409c4eae97f4448332a1157605b507f6abe8f5d0767c69d07a6ab62cc878352",
+    "service/tests/test_vault_video_backoff.py": "51a48453febdb0e1867edf5bb7297664991ba37db3e2bd424ad750ef9573a9a9",
+    "service/moxy_replacement/pilot.py": "823a486132c7d2cc0ac936ca6c1f49bc184e54983d1c627659adac44da8a0aff",
+    "service/onlyfans_runtime/text_delivery.py": "53447117454c4167217e710e8ef2c1f4a86cc37187bc749313e44d5a4143a3b9"
+  },
+  "all_match_handoff_checkout": true,
+  "source_note": "Includes the live quarantine and vault/video fixes previously present only in preserved production image layers."
+}

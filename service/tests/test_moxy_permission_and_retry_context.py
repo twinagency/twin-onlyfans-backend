@@ -80,3 +80,53 @@ def test_product_retry_includes_independent_wording_problem_in_its_single_correc
  assert brief['existing_cards'][0]['verified_assets']==snap['products']['old']['assets']
  assert 'text' not in brief['existing_cards'][0]
  assert snap==before
+
+
+@pytest.mark.parametrize('facts,override,allowed', [
+    ({}, None, False),
+    ({'spender': False, 'vip': False}, None, False),
+    ({'spender': True, 'vip': True}, None, True),
+    ({}, True, True),
+    ({'spender': False, 'vip': False}, True, True),
+    ({'spender': True, 'vip': True}, False, False),
+])
+def test_writer_uses_only_resolved_conversation_permission_branch(facts, override, allowed):
+    import json
+    from moxy_replacement.configuration import CreatorConfiguration, load_foundation
+    from moxy_replacement.writer import messages
+
+    creator = deepcopy(load('amelia').creator)
+    if override is not None:
+        rule = next(rule for rule in creator['rules'] if rule['key'] == 'sexting')
+        rule['value'] = override
+        rule['requires'] = {}
+        rule['instruction'] = 'Operator-approved fixture conversation permission.'
+    configuration = CreatorConfiguration(load_foundation(), creator)
+    snap = scene()
+    snap['event']['payload'] = {}
+    snap['instructions'] = configuration.public_context()
+    snap['fan_state'].update(facts)
+    snap['history'] = [
+        {'id': 1, 'direction': 'out', 'text': 'That topic is off the table for me.'},
+        {'id': 2, 'direction': 'in', 'text': 'Why did you say that?'},
+    ]
+    snap['pending_fan_messages'] = [snap['history'][-1]]
+    before = deepcopy(snap)
+
+    prompt = messages(snap)
+    system = prompt[0]['content']
+    payload = json.loads(prompt[1]['content'])
+    resolved = permission_context(snap['instructions'], snap['fan_state'], 'sexting')
+    assert resolved['allowed'] is allowed
+    assert payload['permission_status']['sexting'] == resolved
+    assert ('The resolved conversation permission is allowed.' in system) is allowed
+    assert ('The resolved conversation permission is unavailable for this fan.' in system) is not allowed
+    assert 'Do not describe genital contact' not in system
+    assert 'waive the sexting restriction' not in system
+    assert 'Outgoing history, saved excerpts and writing examples record what was said' in system
+    assert 'Preserve a boundary when a current rule supports it' in system
+    assert payload['history'] == before['history']
+    assert payload['pending_fan_messages'] == before['pending_fan_messages']
+    assert snap == before
+    current_rule = next(rule for rule in snap['instructions']['rules'] if rule['key'] == 'sexting')
+    assert json.dumps(current_rule, sort_keys=True, separators=(',', ':')) in system

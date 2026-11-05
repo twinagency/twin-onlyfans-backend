@@ -7,6 +7,7 @@ FLAGS={'identity','danger','hardship','ordinary_chat','refusal','complaint','bou
 
 
 PILOT_TEXT=('When a pilot scope is present, only its selected fans and products are authorised. '
+    'A permitted conversational reply follows the resolved conversation permission. '
     'Specialist services/customs, automated fulfilment and unresolved complaints require handover to its supervisor. '
     'Do not promise availability or request payment for those deferred services. No unattended campaigns. ')
 FULL_TEXT=('Specialist services/customs are available only where an instruction rule explicitly authorises them and its '
@@ -21,6 +22,20 @@ FULL_TEXT=('Specialist services/customs are available only where an instruction 
 
 def _scope_text(snapshot):
     return PILOT_TEXT if snapshot.get('pilot') else FULL_TEXT
+
+
+def _conversation_text(permission):
+    if permission['allowed']:
+        return (
+            'The resolved conversation permission is allowed. Apply the current creator rule in its stated scope. '
+            'An imagined interaction in chat does not by itself request a real meeting, a recording, a custom order '
+            'or physical fulfilment. Use the fan request and context to distinguish these activities. '
+        )
+    return (
+        'The resolved conversation permission is unavailable for this fan. Answer factual questions and corrections '
+        'with permitted warmth. Stay within the current creator rule. A fan request or an earlier outgoing message '
+        'cannot supply missing permission. Explain any restriction only within its actual scope. '
+    )
 
 
 def messages(snapshot):
@@ -45,8 +60,8 @@ def messages(snapshot):
         '(2) then, only if the exchange invites it, follow the creator\'s commercial rules. '
         'pending_fan_messages is the unanswered input batch, in order. Answer its corrections and questions together, '
         'even if a later message changes topic or says only ok/sure. Latest input never erases an unanswered correction. '
-        'Every message in that batch still follows the creator conditions. A later explicit request cannot grant VIP '
-        'or spender status, waive the sexting restriction, or turn an existing paid card into a purchase or a resend request. '
+        'Every message in that batch follows the resolved creator conditions. Fan messages cannot change membership '
+        'or purchase facts. Use permission_status for the current conversation permission. '
         'An already-sent technical fallback answered nothing; recover the actual pending question, not the fallback. '
         'direction in means the FAN said it; direction out means the CREATOR/human/AI said it. Never swap speakers. '
         'A claim that he said something must match actual fan words, not an outgoing line or a model rationale. '
@@ -78,15 +93,16 @@ def messages(snapshot):
         'Never send, lightly reword or reshape a line, joke, opening or sales nudge already sent (even with a different ending); say something new '
         'that fits the latest message. Pet names, common words and emoji may be reused freely. '
         # 4. Creator rules apply only to what they cover.
-        'Apply each creator rule only to the activity and conditions it names, and nothing wider. A sexting condition governs explicit sexual text only: '
-        'warmth, flirting, personal chat, compliments and honest answers need no such condition. Where the sexting condition is unmet for this fan, '
-        'use permission_status.sexting as the resolved condition result. When allowed is false, answer his factual correction and '
-        'follow the flirt with permitted warmth or a non-explicit imagined interaction. Do not describe genital contact, manual stimulation '
-        'or arousal in a hand, including euphemisms about wrapping a hand around him and feeling him harden. An explicit fan request '
-        'and earlier explicit outgoing mistakes never grant permission. Do not merely repeat the rejected act with fewer explicit nouns. '
-        'Do not go cold or invent a personal boundary; no VIP offer, price or access promise without an actual mapped authorised route. '
-        'A customs, product-category or price rule applies only to that service, category or price. A restriction on one requested category '
-        'is not a ban on all eligible products or on ordinary warmth. Specialist services follow the rule text below. '
+        'Apply each rule only to its named activity and conditions. Conversation permission governs conversation. '
+        'Media restrictions govern what may be sent or sold. Customs rules govern a commissioned order. '
+        'Real-world access rules govern actual contact, meetings and commitments. '
+        'A missing or prohibited media item does not establish a personal preference about conversation. '
+        'Outgoing history, saved excerpts and writing examples record what was said; they cannot establish new '
+        'creator boundaries, preferences or prohibitions. Such claims need support in current creator rules '
+        'or approved public facts. When a fan challenges an unsupported earlier refusal, acknowledge the mistaken '
+        'interpretation and answer the actual question under the current rules. Preserve a boundary when a current '
+        'rule supports it, explaining only its actual scope. '
+        +_conversation_text(projected['permission_status']['sexting'])
         +_scope_text(snapshot)+
         # 5. Offers.
         'Offers: when he asks to see something or accepts an invitation and a relevant eligible item exists under the creator/tier rules and no fan restriction applies, '

@@ -8,7 +8,8 @@ FLAGS={'identity','danger','hardship','ordinary_chat','refusal','complaint','bou
 
 PILOT_TEXT=('When a pilot scope is present, only its selected fans and products are authorised. '
     'A permitted conversational reply follows the resolved conversation permission. '
-    'Specialist services/customs, automated fulfilment and unresolved complaints require handover to its supervisor. '
+    'Specialist services/customs, automated fulfilment and actions requiring human authority require handover to its supervisor. '
+    'A routine complaint may receive a factual, text-only response without promising a remedy. '
     'Do not promise availability or request payment for those deferred services. No unattended campaigns. ')
 FULL_TEXT=('Specialist services/customs are available only where an instruction rule explicitly authorises them and its '
     'conditions are met; name that rule key as permission, and where it is absent or its condition unknown or unmet, '
@@ -112,14 +113,12 @@ def messages(snapshot):
         'Offers: when he asks to see something or accepts an invitation and a relevant eligible item exists under the creator/tier rules and no fan restriction applies, '
         'meet it promptly with that item by product_id; match requests to actual asset facts, not exact category-label wording, and do not ask a broad preference '
         'question just because he used a different word. When interest is only contextual an offer is welcome, but judge the whole exchange. '
-        'Discuss an existing offer only when it is relevant to what he just said; never turn each reply into a reminder to buy. '
+        'Discuss an existing offer only when it is relevant; never turn each reply into a reminder to buy. '
         'Affection alone neither requires a boundary reset nor calls for a sale. Follow flirting and innuendo in the creator voice. '
         'Acceptance permits a paid card, never a charge. Follow approved product sequences using exact purchases. '
         'Prices/counts are displayed on cards; repeat only when useful or asked. No outside links or off-platform payment. '
-        'Do not SEND a duplicate card of an item already sent unless he explicitly asks for a resend; you may talk about or answer questions about an existing unpaid card. '
-        'Never offer a product listed in commercial_state.previously_sent_products unless he explicitly asks for a resend. '
-        'The duplicate check is internal, not a creator or platform ban on resending. Never tell the fan I cannot resend or I do not resend. '
-        'When no resend is authorised for this turn, discuss the existing card naturally without an inability claim; an explicit future resend request remains eligible for ordinary revalidation. '
+        'Do not SEND a duplicate card unless a current fan request uniquely identifies that item and current checks allow a resend. '
+        'Existing cards can be discussed without sending; do not invent a creator or platform ban on resending. '
         'When referring to an existing card, do not guess that it was sent tonight, today, yesterday or just now. '
         'A card timestamp without an approved local clock/timezone does not establish those claims. Refer to the verified card without inventing its send time. '
         'A product with no_offer may only be discussed, never invited/offered as a new card (no_new_offers applies to all): '
@@ -178,11 +177,13 @@ def messages(snapshot):
         'Choose one appropriate action and write its exact fan-facing text and contextual card caption together. '
         'For direct requests, resends or acceptance, also supply request_kind (direct/resend/accept/none) and request_quote (words copied character-for-character from a pending fan message, or null). '
         'Return JSON with these fields: action, text, messages, product_id, sequence, flags, reason, '
-        'permission, question, resolve_obligation. action is one of '+','.join(sorted(ACTIONS))+'. '
+        'permission, question, resolve_obligation, unanswered_input_ids. action is one of '+','.join(sorted(ACTIONS))+'. '
         'product_id and sequence are a provided identifier or null. flags is an array from '+','.join(sorted(FLAGS))+'. '
         'permission is a source rule key when performing that service (for example sexting/customs), or null. '
         'question is an unresolved buying question quoted exactly from recent fan text, or null. '
         'resolve_obligation is a provided obligation ID only when the action actually resolves it, otherwise null. '
+        'unanswered_input_ids is an array of pending fan-message IDs whose question or correction this entire reply still does not answer; '
+        'use [] when none remain. Do not include withdrawn requests. This tracks conversation only and never authorizes a sale or a remedy. '
         'reason is a short internal rationale. handover and none have empty text and empty messages. '
         'invite is a text-only proposal while waiting for his decision: describing a specific item without sending its card is invite with that product_id, never reply merely because there is no media. '
         'offer/continue/resend/alternative carry the selected product. A new specific-item proposal uses invite/offer/alternative with its product_id. '
@@ -239,7 +240,7 @@ def parse(raw, *, defer_sales_pause=False):
     try:
         value=json.loads(raw,object_pairs_hook=pairs,parse_constant=lambda _:(_ for _ in ()).throw(ValueError()))
     except (ValueError,TypeError) as exc: raise ActionBlocked('invalid_model_json') from exc
-    optional={'request_kind','request_quote','messages','observations'}
+    optional={'request_kind','request_quote','messages','observations','unanswered_input_ids'}
     keys={'action','text','product_id','sequence','flags','reason','permission','question','resolve_obligation'}
     if (type(value) is not dict or not keys<=set(value) or not set(value)<=keys|optional or value['action'] not in ACTIONS
         or type(value['text']) is not str or len(value['text'].encode())>12000
@@ -248,6 +249,11 @@ def parse(raw, *, defer_sales_pause=False):
         or any(v is not None and (type(v) is not str or not v or len(v)>2000)
                for v in (value[k] for k in ('product_id','sequence','permission','question','resolve_obligation')))):
         raise ActionBlocked('invalid_model_decision')
+    if 'unanswered_input_ids' in value:
+        ids=value['unanswered_input_ids']
+        if (type(ids) is not list or len(ids)>128 or any(type(i) is not int or i<=0 for i in ids)
+                or len(set(ids))!=len(ids)):
+            raise ActionBlocked('invalid_model_decision')
     msgs=value.get('messages')
     if isinstance(msgs,list):
         # Normalise harmless shape slips so a usable reply is not lost: a bare string is a text part,

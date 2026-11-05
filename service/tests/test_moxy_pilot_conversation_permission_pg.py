@@ -32,8 +32,7 @@ def test_reply_with_sexting_permission_retains_every_bubble_and_passes_pilot_gat
 
 @pytest.mark.parametrize('permission,action,flags',[
  ('customs','reply',[]),('ratings','reply',[]),('unknown','reply',[]),
- ('sexting','offer',[]),(None,'correct',[]),(None,'fulfil',[]),
- ('sexting','reply',['complaint'])])
+ ('sexting','offer',[]),(None,'correct',[]),(None,'fulfil',[])])
 def test_specialist_services_and_complaints_still_require_human(permission,action,flags):
  d=decision(action=action,permission=permission,flags=flags,
   messages=[{'text':'This must not be sent.','media':False}])

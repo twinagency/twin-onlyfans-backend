@@ -20,6 +20,9 @@ _MONEY = re.compile(
 _NUMBER = re.compile(r"(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?")
 _BREAK = re.compile(r"(?<!\d)[.!?;,\n]+|[.!?;,\n]+(?!\d)|\b(?:but|and)\b", re.I)
 _CARD_ID = re.compile(r"\b(?:card|message)\s*(?:number\s*|#\s*)?(\d+)\b", re.I)
+_CHEAPEST_CARD = re.compile(
+    r"\b(?:the one in (?:the )?chat|this(?:\s+(?:one|card))?|that\s+(?:one|card)|(?:the\s+)?card|it)"
+    r"(?:\s+is|'s)\s+(?:(?:already|actually|currently)\s+)?(?:my|the)\s+cheapest\b", re.I)
 _BUDGET_BEFORE = re.compile(
     r"\b(?:your budget(?:\s+(?:is|was|of))?|you\s+(?:only\s+)?(?:have|had|can spend|could spend))"
     r"(?:\s+(?:just|only|up to|exactly))?\s*$", re.I,
@@ -132,6 +135,28 @@ def _selected_target(snapshot, decision, terms):
     return snapshot.get("inventory", {}).get(key) or snapshot.get("products", {}).get(key)
 
 
+def _cheapest_card_problem(snapshot, decision, selected, clause):
+    """Reject a definite cheapest claim only when a cheaper same-category item is offerable."""
+    match = _CHEAPEST_CARD.search(clause)
+    if not match or any(start <= match.start() < end for start, end, _ in quotes(clause)):
+        return False
+    if re.search(r"\b(?:not|never|wrong|incorrect|didn't|did not)\b", clause[:match.start()], re.I):
+        return False
+    key = decision.get('product_id')
+    target = selected
+    if key is None:
+        cards = snapshot.get('card_state') or []
+        if len(cards) != 1:
+            return False  # The claim has no unique card target.
+        target = cards[0]
+        key = target.get('product_id')
+    product = snapshot.get('products', {}).get(key, {})
+    category = product.get('category')
+    price = target.get('price_cents') if isinstance(target, dict) else None
+    lowest = (snapshot.get('commercial_state', {}).get('cheapest_offerable_cents_by_category') or {}).get(category)
+    return type(price) is int and type(lowest) is int and lowest < price
+
+
 def price_problem(snapshot, decision, terms=None):
     """Return a scoped correction reason, or None for supported/no money claims.
 
@@ -143,6 +168,8 @@ def price_problem(snapshot, decision, terms=None):
     selected = _selected_target(snapshot, decision, terms)
     for part in plan(decision):
         for clause in _clauses(part["text"]):
+            if _cheapest_card_problem(snapshot, decision, selected, clause):
+                return 'price_claim_mismatch'
             for match in _MONEY.finditer(clause):
                 if _quoted_source(snapshot, clause, match):
                     continue

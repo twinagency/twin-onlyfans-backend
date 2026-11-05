@@ -362,13 +362,19 @@ def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
     completed=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.fan_id==fan,
         MoxyEvent.event_id!=event.event_id,MoxyEvent.kind.in_(('turn','welcome')),MoxyEvent.status=='done')
         .order_by(MoxyEvent.updated_at.desc())).all()
-    answered=[]
+    answered=[];unanswered_ids=None
     for previous in completed:
-        progress=json.loads(previous.payload_json).get('_moxy_delivery',{}).get('receipts',[])
+        previous_payload=json.loads(previous.payload_json)
+        progress=previous_payload.get('_moxy_delivery',{}).get('receipts',[])
         if not progress or any(v['message_id'] in own_receipts for v in progress):continue
         d=json.loads(previous.decision_json or '{}')
         if d.get('reason')=='moxy_validated_technical_fallback':continue
-        mid=json.loads(previous.payload_json).get('source_message_id')
+        annotation=previous_payload.get('_moxy_conversation_progress')
+        if (unanswered_ids is None and type(annotation) is dict and annotation.get('version')==1
+                and type(annotation.get('unanswered_input_ids')) is list
+                and all(type(i) is int and i>0 for i in annotation['unanswered_input_ids'])):
+            unanswered_ids=annotation['unanswered_input_ids']
+        mid=previous_payload.get('source_message_id')
         if mid is not None:
             message=s.get(Message,(account,fan,mid))
             if message is not None:answered.append(message)
@@ -377,8 +383,10 @@ def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
         Message.direction=='in',Message.is_unsent.is_(False))
     if boundary is not None:
         from sqlalchemy import or_,and_
-        batch_query=batch_query.where(or_(Message.created_at>boundary.created_at,
-            and_(Message.created_at==boundary.created_at,Message.message_id>boundary.message_id)))
+        newer=[Message.created_at>boundary.created_at,
+               and_(Message.created_at==boundary.created_at,Message.message_id>boundary.message_id)]
+        if unanswered_ids:newer.append(Message.message_id.in_(unanswered_ids))
+        batch_query=batch_query.where(or_(*newer))
     batch=[{'id':m.message_id,'direction':'in','sender':'fan','text':m.body,'at':m.created_at,
         'attachment_description':m.image_desc,'media_count':m.media_count} for m in s.scalars(
             batch_query.order_by(Message.created_at,Message.message_id))]
@@ -434,6 +442,7 @@ FACTUAL_REASONS={'unsupported_fan_attribution','unsupported_relationship_history
     'known_name_not_used','unsupported_profile_visibility_claim'}
 FACTUAL_REASONS|={'unsupported_catalogue_prohibition','unsupported_price_units','unsupported_card_access_denial','sexting_permission_unverified','unsupported_asset_absence'}
 FACTUAL_REASONS|={'price_claim_mismatch','price_claim_unbound'}
+FACTUAL_REASONS.add('invalid_conversation_progress')
 REQUEST_EVIDENCE_REASONS={'current_request_authority_unverified','current_request_evidence_missing','request_quote_required','resend_not_requested'}
 FACTUAL_REASONS|=REQUEST_EVIDENCE_REASONS
 RECOVERABLE_REASONS|=FACTUAL_REASONS|{'product_request_mismatch'}
@@ -580,7 +589,7 @@ def wording_problem(snap,decision):
     if decision['action'] not in {'correct','fulfil'} and content_status_violation(snap,texts):return 'content_status_wording'
     # The decision's own already-delivered parts are not "recent lines" for its later parts.
     own={r.get('message_id') for r in payload.get('_moxy_delivery',{}).get('receipts',[])}
-    recent=[m['text'] for m in snap['history'][-20:] if m['direction']=='out' and m.get('text') and m['id'] not in own]
+    recent=[m['text'] for m in snap['history'] if m['direction']=='out' and m.get('text') and m.get('id') not in own][-12:]
     from .parts import repetition_texts
     looping=repetition_texts(snap,decision)
     norm_recent={_norm(t) for t in recent[-12:]}
@@ -588,6 +597,15 @@ def wording_problem(snap,decision):
         # Sending the same line again reads as a bot; one bounded correction asks for a fresh reply.
         return 'repeated_recent_line'
     if reused_wording([{'text':t} for t in looping],recent):return 'repeated_recent_phrase'
+    for index,text in enumerate(looping):
+        earlier=looping[:index]
+        if (len(_norm(text))>=12 and any(_norm(text)==_norm(old) for old in earlier)) or reused_wording([{'text':text}],earlier):
+            return 'repeated_recent_phrase'
+    # The captured Amelia thread repeated the same short laugh on successive
+    # creator turns; one isolated laugh remains ordinary conversation.
+    laugh=lambda text:bool(_policy_re.match(r'^\s*ha(?:ha)*\b',text,_policy_re.I))
+    if len(recent)>=3 and all(laugh(t) for t in recent[-3:]) and looping and laugh(looping[0]):
+        return 'repeated_recent_phrase'
     if any(INVENTED_POLICY.search(t) for t in texts):
         # No source states a blanket free-content policy; inventing one is refused once, then a person decides.
         return 'invented_policy_claim'
@@ -658,9 +676,10 @@ def correction_brief(reason,result,snap):
         brief['guidance']='The draft used internal cents as customer-facing money. Use verified price_cents divided by100 for dollars and only current offerable prices. Do not invent a cheaper item or discount.'
         brief['verified_offerable_prices']=(snap.get('commercial_state') or {}).get('cheapest_offerable_cents_by_category',{})
     if reason in {'price_claim_mismatch','price_claim_unbound'}:
-        brief['guidance']='Bind each monetary claim to the exact selected item or identified existing card, or remove the unsupported claim. Use the supplied current terms for a new card and the recorded receipt terms for a historical card. A fan budget or a clearly attributed historical quotation is not a new offer price. Preserve the valid item and approved amount; never change the card price to fit your wording.'
+        brief['guidance']='Bind each monetary claim to the exact selected item or identified existing card, or remove the unsupported claim. Use the supplied current terms for a new card and the recorded receipt terms for a historical card. Do not call a card the cheapest when a cheaper eligible item is shown. A fan budget or a clearly attributed historical quotation is not a new offer price. Preserve the valid item and approved amount; never change the card price to fit your wording.'
         brief['selected_terms']=snap.get('inventory',{}).get(result.get('product_id'))
         brief['verified_cards']=snap.get('card_state',[])
+        brief['verified_offerable_prices']=(snap.get('commercial_state') or {}).get('cheapest_offerable_cents_by_category',{})
     if reason=='unsupported_card_access_denial':
         brief['guidance']='The referenced durable card has a positive price and is not a free welcome message. Do not claim nothing needs opening or unlocking. Use its exact verified product mapping; if its content is unknown, handover with no fan text for operator review rather than invent a description.'
         brief['verified_cards']=snap.get('card_state',[])
@@ -672,6 +691,8 @@ def correction_brief(reason,result,snap):
         brief['guidance']='Your text invites a specific catalogue item. Use invite and its actual product_id, without a media card, so acceptance retains its identity.'
     if reason in REQUEST_EVIDENCE_REASONS:
         brief['guidance']='Repair the request evidence using the actual current fan message. Missing or unsupported evidence does not ban the item. Keep the proposed product, action and approved terms if current evidence supports them; otherwise answer or clarify in text with no product or media. Do not switch products, invent consent, clear a restriction or claim a general inability to sell.'
+    if reason=='invalid_conversation_progress':
+        brief['guidance']='Use only IDs from the pending fan messages for unanswered_input_ids. Include only questions or corrections not answered by the whole reply; use an empty list when none remain.'
     from .request_evidence import authorizes_request
     resend_repair=(reason=='media_previously_sent_requires_explicit_resend'
         and result.get('product_id') is not None
@@ -716,6 +737,10 @@ def validate_decision(settings,snap,decision,*,planning=False):
     from .observations import observations, apply
     facts=apply(facts,observations(decision,snap))
     from .conversation import pending_messages
+    if 'unanswered_input_ids' in decision:
+        allowed={m['id'] for m in pending_messages(snap) if m.get('direction')=='in'}
+        if any(i not in allowed for i in decision['unanswered_input_ids']):
+            raise ActionBlocked('invalid_conversation_progress')
     if decision['question'] is not None and not any(m['direction']=='in' and _norm(decision['question']) in _norm(m['text']) for m in snap['history']+pending_messages(snap)):
         # An unquoted buying question only loses its reminder obligation; it never holds the turn.
         decision['question']=None
@@ -1401,7 +1426,13 @@ def delivered(s,intent):
             if o['id']==d['resolve_obligation']:o['status']='fulfilled';o['message_id']=intent.provider_message_id
     mf.state_json=canonical(state);mf.revision+=1;mf.updated_at=utcnow();e.updated_at=utcnow()
     e.status='done'
-    if has_remaining(e):
+    remaining=has_remaining(e)
+    if not remaining:
+        original=json.loads(e.decision_json)
+        if 'unanswered_input_ids' in original:
+            payload['_moxy_conversation_progress']={'version':1,'unanswered_input_ids':original['unanswered_input_ids']}
+            e.payload_json=canonical(payload)
+    if remaining:
         if not continuation_ok:
             e.status='stale';e.reason='moxy_conversation_interrupted'
         else:

@@ -91,12 +91,15 @@ class Replay:
         system=m.calls[0][0]['content'];sees=json.loads(m.calls[0][1]['content'])
         refs=json.loads(system.split('\nWriting references:\n',1)[1]) if '\nWriting references:\n' in system else {}
         draft=json.loads(m.raw_output)
+        first=sees['products'].get('first')
+        if first is None and sees.get('rejected_product_context',{}).get('product_id')=='first':
+            first=sees['rejected_product_context']
         return {'kind':kind,'event_id':event_id,'status':status,'reason':reason,
             'draft':[p['text'] for p in draft.get('messages') or [{'text':draft['text']}]],
             'draft_action':draft['action'],'draft_product':draft['product_id'],
             'rejected':payload.get('rejected'),
             'prompt':{'fan_name':sees.get('fan_name'),'current_input':(sees.get('commercial_state') or {}).get('current_input'),
-                'first_offer':sees['products']['first'].get('no_offer','offerable'),
+                'first_offer':first.get('no_offer','offerable') if first is not None else 'missing',
                 'situation':refs.get('latest_exchange_reads_as'),
                 'reference_situations':[x.get('situation',x.get('kind')) for x in refs.get('examples',[])]}}
 
@@ -570,7 +573,7 @@ def test_prompt_no_longer_holds_contradictory_rules():
     assert 'turn the interest into an invite or offer' not in text   # turned every flirt into a sale
     assert text.count('No message-count quota')==1 and 'no emoji quota' in text
     assert 'Order of work' in text and 'fan\'s latest message' in text and 'clarification' in text
-    assert 'only to the activity and conditions it names' in text
+    assert 'Apply each rule only to its named activity and conditions' in text
     assert 'only when it is relevant' in text and 'verified current asset information' in text
 
 
@@ -646,7 +649,7 @@ def test_usable_fan_name_prefers_verified_memory_then_chosen_then_profile():
 
 def test_correction_brief_separates_wording_from_product():
     from moxy_replacement.runtime import correction_brief
-    snap={'history':[{'direction':'in','text':'show me something'}]}
+    snap={'history':[{'id':1,'direction':'in','text':'show me something'}]}
     result={'action':'offer','product_id':'first','sequence':'s','text':'again','messages':[{'text':'again','media':False},{'text':'x','media':True}]}
     wording=correction_brief('repeated_recent_phrase',result,snap)
     assert wording['kind']=='wording' and wording['product_id'] is None and wording['keep']=={'action':'offer','product_id':'first','sequence':'s'}

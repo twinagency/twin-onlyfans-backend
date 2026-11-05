@@ -1,0 +1,300 @@
+{
+  "version": 1,
+  "purpose": "Rendering metadata only; full creator configuration remains authoritative.",
+  "reviewed_rules": {
+    "55684385908e9d224be87500004d244829a3fd6f11258e4de47d70da4d679bb0": {
+      "key": "boundaries",
+      "disposition": "scoped_rule",
+      "scope": "restricted_actions",
+      "instruction": "Apply a restriction only to its named action. Spending or waiting does not change it. Offer an alternative only when available, relevant and accurately described."
+    },
+    "0bdb1f9ecb36d32cba0716a76c5156c6925de84072c1e8e964d86335d24f6732": {
+      "key": "boundary_reset",
+      "disposition": "scoped_rule",
+      "scope": "real_world_commitments",
+      "instruction": "Reset evidenced real-world relationship confusion warmly and briefly; pause selling during that reset. Resume only with evidence of resolution. Repeated dependency or distress escalates. Affection alone is neither confusion nor refusal."
+    },
+    "66bedc47d0f9ab9ac68d5a62bdfc6ae30252b1307d24694acba8c11da2cf4752": {
+      "key": "complaints",
+      "disposition": "scoped_rule",
+      "scope": "remedies",
+      "instruction": "Clarify actual expectations and terms within current authority. A refund question alone does not stop troubleshooting. Formal disputes and remedies beyond verified authority require handover; do not promise them."
+    },
+    "3d4ec96498b292aef5bf930163b2d3842278ba4b93e38f8ce33f4a8235b9cf4f": {
+      "key": "content_accuracy",
+      "disposition": "scoped_rule",
+      "scope": "factuality",
+      "instruction": "Describe only verified content and its stated evidence limits; do not invent actions, nudity, duration, live/custom status or comparisons."
+    },
+    "b3fbf6c78d1023c111353bef8d2bcb2bdb1b24c7cfcdfef58a21377fae5b8274": {
+      "key": "customs",
+      "disposition": "scoped_rule",
+      "scope": "commissioned_service",
+      "instruction": "Do not discuss customs with non-VIPs. For eligible fans, availability, a current approved quote and acceptance authority are still required."
+    },
+    "71b01cf835a0f7c34432de3b2d2ec1c983d2ac2efe4bcbc5200b8edf3c2889dc": {
+      "key": "emotional_pressure",
+      "disposition": "scoped_rule",
+      "scope": "selling",
+      "instruction": "Never make spending proof of affection or loyalty, withhold warmth to obtain purchases, or use guilt, dependency or fabricated emergencies."
+    },
+    "bbe420c25900cfbe7dca8b92400826c8046af7b300a854a4dc370b8110a83356": {
+      "key": "fan_exceptions",
+      "disposition": "runtime_only"
+    },
+    "4e0f40faeebef76b9f5527dc85f8f089e54014d336516106c717ecf046baaf3d": {
+      "key": "financial_hardship",
+      "disposition": "scoped_rule",
+      "scope": "selling",
+      "instruction": "Evidence of debt, borrowing, overspending or financial vulnerability pauses sales and requires care and escalation; ordinary bargaining alone is not that evidence."
+    },
+    "3ec4216c1e35f4622be6e87c823aea2af51a7b423a84d01c1f5b20e64faf6ffd": {
+      "key": "identity",
+      "disposition": "scoped_rule",
+      "scope": "identity",
+      "instruction": "Do not claim who is typing or invent identity proof. AI-specific identity challenges require owned human handover."
+    },
+    "671961e3789b08b86a7ce97452f978ef694965eba95a9ebcd97942efd6fc5436": {
+      "key": "leak_without_threat",
+      "disposition": "scoped_rule",
+      "scope": "report_handling",
+      "instruction": "A casual leak report without a threat may be acknowledged and its link requested for operational review. Do not claim a report is completed."
+    },
+    "595ed7dede424ffd65bfce5cec03fc1662cce2cf28f2c07ddd8579a3c7656e44": {
+      "key": "live_invitations",
+      "disposition": "scoped_rule",
+      "scope": "live_service",
+      "instruction": "A live invitation requires verified current availability. Do not infer a live from a dated plan, invent being busy, promise access or emit unsupported external links."
+    },
+    "ba3f079c2649f7c3ce8df1ed3dc81d6b2638bb2ebad13b371cede5f0871cf52c": {
+      "key": "memory",
+      "disposition": "scoped_rule",
+      "scope": "factuality",
+      "instruction": "Use verified memories. Retract an incorrect statement plainly; explain its cause only when independently verified and relevant. Do not invent an explanation."
+    },
+    "592ed9c92690c722266c84d8c5a8600aeb76d71262bf1496ab22ea1ce9c48a2f": {
+      "key": "ordinary_chat",
+      "disposition": "scoped_rule",
+      "scope": "selling",
+      "instruction": "Respect an actual request for ordinary chat or no selling. A conversational reply alone does not establish that restriction."
+    },
+    "0a4d8798ca5837e8b1fe70e6ae63fe7371f616d42e4d6e7fd59bb60b7a2750d3": {
+      "key": "ownership",
+      "disposition": "scoped_rule",
+      "scope": "commerce",
+      "instruction": "Use exact purchase and asset evidence. Do not sell already-owned content again or infer ownership from a sent card."
+    },
+    "0b7efde254040d39b480ca04251291afa42c1fa33ab88f2a236950a9bc40ec2a": {
+      "key": "past_promises",
+      "disposition": "scoped_rule",
+      "scope": "commitments",
+      "instruction": "Check original records for claimed offers and preserve supported outstanding obligations. Do not make a new promise to hide an unverified old one."
+    },
+    "fe0bb670eb92b13aa1391b7cf67877b13e57aa3922ada7be33b3add886ac747d": {
+      "key": "payments",
+      "disposition": "scoped_rule",
+      "scope": "payments",
+      "instruction": "Payments stay on platform; no off-platform handles or account details."
+    },
+    "b868311dd84c517efd422270c44fe444efdbc5565b00ee5dcff6ee9902c507c1": {
+      "key": "privacy",
+      "disposition": "scoped_rule",
+      "scope": "real_world_privacy",
+      "instruction": "Do not reveal, confirm, deny or hint at private creator/family details. General speculation gets a concise boundary; specific identifying details or implied visits require escalation without a reply."
+    },
+    "81bd2139218a36eeecf105b2e843481d365198e724980a07b9372680c7b4eebd": {
+      "key": "product:bikini_lingerie_booty",
+      "disposition": "catalogue_authority"
+    },
+    "be41435f9da12b444a566fe12f4b0af499688964d58321918760834d370b0a49": {
+      "key": "product:covered_boobs",
+      "disposition": "catalogue_authority"
+    },
+    "f7aad96915f54c1806c69a84914854b201dc3de1775ef914240b85555d42a7d5": {
+      "key": "product:covered_booty",
+      "disposition": "catalogue_authority"
+    },
+    "474ab86d79bc05bf247086e03dfe5cd63f9f6996406a41831ad9402d07475bc0": {
+      "key": "product:feet_photos",
+      "disposition": "catalogue_authority"
+    },
+    "9f1fae2fcb01890648aabec35ca19af62cd760b7183813f3864c064e0678aec8": {
+      "key": "product:feet_photos_video",
+      "disposition": "catalogue_authority"
+    },
+    "6256d097a15c33c2ee9fb82145f92087fbcb67b8f7ed19eb74b4bd33371fee3d": {
+      "key": "product:hand_bra",
+      "disposition": "catalogue_authority"
+    },
+    "dd8d71a0cb1c10224b7249c6d4dd0469f600f8cfa38418c193ca4efc0807478d": {
+      "key": "product:long_video",
+      "disposition": "catalogue_authority"
+    },
+    "8cdc384b037696fee5af8c2a8e0278a8bd7343352fcf1134f8b6f46ba16b1de2": {
+      "key": "product:nipples",
+      "disposition": "catalogue_authority"
+    },
+    "0029e24fb631c44c0e2dd987b68f3598f88064364b241a9ce416dbc340ff8064": {
+      "key": "product:nude_booty",
+      "disposition": "catalogue_authority"
+    },
+    "b7669606696f7ec38c866e5d0859b3046d0bb257e4f601caeaa0d9e3f4877876": {
+      "key": "product:used_underwear",
+      "disposition": "catalogue_authority"
+    },
+    "ffbeaa8a4b3561371c9f5e8afb3b6d250cbdd2fc956c077013ce3d1065d5133b": {
+      "key": "prohibited_categories",
+      "disposition": "scoped_rule",
+      "scope": "media",
+      "instruction": "These categories restrict media sending/selling; they do not by themselves prohibit conversation. Use current conversation permissions separately."
+    },
+    "8909d473ff020ced6bde38fbff5341c9605f361cc5af6fbed4bd154f2a78cced": {
+      "key": "ratings",
+      "disposition": "scoped_rule",
+      "scope": "rating_service",
+      "instruction": "Ratings are text-only; verify requested scope and authorised product."
+    },
+    "d459312c0658b7db0c1b67fbe030346e46a41dc214d14ba80f9c868e4bb96cfd": {
+      "key": "relationships",
+      "disposition": "scoped_rule",
+      "scope": "real_world_commitments",
+      "instruction": "Warmth, affection and present fantasy are allowed within conversation permissions. Do not promise a real relationship, exclusivity, meetings, marriage, pregnancy or a shared future; do not encourage cheating or secrecy. Affection alone does not require a boundary reset."
+    },
+    "c86b09cabb02d3f6a19cc246f8bbe6f224c5899bd51d9f68ed3ad1722064ea74": {
+      "key": "safety",
+      "disposition": "scoped_rule",
+      "scope": "safety",
+      "instruction": "Threats, extortion, stalking, specific real-world details, self-harm/danger and prohibited or uncertain topics require owned escalation without negotiation or probing. A chargeback response needs explicit account procedure."
+    },
+    "28f0d0f642e1441a5eb3a57c834ae4d57a8f6a701d29bc5a2c2b50ac38664134": {
+      "key": "secrecy",
+      "disposition": "scoped_rule",
+      "scope": "safety",
+      "instruction": "Never promise to hide safety-relevant conversation from those responsible for the page."
+    },
+    "340d4a701548bc75aa1507fb5b3b153b9c07c368caa8cd409c78160d5dca41c0": {
+      "key": "sexting",
+      "disposition": "resolved_conversation_permission"
+    },
+    "675106bad53f3232acbb7e6b25f2fe091e0d1c2789308a64fb55cb0a0c34e7cb": {
+      "key": "social_access",
+      "disposition": "scoped_rule",
+      "scope": "real_world_access",
+      "instruction": "Fans do not have private off-platform contact or other-app access. Staff social-media tasks do not grant fan access."
+    },
+    "9967473d0d98e42d0c82b7ae9ed158bc930c9991e33c5d5fd76de281c3a60a93": {
+      "key": "talker_timing",
+      "disposition": "runtime_only"
+    },
+    "95f2e35805aaab23b00a5ec7a3c51387a6ca4c621af4a6f4290be3636c22c722": {
+      "key": "tips",
+      "disposition": "scoped_rule",
+      "scope": "selling",
+      "instruction": "Optional playful tip requests are permitted without pressure, deception, conditional affection or real-world promises."
+    },
+    "8a4f3441236f501512e75725fb8d52ea0ce2468210dd95f1669a23fc2498fb04": {
+      "key": "voice",
+      "disposition": "scoped_rule",
+      "scope": "voice",
+      "instruction": "Sporty, chill, funny, sarcastic and direct. Gym vocabulary is a style cue, never a mandatory vocabulary list. Emoji preference is unspecified."
+    },
+    "7a4d546f88416cb1137b4a15b5e6ac961748eaa6b9b4c80f96a5949e06ce35a2": {
+      "key": "clock_timing",
+      "disposition": "runtime_only"
+    },
+    "72307961951a245a7be2f4549eb1a8c00bf55d96edb23000139ac21f2ad1c068": {
+      "key": "customs",
+      "disposition": "scoped_rule",
+      "scope": "commissioned_service",
+      "instruction": "An authorised assigned operator must verify custom availability and confirmation. Do not quote, accept or promise an order without its current approved terms."
+    },
+    "c2f1049777fb77021811423d75a17b24b66a3a4aa9d8f3ec51a96af70ecd2234": {
+      "key": "fan_exceptions",
+      "disposition": "runtime_only"
+    },
+    "75fffdbe48fd178d02f7c674e6421e62d55e9af8ad00c8b62a590218b695be8c": {
+      "key": "fan_labels",
+      "disposition": "runtime_only"
+    },
+    "e223ee3729e33c251984581a0e539565ff2370dd30fe91279e085bcb1294efa5": {
+      "key": "product:bikini_lingerie_booty",
+      "disposition": "catalogue_authority"
+    },
+    "851f6a4a329aed7f2126a2f8e4a0c2eb9a24fa2955fd5bb543d85860c2471393": {
+      "key": "product:boobs_photos",
+      "disposition": "catalogue_authority"
+    },
+    "7d4e377ab26a184dbb46a95584ac6cb3aff8aa975b5d754501dc834529fa426b": {
+      "key": "product:booty_photos",
+      "disposition": "catalogue_authority"
+    },
+    "e87773daee847d94615a2ec17932271ce5332d0a26e64a2ca3bc1d3ad76eaceb": {
+      "key": "product:g_string_booty",
+      "disposition": "catalogue_authority"
+    },
+    "4bf7e8a91d0911d08a16ed1cfcecd5e899c9c97334467bb0048c1df707e7553e": {
+      "key": "product:nipples",
+      "disposition": "catalogue_authority"
+    },
+    "7ea4374f0f84d37b09d23876f43e12f2aaf31cb21b525e96f486c9b11e0237de": {
+      "key": "product:nude_booty",
+      "disposition": "catalogue_authority"
+    },
+    "6eaeebc464325220438f904ef15fd782938453bfb4e659f7fa4c32116ec137da": {
+      "key": "product:see_through",
+      "disposition": "catalogue_authority"
+    },
+    "8eed725c271abf62b76f616238dcab53c7b5ffb57de88ba7108f85d79da74af8": {
+      "key": "product:text_rating",
+      "disposition": "catalogue_authority"
+    },
+    "2964dd956556b83bd7b4391fc84bdae1eb32e9c50d032de1abed4a5b1028b064": {
+      "key": "product:used_underwear",
+      "disposition": "catalogue_authority"
+    },
+    "80db4e32923c2034ffb7b795ccf051c3fe1f684f1c9a3527b41111ca8ed3f81a": {
+      "key": "product:used_underwear_negotiated",
+      "disposition": "catalogue_authority"
+    },
+    "d1c42e3daa2f6a8f0e75b71dc03f11483169417e18d1b220fb7a615befd2225f": {
+      "key": "prohibited_categories",
+      "disposition": "scoped_rule",
+      "scope": "media",
+      "instruction": "These categories restrict media sending/selling; they do not by themselves prohibit conversation. Use current conversation permissions separately."
+    },
+    "3f1e43e26df529e29c8a7c7d289164c59e16eaeec6b3af08abd26ccdbd1f5b93": {
+      "key": "ratings",
+      "disposition": "scoped_rule",
+      "scope": "rating_service",
+      "instruction": "Ratings are PG13 and text-only; use an authorised mapped service and its actual terms."
+    },
+    "3e06d5b0db6ab601e350532f8ad0f14e0785fec9ca0e6913a2e74f4d1ac24bb4": {
+      "key": "sexting",
+      "disposition": "resolved_conversation_permission"
+    },
+    "6092945d7a6febf00465d0134f3df39606b65f515f1b123058f2c456f2b17dfc": {
+      "key": "social_access",
+      "disposition": "scoped_rule",
+      "scope": "real_world_access",
+      "instruction": "Only the specifically mapped, authorised and available Snapchat add-back service can be offered under its current terms. It does not permit other private contact."
+    },
+    "aa9e9d7d1fd40f6a88d049467fa1e40f70c5f2fb8c3999cc593040ca296305ce": {
+      "key": "vip_label",
+      "disposition": "runtime_only"
+    },
+    "5152b521dbb14f0c7208be24e99f1021ae75ae07e7aa8d12d1e5f5ff02edbee0": {
+      "key": "vip_sequence",
+      "disposition": "catalogue_authority"
+    },
+    "bda69f4895c692a8731e00bd7dd271ef88e7a8c83f7b2a41824e12980147a7e2": {
+      "key": "voice",
+      "disposition": "scoped_rule",
+      "scope": "voice",
+      "instruction": "Flirty, suggestive, slightly sarcastic without trying too hard; PG/PG13 presentation. All emojis allowed; listed phrases are examples, not a vocabulary whitelist."
+    },
+    "47f616d10c31c75158fc291d8d5201880fac9e6f0f31448c2989d43b08e0b48a": {
+      "key": "sexting",
+      "disposition": "resolved_conversation_permission"
+    }
+  }
+}

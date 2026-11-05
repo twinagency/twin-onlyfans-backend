@@ -374,7 +374,8 @@ def test_examples_are_the_approved_bank_and_stay_compact():
     from moxy_replacement.configuration import canonical
     for creator in ('amelia','cristina'):
         r=references(creator);assert 2<=len(r['examples'])<=3 and len(canonical(r).encode())<16384
-        assert all(set(e)=={'situation','lesson','lines'} for e in r['examples'])      # provenance stays in the file
+        assert all(set(e)=={'lines','reference_role','source_creator'} for e in r['examples'])
+        assert all(e['source_creator'].casefold()==creator for e in r['examples'])
         assert all('—' not in t and '–' not in t for e in r['examples'] for d,t in e['lines'])
 
 

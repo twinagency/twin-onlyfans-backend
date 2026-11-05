@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from typing import Any
 
 from jsonsafe import load_json
@@ -122,7 +123,7 @@ def normalize_tags(v: Any) -> list[str]:
 
 
 
-def project_operator_text(field, raw, overrides, locked, columns):
+def project_operator_text(field, raw, overrides, locked, columns, *, item=None):
     """Shared override, lock and compat projection for existing text/tag edits.
 
     Each caller admits its own editable fields. The value and precedence rules
@@ -132,4 +133,58 @@ def project_operator_text(field, raw, overrides, locked, columns):
     overrides[field]=value
     locked.add(field)
     columns[field]=json.dumps(value) if field=="tags" else value
+    if field in {'description', 'video_description'}:
+        # Private provenance is separate from editable field names. Record it at
+        # the same write boundary as the correction so later AI reanalysis cannot
+        # silently reapprove this human text for a different asset version.
+        key = '_description_bindings_v1'
+        previous = overrides.get(key)
+        bindings = dict(previous) if isinstance(previous, dict) else {}
+        if item is not None and isinstance(value, str) and value.strip():
+            from vault_describe_state import stamp_of
+            bindings[field] = {
+                'account_id': getattr(item, 'account_id', None),
+                'media_id': getattr(item, 'media_id', None),
+                'kind': getattr(item, 'kind', None),
+                'content_stamp': stamp_of(item),
+                'text_sha256': hashlib.sha256(value.strip().encode()).hexdigest(),
+            }
+        else:
+            # A legacy caller without the item cannot retain old version proof
+            # when it edits text; blanking a field similarly removes its proof.
+            bindings.pop(field, None)
+        if bindings:
+            overrides[key] = bindings
+        else:
+            overrides.pop(key, None)
     return value
+
+
+def preserve_stale_operator_descriptions(item):
+    """Retain known stale legacy version evidence before AI stamps are replaced.
+
+    No human text is changed. The legacy correction's age cannot be recovered,
+    but a known content mismatch must not disappear merely because the model
+    runs again. Explicitly reviewing/editing the human text can bind it anew.
+    """
+    from vault_describe_state import content_changed, fields_of
+    saved = overrides(item)
+    if not content_changed(item) or not isinstance(saved, dict):
+        return saved
+    key = '_description_bindings_v1'
+    prior = saved.get(key)
+    if prior is not None and not isinstance(prior, dict):
+        return saved  # retain invalid evidence for explicit review
+    bindings = dict(prior or {})
+    for field in locked_fields(item) & {'description', 'video_description'}:
+        value = effective_value(item, field)
+        if field in bindings or not isinstance(value, str) or not value.strip():
+            continue
+        bindings[field] = {
+            'account_id': getattr(item, 'account_id', None),
+            'media_id': getattr(item, 'media_id', None),
+            'kind': getattr(item, 'kind', None),
+            'content_stamp': fields_of(item).get('_content_stamp'),
+            'text_sha256': hashlib.sha256(value.strip().encode()).hexdigest(),
+        }
+    return {**saved, key: bindings} if bindings else saved

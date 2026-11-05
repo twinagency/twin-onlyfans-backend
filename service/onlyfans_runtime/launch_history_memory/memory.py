@@ -175,7 +175,11 @@ def snapshot(s, account_id, fan_id, *, query="", max_interactions=6):
     from onlyfans_runtime.profile_learning.storage import reply_memory
     learned = reply_memory(s, account_id, fan_id, query=query)
     if learned is not None:
-        result["learnedProfile"] = learned
+        # Queue/cohort/coverage diagnostics belong to the operator profile view.
+        # They are not fan evidence and must not invalidate an in-flight reply
+        # when a background check completes without changing any known facts.
+        result["learnedProfile"] = {k: v for k, v in learned.items()
+                                    if k != "learningAvailability"}
         result["facts"] = {k: v for k, v in result["facts"].items() if v["source"] == "operator"}
         result["summaries"] = {k: v for k, v in result["summaries"].items() if k in overrides}
         # Old source quotes are retrieved on a concrete topic, never injected just

@@ -68,6 +68,30 @@ def test_existing_metadata_read_precedence_lock_merge_retry_and_conflict(databas
     store.close()
 
 
+def test_description_review_binds_current_content_and_rejects_stale_view(database):
+    from moxy_replacement import media_descriptions as md
+    store = setup(database)
+    with Session(database[1]) as s, s.begin():
+        row = s.get(VaultItem, (ACCOUNT, 11))
+        row.content_hash = 'first'; row.content_hash_kind = 'fixture'
+        row.describe_status = 'described'
+    previous = get_asset(store, TENANT, ACCOUNT, '11')
+    with Session(database[1]) as s, s.begin():
+        s.get(VaultItem, (ACCOUNT, 11)).content_hash = 'replacement'
+    with pytest.raises(Refused, match='vault metadata changed'):
+        asset_save(store, {'description': 'From the old view'}, data=previous)
+    asset_save(store, {'description': 'Reviewed replacement'}, key='d' * 64)
+    with Session(database[1]) as s, s.begin():
+        row = s.get(VaultItem, (ACCOUNT, 11))
+        binding = json.loads(row.operator_overrides_json)['_description_bindings_v1']['description']
+        assert binding['content_stamp'] == 'fixture:replacement'
+        assert md.item_state(row) == 'described'
+        row.content_hash = 'changed-again'
+        assert md.item_state(row) == 'pending'
+        assert md.effective_description(row) == 'Reviewed replacement'
+    store.close()
+
+
 def test_concurrent_native_metadata_updates_serialize_without_lost_edit(database):
     store=setup(database);data=get_asset(store,TENANT,ACCOUNT,"11")
     def update(key):

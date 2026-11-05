@@ -42,16 +42,18 @@ def test_complete_amelia_photo_and_ordinary_exchanges_remain_creator_specific():
   assert not {6,70,170}&{e['record'] for e in chosen}
 
 
-def test_shared_behavior_is_labelled_and_never_claims_amelia_voice_coverage():
+def test_runtime_voice_references_exclude_shared_behavior_and_admit_coverage_limit():
  refs=examples.references('amelia',history('I cannot afford that, my bills are overdue'))
- assert refs['examples'] and all(e['reference_role']=='shared_behavior_only' for e in refs['examples'])
- assert refs['creator_voice_reference_count']==0
+ assert refs['examples'] and all(e['source_creator']=='Amelia' and e['reference_role']=='creator_voice' for e in refs['examples'])
+ assert refs['creator_voice_reference_count']==2
+ assert 'does not establish coverage' in refs['voice_scope']
  assert 'incomplete' in examples._bank()['creator_voice_coverage']['status']
 
 
-def test_neutral_input_does_not_force_unrelated_voice_examples():
+def test_neutral_input_uses_same_fixed_voice_set_without_business_labels():
  refs=examples.references('amelia',history('hey'))
- assert refs['examples']==[] and refs['creator_voice_reference_count']==0
+ assert refs==examples.references('amelia',history('Can you send me a photo?'))
+ assert all('lesson' not in item and 'situation' not in item for item in refs['examples'])
 
 
 def test_cristina_keeps_her_own_approved_voice_without_amelia_references():

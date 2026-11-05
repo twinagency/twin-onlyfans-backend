@@ -2929,11 +2929,19 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
     #     overwrite the model's answer with the operator's and erase the
     #     evidence that a re-run happened at all.
     #
-    # The flags are a different reading of the SAME image, so they stay valid
-    # across a re-describe. A locked dispute fix outranks model and carried alike.
+    # Flags describe the same observed content version, not the persistent
+    # media ID. A known content change invalidates automatic flags and their
+    # success markers. Preserve explicit operator corrections below; their
+    # independent version qualification is not inferred by this model pass.
     prev = load_json(item.ai_fields_json, {}) or {}
-    for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
-                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
+    if not vds.content_changed(item):
+        for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
+                    "_flags_v", "_flags_model", "_flags_frames", "_flags_arc"):
+            if key in prev:
+                data[key] = prev[key]
+    # Folder markers preserve subsequent manual membership changes. Clearing
+    # them would recreate folders/memberships that an operator removed.
+    for key in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
         if key in prev:
             data[key] = prev[key]
     for key, val in (load_json(item.operator_overrides_json, {}) or {}).items():
@@ -2970,9 +2978,18 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
             await scope_guard(s, media_id, phase="write")
         # A concurrent backfill may have assigned folders while vision ran.
         # Carry its marker from the current row, not just the earlier snapshot.
-        current_fields = await s.scalar(select(VaultItem.ai_fields_json).where(
+        current_item = await s.scalar(select(VaultItem).where(
             VaultItem.account_id == account_id, VaultItem.media_id == media_id).with_for_update())
-        current_fields = load_json(current_fields, {}) or {}
+        current_fields = load_json(current_item.ai_fields_json if current_item else None, {}) or {}
+        if current_item is not None:
+            # Refreshing the model's stamp cannot reapprove a stale human lock.
+            # Read/merge under the same row lock so a concurrent operator edit
+            # and its independent version binding are never overwritten.
+            from vault_ai_effective import preserve_stale_operator_descriptions
+            preserved = preserve_stale_operator_descriptions(current_item)
+            existing_overrides = load_json(current_item.operator_overrides_json, {}) or {}
+            if preserved != existing_overrides:
+                vals['operator_overrides_json'] = json.dumps(preserved, ensure_ascii=False)
         if isinstance(current_fields, dict):
             for marker in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
                 if current_fields.get(marker) is True:
@@ -3736,7 +3753,7 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
         flag_edits: dict[str, Any] = {}
         for field, raw in edits.items():
             if field == "tags":
-                project_operator_text(field,raw,overrides,locked,col_vals)
+                project_operator_text(field,raw,overrides,locked,col_vals,item=item)
                 continue
             elif field == "suggested_price_cents":
                 # Cents, non-negative. Blank/None clears it back to "no price".
@@ -3766,7 +3783,7 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
                 ov = str(raw).strip()[:60] if raw else None
                 flag_edits[field] = ov
             else:
-                project_operator_text(field,raw,overrides,locked,col_vals)
+                project_operator_text(field,raw,overrides,locked,col_vals,item=item)
                 continue
             overrides[field] = ov       # operator override (locked or not — read-time wins)
             locked.add(field)            # lock: a describe rerun's is_locked() skips it

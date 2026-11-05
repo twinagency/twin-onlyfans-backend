@@ -219,6 +219,99 @@ def test_operator_corrections_are_never_overwritten_by_reanalysis(rig):
     assert rig.row().description == "Operator wording"
 
 
+def test_forced_model_refresh_cannot_renew_a_stale_legacy_operator_correction(rig):
+    import vault_ai_api as api
+    from moxy_replacement import media_descriptions as md
+    rig.update(description='Prior human text', describe_status='described',
+               content_hash='v2', content_hash_kind='fixture',
+               ai_fields_json=json.dumps({'_content_stamp': 'fixture:v1'}),
+               operator_overrides_json=json.dumps({'description': 'Prior human text'}),
+               locked_fields_json='["description"]')
+    assert md.item_state(rig.row()) == 'pending'
+    # Collector/model are the rig's local fakes; this exercises only the real
+    # persistence path and cannot make a model/provider call.
+    out = rig.arun(api._describe_one(ACCOUNT, MID, model='qwen3-vl-30b', escalate=False))
+    assert out['ok'] is True
+    row = rig.row()
+    assert json.loads(row.ai_fields_json)['_content_stamp'] == 'fixture:v2'
+    assert md.item_state(row) == 'pending'
+    assert md.effective_description(row) == 'Prior human text'
+    assert json.loads(row.operator_overrides_json)['_description_bindings_v1']['description']['content_stamp'] == 'fixture:v1'
+
+
+def test_legacy_editor_binds_description_to_current_content_without_exposing_metadata(rig):
+    import auth
+    from fastapi import HTTPException
+    import vault_ai_api as api
+    from moxy_replacement import media_descriptions as md
+    rig.update(content_hash='v2', content_hash_kind='fixture', describe_status='described',
+               ai_fields_json=json.dumps({'_content_stamp': 'fixture:v1'}))
+    payload = {'account_id': ACCOUNT,
+        'fields': {'description': 'Reviewed current outfit', '_description_bindings_v1': 'untrusted'}}
+    # Exercise the real principal/ownership gate. Do not make anonymous calls
+    # privileged or replace assert_account_owned with a permissive test stub.
+    before = rig.row().operator_overrides_json
+    token = auth._request_user.set(None)
+    try:
+        with pytest.raises(HTTPException) as denied:
+            rig.arun(api.edit_item(MID, payload))
+        assert denied.value.status_code == 401
+    finally:
+        auth._request_user.reset(token)
+    token = auth._request_user.set(auth.AuthedUser('fixture-other', 'other', frozenset({'another-account'})))
+    try:
+        with pytest.raises(HTTPException) as denied:
+            rig.arun(api.edit_item(MID, payload))
+        assert denied.value.status_code == 403
+    finally:
+        auth._request_user.reset(token)
+    assert rig.row().operator_overrides_json == before
+    token = auth._request_user.set(auth.AuthedUser('fixture-owner', 'owner', frozenset({ACCOUNT})))
+    try:
+        out = rig.arun(api.edit_item(MID, payload))
+    finally:
+        auth._request_user.reset(token)
+    row = rig.row()
+    binding = json.loads(row.operator_overrides_json)['_description_bindings_v1']['description']
+    assert binding['content_stamp'] == 'fixture:v2'
+    assert binding['account_id'] == ACCOUNT and binding['media_id'] == MID
+    assert md.item_state(row) == 'described'
+    assert '_description_bindings_v1' not in json.dumps(out)
+    assert 'untrusted' not in row.operator_overrides_json
+
+
+@pytest.mark.parametrize('changed', [False, True])
+def test_automatic_visual_flags_are_not_carried_to_changed_content(rig, changed):
+    import vault_ai_api as api
+    import vault_ai_brief
+    from vault_ai_effective import effective_value
+    old_flags = {'underwear_visible': True, 'breasts_vis': 'covered',
+        'vulva_vis': 'covered', 'anus_vis': 'not_in_frame',
+        'over_breasts': 'shirt', 'over_vulva': 'shorts', '_flags_v': api._FLAGS_VERSION,
+        '_flags_model': 'fixture-previous-model', '_flags_frames': 1}
+    workflow = {'_auto_folders_v1': True, '_auto_folders_v2': True}
+    rig.update(content_hash='v2' if changed else 'v1', content_hash_kind='fixture',
+        describe_status='described', description='Earlier content description',
+        ai_fields_json=json.dumps({'_content_stamp': 'fixture:v1', **old_flags, **workflow}),
+        operator_overrides_json=json.dumps({'tags': ['operator tag'], 'suggested_price_cents': 1234}),
+        locked_fields_json='["tags", "suggested_price_cents"]', tags='["operator tag"]',
+        notes='Operator note', suggested_price_cents=1234)
+    result = rig.arun(api._describe_one(ACCOUNT, MID, model='qwen3-vl-30b', escalate=False))
+    assert result['ok'] is True
+    row = rig.row()
+    fields = json.loads(row.ai_fields_json)
+    if changed:
+        assert not set(old_flags).intersection(fields)
+        assert vault_ai_brief.flags_known(fields) is False
+    else:
+        assert {key: fields[key] for key in old_flags} == old_flags
+        assert vault_ai_brief.flags_known(fields) is True
+    assert all(fields[key] is True for key in workflow)
+    assert effective_value(row, 'tags') == ['operator tag']
+    assert effective_value(row, 'suggested_price_cents') == 1234
+    assert row.notes == 'Operator note'
+
+
 def test_videos_are_not_starved_by_a_photo_backlog(rig):
     for i in range(12):
         rig.add(12000 + i, "photo")

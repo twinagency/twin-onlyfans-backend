@@ -129,4 +129,11 @@ def test_writer_uses_only_resolved_conversation_permission_branch(facts, overrid
     assert payload['pending_fan_messages'] == before['pending_fan_messages']
     assert snap == before
     current_rule = next(rule for rule in snap['instructions']['rules'] if rule['key'] == 'sexting')
-    assert json.dumps(current_rule, sort_keys=True, separators=(',', ':')) in system
+    # Full authority stays in the snapshot. Unknown override text is preserved
+    # in the scoped user view; reviewed forms use the same resolved permission.
+    assert snap['instructions']['rules'] == before['instructions']['rules']
+    view = payload['creator_rules']
+    if view['dispositions']['sexting'] == 'unreviewed_preserved':
+        assert current_rule['instruction'] in json.dumps(view)
+    else:
+        assert view['dispositions']['sexting'] == 'resolved_conversation_permission'

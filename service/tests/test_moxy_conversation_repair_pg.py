@@ -227,7 +227,7 @@ def test_clarification_is_answered_not_repeated(database,monkeypatch):
     assert first['status']=='held' and first['reason']=='repeated_recent_phrase'
     assert fix['rejected']['kind']=='wording' and fix['rejected']['fan_message'].startswith('no no i meant what do you do for work')
     assert fix['prompt']['current_input']['text']==turn['fan']            # the writer is shown the clarification as the current input
-    assert 'clarification' in fix['prompt']['situation']
+    assert fix['prompt']['situation'] is None  # no second classifier supplies a competing meaning
     assert [x['body'] for x in turn['sent']]==['ha my bad','I work as a graphic designer']
     assert turn['final_status']=='done'
 
@@ -237,7 +237,7 @@ def test_question_is_answered_and_nudge_not_repeated(database,monkeypatch):
     t=run_scenario(database,monkeypatch,scenario_question_vs_nudge)
     turn=t['turns'][0];first,fix=turn['attempts']
     assert first['reason']=='repeated_recent_phrase' and fix['prompt']['current_input']['text']=='what time do you usually go live?'
-    assert 'question' in fix['prompt']['situation']
+    assert fix['prompt']['situation'] is None
     assert [x['body'] for x in turn['sent']]==['i dont have a confirmed live time to share right now','keep an eye on the page for an announcement']
     assert all(x['price_cents']==0 and not x['media'] for turn in t['turns'] for x in turn['sent'])   # no second card
     # State carried forward: the second turn is written against a history that contains the answer.
@@ -448,9 +448,9 @@ def _hist(*fan_texts,out=None):
 
 
 def _records(refs):
-    from moxy_replacement.examples import _bank
-    by_text={e['lesson']:e['record'] for e in _bank()['examples']}
-    return [by_text[e['lesson']] for e in refs['examples']]
+    from moxy_replacement.examples import _bank, _lines
+    by_text={json.dumps(_lines(e)):e['record'] for e in _bank()['examples']}
+    return [by_text[json.dumps(e['lines'])] for e in refs['examples']]
 
 
 def test_bank_preserves_the_eight_approved_records_and_exact_opening_subset():
@@ -490,7 +490,8 @@ def test_projection_carries_no_provenance_and_says_names_prices_are_not_facts():
     refs=references('cristina',_hist('i cant afford it right now'))
     text=canonical(refs)
     assert 'b30c585b' not in text and 'TOP93' not in text and '"record"' not in text and '"at"' not in text
-    assert 'NOT facts' in refs['scope'] and 'prices' in refs['scope'] and 'instructions' in refs['scope']
+    assert 'not current facts' in refs['scope'] and 'prices' in refs['scope'] and 'permissions' in refs['scope']
+    assert all('lesson' not in e and 'situation' not in e for e in refs['examples'])
 
 
 @pytest.mark.parametrize('fan',[
@@ -585,13 +586,14 @@ def test_prompt_correction_and_name_instructions():
     assert 'Never ask for his name' in text
 
 
-def test_prompt_carries_the_situation_selected_references_for_the_creator():
+def test_prompt_carries_fixed_voice_references_without_second_interpretation():
     text=_prompt('amelia',history=_hist('i want to fuck your throat'))
     refs=json.loads(text.split('\nWriting references:\n',1)[1])
-    assert 'sexting_scene' in refs['latest_exchange_reads_as']
-    assert all(e['situation']!='sales_flow' for e in refs['examples'])      # Amelia: no explicit sales excerpt
+    assert 'latest_exchange_reads_as' not in refs
+    assert all(e['source_creator']=='Amelia' and 'lesson' not in e for e in refs['examples'])
+    assert refs==json.loads(_prompt('amelia',history=_hist('How was your day?')).split('\nWriting references:\n',1)[1])
     cristina=json.loads(_prompt('cristina',history=_hist('i want to fuck your throat')).split('\nWriting references:\n',1)[1])
-    assert cristina['examples'][0]['situation']=='sales_flow'
+    assert all(e['source_creator']=='Cristina' and 'lesson' not in e for e in cristina['examples'])
 
 
 # ------------------------------------------------------------------ repetition, status wording, names, correction brief

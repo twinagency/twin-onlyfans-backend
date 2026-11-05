@@ -162,7 +162,7 @@ def _inventory_report(s,account,settings,pa):
                 'updated_at':v.updated_at if a['evidence_ref'].startswith('asset:') else None,'removed_at':None,
                 # What the description is based on (sampling limits), so a caption never
                 # claims audio, motion or detail the analysis could not have seen.
-                'description_basis':limitations(v),'operator_corrected':operator_corrected(v)})
+                'description_basis':limitations(v,include_freshness=True),'operator_corrected':operator_corrected(v)})
         if reason is None and (not ids or not set(previews) < set(ids)):reason='catalogue_media_invalid'
         if reason is None:
             from .pricing import validate_format, validate_price
@@ -433,7 +433,9 @@ FACTUAL_REASONS={'unsupported_fan_attribution','unsupported_relationship_history
     'unsupported_creator_routine','unsupported_asset_gaze','content_status_wording','verified_ownership_ignored',
     'known_name_not_used','unsupported_profile_visibility_claim'}
 FACTUAL_REASONS|={'unsupported_catalogue_prohibition','unsupported_price_units','unsupported_card_access_denial','sexting_permission_unverified','unsupported_asset_absence'}
+FACTUAL_REASONS|={'price_claim_mismatch','price_claim_unbound'}
 RECOVERABLE_REASONS|=FACTUAL_REASONS|{'product_request_mismatch'}
+RECOVERABLE_REASONS.add('current_request_authority_unverified')
 
 # Unusable output for the same input gets one bounded correction before internal operator attention.
 FORMAT_REASONS={'invalid_model_json','invalid_model_decision','invalid_message_plan','invalid_message_part',
@@ -654,6 +656,10 @@ def correction_brief(reason,result,snap):
     if reason=='unsupported_price_units':
         brief['guidance']='The draft used internal cents as customer-facing money. Use verified price_cents divided by100 for dollars and only current offerable prices. Do not invent a cheaper item or discount.'
         brief['verified_offerable_prices']=(snap.get('commercial_state') or {}).get('cheapest_offerable_cents_by_category',{})
+    if reason in {'price_claim_mismatch','price_claim_unbound'}:
+        brief['guidance']='Bind each monetary claim to the exact selected item or identified existing card, or remove the unsupported claim. Use the supplied current terms for a new card and the recorded receipt terms for a historical card. A fan budget or a clearly attributed historical quotation is not a new offer price. Preserve the valid item and approved amount; never change the card price to fit your wording.'
+        brief['selected_terms']=snap.get('inventory',{}).get(result.get('product_id'))
+        brief['verified_cards']=snap.get('card_state',[])
     if reason=='unsupported_card_access_denial':
         brief['guidance']='The referenced durable card has a positive price and is not a free welcome message. Do not claim nothing needs opening or unlocking. Use its exact verified product mapping; if its content is unknown, handover with no fan text for operator review rather than invent a description.'
         brief['verified_cards']=snap.get('card_state',[])
@@ -663,6 +669,8 @@ def correction_brief(reason,result,snap):
         brief['guidance']='Missing pilot inventory is not a creator-wide prohibition. Withdraw the invented boundary. State only which verified items you can send right now, while retaining actual source creator prohibitions and conditions.'
     if reason=='product_invitation_missing_identity':
         brief['guidance']='Your text invites a specific catalogue item. Use invite and its actual product_id, without a media card, so acceptance retains its identity.'
+    if reason=='current_request_authority_unverified':
+        brief['guidance']='The current source message does not clearly authorize this exception to a saved sales restriction or this change of retained offer. Keep the restriction and valid existing terms. Answer the current conversation or clarify the specific item; do not invent consent or a general inability to sell.'
     if reason in WORDING_REASONS|FACTUAL_REASONS:
         brief.update(kind='factual' if reason in FACTUAL_REASONS else 'wording',action=None,product_id=None,
             avoid=[p['text'][:300] for p in _plan(result)][:4])
@@ -729,7 +737,12 @@ def validate_decision(settings,snap,decision,*,planning=False):
             if action in COMMERCIAL_ACTIONS or key is not None:raise ActionBlocked('current_request_evidence_missing')
             request_kind='none'
     if request_kind!='none':
-        if request_kind in {'direct','accept'}:
+        if request_kind in {'direct','accept'} and key is not None:
+            from .request_evidence import authorizes_request
+            if (facts.get('no_push') is not False or facts.get('ordinary_chat_only') is not False
+                    or facts.get('sales_refused') is not False):
+                if not authorizes_request(snap,key,request_kind,quote):
+                    raise ActionBlocked('current_request_authority_unverified')
             facts['direct_request_product']=key
             facts['ordinary_chat_only']=facts['sales_refused']=False
         if request_kind=='resend':facts['requested_resend_product']=key
@@ -754,7 +767,11 @@ def validate_decision(settings,snap,decision,*,planning=False):
         else:
             # The model may interpret natural paraphrases as a direct request or
             # assent; the retained product/invitation remains explicit evidence.
-            if snap['event']['payload'].get('direct_request_product')==key: facts['direct_request_product']=key
+            if snap['event']['payload'].get('direct_request_product')==key:
+                from .request_evidence import authorizes_request
+                if not authorizes_request(snap,key,'direct'):
+                    raise ActionBlocked('current_request_authority_unverified')
+                facts['direct_request_product']=key
             if snap['event']['payload'].get('requested_resend_product')==key: facts['requested_resend_product']=key
             purpose={'invite':'offer','continue':'continuation'}.get(action,action)
             if (action=='continue' and decision['sequence'] is None
@@ -762,11 +779,20 @@ def validate_decision(settings,snap,decision,*,planning=False):
                 # A follow-up sale from standalone inventory is an ordinary offer; it never needs a sequence.
                 purpose='offer'
             if action=='offer' and snap.get('invitation'):
-                if key!=snap['invitation']['product_id']:raise ActionBlocked('acceptance_product_mismatch')
-                pa.accepted_invitation(snap['invitation'],facts)
+                if request_kind=='direct':
+                    from .request_evidence import authorizes_request
+                    if not authorizes_request(snap,key,'direct',quote):
+                        raise ActionBlocked('current_request_authority_unverified')
+                    pa.terms(key,facts,purpose=purpose,sequence=decision['sequence'])
+                else:
+                    if key!=snap['invitation']['product_id']:raise ActionBlocked('acceptance_product_mismatch')
+                    pa.accepted_invitation(snap['invitation'],facts)
             else:pa.terms(key,facts,purpose=purpose,sequence=decision['sequence'])
             terms=snap['inventory'][key] if action!='invite' else None
     elif key is not None:raise ActionBlocked('unexpected_product_reference')
+    from .price_assertions import price_problem
+    monetary_problem=price_problem(snap,decision,terms)
+    if monetary_problem:raise ActionBlocked(monetary_problem)
     if decision['resolve_obligation']:
         owed=next((o for o in snap['obligations'] if o['id']==decision['resolve_obligation'] and o.get('status')=='open'),None)
         if owed is None or (action not in {'correct','fulfil'} and not (action in {'reply','invite','offer','alternative'} and owed.get('kind')=='buying_question')):
@@ -955,7 +981,9 @@ class MoxyService:
                 prompts=writer.messages(snap)
                 if len(canonical(prompts).encode())>131072:raise Refused('moxy_context_budget_exceeded')
             except Exception as exc:
-                event.status='held';event.reason=(str(exc) if isinstance(exc,Refused) else 'moxy_prompt_build_failed')[:128]
+                reviewed_rule_failure=(isinstance(exc,ActionBlocked) and _policy_re.fullmatch(
+                    r'writer_rule_review_required:[A-Za-z0-9_:.-]{1,80}',str(exc)))
+                event.status='held';event.reason=(str(exc) if isinstance(exc,Refused) or reviewed_rule_failure else 'moxy_prompt_build_failed')[:128]
                 diagnose(s,account,'context_failure',event=event,error_type=type(exc).__name__)
                 self._technical_attention(s,owner,event)
                 return event_id
@@ -1343,8 +1371,9 @@ def delivered(s,intent):
         state['invitation']={'product_id':d['product_id'],'fingerprint':pa.fingerprint,'sequence':d['sequence']}
     elif d['action'] in {'offer','continue','resend','alternative'}:
         state.pop('invitation',None)
-        if d.get('request_kind') in {'direct','accept'}:
-            state['ordinary_chat_only']=state['sales_refused']=False
+        # An explicitly requested item is a scoped exception, not permission
+        # to pitch later items. Only verified reversal observations change the
+        # durable preference; receiving this card does not do so.
     if d['question']:
         obligations=state.setdefault('obligations',[])
         if not any(o.get('question')==d['question'] and o['status']=='open' for o in obligations):

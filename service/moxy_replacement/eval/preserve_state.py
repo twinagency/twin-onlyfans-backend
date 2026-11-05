@@ -175,7 +175,7 @@ def run(args):
 
 def run_one(ctx,case,out,filtered):
     snap=case['snapshot'];prompts=writer.messages(snap)
-    selected,_=examples.select(snap['instructions']['creator_key'],snap['history'],snap['fan_state'])
+    selected=examples.voice_examples(snap['instructions']['creator_key'])
     assert not HOLDOUTS.intersection(e['record'] for e in selected)
     folder=out/case['id'];folder.mkdir()
     (folder/'snapshot.json').write_text(json.dumps(snap,indent=2),encoding='utf-8')

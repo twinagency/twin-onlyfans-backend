@@ -34,15 +34,22 @@ def decision(settings,snapshot,result):
     value=scope(settings)
     if value is None:return
     check(settings,snapshot['fan_id'],snapshot['event']['kind'])
-    if (result['action'] not in ACTIONS or result['permission'] is not None
+    if (result['action'] not in ACTIONS or _specialist_permission(result)
             or (result['product_id'] is not None and result['product_id'] not in value['product_ids'])):
         raise ActionBlocked('pilot_specialist_handover_required')
+
+
+def _specialist_permission(result):
+    # Sexting is a conversational reply capability, not a separately fulfilled
+    # service. validate_decision still resolves its current creator conditions.
+    return result['permission'] is not None and not (
+        result['permission']=='sexting' and result['action']=='reply')
 
 
 def route_specialist(settings,result):
     """No unimplemented service promises, charges or automatic fulfilment."""
     if scope(settings) is None:return result
-    if result['permission'] is not None or result['action'] in {'correct','fulfil'} or 'complaint' in result['flags']:
+    if _specialist_permission(result) or result['action'] in {'correct','fulfil'} or 'complaint' in result['flags']:
         # The ordered messages array is the normal writer output now: a handover carries none, so drop the drafted ones.
         routed={**result,'action':'handover','text':'','product_id':None,'sequence':None,
             'permission':None,'resolve_obligation':None,'reason':'pilot_specialist_handover_required'}

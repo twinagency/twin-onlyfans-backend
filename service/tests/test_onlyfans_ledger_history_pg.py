@@ -181,7 +181,7 @@ def test_history_page_is_still_verified_identity_bounded_and_get_only(monkeypatc
     def call(method,path,body=b""):
         assert seen==["identity"] and method=="GET" and body==b""
         assert urlsplit(path).path=="/api2/v2/payouts/transactions"
-        assert parse_qs(urlsplit(path).query)["start"]==["1970-01-01T00:00:00Z"]
+        assert parse_qs(urlsplit(path).query)["startDate"]==["1970-01-01 00:00:00"]
         return payload([])
     monkeypatch.setattr(wire,"_call",call)
     assert wire.transaction_page(offset=20000,start=datetime(1970,1,1),end=datetime(2026,10,26),history=True)

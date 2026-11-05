@@ -2,8 +2,7 @@
 from copy import deepcopy
 def cancelled(message):
     from .request_evidence import send_cancelled
-    from .conversation import clauses
-    return any(send_cancelled(part) for part in clauses(message.get('text','')))
+    return send_cancelled(message.get('text',''))
 
 def explicit_updates(messages):
     result=[]

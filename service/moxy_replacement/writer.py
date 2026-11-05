@@ -211,6 +211,8 @@ def messages(snapshot):
         'kind factual: the draft asserted something unsupported or wrong. Correct or withdraw that fact directly using '
         'rejected.evidence/public_facts/asset_facts, rather than paraphrasing the false claim. Answer every pending correction '
         'and question. Preserve rejected.keep and its exact terms when supplied, but recheck current eligibility. '
+        'For missing or unsupported request evidence, repair it from current fan text while retaining those terms, '
+        'or clarify with action reply and no product/media; the item itself is not banned. '
         'Never invent an excuse or a new fact to explain a previous error. '
         'kind product: the product decision was refused. rejected_product_context is discussion evidence, never a selectable new card. '
         'Choose a different relevant item from new_card_product_ids or give a useful text-only answer about the verified existing card '
@@ -267,10 +269,8 @@ def parse(raw, *, defer_sales_pause=False):
     kind=value.get('request_kind','none');quote=value.get('request_quote')
     if kind not in {'none','direct','resend','accept'} or (quote is not None and (type(quote) is not str or not quote or len(quote)>2000)):
         raise ActionBlocked('invalid_request_evidence')
-    if kind!='none' and quote is None:
-        if value['action'] in {'invite','offer','resend','alternative','continue','correct','fulfil'} or value['product_id'] is not None:
-            raise ActionBlocked('request_quote_required')
-        value['request_kind']='none'
+    # A missing quote is an action-evidence defect, not malformed JSON. Keep
+    # this structurally valid plan for ordinary validation and one correction.
     if value['action'] in {'handover','none'}:
         if value['text']: raise ActionBlocked('handover_must_not_reply')
     elif not value['text'].strip(): raise ActionBlocked('empty_model_reply')

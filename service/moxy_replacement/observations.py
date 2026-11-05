@@ -43,10 +43,9 @@ def observations(decision, snapshot):
             raise ActionBlocked('invalid_constraint_scope')
         if o['kind']=='financial_hardship' and not o['active']:
             raise ActionBlocked('hardship_requires_owned_resolution')
-        if not o['active']:
-            from .request_evidence import permits_preference_removal
-            if not permits_preference_removal(o,incoming[o['message_id']],snapshot):
-                continue
+        from .request_evidence import supports_preference
+        if not supports_preference(o,incoming[o['message_id']],snapshot):
+            continue
         result.append(deepcopy(o))
     from .input_batch import chronological
     result=chronological(result,list(incoming.values()))

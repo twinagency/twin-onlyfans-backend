@@ -25,6 +25,8 @@ _REQUEST = re.compile(
     r"^\s*(?:(?:actually|instead|now|okay|ok|yes|yeah|yep|please)\b[\s,]*)*"
     r"(?:(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
     r"(?:send|show|offer)\b|(?:i\s+(?:want|would\s+like)|i'd\s+like)\b)", re.I)
+_REFUSAL = re.compile(r"^\s*(?:i\s+(?:don't|do\s+not|dont)\s+want|"
+                      r"(?:please\s+)?(?:don't|do\s+not)\s+(?:send|offer)|not)\b", re.I)
 _NEGATIVE = re.compile(r"\b(?:no|nothing|not|never|don't|dont|do\s+not|can't|cannot|won't|wouldn't|without)\b", re.I)
 _META_REQUEST = re.compile(r"\b(?:how|why|whether|price|cost|explain|describe|description|meaning|know|about|refund|delete|remove|cancel|discount)\b", re.I)
 _WANT = re.compile(r"\bi(?:\s+(?:want|would\s+like)|'d\s+like)\b", re.I)
@@ -45,6 +47,35 @@ _PERSONAL_BUDGET = re.compile(
     r"(?:(?:only|just|up\s+to)\s+)?\$(?P<amount>[0-9]{1,5}(?:\.[0-9]{1,2})?)\s*[.!]*", re.I)
 
 
+def _without_courtesy(text):
+    # A closing thanks may address any name, not just a fixed list of pet names.
+    # Keep conditions, negation and reported speech in scope before stripping it.
+    match = re.search(r'\b(?:thanks|thank\s+you)\b', text, re.I)
+    if match:
+        closing = text[match.start():]
+        if (re.fullmatch(r'(?:thanks|thank\s+you)(?:\s+[^\W\d_]+)?[^\w]*', closing, re.I)
+                and not any(p.search(closing) for p in (_NEGATIVE, _QUALIFIER, _REPORTED, _META_REQUEST, _MEDIA, _REQUEST))):
+            return text[:match.start()].rstrip(' ,.!')
+    return text
+
+
+def request_source(snapshot, quote=None):
+    """Select the model's current source, never guess a topic from old history.
+
+    A missing quote selects only the latest input for legacy/proactive plans.
+    This binds provenance; affirmative scope and product facts are checked below.
+    """
+    from .conversation import pending_messages
+    from .input_batch import current_requests
+    incoming = current_requests([m for m in pending_messages(snapshot) if m.get('direction') == 'in'])
+    if quote is None:
+        return incoming[-1] if incoming else None
+    def normalized(text):
+        return ' '.join(text.translate(str.maketrans('‘’“”', '\'\'""')).casefold().split())
+    needle = normalized(quote)
+    return next((m for m in reversed(incoming) if needle and needle in normalized(m.get('text', ''))), None)
+
+
 def _unquoted(text):
     text = text.replace('’', "'").replace('“', '"').replace('”', '"')
     for start, end, _ in reversed(quotes(text)):
@@ -54,18 +85,24 @@ def _unquoted(text):
 
 def send_cancelled(text):
     """A scoped or global send cancellation, excluding unrelated topic changes."""
-    text = _unquoted(text)
-    match = _SEND_STOP.search(text) or _CANCEL.search(text)
-    return bool(match and not _REPORTED.search(text[:match.start()]))
+    return any(_SEND_STOP.search(part) or _CANCEL.search(part) for part in _asserted_clauses(text))
 
 
 def stops_all_sends(text):
-    for part in clauses(text):
-        part = _unquoted(part)
-        match = _GLOBAL_STOP.search(part)
-        if match and not _REPORTED.search(part[:match.start()]):
-            return True
-    return False
+    return any(_GLOBAL_STOP.search(part) for part in _asserted_clauses(text))
+
+
+def _asserted_clauses(text):
+    """Shared source scope for observed preferences and deterministic stops."""
+    for sentence in re.split(r'[.!?\n]+', _unquoted(text)):
+        parts = list(clauses(sentence))
+        for index, part in enumerate(parts):
+            # A trailing explanation leaves a direct refusal intact. Carry
+            # conditions across commas, not unrelated preceding sentences.
+            part = re.split(r'\s+\b(?:because|since)\b', part, maxsplit=1, flags=re.I)[0]
+            scope = ' '.join(parts[:index] + [part])
+            if not _REPORTED.search(scope) and not _QUALIFIER.search(scope):
+                yield part
 
 
 def _simple_request(part):
@@ -90,6 +127,9 @@ def affirmative_requests(text):
     """
     result = []
     for part in clauses(text):
+        part = _without_courtesy(part)
+        if not part:
+            continue
         if _simple_cancellation(part):
             result = []
         elif _simple_request(part):
@@ -119,7 +159,7 @@ def budget_evidence(text, *, allow_personal=False):
 
 
 def has_replacement(text):
-    return any(send_cancelled(part) for part in clauses(text)) and bool(affirmative_requests(text))
+    return send_cancelled(text) and bool(affirmative_requests(text))
 
 
 def _object_signature(text):
@@ -140,7 +180,7 @@ def cancellation_leaves_independent_request(prior_text, cancellation_text):
     """Prove a previous request is distinct; ambiguity stays fenced."""
     if stops_all_sends(cancellation_text):
         return False
-    cancelled = [part for part in clauses(cancellation_text) if send_cancelled(part)]
+    cancelled = [part for part in _asserted_clauses(cancellation_text) if send_cancelled(part)]
     requests = affirmative_requests(prior_text)
     if not cancelled or not requests:
         return False
@@ -163,7 +203,7 @@ def _contains(text, phrase):
 def _target_is_unique(part, product_id, snapshot):
     products = snapshot.get('products', {})
     inventory = snapshot.get('inventory', {})
-    match = _REQUEST.search(part)
+    match = _REQUEST.search(part) or _REFUSAL.match(part)
     if not match:
         return False
     # The entire requested object must be accounted for. A matching product ID
@@ -213,12 +253,13 @@ def _target_is_unique(part, product_id, snapshot):
 
 def authorizes_request(snapshot, product_id, kind, quote=None):
     from .conversation import pending_messages
-    from .input_batch import current_requests
     if product_id not in snapshot.get('products', {}):
         return False
     invitation = snapshot.get('invitation') or {}
     incoming = [m for m in pending_messages(snapshot) if m.get('direction') == 'in']
-    eligible = current_requests(incoming)
+    message = request_source(snapshot, quote)
+    if message is None:
+        return False
 
     def retained_through_latest(index):
         # An older quotation does not make subsequent withdrawal or changed
@@ -232,30 +273,37 @@ def authorizes_request(snapshot, product_id, kind, quote=None):
                 return False
         return True
 
-    for index, message in enumerate(incoming):
-        if message not in eligible or not retained_through_latest(index):
-            continue
-        text = message.get('text', '')
-        if quote and quote not in text:
-            continue
-        if kind == 'accept' and invitation.get('product_id') == product_id and _ASSENT.fullmatch(text):
-            return True
-        for part in affirmative_requests(text):
-            if quote and quote not in part and part not in quote:
-                continue
-            if kind == 'accept' and invitation.get('product_id') != product_id:
-                continue
-            if _target_is_unique(part, product_id, snapshot):
-                return True
-    return False
-
-
-def permits_preference_removal(observation, message, snapshot):
-    """Require an explicit reversal; a one-item request is not a global opt-in."""
-    text = _unquoted(message.get('text', ''))
-    if _REPORTED.search(text) or stops_all_sends(text):
+    if not retained_through_latest(incoming.index(message)):
         return False
+    text = message.get('text', '')
+    if kind == 'accept' and invitation.get('product_id') == product_id and _ASSENT.fullmatch(text):
+        return True
+    if kind == 'accept' and invitation.get('product_id') != product_id:
+        return False
+    return any(_target_is_unique(part, product_id, snapshot) for part in affirmative_requests(text))
+
+
+def supports_preference(observation, message, snapshot):
+    """Check new sales holds and reversals against what the fan actually stated."""
+    text = _unquoted(message.get('text', ''))
+    if observation['active'] and observation['kind'] not in {'ordinary_chat_only', 'sales_refused'}:
+        return True  # Existing hardship/boundary authority is unchanged.
     kind = observation['kind']
+    if observation['active']:
+        for part in _asserted_clauses(text):
+            if observation.get('product_id') is not None:
+                if (kind == 'sales_refused' and _REFUSAL.match(part)
+                        and _target_is_unique(part, observation['product_id'], snapshot)):
+                    return True
+            elif stops_all_sends(part) or re.fullmatch(
+                r"(?:please\s+)?(?:no\s+(?:more\s+)?(?:offers|sales|content)"
+                r"|(?:just\s+chat|(?:i\s+)?only\s+want\s+to\s+chat)(?:\s+with\s+me)?"
+                r"|(?:don't|do\s+not)\s+(?:send|offer|sell)\s+(?:me\s+)?(?:any\s+)?(?:more\s+)?(?:offers|content))"
+                r"(?:\s+please)?", part, re.I):
+                return True
+        return False
+    if _REPORTED.search(text) or _QUALIFIER.search(text) or stops_all_sends(text):
+        return False
     if observation.get('product_id') is not None:
         return kind == 'sales_refused' and authorizes_request(
             {**snapshot, 'pending_fan_messages': [message]}, observation['product_id'], 'direct', observation['quote'])

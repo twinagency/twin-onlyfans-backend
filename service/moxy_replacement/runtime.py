@@ -434,8 +434,9 @@ FACTUAL_REASONS={'unsupported_fan_attribution','unsupported_relationship_history
     'known_name_not_used','unsupported_profile_visibility_claim'}
 FACTUAL_REASONS|={'unsupported_catalogue_prohibition','unsupported_price_units','unsupported_card_access_denial','sexting_permission_unverified','unsupported_asset_absence'}
 FACTUAL_REASONS|={'price_claim_mismatch','price_claim_unbound'}
+REQUEST_EVIDENCE_REASONS={'current_request_authority_unverified','current_request_evidence_missing','request_quote_required'}
+FACTUAL_REASONS|=REQUEST_EVIDENCE_REASONS
 RECOVERABLE_REASONS|=FACTUAL_REASONS|{'product_request_mismatch'}
-RECOVERABLE_REASONS.add('current_request_authority_unverified')
 
 # Unusable output for the same input gets one bounded correction before internal operator attention.
 FORMAT_REASONS={'invalid_model_json','invalid_model_decision','invalid_message_plan','invalid_message_part',
@@ -669,8 +670,8 @@ def correction_brief(reason,result,snap):
         brief['guidance']='Missing pilot inventory is not a creator-wide prohibition. Withdraw the invented boundary. State only which verified items you can send right now, while retaining actual source creator prohibitions and conditions.'
     if reason=='product_invitation_missing_identity':
         brief['guidance']='Your text invites a specific catalogue item. Use invite and its actual product_id, without a media card, so acceptance retains its identity.'
-    if reason=='current_request_authority_unverified':
-        brief['guidance']='The current source message does not clearly authorize this exception to a saved sales restriction or this change of retained offer. Keep the restriction and valid existing terms. Answer the current conversation or clarify the specific item; do not invent consent or a general inability to sell.'
+    if reason in REQUEST_EVIDENCE_REASONS:
+        brief['guidance']='Repair the request evidence using the actual current fan message. Missing or unsupported evidence does not ban the item. Keep the proposed product, action and approved terms if current evidence supports them; otherwise answer or clarify in text with no product or media. Do not switch products, invent consent, clear a restriction or claim a general inability to sell.'
     if reason in WORDING_REASONS|FACTUAL_REASONS:
         brief.update(kind='factual' if reason in FACTUAL_REASONS else 'wording',action=None,product_id=None,
             avoid=[p['text'][:300] for p in _plan(result)][:4])
@@ -728,13 +729,12 @@ def validate_decision(settings,snap,decision,*,planning=False):
     request_kind=decision.get('request_kind','none')
     quote=decision.get('request_quote')
     if request_kind!='none':
-        from .conversation import pending_messages
-        from .input_batch import current_requests
-        incoming=current_requests(pending_messages(snap))
-        if not incoming or not quote or not any(_norm(quote) in _norm(m['text']) for m in incoming):
+        from .request_evidence import request_source
+        if not quote or request_source(snap,quote) is None:
             # Unverifiable request evidence never authorises commerce; a plain
             # reply without a product is still sent, just without request effects.
-            if action in COMMERCIAL_ACTIONS or key is not None:raise ActionBlocked('current_request_evidence_missing')
+            if action in COMMERCIAL_ACTIONS or key is not None:
+                raise ActionBlocked('request_quote_required' if not quote else 'current_request_evidence_missing')
             request_kind='none'
     if request_kind!='none':
         if request_kind in {'direct','accept'} and key is not None:
@@ -802,7 +802,9 @@ def validate_decision(settings,snap,decision,*,planning=False):
                 or terms['price_cents']!=campaign['terms']['price_cents']
                 or terms['media_ids']!=campaign['terms']['media_ids']):
             raise ActionBlocked('moxy_campaign_product_changed')
-    if planning and type(rejected) is dict and rejected.get('kind') in {'wording','factual'} and rejected.get('keep'):
+    clarification=(type(rejected) is dict and rejected.get('reason') in REQUEST_EVIDENCE_REASONS
+        and action in {'reply','none','handover'} and key is None)
+    if planning and not clarification and type(rejected) is dict and rejected.get('kind') in {'wording','factual'} and rejected.get('keep'):
         if any(decision.get(k)!=v for k,v in rejected['keep'].items()):
             raise ActionBlocked('correction_changed_valid_plan')
         item=snap['inventory'].get(decision.get('product_id'),{})

@@ -17,8 +17,6 @@ _TOPIC={
 _CATEGORY={'covered_boobs':{'breasts'},'hand_bra':{'breasts'},'nipples':{'breasts'},
  'covered_booty':{'booty'},'bikini_lingerie_booty':{'booty'},'nude_booty':{'booty'},
  'feet_photos':{'feet'},'feet_photos_video':{'feet'},'kitty':{'kitty'},'bootyhole':{'bootyhole'},'xxx':{'xxx'}}
-_REQUEST=re.compile(r"\b(?:show|send|see|want|like|have|photo|pic(?:ture)?|video|worth)\b",re.I)
-_ASSENT=re.compile(r"^(?:(?:ok(?:ay)?|sure|yes|yeah|yep|please|go ahead|send it|do it)[\s,!?.]*)+$",re.I)
 _ALT=re.compile(r"\b(?:instead|different|alternative|rather than)\b",re.I)
 _GLOBAL=re.compile(
  r"\b(?:i|we)\s+(?:don'?t|do not|never)\s+(?:do|make|sell|offer|show|send|have)\b"
@@ -34,29 +32,16 @@ def topics(text):
 
 
 def _positive_facts(product):
-    # Negative description clauses cannot establish the presence of a feature.
-    facts=' '.join(f for asset in product.get('assets',[]) for f in asset.get('facts',[]))
-    return ' '.join(part for part in re.split(r'[.;]|,\s*(?:with|and)\s+',facts)
-                    if not re.search(r"\b(?:no|not|without|never)\b",part,re.I))
-
-
-def _request(snapshot):
-    from .conversation import pending_messages
-    pending=pending_messages(snapshot)
-    for m in reversed(pending):
-        text=m.get('text','')
-        if topics(text) and _REQUEST.search(text):return text
-    # An acceptance can refer back to the actual preceding request, but an
-    # unrelated new conversation does not inherit an old product topic.
-    last=pending[-1].get('text','') if pending else ''
-    if not _ASSENT.fullmatch(last.strip()):return ''
-    pending_ids={m['id'] for m in pending}
-    for m in reversed(snapshot.get('history',[])):
-        if m['direction']!='in' or m['id'] in pending_ids:continue
-        text=m.get('text','')
-        if topics(text) and _REQUEST.search(text):return text
-        if not _ASSENT.fullmatch(text.strip()):break
-    return ''
+    # Preserve a supported prefix such as "outfit photo, no live claim".
+    # A negated list remains one unit: "no toy, and feet" proves neither.
+    result=[]
+    for asset in product.get('assets',[]):
+        for fact in asset.get('facts',[]):
+            for sentence in re.split(r'[.;]',fact):
+                prefix=re.split(r',\s*(?=(?:no|not|without|never)\b)',sentence,maxsplit=1,flags=re.I)[0]
+                if not re.search(r"\b(?:no|not|without|never)\b",prefix,re.I):
+                    result.append(prefix)
+    return ' '.join(result)
 
 
 def _prohibited(snapshot):
@@ -96,32 +81,25 @@ def product_problem(snapshot,decision,texts):
             return 'unsupported_catalogue_prohibition'
     product=snapshot.get('products',{}).get(decision.get('product_id'))
     if not product:return None
-    request=_request(snapshot)
-    wanted=topics(request)
+    from .request_evidence import request_source, affirmative_requests
+    source=request_source(snapshot,decision.get('request_quote'))
+    request=' '.join(affirmative_requests(source['text'])) if source else ''
+    rendered=' '.join(texts)
+    # With no current request (e.g. acceptance of a retained invitation), check
+    # the caption's own content claim. Old fan topics are never revived.
+    wanted=topics(request) if request else topics(rendered)
     actual=set(_CATEGORY.get(product.get('category'),set()))|topics(_positive_facts(product))
-    relevant=not wanted or bool(wanted & actual)
+    relevant=(not wanted or bool(wanted & actual)) if request else wanted<=actual
     terms=snapshot.get('inventory',{}).get(decision.get('product_id'),{})
     kinds={f.get('kind') for f in terms.get('files',[]) if f.get('kind')}
-    video=bool(re.search(r'\bvideos?\b',request,re.I))
-    photo=bool(re.search(r'\b(?:photos?|pics?|pictures?)\b',request,re.I))
+    format_source=request or rendered
+    video=bool(re.search(r'\bvideos?\b',format_source,re.I))
+    photo=bool(re.search(r'\b(?:photos?|pics?|pictures?)\b',format_source,re.I))
     format_mismatch=(video and not photo and kinds and 'video' not in kinds) or (photo and not video and kinds and not kinds & {'photo','image'})
     if relevant and not format_mismatch:return None
-    rendered=' '.join(texts)
     # A real different alternative must say what is different. "Closest to
     # bare tits" does not turn a booty-only product into breast content.
     named_actual=topics(rendered) & actual
     named_format=(format_mismatch and bool(re.search(r'\b(?:photo|pic|picture)\b',rendered,re.I)) and kinds<={'photo','image'}) or (format_mismatch and bool(re.search(r'\bvideo\b',rendered,re.I)) and kinds=={'video'})
     if _ALT.search(rendered) and (named_actual or named_format):return None
-    from .conversation import pending_messages
-    pending=pending_messages(snapshot)
-    invitation=snapshot.get('invitation') or {}
-    if invitation.get('product_id')==decision.get('product_id') and pending and all(_ASSENT.fullmatch(m.get('text','').strip()) for m in pending):
-        proposal=[]
-        for m in reversed(snapshot.get('history',[])):
-            if m['direction']=='in':
-                if m['id'] in {x['id'] for x in pending}:continue
-                break
-            if m['direction']=='out':proposal.append(m.get('text',''))
-        proposal=' '.join(reversed(proposal))
-        if _ALT.search(proposal) and topics(proposal)&actual:return None
     return 'product_request_mismatch'

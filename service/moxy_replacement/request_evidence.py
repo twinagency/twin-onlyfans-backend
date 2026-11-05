@@ -24,7 +24,7 @@ _REPORTED = re.compile(r"\b(?:say|says|said|saying|wrote|quoted|asked|told|meant
 _REQUEST = re.compile(
     r"^\s*(?:(?:actually|instead|now|okay|ok|yes|yeah|yep|please)\b[\s,]*)*"
     r"(?:(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
-    r"(?:send|show|offer)\b|(?:i\s+(?:want|would\s+like)|i'd\s+like)\b)", re.I)
+    r"(?:re-?send|send|show|offer)\b|(?:i\s+(?:want|would\s+like)|i'd\s+like)\b)", re.I)
 _REFUSAL = re.compile(r"^\s*(?:i\s+(?:don't|do\s+not|dont)\s+want|"
                       r"(?:please\s+)?(?:don't|do\s+not)\s+(?:send|offer)|not)\b", re.I)
 _NEGATIVE = re.compile(r"\b(?:no|nothing|not|never|don't|dont|do\s+not|can't|cannot|won't|wouldn't|without)\b", re.I)
@@ -211,7 +211,7 @@ def _target_is_unique(part, product_id, snapshot):
     # request into permission to send that product.
     body = re.sub(r'^\s*to\s+(?:see|get|buy|receive)\s+', '', part[match.end():], flags=re.I)
     object_tokens = set(re.findall(r'[a-z0-9]+', body.lower()))
-    grammar = {'a','an','the','this','that','one','it','me','my','your','you','of','to',
+    grammar = {'a','an','the','this','that','one','item','items','it','me','my','your','you','of','to',
                'please','now','instead','again','too','also'}
     kinds = {'photo','photos','picture','pictures','pic','pics','image','images',
              'video','videos','clip','clips','card','cards','content','set','bundle'}
@@ -251,6 +251,47 @@ def _target_is_unique(part, product_id, snapshot):
     return candidates == {product_id}
 
 
+def _resend_target_is_unique(part, product_id, snapshot):
+    """Bind an affirmative current request to a uniquely evidenced old item."""
+    products = snapshot.get('products', {})
+    state = snapshot.get('fan_state', {})
+    sent = set(state.get('previously_sent_assets') or [])
+    assets = state.get('paid_assets_by_product') or {}
+    previous = set()
+    for key in products:
+        paid = set(assets.get(key) or [])
+        # An asset exposure alone is sufficient only for a complete mapped
+        # product, never for a partially seen multi-asset set.
+        if paid and paid <= sent:
+            previous.add(key)
+    cards = snapshot.get('card_state') or []
+    previous.update(c['product_id'] for c in cards if c.get('product_id') in products)
+    if product_id not in previous:
+        return False
+    match = _REQUEST.search(part)
+    if not match:
+        return False
+    body = part[match.end():].lower()
+    tokens = set(re.findall(r'[a-z0-9]+', body))
+    # A bare "send it again" refers to an old card only when the old target is
+    # unique. Unknown or unmapped cards cannot be silently ignored.
+    generic = {'me', 'us', 'it', 'that', 'this', 'one', 'the', 'card', 'item', 'again',
+               'please', 'now', 'same', 'too'}
+    unknown = any(c.get('product_id') not in products for c in cards)
+    if tokens <= generic and (re.search(r'\b(?:re-?send|again)\b', part, re.I)):
+        return not unknown and state.get('exposure_history_verified') is not False and previous == {product_id}
+    if _target_is_unique(part, product_id, snapshot):
+        return True
+    if re.search(r'\b(?:re-?send|again)\b', part, re.I) and not unknown and state.get('exposure_history_verified') is not False:
+        # An explicit resend refers to previous items. Do not let unrelated,
+        # never-sent catalogue items make a unique old item ambiguous.
+        scope = {**snapshot, 'products': {k: products[k] for k in previous},
+                 'inventory': {k: snapshot.get('inventory', {}).get(k, {}) for k in previous},
+                 'invitation': None}
+        return _target_is_unique(part, product_id, scope)
+    return False
+
+
 def authorizes_request(snapshot, product_id, kind, quote=None):
     from .conversation import pending_messages
     if product_id not in snapshot.get('products', {}):
@@ -269,7 +310,8 @@ def authorizes_request(snapshot, product_id, kind, quote=None):
             if _ASSENT.fullmatch(text):
                 continue
             requests = affirmative_requests(text)
-            if not requests or not all(_target_is_unique(part, product_id, snapshot) for part in requests):
+            target = _resend_target_is_unique if kind == 'resend' else _target_is_unique
+            if not requests or not all(target(part, product_id, snapshot) for part in requests):
                 return False
         return True
 
@@ -280,7 +322,8 @@ def authorizes_request(snapshot, product_id, kind, quote=None):
         return True
     if kind == 'accept' and invitation.get('product_id') != product_id:
         return False
-    return any(_target_is_unique(part, product_id, snapshot) for part in affirmative_requests(text))
+    target = _resend_target_is_unique if kind == 'resend' else _target_is_unique
+    return any(target(part, product_id, snapshot) for part in affirmative_requests(text))
 
 
 def supports_preference(observation, message, snapshot):

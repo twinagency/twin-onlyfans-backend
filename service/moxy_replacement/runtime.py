@@ -434,7 +434,7 @@ FACTUAL_REASONS={'unsupported_fan_attribution','unsupported_relationship_history
     'known_name_not_used','unsupported_profile_visibility_claim'}
 FACTUAL_REASONS|={'unsupported_catalogue_prohibition','unsupported_price_units','unsupported_card_access_denial','sexting_permission_unverified','unsupported_asset_absence'}
 FACTUAL_REASONS|={'price_claim_mismatch','price_claim_unbound'}
-REQUEST_EVIDENCE_REASONS={'current_request_authority_unverified','current_request_evidence_missing','request_quote_required'}
+REQUEST_EVIDENCE_REASONS={'current_request_authority_unverified','current_request_evidence_missing','request_quote_required','resend_not_requested'}
 FACTUAL_REASONS|=REQUEST_EVIDENCE_REASONS
 RECOVERABLE_REASONS|=FACTUAL_REASONS|{'product_request_mismatch'}
 
@@ -672,11 +672,18 @@ def correction_brief(reason,result,snap):
         brief['guidance']='Your text invites a specific catalogue item. Use invite and its actual product_id, without a media card, so acceptance retains its identity.'
     if reason in REQUEST_EVIDENCE_REASONS:
         brief['guidance']='Repair the request evidence using the actual current fan message. Missing or unsupported evidence does not ban the item. Keep the proposed product, action and approved terms if current evidence supports them; otherwise answer or clarify in text with no product or media. Do not switch products, invent consent, clear a restriction or claim a general inability to sell.'
-    if reason in WORDING_REASONS|FACTUAL_REASONS:
-        brief.update(kind='factual' if reason in FACTUAL_REASONS else 'wording',action=None,product_id=None,
+    from .request_evidence import authorizes_request
+    resend_repair=(reason=='media_previously_sent_requires_explicit_resend'
+        and result.get('product_id') is not None
+        and (authorizes_request(snap,result['product_id'],'resend',result.get('request_quote'))
+             or authorizes_request(snap,result['product_id'],'resend')))
+    if resend_repair:
+        brief['guidance']='The current request uniquely identifies this previously sent item. Repair the action as a resend with the exact current request quote and original product and terms. Revalidate purchase ownership, creator permission, price and delivery state; otherwise clarify without media.'
+    if reason in WORDING_REASONS|FACTUAL_REASONS or resend_repair:
+        brief.update(kind='factual' if reason in FACTUAL_REASONS or resend_repair else 'wording',action=None,product_id=None,
             avoid=[p['text'][:300] for p in _plan(result)][:4])
         if result.get('product_id') is not None and result['action'] in COMMERCIAL_ACTIONS:
-            brief['keep']={'action':result['action'],'product_id':result['product_id'],'sequence':result.get('sequence')}
+            brief['keep']={'action':'resend' if resend_repair else result['action'],'product_id':result['product_id'],'sequence':result.get('sequence')}
             item=snap.get('inventory',{}).get(result['product_id'],{})
             if all(k in item for k in ('price_cents','media_ids','preview_ids')):
                 brief['keep_terms']={k:item[k] for k in ('price_cents','media_ids','preview_ids')}
@@ -728,6 +735,8 @@ def validate_decision(settings,snap,decision,*,planning=False):
         if snap['operational']['in_graveyard_shift']:raise ActionBlocked('graveyard_clock_hold')
     request_kind=decision.get('request_kind','none')
     quote=decision.get('request_quote')
+    if action=='resend' and request_kind!='resend':
+        raise ActionBlocked('resend_not_requested')
     if request_kind!='none':
         from .request_evidence import request_source
         if not quote or request_source(snap,quote) is None:
@@ -745,7 +754,14 @@ def validate_decision(settings,snap,decision,*,planning=False):
                     raise ActionBlocked('current_request_authority_unverified')
             facts['direct_request_product']=key
             facts['ordinary_chat_only']=facts['sales_refused']=False
-        if request_kind=='resend':facts['requested_resend_product']=key
+        if request_kind=='resend' and action in COMMERCIAL_ACTIONS:
+            from .request_evidence import authorizes_request
+            if not authorizes_request(snap,key,'resend',quote):
+                raise ActionBlocked('current_request_authority_unverified')
+            facts['requested_resend_product']=key
+            # A specific request permits this one response without erasing the
+            # fan's stored preference against unsolicited offers.
+            facts['ordinary_chat_only']=facts['sales_refused']=False
     from .input_batch import cancelled,current_requests
     batch=pending_messages(snap)
     if action in COMMERCIAL_ACTIONS and any(cancelled(m) for m in batch):

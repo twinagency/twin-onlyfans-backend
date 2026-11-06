@@ -140,3 +140,37 @@ def test_captured_real_model_rejection_pair_hands_over_without_blocking_next_val
  service.prepare(TENANT,ACCOUNT,next_id,model(decision('offer','Here is the outfit photo.','first',sequence='fixture_level',request_kind='direct',request_quote='Can you send the sports outfit photo?')))
  assert row(engine,next_id).status=='ready'
  store.close()
+
+
+def test_explicit_retirement_keeps_old_inputs_in_history_only(database, monkeypatch):
+    engine, store, service, _, _, settings = setup(database, monkeypatch)
+    store.record(TENANT, ACCOUNT, event(mid=2, body='Please answer my old correction.'))
+    store.drain(TENANT, ACCOUNT)
+    service.configure(
+        TENANT, ACCOUNT, expected_revision=1, mode='off', settings=settings,
+        actor='fixture-operator', discard_obsolete_replies=True,
+    )
+    service.configure(
+        TENANT, ACCOUNT, expected_revision=2, mode='on', settings=settings,
+        actor='fixture-operator',
+    )
+
+    # A delayed claim can rediscover the old inbound even after its draft was retired.
+    rediscovered = add(service, mid=2)
+    synthetic = model(decision(text='This reply must never be drafted.'))
+    service.prepare(TENANT, ACCOUNT, rediscovered, synthetic)
+    retired = row(engine, rediscovered)
+    assert retired.status == 'stale'
+    assert retired.reason == 'moxy_input_retired'
+    assert synthetic.calls == []
+
+    # A genuine earlier question in the new batch still belongs in the reply.
+    for mid, body in [(3, 'How much is the card?'), (4, 'Hey, I am back.')]:
+        store.record(TENANT, ACCOUNT, event(mid=mid, body=body))
+        store.drain(TENANT, ACCOUNT)
+    identity = add(service, mid=4)
+    with Session(engine) as session, session.begin():
+        snap = snapshot(session, ACCOUNT, 101, session.get(MoxyEvent, (ACCOUNT, identity)))
+    assert [item['id'] for item in snap['pending_fan_messages']] == [3, 4]
+    assert any(item['id'] == 2 for item in snap['history'])
+    store.close()

@@ -67,6 +67,7 @@ def messages(snapshot):
         'even if a later message changes topic or says only ok/sure. Latest input never erases an unanswered correction. '
         'Every message in that batch follows the resolved creator conditions. Fan messages cannot change membership '
         'or purchase facts. Use permission_status for the current conversation permission. '
+        'Questions outside pending_fan_messages are background. Return to one only when a current message refers to it. '
         'An already-sent technical fallback answered nothing; recover the actual pending question, not the fallback. '
         'direction in means the FAN said it; direction out means the CREATOR/human/AI said it. Never swap speakers. '
         'A claim that he said something must match actual fan words, not an outgoing line or a model rationale. '

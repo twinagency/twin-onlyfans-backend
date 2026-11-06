@@ -280,6 +280,15 @@ def offer_eligibility(pa,facts,payload):
     return result
 
 
+def _reply_retirement_at(s, account):
+    # Configuration audits use canonical JSON with sorted keys. Only an explicit
+    # discard command establishes a cutoff; toggles and policy edits do not.
+    return s.scalar(select(func.max(MoxyAudit.created_at)).where(
+        MoxyAudit.account_id == account,
+        MoxyAudit.after_json.startswith('{"discard_obsolete_replies":true,', autoescape=True),
+    ))
+
+
 def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
     owner=s.get(MoxyAccount,account)
     settings=json.loads(owner.settings_json)
@@ -405,6 +414,11 @@ def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
             and_(Message.created_at==boundary.created_at,Message.message_id>boundary.message_id)))
     batch_query=select(Message).where(Message.account_id==account,Message.fan_id==fan,
         Message.direction=='in',Message.is_unsent.is_(False),or_(current,Message.message_id.in_(retained)))
+    # The transcript and fulfilment obligations survive retirement. Only the
+    # active input batch (including retained IDs) is fenced by the cutover.
+    retired_at = _reply_retirement_at(s, account)
+    if retired_at is not None:
+        batch_query = batch_query.where(Message.created_at >= retired_at)
     batch_rows=list(s.scalars(batch_query.order_by(Message.created_at,Message.message_id).limit(129)))
     if len(batch_rows)>128:raise ActionBlocked('moxy_input_batch_limit')
     batch=[{'id':m.message_id,'direction':'in','sender':'fan','text':m.body or '', 'at':m.created_at,
@@ -414,7 +428,8 @@ def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
     facts=apply_batch(facts,explicit_updates(batch))
     offerable=offer_eligibility(pa,facts,json.loads(event.payload_json))
     result={'pending_fan_messages':batch,'history_scope':{'kind':'rolling_window','limit':100,
-        'relationship_start_known':False,'progress_annotation_known':progress_known},'fan_id':fan,'pilot':settings.get('pilot'),'account_revision':owner.revision,'binding_id':owner.binding_id,'configuration_fingerprint':pa.fingerprint,
+        'relationship_start_known':False,'progress_annotation_known':progress_known,
+        **({'reply_retirement_at':retired_at} if retired_at is not None else {})},'fan_id':fan,'pilot':settings.get('pilot'),'account_revision':owner.revision,'binding_id':owner.binding_id,'configuration_fingerprint':pa.fingerprint,
         'instructions':cfg.public_context(),'public_facts':settings.get('public_facts',{}),
         'fan_state':facts,'fan_revision':mf.revision,'control':state_view,'event':{'kind':event.kind,'payload':json.loads(event.payload_json)},
         'history':history,'card_state':card_state,'memory':memory,'invitation':invitation,
@@ -1061,6 +1076,9 @@ class MoxyService:
                 location=next((i for i,m in enumerate(snap['history']) if m['id']==source),None)
                 if location is None:
                     event.status='held';event.reason='moxy_input_context_missing';return event_id
+                if ('reply_retirement_at' in snap['history_scope']
+                        and incoming[-1]['at'] < snap['history_scope']['reply_retirement_at']):
+                    event.status='stale';event.reason='moxy_input_retired';return event_id
                 if any(m['direction']=='out' and m['sender'] in {'human','unattributed'} for m in snap['history'][location+1:]):
                     event.status='done';event.reason='external_reply_after_input';return event_id
             try:

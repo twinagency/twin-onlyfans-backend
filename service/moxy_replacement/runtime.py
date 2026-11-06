@@ -19,7 +19,7 @@ from onlyfans_runtime.store import Refused, utcnow
 from onlyfans_runtime.native_context import canonical, versions
 from .configuration import load, load_foundation, CreatorConfiguration, ActionBlocked, InvalidConfiguration, digest
 from .authority import ProductAuthority, readiness
-from .parts import plan as _plan, reused_wording
+from .parts import plan as _plan, reused_wording, repeated_habit
 from . import writer
 from .diagnostics import record as diagnose
 
@@ -454,7 +454,7 @@ RECOVERABLE_REASONS={'media_previously_sent_requires_explicit_resend','acceptanc
     'price_differs_from_authorised_fixed','product_media_format_mismatch','product_photo_count_mismatch'}
 RECOVERABLE_REASONS.add('product_invitation_missing_identity')
 RECOVERABLE_PREFIXES=('condition_not_met:','condition_unknown:')
-RECOVERABLE_REASONS|={'pilot_specialist_handover_required','repeated_recent_line','invented_policy_claim',
+RECOVERABLE_REASONS|={'pilot_specialist_handover_required','repeated_recent_line','repeated_habit','invented_policy_claim',
     'repeated_recent_phrase','content_status_wording','asks_known_name','known_name_not_used','unsupported_profile_visibility_claim','unsupported_creator_routine','unsupported_asset_gaze','verified_ownership_ignored'}
 FACTUAL_REASONS={'unsupported_fan_attribution','unsupported_relationship_history','customer_facing_technical_fallback',
     'unsupported_creator_routine','unsupported_asset_gaze','content_status_wording','verified_ownership_ignored',
@@ -488,7 +488,7 @@ INVENTED_POLICY=_policy_re.compile(
 
 # Wording failures: the product decision may be fine, only the words are refused. A correction for these
 # rewrites the wording and keeps an otherwise valid offer; every other recoverable reason is a product failure.
-WORDING_REASONS={'repeated_recent_line','repeated_recent_phrase','invented_policy_claim','content_status_wording','asks_known_name',
+WORDING_REASONS={'repeated_recent_line','repeated_habit','repeated_recent_phrase','invented_policy_claim','content_status_wording','asks_known_name',
     'known_name_not_used','unsupported_profile_visibility_claim','unsupported_creator_routine','unsupported_asset_gaze','verified_ownership_ignored'}
 
 _VIEWED_CLAIM=_policy_re.compile(
@@ -623,6 +623,8 @@ def wording_problem(snap,decision):
         # Sending the same line again reads as a bot; one bounded correction asks for a fresh reply.
         return 'repeated_recent_line'
     if reused_wording([{'text':t} for t in looping],recent):return 'repeated_recent_phrase'
+    # The same pet name or emoji on most recent lines reads as a script; the one correction asks for a different one.
+    if repeated_habit(looping,recent,_latest_fan_text(snap)):return 'repeated_habit'
     for index,text in enumerate(looping):
         earlier=looping[:index]
         if (len(_norm(text))>=12 and any(_norm(text)==_norm(old) for old in earlier)) or reused_wording([{'text':text}],earlier):
@@ -715,6 +717,8 @@ def correction_brief(reason,result,snap):
         brief['guidance']='Missing pilot inventory is not a creator-wide prohibition. Withdraw the invented boundary. State only which verified items you can send right now, while retaining actual source creator prohibitions and conditions.'
     if reason=='product_invitation_missing_identity':
         brief['guidance']='Your text invites a specific catalogue item. Use invite and its actual product_id, without a media card, so acceptance retains its identity.'
+    if reason=='repeated_habit':
+        brief['guidance']='Your recent replies already used the same pet name or emoji. Answer the same fan message again with no pet name and no emoji, or a different one. Keep every price, fact and offer exactly as it was, and still state any price or quantity he asked for.'
     if reason in REQUEST_EVIDENCE_REASONS:
         brief['guidance']='Repair the request evidence using the actual current fan message. Missing or unsupported evidence does not ban the item. Keep the proposed product, action and approved terms if current evidence supports them; otherwise answer or clarify in text with no product or media. Do not switch products, invent consent, clear a restriction or claim a general inability to sell.'
     if reason=='invalid_conversation_progress':

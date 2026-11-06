@@ -70,6 +70,38 @@ def shared_wording(new_text, old_text):
     return prefix>=4 and min(len(a),len(b))>=6 and _content(a[:prefix])>=2
 
 
+# ---- Habit: the same pet name or emoji on most of the last few creator lines.
+# `love`, `sexy` and `handsome` are ordinary words, so only real terms of address are counted.
+HABIT_NAMES=PET_NAMES-{_squash(w) for w in ('love','sexy','handsome')}
+_HABIT_FOLD={'babe':'baby','babes':'baby','bby':'baby'}
+_EMOJI=re.compile('[\u2600-\u27bf\U0001f000-\U0001faff]')
+HABIT_WINDOW=4   # last creator lines examined
+HABIT_LIMIT=2    # a pet name/emoji already on this many of them may not open a third
+
+
+def habits(text):
+    """The pet names (babe/babes/bby folded into baby) and emoji used in one line."""
+    words=re.sub(r"[^\w\s']",' ',str(text).lower().replace('\u2019',"'")).split()
+    names={_HABIT_FOLD.get(w,w) for w in (_squash(x.replace("'",'')) for x in words) if len(w)>1 and w in HABIT_NAMES}
+    return names|set(_EMOJI.findall(str(text)))
+
+
+def repeated_habit(new_texts, recent_texts, fan_text=''):
+    """A pet name or emoji in new_texts already on HABIT_LIMIT of the last HABIT_WINDOW recent lines, else None.
+
+    One use now and then stays natural. Something the fan just wrote himself (he asked to be called
+    daddy, or sent the emoji) is never refused. Prices, quotes and facts are not affected.
+    """
+    seen={}
+    for old in recent_texts[-HABIT_WINDOW:]:
+        for h in habits(old):seen[h]=seen.get(h,0)+1
+    asked=habits(fan_text)
+    for text in new_texts:
+        for h in sorted(habits(text)-asked):
+            if seen.get(h,0)>=HABIT_LIMIT:return h
+    return None
+
+
 def reused_wording(parts, recent_texts):
     """The first recent line whose wording a new part substantially reuses, else None."""
     for part in parts:

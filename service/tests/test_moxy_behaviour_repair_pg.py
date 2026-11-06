@@ -226,7 +226,7 @@ def test_writer_prompt_follows_innuendo_and_pivots_unavailable_requests():
     joined=w.messages(snap)[0]['content']
     assert 'Vary habitual openings, pet names, emoji' in joined
     assert 'Necessary quotations, prices and grounded facts may repeat' in joined
-    assert 'relevant eligible item exists' in joined and 'may talk about' in joined and 'commercial_state' in joined
+    assert 'relevant eligible item exists' in joined and 'Existing cards can be discussed without sending' in joined and 'commercial_state' in joined
     assert 'character-for-character' in joined
 
 

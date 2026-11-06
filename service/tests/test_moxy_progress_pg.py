@@ -148,6 +148,10 @@ def test_legacy_receipt_does_not_replay_prior_messages(database, monkeypatch):
         incoming(store, 2, 'Earlier question?')
         first = add(service, key='legacy-reply', mid=2)
         service.prepare(TENANT, ACCOUNT, first, model(decision(text='That sounds good.')))
+        # A stored event from before the field existed: strip it from the saved decision (explicit legacy fixture).
+        with Session(engine) as s, s.begin():
+            e = s.get(MoxyEvent, (ACCOUNT, first)); d = json.loads(e.decision_json)
+            d.pop('unanswered_input_ids', None); e.decision_json = json.dumps(d)
         assert send(service, authority, engine, first)[0] == 'accepted'
         assert '_moxy_conversation_progress' not in json.loads(row(engine, first).payload_json)
         incoming(store, 3, 'New question?')

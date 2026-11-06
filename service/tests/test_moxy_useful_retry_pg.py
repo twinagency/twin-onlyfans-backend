@@ -9,6 +9,7 @@ from test_onlyfans_text_delivery_pg import TENANT,ACCOUNT
 from db.onlyfans_delivery_models import OfTextIntent
 from db.onlyfans_moxy_models import MoxyFan
 from onlyfans_runtime.native_planning import SyntheticNativeModel
+from helpers.historical_output import adapt_historical_output
 from moxy_replacement.runtime import MoxyService
 
 ACTUAL_CONSECUTIVE_BAD='{\n  "action": "reply",\n  "text": "you\'re right, i shouldn\'t have said that. i can\'t actually tell you how long we\'ve been talking from what i can see here, so i won\'t pretend i know. what i do know is you\'re here now and i\'m glad you are 😏",\n  "messages": [\n    {\n      "text": "you\'re right, i shouldn\'t have said that. i can\'t actually tell you how long we\'ve been talking from what i can see here, so i won\'t pretend i know. what i do know is you\'re here now and i\'m glad you are 😏",\n      "media": false\n    },\n    {\n      "text": "and no, a kiss isn\'t all you\'d get. i\'d wrap my hand around you and feel you get hard while i\'m looking right at you",\n      "media": false\n    }\n  ],\n  "product_id": null,\n  "sequence": null,\n  "flags": [],\n  "reason": "Fan corrected the unsupported \'yesterday/one conversation\' claim and asked a follow-up sexual question. Withdraw the false history claim plainly, cannot give exact start from available history. Sexting condition unmet (not VIP/spender), so keep the answer suggestive rather than explicit. No new offer needed since he is not asking to buy and already has unpaid cards.",\n  "permission": null,\n  "question": null,\n  "resolve_obligation": null\n}'
@@ -30,9 +31,9 @@ def test_actual_corrected_consecutive_reply_is_useful_ordered_and_does_not_chang
   'is that it a kiss? you wouldnt hold my dick and have it get hard in your hands?']
  for mid,body in enumerate(inputs,2):store.record(TENANT,ACCOUNT,event(mid=mid,body=body));store.drain(TENANT,ACCOUNT)
  identity=add(svc,mid=3)
- svc.prepare(TENANT,ACCOUNT,identity,SyntheticNativeModel(raw_output=ACTUAL_CONSECUTIVE_BAD))
+ svc.prepare(TENANT,ACCOUNT,identity,SyntheticNativeModel(raw_output=adapt_historical_output(ACTUAL_CONSECUTIVE_BAD)))
  assert row(engine,identity).reason=='sexting_permission_unverified'
- retry=correction(engine);response=SyntheticNativeModel(raw_output=ACTUAL_CONSECUTIVE_GOOD)
+ retry=correction(engine);response=SyntheticNativeModel(raw_output=adapt_historical_output(ACTUAL_CONSECUTIVE_GOOD))
  svc.prepare(TENANT,ACCOUNT,retry,response)
  assert row(engine,retry).status=='ready'
  prompt=json.loads(response.calls[0][1]['content'])
@@ -65,7 +66,7 @@ def test_duplicate_choice_retry_can_answer_about_unpaid_card_without_new_card_or
  before=purchase_state(engine)
  store.record(TENANT,ACCOUNT,event(mid=2,body='ok send me the ass pic'));store.drain(TENANT,ACCOUNT)
  identity=add(svc,key='actual-duplicate-request',mid=2)
- svc.prepare(TENANT,ACCOUNT,identity,SyntheticNativeModel(raw_output=ACTUAL_DUPLICATE_BAD))
+ svc.prepare(TENANT,ACCOUNT,identity,SyntheticNativeModel(raw_output=adapt_historical_output(ACTUAL_DUPLICATE_BAD)))
  assert row(engine,identity).reason=='media_previously_sent_requires_explicit_resend'
  retry=correction(engine)
  reply=model(decision(text='That photo is already in our chat, babe. The card is still unpaid.'))

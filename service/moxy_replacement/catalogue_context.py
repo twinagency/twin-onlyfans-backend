@@ -28,7 +28,7 @@ def project(snapshot):
         terms=inventory[key]
         files={f['media_id']:f for f in terms.get('files',[])}
         entry={name:deepcopy(p[name]) for name in
-               ('category','price_cents','currency','available','requires','source')}
+               ('category','price_cents','currency','available','requires')}
         if not entry['requires']: del entry['requires']  # absent means no extra condition; keeps 100 products in budget
         cents=p['price_cents']
         entry['price_display']=f"${cents//100}.{cents%100:02d} {p['currency']}"
@@ -43,10 +43,19 @@ def project(snapshot):
         entry['assets']=[]
         for asset in p['assets']:
             facts=files.get(asset['id'],{})
-            entry['assets'].append({'id':asset['id'],'facts':deepcopy(asset['facts']),
+            basis=deepcopy(facts.get('description_basis',{}))
+            freshness=basis.get('description_freshness')
+            if isinstance(freshness,dict):
+                # The writer needs the freshness conclusion and its limits; the
+                # raw fingerprints remain in the full validation snapshot.
+                freshness.pop('recorded_stamp',None)
+                freshness.pop('current_stamp',None)
+            asset_view={'id':asset['id'],'facts':deepcopy(asset['facts']),
                 'kind':facts.get('kind'),
-                'description_basis':deepcopy(facts.get('description_basis',{})),
-                'operator_corrected':facts.get('operator_corrected',False)})
+                'description_basis':basis}
+            if facts.get('operator_corrected',False):
+                asset_view['operator_corrected']=True
+            entry['assets'].append(asset_view)
         if common_caption is None:
             entry['caption_instructions']=p.get('caption_instructions','')
         compact[key]=entry

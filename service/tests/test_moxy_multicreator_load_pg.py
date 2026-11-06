@@ -144,7 +144,7 @@ class Ctx:
 def decision(action='reply', text='', product_id=None, sequence=None, flags=(), **extra):
     return {'action': action, 'text': text, 'product_id': product_id, 'sequence': sequence, 'flags': list(flags),
             'reason': 'Deterministic load fixture; not a model-quality result.', 'permission': None,
-            'question': None, 'resolve_obligation': None, **extra}
+            'question': None, 'resolve_obligation': None, 'unanswered_input_ids': [], **extra}
 
 
 def make_stub(ctx, c):

@@ -32,12 +32,15 @@ def test_exposure_boundaries(database,monkeypatch,creator,case):
                         body="Please resend that outfit item",created_at=utcnow()))
         action="resend" if case=="explicit_resend" else "offer"
         extra={"request_kind":"resend","request_quote":"Please resend that outfit item"} if case=="explicit_resend" else {}
-        identity,_=run(service,engine,decision(action,"Here is the outfit item.","first",sequence="fixture_level",**extra))
-        with Session(engine) as s:status=s.get(MoxyEvent,(ACCOUNT,identity)).status
+        payload={"source_message_id":7001} if case=="explicit_resend" else None
+        identity,_=run(service,engine,decision(action,"Here is the outfit item.","first",sequence="fixture_level",**extra),payload=payload)
+        with Session(engine) as s:
+            saved=s.get(MoxyEvent,(ACCOUNT,identity))
+            status,reason=saved.status,saved.reason
         transport=SyntheticTextTransport(ACCOUNT)
         if case=="missing_count":
             assert status=="held";assert transport.calls==[];return
-        assert status=="ready"
+        assert status=="ready", reason
         intent=service.queue(TENANT,ACCOUNT,identity)
         if case in {"free_after_queue","unpaid_after_queue"}:
             with Session(engine) as s,s.begin():

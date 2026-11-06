@@ -2932,8 +2932,14 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
     # The flags are a different reading of the SAME image, so they stay valid
     # across a re-describe. A locked dispute fix outranks model and carried alike.
     prev = load_json(item.ai_fields_json, {}) or {}
-    for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
-                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
+    # Automatic visual flags describe the prior content version. Keep workflow
+    # markers across versions, but carry visual flags only when content matches.
+    retained_keys = ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1")
+    freshness = vds.content_version_evidence(item, prev.get("_content_stamp"))["status"]
+    if freshness not in {"changed", "unverifiable"}:
+        retained_keys += (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
+                          "_flags_v", "_flags_model", "_flags_frames", "_flags_arc")
+    for key in retained_keys:
         if key in prev:
             data[key] = prev[key]
     for key, val in (load_json(item.operator_overrides_json, {}) or {}).items():

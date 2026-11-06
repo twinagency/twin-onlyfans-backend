@@ -20,6 +20,12 @@ _GLOBAL_STOP = re.compile(
     r"\b(?:do\s+not|don't|dont|never)\s+send\s+(?:(?:me|us)\s+)?(?:anything|any\s+more(?:\s+(?:offers|content))?|more\s+(?:offers|content))\b(?=\s*(?:$|because\b|since\b))"
     r"|\bstop\s+(?:sending|offering)(?:\s+(?:me|us))?(?:\s+(?:anything|content|offers))?\s*[.!?]*$",
     re.I)
+# A fan declining to buy at all. Evidence for a retained sales_refused observation;
+# the model supplies the observation, this only confirms the quoted words say it.
+_SALES_DECLINE = re.compile(
+    r"\bnot\s+interested\s+in\s+(?:buying|purchasing|paying|any\s+(?:offers|content|more)|anything\b)"
+    r"|\b(?:don'?t|do\s+not|dont)\s+want\s+to\s+(?:buy|purchase|pay\s+for)\s+(?:anything|any|more)\b"
+    r"|\bno\s+more\s+(?:offers|content|sales\s+pitches|pitches)\b", re.I)
 _REPORTED = re.compile(r"\b(?:say|says|said|saying|wrote|quoted|asked|told|meant|hypothetically)\b", re.I)
 _REQUEST = re.compile(
     r"^\s*(?:(?:actually|instead|now|okay|ok|yes|yeah|yep|please)\b[\s,]*)*"
@@ -353,7 +359,7 @@ def supports_preference(observation, message, snapshot):
                 if (kind == 'sales_refused' and _REFUSAL.match(part)
                         and _target_is_unique(part, observation['product_id'], snapshot)):
                     return True
-            elif stops_all_sends(part) or re.fullmatch(
+            elif stops_all_sends(part) or _SALES_DECLINE.search(part) or re.fullmatch(
                 r"(?:please\s+)?(?:no\s+(?:more\s+)?(?:offers|sales|content)"
                 r"|(?:just\s+chat|(?:i\s+)?only\s+want\s+to\s+chat)(?:\s+with\s+me)?"
                 r"|(?:don't|do\s+not)\s+(?:send|offer|sell)\s+(?:me\s+)?(?:any\s+)?(?:more\s+)?(?:offers|content))"

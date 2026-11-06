@@ -95,8 +95,10 @@ def test_pending_batch_extends_beyond_rolling_history_and_fallback(database,monk
  engine,store,service,_,_,_=setup(database,monkeypatch)
  now=utcnow()
  with Session(engine) as s,s.begin():
-  for i in range(105):s.add(Message(account_id=ACCOUNT,fan_id=101,message_id=100+i,direction='in',body='Unanswered question '+str(i),created_at=now+timedelta(seconds=i)))
   s.add(Message(account_id=ACCOUNT,fan_id=101,message_id=300,direction='out',body=LEGACY_TECHNICAL_FALLBACK,created_at=now+timedelta(seconds=200)))
+ # Unanswered questions arrive as live ingress: imported rows are context only (by design).
+ for i in range(105):store.record(TENANT,ACCOUNT,event(mid=100+i,body='Unanswered question '+str(i)))
+ while store.drain(TENANT,ACCOUNT):pass
  identity=add(service,mid=204)
  with Session(engine) as s,s.begin():
   snap=snapshot(s,ACCOUNT,101,s.get(MoxyEvent,(ACCOUNT,identity)))

@@ -40,16 +40,15 @@ def decision(settings,snapshot,result):
 
 
 def _specialist_permission(result):
-    # Sexting is a conversational reply capability, not a separately fulfilled
-    # service. validate_decision still resolves its current creator conditions.
-    return result['permission'] is not None and not (
-        result['permission']=='sexting' and result['action']=='reply')
+    # Discussion permission and the commercial action are independent. The
+    # full validator resolves the source permission for either action shape.
+    return result['permission'] not in (None,'sexting')
 
 
 def route_specialist(settings,result):
     """No unimplemented service promises, charges or automatic fulfilment."""
     if scope(settings) is None:return result
-    if _specialist_permission(result) or result['action'] in {'correct','fulfil'} or 'complaint' in result['flags']:
+    if _specialist_permission(result) or result['action'] in {'correct','fulfil'}:
         # The ordered messages array is the normal writer output now: a handover carries none, so drop the drafted ones.
         routed={**result,'action':'handover','text':'','product_id':None,'sequence':None,
             'permission':None,'resolve_obligation':None,'reason':'pilot_specialist_handover_required'}

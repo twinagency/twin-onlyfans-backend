@@ -10,12 +10,13 @@ def prepare_decision(s,account,fan,event_id,body):
         raise Refused('moxy_decision_not_current')
     if event.charged_millicents is None or digest(snapshot(s,account,fan,event))!=event.snapshot_hash:
         raise Refused('moxy_snapshot_changed')
-    from .parts import active
+    from .parts import active,index
     decision=active(event)
     from .campaigns import validate
     validate(s,account,fan,event)
     if decision['text']!=body:raise Refused('moxy_writer_text_changed')
-    terms=validate_decision(json.loads(owner.settings_json),json.loads(event.snapshot_json),decision)
+    terms=validate_decision(json.loads(owner.settings_json),json.loads(event.snapshot_json),
+        json.loads(event.decision_json),part_index=index(event))
     if terms:
         terms={**terms,'moxy_action':decision['action']}
         if terms['price_cents']==0:terms['preview_ids']=[]
@@ -33,10 +34,10 @@ def media_current(s,row):
     if not current(s,row):return False
     event=s.get(MoxyEvent,(row.account_id,row.moxy_event_id))
     try:
-        from .parts import active
+        from .parts import active,index
         decision=active(event)
         terms=validate_decision(json.loads(s.get(MoxyAccount,row.account_id).settings_json),
-            json.loads(event.snapshot_json),decision)
+            json.loads(event.snapshot_json),json.loads(event.decision_json),part_index=index(event))
         if terms:
             terms={**terms,'moxy_action':decision['action']}
             if terms['price_cents']==0:terms['preview_ids']=[]

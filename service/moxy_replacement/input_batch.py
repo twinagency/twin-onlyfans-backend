@@ -1,25 +1,37 @@
 """Chronological explicit input updates; a later cancellation/budget fences older consent."""
-import re
 from copy import deepcopy
-_BUDGET=re.compile(r"\b(?:my\s+)?budget\s+(?:is\s+|of\s+|[:=]\s*)?(?:(?:only|just)\s+)?\$([0-9]{1,5}(?:\.[0-9]{1,2})?)\b",re.I)
-_CANCEL=re.compile(r"\b(?:cancel(?:\s+(?:that|it|my request|the request))?|don'?t send|do not send|never ?mind|hold off(?: on sending)?)\b",re.I)
-
-def cancelled(message):return bool(_CANCEL.search(message.get('text','')))
+def cancelled(message):
+    from .request_evidence import send_cancelled
+    return send_cancelled(message.get('text',''))
 
 def explicit_updates(messages):
     result=[]
     for m in messages:
-        for match in _BUDGET.finditer(m.get('text','')):
-            result.append({'kind':'budget','active':True,'message_id':m['id'],'quote':match.group(0),
-                'product_id':None,'amount_cents':round(float(match.group(1))*100)})
-        if cancelled(m):result.append({'kind':'ordinary_chat_only','active':True,'message_id':m['id'],
+        from .request_evidence import stops_all_sends,budget_evidence
+        budgets=budget_evidence(m.get('text',''))
+        if budgets:
+            quote,amount=budgets[-1]
+            result.append({'kind':'budget','active':True,'message_id':m['id'],'quote':quote,
+                'product_id':None,'amount_cents':amount})
+        if stops_all_sends(m.get('text','')):result.append({'kind':'ordinary_chat_only','active':True,'message_id':m['id'],
             'quote':m['text'],'product_id':None})
     return result
 
 
 def current_requests(messages):
-    last=max((i for i,m in enumerate(messages) if cancelled(m)),default=-1)
-    return messages[last+1:]
+    from .request_evidence import has_replacement,cancellation_leaves_independent_request
+    result=[]
+    for message in messages:
+        if not cancelled(message):
+            result.append(message)
+            continue
+        result=[prior for prior in result if cancellation_leaves_independent_request(
+            prior.get('text',''),message.get('text',''))]
+        if has_replacement(message.get('text','')):
+            # Keep the exact source message, including its cancellation. The
+            # authority check binds to the affirmative replacement clause.
+            result.append(message)
+    return result
 
 
 def chronological(values,messages):

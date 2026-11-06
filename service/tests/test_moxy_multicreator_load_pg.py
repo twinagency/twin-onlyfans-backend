@@ -144,7 +144,7 @@ class Ctx:
 def decision(action='reply', text='', product_id=None, sequence=None, flags=(), **extra):
     return {'action': action, 'text': text, 'product_id': product_id, 'sequence': sequence, 'flags': list(flags),
             'reason': 'Deterministic load fixture; not a model-quality result.', 'permission': None,
-            'question': None, 'resolve_obligation': None, **extra}
+            'question': None, 'resolve_obligation': None, 'unanswered_input_ids': [], **extra}
 
 
 def make_stub(ctx, c):
@@ -532,6 +532,17 @@ def test_three_creators_concurrent_mixed_load(database, monkeypatch, tmp_path):
                 ev2[(c.account, f)] = add_event(ctx, c, f, 'r2-%s-%d' % (scenario(i), f))
     webhook = {'results': [], 'errors': []}
 
+    def record_with_retry(intake, c, proof):
+        # A duplicate delivery may lose the runtime-row lock race (lock_timeout) under load; the provider
+        # would redeliver. Retry only that error; the final result and the 1/1/1 counts are still asserted.
+        for attempt in range(4):
+            try:
+                return intake.record(c.tenant, c.account, proof)
+            except Exception as exc:  # noqa: BLE001
+                if 'LockNotAvailable' not in repr(exc) or attempt == 3:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
+
     def webhook_worker():
         intake = CommerceIntake(store)
         t0 = time.monotonic()
@@ -554,7 +565,7 @@ def test_three_creators_concurrent_mixed_load(database, monkeypatch, tmp_path):
                 if kind == 'dup_seq':
                     for _ in range(3):
                         try:
-                            r.append(intake.record(c.tenant, c.account, proof))
+                            r.append(record_with_retry(intake, c, proof))
                         except Exception as exc:  # noqa: BLE001
                             r.append('exc:' + repr(exc)[:120])
                     webhook['results'].append((c.account, f, kind, r))
@@ -564,7 +575,7 @@ def test_three_creators_concurrent_mixed_load(database, monkeypatch, tmp_path):
         def deliver(c, proof, r, barrier):
             barrier.wait()
             try:
-                r.append(intake.record(c.tenant, c.account, proof))
+                r.append(record_with_retry(intake, c, proof))
             except Exception as exc:  # noqa: BLE001
                 r.append('exc:' + repr(exc)[:160])
         ts = []
@@ -580,7 +591,7 @@ def test_three_creators_concurrent_mixed_load(database, monkeypatch, tmp_path):
         # an even later replay of the same webhook
         for c, f, proof, r in racers:
             try:
-                r.append(intake.record(c.tenant, c.account, proof))
+                r.append(record_with_retry(intake, c, proof))
             except Exception as exc:  # noqa: BLE001
                 r.append('exc:' + repr(exc)[:160])
         ctx.webhooks_done.set()

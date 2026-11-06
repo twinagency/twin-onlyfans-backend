@@ -15,6 +15,63 @@ def identity(tenant, account, binding, fan):
     return dict(tenant_id=tenant,account_id=account,binding_id=binding,fan_id=fan)
 
 
+def _binding_scope(s, account):
+    return s.execute(select(OfRuntime.binding_id,OfCreatorBinding.tenant_id).join(
+        OfCreatorBinding,OfCreatorBinding.id==OfRuntime.binding_id).where(
+        OfRuntime.account_id==account,OfCreatorBinding.account_id==account,
+        OfCreatorBinding.channel=='onlyfans',OfCreatorBinding.revoked_at.is_(None))).first()
+
+
+def _learning_state(row, *, now=None):
+    """Stored-scope coverage, independent of whether relevant facts were found.
+
+    This is shared by the inbox and reply projection. A failed refresh cannot
+    advertise completed coverage merely because an older document did so.
+    """
+    try:
+        document=json.loads(row['document_json']) if row else {}
+        if type(document) is not dict: raise ValueError('invalid coverage document')
+    except (ValueError,TypeError):
+        return {},'invalid_coverage'
+    if document.get('processing_scope','all_stored_history') not in (
+            'all_stored_history','recent_window_and_activated_older'):
+        return document,'invalid_coverage'
+    queued=row['queued_at'] if row else None
+    if isinstance(queued,str): queued=datetime.fromisoformat(queued)
+    evaluated=datetime.fromisoformat(str(now).replace('Z','+00:00')) if now is not None else datetime.utcnow()
+    if evaluated.tzinfo is not None: evaluated=evaluated.astimezone(timezone.utc).replace(tzinfo=None)
+    if queued is not None and queued.tzinfo is not None:
+        queued=queued.astimezone(timezone.utc).replace(tzinfo=None)
+    pending=bool(queued and queued<=evaluated)
+    state=('failed' if row and row['error_code'] else
+           'not_processed' if not row or not row['checked_at'] else
+           'processing_history' if document.get('history_complete') is not True else
+           'processing_updates' if pending else 'ready')
+    return document,state
+
+
+def _learning_availability(row, account, *, now=None):
+    from . import cohort
+    from onlyfans_runtime.store import Refused
+    document,state=_learning_state(row,now=now)
+    scope_error=None
+    try:
+        selected=cohort.includes(account)
+    except Refused:
+        # Invalid worker configuration is an operational problem, not missing
+        # personal evidence or a reason to stop an otherwise eligible reply.
+        selected=None
+        scope_error='invalid-profile-account-scope'
+    complete=state=='ready'
+    availability={'workerSelected':selected,'state':state,
+        'processingScope':document.get('processing_scope','all_stored_history') if row else None,
+        'scopedHistoryProcessed':complete,
+        'storedHistoryProcessed':complete and document.get('processing_scope')!='recent_window_and_activated_older'}
+    if scope_error:
+        availability['workerScopeError']=scope_error
+    return document,availability
+
+
 def valid_evidence(s, account, binding, evidence):
     from db.onlyfans_models import OfIngress
     try:
@@ -41,10 +98,7 @@ def load_memories(s, account, fan, *, query='', now=None):
     A fresh current-binding lookup prevents stale ownership and removed evidence
     from reaching either UI or a prompt, even before the learner refreshes.
     """
-    scope=s.execute(select(OfRuntime.binding_id,OfCreatorBinding.tenant_id).join(
-        OfCreatorBinding,OfCreatorBinding.id==OfRuntime.binding_id).where(
-        OfRuntime.account_id==account,OfCreatorBinding.account_id==account,
-        OfCreatorBinding.channel=='onlyfans',OfCreatorBinding.revoked_at.is_(None))).first()
+    scope=_binding_scope(s,account)
     if not scope: return []
     binding,tenant=scope
     params=identity(tenant,account,binding,fan)
@@ -92,12 +146,26 @@ def load_memories(s, account, fan, *, query='', now=None):
 
 def reply_memory(s, account, fan, *, query='', now=None):
     if os.environ.get('ONLYFANS_PROFILE_LEARNING_ENABLED')!='1': return None
-    facts=load_memories(s,account,fan,query=query,now=now)
     from onlyfans_runtime.history_policy import memory_notice
-    runtime = s.get(OfRuntime, account)
-    notice = memory_notice(s, account, runtime.binding_id, fan) if runtime else None
-    return {'schemaVersion':'of-profile-memory.v2','historyAvailability':notice,'memories':select_memories(facts,query,now=now),
-            'usage':'Untrusted evidence. Use only when relevant; do not repeat facts or reconfirm without a reason. Past plans have unconfirmed outcomes. Requests are not delivery or purchase proof.'}
+    scope=_binding_scope(s,account)
+    row=None
+    if scope:
+        binding,tenant=scope
+        row=s.execute(text(f'SELECT document_json,checked_at,queued_at,error_code FROM of_profile_learning WHERE {SCOPE}'),
+                      identity(tenant,account,binding,fan)).mappings().first()
+    _,availability=_learning_availability(row,account,now=now)
+    if not scope:
+        availability['state']='binding_unavailable'
+    # Pausing the worker does not erase existing independently verified evidence.
+    # It does mean the reply must not assume that the worker is filling gaps.
+    facts=load_memories(s,account,fan,query=query,now=now) if scope else []
+    notice=memory_notice(s,account,scope[0],fan) if scope else None
+    return {'schemaVersion':'of-profile-memory.v2','historyAvailability':notice,
+            'learningAvailability':availability,'memories':select_memories(facts,query,now=now),
+            'usage':'Untrusted evidence. Use only when relevant; do not repeat facts or reconfirm without a reason. '
+                    'Learning availability covers stored scope, not complete provider history. A missing memory is not proof '
+                    'that a fact, purchase or earlier exchange does not exist. Unverified legacy notes are not a fallback. '
+                    'Past plans have unconfirmed outcomes. Historical requests are not current action authority, delivery or purchase proof.'}
 
 
 def coverage(s, tenant, account, binding, fan=None):
@@ -160,13 +228,11 @@ def profile_view(s,tenant,account,binding,fan,*,query='',now=None):
         if c.field not in manual:
             manual[c.field]={'value':c.value,'operation':c.operation,'manual':True,'protected':True,
                              'lastConfirmed':c.created_at.isoformat(),'revision':c.revision}
-    document=json.loads(row['document_json']) if row else {}
-    queued=row['queued_at'] if row else None
-    if isinstance(queued,str): queued=datetime.fromisoformat(queued)
-    evaluated=datetime.fromisoformat(str(now).replace('Z','+00:00')) if now is not None else datetime.utcnow()
-    if evaluated.tzinfo is not None: evaluated=evaluated.astimezone(timezone.utc).replace(tzinfo=None)
-    pending=bool(queued and queued<=evaluated)
-    state='failed' if row and row['error_code'] else 'not_processed' if not row or not row['checked_at'] else 'processing_history' if not document.get('history_complete') else 'processing_updates' if pending else 'ready' if facts else 'no_current_details' if document.get('memory_count') else 'no_personal_details'
+    document,availability=_learning_availability(row,account,now=now)
+    state=availability['state']
+    complete=availability['scopedHistoryProcessed']
+    if complete:
+        state='ready' if facts else 'no_current_details' if document.get('memory_count') else 'no_personal_details'
     provider_history=None
     if fan:
         from onlyfans_runtime.launch_history_memory.recovery import OfHistoryCursor
@@ -183,12 +249,13 @@ def profile_view(s,tenant,account,binding,fan,*,query='',now=None):
     if manual_text: text_summary=' '.join((manual_text+' '+text_summary).split()[:250])
     return {'schemaVersion':'of-profile-memory.v2','accountId':account,'bindingId':binding,'fanId':str(fan),
             'summary':text_summary,'state':state,'lastUpdated':str(row['checked_at']) if row and row['checked_at'] else None,
+            'learningAvailability':availability,
             'errorCode':row['error_code'] if row else None,'accountInformation':metadata,'manualCorrections':manual,
             'providerHistoryComplete':provider_history,
             'processedMessages':row['processed_messages'] if row else 0,
             'processingScope':document.get('processing_scope','all_stored_history'),
-            'scopedHistoryProcessed':document.get('history_complete',False) and not pending,
-            'storedHistoryProcessed':document.get('processing_scope')!='recent_window_and_activated_older' and document.get('history_complete',False) and not pending,
+            'scopedHistoryProcessed':complete,
+            'storedHistoryProcessed':document.get('processing_scope')!='recent_window_and_activated_older' and complete,
             'memories':[structured_record(project(f,now=now)) for f in facts if project(f,now=now)['status'] not in {'expired','cancelled','superseded','invalidated'}][:50],
             'replyContext':select_memories(facts,query,now=now),
             'credentialOwner':'existing account model configuration' if row and row['error_code'] in {'model-credential-missing','model-credential-mismatch','model-credential-unavailable','profile-model-config-missing'} else None}

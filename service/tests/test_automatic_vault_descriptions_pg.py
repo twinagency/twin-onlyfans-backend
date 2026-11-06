@@ -55,7 +55,9 @@ def setup(database, monkeypatch):
         return vault_frames.Collected(["data:image/jpeg;base64,AAAA"], "ok")
     async def chat(**kwargs):
         assert kwargs["account_id"] == ACCOUNT and kwargs["purpose"] == "describe_media"
-        assert os.environ.get("ONLYFANS_PROCESS_ROLE") is None
+        assert os.environ.get("ONLYFANS_PROCESS_ROLE") == "worker"
+        import llm_client
+        assert llm_client._vault_caption_account.get() == ACCOUNT
         return SimpleNamespace(content=json.dumps({"description": "Synthetic outdoors portrait", "tags": ["outdoors"], "explicitness": "sfw"}), call_id=None, cost_cents=1)
     async def cap(*a):
         return {"capped": False, "spent_millicents": 0, "cap_millicents": 10000}

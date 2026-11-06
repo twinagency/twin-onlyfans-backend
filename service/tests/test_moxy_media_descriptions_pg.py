@@ -73,12 +73,18 @@ def test_changed_description_leaves_selection_until_rebound_then_reaches_caption
 
 
 def test_operator_correction_beats_model_description_in_prompt(database, monkeypatch):
+    from onlyfans_runtime.vault_editing import get_asset, edit_asset
     engine, store, service, authority, claim, settings = setup(database, monkeypatch)
     ai = 'AI said: sunglasses and a hat'
     op = 'Operator: black lace set, taken indoors'
-    edit(engine, 7101, description=op, content_hash='fixture-first-v2',   # content changed AND corrected
-         ai_fields_json=json.dumps({'description': ai, '_content_stamp': ':fixture-first'}),
-         operator_overrides_json=json.dumps({'description': op}), locked_fields_json='["description"]')
+    edit(engine, 7101, content_hash='fixture-first-v2',
+         ai_fields_json=json.dumps({'description': ai, '_content_stamp': ':fixture-first'}))
+    # Review the changed item through the real scoped edit path; the human
+    # correction receives its own stamp rather than borrowing the old AI one.
+    current = get_asset(store, TENANT, ACCOUNT, '7101')
+    edit_asset(store, TENANT, ACCOUNT, '7101', patch={'description': op},
+               expected_fingerprint=current['fingerprint'], command_key='a' * 64,
+               actor='op-session:' + 'b' * 64)
     with Session(engine) as s:
         v = s.get(VaultItem, (ACCOUNT, 7101))
         assert md.item_state(v) == 'described' and md.effective_description(v) == op   # correction survives content change
@@ -86,6 +92,47 @@ def test_operator_correction_beats_model_description_in_prompt(database, monkeyp
     identity, m = offer(service, engine, 'op')
     p = prompt_of(m)
     assert op in p and ai not in p
+    store.close()
+
+
+def test_stale_operator_text_cannot_be_reapproved_by_rebinding_product(database, monkeypatch):
+    from onlyfans_runtime.store import Refused
+    engine, store, service, authority, claim, settings = setup(database, monkeypatch)
+    op = 'Old operator description retained for review'
+    edit(engine, 7101, description=op, content_hash='fixture-first-v2',
+         ai_fields_json=json.dumps({'_content_stamp': ':fixture-first'}),
+         operator_overrides_json=json.dumps({'description': op}), locked_fields_json='["description"]')
+    with pytest.raises(Refused, match='moxy_activation_not_ready'):
+        rebind(engine, service, settings, 1)
+    from moxy_replacement.runtime import account_readiness
+    with Session(engine) as s:
+        assert md.effective_description(s.get(VaultItem, (ACCOUNT, 7101))) == op
+        assert account_readiness(s, ACCOUNT, settings)['excluded_products']['first'] == 'media_description_pending:7101'
+    identity, m = offer(service, engine, 'stale-human-lock')
+    with Session(engine) as s:
+        e = s.get(MoxyEvent, (ACCOUNT, identity))
+        assert e.status == 'held' and e.reason == 'real_inventory_missing_or_stale'
+    assert len(m.calls) == 1  # the selected stale product is rejected, not all conversation
+    store.close()
+
+
+def test_one_stale_media_item_does_not_block_unrelated_plain_reply(database, monkeypatch):
+    engine, store, service, authority, claim, settings = setup(database, monkeypatch)
+    edit(engine, 7101, description='Prior human text', content_hash='fixture-first-v2',
+         ai_fields_json=json.dumps({'_content_stamp': ':fixture-first'}),
+         operator_overrides_json=json.dumps({'description': 'Prior human text'}), locked_fields_json='["description"]')
+    identity, m = run(service, engine, decision('reply', 'How did your hike go?'), key='plain-with-stale-item')
+    with Session(engine) as s:
+        event = s.get(MoxyEvent, (ACCOUNT, identity))
+        assert event.status == 'ready'
+    assert len(m.calls) == 1
+    view = json.loads(m.calls[0][1]['content'])
+    assert 'first' not in view['products']
+    intent = service.queue(TENANT, ACCOUNT, identity)
+    transport = SyntheticTextTransport(ACCOUNT)
+    assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'accepted'
+    assert transport.calls[0].body == 'How did your hike go?'
+    assert transport.calls[0].media_ids == ()
     store.close()
 
 
@@ -100,6 +147,8 @@ def test_video_sampling_limits_reach_the_caption_prompt(database, monkeypatch):
     p = prompt_of(m)
     assert 'audio and unsampled moments unseen' in p and 'description_basis' in p
     assert 'never describe a different item or claim audio' in p
+    asset = json.loads(m.calls[0][1]['content'])['products']['first']['assets'][0]
+    assert asset['description_basis']['description_freshness']['full_asset_verified'] is False
     store.close()
 
 

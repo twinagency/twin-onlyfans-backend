@@ -266,13 +266,17 @@ class NativeWorker:
         stale-input, model budget, one-use delivery, per-account send throttle) is inside these calls."""
         from moxy_replacement.runtime import MoxyService
         service = MoxyService(self.store)
-        for _ in range(4):
-            claim = self.store.claim(self.tenant_id, account_ids=(account.account_id,))
-            if claim is None:break
-            service.from_claim(self.tenant_id, claim); report.claims += 1
-        if account.model is not None:
-            report.queued += service.step(self.tenant_id, account.account_id, account.model)
-        self._deliver(account, report)
+        try:
+            for _ in range(4):
+                claim = self.store.claim(self.tenant_id, account_ids=(account.account_id,))
+                if claim is None:break
+                service.from_claim(self.tenant_id, claim); report.claims += 1
+            if account.model is not None:
+                report.queued += service.step(self.tenant_id, account.account_id, account.model)
+        finally:
+            # Already admitted work still receives its normal current-state
+            # checks even if an unrelated preparation fails. No new sender.
+            self._deliver(account, report)
 
     def _moxy_due(self,skip=()):
         """Worker accounts whose Moxy reply work is ready right now. Accounts this worker cannot plan or

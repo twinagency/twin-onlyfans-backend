@@ -117,12 +117,25 @@ def repetition_texts(snapshot,decision):
     all_text=' '.join(p['text'] for p in plan(decision))
     owns_statement=bool(re.search(r"\bi (?:said|wrote|told|was the one)|\b(?:that|it) was me|\bmy (?:words|line|statement|mistake)\b",all_text,re.I))
     for part in plan(decision):
+        # Re-delivering the same card legitimately repeats its caption. This
+        # exempts only that media part from style novelty; request authority,
+        # prices, permissions and factual wording still validate the full plan.
+        if decision.get('action')=='resend' and part['media']:
+            result.append('');continue
         kept=[]
         for clause in clauses(part['text']):
             # A retraction must quote/refer to actual previous outgoing words.
             if _RETRACT.search(clause):
                 stripped=re.split(r"\b(?:said|claimed|saying)\b",clause,maxsplit=1,flags=re.I)
                 if len(stripped)==2 and any(_norm(stripped[1]) and _norm(stripped[1]) in _norm(old) for old in previous):continue
+            # An attribution correction may repeat our actual words without
+            # quotation marks. Protect only the evidenced reported span.
+            reported=re.search(r"\bi (?:said|wrote|told you)(?: that)?\s+(.+)",clause,re.I)
+            if correcting and reported:
+                def speech(value):return _norm(value).replace("i'd ","i would ")
+                phrase=speech(reported.group(1))
+                if phrase and any(phrase in speech(old) for old in previous):
+                    clause=clause[:reported.start(1)]
             denial=re.search(r"\byou (?:didn'?t|did not|never) (?:say|tell me|mention|write) (.+)",clause,re.I)
             if denial and owns_statement:
                 stop={'you','your','i','me','my','would','will','did','do','not','never','on','a','the','that','it'}
@@ -145,8 +158,13 @@ def index(event):
 
 
 def active(event):
-    original=json.loads(event.decision_json)
-    values=plan(original);position=index(event)
+    return emission(json.loads(event.decision_json),index(event))
+
+
+def emission(original,position):
+    """Project only wire/action effects; the immutable plan owns claim context."""
+    values=plan(original)
+    if type(position) is not int or position<0:raise ActionBlocked('invalid_message_position')
     if position>=len(values):raise ActionBlocked('message_plan_complete')
     part=values[position];result=deepcopy(original)
     result.pop('messages',None)

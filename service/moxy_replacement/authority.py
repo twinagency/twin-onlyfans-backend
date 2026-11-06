@@ -128,7 +128,8 @@ class ProductAuthority:
                 'purpose': purpose, 'sequence': sequence}
 
     def accepted_invitation(self, invitation, state):
-        if (type(invitation) is not dict or set(invitation) != {'product_id', 'fingerprint', 'sequence'}
+        if (type(invitation) is not dict or not {'product_id', 'fingerprint', 'sequence'}<=set(invitation)
+                or not set(invitation)<={'product_id','fingerprint','sequence','message_id'}
                 or invitation['fingerprint'] != self.fingerprint):
             raise ActionBlocked('invitation_stale_or_ambiguous')
         # Acceptance authorises a paid card only. No payment/charge capability

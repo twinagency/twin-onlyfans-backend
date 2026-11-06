@@ -21,7 +21,7 @@ def observations(decision, snapshot):
     incoming={m['id']:m for m in pending_messages(snapshot)}
     result=[]
     for o in values:
-        if (type(o) is not dict or o.get('kind') not in KINDS
+        if (type(o) is not dict or type(o.get('kind')) is not str or o.get('kind') not in KINDS
                 or set(o)!=(BASE|{'amount_cents'} if o.get('kind')=='budget' else BASE)
                 or type(o['active']) is not bool
                 or type(o['message_id']) is not int or type(o['quote']) is not str
@@ -33,11 +33,19 @@ def observations(decision, snapshot):
         if o['kind']=='budget' and (o['product_id'] is not None or type(o.get('amount_cents')) is not int
                 or not 0<o['amount_cents']<=10000000 or (o['active'] and o['amount_cents'] not in _amounts(o['quote']))):
             continue
+        if o['kind']=='budget' and o['active']:
+            from .request_evidence import budget_evidence
+            budgets=budget_evidence(incoming[o['message_id']]['text'],allow_personal=True)
+            if not budgets or budgets[-1][1]!=o['amount_cents']:
+                continue
         product=o['product_id']
-        if product is not None and (o['kind']!='sales_refused' or product not in snapshot['products']):
+        if product is not None and (o['kind']!='sales_refused' or type(product) is not str or product not in snapshot['products']):
             raise ActionBlocked('invalid_constraint_scope')
         if o['kind']=='financial_hardship' and not o['active']:
             raise ActionBlocked('hardship_requires_owned_resolution')
+        from .request_evidence import supports_preference
+        if not supports_preference(o,incoming[o['message_id']],snapshot):
+            continue
         result.append(deepcopy(o))
     from .input_batch import chronological
     result=chronological(result,list(incoming.values()))

@@ -2,7 +2,6 @@
 from copy import deepcopy
 from datetime import timedelta
 import json
-from pathlib import Path
 import pytest
 from sqlalchemy.orm import Session
 from db.models import Message, ContentOffer, CatalogItem, VaultSend, Fan
@@ -26,7 +25,7 @@ CASES = [
 
 @pytest.mark.parametrize("creator", ["amelia", "cristina"])
 @pytest.mark.parametrize("case,allow", CASES)
-def test_no_reoffer_full_dispatch(database, monkeypatch, creator, case, allow):
+def test_no_reoffer_full_dispatch(database, monkeypatch, tmp_path, creator, case, allow):
     # Exercise the native connector's extra preflight as well as the shared
     # consume_dispatch gate. The replacement transport remains purely synthetic.
     original_send = SyntheticTextTransport.send
@@ -90,7 +89,7 @@ def test_no_reoffer_full_dispatch(database, monkeypatch, creator, case, allow):
         calls = [{"media_ids":list(c.media_ids), "price_cents":c.price_cents} for c in transport.calls]
         record = {"creator":creator,"case":case,"expected_allow":allow,"prepared":prepared,
                   "reason":reason,"dispatch":outcome,"wire_calls":calls}
-        with open(Path(__file__).parents[2]/"exposure-results.jsonl","a") as f:
+        with (tmp_path / "exposure-results.jsonl").open("a") as f:
             f.write(json.dumps(record)+"\n")
         print("AUDIT "+json.dumps(record))
         if allow:

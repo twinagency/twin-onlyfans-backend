@@ -49,10 +49,31 @@ def fields_of(item) -> dict:
 
 def content_changed(item) -> bool:
     """True only when a recorded stamp exists and differs from the current one.
-    Rows described before stamping existed are never re-paid for."""
+    Rows described before stamping existed are not automatically re-paid for.
+    False means no observed mismatch, not proof that the full asset is unchanged."""
     recorded = fields_of(item).get("_content_stamp")
     current = stamp_of(item)
     return bool(recorded and current and recorded != current)
+
+
+def content_version_evidence(item, recorded_stamp) -> dict:
+    """Report the scope of an observed fingerprint, not visual correctness.
+
+    The current vault hash producer fingerprints cached thumbnails. A matching
+    hash cannot establish unchanged full video/photo bytes or accurate content
+    interpretation. Unknown/legacy evidence stays explicit without scheduling
+    automatic paid reanalysis of every pre-stamp asset.
+    """
+    current = stamp_of(item)
+    status = 'unknown'
+    if isinstance(recorded_stamp, str) and recorded_stamp and current:
+        status = 'matching_fingerprint' if recorded_stamp == current else 'changed'
+    elif isinstance(recorded_stamp, str) and recorded_stamp:
+        status = 'unverifiable'
+    kind = getattr(item, 'content_hash_kind', None) or ''
+    return {'status': status, 'recorded_stamp': recorded_stamp, 'current_stamp': current,
+            'fingerprint_scope': 'thumbnail' if kind.startswith('thumb/') else 'unspecified',
+            'full_asset_verified': False}
 
 
 def failure_of(item) -> dict | None:

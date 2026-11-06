@@ -64,8 +64,10 @@ def test_invented_quote_cannot_create_a_fan_constraint(database,monkeypatch):
 
 def test_item_refusal_does_not_block_different_item(database,monkeypatch):
     engine,store,service,authority,claim,settings=setup(database,monkeypatch)
-    incoming(store,'Not that outfit photo, show me a different one.')
-    first,_=run(service,engine,decision('none','',observations=[evidence('sales_refused','Not that outfit photo',product_id='first')]))
+    # All four fixture items are outfit photos; the declined item must actually
+    # be identified, not guessed from the model's product_id annotation.
+    incoming(store,'Not the first outfit photo, show me a different one.')
+    first,_=run(service,engine,decision('none','',observations=[evidence('sales_refused','Not the first outfit photo',product_id='first')]))
     with Session(engine) as s:
         state=json.loads(s.get(MoxyFan,(ACCOUNT,101)).state_json)
         assert state['rejected_products']==['first'] and not state.get('sales_refused',False)
@@ -218,13 +220,13 @@ def test_request_quote_tolerates_case_spacing_and_typographic_quotes(database,mo
 
 
 def test_writer_prompt_follows_innuendo_and_pivots_unavailable_requests():
-    from moxy_replacement.configuration import load as _load
-    snap={'instructions':_load('amelia').public_context(),'pilot':True}
+    from test_moxy_foundation_authority_regressions import authority_scene
+    _,snap,_=authority_scene()
     import moxy_replacement.writer as w
-    text=w.messages.__code__.co_consts
-    joined=' '.join(c for c in text if isinstance(c,str))
-    assert 'lightly reword or reshape a line' in joined and 'already sent' in joined
-    assert 'relevant eligible item exists' in joined and 'may talk about' in joined and 'commercial_state' in joined
+    joined=w.messages(snap)[0]['content']
+    assert 'Vary habitual openings, pet names, emoji' in joined
+    assert 'Necessary quotations, prices and grounded facts may repeat' in joined
+    assert 'relevant eligible item exists' in joined and 'Existing cards can be discussed without sending' in joined and 'commercial_state' in joined
     assert 'character-for-character' in joined
 
 
@@ -374,7 +376,8 @@ def test_examples_are_the_approved_bank_and_stay_compact():
     from moxy_replacement.configuration import canonical
     for creator in ('amelia','cristina'):
         r=references(creator);assert 2<=len(r['examples'])<=3 and len(canonical(r).encode())<16384
-        assert all(set(e)=={'situation','lesson','lines'} for e in r['examples'])      # provenance stays in the file
+        assert all(set(e)=={'lines','reference_role','source_creator'} for e in r['examples'])
+        assert all(e['source_creator'].casefold()==creator for e in r['examples'])
         assert all('—' not in t and '–' not in t for e in r['examples'] for d,t in e['lines'])
 
 
@@ -431,7 +434,10 @@ def test_correction_cannot_see_the_refused_or_already_sent_card_as_offerable(dat
     m=model(decision('offer','try this one instead','fourth'))
     service.prepare(TENANT,ACCOUNT,fix.event_id,m)
     products=_user(m)['products']
-    assert products['first']['no_offer']=='refused' and 'no_offer' not in products['fourth']
+    assert 'first' not in _user(m)['new_card_product_ids']
+    assert _user(m)['rejected_product_context']['product_id']=='first'
+    assert _user(m)['rejected_product_context']['no_offer']=='refused'
+    assert 'no_offer' not in products['fourth']
     assert _user(m)['commercial_state']['sent_unpaid_cards'][0]['product_id']=='first', 'kept in history for answers'
     assert status(engine,fix.event_id)=='ready' and not _cases(engine)
     store.close()
@@ -501,7 +507,10 @@ def test_stated_budget_is_recorded_and_no_over_budget_card_is_sent(database,monk
     m=model(decision('reply','aw thats okay, nothing that low right now but i still love chatting with you'))
     service.prepare(TENANT,ACCOUNT,fix.event_id,m)
     u=_user(m)
-    assert u['products']['fourth']['no_offer']=='refused' and u['products']['first']['no_offer']=='over_budget'
+    assert 'fourth' not in u['new_card_product_ids']
+    assert u['rejected_product_context']['product_id']=='fourth'
+    assert u['rejected_product_context']['no_offer']=='refused'
+    assert u['products']['first']['no_offer']=='over_budget'
     assert u['commercial_state']['stated_budget_cents']==2000 and 'cheapest_offerable_cents_by_category' not in u['commercial_state']
     assert status(engine,fix.event_id)=='ready' and not _cases(engine)
     store.close()
@@ -538,10 +547,14 @@ def test_continue_from_standalone_inventory_is_an_ordinary_offer(database,monkey
 
 def test_writer_prompt_drops_invented_cadence_and_emoji_rules():
     from moxy_replacement.writer import messages
-    import inspect
-    src=inspect.getsource(messages)
+    from test_moxy_foundation_authority_regressions import authority_scene
+    _,snap,_=authority_scene()
+    src=messages(snap)[0]['content']
     assert 'this turn or the next' not in src and 'is a failure' not in src and 'never reuse an emoji' not in src
-    assert 'no em or en dashes' in src.lower() and 'Affection alone' in src
+    assert 'Affection alone' in src
+    parsed=writer.parse(json.dumps(decision(text='Hello — there',messages=[
+        {'text':'Hello — there','media':False}, {'text':'How was your day – any plans?','media':False}])))
+    assert all('—' not in p['text'] and '–' not in p['text'] for p in parsed['messages'])
     assert not hasattr(writer,'dedupe_emoji')
 
 

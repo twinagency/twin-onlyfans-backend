@@ -24,7 +24,7 @@ from moxy_replacement.runtime import MoxyService,snapshot
 def decision(action='reply',text='How did training go today?',product_id=None,**extra):
     return {'action':action,'text':text,'product_id':product_id,'sequence':None,'flags':[],
         'reason':'Fixture decision; not a model-quality result.','permission':None,'question':None,
-        'resolve_obligation':None,**extra}
+        'resolve_obligation':None,'unanswered_input_ids':[],**extra}
 
 
 def model(d,**kw):return SyntheticNativeModel(raw_output=json.dumps(d),**kw)

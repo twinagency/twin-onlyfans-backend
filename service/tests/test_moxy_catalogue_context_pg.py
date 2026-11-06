@@ -25,7 +25,9 @@ def test_projection_preserves_every_asset_and_condition():
                       {'id':i*2+2,'facts':['preview fact '+str(i)]}]}
         inventory[key]={'media_ids':[i*2+1,i*2+2],'preview_ids':[i*2+2],
             'item':{'id':i,'label':key},'files':[
-                {'media_id':i*2+1,'kind':'photo','description_basis':{'frames':1}},
+                {'media_id':i*2+1,'kind':'photo','description_basis':{'frames':1,
+                    'description_freshness':{'status':'unknown','recorded_stamp':None,
+                        'current_stamp':'synthetic-fingerprint','full_asset_verified':False}}},
                 {'media_id':i*2+2,'kind':'photo','description_basis':{'frames':1}}]}
     original={'products':products,'inventory':inventory,'instructions':{},
         'fan_state':{'owned_assets':[19],'previously_sent_assets':[21],'budget_cents':5000},
@@ -41,6 +43,10 @@ def test_projection_preserves_every_asset_and_condition():
         assert q['media_ids']==inventory[key]['media_ids']
         assert q['preview_ids']==inventory[key]['preview_ids']
         assert [a['facts'] for a in q['assets']]==[a['facts'] for a in p['assets']]
+        freshness=q['assets'][0]['description_basis']['description_freshness']
+        assert freshness['status']=='unknown' and freshness['full_asset_verified'] is False
+        assert 'current_stamp' not in freshness and 'recorded_stamp' not in freshness
+        assert 'source' not in q and original['products'][key]['source']==p['source']
     assert out['catalogue_caption_instructions']=='Use actual asset facts.'
     products['product-099']['caption_instructions']='A distinct operator instruction.'
     assert project(original)['products']['product-099']['caption_instructions']=='A distinct operator instruction.'

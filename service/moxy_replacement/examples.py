@@ -1,8 +1,9 @@
-"""Approved writing references, chosen by the recent exchange and the creator.
+"""Fixed, source-verified creator voice references for the runtime writer.
 
 The bank is Jesse's eight approved verbatim excerpts (sources/conversation_examples.v1.json). They
 are references for voice, rhythm, expression and natural bubble breaks only: historical names,
 prices, availability and promises are never facts about the current fan or catalogue.
+The old situation selector is retained solely for offline baseline comparisons.
 """
 import hashlib
 import json
@@ -112,10 +113,10 @@ def _allowed(example,creator):
 
 
 def select(creator,history=None,fan_state=None,*,exclude_held_back=False,limit=LIMIT):
-    """At most limit relevant approved references; no unrelated filler.
+    """Legacy offline comparison selector; never called by the runtime writer.
 
-    Creator fit is a hard filter: an explicit excerpt is never offered to a creator it is not listed
-    for (Amelia is a PG account with sexting for spenders only). Same-source creator is a tie-break.
+    Preserve the old selection for measured comparisons, including its labels.
+    Production uses voice_examples(), with strict source-creator identity.
     """
     pool=[e for e in _bank()['examples'] if _allowed(e,creator)
         and not e.get('retrieval_excluded') and not e.get('evaluation_only')
@@ -154,19 +155,26 @@ def _lines(example):
     return result
 
 
-def references(creator,history=None,fan_state=None,*,exclude_held_back=None,limit=LIMIT):
-    """Model-facing projection: situation, one-line lesson and the message lines, one bubble per line.
+def voice_examples(creator, *, exclude_held_back=None, limit=LIMIT):
+    """The one fixed selection used by both generation and evaluation evidence."""
+    exclude = EXCLUDE_HELD_BACK if exclude_held_back is None else exclude_held_back
+    pool = [e for e in _bank()['examples'] if _allowed(e,creator)
+            and e['creator_in_source'].casefold() == creator.casefold()
+            and not e.get('retrieval_excluded') and not e.get('evaluation_only')
+            and not (exclude and e['held_back']) and verified(e)]
+    return sorted(pool,key=lambda e:e['record'])[:max(0,min(limit,LIMIT))]
 
-    Record numbers, source line ranges, hashes and creator-of-origin stay in the file as provenance.
+
+def references(creator,history=None,fan_state=None,*,exclude_held_back=None,limit=LIMIT):
+    """Fixed creator-specific voice set, without a second intent interpretation.
+
+    The legacy selector remains available for offline comparisons. It is not
+    used in generation. Historical metadata stays in the source bank.
     """
-    data=_bank()
-    chosen,weights=select(creator,history,fan_state,exclude_held_back=EXCLUDE_HELD_BACK if exclude_held_back is None else exclude_held_back,limit=limit)
-    # A clarification or a question is what the writer must answer first, so those labels always lead.
-    labels=sorted(weights,key=lambda k:(-weights[k],k not in ('clarification','question'),k))
-    return {'scope':data['scope'],
-        'voice_scope':'Only creator_voice references establish this creator voice. Shared_behavior_only references illustrate decisions, never a substitute creator voice. Missing representative creator voice remains an evidence gap.',
-        'creator_voice_reference_count':sum(e['creator_in_source'].lower().startswith(creator.lower()) for e in chosen),
-        'latest_exchange_reads_as':labels[:5],
-        'examples':[{'situation':e['situation'],'lesson':e['lesson'],'lines':_lines(e),
-            'reference_role':'creator_voice' if e['creator_in_source'].lower().startswith(creator.lower()) else 'shared_behavior_only',
+    chosen = voice_examples(creator,exclude_held_back=exclude_held_back,limit=limit)
+    return {'scope':'Historical same-creator voice only; not current facts, permissions, prices or business decisions.',
+        'voice_scope':'This small voice set does not establish coverage of every situation. Missing representative creator voice remains an evidence gap. Never replace it with another creator.',
+        'creator_voice_reference_count':len(chosen),
+        'examples':[{'lines':_lines(e),
+            'reference_role':'creator_voice',
             'source_creator':e['creator_in_source']} for e in chosen]}

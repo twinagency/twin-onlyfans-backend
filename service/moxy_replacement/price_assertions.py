@@ -230,7 +230,9 @@ def price_question_problem(snapshot, decision, terms=None):
         return None
     incoming = [m for m in pending_messages(snapshot) if m.get("direction") == "in"]
     for message in incoming:
-        for question in _clauses(message.get("text") or ""):
+        # Preserve the shorthand "$?" when splitting on question marks.
+        fan_text = re.sub(r"\$\s*\?", "price?", message.get("text") or "")
+        for question in _clauses(fan_text):
             # A personal expense is separate from a card, even if another
             # sentence in the message refers to it using a pronoun.
             if _ordinary_expense(question) or not _asked_price(question):

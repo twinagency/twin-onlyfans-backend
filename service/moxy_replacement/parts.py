@@ -92,6 +92,20 @@ def habits(text):
     return names|set(_EMOJI.findall(str(text)))
 
 
+def habit_run_limits(recent_texts, fan_text=''):
+    """Decorations that would extend an existing repetitive run."""
+    lines = [text for text in recent_texts if not _CAPTION_ONLY.match(str(text))]
+    if not lines:
+        return []
+    repeated = []
+    for token in habits(lines[-1]) - habits(fan_text):
+        n = HABIT_NAME_RUN if token.isalpha() else HABIT_EMOJI_RUN
+        window = lines[-(n - 1):]
+        if len(window) == n - 1 and all(token in habits(line) for line in window):
+            repeated.append(token)
+    return sorted(repeated)
+
+
 def repeated_habit(new_texts, recent_texts, fan_text=''):
     """A pet name/emoji that would be the same on every one of the last N creator lines, else None.
 

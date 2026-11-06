@@ -167,3 +167,24 @@ def test_captured_pilot_permission_form_does_not_change_default_creator_authorit
     assert projected['permission_status']['sexting']['allowed'] is True
     assert 'sexting' not in projected['creator_rules']['unreviewed_keys']
     assert permission_context(load('amelia').public_context(), value['fan_state'], 'sexting')['allowed'] is False
+
+
+def test_writer_surfaces_repeated_emoji_on_punctuation_follow_up_without_media_authority_change():
+    value = snapshot(text='I was imagining us together')
+    value['fan_state'].update(spender=True, vip=True)
+    value['history'][:0] = [
+        {'id': 7, 'direction': 'out', 'sender': 'ai', 'text': 'Hey \U0001f60f'},
+        {'id': 8, 'direction': 'out', 'sender': 'ai', 'text': 'How was your day? \U0001f60f'},
+    ]
+    nudge = {'id': 10002, 'direction': 'in', 'sender': 'fan', 'text': '?'}
+    value['history'].append(nudge)
+    value['pending_fan_messages'].append(nudge)
+    value['event']['payload']['rejected'] = {'kind': 'wording', 'reason': 'repeated_habit'}
+    system, projected = messages(value)
+    context = json.loads(projected['content'])
+    assert context['style_run_limits'] == ['\U0001f60f']
+    assert context['permission_status']['sexting']['allowed'] is True
+    assert [m['id'] for m in context['pending_fan_messages']] == [10001, 10002]
+    assert 'drop any unasked-for catalogue refusal' in system['content']
+    assert any(r['key'] == 'prohibited_categories' and r['scope'] == 'media'
+               for r in context['creator_rules']['rules'])

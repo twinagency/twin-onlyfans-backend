@@ -2990,6 +2990,14 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
         preserved_overrides = preserve_stale_operator_descriptions(current_item)
         if preserved_overrides != saved_overrides:
             vals["operator_overrides_json"] = json.dumps(preserved_overrides, ensure_ascii=False)
+        # Dispute fixes live in the AI field blob as well as the override map.
+        # Carry the latest locked values, including edits made during the call.
+        for key, value in preserved_overrides.items():
+            if key in current_locked and key in vault_ai_fix.FIXABLE:
+                if value is None:
+                    data.pop(key, None)
+                else:
+                    data[key] = value
         current_fields = load_json(current_item.ai_fields_json, {}) or {}
         if isinstance(current_fields, dict):
             for marker in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):

@@ -40,7 +40,8 @@ def referenced_card(snapshot,text,*,allow_current=True):
     latest=incoming[-1].get('text','') if incoming else ''
     present,card=explicit(latest)
     if present:return card
-    if re.search(r'\b(?:card|that|it|this)\b',latest+' '+text,re.I):
+    # "the one i sent" is a back-reference to the existing card, not a new delivery claim.
+    if re.search(r'\b(?:card|that|it|this|the\s+(?:one|card|pic|photo|video|set)\s+i\s+sent|what\s+i\s+sent)\b',latest+' '+text,re.I):
         # Repeated deliveries of one item at identical terms are not different
         # price/content answers. Explicit IDs above still retain their identity.
         terms={(c.get('product_id'),c.get('price_cents'),c.get('currency') or 'USD') for c in cards}

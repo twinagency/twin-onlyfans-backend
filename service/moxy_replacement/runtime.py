@@ -280,13 +280,20 @@ def offer_eligibility(pa,facts,payload):
     return result
 
 
-def _reply_retirement_at(s, account):
+def _reply_retirement_at(s, account, fan):
     # Configuration audits use canonical JSON with sorted keys. Only an explicit
     # discard command establishes a cutoff; toggles and policy edits do not.
-    return s.scalar(select(func.max(MoxyAudit.created_at)).where(
+    cutoff = s.scalar(select(func.max(MoxyAudit.created_at)).where(
         MoxyAudit.account_id == account,
         MoxyAudit.after_json.startswith('{"discard_obsolete_replies":true,', autoescape=True),
     ))
+    from onlyfans_runtime.send_recovery import RETIRED_UNCONFIRMED_TEXT
+    retired_send = s.scalar(select(func.max(OfTextIntent.wire_started_at)).join(
+        MoxyEvent, (MoxyEvent.account_id == OfTextIntent.account_id)
+        & (MoxyEvent.intent_id == OfTextIntent.intent_id),
+    ).where(MoxyEvent.account_id == account, MoxyEvent.fan_id == fan,
+            MoxyEvent.reason == RETIRED_UNCONFIRMED_TEXT))
+    return max((stamp for stamp in (cutoff, retired_send) if stamp is not None), default=None)
 
 
 def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
@@ -416,7 +423,7 @@ def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
         Message.direction=='in',Message.is_unsent.is_(False),or_(current,Message.message_id.in_(retained)))
     # The transcript and fulfilment obligations survive retirement. Only the
     # active input batch (including retained IDs) is fenced by the cutover.
-    retired_at = _reply_retirement_at(s, account)
+    retired_at = _reply_retirement_at(s, account, fan)
     if retired_at is not None:
         batch_query = batch_query.where(Message.created_at >= retired_at)
     batch_rows=list(s.scalars(batch_query.order_by(Message.created_at,Message.message_id).limit(129)))
@@ -1483,7 +1490,8 @@ def current(s,intent):
 def delivered(s,intent):
     if not intent.moxy_event_id:return
     e=s.get(MoxyEvent,(intent.account_id,intent.moxy_event_id))
-    if e.status=='done':return
+    from onlyfans_runtime.send_recovery import RETIRED_UNCONFIRMED_TEXT
+    if e.status=='done' or e.reason==RETIRED_UNCONFIRMED_TEXT:return
     from .parts import active, has_remaining, continuation_unchanged, plan, index
     d=active(e)
     continuation_ok=True

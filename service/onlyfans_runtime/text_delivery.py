@@ -920,7 +920,9 @@ class TextAuthority:
     def record_accepted(self, tenant_id, account_id, intent_id, dispatch_token, receipt):
         with Session(self.engine) as s, s.begin():
             row = self._attempt(s, tenant_id, account_id, intent_id, dispatch_token)
-            if row.status not in {"dispatching", "unknown", "accepted"}:
+            from .send_recovery import RETIRED_UNCONFIRMED_TEXT
+            retired = row.status == "cancelled" and row.reason == RETIRED_UNCONFIRMED_TEXT
+            if row.status not in {"dispatching", "unknown", "accepted"} and not retired:
                 raise Refused("attempt is already settled")
             try:
                 if type(receipt) is not Accepted:
@@ -929,7 +931,7 @@ class TextAuthority:
                 self._validate_proof(row, receipt)
                 encoded = _json(asdict(receipt))
             except (Refused, TypeError, AttributeError):
-                if row.status == "accepted":
+                if row.status == "accepted" or retired:
                     raise Refused("accepted receipt conflict")
                 self._hold_unknown(s, row, "invalid_receipt", tenant_id)
                 return "unknown"
@@ -944,6 +946,8 @@ class TextAuthority:
             other = s.scalar(select(OfTextIntent.intent_id).where(
                 OfTextIntent.account_id == account_id, OfTextIntent.provider_message_id == receipt.message_id,
                 OfTextIntent.intent_id != intent_id).limit(1))
+            if other is not None and retired:
+                raise Refused("retired attempt provider identity conflict")
             row.receipt_json, row.evidence_ref = encoded, receipt.evidence_ref
             if other is not None:
                 self._hold_unknown(s, row, "provider_identity_conflict", tenant_id)

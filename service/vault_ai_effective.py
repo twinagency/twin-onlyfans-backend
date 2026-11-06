@@ -122,14 +122,53 @@ def normalize_tags(v: Any) -> list[str]:
 
 
 
-def project_operator_text(field, raw, overrides, locked, columns):
-    """Shared override, lock and compat projection for existing text/tag edits.
+def _description_binding(item, value, stamp):
+    import hashlib
+    return {
+        "account_id": item.account_id,
+        "media_id": item.media_id,
+        "kind": item.kind,
+        "content_stamp": stamp,
+        "text_sha256": hashlib.sha256(value.strip().encode()).hexdigest(),
+    }
 
-    Each caller admits its own editable fields. The value and precedence rules
-    stay the same for the legacy editor and the scoped native adapter.
-    """
-    value=normalize_tags(raw) if field=="tags" else None if raw is None else str(raw)
-    overrides[field]=value
+
+def project_operator_text(field, raw, overrides, locked, columns, *, item=None):
+    """Project operator edits and bind reviewed descriptions to their content."""
+    value = normalize_tags(raw) if field == "tags" else None if raw is None else str(raw)
+    overrides[field] = value
     locked.add(field)
-    columns[field]=json.dumps(value) if field=="tags" else value
+    columns[field] = json.dumps(value) if field == "tags" else value
+    if item is not None and field in {"description", "video_description"}:
+        bindings = overrides.get("_description_bindings_v1")
+        bindings = dict(bindings) if isinstance(bindings, dict) else {}
+        if isinstance(value, str) and value.strip():
+            from vault_describe_state import stamp_of
+            bindings[field] = _description_binding(item, value, stamp_of(item))
+        else:
+            bindings.pop(field, None)
+        if bindings:
+            overrides["_description_bindings_v1"] = bindings
+        else:
+            overrides.pop("_description_bindings_v1", None)
     return value
+
+
+def preserve_stale_operator_descriptions(item):
+    """Keep an old operator description tied to its known earlier content."""
+    from vault_describe_state import content_changed, fields_of
+    saved = overrides(item)
+    if not content_changed(item):
+        return saved
+    recorded_stamp = fields_of(item).get("_content_stamp")
+    existing = saved.get("_description_bindings_v1")
+    if existing is not None and not isinstance(existing, dict):
+        return saved
+    bindings = dict(existing or {})
+    for field in ("description", "video_description"):
+        value = saved.get(field)
+        if field in locked_fields(item) and field not in bindings and isinstance(value, str) and value.strip():
+            bindings[field] = _description_binding(item, value, recorded_stamp)
+    if bindings:
+        saved["_description_bindings_v1"] = bindings
+    return saved

@@ -2970,9 +2970,27 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
             await scope_guard(s, media_id, phase="write")
         # A concurrent backfill may have assigned folders while vision ran.
         # Carry its marker from the current row, not just the earlier snapshot.
-        current_fields = await s.scalar(select(VaultItem.ai_fields_json).where(
+        current_item = await s.scalar(select(VaultItem).where(
             VaultItem.account_id == account_id, VaultItem.media_id == media_id).with_for_update())
-        current_fields = load_json(current_fields, {}) or {}
+        if current_item is None:
+            return {"media_id": media_id, "ok": False, "status": "missing",
+                    "cost_millicents": result.cost_cents if result else 0}
+        # A model response cannot validate a later content version or overwrite
+        # an operator lock that was added while the model was running.
+        if (vds.stamp_of(current_item) != vds.stamp_of(item)
+                or current_item.kind != item.kind):
+            return {"media_id": media_id, "ok": False, "status": "content_changed",
+                    "cost_millicents": result.cost_cents if result else 0}
+        current_locked = _locked_fields(current_item)
+        for field in ("description", "video_description", "tags", "explicitness_tier",
+                      "tip_vault_flag", "search_text"):
+            if field in current_locked:
+                vals.pop(field, None)
+        saved_overrides = load_json(current_item.operator_overrides_json, {}) or {}
+        preserved_overrides = preserve_stale_operator_descriptions(current_item)
+        if preserved_overrides != saved_overrides:
+            vals["operator_overrides_json"] = json.dumps(preserved_overrides, ensure_ascii=False)
+        current_fields = load_json(current_item.ai_fields_json, {}) or {}
         if isinstance(current_fields, dict):
             for marker in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
                 if current_fields.get(marker) is True:
@@ -3678,7 +3696,7 @@ _EDITABLE_FIELDS = (
 )
 
 
-from vault_ai_effective import normalize_tags as _normalize_tags, project_operator_text
+from vault_ai_effective import normalize_tags as _normalize_tags, project_operator_text, preserve_stale_operator_descriptions
 
 
 def _item_edit_view(item: VaultItem, locked: list[str]) -> dict[str, Any]:
@@ -3736,7 +3754,7 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
         flag_edits: dict[str, Any] = {}
         for field, raw in edits.items():
             if field == "tags":
-                project_operator_text(field,raw,overrides,locked,col_vals)
+                project_operator_text(field,raw,overrides,locked,col_vals,item=item)
                 continue
             elif field == "suggested_price_cents":
                 # Cents, non-negative. Blank/None clears it back to "no price".
@@ -3766,7 +3784,7 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
                 ov = str(raw).strip()[:60] if raw else None
                 flag_edits[field] = ov
             else:
-                project_operator_text(field,raw,overrides,locked,col_vals)
+                project_operator_text(field,raw,overrides,locked,col_vals,item=item)
                 continue
             overrides[field] = ov       # operator override (locked or not — read-time wins)
             locked.add(field)            # lock: a describe rerun's is_locked() skips it

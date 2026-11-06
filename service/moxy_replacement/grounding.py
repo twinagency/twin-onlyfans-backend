@@ -148,3 +148,50 @@ def unverified_card_question(snapshot):
     return any(type(c.get('id')) is int and re.search(r'(?<!\d)'+str(c['id'])+r'(?!\d)',text)
         and c.get('price_cents',0)>0 and c.get('product_id') not in snapshot.get('inventory',{})
         for c in snapshot.get('card_state',[]))
+
+
+def commitment_problem(snapshot,decision,texts):
+    """Check declared outcomes against the existing action/receipt authority.
+
+    This replaces pilot text-to-handover overrides. An unsupported draft gets
+    the normal one correction; optional model flags cannot bypass this check.
+    These bounded claims are not a general semantic guarantee.
+    """
+    from .conversation import clauses,quotes
+    from .parts import MEDIA_ACTIONS
+    from .state import referenced_card
+    from onlyfans_runtime.quote import boundary_hold
+    for text in texts:
+        for clause in clauses(text):
+            # A clearly attributed quote reports earlier words, not a new
+            # promise. Speaker/factual checks still inspect the original text.
+            for start,end,_ in reversed(quotes(clause)):
+                if re.search(r'\b(?:said|wrote|claimed|asked|words|promise)\b',clause[:start],re.I):
+                    clause=clause[:start]+' '+clause[end:]
+            boundary=boundary_hold(clause)
+            if boundary:return ('unsupported_remedy_commitment' if boundary=='refund-claim-unbacked'
+                                else 'unapproved_real_world_commitment')
+            promises=list(re.finditer(r"\b(?:i(?:'ll|ll| will| can| could| am going to)|we(?:'ll| will| can)|i'm gonna)\s+",clause,re.I))
+            completed=re.search(r"\b(?:i(?:'ve| have)?|we(?:'ve| have)?)\s+(?:already\s+|just\s+)?(?:sent|resent|refunded|issued|processed|approved)\b",clause,re.I)
+            remedy=re.search(r'\b(?:refund(?:ed)?|reimburse\w*|compensat\w*|money back|replacement)\b',clause,re.I)
+            remedy_outcome=re.search(r"\b(?:your|the)\s+(?:refund|reimbursement)\s+(?:is|was|has been)\s+(?:approved|issued|processed|sent|complete|on the way)\b|\byou(?:'ll| will)\s+(?:get|receive)\b",clause,re.I)
+            if remedy and (any(re.match(r'(?:refund|reimburse|compensate|give|issue|process|send)\b',clause[p.end():],re.I) for p in promises) or completed or remedy_outcome):
+                return 'unsupported_remedy_commitment'
+            if any(re.match(r'replace\b',clause[p.end():],re.I) for p in promises):
+                if re.search(r'\b(?:your|ur|the|that|this)\s+(?:photos?|pics?|videos?|cards?|content|media|items?|purchases?|orders?)\b|\bfor free\b',clause,re.I):
+                    if decision['action'] not in {'correct','fulfil'}:return 'unsupported_remedy_commitment'
+            if promises and re.search(r'\b(?:custom|personalised|personalized)\s+(?:video|photo|content|clip|set)\b',clause,re.I):
+                # A chat decision is not an accepted custom order or delivery.
+                return 'unsupported_service_commitment'
+            sending=any(re.match(r'(?:send|resend)\b',clause[p.end():],re.I) for p in promises) or re.match(r'\s*(?:sending|resending)\b',clause,re.I)
+            if sending and decision['action'] not in MEDIA_ACTIONS:
+                return 'delivery_promise_without_action'
+            if completed and re.search(r'\b(?:sent|resent)\b',completed.group(),re.I) and not remedy:
+                card=referenced_card(snapshot,clause)
+                # Price-bearing history/card rows are observed delivery facts.
+                # A proposed new action itself is never evidence it was sent.
+                if not card:return 'sent_claim_without_receipt'
+                if re.search(r'\b(?:just|again|now|resent)\b',clause,re.I):
+                    own=snapshot.get('event',{}).get('payload',{}).get('_moxy_delivery',{}).get('receipts',[])
+                    if not any(r.get('message_id')==card['id'] for r in own):return 'sent_claim_without_receipt'
+    return None

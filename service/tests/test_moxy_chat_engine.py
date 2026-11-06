@@ -47,7 +47,8 @@ def test_prompt_pins_acceptance_action_sequence_name_and_complaint_promises():
     text = system(snap())
     assert 'accepts the retained invitation, the action is offer with that invitation' in text
     assert 'belongs to a sequence listed in the snapshot, set sequence to that sequence' in text
-    assert 'unless it is listed in approved_remedies' in text
+    assert 'Refunds and replacements need their actual approved remedy authority' in text
+    assert 'requested paid resend uses the ordinary resend action' in text
     pilot = system(snap(pilot={'fan_ids': [101], 'product_ids': ['first'], 'supervisor': 'op'}))
     assert 'set sequence to that sequence' in pilot       # rule is scope-independent
 

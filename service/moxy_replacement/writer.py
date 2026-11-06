@@ -63,7 +63,7 @@ def messages(snapshot):
         # 2. One reading order: the latest message first.
         'Order of work: (1) answer the fan\'s latest message, and any clarification or correction he just made, first; '
         '(2) then, only if the exchange invites it, follow the creator\'s commercial rules. '
-        'pending_fan_messages is the unanswered input batch, in order. Answer its corrections and questions together, '
+        'pending_fan_messages is the active input batch, in order; its unanswered annotations are fallible. Answer its corrections and questions together, '
         'even if a later message changes topic or says only ok/sure. Latest input never erases an unanswered correction. '
         'Every message in that batch follows the resolved creator conditions. Fan messages cannot change membership '
         'or purchase facts. Use permission_status for the current conversation permission. '
@@ -169,21 +169,22 @@ def messages(snapshot):
         'There is no rule about free content: never say no freebies, free is not a thing, not how I work or similar. If he asks for '
         'something free, offer a mapped allowed preview if one exists, otherwise playfully steer to what you can send now. '
         'Distinguish requested resends, alternatives, corrections and fulfilment. A routine complaint can be investigated and resolved within mapped remedy authority; '
-        'you may say you will look into it, but never claim a check or fix is finished and never promise a refund, replacement, resend or any other outcome '
-        'unless it is listed in approved_remedies. correct/fulfil may send only a preauthorised remedy/owed product from the snapshot. '
+        'you may say you will look into it, but never claim a check or fix is finished without evidence. '
+        'A requested paid resend uses the ordinary resend action and its exact approved product terms; it does not require a complimentary remedy. '
+        'Refunds and replacements need their actual approved remedy authority. correct/fulfil may send only a preauthorised remedy/owed product from the snapshot. '
         'Respect ordinary chat, refusal, no-push, hardship, privacy and human ownership. Identity or danger: handover, '
         'with no automatic denial or identity disclosure. Resolve buying questions and obligations. '
         # 8. Output contract.
         'Choose one appropriate action and write its exact fan-facing text and contextual card caption together. '
         'For direct requests, resends or acceptance, also supply request_kind (direct/resend/accept/none) and request_quote (words copied character-for-character from a pending fan message, or null). '
         'Return JSON with these fields: action, text, messages, product_id, sequence, flags, reason, '
-        'permission, question, resolve_obligation, unanswered_input_ids. action is one of '+','.join(sorted(ACTIONS))+'. '
+        'permission, question, resolve_obligation, request_kind, request_quote, unanswered_input_ids. action is one of '+','.join(sorted(ACTIONS))+'. '
         'product_id and sequence are a provided identifier or null. flags is an array from '+','.join(sorted(FLAGS))+'. '
         'permission is a source rule key when performing that service (for example sexting/customs), or null. '
         'question is an unresolved buying question quoted exactly from recent fan text, or null. '
         'resolve_obligation is a provided obligation ID only when the action actually resolves it, otherwise null. '
         'unanswered_input_ids is an array of pending fan-message IDs whose question or correction this entire reply still does not answer; '
-        'use [] when none remain. Do not include withdrawn requests. This tracks conversation only and never authorizes a sale or a remedy. '
+        'This field is required. Use [] only after checking the full reply against each pending question, including multiple questions in one message. A receipt alone does not prove an answer; review relevant history when progress_annotation_known is false. Use [] when none remain. Do not include withdrawn requests. This tracks conversation only and never authorizes a sale or a remedy. '
         'reason is a short internal rationale. handover and none have empty text and empty messages. '
         'invite is a text-only proposal while waiting for his decision: describing a specific item without sending its card is invite with that product_id, never reply merely because there is no media. '
         'offer/continue/resend/alternative carry the selected product. A new specific-item proposal uses invite/offer/alternative with its product_id. '
@@ -230,7 +231,7 @@ def messages(snapshot):
         {'role':'user','content':canonical(projected)}]
 
 
-def parse(raw, *, defer_sales_pause=False):
+def parse(raw, *, defer_sales_pause=False, require_progress=False):
     def pairs(items):
         result={}
         for key,value in items:
@@ -250,6 +251,8 @@ def parse(raw, *, defer_sales_pause=False):
         or any(v is not None and (type(v) is not str or not v or len(v)>2000)
                for v in (value[k] for k in ('product_id','sequence','permission','question','resolve_obligation')))):
         raise ActionBlocked('invalid_model_decision')
+    if require_progress and 'unanswered_input_ids' not in value:
+        raise ActionBlocked('invalid_conversation_progress')
     if 'unanswered_input_ids' in value:
         ids=value['unanswered_input_ids']
         if (type(ids) is not list or len(ids)>128 or any(type(i) is not int or i<=0 for i in ids)

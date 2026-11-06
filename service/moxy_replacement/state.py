@@ -10,6 +10,40 @@ RESTRICTIONS=('ordinary_chat_only','sales_refused','boundary_hold','financial_ha
               'no_push','human_owned','safety_hold')
 
 
+import re
+CARD_REFERENCE=re.compile(r'\b(?:card|message)\s*(?:number\s*|#\s*)?(\d+)\b',re.I)
+_ORDINAL=re.compile(r'\b(first|second|third|fourth|fifth|last|latest)\s+(?:one|card|message)\b',re.I)
+
+
+def referenced_card(snapshot,text,*,allow_current=True):
+    """Resolve an explicit discussion reference, never select a new product.
+
+    Price and content claims share this owner. Ambiguous or unknown identities
+    stay unresolved; a selected new item must not substitute for an old card.
+    """
+    cards=sorted((c for c in snapshot.get('card_state',[]) if type(c.get('id')) is int),
+                 key=lambda c:(str(c.get('at') or ''),c['id']))
+    by_id={str(c['id']):c for c in cards}
+    def explicit(value):
+        ids=CARD_REFERENCE.findall(value)
+        if ids:return True,by_id.get(ids[0]) if len(set(ids))==1 else None
+        ordinals=_ORDINAL.findall(value)
+        if ordinals:
+            if len(set(o.lower() for o in ordinals))!=1:return True,None
+            number={'first':0,'second':1,'third':2,'fourth':3,'fifth':4,'last':-1,'latest':-1}[ordinals[0].lower()]
+            return True,cards[number] if cards and number<len(cards) else None
+        return False,None
+    present,card=explicit(text)
+    if present or not allow_current:return card
+    from .conversation import pending_messages
+    incoming=pending_messages(snapshot)
+    latest=incoming[-1].get('text','') if incoming else ''
+    present,card=explicit(latest)
+    if present:return card
+    if len(cards)==1 and re.search(r'\b(?:card|that|it|this)\b',latest,re.I):return cards[0]
+    return None
+
+
 def _card(m):
     cents=m.get('price_cents')
     return {'card_kind':'priced_card','price_display':f'${cents//100}.{cents%100:02d}' if type(cents) is int else None,

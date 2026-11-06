@@ -148,7 +148,8 @@ def test_new_direct_request_is_not_forced_back_to_old_invitation():
 def test_actual_acceptance_preserves_invitation_target_and_price():
     settings, snap, authority = authority_scene("Yes, send that one.")
     snap["invitation"] = {"product_id": "first", "fingerprint": authority.fingerprint,
-                          "sequence": None}
+                          "sequence": None, "message_id": 1000}
+    snap['history'].insert(0, {'id': 1000, 'direction': 'out', 'text': 'Want the first photo?'})
     proposed = parsed_offer(request="Yes, send that one.", kind="accept")
     terms = validate_decision(settings, snap, proposed, planning=True)
     assert terms["media_ids"] == [101]

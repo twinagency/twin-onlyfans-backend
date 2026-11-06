@@ -21,7 +21,7 @@ def observations(decision, snapshot):
     incoming={m['id']:m for m in pending_messages(snapshot)}
     result=[]
     for o in values:
-        if (type(o) is not dict or o.get('kind') not in KINDS
+        if (type(o) is not dict or type(o.get('kind')) is not str or o.get('kind') not in KINDS
                 or set(o)!=(BASE|{'amount_cents'} if o.get('kind')=='budget' else BASE)
                 or type(o['active']) is not bool
                 or type(o['message_id']) is not int or type(o['quote']) is not str
@@ -39,7 +39,7 @@ def observations(decision, snapshot):
             if not budgets or budgets[-1][1]!=o['amount_cents']:
                 continue
         product=o['product_id']
-        if product is not None and (o['kind']!='sales_refused' or product not in snapshot['products']):
+        if product is not None and (o['kind']!='sales_refused' or type(product) is not str or product not in snapshot['products']):
             raise ActionBlocked('invalid_constraint_scope')
         if o['kind']=='financial_hardship' and not o['active']:
             raise ActionBlocked('hardship_requires_owned_resolution')

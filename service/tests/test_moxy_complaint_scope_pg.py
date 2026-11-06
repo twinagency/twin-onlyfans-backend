@@ -41,12 +41,22 @@ def test_routine_complaint_reply_is_not_automatically_handed_over(text):
 def test_pilot_remedy_claim_or_promise_still_requires_human(text, flags):
     proposed = decision(text=text, flags=flags)
     routed = route_specialist(settings(), proposed)
-    assert routed['action'] == 'handover' and routed['text'] == ''
+    # Invalid draft wording cannot itself transfer the whole conversation.
+    # The validator refuses the commitment; any actual remedy remains human-owned.
+    assert routed == proposed
+    from moxy_replacement.grounding import commitment_problem
+    assert commitment_problem({},routed,[text]) == 'unsupported_remedy_commitment'
 
 
 def test_complaint_does_not_authorize_a_new_sale_or_specialist_service():
-    proposed = decision(action='offer', text='Here is a photo.', product_id='p', flags=['complaint'])
-    assert route_specialist(settings(), proposed)['action'] == 'handover'
+    from test_moxy_foundation_authority_regressions import authority_scene
+    from moxy_replacement.runtime import validate_decision
+    from moxy_replacement.configuration import ActionBlocked
+    cfg,snap,_=authority_scene('There is a problem with the card.',no_push=True)
+    proposed = decision(action='offer', text='Here is a photo.', product_id='first', flags=['complaint'])
+    assert route_specialist(settings(), proposed) == proposed
+    with pytest.raises(ActionBlocked,match='no_push'):
+        validate_decision(cfg,snap,proposed,planning=True)
 
 
 def test_an_unrelated_personal_replacement_is_not_a_media_remedy():
@@ -66,7 +76,9 @@ def test_unapproved_refund_in_any_visible_part_requires_human_even_without_a_fla
         {'text': "I'll give you a refund.", 'media': False},
     ])
     routed = route_specialist(settings(), proposed)
-    assert routed['action'] == 'handover' and routed['messages'] == []
+    assert routed == proposed
+    from moxy_replacement.grounding import commitment_problem
+    assert commitment_problem({},routed,[p['text'] for p in proposed['messages']]) == 'unsupported_remedy_commitment'
 
 
 def test_actual_resend_action_may_announce_its_own_card():
@@ -76,11 +88,13 @@ def test_actual_resend_action_may_announce_its_own_card():
 
 def test_resend_announcement_does_not_hide_a_separate_refund_promise():
     proposed = decision(action='resend', text="I'll resend it and I'll refund you.", product_id='p')
-    assert route_specialist(settings(), proposed)['action'] == 'handover'
+    assert route_specialist(settings(), proposed) == proposed
+    from moxy_replacement.grounding import commitment_problem
+    assert commitment_problem({},proposed,[proposed['text']]) == 'unsupported_remedy_commitment'
 
 
-def test_pilot_offer_with_unapproved_refund_in_second_part_hands_over_without_sending(database, monkeypatch):
-    engine, store, service, _, _, _ = pilot(database, monkeypatch)
+def test_pilot_offer_with_unapproved_refund_gets_one_correction_without_takeover(database, monkeypatch):
+    engine, store, service, authority, _, _ = pilot(database, monkeypatch)
     try:
         identity = add(service, key='refund-in-offer')
         service.prepare(TENANT, ACCOUNT, identity, model(decision(
@@ -88,10 +102,17 @@ def test_pilot_offer_with_unapproved_refund_in_second_part_hands_over_without_se
             messages=[{'text': 'Here is the photo.', 'media': True},
                       {'text': "I'll give you a refund.", 'media': False}])))
         saved = row(engine, identity)
-        assert json.loads(saved.decision_json)['action'] == 'handover'
+        assert saved.status=='held' and saved.reason=='unsupported_remedy_commitment'
+        assert json.loads(saved.decision_json)['action'] == 'offer'
         with Session(engine) as session:
             assert session.query(OfTextIntent).count() == 0
-            assert session.query(OfOperatorCase).count() == 1
+            assert session.query(OfOperatorCase).count() == 0
+        from test_moxy_reply_recovery_pg import correction,send
+        retry=correction(engine)
+        service.prepare(TENANT,ACCOUNT,retry,model(decision('offer','Here is the photo.','first',sequence='fixture_level')))
+        assert row(engine,retry).status=='ready',row(engine,retry).reason
+        result,wire,_=send(service,authority,engine,retry)
+        assert result=='accepted' and wire.calls[0].price_cents==7500
     finally:
         store.close()
 

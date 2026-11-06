@@ -9,17 +9,17 @@ import re
 
 from .conversation import pending_messages, quotes
 from .parts import plan
+from .state import referenced_card, CARD_REFERENCE as _CARD_ID
 
 
 _MONEY = re.compile(
     r"(?P<prefix>\b(?:USD|AUD|CAD|EUR|GBP)\s*\$?|US\$|A\$|C\$|\$|€|£)\s*"
     r"(?P<p_amount>[+-]?\d[\d,.]*)"
-    r"|(?P<s_amount>[+-]?\d[\d,.]*)\s*(?P<suffix>USD|AUD|CAD|EUR|GBP|dollars?|euros?|pounds?\s+sterling)\b",
+    r"|(?P<s_amount>[+-]?\d[\d,.]*)\s*(?P<suffix>USD|AUD|CAD|EUR|GBP|dollars?|bucks?|euros?|pounds?\s+sterling|\$)(?!\w)",
     re.I,
 )
 _NUMBER = re.compile(r"(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?")
 _BREAK = re.compile(r"(?<!\d)[.!?;,\n]+|[.!?;,\n]+(?!\d)|\b(?:but|and)\b", re.I)
-_CARD_ID = re.compile(r"\b(?:card|message)\s*(?:number\s*|#\s*)?(\d+)\b", re.I)
 _CHEAPEST_CARD = re.compile(
     r"\b(?:the one in (?:the )?chat|this(?:\s+(?:one|card))?|that\s+(?:one|card)|(?:the\s+)?card|it)"
     r"(?:\s+is|'s)\s+(?:(?:already|actually|currently)\s+)?(?:my|the)\s+cheapest\b", re.I)
@@ -42,7 +42,7 @@ def _money(match):
     value = (match.group("p_amount") or match.group("s_amount")).rstrip(".,")
     marker = re.sub(r"\s+", "", (match.group("prefix") or match.group("suffix")).upper())
     currency = ({"$": "USD", "US$": "USD", "DOLLAR": "USD", "DOLLARS": "USD",
-                 "A$": "AUD", "C$": "CAD", "€": "EUR", "EURO": "EUR", "EUROS": "EUR",
+                 "BUCK":"USD", "BUCKS":"USD", "A$": "AUD", "C$": "CAD", "€": "EUR", "EURO": "EUR", "EUROS": "EUR",
                  "£": "GBP", "POUNDSTERLING": "GBP", "POUNDSSTERLING": "GBP",
                  "USD$": "USD", "AUD$": "AUD", "CAD$": "CAD", "EUR$": "EUR", "GBP$": "GBP"}).get(marker, marker)
     try:
@@ -105,27 +105,6 @@ def _budget_claim(snapshot, clause, match):
     return amount is not None and latest_budget == (amount, currency)
 
 
-def _card_target(snapshot, clause, *, allow_current):
-    cards = {str(c.get("id")): c for c in snapshot.get("card_state", [])
-             if type(c.get("id")) is int and type(c.get("price_cents")) is int}
-    explicit = _CARD_ID.findall(clause)
-    if explicit:
-        return cards.get(explicit[0]) if len(set(explicit)) == 1 else None
-    if not allow_current:
-        return None
-    incoming = pending_messages(snapshot)
-    latest = incoming[-1].get("text", "") if incoming else ""
-    referenced = _CARD_ID.findall(latest)
-    if referenced:
-        return cards.get(referenced[0]) if len(set(referenced)) == 1 else None
-    if re.search(r"\b(?:last|latest)\s+card\b", latest, re.I):
-        last = (snapshot.get("commercial_state") or {}).get("last_offer") or {}
-        return cards.get(str(last.get("message_id")))
-    if len(cards) == 1 and re.search(r"\b(?:card|that|it|this)\b", latest, re.I):
-        return next(iter(cards.values()))
-    return None
-
-
 def _selected_target(snapshot, decision, terms):
     key = decision.get("product_id")
     if key is None:
@@ -168,8 +147,22 @@ def price_problem(snapshot, decision, terms=None):
     selected = _selected_target(snapshot, decision, terms)
     for part in plan(decision):
         for clause in _clauses(part["text"]):
+            # Ordinary expenses are not catalogue terms, including in a reply
+            # which also contains an offer. Keep commercial clauses separate.
+            ordinary=bool(re.search(r'\b(?:dinner|lunch|breakfast|rent|salary|wages|groceries|coffee|parking|petrol|taxi|bus fare|gym shoes|utility bill)\b',clause,re.I))
+            commercial=bool(re.search(r'\b(?:card|content|photo|pic|picture|video|clip|bundle|unlock|discount|offer)\b',clause,re.I))
+            if ordinary and not commercial:continue
             if _cheapest_card_problem(snapshot, decision, selected, clause):
                 return 'price_claim_mismatch'
+            discount=re.search(r'\b(?:half[ -]off|half[ -]price|\d+(?:\.\d+)?\s*%\s*(?:off|discount)|discount(?:ed)?)\b',clause,re.I)
+            if discount and not re.search(r"\b(?:no|not|never|won't|cannot|can't|whether|possible|ask|asking|asked|want)\b",clause[:discount.start()],re.I):
+                if not any(a<=discount.start()<b for a,b,_ in quotes(clause)):
+                    return 'unapproved_discount_claim'
+            free=re.search(r"\b(?:this|that|the|your)\s+(?:card|photo|pic|video|clip|one)\s+(?:is|'s)\s+free\b|\b(?:send|give|offer)\b.{0,60}\bfor free\b",clause,re.I)
+            if free and not re.search(r"\b(?:not|never|won't|can't|cannot|whether)\b",clause[:free.start()],re.I):
+                card=referenced_card(snapshot,clause,allow_current=selected is None)
+                target=card or selected
+                if not target or target.get('price_cents')!=0:return 'unapproved_discount_claim'
             for match in _MONEY.finditer(clause):
                 if _quoted_source(snapshot, clause, match):
                     continue
@@ -178,7 +171,7 @@ def price_problem(snapshot, decision, terms=None):
                     if not budget:
                         return "price_claim_unbound"
                     continue
-                card = _card_target(snapshot, clause, allow_current=selected is None)
+                card = referenced_card(snapshot, clause, allow_current=selected is None)
                 # An explicit unknown card must not fall through to the selected
                 # product simply because its price happens to match.
                 if _CARD_ID.search(clause) and card is None:

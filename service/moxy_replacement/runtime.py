@@ -333,16 +333,26 @@ def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
     card_rows=s.scalars(select(Message).where(Message.account_id==account,Message.fan_id==fan,
         Message.is_unsent.is_(False),Message.direction=='out',Message.price_cents>0)
         .order_by(Message.created_at,Message.message_id)).all()
-    card_state=[{'id':r.message_id,'direction':'out','text':r.body,'at':r.created_at,
+    card_state=[{'id':r.message_id,'direction':'out','text':r.body or '','at':r.created_at,
         'price_cents':r.price_cents,**_card_facts(r,inventory,offers)} for r in card_rows]
     from db.models import OfMessageDelivery
     receipts={x.message_id:x.origin for x in s.scalars(select(OfMessageDelivery).where(
         OfMessageDelivery.account_id==account,OfMessageDelivery.fan_id==fan))}
-    history=[{'id':r.message_id,'direction':r.direction,'text':r.body,'at':r.created_at,
+    history=[{'id':r.message_id,'direction':r.direction,'text':r.body or '','at':r.created_at,
         'attachment_description':r.image_desc,'media_count':r.media_count,
         'sender':('fan' if r.direction=='in' else 'ai' if receipts.get(r.message_id)=='ai' else
             'human' if r.sent_by_employee_id or receipts.get(r.message_id)=='human' else 'unattributed'),
         'price_cents':r.price_cents,**_card_facts(r,inventory,offers)} for r in reversed(rows)]
+    # Older invitations predate receipt identity in fan state. Recover that
+    # identity from the recorded Moxy plan/receipts, never from caption wording.
+    invitation=memo.get('invitation')
+    if isinstance(invitation,dict) and 'message_id' not in invitation:
+        for prior in s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.fan_id==fan,
+                MoxyEvent.status=='done',MoxyEvent.decision_json.is_not(None)).order_by(MoxyEvent.updated_at.desc()).limit(100)):
+            proposal=json.loads(prior.decision_json)
+            progress=json.loads(prior.payload_json).get('_moxy_delivery',{}).get('receipts',[])
+            if proposal.get('action')=='invite' and proposal.get('product_id')==invitation.get('product_id') and progress:
+                invitation={**invitation,'message_id':progress[-1]['message_id']};break
     # The canonical verified memory owner is reused. No creator-private facts
     # from that owner's config/biography are copied into this prompt.
     _,native=versions(s,account,fan)
@@ -362,43 +372,52 @@ def snapshot(s,account,fan,event,*,ignore_outgoing_ids=()):
     completed=s.scalars(select(MoxyEvent).where(MoxyEvent.account_id==account,MoxyEvent.fan_id==fan,
         MoxyEvent.event_id!=event.event_id,MoxyEvent.kind.in_(('turn','welcome')),MoxyEvent.status=='done')
         .order_by(MoxyEvent.updated_at.desc())).all()
-    answered=[];unanswered_ids=None
+    # Pair progress with the exact delivered input boundary. Searching older
+    # records for a nonempty annotation revives questions already superseded.
+    answered=[]
     for previous in completed:
-        previous_payload=json.loads(previous.payload_json)
-        progress=previous_payload.get('_moxy_delivery',{}).get('receipts',[])
-        if not progress or any(v['message_id'] in own_receipts for v in progress):continue
-        d=json.loads(previous.decision_json or '{}')
-        if d.get('reason')=='moxy_validated_technical_fallback':continue
-        annotation=previous_payload.get('_moxy_conversation_progress')
-        if (unanswered_ids is None and type(annotation) is dict and annotation.get('version')==1
-                and type(annotation.get('unanswered_input_ids')) is list
-                and all(type(i) is int and i>0 for i in annotation['unanswered_input_ids'])):
-            unanswered_ids=annotation['unanswered_input_ids']
-        mid=previous_payload.get('source_message_id')
-        if mid is not None:
-            message=s.get(Message,(account,fan,mid))
-            if message is not None:answered.append(message)
-    boundary=max(answered,key=lambda m:(m.created_at,m.message_id)) if answered else None
-    batch_query=select(Message).where(Message.account_id==account,Message.fan_id==fan,
-        Message.direction=='in',Message.is_unsent.is_(False))
+        payload=json.loads(previous.payload_json)
+        receipts=payload.get('_moxy_delivery',{}).get('receipts',[])
+        if not receipts or any(v['message_id'] in own_receipts for v in receipts):continue
+        if json.loads(previous.decision_json or '{}').get('reason')=='moxy_validated_technical_fallback':continue
+        mid=payload.get('source_message_id')
+        message=s.get(Message,(account,fan,mid)) if type(mid) is int else None
+        if message is not None:answered.append((message,previous,payload))
+    latest=max(answered,key=lambda v:(v[0].created_at,v[0].message_id,v[1].updated_at)) if answered else None
+    boundary=latest[0] if latest else None
+    annotation=latest[2].get('_moxy_conversation_progress') if latest else None
+    progress_known=(type(annotation) is dict and annotation.get('version')==1
+        and type(annotation.get('unanswered_input_ids')) is list
+        and all(type(i) is int and i>0 for i in annotation['unanswered_input_ids']))
+    retained=annotation['unanswered_input_ids'] if progress_known else []
+    from db.onlyfans_models import OfIngress,OfRuntime
+    from sqlalchemy import or_,and_
+    runtime=s.get(OfRuntime,account)
+    # History imports remain context. Only applied live ingress, explicit source
+    # identity, or a delivered plan's retained IDs create current pending work.
+    live=select(OfIngress.message_id).where(OfIngress.account_id==account,OfIngress.fan_id==fan,
+        OfIngress.binding_id==owner.binding_id,OfIngress.status=='applied',OfIngress.source!='import')
+    current=and_(Message.message_id.in_(live),Message.created_at>=runtime.activated_at)
+    source=json.loads(event.payload_json).get('source_message_id')
+    if type(source) is int:current=or_(current,Message.message_id==source)
     if boundary is not None:
-        from sqlalchemy import or_,and_
-        newer=[Message.created_at>boundary.created_at,
-               and_(Message.created_at==boundary.created_at,Message.message_id>boundary.message_id)]
-        if unanswered_ids:newer.append(Message.message_id.in_(unanswered_ids))
-        batch_query=batch_query.where(or_(*newer))
-    batch=[{'id':m.message_id,'direction':'in','sender':'fan','text':m.body,'at':m.created_at,
-        'attachment_description':m.image_desc,'media_count':m.media_count} for m in s.scalars(
-            batch_query.order_by(Message.created_at,Message.message_id))]
+        current=and_(current,or_(Message.created_at>boundary.created_at,
+            and_(Message.created_at==boundary.created_at,Message.message_id>boundary.message_id)))
+    batch_query=select(Message).where(Message.account_id==account,Message.fan_id==fan,
+        Message.direction=='in',Message.is_unsent.is_(False),or_(current,Message.message_id.in_(retained)))
+    batch_rows=list(s.scalars(batch_query.order_by(Message.created_at,Message.message_id).limit(129)))
+    if len(batch_rows)>128:raise ActionBlocked('moxy_input_batch_limit')
+    batch=[{'id':m.message_id,'direction':'in','sender':'fan','text':m.body or '', 'at':m.created_at,
+        'attachment_description':m.image_desc,'media_count':m.media_count} for m in batch_rows]
     from .input_batch import explicit_updates
     from .observations import apply as apply_batch
     facts=apply_batch(facts,explicit_updates(batch))
     offerable=offer_eligibility(pa,facts,json.loads(event.payload_json))
     result={'pending_fan_messages':batch,'history_scope':{'kind':'rolling_window','limit':100,
-        'relationship_start_known':False},'fan_id':fan,'pilot':settings.get('pilot'),'account_revision':owner.revision,'binding_id':owner.binding_id,'configuration_fingerprint':pa.fingerprint,
+        'relationship_start_known':False,'progress_annotation_known':progress_known},'fan_id':fan,'pilot':settings.get('pilot'),'account_revision':owner.revision,'binding_id':owner.binding_id,'configuration_fingerprint':pa.fingerprint,
         'instructions':cfg.public_context(),'public_facts':settings.get('public_facts',{}),
         'fan_state':facts,'fan_revision':mf.revision,'control':state_view,'event':{'kind':event.kind,'payload':json.loads(event.payload_json)},
-        'history':history,'card_state':card_state,'memory':memory,'invitation':memo.get('invitation'),
+        'history':history,'card_state':card_state,'memory':memory,'invitation':invitation,
         'obligations':memo.get('obligations',[]),'products':{k:pa.products[k] for k in inventory},
         'offer_eligibility':{k:offerable.get(k,'product_mapping_missing') for k in inventory},
         'inventory':inventory,'sequences':pa.sequences,'operational':settings['operational'],
@@ -443,7 +462,10 @@ FACTUAL_REASONS={'unsupported_fan_attribution','unsupported_relationship_history
 FACTUAL_REASONS|={'unsupported_catalogue_prohibition','unsupported_price_units','unsupported_card_access_denial','sexting_permission_unverified','unsupported_asset_absence'}
 FACTUAL_REASONS|={'price_claim_mismatch','price_claim_unbound'}
 FACTUAL_REASONS.add('invalid_conversation_progress')
-REQUEST_EVIDENCE_REASONS={'current_request_authority_unverified','current_request_evidence_missing','request_quote_required','resend_not_requested'}
+FACTUAL_REASONS|={'unsupported_remedy_commitment','unsupported_service_commitment','delivery_promise_without_action',
+    'sent_claim_without_receipt','unapproved_discount_claim','unapproved_real_world_commitment',
+    'unsupported_card_content_claim'}
+REQUEST_EVIDENCE_REASONS={'current_request_authority_unverified','current_request_evidence_missing','request_quote_required','resend_not_requested','invitation_stale_or_ambiguous'}
 FACTUAL_REASONS|=REQUEST_EVIDENCE_REASONS
 RECOVERABLE_REASONS|=FACTUAL_REASONS|{'product_request_mismatch'}
 
@@ -451,7 +473,7 @@ RECOVERABLE_REASONS|=FACTUAL_REASONS|{'product_request_mismatch'}
 FORMAT_REASONS={'invalid_model_json','invalid_model_decision','invalid_message_plan','invalid_message_part',
     'message_plan_media_mismatch','message_plan_text_mismatch','empty_model_reply','duplicate_model_key',
     'invalid_request_evidence','unsupported_output_markup_or_link','handover_must_not_have_messages',
-    'handover_must_not_reply','untruthful_identity_or_instruction_leak','owned_handover_required'}
+    'handover_must_not_reply','untruthful_identity_or_instruction_leak','owned_handover_required','invalid_conversation_progress'}
 
 
 def recoverable(reason):
@@ -580,6 +602,9 @@ def wording_problem(snap,decision):
     if problem:return problem
     from .grounding import current_record_problem
     problem=current_record_problem(snap,texts)
+    if problem:return problem
+    from .grounding import commitment_problem
+    problem=commitment_problem(snap,decision,texts)
     if problem:return problem
     from .product_grounding import product_problem
     problem=product_problem(snap,decision,texts)
@@ -835,6 +860,8 @@ def validate_decision(settings,snap,decision,*,planning=False,part_index=None):
                     pa.terms(key,facts,purpose=purpose,sequence=decision['sequence'])
                 else:
                     if key!=snap['invitation']['product_id']:raise ActionBlocked('acceptance_product_mismatch')
+                    from .request_evidence import current_invitation_acceptance
+                    if not current_invitation_acceptance(snap,key,quote):raise ActionBlocked('invitation_stale_or_ambiguous')
                     pa.accepted_invitation(snap['invitation'],facts)
             else:pa.terms(key,facts,purpose=purpose,sequence=decision['sequence'])
             terms=snap['inventory'][key] if action!='invite' else None
@@ -1066,7 +1093,7 @@ class MoxyService:
                     tokens_in=getattr(model,'tokens_in',None),tokens_out=getattr(model,'tokens_out',None),
                     cache_hit_tokens=getattr(model,'cache_hit_tokens',None),
                     configuration_fingerprint=snap.get('configuration_fingerprint'))
-            result=writer.parse(raw,defer_sales_pause=True)
+            result=writer.parse(raw,defer_sales_pause=True,require_progress=True)
         except (TimeoutError,asyncio.TimeoutError):reason='moxy_model_unknown'
         except Exception as exc:reason=str(exc) if isinstance(exc,ActionBlocked) else 'moxy_draft_refused'
         with Session(self.engine) as s,s.begin():
@@ -1142,10 +1169,10 @@ class MoxyService:
         event.snapshot_json=canonical(snap);event.snapshot_hash=digest(snap)
         if result['action']=='handover':
             from .grounding import unverified_card_question
-            if (result.get('reason','').partition(':')[0]=='card_context_unavailable'
-                    and not set(result['flags']) & {'identity','danger','complaint','hardship','boundary_reset'}
-                    and unverified_card_question(snap)):
-                event.reason='card_context_unavailable'
+            if (not set(result['flags']) & {'identity','danger'} and
+                    (result.get('reason','').partition(':')[0]=='creator_fact_unavailable'
+                     or (result.get('reason','').partition(':')[0]=='card_context_unavailable' and unverified_card_question(snap)))):
+                event.reason=result.get('reason','').partition(':')[0]
                 self._technical_attention(s,owner,event)
                 event.status='done'
                 diagnose(s,account,'human_review_required',event=event)
@@ -1246,7 +1273,7 @@ class MoxyService:
                     if event.snapshot_hash!=digest(fresh):
                         event.status='stale';event.reason='moxy_snapshot_changed'
                     else:
-                        try:result=writer.parse(proof['raw'],defer_sales_pause=True)
+                        try:result=writer.parse(proof['raw'],defer_sales_pause=True,require_progress=True)
                         except ActionBlocked as exc:
                             self._generation_failure(s,owner,event,fresh,str(exc))
                         else:self._finish_decision(s,owner,event,fresh,result)
@@ -1446,7 +1473,8 @@ def delivered(s,intent):
     mf=_fan(s,intent.account_id,intent.fan_id);state=json.loads(mf.state_json)
     if d['action']=='invite':
         cfg,pa=configuration(json.loads(s.get(MoxyAccount,intent.account_id).settings_json))
-        state['invitation']={'product_id':d['product_id'],'fingerprint':pa.fingerprint,'sequence':d['sequence']}
+        state['invitation']={'product_id':d['product_id'],'fingerprint':pa.fingerprint,'sequence':d['sequence'],
+            'message_id':intent.provider_message_id}
     elif d['action'] in {'offer','continue','resend','alternative'}:
         state.pop('invitation',None)
         # An explicitly requested item is a scoped exception, not permission

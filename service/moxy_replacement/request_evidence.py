@@ -33,12 +33,12 @@ _WANT = re.compile(r"\bi(?:\s+(?:want|would\s+like)|'d\s+like)\b", re.I)
 _MEDIA = re.compile(r"\b(?:photos?|pictures?|pics?|videos?|clips?|cards?|content|set|bundle)\b", re.I)
 _QUALIFIER = re.compile(r"\b(?:if|unless|when|until|before|after|because|while|whether|what|how|why|"
                         r"tomorrow|later|yesterday|tonight|next|eventually|someday)\b", re.I)
-_ASSENT = re.compile(r"^\s*(?:yes|yeah|yep|sure|okay|ok|please\s+do|go\s+ahead)"
-                     r"(?:\s*,?\s*(?:please|send\s+(?:it|that(?:\s+one)?)))?\s*[.!]*$", re.I)
+_ASSENT = re.compile(r"^\s*(?:yes|yeah|yep|sure|okay|ok|absolutely|please\s+do|go\s+ahead)"
+                     r"(?:\s*,?\s*(?:please|send\s+(?:it|that(?:\s+one)?)(?:\s+over)?))*\s*[.!]*$", re.I)
 _REFERENCE = re.compile(r"\b(?:it|that(?:\s+one)?|this(?:\s+one)?)\b", re.I)
 _ACK = re.compile(r"\s*(?:ok|okay|yes|yeah|yep|no|sure|please|thanks|thank\s+you|"
                   r"actually|instead|now|alright|hi|hey|hello|"
-                  r"that(?:'s|s|\s+is)\s+too\s+much|too\s+expensive)\s*[.!]*", re.I)
+                  r"that(?:'s|s|\s+is)\s+too\s+much|too\s+expensive)(?:\s+please)?\s*[.!]*", re.I)
 _BUDGET_STATEMENT = re.compile(
     r"\s*(?:(?:actually|now|well)\s+)?(?:my\s+)?budget\s+(?:is\s+|of\s+|[:=]\s*)?"
     r"(?:(?:only|just)\s+)?\$(?P<amount>[0-9]{1,5}(?:\.[0-9]{1,2})?)\s*[.!]*", re.I)
@@ -324,6 +324,21 @@ def authorizes_request(snapshot, product_id, kind, quote=None):
         return False
     target = _resend_target_is_unique if kind == 'resend' else _target_is_unique
     return any(target(part, product_id, snapshot) for part in affirmative_requests(text))
+
+
+def current_invitation_acceptance(snapshot,product_id,quote=None):
+    """Bind assent to its receipted invitation, not merely retained fan state."""
+    invitation=snapshot.get('invitation') or {}
+    if invitation.get('product_id')!=product_id or type(invitation.get('message_id')) is not int:return False
+    own={r.get('message_id') for r in snapshot.get('event',{}).get('payload',{}).get('_moxy_delivery',{}).get('receipts',[])}
+    outgoing=[m for m in snapshot.get('history',[]) if m.get('direction')=='out' and m.get('id') not in own]
+    if not outgoing or outgoing[-1].get('id')!=invitation['message_id']:return False
+    # Exact invitation identity narrows the referred item; general product
+    # selection still uses the full catalogue. Intervening requests/cancellation
+    # remain subject to the existing chronological evidence checks.
+    scope={**snapshot,'products':{product_id:snapshot['products'][product_id]},
+           'inventory':{product_id:snapshot.get('inventory',{}).get(product_id,{})}}
+    return authorizes_request(scope,product_id,'accept',quote)
 
 
 def supports_preference(observation, message, snapshot):

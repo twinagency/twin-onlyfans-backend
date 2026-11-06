@@ -75,8 +75,14 @@ def shared_wording(new_text, old_text):
 HABIT_NAMES=PET_NAMES-{_squash(w) for w in ('love','sexy','handsome')}
 _HABIT_FOLD={'babe':'baby','babes':'baby','bby':'baby'}
 _EMOJI=re.compile('[\u2600-\u27bf\U0001f000-\U0001faff]')
-HABIT_WINDOW=4   # last creator lines examined
-HABIT_LIMIT=2    # a pet name/emoji already on this many of them may not open a third
+# Mechanical repetition only: the SAME pet name on every one of the last HABIT_NAME_RUN creator lines
+# (including the new one) or the SAME emoji on every one of the last HABIT_EMOJI_RUN. Measured on the 11
+# approved chatter examples the longest consecutive-line run is 3 for a pet name and 2 for an emoji, so
+# creator voice (babyy on most lines, an emoji now and then) is never refused; the saved model transcripts
+# run 4 of 4 (baby / black heart) or 4 of 4 (baby) and are caught. Price-only card captions are not lines.
+HABIT_NAME_RUN=4
+HABIT_EMOJI_RUN=3
+_CAPTION_ONLY=re.compile(r'^\s*\$?\d[\d.,]*\s*(?:usd)?\s*$',re.I)
 
 
 def habits(text):
@@ -87,18 +93,20 @@ def habits(text):
 
 
 def repeated_habit(new_texts, recent_texts, fan_text=''):
-    """A pet name or emoji in new_texts already on HABIT_LIMIT of the last HABIT_WINDOW recent lines, else None.
+    """A pet name/emoji that would be the same on every one of the last N creator lines, else None.
 
-    One use now and then stays natural. Something the fan just wrote himself (he asked to be called
-    daddy, or sent the emoji) is never refused. Prices, quotes and facts are not affected.
+    One use, or a run shorter than N, is ordinary voice. Something the fan just wrote himself is never
+    refused. Prices, quotes and facts are not affected.
     """
-    seen={}
-    for old in recent_texts[-HABIT_WINDOW:]:
-        for h in habits(old):seen[h]=seen.get(h,0)+1
+    lines=[t for t in recent_texts if not _CAPTION_ONLY.match(str(t))]
     asked=habits(fan_text)
     for text in new_texts:
+        if _CAPTION_ONLY.match(str(text)):continue
         for h in sorted(habits(text)-asked):
-            if seen.get(h,0)>=HABIT_LIMIT:return h
+            n=HABIT_NAME_RUN if h.isalpha() else HABIT_EMOJI_RUN
+            window=lines[-(n-1):]
+            if len(window)==n-1 and all(h in habits(x) for x in window):return h
+        lines.append(text)
     return None
 
 

@@ -410,9 +410,7 @@ def test_approved_chatter_bubbles_pass_the_repetition_and_status_detectors():
             if t['who']=='marker':continue
             if t['who']=='chatter':
                 snap={'history':history,'event':{'payload':{}}}
-                # repeated_habit is deliberately stricter than the real chatters (they say babyy on most lines);
-                # the approved voice must still pass every other detector.
-                assert wording_problem(snap,{'action':'reply','text':t['text']}) in (None,'repeated_habit'),(ex['record'],t['text'])
+                assert wording_problem(snap,{'action':'reply','text':t['text']}) is None,(ex['record'],t['text'])
             history.append({'id':i,'direction':'out' if t['who']=='chatter' else 'in','text':t['text'],'price_cents':0})
 
 

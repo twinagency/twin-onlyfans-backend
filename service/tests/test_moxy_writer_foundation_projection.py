@@ -188,3 +188,39 @@ def test_writer_surfaces_repeated_emoji_on_punctuation_follow_up_without_media_a
     assert 'drop any unasked-for catalogue refusal' in system['content']
     assert any(r['key'] == 'prohibited_categories' and r['scope'] == 'media'
                for r in context['creator_rules']['rules'])
+
+
+def test_writer_anchors_tell_me_to_creator_idea():
+    value = snapshot(text='Tell me ')
+    value['history'].insert(0, {'id': 10000, 'direction': 'out', 'sender': 'unattributed',
+                                'text': 'I got an idea... wanna hear it?'})
+    system, user = messages(value)
+    context = json.loads(user['content'])
+    assert context['accepted_conversational_idea']['creator_message_id'] == 10000
+    assert context['accepted_conversational_idea']['fan_message_id'] == 10001
+    assert 'before asking anything back' in system['content']
+
+
+def test_writer_marks_repeated_unbacked_roleplay_refusal_and_preserves_source():
+    from moxy_replacement.conversation import history_problem
+    value = snapshot(text='What is wrong with kneeling?')
+    value['fan_state'].update(spender=True, vip=True)
+    value['history'].insert(0, {'id': 10000, 'direction': 'out', 'sender': 'ai',
+                                'text': "Kneeling is the one thing I don't play out."})
+    draft = "Nothing is wrong with it, it's just not something I play out."
+    _, user = messages(value)
+    context = json.loads(user['content'])
+    assert any(item['message_id'] == 10000 and item['problem'] == 'unsupported_roleplay_boundary'
+               for item in context['unverified_history_claims'])
+    assert 'unsupported roleplay refusal' in context['history'][0]['text']
+    assert "Kneeling is the one thing" in value['history'][0]['text']
+    assert history_problem(value, [draft]) == 'unsupported_roleplay_boundary'
+    assert history_problem(value, ["I don't play that out in real life."]) is None
+    assert history_problem(value, ["I was wrong when I said I don't play it out."]) is None
+    value['instructions']['rules'].append({
+        'key': 'roleplay_position_limit', 'value': False, 'requires': {},
+        'instruction': 'Kneeling is outside the approved conversation scope.',
+        'source': {'document': '01_Amelia.pdf', 'pages': [1]},
+    })
+    assert history_problem(value, [draft]) is None
+

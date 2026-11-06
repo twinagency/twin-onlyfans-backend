@@ -178,3 +178,47 @@ def test_reason_rides_the_single_factual_correction():
     snap = priced('how much is it?')
     brief = correction_brief('price_question_unanswered', reply('nice'), snap)
     assert brief['kind'] == 'factual' and 'exact verified price' in brief['guidance']
+
+
+def test_planning_removes_only_the_repeated_standalone_face_without_redrafting():
+    from moxy_replacement.runtime import _validate_draft, validate_decision
+    from moxy_replacement.configuration import ActionBlocked
+
+    settings, snap, _ = authority_scene('How was your day?')
+    face = '\U0001F60F'
+    snap['history'] = history('hi ' + face, 'good morning ' + face) + snap['history']
+    original = planned('quiet one ' + face + ' how about yours?')
+    with pytest.raises(ActionBlocked, match='repeated_habit'):
+        validate_decision(settings, snap, original, planning=True)
+    revised = _validate_draft(settings, snap, original)
+    assert revised['text'] == 'quiet one how about yours?'
+    assert revised['messages'][0]['text'] == revised['text']
+    assert original['text'].endswith('how about yours?') and face in original['text']
+    assert {k: v for k, v in original.items() if k not in ('text', 'messages')} == {
+        k: v for k, v in revised.items() if k not in ('text', 'messages')}
+
+
+def test_emoji_repair_never_weakens_a_fact_or_an_explicit_emoji_request():
+    from moxy_replacement.runtime import _validate_draft
+    from moxy_replacement.configuration import ActionBlocked
+
+    settings, snap, _ = authority_scene('Can you explain that emoji?')
+    face = '\U0001F60F'
+    snap['history'] = history('hi ' + face, 'good morning ' + face) + snap['history']
+    with pytest.raises(ActionBlocked, match='repeated_habit'):
+        _validate_draft(settings, snap, planned('i like this one ' + face))
+    settings, snap, _ = authority_scene('How was your day?')
+    snap['history'] = history('hi ' + face, 'good morning ' + face) + snap['history']
+    with pytest.raises(ActionBlocked, match='unsupported_creator_routine'):
+        _validate_draft(settings, snap, planned('i coach at the gym every morning ' + face))
+
+
+def test_cosmetic_repair_keeps_refusals_on_the_normal_correction_path():
+    from moxy_replacement.runtime import _validate_draft
+    from moxy_replacement.configuration import ActionBlocked
+
+    settings, snap, _ = authority_scene('How was your day?')
+    face = '\U0001F60F'
+    snap['history'] = history('hi ' + face, 'good morning ' + face) + snap['history']
+    with pytest.raises(ActionBlocked, match='repeated_habit'):
+        _validate_draft(settings, snap, planned("i don't feel like it today " + face))

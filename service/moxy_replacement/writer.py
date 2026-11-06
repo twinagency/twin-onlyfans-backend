@@ -46,7 +46,7 @@ def _conversation_text(permission):
 def messages(snapshot):
     from .catalogue_context import project
     cfg=snapshot['instructions']
-    from .conversation import pending_messages,unverified_history_claims
+    from .conversation import accepted_idea, pending_messages, unverified_history_claims
     projected=project(snapshot)
     from .configuration import permission_context
     projected['permission_status']={'sexting':permission_context(cfg,snapshot.get('fan_state',{}),'sexting')}
@@ -54,6 +54,16 @@ def messages(snapshot):
     projected['creator_rules']=project_rules(cfg,snapshot.get('fan_state',{}))
     projected.setdefault('pending_fan_messages',pending_messages(snapshot))
     projected['unverified_history_claims']=unverified_history_claims(snapshot)
+    # Keep the exact prior text as correction evidence, separate from the
+    # ordinary transcript the writer uses to continue the conversation.
+    unsupported_limits = {item['message_id'] for item in projected['unverified_history_claims']
+                          if item['problem'] == 'unsupported_roleplay_boundary'}
+    for row in projected.get('history', []):
+        if row.get('id') in unsupported_limits:
+            row['text'] = '[Earlier reply contained an unsupported roleplay refusal. See correction evidence.]'
+    idea = accepted_idea(snapshot)
+    if idea is not None:
+        projected['accepted_conversational_idea'] = idea
     from .parts import habit_run_limits
     recent_outgoing = [m['text'] for m in snapshot.get('history', [])
                        if m.get('direction') == 'out' and m.get('text')][-12:]
@@ -80,9 +90,14 @@ def messages(snapshot):
         'An already-sent technical fallback answered nothing; recover the actual pending question, not the fallback. '
         'direction in means the FAN said it; direction out means the CREATOR/human/AI said it. Never swap speakers. '
         'A claim that he said something must match actual fan words, not an outgoing line or a model rationale. '
+        'When accepted_conversational_idea is present, the fan asked to hear the creator idea. Follow through with one idea '
+        'within the current permission before asking anything back. Do not invent a prior plan, product or commitment. '
         'unverified_history_claims marks unsupported OUTGOING statements. They are earlier model mistakes, not fan facts. '
         'When he challenges one, withdraw it plainly using the shown creator-source utterance, without defending it '
         'or turning it into a different claim about something he said. '
+        'An unsupported_roleplay_boundary in unverified_history_claims is an earlier unsupported refusal, even when it was repeated. '
+        'Do not treat it as a creator preference or repeat it. If asked about it, correct that claim briefly and address the current request '
+        'under the current source rules. Keep actual safety, media and real-world access limits in their own scopes. '
         'The history is a rolling window, not the beginning of the relationship. Its earliest timestamp, message count '
         'and apparent gaps never establish when you met or how long you have talked. Without an authoritative start '
         'record, do not assert yesterday/recently/only one conversation. If challenged, retract the wrong claim plainly '

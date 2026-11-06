@@ -184,3 +184,53 @@ def price_problem(snapshot, decision, terms=None):
                 if amount != target["price_cents"] or currency != expected_currency:
                     return "price_claim_mismatch"
     return None
+
+
+_PRICE_ASK = re.compile(
+    r"\bprice[sd]?\b|\bcosts?\b|\$\s*\?|\bhow\s+much\b(?!\s+(?:longer|more|time|later|fun|(?:do|did|would|will|can)?\s*(?:you|u)\b(?!\s+charge)))",
+    re.I)
+
+
+def _asked_price(text):
+    """The fan is asking what an item costs (not 'how much do you miss me')."""
+    return bool(_PRICE_ASK.search(str(text or "").replace("’", "'")))
+
+
+def _asked_target(snapshot, decision, terms, fan_text):
+    """The one item whose price he asked for, or None when it is ambiguous or not an item we sell."""
+    explicit = _CARD_ID.search(fan_text)
+    if explicit:
+        return referenced_card(snapshot, fan_text, allow_current=False)
+    key = decision.get("product_id")
+    if key is not None:
+        return _selected_target(snapshot, decision, terms)
+    return referenced_card(snapshot, fan_text)
+
+
+def price_question_problem(snapshot, decision, terms=None):
+    """'price_question_unanswered' when he asked an item's price and the reply never states it.
+
+    Only when the target is unique: an existing card, or the item this decision selects. An
+    ambiguous or unknown target is never forced to a number (a clarifying question is fine). The
+    stated amount itself is validated by price_problem; a figure inside a quotation of someone's
+    words is a quote, not the answer.
+    """
+    if decision.get("action") in {"none", "handover"}:
+        return None
+    incoming = [m for m in pending_messages(snapshot) if m.get("direction") == "in"]
+    fan_text = (incoming[-1].get("text") or "") if incoming else ""
+    if not _asked_price(fan_text):
+        return None
+    target = _asked_target(snapshot, decision, terms, fan_text)
+    price = target.get("price_cents") if isinstance(target, dict) else None
+    if type(price) is not int or price <= 0:
+        return None
+    currency = target.get("currency") or "USD"
+    for part in plan(decision):
+        text = part["text"]
+        for match in _MONEY.finditer(text):
+            if any(a <= match.start() < b for a, b, _ in quotes(text)):
+                continue
+            if _money(match) == (price, currency):
+                return None
+    return "price_question_unanswered"

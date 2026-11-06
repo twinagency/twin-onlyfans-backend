@@ -70,6 +70,46 @@ def shared_wording(new_text, old_text):
     return prefix>=4 and min(len(a),len(b))>=6 and _content(a[:prefix])>=2
 
 
+# ---- Habit: the same pet name or emoji on most of the last few creator lines.
+# `love`, `sexy` and `handsome` are ordinary words, so only real terms of address are counted.
+HABIT_NAMES=PET_NAMES-{_squash(w) for w in ('love','sexy','handsome')}
+_HABIT_FOLD={'babe':'baby','babes':'baby','bby':'baby'}
+_EMOJI=re.compile('[\u2600-\u27bf\U0001f000-\U0001faff]')
+# Mechanical repetition only: the SAME pet name on every one of the last HABIT_NAME_RUN creator lines
+# (including the new one) or the SAME emoji on every one of the last HABIT_EMOJI_RUN. Measured on the 11
+# approved chatter examples the longest consecutive-line run is 3 for a pet name and 2 for an emoji, so
+# creator voice (babyy on most lines, an emoji now and then) is never refused; the saved model transcripts
+# run 4 of 4 (baby / black heart) or 4 of 4 (baby) and are caught. Price-only card captions are not lines.
+HABIT_NAME_RUN=4
+HABIT_EMOJI_RUN=3
+_CAPTION_ONLY=re.compile(r'^\s*\$?\d[\d.,]*\s*(?:usd)?\s*$',re.I)
+
+
+def habits(text):
+    """The pet names (babe/babes/bby folded into baby) and emoji used in one line."""
+    words=re.sub(r"[^\w\s']",' ',str(text).lower().replace('\u2019',"'")).split()
+    names={_HABIT_FOLD.get(w,w) for w in (_squash(x.replace("'",'')) for x in words) if len(w)>1 and w in HABIT_NAMES}
+    return names|set(_EMOJI.findall(str(text)))
+
+
+def repeated_habit(new_texts, recent_texts, fan_text=''):
+    """A pet name/emoji that would be the same on every one of the last N creator lines, else None.
+
+    One use, or a run shorter than N, is ordinary voice. Something the fan just wrote himself is never
+    refused. Prices, quotes and facts are not affected.
+    """
+    lines=[t for t in recent_texts if not _CAPTION_ONLY.match(str(t))]
+    asked=habits(fan_text)
+    for text in new_texts:
+        if _CAPTION_ONLY.match(str(text)):continue
+        for h in sorted(habits(text)-asked):
+            n=HABIT_NAME_RUN if h.isalpha() else HABIT_EMOJI_RUN
+            window=lines[-(n-1):]
+            if len(window)==n-1 and all(h in habits(x) for x in window):return h
+        lines.append(text)
+    return None
+
+
 def reused_wording(parts, recent_texts):
     """The first recent line whose wording a new part substantially reuses, else None."""
     for part in parts:

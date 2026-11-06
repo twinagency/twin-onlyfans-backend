@@ -35,27 +35,33 @@ def _squash(word):
 PET_NAMES={_squash(w) for w in ('babe','baby','bby','bb','babes','babyy','bestie','bestiee','daddy','handsome','honey','hun','sweetie',
     'cutie','love','papi','boo','darling','sexy')}
 COMMON={_squash(w) for w in ('i','you','me','my','your','the','a','an','and','to','of','it','is','are','am','was','in','on','at','for','so',
-    'do','did','what','how','that','this','with','just','be','im','u','ur','we','can','if','or','but','not','no','yes','ok','okay','lol','omg','hey','hi')}
+    'do','did','what','how','that','this','with','just','be','im','u','ur','we','can','if','or','but','not','no','yes','ok','okay','lol','omg','hey','hi',
+    'up','while')}
 
 
-def _tokens(text):
-    words=re.sub(r"[^\w\s']",' ',str(text).lower().replace('\u2019',"'")).split()
-    return [w for w in (_squash(x.replace("'",'')) for x in words) if w and w not in PET_NAMES]
+def _token_spans(text):
+    for match in re.finditer(r"[\w'\u2019]+", text):
+        token = _squash(match.group().lower().replace("'", '').replace('\u2019', ''))
+        if token and token not in PET_NAMES:
+            yield token, match.start(), match.end()
 
 
 def _content(tokens):
     return sum(1 for t in tokens if t not in COMMON)
 
 
-def shared_wording(new_text, old_text):
-    """True when new_text reuses a substantial phrase of old_text.
+def shared_wording_fragment(new_text, old_text):
+    """Return the exact reused fragment, if it carries substantial wording.
 
     A shared run of 5 or more words that carries real content, or the same opening of 4 or more words
     in two longer messages (the same joke with a different ending). Pet names, common words and emoji
     never count, so ordinary vocabulary stays usable.
     """
-    a=_tokens(new_text);b=_tokens(old_text)
-    if len(a)<4 or len(b)<4:return False
+    new_text = str(new_text)
+    spans = list(_token_spans(new_text))
+    a = [token for token, _, _ in spans]
+    b = [token for token, _, _ in _token_spans(str(old_text))]
+    if len(a)<4 or len(b)<4:return None
     best=0;best_start=0;prefix=0
     previous=[0]*(len(b)+1)
     for i in range(1,len(a)+1):
@@ -66,8 +72,15 @@ def shared_wording(new_text, old_text):
                 if row[j]>best:best=row[j];best_start=i-row[j]
         previous=row
     while prefix<min(len(a),len(b)) and a[prefix]==b[prefix]:prefix+=1
-    if best>=5 and _content(a[best_start:best_start+best])>=2:return True
-    return prefix>=4 and min(len(a),len(b))>=6 and _content(a[:prefix])>=2
+    if best>=5 and _content(a[best_start:best_start+best])>=2:
+        return new_text[spans[best_start][1]:spans[best_start+best-1][2]]
+    if prefix>=4 and min(len(a),len(b))>=6 and _content(a[:prefix])>=2:
+        return new_text[spans[0][1]:spans[prefix-1][2]]
+    return None
+
+
+def shared_wording(new_text, old_text):
+    return shared_wording_fragment(new_text, old_text) is not None
 
 
 # ---- Habit: the same pet name or emoji on most of the last few creator lines.

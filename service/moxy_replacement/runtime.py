@@ -751,6 +751,20 @@ def correction_brief(reason,result,snap):
         brief['guidance']='Missing pilot inventory is not a creator-wide prohibition. Withdraw the invented boundary. State only which verified items you can send right now, while retaining actual source creator prohibitions and conditions.'
     if reason=='product_invitation_missing_identity':
         brief['guidance']='Your text invites a specific catalogue item. Use invite and its actual product_id, without a media card, so acceptance retains its identity.'
+    if reason=='repeated_recent_phrase':
+        from .parts import repetition_texts, shared_wording_fragment
+        earlier = _recent_outgoing_for_repetition(snap)
+        matches = []
+        for line in repetition_texts(snap, result):
+            for previous in earlier:
+                fragment = shared_wording_fragment(line, previous)
+                if fragment and fragment not in matches:
+                    matches.append(fragment)
+            earlier.append(line)
+        brief['repeated_fragments'] = [fragment[:160] for fragment in matches[:4]]
+        brief['guidance'] = ('Avoid the phrases in repeated_fragments from earlier replies, including any moved out '
+                             'of normal history as unsupported claims. Answer the current turn in fresh words '
+                             'within the same verified permissions and facts.')
     if reason=='repeated_habit':
         brief['guidance']='Your last replies used the same pet name or emoji on every line. Answer the same fan message again in your own voice but with a different pet name or emoji, or none this time. Keep every price, fact and offer exactly as it was, and still state any price or quantity he asked for.'
     if reason=='price_question_unanswered':

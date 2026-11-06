@@ -222,3 +222,25 @@ def test_cosmetic_repair_keeps_refusals_on_the_normal_correction_path():
     snap['history'] = history('hi ' + face, 'good morning ' + face) + snap['history']
     with pytest.raises(ActionBlocked, match='repeated_habit'):
         _validate_draft(settings, snap, planned("i don't feel like it today " + face))
+
+
+def test_repetition_does_not_count_function_words_as_substantive_overlap():
+    from moxy_replacement.parts import shared_wording
+
+    assert not shared_wording(
+        'Then I was looking up at you while you told the story.',
+        'I kept looking up at you while I finished my coffee.',
+    )
+    assert shared_wording(
+        'I put the blue velvet ribbon on the table.',
+        'You know I put the blue velvet ribbon on the shelf.',
+    )
+
+
+def test_rewrite_gets_exact_fragment_even_if_the_old_message_is_flagged():
+    _, snap, _ = authority_scene('What did you do after that?')
+    snap['history'] = history('You know I put the blue velvet ribbon on the shelf.') + snap['history']
+    result = planned('I put the blue velvet ribbon on the table.')
+    assert wording_problem(snap, result) == 'repeated_recent_phrase'
+    brief = correction_brief('repeated_recent_phrase', result, snap)
+    assert brief['repeated_fragments'] == ['I put the blue velvet ribbon on the']

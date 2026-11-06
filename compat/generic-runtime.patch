@@ -352,7 +352,7 @@
 +PHOTO_CAP = 1500
 +VIDEO_CAP = 700
 +CAPS = {'photo': PHOTO_CAP, 'video': VIDEO_CAP}
-+POLL_SECONDS = 300
++POLL_SECONDS = 7200
 +RECONCILE_SECONDS = 86400
 +POLICY = {'version': 1, 'photos': PHOTO_CAP, 'videos': VIDEO_CAP, 'order': 'recent'}
 +

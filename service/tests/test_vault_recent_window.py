@@ -32,12 +32,14 @@ def test_each_kind_has_its_own_hard_page_boundary():
 def test_new_heads_are_checked_while_initial_import_remains_in_progress():
     now=datetime(2026,11,6);state=policy.start(now)
     state['photo']['offset']=240
-    state,read=policy.next_read(state,now+timedelta(minutes=5),6)
+    _,early=policy.next_read(state,now+timedelta(seconds=7199),6)
+    assert not early['head'] and early['offset']==240
+    state,read=policy.next_read(state,now+timedelta(hours=2),6)
     assert read['head'] and read['offset']==0
     state=policy.advance(state,read,rows('photo',6),True,[True]*6,'a'*64,now,6)
-    state,read=policy.next_read(state,now+timedelta(minutes=5),6)
+    state,read=policy.next_read(state,now+timedelta(hours=2),6)
     assert read['kind']=='video' and read['head']
-    state=policy.advance(state,read,rows('video',6),True,[True]*6,'b'*64,now+timedelta(minutes=5),6)
+    state=policy.advance(state,read,rows('video',6),True,[True]*6,'b'*64,now+timedelta(hours=2),6)
     assert state['head'] is None and state['photo']['offset']==240
     assert not policy.complete(state)
 

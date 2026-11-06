@@ -17,7 +17,8 @@
     },
     "switch": "ONLYFANS_VAULT_RECENT_WINDOW_ENABLED=1",
     "worker_sha256": "0ac5c7a85fec208b99d04b302b8d5a554bb49cdd765ff0f4d1689489bc676e4b",
-    "policy_sha256": "aac37f83f9a0c858bc9a1190401a30baa859fb88d9553c8d60fca0f1f8399e4d",
-    "child_change": "Same producer/guards/deadlines; scope guard and newest-first automatic selection when enabled"
+    "policy_sha256": "01842f467d85ae536613619d1155504a94ddfbeb5a32c4ff555d6c764fcf5b11",
+    "child_change": "Same producer/guards/deadlines; scope guard and newest-first automatic selection when enabled",
+    "poll_seconds": 7200
   }
 }

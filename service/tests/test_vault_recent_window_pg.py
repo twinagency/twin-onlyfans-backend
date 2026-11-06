@@ -244,3 +244,74 @@ def test_main_and_dedicated_selectors_share_cap_and_prioritise_recent_media(data
         # Rolling out of automatic work is not a catalogue deletion.
         assert s.get(VaultItem,(account,10000)).removed_at is None
     store.close()
+
+
+def test_scheduled_window_polls_every_two_hours_without_delaying_first_import(database,monkeypatch):
+    from types import SimpleNamespace
+    from db.onlyfans_models import OfRuntime
+    from onlyfans_runtime import content_sync
+    import test_onlyfans_connections_pg as connections
+    from datetime import datetime,timezone
+    monkeypatch.setenv('ONLYFANS_VAULT_RECENT_WINDOW_ENABLED','1')
+    monkeypatch.setattr(connections,'expires',lambda:datetime.now(timezone.utc)+timedelta(days=1))
+    store,account,_=verified(database,monkeypatch)
+    calls=[];clock=provider(monkeypatch,store,{'photo':[],'video':[]},calls)
+    monkeypatch.setattr(content_sync,'utcnow',lambda:clock[0])
+    with Session(store.engine) as s:binding=s.get(OfRuntime,account).binding_id
+    def tick(identity):
+        return content_sync._queue_vault(store,TENANT,SimpleNamespace(account=account,
+            binding_id=binding,connection_revision=1,operation_id=identity,now=clock[0]),ACTOR)
+    assert tick('initial')=='queued' and calls==[]
+    with Session(store.engine) as s:
+        first=s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id==account))
+        identity=first.job_id
+    initial=drain(store,account,identity)
+    assert policy.load(initial.window_json)['mode']=='window'
+    completed=initial.completed_at
+    for seconds in (300,7199):
+        clock[0]=completed+timedelta(seconds=seconds)
+        assert tick('too-soon-'+str(seconds))=='recent'
+    with Session(store.engine) as s:
+        assert s.scalar(select(func.count()).select_from(OfVaultSyncJob))==1
+    clock[0]=completed+timedelta(hours=2)
+    assert tick('two-hours')=='queued'
+    with Session(store.engine) as s:
+        fresh=s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.status=='pending'))
+        identity=fresh.job_id
+        assert policy.load(fresh.window_json)['mode']=='head'
+    drain(store,account,identity)
+    assert content_sync.INCREMENTAL_SECONDS==300  # Other source owners retain their schedule.
+    store.close()
+
+
+def test_selected_window_coverage_allows_two_hour_schedule(database,monkeypatch):
+    from onlyfans_runtime.content_sync import _vault_coverage,_coverage_state
+    monkeypatch.setenv('ONLYFANS_VAULT_RECENT_WINDOW_ENABLED','1')
+    store,account,_=verified(database,monkeypatch)
+    calls=[];provider(monkeypatch,store,{'photo':[],'video':[]},calls)
+    queued=queue(store,account,70);complete=drain(store,account,queued['jobId'])
+    with Session(store.engine) as s:
+        for minutes in (30,121):
+            view=_vault_coverage(s,account,True,complete.completed_at+timedelta(minutes=minutes))
+            assert view['state']=='current' and 'overdue' not in view['detail']
+        late=_vault_coverage(s,account,True,complete.completed_at+timedelta(hours=4,seconds=1))
+        assert late['state']=='delayed' and 'two-hour schedule' in late['detail']
+    assert _coverage_state(complete.completed_at+timedelta(seconds=601),complete.completed_at)=='delayed'
+    store.close()
+
+
+def test_recent_legacy_scan_does_not_delay_first_selected_import(database,monkeypatch):
+    from types import SimpleNamespace
+    from db.onlyfans_models import OfRuntime
+    from onlyfans_runtime.content_sync import _queue_vault
+    store,account,_=verified(database,monkeypatch)
+    legacy=queue(store,account,80)
+    monkeypatch.setenv('ONLYFANS_VAULT_RECENT_WINDOW_ENABLED','1')
+    calls=[];provider(monkeypatch,store,{'photo':[],'video':[]},calls)
+    process_vault_jobs(store,TENANT,limit=1)
+    with Session(store.engine) as s:binding=s.get(OfRuntime,account).binding_id
+    claim=SimpleNamespace(account=account,binding_id=binding,connection_revision=1,
+        operation_id='first-selected-import',now=utcnow())
+    assert _queue_vault(store,TENANT,claim,ACTOR)=='queued'
+    assert calls==[]
+    store.close()

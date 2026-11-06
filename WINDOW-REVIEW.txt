@@ -12,8 +12,12 @@ Behaviour
   pages use type=photo/video, field=recent and sort=desc. Each request is clipped
   to the remaining quota. GIF/audio are outside this automatic policy.
 - Keep the current scheduler and resumable vault job. Check fresh heads about
-  every five minutes, including during a long first import. Shared provider
+  every two hours, including during a long first import. Shared provider
   limits, backoff and account connection state can delay that schedule.
+- The initial selected import starts immediately. Its pages keep draining;
+  changing the freshness interval does not space import pages two hours apart.
+  Existing chat, delivery and other source schedules remain unchanged. Selected
+  vault coverage is marked overdue after two missed two-hour intervals.
 - Stop a head check after a full known-page overlap, or its type quota/EOF.
   Recheck the complete selected window about daily to catch changes further in.
 - New uploads enter automatic processing. The oldest ordinary items roll out

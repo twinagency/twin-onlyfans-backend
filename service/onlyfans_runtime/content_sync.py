@@ -437,10 +437,10 @@ def upload_counts(session, account, binding_id):
     return counts
 
 
-def _coverage_state(now, checked, *, partial=False, started=True):
+def _coverage_state(now, checked, *, partial=False, started=True, delayed_seconds=DELAYED_SECONDS):
     if not started or checked is None:
         return "not_started"
-    if (now - checked).total_seconds() > DELAYED_SECONDS:
+    if (now - checked).total_seconds() > delayed_seconds:
         return "delayed"
     return "partial" if partial else "current"
 
@@ -486,14 +486,16 @@ def _vault_coverage(s, account, enabled, now):
         return {"state": state, "checkedAt": None,
             "detail": "Reading the vault." if state == "partial" else "The vault has not been read yet.", "initialImport": initial}
     partial = latest.status == "failed"
-    state = _coverage_state(now, done.completed_at, partial=partial)
+    from vault_import_policy import POLL_SECONDS as vault_poll_seconds
+    delayed = 2 * vault_poll_seconds if done.window_json is not None else DELAYED_SECONDS
+    state = _coverage_state(now, done.completed_at, partial=partial, delayed_seconds=delayed)
     detail = ("The latest vault read failed; showing the last complete read." if partial
         else "The last complete vault read is more than ten minutes old." if state == "delayed"
         else "Vault media is up to date.")
     from vault_import_policy import scope as window_scope
     if done.window_json is not None:
         selected = ("The latest selected-window check failed; showing the last successful check." if partial
-            else "The last selected-window check is more than ten minutes old." if state == "delayed"
+            else "The selected-window check is overdue for the two-hour schedule." if state == "delayed"
             else "Selected recent media has been checked.")
         detail = selected + " This is not a full-vault inventory."
         initial = {**initial, "scope": window_scope()}
@@ -993,9 +995,22 @@ def dispatch_refresh_queue(store, tenant, account, actor):
 
 def _queue_vault(store, tenant, claim, actor):
     from .vault_management import InvalidVault, request_sync
+    from vault_import_policy import enabled as recent_window_enabled, POLL_SECONDS
     with Session(store.engine) as s:
-        latest = s.scalar(select(func.max(OfVaultSyncJob.requested_at)).where(OfVaultSyncJob.account_id == claim.account))
-    if latest is not None and (claim.now - latest).total_seconds() < VAULT_MIN_INTERVAL_SECONDS:
+        if recent_window_enabled():
+            # The first selected import starts immediately, including when an
+            # old uncapped scan was just fenced. Completed checks wait two hours;
+            # the existing worker still drains active jobs without that delay.
+            latest = s.scalar(select(func.max(func.coalesce(
+                OfVaultSyncJob.completed_at, OfVaultSyncJob.requested_at))).where(
+                    OfVaultSyncJob.account_id == claim.account,
+                    OfVaultSyncJob.binding_id == claim.binding_id,
+                    OfVaultSyncJob.window_json.is_not(None)))
+            interval = POLL_SECONDS
+        else:
+            latest = s.scalar(select(func.max(OfVaultSyncJob.requested_at)).where(OfVaultSyncJob.account_id == claim.account))
+            interval = VAULT_MIN_INTERVAL_SECONDS
+    if latest is not None and (claim.now - latest).total_seconds() < interval:
         return "recent"
     try:
         request_sync(store, tenant, claim.account, expected_connection_revision=claim.connection_revision,

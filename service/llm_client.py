@@ -51,6 +51,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING
 from typing import Any
@@ -67,6 +68,12 @@ from llm_providers import (
     telegram_credential)
 
 log = logging.getLogger("of-relay.llm_client")
+
+# Task-local authority for the isolated, account-bound vault caption child.
+# Keep the process role intact while concurrent metadata calls await I/O.
+_vault_caption_account: ContextVar[str | None] = ContextVar("vault_caption_account", default=None)
+_VAULT_CAPTION_MODELS = {"openrouter/qwen3-vl-30b", "qwen3-vl-235b"}
+
 
 # ── Model registry ──────────────────────────────────────────────────────
 # Moved to `llm_models` — WHAT there is to call, next to WHO serves it
@@ -87,6 +94,8 @@ _MILLICENTS_PER_CENT = 100  # internal cost unit: 1 cent = 100 millicents
 BACKGROUND_PURPOSES = frozenset({"gen_info", "describe_media", "describe_flags", "vault_ppv_week_caption", "enrich_persona", "pins_judge"})
 _DEFAULT_CAP_CENTS = 100  # mirrors AccountAiConfig.daily_cost_cap_cents default
 _REQUEST_TIMEOUT_S = 120.0
+# One total wall-clock deadline across all caption HTTP attempts.
+_CAPTION_TOTAL_TIMEOUT_S = 180.0
 
 # Transient-failure retry for the single fire (19 §2 step 4). Every automation
 # funnels through here, and a one-shot POST turned a flaky provider into a
@@ -1030,7 +1039,12 @@ async def chat(
     """
     import os
     if "ONLYFANS_PROCESS_ROLE" in os.environ:
-        raise RuntimeError("Legacy model calls are unavailable in dedicated OnlyFans roles")
+        caption_allowed = (os.environ.get("ONLYFANS_PROCESS_ROLE") == "worker"
+            and _vault_caption_account.get() == account_id
+            and purpose == "describe_media" and model in _VAULT_CAPTION_MODELS
+            and fan_id is None)
+        if not caption_allowed:
+            raise RuntimeError("Legacy model calls are unavailable in dedicated OnlyFans roles")
     mdl, prov = _resolve(model)
     # P2-I7: the trusted Telegram policy gate. The full decision - trusted
     # billing account, enabled purpose, configured model and allowed provider -
@@ -1109,12 +1123,21 @@ async def chat(
     # trip repeats; a permanent failure finalizes and releases exactly once,
     # below, when the attempts run out.
     data = None
+    deadline = time.monotonic() + _CAPTION_TOTAL_TIMEOUT_S if purpose == "describe_media" else None
     for attempt in range(_LLM_MAX_ATTEMPTS):
         last = attempt + 1 >= _LLM_MAX_ATTEMPTS
         t0 = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_S) as client:
-                resp = await client.post(url, headers=headers, json=body)
+                if deadline is None:
+                    resp = await client.post(url, headers=headers, json=body)
+                else:
+                    remaining=deadline-time.monotonic()
+                    if remaining<=0:raise httpx.ReadTimeout("caption total deadline exceeded")
+                    try:
+                        resp=await asyncio.wait_for(client.post(url,headers=headers,json=body),timeout=remaining)
+                    except asyncio.TimeoutError as exc:
+                        raise httpx.ReadTimeout("caption total deadline exceeded") from exc
             latency_ms = int(round((time.monotonic() - t0) * 1000))
             resp.raise_for_status()
             data = resp.json()
@@ -1124,11 +1147,14 @@ async def chat(
             # e.response.text is the provider's error body (not our prompt) → safe to keep.
             snippet = (e.response.text or "")[:500]
             msg = f"{prov.name} HTTP {e.response.status_code}: {snippet}"
-            if e.response.status_code in _RETRYABLE_STATUS and not last:
+            if (e.response.status_code in _RETRYABLE_STATUS and not last
+                    and (deadline is None or time.monotonic()<deadline)):
                 log.warning("llm_client: %s HTTP %s — retry %d/%d model=%s purpose=%s",
                             prov.name, e.response.status_code, attempt + 1,
                             _LLM_MAX_ATTEMPTS, model, purpose)
-                await asyncio.sleep(_LLM_RETRY_BACKOFF_S * (attempt + 1))
+                await asyncio.sleep(min(_LLM_RETRY_BACKOFF_S * (attempt + 1),
+                    max(0.0,deadline-time.monotonic())) if deadline is not None
+                    else _LLM_RETRY_BACKOFF_S * (attempt + 1))
                 continue
             # On an error row, upgrade the receipt to carry the image-redacted
             # body: `error_text` is the PROVIDER's sentence, not ours, so this
@@ -1145,11 +1171,13 @@ async def chat(
             # ValueError = resp.json() on a non-JSON body; a re-fire may get a clean one.
             latency_ms = int(round((time.monotonic() - t0) * 1000))
             msg = f"{prov.name} request error: {type(e).__name__}: {e}"
-            if not last:
+            if not last and (deadline is None or time.monotonic()<deadline):
                 log.warning("llm_client: %s %s — retry %d/%d model=%s purpose=%s latency=%dms",
                             prov.name, type(e).__name__, attempt + 1,
                             _LLM_MAX_ATTEMPTS, model, purpose, latency_ms)
-                await asyncio.sleep(_LLM_RETRY_BACKOFF_S * (attempt + 1))
+                await asyncio.sleep(min(_LLM_RETRY_BACKOFF_S * (attempt + 1),
+                    max(0.0,deadline-time.monotonic())) if deadline is not None
+                    else _LLM_RETRY_BACKOFF_S * (attempt + 1))
                 continue
             await _finalize_call(call_id, status="error", error_text=msg[:2000],
                                  latency_ms=latency_ms,

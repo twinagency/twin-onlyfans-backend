@@ -184,6 +184,7 @@ def commitment_problem(snapshot,decision,texts):
                 # A chat decision is not an accepted custom order or delivery.
                 return 'unsupported_service_commitment'
             sending=any(re.match(r'(?:send|resend)\b',clause[p.end():],re.I) for p in promises) or re.match(r'\s*(?:sending|resending)\b',clause,re.I)
+            if sending and re.fullmatch(r"(?:i(?:'m| am) )?sending (?:you )?(?:good vibes|a virtual hug|hugs|love)",clause,re.I):sending=False
             if sending and decision['action'] not in MEDIA_ACTIONS:
                 return 'delivery_promise_without_action'
             if completed and re.search(r'\b(?:sent|resent)\b',completed.group(),re.I) and not remedy:

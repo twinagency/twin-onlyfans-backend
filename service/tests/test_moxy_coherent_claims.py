@@ -14,6 +14,7 @@ from test_moxy_foundation_authority_regressions import authority_scene, parsed_o
     'I just sent it to you, check your DMs.',
     'sending it again now', "I'll send you the video now.",
     'ill make you a custom video for free', 'I can give you 20% off.',
+    'I want to give you 20% off.', "The card is 'half off'.",
     "I'll refund your payment.", 'I have already issued your refund.',
 ])
 def test_unsupported_commitment_is_a_correctable_claim_not_automatic_handover(text):
@@ -34,6 +35,8 @@ def test_unsupported_commitment_is_a_correctable_claim_not_automatic_handover(te
     ('Can you help with that card?', 'I can check whether a refund is possible.'),
     ('Can you help with that card?', "I haven't sent another card."),
     ('Can you help with that card?', "I won't promise you a discount."),
+    ('Can you help with that card?', 'I can check whether a discount is available.'),
+    ('I am tired.', 'Sending you good vibes.'),
 ])
 def test_ordinary_conversation_and_noncommitments_remain_valid(fan,text):
     settings, snap, _ = authority_scene(fan)

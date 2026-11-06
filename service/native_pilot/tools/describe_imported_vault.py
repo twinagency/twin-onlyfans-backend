@@ -173,15 +173,15 @@ async def run(args):
                     if (kwargs.get("account_id") != args.account or kwargs.get("purpose") != "describe_media"
                         or kwargs.get("model") not in {caption_vault.DEFAULT_MODEL, "qwen3-vl-235b"}):
                         raise Refused("caption model scope unavailable")
-                    # The established caption CLI's legacy bridge is confined
-                    # to this one serial, metadata-only child and purpose.
+                    # Validated authority is task-local; unrelated calls retain
+                    # the worker restriction while this caption awaits I/O.
                     if account_key is not None and kwargs.get('model') != caption_vault.DEFAULT_MODEL:
                         raise Refused('caption fallback provider unavailable')
-                    os.environ.pop("ONLYFANS_PROCESS_ROLE", None)
+                    token=llm_client._vault_caption_account.set(args.account)
                     try:
                         return await legacy_chat(**kwargs)
                     finally:
-                        os.environ["ONLYFANS_PROCESS_ROLE"] = "worker"
+                        llm_client._vault_caption_account.reset(token)
 
                 llm_client.chat = caption_chat
                 from onlyfans_runtime.provider_read_budget import acquire, current, release

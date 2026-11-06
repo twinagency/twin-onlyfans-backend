@@ -41,7 +41,7 @@ def pending(now):
     unlocked = and_(locked.not_like('%"description"%'), locked.not_like('%"video_description"%'))
     blank = and_(func.trim(func.coalesce(VaultItem.description, "")) == "",
         func.trim(func.coalesce(VaultItem.video_description, "")) == "",
-        or_(VaultItem.describe_status.is_(None), failure_retry))
+        or_(VaultItem.describe_status.is_(None), VaultItem.describe_status=='described', failure_retry))
     changed = and_(VaultItem.content_hash.is_not(None), fields.like('%"_content_stamp"%'),
         fields.not_like(literal('%') + stamp + '%'),
         or_(VaultItem.describe_status.in_(("described", "refused")) | VaultItem.describe_status.is_(None), failure_retry))

@@ -82,17 +82,19 @@ def process_request(store,account,key):
                 request=json.loads(row.before_json);tenant=request.pop('tenant');binding=row.binding_id;created=row.created_at
                 result_key=digest([RESULT,key])
                 if s.get(OfLaunchCommand,(account,result_key)) is not None:return
-            state='refused'
+            state='refused';reason='request_expired'
             if utcnow()-created<=timedelta(minutes=5):
                 try:
                     request['command_key']=digest(['delivery_resolution_evidence',key])
-                    asyncio.run(perform(store,tenant,account,**request));state='resolved'
-                except Exception:pass
+                    asyncio.run(perform(store,tenant,account,**request));state='resolved';reason='evidence_reconciled'
+                except Refused:reason='evidence_or_scope_refused'
+                except (TimeoutError,asyncio.TimeoutError):reason='evidence_check_timeout'
+                except Exception:reason='evidence_check_failed'
             with Session(store.engine) as s,s.begin():
                 runtime=store._runtime(s,tenant,account)
                 if runtime.binding_id!=binding:raise Refused('scope unavailable')
                 if s.get(OfLaunchCommand,(account,result_key)) is None:
-                    _record(s,runtime,result_key,RESULT,key,request['actor'],'Worker provider evidence decision',{'requestKey':key},{'recorded':True,'state':state},utcnow())
+                    _record(s,runtime,result_key,RESULT,key,request['actor'],'Worker provider evidence decision',{'requestKey':key},{'recorded':True,'state':state,'reason':reason},utcnow())
         finally:connection.execute(text('SELECT pg_advisory_unlock(:key)'),{'key':lock})
 
 if __name__=='__main__':

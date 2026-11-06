@@ -155,8 +155,8 @@ def price_problem(snapshot, decision, terms=None):
             if _cheapest_card_problem(snapshot, decision, selected, clause):
                 return 'price_claim_mismatch'
             discount=re.search(r'\b(?:half[ -]off|half[ -]price|\d+(?:\.\d+)?\s*%\s*(?:off|discount)|discount(?:ed)?)\b',clause,re.I)
-            if discount and not re.search(r"\b(?:no|not|never|won't|cannot|can't|whether|possible|ask|asking|asked|want)\b",clause[:discount.start()],re.I):
-                if not any(a<=discount.start()<b for a,b,_ in quotes(clause)):
+            if discount and not re.search(r"\b(?:no|not|never|won't|cannot|can't|whether)\b",clause[:discount.start()],re.I):
+                if not _quoted_source(snapshot,clause,discount):
                     return 'unapproved_discount_claim'
             free=re.search(r"\b(?:this|that|the|your)\s+(?:card|photo|pic|video|clip|one)\s+(?:is|'s)\s+free\b|\b(?:send|give|offer)\b.{0,60}\bfor free\b",clause,re.I)
             if free and not re.search(r"\b(?:not|never|won't|can't|cannot|whether)\b",clause[:free.start()],re.I):

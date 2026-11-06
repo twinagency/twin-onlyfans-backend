@@ -2737,7 +2737,7 @@ async def _record_failure(account_id: str, media_id: int, status: str, category:
         item = await s.get(VaultItem, (account_id, media_id), with_for_update=True)
         if item is None:
             return
-        if (item.describe_status == "described" and (item.description or item.video_description)
+        if (item.describe_status == "described" and ((item.description or "").strip() or (item.video_description or "").strip())
                 and not vds.content_changed(item)):
             return
         failure, stamp_at = vds.next_failure(vds.failure_of(item), category, vds.stamp_of(item),
@@ -2800,7 +2800,7 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
     if item is None:
         raise HTTPException(status_code=404, detail={"error": "not_in_mirror", "media_id": media_id})
     if (skip_unchanged and item.describe_status == "described"
-            and (item.description or item.video_description) and not vds.content_changed(item)):
+            and ((item.description or "").strip() or (item.video_description or "").strip()) and not vds.content_changed(item)):
         return {"media_id": media_id, "ok": True, "status": "unchanged", "skipped": True,
                 "cost_millicents": 0}
     raw = load_json(item.raw_json, {}) or {}

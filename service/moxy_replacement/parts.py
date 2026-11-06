@@ -145,8 +145,13 @@ def index(event):
 
 
 def active(event):
-    original=json.loads(event.decision_json)
-    values=plan(original);position=index(event)
+    return emission(json.loads(event.decision_json),index(event))
+
+
+def emission(original,position):
+    """Project only wire/action effects; the immutable plan owns claim context."""
+    values=plan(original)
+    if type(position) is not int or position<0:raise ActionBlocked('invalid_message_position')
     if position>=len(values):raise ActionBlocked('message_plan_complete')
     part=values[position];result=deepcopy(original)
     result.pop('messages',None)

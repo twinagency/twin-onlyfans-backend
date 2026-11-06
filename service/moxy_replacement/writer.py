@@ -242,10 +242,11 @@ def parse(raw, *, defer_sales_pause=False):
     except (ValueError,TypeError) as exc: raise ActionBlocked('invalid_model_json') from exc
     optional={'request_kind','request_quote','messages','observations','unanswered_input_ids'}
     keys={'action','text','product_id','sequence','flags','reason','permission','question','resolve_obligation'}
-    if (type(value) is not dict or not keys<=set(value) or not set(value)<=keys|optional or value['action'] not in ACTIONS
+    if (type(value) is not dict or not keys<=set(value) or not set(value)<=keys|optional
+        or type(value['action']) is not str or value['action'] not in ACTIONS
         or type(value['text']) is not str or len(value['text'].encode())>12000
         or type(value['reason']) is not str or not 0<len(value['reason'])<=2000
-        or type(value['flags']) is not list or any(x not in FLAGS for x in value['flags'])
+        or type(value['flags']) is not list or any(type(x) is not str or x not in FLAGS for x in value['flags'])
         or any(v is not None and (type(v) is not str or not v or len(v)>2000)
                for v in (value[k] for k in ('product_id','sequence','permission','question','resolve_obligation')))):
         raise ActionBlocked('invalid_model_decision')
@@ -274,7 +275,7 @@ def parse(raw, *, defer_sales_pause=False):
         # The ordered message plan is what is sent; the summary text field is derived from it.
         value['text']=msgs[0]['text']
     kind=value.get('request_kind','none');quote=value.get('request_quote')
-    if kind not in {'none','direct','resend','accept'} or (quote is not None and (type(quote) is not str or not quote or len(quote)>2000)):
+    if type(kind) is not str or kind not in {'none','direct','resend','accept'} or (quote is not None and (type(quote) is not str or not quote or len(quote)>2000)):
         raise ActionBlocked('invalid_request_evidence')
     # A missing quote is an action-evidence defect, not malformed JSON. Keep
     # this structurally valid plan for ordinary validation and one correction.
@@ -305,6 +306,6 @@ def parse(raw, *, defer_sales_pause=False):
         text=part['text']
         if denies_automation(text) or discloses_ai(text) or echoes_instruction(text):
             raise ActionBlocked('untruthful_identity_or_instruction_leak')
-        if '<' in text or 'http://' in text or 'https://' in text:
+        if __import__('re').search(r'<\s*(?:/?[A-Za-z]|!|\?)|https?://',text,__import__('re').I):
             raise ActionBlocked('unsupported_output_markup_or_link')
     return value

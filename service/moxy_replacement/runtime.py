@@ -450,7 +450,8 @@ RECOVERABLE_REASONS|=FACTUAL_REASONS|{'product_request_mismatch'}
 # Unusable output for the same input gets one bounded correction before internal operator attention.
 FORMAT_REASONS={'invalid_model_json','invalid_model_decision','invalid_message_plan','invalid_message_part',
     'message_plan_media_mismatch','message_plan_text_mismatch','empty_model_reply','duplicate_model_key',
-    'invalid_request_evidence','unsupported_output_markup_or_link','handover_must_not_have_messages'}
+    'invalid_request_evidence','unsupported_output_markup_or_link','handover_must_not_have_messages',
+    'handover_must_not_reply','untruthful_identity_or_instruction_leak','owned_handover_required'}
 
 
 def recoverable(reason):
@@ -719,7 +720,14 @@ def correction_brief(reason,result,snap):
     return brief
 
 
-def validate_decision(settings,snap,decision,*,planning=False):
+def validate_decision(settings,snap,decision,*,planning=False,part_index=None):
+    # One immutable plan supplies meaning, product claims and prices. Only its
+    # current emission supplies wire effects. A text preamble/tail must never
+    # become an unrelated product-less decision, nor send the card a second time.
+    claim_decision=decision
+    if part_index is not None:
+        from .parts import emission
+        decision=emission(decision,part_index)
     from .pilot import decision as pilot_decision
     pilot_decision(settings,snap,decision)
     rejected=snap.get('event',{}).get('payload',{}).get('rejected')
@@ -832,7 +840,7 @@ def validate_decision(settings,snap,decision,*,planning=False):
             terms=snap['inventory'][key] if action!='invite' else None
     elif key is not None:raise ActionBlocked('unexpected_product_reference')
     from .price_assertions import price_problem
-    monetary_problem=price_problem(snap,decision,terms)
+    monetary_problem=price_problem(snap,claim_decision,terms)
     if monetary_problem:raise ActionBlocked(monetary_problem)
     if decision['resolve_obligation']:
         owed=next((o for o in snap['obligations'] if o['id']==decision['resolve_obligation'] and o.get('status')=='open'),None)
@@ -857,7 +865,7 @@ def validate_decision(settings,snap,decision,*,planning=False):
         except ActionBlocked:sexting_allowed=False
         if not sexting_allowed:raise ActionBlocked('sexting_permission_unverified')
     # Wording is judged last: a product failure always takes precedence over a wording failure.
-    problem=wording_problem(snap,decision)
+    problem=wording_problem(snap,claim_decision)
     if problem:raise ActionBlocked(problem)
     return terms
 
@@ -1077,20 +1085,28 @@ class MoxyService:
             if event.snapshot_hash!=digest(snapshot(s,account,event.fan_id,event)):
                 event.status='stale';event.reason='moxy_snapshot_changed';return event_id
             if reason:
-                event.status='unknown' if reason.endswith('unknown') else 'held';event.reason=reason
-                payload=json.loads(event.payload_json)
-                if (event.status=='held' and not payload.get('correction_of') and owner.mode=='on' and event.kind in {'turn','welcome'}
-                        and payload.get('source_message_id') and reason in FORMAT_REASONS):
-                    enqueue(s,account,event.fan_id,event.kind,'correction:'+event_id,
-                        {'source_message_id':payload['source_message_id'],'correction_of':event_id,
-                         'rejected':{'reason':reason[:120],'kind':'format','action':None,'product_id':None,
-                                     'fan_message':_latest_fan_text(snap)}})
-                if event.status=='held' and payload.get('correction_of') and owner.mode=='on':
-                    self._correction_exhausted(s,owner,event,reason)
-                diagnose(s,account,'generation_outcome',event=event)
+                self._generation_failure(s,owner,event,snap,reason)
                 return event_id
             self._finish_decision(s,owner,event,snap,result)
         return event_id
+
+    def _generation_failure(self,s,owner,event,snap,reason):
+        """Same disposition before/after restart; never retry uncertain usage."""
+        event.status='unknown' if reason.endswith('unknown') else 'held'
+        event.reason=reason[:128];event.lease_until=None
+        payload=json.loads(event.payload_json)
+        if event.status=='held' and owner.mode=='on':
+            if payload.get('correction_of'):
+                self._correction_exhausted(s,owner,event,reason)
+            elif (event.kind in {'turn','welcome'} and payload.get('source_message_id')
+                    and reason in FORMAT_REASONS):
+                enqueue(s,event.account_id,event.fan_id,event.kind,'correction:'+event.event_id,
+                    {'source_message_id':payload['source_message_id'],'correction_of':event.event_id,
+                     'rejected':{'reason':reason[:120],'kind':'format','action':None,'product_id':None,
+                                 'fan_message':_latest_fan_text(snap)}})
+            else:
+                self._technical_attention(s,owner,event)
+        diagnose(s,event.account_id,'generation_outcome',event=event)
 
     def _finish_decision(self,s,owner,event,snap,result):
         account,event_id=event.account_id,event.event_id
@@ -1232,8 +1248,7 @@ class MoxyService:
                     else:
                         try:result=writer.parse(proof['raw'],defer_sales_pause=True)
                         except ActionBlocked as exc:
-                            event.status='held';event.reason='moxy_technical_failure:'+str(exc)[:100]
-                            self._technical_attention(s,owner,event)
+                            self._generation_failure(s,owner,event,fresh,str(exc))
                         else:self._finish_decision(s,owner,event,fresh,result)
                     diagnose(s,account,'generation_recovered',event=event)
                     continue
@@ -1254,7 +1269,8 @@ class MoxyService:
             if event.status!='ready':raise Refused('moxy_decision_not_ready')
             from .parts import active, index
             d=active(event);snap=json.loads(event.snapshot_json)
-            terms=validate_decision(json.loads(s.get(MoxyAccount,account).settings_json),snap,d)
+            terms=validate_decision(json.loads(s.get(MoxyAccount,account).settings_json),snap,
+                json.loads(event.decision_json),part_index=index(event))
             control=s.get(OfConversationState,(account,event.fan_id));fan=event.fan_id
             body=d['text'];revision=control.revision
             # A proved rejection is retained as its own immutable attempt. A
@@ -1334,17 +1350,36 @@ class MoxyService:
         from copy import copy
         def prepare_one(identity):
             invocation=model.fork() if hasattr(model,'fork') else copy(model)
-            self.prepare(tenant,account,identity,invocation)
-            with Session(self.engine) as s,s.begin():
-                self.store._runtime(s,tenant,account)
-                e=s.get(MoxyEvent,(account,identity))
-                if e.status in {'held','stale','done'}:
-                    from .campaigns import retire
-                    retire(s,e)
-            try:self.queue(tenant,account,identity);return 1
-            except Refused:return 0
+            try:
+                self.prepare(tenant,account,identity,invocation)
+                self.queue(tenant,account,identity)
+                return 1
+            except Refused:
+                return 0
+            except (ActionBlocked,InvalidConfiguration) as exc:
+                # A deterministic preparation rejection must leave the ready
+                # queue. Never alter an admitted/unknown intent in this handler.
+                with Session(self.engine) as s,s.begin():
+                    self.store._runtime(s,tenant,account)
+                    e=s.get(MoxyEvent,(account,identity))
+                    if e.status in {'pending','ready'}:
+                        e.status='held';e.reason=str(exc)[:128];e.lease_until=None
+                        self._technical_attention(s,s.get(MoxyAccount,account),e)
+                        diagnose(s,account,'preparation_refused',event=e)
+                return 0
+            finally:
+                self._retire_finished(tenant,account,identity)
+
         with ThreadPoolExecutor(max_workers=min(4,len(ids) or 1)) as pool:
             return sum(pool.map(prepare_one,ids))
+
+    def _retire_finished(self,tenant,account,identity):
+        with Session(self.engine) as s,s.begin():
+            self.store._runtime(s,tenant,account)
+            e=s.get(MoxyEvent,(account,identity))
+            if e.status in {'held','stale','done'}:
+                from .campaigns import retire
+                retire(s,e)
 
 
 def surface_campaign_recovery(s,account,owner):

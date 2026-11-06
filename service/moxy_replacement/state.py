@@ -40,7 +40,12 @@ def referenced_card(snapshot,text,*,allow_current=True):
     latest=incoming[-1].get('text','') if incoming else ''
     present,card=explicit(latest)
     if present:return card
-    if len(cards)==1 and re.search(r'\b(?:card|that|it|this)\b',latest,re.I):return cards[0]
+    if re.search(r'\b(?:card|that|it|this)\b',latest+' '+text,re.I):
+        # Repeated deliveries of one item at identical terms are not different
+        # price/content answers. Explicit IDs above still retain their identity.
+        terms={(c.get('product_id'),c.get('price_cents'),c.get('currency') or 'USD') for c in cards}
+        if len(cards)==1:return cards[0]
+        if len(terms)==1 and cards and cards[-1].get('product_id') is not None:return cards[-1]
     return None
 
 

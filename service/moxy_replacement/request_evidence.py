@@ -212,7 +212,7 @@ def _target_is_unique(part, product_id, snapshot):
     body = re.sub(r'^\s*to\s+(?:see|get|buy|receive)\s+', '', part[match.end():], flags=re.I)
     object_tokens = set(re.findall(r'[a-z0-9]+', body.lower()))
     grammar = {'a','an','the','this','that','one','item','items','it','me','my','your','you','of','to',
-               'please','now','instead','again','too','also'}
+               'please','now','instead','again','too','also','same','exact'}
     kinds = {'photo','photos','picture','pictures','pic','pics','image','images',
              'video','videos','clip','clips','card','cards','content','set','bundle'}
     explicit = set()
@@ -276,7 +276,7 @@ def _resend_target_is_unique(part, product_id, snapshot):
     # A bare "send it again" refers to an old card only when the old target is
     # unique. Unknown or unmapped cards cannot be silently ignored.
     generic = {'me', 'us', 'it', 'that', 'this', 'one', 'the', 'card', 'item', 'again',
-               'please', 'now', 'same', 'too'}
+               'please', 'now', 'same', 'exact', 'too'}
     unknown = any(c.get('product_id') not in products for c in cards)
     if tokens <= generic and (re.search(r'\b(?:re-?send|again)\b', part, re.I)):
         return not unknown and state.get('exposure_history_verified') is not False and previous == {product_id}

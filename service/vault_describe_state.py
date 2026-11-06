@@ -35,6 +35,13 @@ MAX_BACKOFF = timedelta(hours=12)
 POSTER_MIN_FRAMES = 3
 
 
+def has_description(item) -> bool:
+    """Nonblank operator-effective text; metadata flags alone are insufficient."""
+    from vault_ai_effective import effective_value
+    return any(isinstance(v, str) and bool(v.strip()) for v in
+               (effective_value(item, 'description'), effective_value(item, 'video_description')))
+
+
 def stamp_of(item) -> str | None:
     h = getattr(item, "content_hash", None)
     if not h:

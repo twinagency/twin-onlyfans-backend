@@ -440,7 +440,7 @@ def _overlay(item: VaultItem, manual_order: int | None = None) -> dict[str, Any]
     except Exception:  # noqa: BLE001
         base = {"id": item.media_id, "type": item.kind}
     base["_ai"] = {
-        "describe_status": item.describe_status,
+        "describe_status": description_status(item),
         "description": item.description,
         "video_description": item.video_description,
         "tags": load_json(item.tags, []),
@@ -465,7 +465,7 @@ def _overlay(item: VaultItem, manual_order: int | None = None) -> dict[str, Any]
             k: v for k, v in ai.items()
             # `description`/`tags` are already served from their columns (which
             # carry any operator override); don't shadow them with the raw AI value.
-            if k not in ("description", "tags")
+            if k not in ("description", "tags", "describe_status")
         }
     # Stable, signature-free cached-thumb URL (self-heals on miss). Frontend
     # prefers this over the expiring OF url so tiles never break.
@@ -2737,7 +2737,7 @@ async def _record_failure(account_id: str, media_id: int, status: str, category:
         item = await s.get(VaultItem, (account_id, media_id), with_for_update=True)
         if item is None:
             return
-        if (item.describe_status == "described" and (item.description or item.video_description)
+        if (item.describe_status == "described" and vds.has_description(item)
                 and not vds.content_changed(item)):
             return
         failure, stamp_at = vds.next_failure(vds.failure_of(item), category, vds.stamp_of(item),
@@ -2800,7 +2800,7 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
     if item is None:
         raise HTTPException(status_code=404, detail={"error": "not_in_mirror", "media_id": media_id})
     if (skip_unchanged and item.describe_status == "described"
-            and (item.description or item.video_description) and not vds.content_changed(item)):
+            and vds.has_description(item) and not vds.content_changed(item)):
         return {"media_id": media_id, "ok": True, "status": "unchanged", "skipped": True,
                 "cost_millicents": 0}
     raw = load_json(item.raw_json, {}) or {}
@@ -2872,13 +2872,13 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
         used_model = attempt_model
         if not vision.is_refusal(result.content):
             parsed = _parse_describe(result.content)
-            if parsed.get("description") or parsed.get("tags"):
+            if isinstance(parsed.get("description"), str) and parsed["description"].strip():
                 data = parsed
                 break
         if attempt_model == "qwen3-vl-235b":
             break  # escalation also failed
 
-    if not (data.get("description") or data.get("tags")):
+    if not data:
         await _record_failure(account_id, media_id, "refused", "model", scope_guard=scope_guard,
                               model=used_model, call_id=(result.call_id if result else None))
         return {"media_id": media_id, "ok": False, "status": "refused", "category": "model",
@@ -2886,7 +2886,7 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
                 "raw": (result.content if result else "" or "")[:200]}
 
     tags = [str(t).lower().strip() for t in (data.get("tags") or []) if str(t).strip()][:12]
-    desc = str(data.get("description") or "")
+    desc = data["description"].strip()
     tier = data.get("explicitness")  # sfw|suggestive|explicit|hardcore
     nsfw = bool(data.get("nsfw")) if data.get("nsfw") is not None else None
     sellable = bool(data.get("sellable")) if data.get("sellable") is not None else None
@@ -3656,7 +3656,7 @@ async def reject_review_items(payload: dict = Body(...)) -> dict[str, Any]:
 # rerun's is_locked() skips it (see _describe_one's locked-skip). We read the
 # result back ONLY through effective_value(), never the raw column.
 
-from vault_ai_effective import effective_value, locked_fields as _locked_fields  # noqa: E402
+from vault_ai_effective import description_status, effective_value, locked_fields as _locked_fields  # noqa: E402
 
 # The only fields the editor may override+lock. `tags` is stored as a JSON list;
 # every other field is free text.
@@ -3696,7 +3696,7 @@ def _item_edit_view(item: VaultItem, locked: list[str]) -> dict[str, Any]:
         "suggested_caption": effective_value(item, "suggested_caption"),
         "suggested_script": effective_value(item, "suggested_script"),
         "suggested_price_cents": effective_value(item, "suggested_price_cents"),
-        "describe_status": item.describe_status,
+        "describe_status": description_status(item),
         "locked_fields": locked,
     }
 

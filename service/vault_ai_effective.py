@@ -133,3 +133,24 @@ def project_operator_text(field, raw, overrides, locked, columns):
     locked.add(field)
     columns[field]=json.dumps(value) if field=="tags" else value
     return value
+
+
+def description_status(item: Any) -> str | None:
+    """Report legacy empty successes honestly without rewriting verification evidence.
+
+    Folder-only review does not reject a nonblank description. Rejected text
+    and intentional human blanks need review; an accidental blank is pending.
+    """
+    status = getattr(item, "describe_status", None)
+    if status != "described":
+        return status
+    if any(isinstance(v, str) and v.strip() for v in
+           (effective_value(item, "description"), effective_value(item, "video_description"))):
+        return status
+    fields = ai_fields(item)
+    receipt = fields.get("_folder_evidence_v1") if isinstance(fields, dict) else None
+    rejected = isinstance(receipt, dict) and isinstance(receipt.get("rejected_analysis"), dict)
+    if (rejected or getattr(item, "review_state", None) == "needs_review"
+            or locked_fields(item) & {"description", "video_description"}):
+        return "needs_review"
+    return "pending"

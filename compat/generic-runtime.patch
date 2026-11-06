@@ -1,0 +1,171 @@
+--- a/service/vault_ai_api.py
++++ b/service/vault_ai_api.py
+@@ -440,7 +440,7 @@
+     except Exception:  # noqa: BLE001
+         base = {"id": item.media_id, "type": item.kind}
+     base["_ai"] = {
+-        "describe_status": item.describe_status,
++        "describe_status": description_status(item),
+         "description": item.description,
+         "video_description": item.video_description,
+         "tags": load_json(item.tags, []),
+@@ -465,7 +465,7 @@
+             k: v for k, v in ai.items()
+             # `description`/`tags` are already served from their columns (which
+             # carry any operator override); don't shadow them with the raw AI value.
+-            if k not in ("description", "tags")
++            if k not in ("description", "tags", "describe_status")
+         }
+     # Stable, signature-free cached-thumb URL (self-heals on miss). Frontend
+     # prefers this over the expiring OF url so tiles never break.
+@@ -2784,13 +2784,14 @@
+         used_model = attempt_model
+         if not vision.is_refusal(result.content):
+             parsed = _parse_describe(result.content)
+-            if parsed.get("description") or parsed.get("tags"):
++            description = parsed.get("description")
++            if isinstance(description, str) and description.strip():
+                 data = parsed
+                 break
+         if attempt_model == verifier_model:
+             break  # escalation also failed
+ 
+-    if not (data.get("description") or data.get("tags")):
++    if not data:
+         async with get_session() as s:
+             if scope_guard is not None:
+                 await scope_guard(s, media_id, phase="write")
+@@ -2807,27 +2808,25 @@
+ 
+     if accurate:
+         candidates = proposals(data, kind=item.kind, source=source, frame_count=len(got.images))
+-        verification = {}
+-        if candidates:
+-            check_content = [{"type": "text", "text": verification_prompt(candidates, item.kind)
+-                + "\nDescription to check: " + str(data.get("description") or "")[:2000]}]
+-            check_content += [{"type": "image_url", "image_url": {"url": u}} for u in got.images]
+-            try:
+-                checked = await llm_client.chat(model=verifier_model,
+-                    messages=[{"role": "user", "content": check_content}], purpose="describe_media",
+-                    account_id=account_id, temperature=0.0)
+-                verification = _parse_describe(checked.content)
+-            except LLMCapExceeded:
+-                return {"media_id": media_id, "ok": False, "status": "capped"}
+-            except LLMError:
+-                # Do not publish the first pass as verified when checking failed.
+-                async with get_session() as s:
+-                    if scope_guard is not None:
+-                        await scope_guard(s, media_id, phase="write")
+-                    await s.execute(update(VaultItem).where(VaultItem.account_id == account_id,
+-                        VaultItem.media_id == media_id).values(describe_status="failed", describe_generated_at=datetime.utcnow()))
+-                    await s.commit()
+-                return {"media_id": media_id, "ok": False, "status": "verification_pending"}
++        check_content = [{"type": "text", "text": verification_prompt(candidates, item.kind)
++            + "\nDescription to check: " + str(data.get("description") or "")[:2000]}]
++        check_content += [{"type": "image_url", "image_url": {"url": u}} for u in got.images]
++        try:
++            checked = await llm_client.chat(model=verifier_model,
++                messages=[{"role": "user", "content": check_content}], purpose="describe_media",
++                account_id=account_id, temperature=0.0)
++            verification = _parse_describe(checked.content)
++        except LLMCapExceeded:
++            return {"media_id": media_id, "ok": False, "status": "capped"}
++        except LLMError:
++            # Do not publish the first pass as verified when checking failed.
++            async with get_session() as s:
++                if scope_guard is not None:
++                    await scope_guard(s, media_id, phase="write")
++                await s.execute(update(VaultItem).where(VaultItem.account_id == account_id,
++                    VaultItem.media_id == media_id).values(describe_status="failed", describe_generated_at=datetime.utcnow()))
++                await s.commit()
++            return {"media_id": media_id, "ok": False, "status": "verification_pending"}
+         data[CATEGORY_KEY] = receipt(data, verification, got.images, account=account_id,
+             media_id=media_id, kind=item.kind, source=source)
+         if verification.get("description_accurate") is not True:
+@@ -2839,7 +2838,8 @@
+             data[CATEGORY_KEY]["metadata_digest"] = metadata_digest(data)
+ 
+     tags = [str(t).lower().strip() for t in (data.get("tags") or []) if str(t).strip()][:12]
+-    desc = str(data.get("description") or "")
++    desc = str(data.get("description") or "").strip()
++    description_status = "described" if desc else "needs_review"
+     tier = data.get("explicitness")  # sfw|suggestive|explicit|hardcore
+     nsfw = bool(data.get("nsfw")) if data.get("nsfw") is not None else None
+     sellable = bool(data.get("sellable")) if data.get("sellable") is not None else None
+@@ -2895,7 +2895,7 @@
+         else:
+             data[key] = val
+     vals: dict[str, Any] = {
+-        "describe_status": "described",
++        "describe_status": description_status,
+         "describe_model": used_model,
+         "describe_call_id": result.call_id if result else None,
+         "describe_generated_at": datetime.utcnow(),
+@@ -2951,7 +2951,7 @@
+     except Exception:
+         log.exception("automatic folders failed account=%s media=%s", account_id, media_id)
+     return {
+-        "media_id": media_id, "ok": True, "status": "described",
++        "media_id": media_id, "ok": bool(desc), "status": description_status,
+         "description": desc, "tags": tags,
+         "explicitness_tier": str(tier) if tier else None,
+         "nsfw": nsfw, "sellable": sellable,
+@@ -3611,7 +3611,7 @@
+ # rerun's is_locked() skips it (see _describe_one's locked-skip). We read the
+ # result back ONLY through effective_value(), never the raw column.
+ 
+-from vault_ai_effective import effective_value, locked_fields as _locked_fields  # noqa: E402
++from vault_ai_effective import description_status, effective_value, locked_fields as _locked_fields  # noqa: E402
+ 
+ # The only fields the editor may override+lock. `tags` is stored as a JSON list;
+ # every other field is free text.
+@@ -3651,7 +3651,7 @@
+         "suggested_caption": effective_value(item, "suggested_caption"),
+         "suggested_script": effective_value(item, "suggested_script"),
+         "suggested_price_cents": effective_value(item, "suggested_price_cents"),
+-        "describe_status": item.describe_status,
++        "describe_status": description_status(item),
+         "locked_fields": locked,
+     }
+ 
+--- a/service/native_pilot/tools/describe_imported_vault.py
++++ b/service/native_pilot/tools/describe_imported_vault.py
+@@ -256,7 +256,10 @@
+                         return
+                     result = await api._describe_one(args.account, media_id, model=caption_vault.DEFAULT_MODEL,
+                         prompt_version="v3", scope_guard=guard)
+-                    summary["described" if result.get("ok") else "failed"] += 1
++                    if result.get("status") == "needs_review":
++                        summary["needsReview"] = summary.get("needsReview", 0) + 1
++                    else:
++                        summary["described" if result.get("ok") else "failed"] += 1
+                     if result.get("status") == "capped":
+                         summary["state"] = "budget_paused"
+                         capped.set()
+--- a/service/vault_ai_effective.py
++++ b/service/vault_ai_effective.py
+@@ -133,3 +133,24 @@
+     locked.add(field)
+     columns[field]=json.dumps(value) if field=="tags" else value
+     return value
++
++
++def description_status(item: Any) -> str | None:
++    """Report legacy empty successes honestly without rewriting verification evidence.
++
++    Folder-only review does not reject a nonblank description. Rejected text
++    and intentional human blanks need review; an accidental blank is pending.
++    """
++    status = getattr(item, "describe_status", None)
++    if status != "described":
++        return status
++    if any(isinstance(v, str) and v.strip() for v in
++           (effective_value(item, "description"), effective_value(item, "video_description"))):
++        return status
++    fields = ai_fields(item)
++    receipt = fields.get("_folder_evidence_v1") if isinstance(fields, dict) else None
++    rejected = isinstance(receipt, dict) and isinstance(receipt.get("rejected_analysis"), dict)
++    if (rejected or getattr(item, "review_state", None) == "needs_review"
++            or locked_fields(item) & {"description", "video_description"}):
++        return "needs_review"
++    return "pending"

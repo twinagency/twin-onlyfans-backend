@@ -445,23 +445,52 @@ def _coverage_state(now, checked, *, partial=False, started=True):
     return "partial" if partial else "current"
 
 
+def _initial_vault_import(s, account, enabled, now):
+    """Read-only onboarding progress, separate from approved product eligibility.
+
+    Use the current binding's original connection time. Credential renewal,
+    refresh jobs and restarts cannot move the 24-hour checkpoint forward.
+    """
+    binding = s.scalar(select(OfCreatorBinding).join(OfRuntime,
+        OfRuntime.binding_id == OfCreatorBinding.id).where(
+            OfRuntime.account_id == account, OfCreatorBinding.revoked_at.is_(None)))
+    if binding is None:
+        return {"state": "not_started", "startedAt": None, "completedAt": None,
+                "checkpointHours": 24, "needsAttention": False}
+    completed = s.scalar(select(func.min(OfVaultSyncJob.completed_at)).where(
+        OfVaultSyncJob.account_id == account, OfVaultSyncJob.binding_id == binding.id,
+        OfVaultSyncJob.status == "complete"))
+    due = bool(enabled and completed is None and now - binding.created_at >= timedelta(hours=24))
+    return {"state": "complete" if completed else "paused" if not enabled else
+                    "needs_attention" if due else "in_progress",
+            "startedAt": _date(binding.created_at), "completedAt": _date(completed),
+            "checkpointHours": 24, "needsAttention": due}
+
+
 def _vault_coverage(s, account, enabled, now):
+    initial = _initial_vault_import(s, account, enabled, now)
     if not enabled:
-        return {"state": "not_started", "checkedAt": None, "detail": "Automatic sync is off."}
-    jobs = s.scalars(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account)
+        return {"state": "not_started", "checkedAt": None, "detail": "Automatic sync is off.", "initialImport": initial}
+    jobs = s.scalars(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
+        OfVaultSyncJob.binding_id == select(OfRuntime.binding_id).where(OfRuntime.account_id == account).scalar_subquery())
         .order_by(OfVaultSyncJob.requested_at.desc()).limit(10)).all()
     done = next((j for j in jobs if j.status == "complete"), None)
+    if done is None and initial["state"] == "complete":
+        done = s.scalar(select(OfVaultSyncJob).where(
+            OfVaultSyncJob.account_id == account,
+            OfVaultSyncJob.binding_id == select(OfRuntime.binding_id).where(OfRuntime.account_id == account).scalar_subquery(),
+            OfVaultSyncJob.status == "complete").order_by(OfVaultSyncJob.completed_at.desc()).limit(1))
     latest = jobs[0] if jobs else None
     if done is None:
         state = "partial" if latest is not None and latest.status in {"pending", "running"} else "not_started"
         return {"state": state, "checkedAt": None,
-            "detail": "Reading the vault." if state == "partial" else "The vault has not been read yet."}
+            "detail": "Reading the vault." if state == "partial" else "The vault has not been read yet.", "initialImport": initial}
     partial = latest.status == "failed"
     state = _coverage_state(now, done.completed_at, partial=partial)
     detail = ("The latest vault read failed; showing the last complete read." if partial
         else "The last complete vault read is more than ten minutes old." if state == "delayed"
         else "Vault media is up to date.")
-    return {"state": state, "checkedAt": _date(done.completed_at), "detail": detail}
+    return {"state": state, "checkedAt": _date(done.completed_at), "detail": detail, "initialImport": initial}
 
 
 def _posts_coverage(row, enabled, now, progress=None):

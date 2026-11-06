@@ -261,8 +261,7 @@ async def run(args):
                         await guard(session, media_id)
                         item = await session.get(VaultItem, (args.account, media_id))
                         if ("description" in locked_fields(item) or "video_description" in locked_fields(item)
-                            or ((effective_value(item, "description") or effective_value(item, "video_description"))
-                                and not vds.content_changed(item))):
+                            or (vds.has_description(item) and not vds.content_changed(item))):
                             summary["skipped"] += 1
                             continue
                     preview_ready = await warm_preview(media_id)

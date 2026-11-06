@@ -50,7 +50,8 @@ def pending(now):
     changed = and_(VaultItem.content_hash.is_not(None), fields.like('%"_content_stamp"%'),
         fields.not_like(literal('%') + stamp + '%'),
         or_(VaultItem.describe_status.in_(("described", "refused")) | VaultItem.describe_status.is_(None), failure_retry))
-    return and_(VaultItem.removed_at.is_(None), VaultItem.kind.in_(("photo", "video")),
+    from vault_import_policy import automatic_window
+    return and_(automatic_window(), VaultItem.removed_at.is_(None), VaultItem.kind.in_(("photo", "video")),
         unlocked, ~exhausted_now,
         or_(VaultItem.review_state.is_(None), VaultItem.review_state != "needs_review"),
         or_(blank, changed))

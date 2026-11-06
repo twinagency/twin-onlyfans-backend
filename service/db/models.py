@@ -883,6 +883,7 @@ class VaultItem(Base):
     script_reversed: Mapped[bool | None] = mapped_column(Boolean)
 
     __table_args__ = (
+        Index("ix_vault_recent_window", "account_id", "kind", "created_at", "media_id", info={"onlyfans_since": "0112_vault_recent_window"}),
         Index("ix_vault_account_created", "account_id", "created_at"),
         Index("ix_vault_account_send", "account_id", "send_count"),
         Index("ix_vault_account_seen", "account_id", "last_seen_run_id"),

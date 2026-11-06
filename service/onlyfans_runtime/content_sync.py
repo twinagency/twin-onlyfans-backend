@@ -490,6 +490,13 @@ def _vault_coverage(s, account, enabled, now):
     detail = ("The latest vault read failed; showing the last complete read." if partial
         else "The last complete vault read is more than ten minutes old." if state == "delayed"
         else "Vault media is up to date.")
+    from vault_import_policy import scope as window_scope
+    if done.window_json is not None:
+        selected = ("The latest selected-window check failed; showing the last successful check." if partial
+            else "The last selected-window check is more than ten minutes old." if state == "delayed"
+            else "Selected recent media has been checked.")
+        detail = selected + " This is not a full-vault inventory."
+        initial = {**initial, "scope": window_scope()}
     return {"state": state, "checkedAt": _date(done.completed_at), "detail": detail, "initialImport": initial}
 
 

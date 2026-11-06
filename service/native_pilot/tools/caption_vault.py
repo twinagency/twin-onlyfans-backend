@@ -57,6 +57,8 @@ async def candidates(api, account: str, limit: int, *, fresh_only: bool = False,
         VaultItem.account_id == account, VaultItem.removed_at.is_(None),
         VaultItem.kind.in_(api._DESCRIBABLE_KINDS),
     )
+    from vault_import_policy import automatic_window
+    stmt = stmt.where(automatic_window())
     if fresh_only:
         stmt = stmt.where(VaultItem.describe_status.is_(None))
     else:

@@ -1,0 +1,70 @@
+Vault rolling window: 1,500 photos and 700 videos per creator
+6 November 2026
+
+Status
+Implemented as a review candidate on Work Server, based on description repair
+b3ed58b84535b71c3ddac0492933a38441f587ae. Production has not been changed and no
+paid descriptions or customer messages have been initiated by this work.
+
+Behaviour
+- Initially read the newest 1,500 photos and newest 700 videos, independently.
+  Creators with fewer items contribute only what is available. Native typed
+  pages use type=photo/video, field=recent and sort=desc. Each request is clipped
+  to the remaining quota. GIF/audio are outside this automatic policy.
+- Keep the current scheduler and resumable vault job. Check fresh heads about
+  every five minutes, including during a long first import. Shared provider
+  limits, backoff and account connection state can delay that schedule.
+- Stop a head check after a full known-page overlap, or its type quota/EOF.
+  Recheck the complete selected window about daily to catch changes further in.
+- New uploads enter automatic processing. The oldest ordinary items roll out
+  of the automatic window. Background description selection and preview warming
+  use the same scope. Automatic batches favour recent media when enabled.
+- Keep existing human edits, valid descriptions, verification rejections,
+  attempt ceilings and provider deadlines. Do not treat an import checkpoint
+  as proof every description is verified or every item is ready to sell.
+- Keep approved older products eligible through the existing evidence/approval
+  rules. Prices, sent cards, purchases and delivery authority are unchanged.
+  Description/evidence changes still require the existing explicit reapproval.
+
+Storage and costs
+This is an automatic import/analysis window, not a hard count of every retained
+database row or a byte storage limit. Historical metadata and existing cached
+previews are preserved; neither original OnlyFans content nor historical sales
+are deleted. Explicit operator requests may still retrieve an older approved
+asset. A separate measured cache-retention policy would be needed for a hard
+disk budget; this change does not silently delete cache files.
+
+Describing 1,500 previously undescribed photos plus 700 previously undescribed
+videos is estimated at about US$3.43-5.48 using the observed historical caption
+and verification costs, excluding storage, conversation use and additional
+retries. This is an estimate, not an approved spend or guaranteed price.
+Existing reusable descriptions lower the initial bill. Future uploads add
+their own analysis cost; a rolling cap does not cap lifetime spending.
+
+Integration and deployment
+The rollout switch ONLYFANS_VAULT_RECENT_WINDOW_ENABLED=1 defaults off.
+All relevant main and dedicated workers must receive the same policy. The
+hash-pinned generic overlay preserves that image's producer verification,
+read deadlines and process guards, adding only the required scope handling
+and selection order alongside the existing description repair.
+
+The additive 0112_vault_recent_window migration adds progress to the current
+vault job and an index; it creates no competing queue or catalogue. A populated
+0111 upgrade and refused destructive downgrade are tested in isolated PG.
+Older images enforce exact schema versions, so schema and all image versions
+must be coordinated in the reviewed release. Do not migrate a shared live DB
+under an unchanged old image. Keep progress for a compatible code rollback.
+
+An uncapped in-progress import is fenced before another provider GET when the
+switch turns on. Existing scheduling queues its capped successor. Restart,
+provider backoff and per-type cursors remain durable.
+
+This candidate must be merged and checked against the exact selected Moxy
+release and every deployed worker variant before production activation.
+The previously identified cloud candidate f9b55ebc3b90933959abbe718789256bc42b973b
+has not been made available in the Work Server checkout; do not substitute an
+older integration probe as proof the final cloud release is compatible.
+
+Tests use owned disposable PostgreSQL, synthetic media/model/transport and
+loopback networking only. They do not use production credentials or send media.
+The final receipt and test XML in this package identify the exact tested commit.

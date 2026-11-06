@@ -72,8 +72,10 @@ class VaultPreviewWorker:
                 expires_at=connection.expires_at.replace(tzinfo=timezone.utc),
                 capture=clear["capture"], x_hash=clear["xHash"], proxy_url=clear["proxyUrl"])
             requested = vault_previews.requested_ids(account,binding,owner)
+            from vault_import_policy import automatic_window
             background = [] if requested_only else list(session.scalars(select(VaultItem.media_id).where(
                 VaultItem.account_id == account, VaultItem.removed_at.is_(None),
+                automatic_window(),
                 VaultItem.kind.in_(("photo", "video", "gif")),
                 VaultItem.media_id > self.cursors.get(account, 0))
                 .order_by(VaultItem.media_id).limit(96)))

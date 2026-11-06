@@ -9,5 +9,15 @@
   "producer_before_reporting_sha256": "20c210f97aecc7fa1eb016f918b941a5e4e95f155d8abdc82e5663e6e73cb002",
   "producer_function_sha256": "f914836beb698321426029eb7186bcfad9d56f140986dfa6666e4163d9c49f7c",
   "final_api_sha256": "f8a3360cac98f4992d8f7acf58f4b6c6e8814f49bc7d9e8cdc01d63b3b2f79aa",
-  "additional_reporting": "Shared effective-state reporting; model metadata cannot override system description status"
+  "additional_reporting": "Shared effective-state reporting; model metadata cannot override system description status",
+  "recent_window": {
+    "policy": {
+      "photos": 1500,
+      "videos": 700
+    },
+    "switch": "ONLYFANS_VAULT_RECENT_WINDOW_ENABLED=1",
+    "worker_sha256": "0ac5c7a85fec208b99d04b302b8d5a554bb49cdd765ff0f4d1689489bc676e4b",
+    "policy_sha256": "aac37f83f9a0c858bc9a1190401a30baa859fb88d9553c8d60fca0f1f8399e4d",
+    "child_change": "Same producer/guards/deadlines; scope guard and newest-first automatic selection when enabled"
+  }
 }

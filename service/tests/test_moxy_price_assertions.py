@@ -125,3 +125,32 @@ def test_price_without_item_or_evidenced_budget_is_not_invented():
     assert price_problem(scene(), draft("It is $75.", key=None, action="reply")) == "price_claim_unbound"
     assert price_problem(scene(), draft("There are 75 stars.", key=None, action="reply")) is None
     assert price_problem(scene(), draft("My dog weighs 75 pounds.", key=None, action="reply")) is None
+
+
+def test_ordinary_expense_question_does_not_require_price_of_unpaid_card():
+    from moxy_replacement.price_assertions import price_question_problem
+    snap = scene("How much did dinner cost? Was it nice?")
+    snap["card_state"] = [{"id": 9, "product_id": "first", "price_cents": 7500}]
+    reply = draft("Dinner was $20, and it was lovely.", key=None, action="reply")
+    assert price_problem(snap, reply) is None
+    assert price_question_problem(snap, reply) is None
+
+
+def test_earlier_pending_card_question_must_be_answered():
+    from moxy_replacement.price_assertions import price_question_problem
+    snap = scene("How are you?")
+    first = {"id": 2, "direction": "in", "text": "How much was card 9?"}
+    snap["pending_fan_messages"].insert(0, first)
+    snap["card_state"] = [{"id": 9, "product_id": "first", "price_cents": 7500}]
+    assert price_question_problem(snap, draft("I'm good!", key=None, action="reply")) == "price_question_unanswered"
+    reply = draft("Card 9 was $75. I'm good!", key=None, action="reply")
+    assert price_problem(snap, reply) is None
+    assert price_question_problem(snap, reply) is None
+
+
+def test_dinner_answer_cannot_answer_a_card_question_with_same_amount():
+    from moxy_replacement.price_assertions import price_question_problem
+    snap = scene("How much is card 9?")
+    snap["card_state"] = [{"id": 9, "product_id": "first", "price_cents": 7500}]
+    reply = draft("Dinner was $75.", key=None, action="reply")
+    assert price_question_problem(snap, reply) == "price_question_unanswered"

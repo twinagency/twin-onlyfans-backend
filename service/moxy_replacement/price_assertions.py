@@ -136,6 +136,18 @@ def _cheapest_card_problem(snapshot, decision, selected, clause):
     return type(price) is int and type(lowest) is int and lowest < price
 
 
+def _ordinary_expense(clause):
+    ordinary = re.search(
+        r"\b(?:dinner|lunch|breakfast|rent|salary|wages|groceries|coffee|parking|petrol|taxi|bus fare|gym shoes|utility bill)\b",
+        clause, re.I,
+    )
+    commercial = re.search(
+        r"\b(?:card|content|photo|pic|picture|video|clip|bundle|unlock|discount|offer)\b",
+        clause, re.I,
+    )
+    return bool(ordinary and not commercial)
+
+
 def price_problem(snapshot, decision, terms=None):
     """Return a scoped correction reason, or None for supported/no money claims.
 
@@ -149,9 +161,8 @@ def price_problem(snapshot, decision, terms=None):
         for clause in _clauses(part["text"]):
             # Ordinary expenses are not catalogue terms, including in a reply
             # which also contains an offer. Keep commercial clauses separate.
-            ordinary=bool(re.search(r'\b(?:dinner|lunch|breakfast|rent|salary|wages|groceries|coffee|parking|petrol|taxi|bus fare|gym shoes|utility bill)\b',clause,re.I))
-            commercial=bool(re.search(r'\b(?:card|content|photo|pic|picture|video|clip|bundle|unlock|discount|offer)\b',clause,re.I))
-            if ordinary and not commercial:continue
+            if _ordinary_expense(clause):
+                continue
             if _cheapest_card_problem(snapshot, decision, selected, clause):
                 return 'price_claim_mismatch'
             discount=re.search(r'\b(?:half[ -]off|half[ -]price|\d+(?:\.\d+)?\s*%\s*(?:off|discount)|discount(?:ed)?)\b',clause,re.I)
@@ -218,19 +229,38 @@ def price_question_problem(snapshot, decision, terms=None):
     if decision.get("action") in {"none", "handover"}:
         return None
     incoming = [m for m in pending_messages(snapshot) if m.get("direction") == "in"]
-    fan_text = (incoming[-1].get("text") or "") if incoming else ""
-    if not _asked_price(fan_text):
-        return None
-    target = _asked_target(snapshot, decision, terms, fan_text)
-    price = target.get("price_cents") if isinstance(target, dict) else None
-    if type(price) is not int or price <= 0:
-        return None
-    currency = target.get("currency") or "USD"
-    for part in plan(decision):
-        text = part["text"]
-        for match in _MONEY.finditer(text):
-            if any(a <= match.start() < b for a, b, _ in quotes(text)):
+    for message in incoming:
+        for question in _clauses(message.get("text") or ""):
+            # A personal expense is separate from a card, even if another
+            # sentence in the message refers to it using a pronoun.
+            if _ordinary_expense(question) or not _asked_price(question):
                 continue
-            if _money(match) == (price, currency):
-                return None
-    return "price_question_unanswered"
+            scoped = dict(snapshot, pending_fan_messages=[message])
+            target = _asked_target(scoped, decision, terms, question)
+            price = target.get("price_cents") if isinstance(target, dict) else None
+            if type(price) is not int or price <= 0:
+                continue
+            currency = target.get("currency") or "USD"
+            answered = False
+            for part in plan(decision):
+                for clause in _clauses(part["text"]):
+                    if _ordinary_expense(clause):
+                        continue
+                    for match in _MONEY.finditer(clause):
+                        if any(a <= match.start() < b for a, b, _ in quotes(clause)):
+                            continue
+                        if _budget_claim(snapshot, clause, match) is not None:
+                            continue
+                        card = referenced_card(scoped, clause, allow_current=False)
+                        if _CARD_ID.search(clause) and card != target:
+                            continue
+                        if _money(match) == (price, currency):
+                            answered = True
+                            break
+                    if answered:
+                        break
+                if answered:
+                    break
+            if not answered:
+                return "price_question_unanswered"
+    return None

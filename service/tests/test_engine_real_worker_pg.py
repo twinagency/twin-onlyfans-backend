@@ -15,8 +15,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from test_onlyfans_foundation_pg import database  # noqa: F401
+from approval_helpers import queue_decision
 from test_onlyfans_media_pg import shelf, media_policy
 from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT, configured
+from conversation_engine import approval
 from conversation_engine.commerce import RealCatalogueCoverage, approve_catalogue_offer, verified_terms
 from conversation_engine.engine import EngineService, SyntheticModel, SyntheticProposal
 from conversation_engine.journey import (JourneyConfig, JourneyService, configure_journey, enforce_journey,
@@ -106,20 +108,37 @@ class World:
         with Session(self.database[1]) as s:
             return list(s.scalars(select(model).where(*where)))
 
+    # The worker only STAGES a draft ('awaiting_approval'). These helpers add the explicit, named operator step
+    # (approve the exact staged version, then deliver it) so the older journey tests keep exercising delivery.
+    # `operator_on = False` turns it off; the gate itself is tested in test_engine_approval_pg.py.
+    operator_on = True
+
+    def operate(self, result):
+        if not self.operator_on or result.get('outcome') != 'awaiting_approval':
+            return result
+        staged = result['approval']
+        approval.approve(self.store, TENANT, ACCOUNT, staged['requestId'], staged['generation'],
+                         expected_version=staged['version'], actor='test-operator')
+        self.no_throttle()
+        sent = self.worker.send_approved(TENANT, ACCOUNT, result['decisionId'])
+        if 'intake' in result:
+            sent['intake'] = result['intake']
+        return sent
+
     def send(self, body, key=None):
         self.no_throttle()
         raw = json.dumps(body, separators=(',', ':')).encode()
         signature = hmac.new(SECRET, raw, hashlib.sha256).hexdigest()
-        return self.worker.handle(TENANT, ACCOUNT, raw_body=raw, signature=signature, secret=SECRET,
-                                  event_key=key or 'evt-' + hashlib.sha256(raw).hexdigest()[:24])
+        return self.operate(self.worker.handle(TENANT, ACCOUNT, raw_body=raw, signature=signature, secret=SECRET,
+                                               event_key=key or 'evt-' + hashlib.sha256(raw).hexdigest()[:24]))
 
     def turn(self, tenant, account, fan, mid):
         self.no_throttle()
-        return self.worker.turn(tenant, account, fan, mid)
+        return self.operate(self.worker.turn(tenant, account, fan, mid))
 
     def resume(self, tenant, account, fan, mid):
         self.no_throttle()
-        return self.worker.resume(tenant, account, fan, mid)
+        return self.operate(self.worker.resume(tenant, account, fan, mid))
 
     def say(self, text, fan=FAN, seconds=0):
         self.mid += 1
@@ -246,7 +265,7 @@ def test_duplicate_webhook_is_one_send(world):
     first = world.send(body, key='evt-dup')
     again = world.send(body, key='evt-dup')
     assert first['outcome'] == 'accepted'
-    assert again['intake'] == 'duplicate' and again['outcome'] == 'accepted'
+    assert again['intake'] == 'duplicate' and again['outcome'] == 'already_sent'   # the consumed approval is never revived
     assert len(world.fans.posts) == 1
     assert len(world.rows(OfEngineDecision)) == 1 and len(world.rows(OfTextIntent)) == 1
 
@@ -301,7 +320,7 @@ def test_quarantined_webhook_fences_unsent_work(world):
     world.store.drain(TENANT, ACCOUNT)
     world.engine.select_simulated(TENANT, ACCOUNT, FAN)
     decision = world.engine.plan(TENANT, ACCOUNT, FAN, 600)
-    intent = world.engine.queue(TENANT, ACCOUNT, decision)
+    intent = queue_decision(world.engine, TENANT, ACCOUNT, decision)      # approved, queued, never dispatched
     conflicting = inbound(600, 'DIFFERENT bytes, same key')
     result = world.send(conflicting, key='evt-q')
     assert result['outcome'] == 'quarantined' and len(result['fenced']) == 1
@@ -395,7 +414,9 @@ def test_recheck_just_before_wire_cancels_a_queued_part(world):
             world.intake.accept(raw2, hmac.new(SECRET, raw2, hashlib.sha256).hexdigest(), SECRET, 'evt-851')
         return real(tenant, account, part)
     world.worker.recheck = recheck
-    result = world.worker._send(TENANT, ACCOUNT, decision)
+    staged = world.worker._send(TENANT, ACCOUNT, decision)
+    assert staged['outcome'] == 'awaiting_approval' and world.fans.posts == []
+    result = world.operate(staged)
     assert result['outcome'].startswith('superseded:') and world.fans.posts == []
     intent = world.rows(OfTextIntent)[0]
     assert intent.status == 'cancelled' and world.rows(OfDeliveryPolicy)[0].queued_count == 0

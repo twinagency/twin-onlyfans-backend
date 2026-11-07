@@ -42,12 +42,12 @@ def _revisions():
 
 
 def test_single_linear_head_and_declared_chain():
-    from db.schema import ENGINE_GENERATIONS, ENGINE_MODEL_CALLS, FANS_INTAKE, FANSAPI_TRANSPORT, HEAD, REVISION_RANK
+    from db.schema import ENGINE_APPROVAL, ENGINE_GENERATIONS, ENGINE_MODEL_CALLS, FANS_INTAKE, FANSAPI_TRANSPORT, HEAD, REVISION_RANK
     script = _revisions()
-    assert script.get_heads() == [HEAD] == [ENGINE_MODEL_CALLS]
+    assert script.get_heads() == [HEAD] == [ENGINE_APPROVAL]
     chain = [r.revision for r in script.walk_revisions('base', HEAD)]
-    assert chain[:5] == ['0123_engine_model_calls', '0122_fansapi_transport', '0121_engine_generations', '0120_fans_intake', '0119_identity_independence']
-    assert [REVISION_RANK[v] for v in (FANS_INTAKE, ENGINE_GENERATIONS, FANSAPI_TRANSPORT, ENGINE_MODEL_CALLS)] == [120, 121, 122, 123]
+    assert chain[:6] == ['0124_engine_approval', '0123_engine_model_calls', '0122_fansapi_transport', '0121_engine_generations', '0120_fans_intake', '0119_identity_independence']
+    assert [REVISION_RANK[v] for v in (FANS_INTAKE, ENGINE_GENERATIONS, FANSAPI_TRANSPORT, ENGINE_MODEL_CALLS, ENGINE_APPROVAL)] == [120, 121, 122, 123, 124]
     # no fork anywhere above the live Moxy base (older history legitimately contains merge points)
     assert all(len(r.nextrev) <= 1 for r in script.walk_revisions('0111_moxy_owner', HEAD))
 
@@ -108,6 +108,8 @@ def _build(database, kind, *, offer=False):
         item = shelf(database[1]); media_policy(authority)
         with Session(database[1]) as s, s.begin():
             for v in s.scalars(select(VaultItem)): v.content_hash_kind = 'vault-metadata-v1'
+        from approval_helpers import finished_backfill
+        finished_backfill(database[1], ACCOUNT, FAN)     # real offers wait for a finished backfill of the fan
     if kind == 'fansapi':
         _real_policy(database, authority)
     adapter = FansWebhookAdapter(store)
@@ -128,7 +130,8 @@ def _intent(engine, store, body='Hi there'):
     engine.model = SyntheticModel({'hello': SyntheticProposal(body)})
     store.record(TENANT, ACCOUNT, event(mid=1, fan=FAN, body='hello'))
     store.drain(TENANT, ACCOUNT)
-    return engine.queue(TENANT, ACCOUNT, engine.plan(TENANT, ACCOUNT, FAN, 1))
+    from approval_helpers import queue_decision
+    return queue_decision(engine, TENANT, ACCOUNT, engine.plan(TENANT, ACCOUNT, FAN, 1))
 
 
 # ---------------------------------------------------------------- first-class registration
@@ -146,12 +149,13 @@ def test_real_transport_dispatches_with_no_monkeypatch_when_flag_and_kind_match(
 
 
 def test_flag_off_by_default_refuses_dispatch_before_any_attempt(database, monkeypatch):
-    monkeypatch.delenv('TWIN_ENGINE_FANSAPI_REAL', raising=False)
-    assert real_transport_enabled() is False
+    monkeypatch.setenv('TWIN_ENGINE_FANSAPI_REAL', '1')
     fake = FakeFans()
     try:
         store, authority, engine, _ = _build(database, 'fansapi')
-        intent = _intent(engine, store)
+        intent = _intent(engine, store)          # an approved intent exists; then the switch goes off
+        monkeypatch.delenv('TWIN_ENGINE_FANSAPI_REAL', raising=False)
+        assert real_transport_enabled() is False
         with pytest.raises(Refused, match='not enabled'):
             authority.dispatch(TENANT, ACCOUNT, intent, _real_transport(store, fake))
         assert fake.posts == []
@@ -177,7 +181,8 @@ def test_real_transport_refused_under_synthetic_policy_and_synthetic_transport_u
         fake.close()
 
 
-def test_synthetic_transport_refused_under_fansapi_policy(database):
+def test_synthetic_transport_refused_under_fansapi_policy(database, monkeypatch):
+    monkeypatch.setenv('TWIN_ENGINE_FANSAPI_REAL', '1')
     store, authority, engine, _ = _build(database, 'fansapi')
     intent = _intent(engine, store)
     with pytest.raises(Refused, match='does not match'):

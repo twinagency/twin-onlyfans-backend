@@ -56,6 +56,10 @@ def prepare(s, runtime, fan_id, origin, decision_id, body, catalog_item_id=None,
         raise Refused('engine request is unavailable')
     if (fan_id, request.source_message_id) in conflicted_sources(s, runtime.account_id):
         raise Refused('source webhook conflict')
+    if policy.transport_kind == 'fansapi':
+        # Supervised pilot: the intent is created only against a current, matching, approved draft version.
+        from .approval import require_in_session
+        require_in_session(s, runtime, decision)
     return decision
 
 
@@ -102,6 +106,12 @@ def current(s, runtime, intent):
         valid = memory_current(s, runtime, decision)
     if valid and decision.action == 'offer':
         valid = media_current(s, runtime, intent) is True
+    if valid:
+        policy = s.get(OfDeliveryPolicy, intent.account_id)
+        if policy is not None and policy.transport_kind == 'fansapi':
+            # Checked at admission and again immediately before the wire marker (supervised pilot).
+            from .approval import check_in_session
+            valid = check_in_session(s, runtime, decision) is None
     return bool(valid), True
 
 
@@ -139,6 +149,9 @@ def control_changed(s, account_id, fan_id, state):
         return
     owner.epoch += 1
     owner.revision += 1
+    # Takeover, resume, hand-back and stop are never an approval: they withdraw every live one of this fan.
+    from .approval import invalidate_fan_in_session
+    invalidate_fan_in_session(s, account_id, fan_id, 'control_changed')
     if state.mode == 'automated' and state.takeover_state == 'none':
         # A hand-back (or an explicit resume) re-activates engine ownership under
         # the new epoch; earlier decisions carry the old epoch and stay stale.
@@ -168,6 +181,8 @@ def completed(s, intent):
     if decision is None:
         return
     decision.status, decision.updated_at = 'completed', utcnow()
+    from .approval import consume_in_session
+    consume_in_session(s, decision)
     request = s.get(OfEngineRequest, (intent.account_id, decision.request_id))
     if request.status in {'handover_pending', 'handover_accepted'}:
         request.next_step = 'review_receipt'
@@ -222,6 +237,8 @@ def unsent_cancelled(s, intent):
     if decision is None:
         return
     decision.status, decision.updated_at = 'cancelled', utcnow()
+    from .approval import invalidate_generation_in_session
+    invalidate_generation_in_session(s, intent.account_id, decision.request_id, decision.generation, 'unsent_cancelled')
     later = s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == intent.account_id,
         OfEngineDecision.request_id == decision.request_id, OfEngineDecision.generation == decision.generation,
         OfEngineDecision.part_index > decision.part_index,

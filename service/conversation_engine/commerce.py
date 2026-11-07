@@ -289,7 +289,9 @@ def _record_access(store, tenant, account, observation, cls, kind, prefix):
             dedupe = observation.evidence_ref.removeprefix('fansapi:')
             unlock = s.scalar(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
                 OfFansEvidence.dedupe_key == dedupe, OfFansEvidence.kind == 'unlock'))
+            from fans_api_adapter.evidence_scope import webhook_binding
             if (observation.status != 'confirmed' or unlock is None or unlock.source != 'webhook'
+                    or webhook_binding(s, unlock) != runtime.binding_id
                     or unlock.status not in {'pending', 'applied'}
                     or unlock.reason not in {'awaiting_commerce', 'unlock_confirmed_finance_unlinked'}
                     or unlock.intent_id != intent.intent_id or unlock.fan_id != observation.fan_id

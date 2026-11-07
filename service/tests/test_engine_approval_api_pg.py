@@ -3,6 +3,7 @@
 The model is the in-process fixture and the provider is httpx.MockTransport (no network). Every approval here is an
 explicit HTTP command from a named operator session; nothing approves or hands back automatically.
 """
+import hashlib
 import json
 import re
 import uuid
@@ -474,6 +475,101 @@ def unknown_send(api):
     return intent.intent_id, staged
 
 
+def test_applied_unlock_note_retains_unlinked_financial_evidence(api, monkeypatch):
+    from test_engine_real_worker_pg import _sell, unlock
+    from db.models import Transaction
+    _, message_id = _sell(api)
+    with monkeypatch.context() as worker:
+        worker.setenv('ONLYFANS_PROCESS_ROLE', 'worker')
+        assert api.send(unlock(message_id), key='operator-unlock')['outcome'] == 'evidence'
+    items = get(api, 'unresolved').json()['items']
+    [item] = [entry for entry in items if entry['kind'] == 'unreconciled_access' and 'Provider reported an unlock' in entry['summary']]
+    result = post(api, f"unresolved/{item['id']}/reconcile",
+                  {'commandKey':key(870), 'actor':ACTOR, 'evidenceRef':EVIDENCE})
+    assert result.status_code == 200 and result.json()['outcome'] == 'evidence_recorded_finance_unlinked'
+    assert result.json()['resolved'] is False
+    assert any(entry['id'] == item['id'] for entry in get(api, 'unresolved').json()['items'])
+    with Session(api.database[1]) as s:
+        assert list(s.scalars(select(Transaction))) == []
+
+
+def test_access_review_refuses_evidence_from_an_earlier_creator_binding(api, monkeypatch):
+    from test_engine_real_worker_pg import _sell, unlock
+    from db.models import OfCreatorBinding
+    _, message_id = _sell(api)
+    with monkeypatch.context() as worker:
+        worker.setenv('ONLYFANS_PROCESS_ROLE', 'worker')
+        api.send(unlock(message_id), key='binding-unlock')
+    with Session(api.database[1]) as s, s.begin():
+        [access] = list(s.scalars(select(OfEngineAccessEvidence)))
+        evidence_key, intent_id = 'separate-revocation-evidence', access.intent_id
+        s.add(OfEngineAccessEvidence(account_id=ACCOUNT, evidence_key=evidence_key, intent_id=intent_id,
+            fan_id=FAN, message_id=message_id, media_json=access.media_json, status='revoked', applied=False,
+            evidence_ref='fixture:separate-revocation', occurred_at=utcnow(), created_at=utcnow()))
+    item_id = 'unreconciled_access:access-' + evidence_key
+    assert item_id in {item['id'] for item in get(api, 'unresolved').json()['items']}
+    with Session(api.database[1]) as s, s.begin():
+        s.add(OfCreatorBinding(id='historical-binding', tenant_id='historical-tenant', creator_id='historic',
+                               account_id=ACCOUNT, channel='onlyfans', revoked_at=utcnow()))
+        s.flush()
+        s.get(OfTextIntent, (ACCOUNT, intent_id)).binding_id = 'historical-binding'
+    assert item_id not in {item['id'] for item in get(api, 'unresolved').json()['items']}
+    assert post(api, f'unresolved/{item_id}/reconcile',
+                {'commandKey':key(871), 'actor':ACTOR, 'evidenceRef':EVIDENCE}).status_code == 404
+
+
+def test_unresolved_displays_unknown_model_cost_and_open_request(api):
+    from conversation_engine.model_client import FixtureChatClient, ModelOutcomeUnknown
+    from conversation_engine.model_runtime import ModelRuntime
+    from conversation_engine.writer_context import StaticCreatorProfiles, active_profile
+    from test_engine_model_pg import config
+    client = FixtureChatClient([ModelOutcomeUnknown('simulated lost response')])
+    api.engine.model = ModelRuntime(api.database[1], client, config(), StaticCreatorProfiles({ACCOUNT:active_profile(ACCOUNT)}))
+    api.operator_on = False
+    result, _ = api.say('hello')
+    assert result['outcome'] == 'refused' and len(client.requests) == 1 and api.fans.posts == []
+    items = get(api, 'unresolved').json()['items']
+    [call] = [item for item in items if item['kind'] == 'model_call']
+    [request] = [item for item in items if item['kind'] == 'open_request']
+    assert call['owner'] == 'operator' and call['nextStep'] == 'review_model_usage'
+    assert 'do not assume it was free' in call['summary'].lower()
+    assert request['owner'] and request['nextStep'] and request['conversationId'] == conv()
+    for item in (call, request):
+        assert_dashboard_item(item)
+
+
+def test_unresolved_displays_unverified_returned_model_identity(api):
+    from conversation_engine.model_client import ChatResult, FixtureChatClient, Usage
+    from conversation_engine.model_runtime import ModelRuntime
+    from conversation_engine.writer_context import StaticCreatorProfiles, active_profile
+    from test_engine_model_pg import config, ok
+    client = FixtureChatClient([ChatResult(text=ok('hello'), usage=Usage(100, 10, 500),
+                                          model='m/primary', provider='Wrong Host')])
+    cfg = config(upstream_provider='fixture-host', upstream_reported_name='Fixture Host')
+    api.engine.model = ModelRuntime(api.database[1], client, cfg, StaticCreatorProfiles({ACCOUNT:active_profile(ACCOUNT)}))
+    api.operator_on = False
+    result, _ = api.say('hello')
+    assert result['outcome'] == 'refused' and api.fans.posts == []
+    items = get(api, 'unresolved').json()['items']
+    [call] = [item for item in items if item['kind'] == 'model_call']
+    assert call['nextStep'] == 'review_model_identity' and 'do not use' in call['summary'].lower()
+    assert any(item['kind'] == 'handover_request' for item in items)
+    assert_dashboard_item(call)
+
+
+def test_waiting_fan_request_remains_visible_without_automatic_followup(api):
+    staged, _ = offer_draft(api)
+    draft = drafts(api)[0]
+    assert post(api, draft_path(draft, 'approve'), approve_body(draft, 880)).status_code == 200
+    assert send(api, staged)['outcome'] == 'accepted'
+    before = len(api.fans.posts)
+    items = get(api, 'unresolved').json()['items']
+    [request] = [item for item in items if item['kind'] == 'open_request']
+    assert request['nextStep'] == 'await_purchase_or_question' and 'waiting_fan' in request['summary']
+    assert len(api.fans.posts) == before
+    assert_dashboard_item(request)
+
+
 def test_unresolved_lists_unknown_sends_with_owner_and_next_step_and_reconcile_never_clears_them(api):
     intent_id, staged = unknown_send(api)
     posts_before = len(api.fans.posts)
@@ -540,12 +636,23 @@ def test_unconfirmed_access_evidence_is_listed_and_acknowledged_without_touching
         assert (row.status, row.applied) == ('revoked', False)
 
 
-def evidence_row(api, *, kind='transaction', status='held', created=None, reason='amount_mismatch', fan=FAN, amount=1000):
+def evidence_row(api, *, kind='transaction', status='held', created=None, reason='amount_mismatch', fan=FAN,
+                 amount=1000, scoped=True, epoch=1):
+    from db.onlyfans_engine_models import OfFansWebhook
     evidence_id = str(uuid.uuid4())
+    event_key = 'fixture-' + evidence_id if scoped else None
+    raw = json.dumps({'fixture_evidence': evidence_id}, separators=(',', ':')).encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    event = {'transaction':'transactions.new', 'chargeback':'chargebacks.new', 'unlock':'messages.ppv.unlocked',
+             'human_sent':'messages.sent'}[kind]
     with Session(api.database[1]) as s, s.begin():
-        s.add(OfFansEvidence(account_id=ACCOUNT, evidence_id=evidence_id, dedupe_key=evidence_id[:20], kind=kind, source='webhook',
-            fan_id=fan, amount_cents=amount, provider_status='done', occurred_at=utcnow(), status=status, reason=reason,
-            raw_sha256='a' * 64, created_at=created or utcnow(), updated_at=utcnow()))
+        if scoped:
+            s.add(OfFansWebhook(account_id=ACCOUNT, epoch=epoch, event_key=event_key, event_type=event,
+                                payload_sha256=digest, raw_body=raw, status='accepted', received_at=utcnow()))
+        s.add(OfFansEvidence(account_id=ACCOUNT, evidence_id=evidence_id, dedupe_key=evidence_id[:20], kind=kind,
+            source='webhook', event_key=event_key, fan_id=fan, amount_cents=amount, provider_status='done',
+            occurred_at=utcnow(), status=status, reason=reason, raw_sha256=digest,
+            created_at=created or utcnow(), updated_at=utcnow()))
     return evidence_id
 
 
@@ -585,6 +692,127 @@ def test_unlinked_money_is_listed_apart_and_reconcile_dismisses_it_without_creat
     assert post(api, f'unresolved/unreconciled_access:{unlock}/reconcile', {'commandKey': key(104), 'actor': ACTOR, 'evidenceRef': EVIDENCE}).json()['outcome'] == 'dismissed'
     # an id of the wrong kind never touches another kind of row
     assert post(api, f'unresolved/unreconciled_access:{fresh}/reconcile', {'commandKey': key(105), 'actor': ACTOR, 'evidenceRef': EVIDENCE}).status_code == 404
+
+
+def test_unscoped_or_historical_provider_evidence_is_preserved_without_leaking_details(api):
+    from db.models import OfCreatorBinding
+    from db.onlyfans_engine_models import OfFansConnection
+    stage(api)
+    unscoped = evidence_row(api, scoped=False, amount=987654)
+    other_fan = evidence_row(api, fan=FAN2, amount=876543)
+    with Session(api.database[1]) as s, s.begin():
+        s.add(OfCreatorBinding(id='evidence-historical-binding', tenant_id='old-tenant', creator_id='old-creator',
+                               account_id=ACCOUNT, channel='onlyfans', revoked_at=utcnow()))
+        s.flush()
+        s.add(OfFansConnection(account_id=ACCOUNT, epoch=2, binding_id='evidence-historical-binding',
+                               provider_account_id='old-provider', provider_creator_id='old-creator',
+                               status='retired', created_at=utcnow()))
+    historical = evidence_row(api, epoch=2, amount=765432)
+    current = evidence_row(api, amount=123456)
+    items = get(api, 'unresolved').json()['items']
+    assert any(item['kind'] == 'unscoped_provider_evidence' for item in items)
+    shown = json.dumps(items)
+    assert f'unlinked_transaction:{current}' in shown and '123456' in shown
+    for hidden, amount in ((unscoped, 987654), (other_fan, 876543), (historical, 765432)):
+        assert hidden not in shown and str(amount) not in shown
+        response = post(api, f'unresolved/unlinked_transaction:{hidden}/reconcile',
+                        {'commandKey':key(900 + amount), 'actor':ACTOR, 'evidenceRef':EVIDENCE})
+        assert response.status_code == 404
+    [draft] = drafts(api)
+    assert draft['evidence'] == '1 held payment record(s) need review'
+    with Session(api.database[1]) as s:
+        assert all(s.get(OfFansEvidence, (ACCOUNT, ident)).status == 'held'
+                   for ident in (unscoped, other_fan, historical, current))
+
+
+def test_conflicting_webhook_provenance_is_not_used_for_operator_attribution(api):
+    from db.onlyfans_engine_models import OfFansWebhook, OfFansWebhookConflict
+    stage(api)
+    evidence_id = evidence_row(api)
+    with Session(api.database[1]) as s, s.begin():
+        evidence = s.get(OfFansEvidence, (ACCOUNT, evidence_id))
+        raw = b'{"different":true}'
+        s.add(OfFansWebhookConflict(account_id=ACCOUNT, epoch=1, event_key=evidence.event_key,
+                                    payload_sha256=hashlib.sha256(raw).hexdigest(), raw_body=raw, received_at=utcnow()))
+    items = get(api, 'unresolved').json()['items']
+    assert any(item['kind'] == 'unscoped_provider_evidence' for item in items)
+    assert evidence_id not in json.dumps(items)
+    assert post(api, f'unresolved/unlinked_transaction:{evidence_id}/reconcile',
+                {'commandKey':key(999), 'actor':ACTOR, 'evidenceRef':EVIDENCE}).status_code == 404
+
+
+def test_unscoped_and_old_human_sends_cannot_take_over_current_creator_chat(api):
+    from db.models import OfCreatorBinding
+    from db.onlyfans_engine_models import OfFansConnection
+    stage(api)
+    unscoped = evidence_row(api, kind='human_sent', status='pending', scoped=False)
+    with Session(api.database[1]) as s, s.begin():
+        s.add(OfCreatorBinding(id='old-human-binding', tenant_id='old-tenant', creator_id='old-creator',
+                               account_id=ACCOUNT, channel='onlyfans', revoked_at=utcnow()))
+        s.flush()
+        s.add(OfFansConnection(account_id=ACCOUNT, epoch=2, binding_id='old-human-binding',
+                               provider_account_id='old-provider', provider_creator_id='old-creator',
+                               status='retired', created_at=utcnow()))
+    historical = evidence_row(api, kind='human_sent', status='pending', epoch=2)
+    api.intake.classify_sent(ACCOUNT, FAN)
+    api.intake._takeover(ACCOUNT, FAN, historical, utcnow())
+    with Session(api.database[1]) as s:
+        assert s.get(OfConversationState, (ACCOUNT, FAN)).mode == 'automated'
+        for ident in (unscoped, historical):
+            row = s.get(OfFansEvidence, (ACCOUNT, ident))
+            assert row.status == 'pending' and row.reason == 'creator_scope_unverified'
+    items = get(api, 'unresolved').json()['items']
+    assert any(item['kind'] == 'unscoped_provider_evidence' for item in items)
+    assert unscoped not in json.dumps(items) and historical not in json.dumps(items)
+
+
+def test_pending_historical_webhook_is_held_before_projection_into_current_creator(api):
+    from db.models import Message, OfCreatorBinding
+    from db.onlyfans_engine_models import OfFansConnection, OfFansWebhook
+    from db.onlyfans_fans_intake_models import OfFansProjection
+    stage(api)
+    raw = json.dumps({'event':'messages.received', 'account_id':'old-provider', 'payload':{
+        'id':989898, 'fromUser':{'id':FAN}, 'text':'old creator only',
+        'createdAt':datetime.now(timezone.utc).isoformat(), 'isSentByMe':False, 'media':[], 'price':0}}).encode()
+    with Session(api.database[1]) as s, s.begin():
+        s.add(OfCreatorBinding(id='old-project-binding', tenant_id='old-tenant', creator_id='old-creator',
+                               account_id=ACCOUNT, channel='onlyfans', revoked_at=utcnow()))
+        s.flush()
+        s.add(OfFansConnection(account_id=ACCOUNT, epoch=2, binding_id='old-project-binding',
+                               provider_account_id='old-provider', provider_creator_id='old-creator',
+                               status='retired', created_at=utcnow()))
+        s.flush()
+        s.add(OfFansWebhook(account_id=ACCOUNT, epoch=2, event_key='old-pending', event_type='messages.received',
+                            payload_sha256=hashlib.sha256(raw).hexdigest(), raw_body=raw,
+                            status='accepted', received_at=utcnow()))
+        s.flush()
+        s.add(OfFansProjection(account_id=ACCOUNT, epoch=2, event_key='old-pending', status='pending',
+                               attempts=0, updated_at=utcnow()))
+    assert api.intake._project(ACCOUNT, 2, 'old-pending') == 'held'
+    with Session(api.database[1]) as s:
+        assert s.get(Message, (ACCOUNT, FAN, 989898)) is None
+        row = s.get(OfFansProjection, (ACCOUNT, 2, 'old-pending'))
+        assert (row.status, row.detail) == ('held', 'historical_creator_binding')
+        assert s.get(OfFansWebhook, (ACCOUNT, 2, 'old-pending')).raw_body == raw
+    assert any(item['kind'] == 'unscoped_provider_evidence' for item in get(api, 'unresolved').json()['items'])
+
+
+def test_previously_linked_unlock_requires_current_webhook_lineage_when_settled(api, monkeypatch):
+    from fans_api_adapter.payment_evidence import settle_unlock
+    from test_engine_real_worker_pg import _sell, unlock
+    _, message_id = _sell(api)
+    assert api.send(unlock(message_id), key='stale-linked-unlock')['outcome'] == 'evidence'
+    with Session(api.database[1]) as s, s.begin():
+        [row] = list(s.scalars(select(OfFansEvidence).where(OfFansEvidence.kind == 'unlock')))
+        assert row.reason == 'awaiting_commerce' and row.intent_id is not None
+        row.event_key = None
+        evidence_id = row.evidence_id
+    with monkeypatch.context() as worker:
+        worker.setenv('ONLYFANS_PROCESS_ROLE', 'worker')
+        assert settle_unlock(api.store, ACCOUNT, evidence_id, utcnow()) == 'held'
+    with Session(api.database[1]) as s:
+        assert list(s.scalars(select(OfEngineAccessEvidence))) == []
+        assert s.get(OfFansEvidence, (ACCOUNT, evidence_id)).status == 'held'
 
 
 def test_handover_requests_are_listed_and_cannot_be_reconciled_here(api):

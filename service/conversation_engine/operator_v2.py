@@ -25,7 +25,8 @@ from sqlalchemy.orm import Session
 
 from db.models import Fan, Message, OfConversationState
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
-from db.onlyfans_engine_models import OfEngineAccessEvidence, OfEngineOwner, OfEngineRequest
+from db.onlyfans_engine_models import (OfEngineAccessEvidence, OfEngineApproval, OfEngineModelCall,
+                                       OfEngineOwner, OfEngineRequest)
 from db.onlyfans_fans_intake_models import OfFansEvidence
 from onlyfans_read.agency_scope import ACTOR_PATTERN
 from onlyfans_read.contract import conversation_id_for
@@ -162,23 +163,27 @@ def _recent_messages(s, binding, account, fan_id):
              'text': m.body or '', 'at': _iso(m.created_at)} for m in reversed(rows)]
 
 
-def _fan_evidence(s, account, fan_id):
-    """What a person must know before approving: unresolved sends and held payment evidence of THIS fan."""
+def _fan_evidence(s, binding, account, fan_id):
+    """Show only evidence provably belonging to this creator and fan."""
+    from fans_api_adapter.evidence_scope import webhook_binding
     notes = []
     unknown = s.scalars(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account,
-        OfTextIntent.fan_id == fan_id, OfTextIntent.status.in_(('dispatching', 'unknown')))).all()
+        OfTextIntent.binding_id == binding, OfTextIntent.fan_id == fan_id,
+        OfTextIntent.status.in_(('dispatching', 'unknown')))).all()
     if unknown:
         notes.append(f'{len(unknown)} unresolved send(s) to this fan: do not resend')
-    held = s.scalars(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account,
-        OfFansEvidence.fan_id == fan_id, OfFansEvidence.status == 'held',
-        OfFansEvidence.kind != 'human_sent')).all()
+    rows = s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
+        OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind != 'human_sent',
+        (OfFansEvidence.status == 'held') |
+        ((OfFansEvidence.kind == 'unlock') & (OfFansEvidence.status == 'applied') &
+         (OfFansEvidence.reason == 'unlock_confirmed_finance_unlinked')))).all()
+    scoped = [row for row in rows if webhook_binding(s, row) == binding]
+    held = sum(row.status == 'held' for row in scoped)
+    unlocks = sum(row.kind == 'unlock' and row.status == 'applied' for row in scoped)
     if held:
-        notes.append(f'{len(held)} held payment record(s) need review')
-    unlocks = s.scalars(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account,
-        OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind == 'unlock',
-        OfFansEvidence.status == 'applied', OfFansEvidence.reason == 'unlock_confirmed_finance_unlinked')).all()
+        notes.append(f'{held} held payment record(s) need review')
     if unlocks:
-        notes.append(f'{len(unlocks)} provider-reported unlock(s); transaction and settlement remain unlinked')
+        notes.append(f'{unlocks} provider-reported unlock(s); transaction and settlement remain unlinked')
     return '; '.join(notes) or None
 
 
@@ -203,7 +208,7 @@ def list_drafts(store, tenant, account):
                      'parts': parts,
                      'conversation': {'revision': state.revision if state else 0,
                                       'messages': _recent_messages(s, binding, account, fan_id)},
-                     'evidence': _fan_evidence(s, account, fan_id),
+                     'evidence': _fan_evidence(s, binding, account, fan_id),
                      'approvedBy': view['actor'] if view['status'] == 'approved' else None,
                      'approvedAt': _zulu(view['decidedAt']) if view['status'] == 'approved' else None}
             if offers:
@@ -323,11 +328,11 @@ def _item(kind, ident, owner, next_step, summary, conversation=None, revision=No
     return row
 
 
-def _acknowledged(s, account):
+def _acknowledged(s, account, binding):
     """Item ids an operator already reconciled (plan_c_reconcile records); the record itself is permanent."""
     out = {}
     for row in s.scalars(select(OfLaunchCommand).where(OfLaunchCommand.account_id == account,
-            OfLaunchCommand.kind == 'plan_c_reconcile').order_by(OfLaunchCommand.created_at)):
+            OfLaunchCommand.kind == 'plan_c_reconcile', OfLaunchCommand.binding_id == binding).order_by(OfLaunchCommand.created_at)):
         before = json.loads(row.before_json)
         out[before['id']] = row
     return out
@@ -340,7 +345,7 @@ def unresolved(store, tenant, account):
         return []
     items = []
     with Session(store.engine) as s, s.begin():
-        seen = _acknowledged(s, account)
+        seen = _acknowledged(s, account, binding)
         pilot = {f for (f,) in s.execute(select(OfEngineOwner.fan_id).where(OfEngineOwner.account_id == account,
                                                                              OfEngineOwner.binding_id == binding))}
 
@@ -363,11 +368,18 @@ def unresolved(store, tenant, account):
             items.append(_item('unknown_send', row.intent_id, 'operator', step, summary, cid, revision,
                                row.wire_started_at or row.created_at))
         # 2. Money that is not linked to an unlock (kept apart from access evidence until a person links or dismisses it).
+        from fans_api_adapter.evidence_scope import webhook_binding
+        unscoped_provider_evidence = False
         stale = utcnow() - STALE_PENDING
         for row in s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
                 OfFansEvidence.kind.in_(('transaction', 'chargeback')), OfFansEvidence.status.in_(('pending', 'held')),
                 OfFansEvidence.peer_id.is_(None), OfFansEvidence.intent_id.is_(None))
                 .order_by(OfFansEvidence.created_at).limit(200)):
+            if webhook_binding(s, row) != binding:
+                unscoped_provider_evidence = True
+                continue
+            if row.fan_id not in pilot:
+                continue
             if row.status == 'pending' and row.kind == 'transaction' and row.created_at > stale:
                 continue  # allow a newly arrived transaction its normal review window
             cid, revision = conv(row.fan_id) if row.fan_id in pilot else (None, None)
@@ -379,7 +391,11 @@ def unresolved(store, tenant, account):
                                'review_and_reconcile' if row.status == 'held' else 'review_unlinked_financial_evidence',
                                detail, cid, revision, row.created_at, evidenceId=row.evidence_id))
         # 3. Access evidence that is not confirmed.
-        for row in s.scalars(select(OfEngineAccessEvidence).where(OfEngineAccessEvidence.account_id == account,
+        for row in s.scalars(select(OfEngineAccessEvidence).join(OfTextIntent,
+                and_(OfTextIntent.account_id == OfEngineAccessEvidence.account_id,
+                     OfTextIntent.intent_id == OfEngineAccessEvidence.intent_id)).where(
+                OfEngineAccessEvidence.account_id == account, OfTextIntent.binding_id == binding,
+                OfTextIntent.fan_id == OfEngineAccessEvidence.fan_id,
                 (OfEngineAccessEvidence.status != 'confirmed') | OfEngineAccessEvidence.applied.is_(False))
                 .order_by(OfEngineAccessEvidence.created_at).limit(200)):
             item_id = f'unreconciled_access:access-{row.evidence_key}'
@@ -395,6 +411,11 @@ def unresolved(store, tenant, account):
                 ((OfFansEvidence.status == 'applied') &
                  (OfFansEvidence.reason == 'unlock_confirmed_finance_unlinked')))
                 .order_by(OfFansEvidence.created_at).limit(200)):
+            if webhook_binding(s, row) != binding:
+                unscoped_provider_evidence = True
+                continue
+            if row.fan_id not in pilot:
+                continue
             if row.status not in {'held', 'applied'} and row.created_at > stale:
                 continue
             cid, revision = conv(row.fan_id) if row.fan_id in pilot else (None, None)
@@ -407,6 +428,50 @@ def unresolved(store, tenant, account):
                 summary = f'Unlock for fan {row.fan_id} is {row.status} ({row.reason or "no reason"}). Not yet confirmed access.'
             items.append(_item('unreconciled_access', row.evidence_id, 'operator', step, summary,
                                cid, revision, row.created_at, evidenceId=row.evidence_id))
+        for row in s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
+                OfFansEvidence.kind == 'human_sent', OfFansEvidence.status.in_(('pending', 'held')))
+                .order_by(OfFansEvidence.created_at).limit(200)):
+            if webhook_binding(s, row) != binding:
+                unscoped_provider_evidence = True
+                break
+        from db.onlyfans_fans_intake_models import OfFansProjection
+        if s.scalar(select(OfFansProjection.event_key).where(OfFansProjection.account_id == account,
+                OfFansProjection.status == 'held', OfFansProjection.detail == 'historical_creator_binding').limit(1)):
+            unscoped_provider_evidence = True
+        if unscoped_provider_evidence:
+            items.append(_item('unscoped_provider_evidence', 'review', 'operator', 'review_evidence_scope',
+                               'Provider evidence cannot be safely attributed to the current creator binding. '
+                               'Preserve it for review.'))
+        # Model calls with uncertain usage or unverified identity stay visible.
+        # They are informational here: recording a note cannot settle a cost.
+        for call in s.scalars(select(OfEngineModelCall).where(OfEngineModelCall.account_id == account,
+                OfEngineModelCall.binding_id == binding, OfEngineModelCall.fan_id.in_(pilot),
+                (OfEngineModelCall.status.in_(('reserved', 'calling', 'unknown'))) |
+                (OfEngineModelCall.outcome.in_(('identity_pending', 'identity_unverified'))))
+                .order_by(OfEngineModelCall.created_at).limit(200)):
+            cid, revision = conv(call.fan_id)
+            identity = call.outcome in ('identity_pending', 'identity_unverified')
+            summary = ('The model response identity is not verified. Do not use its text; review the recorded call.'
+                       if identity else 'A model call is in progress or its usage is uncertain. '
+                       'Review the call and cost before retrying; do not assume it was free.')
+            items.append(_item('model_call', call.call_id, 'operator',
+                               'review_model_identity' if identity else 'review_model_usage',
+                               summary, cid, revision, call.created_at))
+        # Requests with no live approval remain visible, including ones waiting
+        # for a fan or provider; displaying one never starts a follow-up.
+        shown_drafts = {request_id for (request_id,) in s.execute(select(OfEngineApproval.request_id).where(
+            OfEngineApproval.account_id == account, OfEngineApproval.binding_id == binding,
+            OfEngineApproval.status.in_(('awaiting', 'approved'))))}
+        for request in s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account,
+                OfEngineRequest.binding_id == binding, OfEngineRequest.status.in_(('open', 'waiting_fan', 'waiting_provider')))
+                .order_by(OfEngineRequest.created_at).limit(200)):
+            if request.request_id in shown_drafts:
+                continue
+            cid, revision = conv(request.fan_id)
+            items.append(_item('open_request', request.request_id, (request.owner or 'operator')[:64],
+                               (request.next_step or 'review_request')[:128],
+                               f'Request for fan {request.fan_id} is {request.status}.', cid, revision,
+                               request.created_at, requestId=request.request_id, requestRevision=request.revision))
         # 4. Conversations a human holds, waiting for an explicit hand back.
         for state, owner in s.execute(select(OfConversationState, OfEngineOwner).join(OfEngineOwner, and_(
                 OfEngineOwner.account_id == OfConversationState.account_id, OfEngineOwner.fan_id == OfConversationState.fan_id))
@@ -469,21 +534,28 @@ def reconcile(store, tenant, account, item_id, body):
                 outcome = 'evidence_recorded_hold_retained'
             elif kind in ('unlinked_transaction', 'unreconciled_access') and ident.startswith('access-'):
                 row = s.get(OfEngineAccessEvidence, (account, ident[len('access-'):]))
-                if row is None or (row.status == 'confirmed' and row.applied):
+                intent = s.get(OfTextIntent, (account, row.intent_id)) if row is not None else None
+                if (row is None or intent is None or intent.binding_id != binding or intent.fan_id != row.fan_id
+                        or (row.status == 'confirmed' and row.applied)):
                     raise NotFound('item unavailable')
                 outcome = 'acknowledged'
             elif kind in ('unlinked_transaction', 'unreconciled_access'):
                 row = s.get(OfFansEvidence, (account, ident), with_for_update=True)
                 expected = ('transaction', 'chargeback') if kind == 'unlinked_transaction' else ('unlock',)
-                if row is None or row.kind not in expected:
+                from fans_api_adapter.evidence_scope import webhook_binding
+                owner = s.get(OfEngineOwner, (account, row.fan_id)) if row is not None else None
+                if (row is None or row.kind not in expected or webhook_binding(s, row) != binding
+                        or owner is None or owner.binding_id != binding):
                     raise NotFound('item unavailable')
-                if row.status == 'dismissed' or row.status == 'applied':
+                if row.status == 'dismissed':
                     raise Conflict('item is already resolved')
                 if (row.kind == 'unlock' and row.status == 'applied'
                         and row.reason == 'unlock_confirmed_finance_unlinked' and kind == 'unreconciled_access'):
                     # A note is audited, but it does not invent a transaction
                     # link or remove the still-unresolved financial issue.
                     outcome = 'evidence_recorded_finance_unlinked'
+                elif row.status == 'applied':
+                    raise Conflict('item is already resolved')
                 elif row.status == 'held' or (row.status == 'pending' and row.kind == 'transaction' and row.peer_id is None
                                               and kind == 'unlinked_transaction'):
                     row.status, row.resolved_by, row.reason, row.updated_at = 'dismissed', actor, 'operator_reconciled', now

@@ -200,7 +200,7 @@ def backfill_complete(s, account, fan_id):
 def verified_spend(s, account, fan_id):
     """Cleared, ledger-backed spending; None when no verified rows exist.
 
-    A provider unlock is a message purchase notification, not a settled
+    A provider-reported unlock is an access observation, not a settled
     transaction. The synthetic lab keeps its explicitly synthetic fixture.
     """
     if active(s, account):
@@ -268,11 +268,15 @@ def decide(s, runtime, owner, message, config=None):
     return verdict
 
 
-def _purchase_before(s, runtime, fan_id, message):
-    """True when the fan has a verified (confirmed, applied) purchase older than this inbound message."""
-    latest = s.scalar(select(OfEngineAccessEvidence).where(OfEngineAccessEvidence.account_id == runtime.account_id,
-        OfEngineAccessEvidence.fan_id == fan_id, OfEngineAccessEvidence.applied.is_(True),
-        OfEngineAccessEvidence.status == 'confirmed')
+def _unlock_before(s, runtime, fan_id, message):
+    """True for a scoped historical unlock observation, not proof of payment or current access."""
+    latest = s.scalar(select(OfEngineAccessEvidence).join(OfTextIntent,
+        (OfTextIntent.account_id == OfEngineAccessEvidence.account_id)
+        & (OfTextIntent.intent_id == OfEngineAccessEvidence.intent_id)).where(
+        OfEngineAccessEvidence.account_id == runtime.account_id, OfEngineAccessEvidence.fan_id == fan_id,
+        OfEngineAccessEvidence.applied.is_(True), OfEngineAccessEvidence.status == 'confirmed',
+        OfTextIntent.fan_id == fan_id, OfTextIntent.binding_id == runtime.binding_id,
+        OfTextIntent.status == 'accepted', OfTextIntent.provider_message_id == OfEngineAccessEvidence.message_id)
         .order_by(OfEngineAccessEvidence.occurred_at.desc(), OfEngineAccessEvidence.created_at.desc()).limit(1))
     return latest is not None and message.created_at > latest.occurred_at
 
@@ -286,8 +290,8 @@ def journey_context(s, runtime, owner, request, message):
     ctx = {'signals': verdict['signals']}
     if verdict['human']:
         ctx['human_required'] = verdict['human']
-    # No new card solely because he complimented something he already bought (he asked for nothing).
-    compliment = 'compliment' in verdict['signals'] and _purchase_before(s, runtime, owner.fan_id, message)
+    # No new card solely because he complimented a previously reported unlock (he asked for nothing).
+    compliment = 'compliment' in verdict['signals'] and _unlock_before(s, runtime, owner.fan_id, message)
     gate = backfill_complete(s, runtime.account_id, owner.fan_id)
     unscoped = has_unscoped_messages(s, runtime.account_id, owner.fan_id, runtime.binding_id)
     # Hard blocks only. The owner's sales state (paused / scoped) is the existing sales mechanism and is judged
@@ -298,7 +302,7 @@ def journey_context(s, runtime, owner, request, message):
     ctx['backfill_complete'] = gate
     ctx['history_scope_incomplete'] = bool(unscoped)
     if compliment:
-        ctx['compliment_after_purchase'] = True
+        ctx['compliment_after_unlock'] = True
     if verdict['no_promise']:
         ctx['no_promise'] = True
     line = identity_line_for(runtime.account_id, config)
@@ -322,8 +326,8 @@ def journey_problems(ctx, proposal):
         problems.append('journey: no offer is allowed in this turn')
     if proposal.action == 'offer' and ctx.get('sales_mode') == 'paused' and proposal.sales_signal != 'reopen':
         problems.append('journey: selling is paused and only his explicit, scoped interest reopens it')
-    if ctx.get('compliment_after_purchase') and (proposal.action != 'reply' or proposal.pitch):
-        problems.append('journey: he only complimented what he bought; send no new card or pitch')
+    if ctx.get('compliment_after_unlock') and (proposal.action != 'reply' or proposal.pitch):
+        problems.append('journey: he only complimented an earlier unlock; send no new card or pitch')
     if ctx.get('no_promise') and promises_custom(proposal.body, *proposal.parts):
         problems.append('journey: a custom request is flagged and must not be promised')
     line = ctx.get('approved_identity_line')

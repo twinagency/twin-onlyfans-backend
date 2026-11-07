@@ -18,7 +18,7 @@ from hashlib import sha256
 import json
 import re
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from db.models import Fan, Message, OfConversationState, OfCreatorBinding
@@ -81,9 +81,11 @@ class FansEventIntake:
             # An authenticated provider event is not sufficient authority to
             # project it through a worker assigned to another creator/tenant.
             if expected_account is not None:
+                from db.onlyfans_models import OfRuntime
                 binding = s.get(OfCreatorBinding, connection.binding_id)
-                if (connection.account_id != expected_account or binding is None
-                        or binding.tenant_id != expected_tenant):
+                runtime = s.get(OfRuntime, expected_account)
+                if (connection.account_id != expected_account or binding is None or runtime is None
+                        or binding.tenant_id != expected_tenant or connection.binding_id != runtime.binding_id):
                     raise Refused('webhook account scope mismatch')
             account, epoch = connection.account_id, connection.epoch
             existing = s.get(OfFansWebhook, (account, epoch, event_key))
@@ -170,8 +172,15 @@ class FansEventIntake:
             if row is None or row.status != 'pending':
                 return row.status if row is not None else 'missing'
             raw = s.get(OfFansWebhook, (account, epoch, event_key))
-            body = _parse(raw.raw_body)
             connection = s.get(OfFansConnection, (account, epoch))
+            from db.onlyfans_models import OfRuntime
+            runtime = s.get(OfRuntime, account)
+            if connection is None or runtime is None or connection.binding_id != runtime.binding_id:
+                # Retain raw and projection; never project an old creator's
+                # event through the currently bound creator's account.
+                row.status, row.detail, row.updated_at = 'held', 'historical_creator_binding', now
+                return row.status
+            body = _parse(raw.raw_body)
             link = self._link(s, connection, now)
             row.attempts += 1
             try:
@@ -412,14 +421,23 @@ class FansEventIntake:
             rows = s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
                 OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind == 'human_sent',
                 OfFansEvidence.status == 'pending').order_by(OfFansEvidence.occurred_at).with_for_update()).all()
+            from db.onlyfans_models import OfRuntime
+            from .evidence_scope import webhook_binding
+            runtime = s.get(OfRuntime, account)
+            policy = s.get(OfDeliveryPolicy, account)
             for row in rows:
+                if policy is not None and policy.transport_kind == 'fansapi' and (
+                        runtime is None or webhook_binding(s, row) != runtime.binding_id):
+                    row.reason, row.updated_at = 'creator_scope_unverified', now
+                    continue
                 own = s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account,
-                    OfTextIntent.provider_message_id == row.message_id))
+                    OfTextIntent.binding_id == runtime.binding_id, OfTextIntent.provider_message_id == row.message_id))
                 if own is not None:
                     row.status, row.reason, row.intent_id, row.updated_at = 'dismissed', 'own_send', own, now
                     continue
                 unresolved = s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account,
-                    OfTextIntent.fan_id == fan_id, OfTextIntent.status.in_(('dispatching', 'unknown'))).limit(1))
+                    OfTextIntent.binding_id == runtime.binding_id, OfTextIntent.fan_id == fan_id,
+                    OfTextIntent.status.in_(('dispatching', 'unknown'))).limit(1))
                 if unresolved is not None:
                     row.reason, row.updated_at = 'send_unresolved', now
                 elif now - row.created_at < self.grace:
@@ -436,9 +454,21 @@ class FansEventIntake:
             if row.status != 'pending':
                 return
             runtime = s.get(OfRuntime, account)
+            if runtime is None:
+                return
+            policy = s.get(OfDeliveryPolicy, account)
+            from .evidence_scope import webhook_binding
+            if policy is not None and policy.transport_kind == 'fansapi' and webhook_binding(s, row) != runtime.binding_id:
+                row.reason, row.updated_at = 'creator_scope_unverified', now
+                return
             binding = s.get(OfCreatorBinding, runtime.binding_id)
-            raw = s.scalar(select(OfFansWebhook.raw_body).where(OfFansWebhook.account_id == account,
-                OfFansWebhook.event_key == row.event_key)) if row.event_key else None
+            if binding is None:
+                return
+            raw = s.scalar(select(OfFansWebhook.raw_body).join(OfFansConnection, and_(
+                OfFansConnection.account_id == OfFansWebhook.account_id,
+                OfFansConnection.epoch == OfFansWebhook.epoch)).where(OfFansWebhook.account_id == account,
+                OfFansConnection.binding_id == runtime.binding_id, OfFansWebhook.event_key == row.event_key,
+                OfFansWebhook.payload_sha256 == row.raw_sha256).order_by(OfFansWebhook.epoch.desc()).limit(1)) if row.event_key else None
             if raw is not None:
                 payload = _parse(raw)['payload']
                 text = strip_html(payload.get('text') or '')

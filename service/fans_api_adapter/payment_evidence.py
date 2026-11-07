@@ -5,7 +5,7 @@ Provider facts about a purchase:
 * ``messages.ppv.unlocked``  names OUR sent message (``message_id``), the fan
   (``chat_id``; ``user_id`` is the CREATOR in that event) and the amount. That
   is message-bound evidence: it is checked against the accepted send, the fan,
-  the frozen price and the offer grant, and then recorded as the purchase.
+  the frozen price and the offer grant, and retained as an unlock observation.
 * ``transactions.new``       carries a provider transaction id and an amount but
   NO message id, and can be delayed by minutes.
 * ``chargebacks.new``        names a transaction id, never a message.
@@ -123,6 +123,14 @@ def _link_unlock(s, row, now):
     if intent is None:
         row.reason = 'no_matching_send'
         return None
+    policy = s.get(OfDeliveryPolicy, row.account_id)
+    if policy is not None and policy.transport_kind == 'fansapi':
+        from db.onlyfans_models import OfRuntime
+        from .evidence_scope import webhook_binding
+        runtime = s.get(OfRuntime, row.account_id)
+        if runtime is None or intent.binding_id != runtime.binding_id or webhook_binding(s, row) != runtime.binding_id:
+            row.reason, row.updated_at = 'creator_scope_unverified', now
+            return None
     if intent.fan_id != row.fan_id:
         _hold(s, row, 'fan_mismatch', now)
         return None
@@ -163,6 +171,14 @@ def match(s, account, fan_id, now, *, window=None, mismatch_settle=None):
             if _link_unlock(s, row, now) is not None and not was_linked:
                 changed = True
         elif row.reason != 'unlinked_transaction':
+            policy = s.get(OfDeliveryPolicy, account)
+            if policy is not None and policy.transport_kind == 'fansapi':
+                from db.onlyfans_models import OfRuntime
+                from .evidence_scope import webhook_binding
+                runtime = s.get(OfRuntime, account)
+                if runtime is None or webhook_binding(s, row) != runtime.binding_id:
+                    row.reason, row.updated_at = 'creator_scope_unverified', now
+                    continue
             row.reason, row.updated_at = 'unlinked_transaction', now
     return changed
 
@@ -199,7 +215,7 @@ def _commerce(store):
 
 
 def _engine_access(store, account, unlock_id, now):
-    """Real-provider accounts only: tell the engine its accepted offer was paid for (unlock evidence).
+    """Real-provider accounts only: record an unlock observation for the accepted offer.
 
     The provider's matching unlock is access evidence, not a transaction or settlement.
     A refusal is retained on the evidence row for operator review.
@@ -298,6 +314,14 @@ def flag_unlinked_reversal(store, account, chargeback_id, now):
         cb = s.get(OfFansEvidence, (account, chargeback_id), with_for_update=True)
         if cb is None or cb.status != 'pending':
             return cb.status if cb is not None else 'missing'
+        policy = s.get(OfDeliveryPolicy, account)
+        if policy is not None and policy.transport_kind == 'fansapi':
+            from db.onlyfans_models import OfRuntime
+            from .evidence_scope import webhook_binding
+            runtime = s.get(OfRuntime, account)
+            if runtime is None or webhook_binding(s, cb) != runtime.binding_id:
+                cb.reason, cb.updated_at = 'creator_scope_unverified', now
+                return 'pending'
         if cb.reason != 'unlinked_reversal':
             cb.reason, cb.updated_at = 'unlinked_reversal', now
             attention(s, account, cb.fan_id)

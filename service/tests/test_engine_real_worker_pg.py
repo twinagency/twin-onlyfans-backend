@@ -540,7 +540,7 @@ def test_subscription_for_another_creator_is_held(world):
 # ======================================================================== journey (b): post-purchase
 
 def _sell(world, item=None):
-    """Sell the first item through the real chain and settle it with a verified unlock + transaction."""
+    """Send one approved simulated offer and return its provider message id."""
     world.backfilled(FAN)
     grant = world.grant(item)
     world.reply(lambda snap: SyntheticProposal('Here you go', action='offer', offer_grant_id=grant))
@@ -566,7 +566,7 @@ def test_compliment_after_a_verified_purchase_gets_a_reply_but_no_new_card(world
     world.reply(lambda snap: SyntheticProposal('Thank you!! Want more?', action='offer', offer_grant_id=offer2))
     refused, mid = world.say('omg thank you, that was so hot', seconds=10)
     assert refused['outcome'] == 'refused' and 'no offer is allowed' in refused['detail']
-    assert world.snaps[-1]['journey']['compliment_after_purchase'] is True
+    assert world.snaps[-1]['journey']['compliment_after_unlock'] is True
     world.reply(lambda snap: SyntheticProposal('Thank you, that really made my day', pitch=True))
     assert world.turn(TENANT, ACCOUNT, FAN, mid)['outcome'] == 'refused'   # a pitch on a compliment turn is refused too
     assert len(world.fans.posts) == posts_before
@@ -576,8 +576,25 @@ def test_compliment_after_a_verified_purchase_gets_a_reply_but_no_new_card(world
     # a message that actually asks for something is not a compliment turn: the next card may go out
     world.reply(lambda snap: SyntheticProposal('Since you asked', action='offer', offer_grant_id=offer2))
     nxt, mid2 = world.say('what else do you have', seconds=20)
-    assert 'compliment_after_purchase' not in world.snaps[-1]['journey'] and world.snaps[-1]['journey']['offers_allowed'] is True
+    assert 'compliment_after_unlock' not in world.snaps[-1]['journey'] and world.snaps[-1]['journey']['offers_allowed'] is True
     assert nxt['outcome'] == 'accepted' and world.fans.posts[-1]['body']['price'] == 15.0
+
+
+def test_unlock_observation_is_scoped_to_the_fan_and_current_creator_binding(world):
+    from types import SimpleNamespace
+    from conversation_engine.journey import _unlock_before
+    _, offer_message = _sell(world)
+    world.send(unlock(offer_message), key='scoped-unlock')
+    world.say_plain('Thank you')
+    result, mid = world.say('that was so hot', seconds=10)
+    assert result['outcome'] == 'accepted'
+    with Session(world.database[1]) as s:
+        runtime = world.store._runtime(s, TENANT, ACCOUNT)
+        message = s.get(Message, (ACCOUNT, FAN, mid))
+        assert _unlock_before(s, runtime, FAN, message)
+        assert not _unlock_before(s, runtime, FAN2, message)
+        other_binding = SimpleNamespace(account_id=ACCOUNT, binding_id='another-creator-binding')
+        assert not _unlock_before(s, other_binding, FAN, message)
 
 
 def test_an_unlock_for_a_message_that_is_not_our_offer_is_not_a_purchase(world):
@@ -587,7 +604,7 @@ def test_an_unlock_for_a_message_that_is_not_our_offer_is_not_a_purchase(world):
     assert world.rows(OfEngineAccessEvidence) == []
     world.say_plain('hello again')
     world.say('hello again?', seconds=10)
-    assert 'compliment_after_purchase' not in world.snaps[-1].get('journey', {})
+    assert 'compliment_after_unlock' not in world.snaps[-1].get('journey', {})
 
 
 # ======================================================================== journey (c): whale hold (DEFERRED for Plan C)

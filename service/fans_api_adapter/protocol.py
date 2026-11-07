@@ -23,6 +23,8 @@ from .webhooks import verify_signature
 from conversation_engine.recovery import Outcome
 
 BASE = 'https://app.onlyfansapi.com'
+# The provider moved API calls to api.fansapi.com; both hosts are the same service.
+ALLOWED_BASES = ('https://app.onlyfansapi.com', 'https://api.fansapi.com')
 _ACCOUNT = re.compile(r'acct_[A-Za-z0-9_-]{1,240}\Z')
 _NUMERIC = re.compile(r'[1-9][0-9]{0,18}\Z')
 _KEY = re.compile(r'[\x21-\x7e]{1,255}\Z')
@@ -44,6 +46,7 @@ class Result:
     trace_id: str | None = None
     http_status: int | None = None
     original_trace_id: str | None = None
+    replayed: bool = False
 
 
 def _id(value):
@@ -82,15 +85,19 @@ class FansApiClient:
     No environment variable enables this object and no default HTTP callable is
     supplied. Integrators must obtain the separately approved egress authority.
     """
-    def __init__(self, *, account, creator_id, epoch, token, http, timeout, enabled=False):
+    def __init__(self, *, account, creator_id, epoch, token, http, timeout, enabled=False, base=BASE):
         if (enabled is not True or type(account) is not str or not _ACCOUNT.fullmatch(account)
                 or type(epoch) is not int or epoch < 1 or type(token) is not str or not token.strip() or len(token) > 4096
                 or token != token.strip() or any(ord(c) < 33 or ord(c) > 126 for c in token) or not callable(http)
-                or type(timeout) not in (int, float) or not 0 < timeout <= 30):
+                or type(timeout) not in (int, float) or not 0 < timeout <= 30
+                or base not in ALLOWED_BASES):
             raise ValueError('explicit protocol configuration required')
         self.account, self.creator_id, self.epoch = account, _id(creator_id), epoch
         self._token, self._http, self._timeout = token, http, timeout
         self._identity_verified = False
+        self.base = base
+        self.last_replayed = False
+        self.credits_balance = None
 
     def _request(self, method, url, body=None, key=None):
         headers = {'Authorization': 'Bearer ' + self._token, 'Accept': 'application/json'}
@@ -103,6 +110,11 @@ class FansApiClient:
             return None, None, None, None
         if type(response) is not Response or type(response.status) is not int:
             return None, None, None, None
+        headers = response.headers if type(response.headers) is dict else {}
+        lowered = {k.lower(): v for k, v in headers.items() if type(k) is str}
+        self.last_replayed = str(lowered.get('idempotent-replayed', '')).strip().lower() == 'true'
+        balance = lowered.get('x-ofapi-credits-balance')
+        self.credits_balance = int(balance) if type(balance) is str and balance.isdecimal() else self.credits_balance
         try:
             parsed = _object(response.body)
         except (ValueError, TypeError, UnicodeError, RecursionError):
@@ -111,7 +123,7 @@ class FansApiClient:
 
     def identity(self):
         self._identity_verified = False
-        status, body, trace, original_trace = self._request('GET', BASE + '/api/accounts')
+        status, body, trace, original_trace = self._request('GET', self.base + '/api/accounts')
         if status != 200 or type(body) is not list or len(body) > 1000:
             return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
         matches = [row for row in body if type(row) is dict and row.get('id') == self.account]
@@ -132,7 +144,7 @@ class FansApiClient:
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError('invalid page bound')
         url = (validate_history_next_page(next_page, connection_id=self.account, chat_id=chat)
-               if next_page is not None else BASE + f'/api/{self.account}/chats/{chat}/messages?' + urlencode({'limit':limit, 'order':'desc'}))
+               if next_page is not None else self.base + f'/api/{self.account}/chats/{chat}/messages?' + urlencode({'limit':limit, 'order':'desc'}))
         if next_page is not None:
             pairs = parse_qsl(urlsplit(url).query, keep_blank_values=True, max_num_fields=8)
             allowed = {'limit','filter','first_id','last_id','id','order','skip_users'}
@@ -160,27 +172,30 @@ class FansApiClient:
             return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
         return Result('observed', page.messages, page.next_page, trace, status, original_trace)
 
-    def send(self, chat_id, *, key, text, media=(), previews=(), price_cents=0, currency='USD'):
+    def send(self, chat_id, *, key, text, media=(), previews=(), price_cents=0, currency='USD', block_banned_words=None):
         if not self._identity_verified: raise ValueError('verified provider identity required')
         chat = _id(chat_id)
         if (type(key) is not str or not _KEY.fullmatch(key) or type(text) is not str
                 or len(text.encode()) > 20000 or type(media) not in (list, tuple) or len(media) > 100
                 or type(previews) not in (list, tuple) or len(previews) > len(media)
                 or type(price_cents) is not int or (price_cents != 0 and not 300 <= price_cents <= 20000)
-                or currency != 'USD' or (not text.strip() and not media) or (price_cents and not media)):
+                or currency != 'USD' or (not text.strip() and not media) or (price_cents and not media)
+                or block_banned_words not in (None, 'strict_ban')):
             raise ValueError('invalid immutable send')
         files = [_media_id(value) for value in media]
         preview_files = [_media_id(value) for value in previews]
         if len(set(files)) != len(files) or len(set(preview_files)) != len(preview_files) or any(v not in files for v in preview_files):
             raise ValueError('invalid media/preview identity')
         fields = ['"text":' + json.dumps(text, ensure_ascii=False)]
+        if block_banned_words is not None:
+            fields.append('"blockBannedWords":' + json.dumps(block_banned_words))
         if files:
             fields += ['"mediaFiles":' + json.dumps(files, separators=(',', ':')),
                        '"previews":' + json.dumps(preview_files, separators=(',', ':'))]
         if price_cents:
             fields.append('"price":%d.%02d' % divmod(price_cents, 100))
         payload = ('{' + ','.join(fields) + '}').encode('utf-8')
-        status, body, trace, original_trace = self._request('POST', BASE + f'/api/{self.account}/chats/{chat}/messages', payload, key)
+        status, body, trace, original_trace = self._request('POST', self.base + f'/api/{self.account}/chats/{chat}/messages', payload, key)
         if status == 200 and type(body) is dict and type(body.get('data')) is dict:
             try:
                 message_id = _id(body['data'].get('id'))
@@ -190,13 +205,39 @@ class FansApiClient:
                 stamp = datetime.fromisoformat(created.replace('Z', '+00:00'))
                 if stamp.tzinfo is None or stamp.utcoffset() is None:
                     raise ValueError('timestamp timezone absent')
-                return Result('accepted', {'message_id':message_id, 'created_at':created}, trace_id=trace, http_status=status, original_trace_id=original_trace)
+                return Result('accepted', {'message_id':message_id, 'created_at':created}, trace_id=trace, http_status=status,
+                              original_trace_id=original_trace, replayed=self.last_replayed)
             except ValueError:
                 pass
         outcome = classify_send_error(status, body)
+        if (outcome is Outcome.UNKNOWN and status in (400, 422) and type(body) is dict
+                and body.get('error') != 'IDEMPOTENCY_KEY_MISMATCH'):
+            # Validation refusal (for example a banned word): the provider executed nothing.
+            return Result('rejected', trace_id=trace, http_status=status, original_trace_id=original_trace)
         state = ('not_sent' if outcome is Outcome.NOT_SENT else 'key_mismatch' if outcome is Outcome.KEY_MISMATCH
                  else 'conflict' if outcome is Outcome.CONFLICT else 'unknown')
         return Result(state, trace_id=trace, http_status=status, original_trace_id=original_trace)
+
+    def vault(self, *, limit=100, offset=0):
+        """One page of GET media/vault. Reading the vault sends nothing."""
+        if not self._identity_verified: raise ValueError('verified provider identity required')
+        if type(limit) is not int or not 10 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= 10_000_000:
+            raise ValueError('invalid vault page')
+        status, body, trace, original_trace = self._request('GET', self.base + f'/api/{self.account}/media/vault?' + urlencode({'limit':limit, 'offset':offset}))
+        data = body.get('data') if type(body) is dict else None
+        if (status != 200 or type(data) is not dict or type(data.get('list')) is not list
+                or type(data.get('hasMore')) is not bool or len(data['list']) > limit
+                or any(type(row) is not dict for row in data['list'])):
+            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+        return Result('observed', tuple(data['list']), 'more' if data['hasMore'] else None, trace, status, original_trace)
+
+    def vault_lists(self):
+        if not self._identity_verified: raise ValueError('verified provider identity required')
+        status, body, trace, original_trace = self._request('GET', self.base + f'/api/{self.account}/media/vault/lists')
+        data = body.get('data') if type(body) is dict else None
+        if status != 200 or type(data) is not dict or type(data.get('list')) is not list or any(type(row) is not dict for row in data['list']):
+            return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+        return Result('observed', tuple(data['list']), None, trace, status, original_trace)
 
     def transactions(self, *, limit=10, marker=None):
         if not self._identity_verified: raise ValueError('verified provider identity required')
@@ -206,7 +247,7 @@ class FansApiClient:
         params = {'limit':limit}
         if marker is not None:
             params['marker'] = transaction_marker(marker)
-        status, body, trace, original_trace = self._request('GET', BASE + f'/api/{self.account}/transactions?' + urlencode(params))
+        status, body, trace, original_trace = self._request('GET', self.base + f'/api/{self.account}/transactions?' + urlencode(params))
         if status != 200 or type(body) is not dict or type(body.get('data')) is not dict:
             return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
         data = body['data']
@@ -230,7 +271,7 @@ class FansApiClient:
         if not self._identity_verified: raise ValueError('verified provider identity required')
         if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= 1_000_000:
             raise ValueError('invalid chargeback page')
-        status, body, trace, original_trace = self._request('GET', BASE + f'/api/{self.account}/chargebacks?' + urlencode({'limit':limit, 'offset':offset}))
+        status, body, trace, original_trace = self._request('GET', self.base + f'/api/{self.account}/chargebacks?' + urlencode({'limit':limit, 'offset':offset}))
         # Provider response layout/evidence semantics still need qualification.
         if status != 200 or body is None:
             return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)

@@ -94,7 +94,7 @@ def approve_simulated_offer(store, tenant, account, fan_id, item_id, coverage):
 def verified_terms(s, runtime, owner, grant, *, intent_id=None):
     if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id
             or grant is None or grant.binding_id != runtime.binding_id or grant.fan_id != owner.fan_id
-            or not grant.coverage_ref.startswith('synthetic:') or grant.expires_at <= utcnow()
+            or not grant.coverage_ref.startswith(('synthetic:', 'vault:')) or grant.expires_at <= utcnow()
             or grant.used_intent_id not in (None, intent_id) or not _sales_permits(owner, grant.item_id)):
         raise Refused('offer authorization is stale or unavailable')
     policy = s.get(OfDeliveryPolicy, runtime.account_id)
@@ -108,6 +108,59 @@ def verified_terms(s, runtime, owner, grant, *, intent_id=None):
     if request_exists(s, runtime.account_id, owner.fan_id, terms):
         raise Refused('an existing offer needs review')
     return terms
+
+
+@dataclass(frozen=True)
+class RealCatalogueCoverage:
+    """Approval that a synced, operator-approved catalogue item may be offered to one fan.
+
+    Unlike SyntheticCoverage it asserts no ownership fixture: fan ownership still comes
+    from the local ledger (`_unowned`). Media must be live vault records from a real sync.
+    """
+    account_id: str
+    fan_id: int
+    item_id: int
+    evidence_ref: str
+    valid_until: datetime
+
+
+def approve_catalogue_offer(store, tenant, account, fan_id, item_id, coverage):
+    from db.models import VaultItem
+    if (type(coverage) is not RealCatalogueCoverage or coverage.account_id != account or coverage.fan_id != fan_id
+            or coverage.item_id != item_id):
+        raise Refused('catalogue coverage scope mismatch')
+    _id(fan_id); _id(item_id)
+    if (type(coverage.evidence_ref) is not str or not coverage.evidence_ref.startswith('vault:')
+            or len(coverage.evidence_ref) > 128 or not isinstance(coverage.valid_until, datetime)
+            or coverage.valid_until.tzinfo is not None or coverage.valid_until <= utcnow()):
+        raise Refused('catalogue coverage is incomplete')
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        owner = s.get(OfEngineOwner, (account, fan_id))
+        policy = s.get(OfDeliveryPolicy, account)
+        if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id
+                or policy is None or policy.transport_kind != 'synthetic' or not policy.media_enabled
+                or not _sales_permits(owner, item_id)):
+            raise Refused('catalogue offer is not authorized')
+        terms = catalog_terms(s, account, item_id)  # approved, enabled, priced, media live
+        for saved in terms['files']:
+            v = s.get(VaultItem, (account, saved['media_id']))
+            if v is None or v.removed_at is not None or v.content_hash_kind != 'vault-metadata-v1':
+                raise Refused('media is not a synced real vault item')
+        _unowned(s, account, fan_id, terms)
+        digest = _hash(terms)
+        prior = s.scalar(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == account,
+            OfEngineOfferGrant.fan_id == fan_id, OfEngineOfferGrant.item_id == item_id,
+            OfEngineOfferGrant.terms_hash == digest))
+        if prior is not None:
+            if prior.binding_id != runtime.binding_id or prior.used_intent_id is not None or prior.expires_at <= utcnow():
+                raise Refused('existing offer authorization needs review')
+            return prior.grant_id
+        grant_id = str(uuid.uuid4())
+        s.add(OfEngineOfferGrant(account_id=account, grant_id=grant_id, fan_id=fan_id,
+            binding_id=runtime.binding_id, item_id=item_id, terms_hash=digest,
+            coverage_ref=coverage.evidence_ref, expires_at=coverage.valid_until, created_at=utcnow()))
+        return grant_id
 
 
 @dataclass(frozen=True)

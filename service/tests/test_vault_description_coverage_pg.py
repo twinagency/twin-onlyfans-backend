@@ -363,3 +363,42 @@ def test_other_account_media_is_never_selected_or_described(rig):
     with Session(rig.database[1]) as s:
         v = s.get(VaultItem, (other, 15001))
         assert v.describe_status is None and not v.description
+
+
+def test_model_result_does_not_stamp_new_content_when_media_changes_during_call(rig, monkeypatch):
+    import llm_client
+    import vault_ai_api as api
+    from types import SimpleNamespace
+
+    rig.update(content_hash="v1", content_hash_kind="fixture")
+    async def changed_during_call(**kwargs):
+        rig.update(content_hash="v2")
+        return SimpleNamespace(content=PHOTO_JSON, call_id=None, cost_cents=3)
+    monkeypatch.setattr(llm_client, "chat", changed_during_call)
+
+    result = rig.arun(api._describe_one(ACCOUNT, MID, model="qwen3-vl-30b", escalate=False))
+    row = rig.row()
+    assert result["ok"] is False and result["status"] == "content_changed"
+    assert result["cost_millicents"] == 3
+    assert row.content_hash == "v2"
+    assert json.loads(row.ai_fields_json or "{}").get("_content_stamp") != "fixture:v2"
+
+
+def test_operator_lock_added_during_model_call_is_preserved(rig, monkeypatch):
+    import llm_client
+    import vault_ai_api as api
+    from types import SimpleNamespace
+
+    rig.update(content_hash="v1", content_hash_kind="fixture")
+    async def edit_during_call(**kwargs):
+        rig.update(description="Operator text",
+                   operator_overrides_json=json.dumps({"description": "Operator text"}),
+                   locked_fields_json=json.dumps(["description"]))
+        return SimpleNamespace(content=PHOTO_JSON, call_id=None, cost_cents=3)
+    monkeypatch.setattr(llm_client, "chat", edit_during_call)
+
+    result = rig.arun(api._describe_one(ACCOUNT, MID, model="qwen3-vl-30b", escalate=False))
+    row = rig.row()
+    assert result["ok"] is True
+    assert row.description == "Operator text"
+    assert json.loads(row.operator_overrides_json)["description"] == "Operator text"

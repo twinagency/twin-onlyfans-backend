@@ -113,3 +113,77 @@ def test_rate_limit_recovery_revalidates_before_new_attempt(database,monkeypatch
         assert len(s.scalars(select(OfTextIntent).where(OfTextIntent.moxy_event_id==identity)).all())==1
     assert fresh.calls==[]
     store.close()
+
+
+def test_scoped_retirement_rearms_only_new_input_and_keeps_late_receipt(database, monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from db.models import OfConversationState
+    from db.onlyfans_models import OfWork
+    from native_pilot.scope import AccountScope
+    from onlyfans_runtime import native_protocol, send_recovery
+    from onlyfans_runtime.store import Refused
+    from onlyfans_runtime.text_delivery import Accepted
+    from moxy_replacement.runtime import snapshot
+    from test_onlyfans_foundation_pg import event
+
+    engine, store, service, authority, _, settings = setup(database, monkeypatch)
+    original, _ = run(service, engine, decision(), payload={'source_message_id': 1})
+    intent_id = service.queue(TENANT, ACCOUNT, original)
+    wire = SyntheticTextTransport(ACCOUNT, outcome='timeout')
+    assert authority.dispatch(TENANT, ACCOUNT, intent_id, wire) == 'unknown'
+    settings['pilot'] = {'fan_ids': [101], 'product_ids': [p['id'] for p in settings['products']],
+                         'supervisor': settings['operational']['assigned_operator']}
+    service.configure(TENANT, ACCOUNT, expected_revision=1, mode='off',
+                      settings=settings, actor='fixture-operator')
+    store.record(TENANT, ACCOUNT, event(mid=2, body='A new question'))
+    store.drain(TENANT, ACCOUNT)
+    with Session(engine) as session, session.begin():
+        intent = session.get(OfTextIntent, (ACCOUNT, intent_id))
+        intent.expires_at = intent.deadline = utcnow() - timedelta(seconds=1)
+        policy = session.get(OfDeliveryPolicy, ACCOUNT)
+        policy.transport_kind = 'native'
+        policy.delivery_mode = 'gap'
+        control = session.get(OfConversationState, (ACCOUNT, 101))
+        work = session.get(OfWork, (ACCOUNT, 101))
+        assert work.target_message_id == 2 and work.status == 'blocked'
+        attempt, revision, used = intent.attempt_id, control.revision, policy.used_units
+
+    monkeypatch.setattr(AccountScope, 'parse', staticmethod(lambda _: SimpleNamespace(provider_id='901')))
+    monkeypatch.setattr(native_protocol, 'message', lambda raw, **_: SimpleNamespace(
+        message_id=raw['id'], direction=raw['direction']))
+    args = dict(expected_attempt_id=attempt, expected_revision=revision, next_input_id=2,
+                complete=True, observed_at=utcnow(), command_key='b' * 64,
+                actor='op-session:' + 'a' * 64, reason='Verified inbound after expired text attempt')
+    with pytest.raises(Refused, match='positive reconciliation'):
+        send_recovery.retire_unconfirmed_text(authority, TENANT, ACCOUNT, 101, intent_id,
+            history=[{'id': 3, 'direction': 'out'}, {'id': 2, 'direction': 'in'}], **args)
+    result = send_recovery.retire_unconfirmed_text(authority, TENANT, ACCOUNT, 101, intent_id,
+        history=[{'id': 2, 'direction': 'in'}], **args)
+    assert result == {'retired': True, 'deliveryOutcome': 'unconfirmed', 'nextInputId': 2}
+    assert send_recovery.retire_unconfirmed_text(authority, TENANT, ACCOUNT, 101, intent_id,
+        history=[{'id': 2, 'direction': 'in'}], **args) == result
+
+    fresh = service.add_event(TENANT, ACCOUNT, 101, 'turn', 'input:2', {'source_message_id': 2})
+    with Session(engine) as session, session.begin():
+        intent = session.get(OfTextIntent, (ACCOUNT, intent_id))
+        policy = session.get(OfDeliveryPolicy, ACCOUNT)
+        assert intent.status == 'cancelled' and intent.receipt_json is None
+        assert intent.reservation_held and policy.used_units == used and policy.active_intent_id is None
+        assert session.get(OfConversationState, (ACCOUNT, 101)).unresolved_attempt_id is None
+        assert session.get(OfWork, (ACCOUNT, 101)).status == 'waiting'
+        new_snapshot = snapshot(session, ACCOUNT, 101, session.get(MoxyEvent, (ACCOUNT, fresh)))
+        assert [m['id'] for m in new_snapshot['pending_fan_messages']] == [2]
+
+    saved = send_recovery.snapshot(authority, TENANT, ACCOUNT, 101, intent_id)
+    proof = Accepted(ACCOUNT, 101, intent_id, attempt, saved['payload_hash'], 18722,
+                     datetime.now(timezone.utc).isoformat(), 'synthetic:late-provider-proof')
+    assert authority.record_accepted(TENANT, ACCOUNT, intent_id, saved['token'], proof) == 'accepted'
+    assert authority.materialize(TENANT, ACCOUNT, intent_id)
+    with Session(engine) as session:
+        old_event = session.get(MoxyEvent, (ACCOUNT, original))
+        assert old_event.status == 'stale' and old_event.reason == send_recovery.RETIRED_UNCONFIRMED_TEXT
+        assert session.get(OfTextIntent, (ACCOUNT, intent_id)).provider_message_id == 18722
+        assert session.get(MoxyEvent, (ACCOUNT, fresh)).status == 'pending'
+    assert len(wire.calls) == 1
+    store.close()

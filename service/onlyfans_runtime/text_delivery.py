@@ -1010,7 +1010,11 @@ class TextAuthority:
     def record_accepted(self, tenant_id, account_id, intent_id, dispatch_token, receipt):
         with Session(self.engine) as s, s.begin():
             row = self._attempt(s, tenant_id, account_id, intent_id, dispatch_token)
-            if row.status not in {"dispatching", "unknown", "accepted"}:
+            from .send_recovery import RETIRED_UNCONFIRMED_TEXT
+            from conversation_engine.delivery import is_engine_intent
+            retired = (row.status == "cancelled" and row.reason == RETIRED_UNCONFIRMED_TEXT
+                       and not is_engine_intent(s, row))  # engine intents are one-use: never reopened
+            if row.status not in {"dispatching", "unknown", "accepted"} and not retired:
                 raise Refused("attempt is already settled")
             try:
                 if type(receipt) is not Accepted:
@@ -1019,7 +1023,7 @@ class TextAuthority:
                 self._validate_proof(row, receipt)
                 encoded = _json(asdict(receipt))
             except (Refused, TypeError, AttributeError):
-                if row.status == "accepted":
+                if row.status == "accepted" or retired:
                     raise Refused("accepted receipt conflict")
                 self._hold_unknown(s, row, "invalid_receipt", tenant_id)
                 return "unknown"
@@ -1034,6 +1038,8 @@ class TextAuthority:
             other = s.scalar(select(OfTextIntent.intent_id).where(
                 OfTextIntent.account_id == account_id, OfTextIntent.provider_message_id == receipt.message_id,
                 OfTextIntent.intent_id != intent_id).limit(1))
+            if other is not None and retired:
+                raise Refused("retired attempt provider identity conflict")
             row.receipt_json, row.evidence_ref = encoded, receipt.evidence_ref
             if other is not None:
                 self._hold_unknown(s, row, "provider_identity_conflict", tenant_id)
@@ -1284,7 +1290,9 @@ class TextAuthority:
             # Exception text may contain credentials or customer data; log type and frames only.
             import sys, traceback
             frames = ",".join(f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}" for f in traceback.extract_tb(exc.__traceback__)[-6:])
-            print(f"onlyfans_dispatch_failed intent={intent_id} type={type(exc).__name__} at={frames}", file=sys.stderr, flush=True)
+            status = getattr(exc, "send_http_status", None)
+            http = f" http_status={status}" if type(status) is int and 100 <= status <= 599 else ""
+            print(f"onlyfans_dispatch_failed intent={intent_id} type={type(exc).__name__}{http} at={frames}", file=sys.stderr, flush=True)
             return self.mark_unknown(tenant_id, account_id, intent_id, grant.token)
         if type(proof) is NotAccepted:
             return self.record_not_accepted(tenant_id, account_id, intent_id, grant.token, proof)

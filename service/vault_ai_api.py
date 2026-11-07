@@ -2932,14 +2932,16 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
     # The flags are a different reading of the SAME image, so they stay valid
     # across a re-describe. A locked dispute fix outranks model and carried alike.
     prev = load_json(item.ai_fields_json, {}) or {}
-    # A new content fingerprint invalidates automatic visual observations. It
-    # does not erase folder workflow markers or explicit human corrections.
-    if not vds.content_changed(item):
-        for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
-                    "_flags_v", "_flags_model", "_flags_frames", "_flags_arc"):
-            if key in prev:
-                data[key] = prev[key]
-    for key in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
+    # Automatic visual flags describe the prior content version. Keep workflow
+    # markers across versions, but carry visual flags only when content matches.
+    retained_keys = ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1")
+    previous_stamp = prev.get("_content_stamp")
+    current_stamp = vds.stamp_of(item)
+    known_stale = isinstance(previous_stamp, str) and bool(previous_stamp) and previous_stamp != current_stamp
+    if not known_stale:
+        retained_keys += (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
+                          "_flags_v", "_flags_model", "_flags_frames", "_flags_arc")
+    for key in retained_keys:
         if key in prev:
             data[key] = prev[key]
     for key, val in (load_json(item.operator_overrides_json, {}) or {}).items():
@@ -2976,27 +2978,35 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
             await scope_guard(s, media_id, phase="write")
         # A concurrent backfill may have assigned folders while vision ran.
         # Carry its marker from the current row, not just the earlier snapshot.
-        current = await s.scalar(select(VaultItem).where(
+        current_item = await s.scalar(select(VaultItem).where(
             VaultItem.account_id == account_id, VaultItem.media_id == media_id).with_for_update())
-        if current is None or (current.kind, vds.stamp_of(current)) != (item.kind, vds.stamp_of(item)):
-            return {"media_id": media_id, "ok": False, "status": "stale_content",
-                    "detail": "Media changed while the description was being prepared."}
-        from vault_ai_effective import preserve_stale_operator_descriptions
-        current_overrides = load_json(current.operator_overrides_json, {}) or {}
-        preserved = preserve_stale_operator_descriptions(current)
-        if preserved != current_overrides:
-            vals["operator_overrides_json"] = json.dumps(preserved, ensure_ascii=False, default=str)
-        current_locked = set(load_json(current.locked_fields_json, []) or [])
-        for field in ("tip_vault_flag", "tags", "explicitness_tier", "description", "video_description", "search_text"):
+        if current_item is None:
+            return {"media_id": media_id, "ok": False, "status": "missing",
+                    "cost_millicents": result.cost_cents if result else 0}
+        # A model response cannot validate a later content version or overwrite
+        # an operator lock that was added while the model was running.
+        if (vds.stamp_of(current_item) != vds.stamp_of(item)
+                or current_item.kind != item.kind):
+            return {"media_id": media_id, "ok": False, "status": "content_changed",
+                    "cost_millicents": result.cost_cents if result else 0}
+        current_locked = _locked_fields(current_item)
+        for field in ("description", "video_description", "tags", "explicitness_tier",
+                      "tip_vault_flag", "search_text"):
             if field in current_locked:
                 vals.pop(field, None)
-        for key, val in preserved.items():
+        saved_overrides = load_json(current_item.operator_overrides_json, {}) or {}
+        preserved_overrides = preserve_stale_operator_descriptions(current_item)
+        if preserved_overrides != saved_overrides:
+            vals["operator_overrides_json"] = json.dumps(preserved_overrides, ensure_ascii=False)
+        # Dispute fixes live in the AI field blob as well as the override map.
+        # Carry the latest locked values, including edits made during the call.
+        for key, value in preserved_overrides.items():
             if key in current_locked and key in vault_ai_fix.FIXABLE:
-                if val is None:
+                if value is None:
                     data.pop(key, None)
                 else:
-                    data[key] = val
-        current_fields = load_json(current.ai_fields_json, {}) or {}
+                    data[key] = value
+        current_fields = load_json(current_item.ai_fields_json, {}) or {}
         if isinstance(current_fields, dict):
             for marker in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
                 if current_fields.get(marker) is True:
@@ -3702,7 +3712,7 @@ _EDITABLE_FIELDS = (
 )
 
 
-from vault_ai_effective import normalize_tags as _normalize_tags, project_operator_text
+from vault_ai_effective import normalize_tags as _normalize_tags, project_operator_text, preserve_stale_operator_descriptions
 
 
 def _item_edit_view(item: VaultItem, locked: list[str]) -> dict[str, Any]:

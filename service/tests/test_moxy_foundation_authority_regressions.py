@@ -346,3 +346,11 @@ def test_named_cancellation_retains_provably_distinct_pending_request():
         {'id': 3, 'direction': 'in', 'text': 'Do not send the first photo.'},
     ]
     assert [message['id'] for message in current_requests(messages)] == [2]
+
+
+def test_validate_decision_accepts_approved_dinner_cost_with_unpaid_card():
+    settings, snap, _ = authority_scene("How much did dinner cost? Was it nice?")
+    snap["card_state"] = [{"id": 9, "product_id": "first", "price_cents": 7500}]
+    snap["public_facts"] = {"dinner": "Dinner was $20, and it was lovely."}
+    proposed = parse(json.dumps(decision(text="Dinner was $20, and it was lovely.")))
+    assert validate_decision(settings, snap, proposed, planning=True) is None

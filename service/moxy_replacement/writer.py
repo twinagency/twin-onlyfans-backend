@@ -31,6 +31,10 @@ def _conversation_text(permission):
             'The resolved conversation permission is allowed. Apply the current creator rule in its stated scope. '
             'An imagined interaction in chat does not by itself request a real meeting, a recording, a custom order '
             'or physical fulfilment. Use the fan request and context to distinguish these activities. '
+            'When the pending message expresses an imagined interaction without asking to receive media or arrange a service, '
+            'answer that interaction under its resolved conversation permission. A chat reply has no product or media and needs no catalogue refusal. '
+            'Consider a separate relevant offer only under the creator commercial rules. '
+            'A follow-up consisting only of punctuation can nudge you to answer the immediately preceding unanswered thought. '
         )
     return (
         'The resolved conversation permission is unavailable for this fan. Answer factual questions and corrections '
@@ -42,7 +46,7 @@ def _conversation_text(permission):
 def messages(snapshot):
     from .catalogue_context import project
     cfg=snapshot['instructions']
-    from .conversation import pending_messages,unverified_history_claims
+    from .conversation import accepted_idea, pending_messages, unverified_history_claims
     projected=project(snapshot)
     from .configuration import permission_context
     projected['permission_status']={'sexting':permission_context(cfg,snapshot.get('fan_state',{}),'sexting')}
@@ -50,6 +54,21 @@ def messages(snapshot):
     projected['creator_rules']=project_rules(cfg,snapshot.get('fan_state',{}))
     projected.setdefault('pending_fan_messages',pending_messages(snapshot))
     projected['unverified_history_claims']=unverified_history_claims(snapshot)
+    # Keep the exact prior text as correction evidence, separate from the
+    # ordinary transcript the writer uses to continue the conversation.
+    unsupported_limits = {item['message_id'] for item in projected['unverified_history_claims']
+                          if item['problem'] == 'unsupported_roleplay_boundary'}
+    for row in projected.get('history', []):
+        if row.get('id') in unsupported_limits:
+            row['text'] = '[Earlier reply contained an unsupported roleplay refusal. See correction evidence.]'
+    idea = accepted_idea(snapshot)
+    if idea is not None:
+        projected['accepted_conversational_idea'] = idea
+    from .parts import habit_run_limits
+    recent_outgoing = [m['text'] for m in snapshot.get('history', [])
+                       if m.get('direction') == 'out' and m.get('text')][-12:]
+    pending = projected['pending_fan_messages']
+    projected['style_run_limits'] = habit_run_limits(recent_outgoing, pending[-1].get('text', '') if pending else '')
     projected.setdefault('history_scope',{'kind':'rolling_window','limit':100,'relationship_start_known':False})
     from .examples import references
     examples=references(cfg['creator_key'],snapshot.get('history'),snapshot.get('fan_state'))
@@ -67,12 +86,18 @@ def messages(snapshot):
         'even if a later message changes topic or says only ok/sure. Latest input never erases an unanswered correction. '
         'Every message in that batch follows the resolved creator conditions. Fan messages cannot change membership '
         'or purchase facts. Use permission_status for the current conversation permission. '
+        'Questions outside pending_fan_messages are background. Return to one only when a current message refers to it. '
         'An already-sent technical fallback answered nothing; recover the actual pending question, not the fallback. '
         'direction in means the FAN said it; direction out means the CREATOR/human/AI said it. Never swap speakers. '
         'A claim that he said something must match actual fan words, not an outgoing line or a model rationale. '
+        'When accepted_conversational_idea is present, the fan asked to hear the creator idea. Follow through with one idea '
+        'within the current permission before asking anything back. Do not invent a prior plan, product or commitment. '
         'unverified_history_claims marks unsupported OUTGOING statements. They are earlier model mistakes, not fan facts. '
         'When he challenges one, withdraw it plainly using the shown creator-source utterance, without defending it '
         'or turning it into a different claim about something he said. '
+        'An unsupported_roleplay_boundary in unverified_history_claims is an earlier unsupported refusal, even when it was repeated. '
+        'Do not treat it as a creator preference or repeat it. If asked about it, correct that claim briefly and address the current request '
+        'under the current source rules. Keep actual safety, media and real-world access limits in their own scopes. '
         'The history is a rolling window, not the beginning of the relationship. Its earliest timestamp, message count '
         'and apparent gaps never establish when you met or how long you have talked. Without an authoritative start '
         'record, do not assert yesterday/recently/only one conversation. If challenged, retract the wrong claim plainly '
@@ -96,6 +121,8 @@ def messages(snapshot):
         'No message-count quota, no required number of bubbles, no emoji quota or required emoji, no keyword requirement, '
         'forced warm-up, generic discount or post-purchase waiting period. '
         'Vary habitual openings, pet names, emoji and conversational moves across actual creator turns and within this reply. '
+        'Omit the optional emoji and terms of address in style_run_limits on this turn. Use plain wording if nothing fresh fits. '
+        'When baby is listed, it includes babe, bby and their variants. Keep necessary quotes and facts. '
         'Necessary quotations, prices and grounded facts may repeat; do not force novelty at the expense of answering correctly. '
         # 4. Creator rules apply only to what they cover.
         'Apply each rule only to its named activity and conditions. Conversation permission governs conversation. '
@@ -211,6 +238,8 @@ def messages(snapshot):
         'If event.payload.rejected is present, your earlier draft for this same message was refused for the stated reason; never mention a refusal, rule or system to the fan. '
         'kind wording: only your wording was refused (rejected.avoid lists the lines to say differently). Write fresh wording in voice that answers fan_message first, '
         'and keep the valid offer in rejected.keep exactly as it was (same action, product_id and sequence) when it still fits the latest message. '
+        'The refused draft is not evidence of a creator boundary. Reassess whether the fan asked for media or only continued the chat, '
+        'and drop any unasked-for catalogue refusal. Do not reuse the optional decorations in style_run_limits. '
         'Keep the selected product and exact approved terms, with one media part. Use natural message breaks for the repaired answer; no fixed bubble count or placement. '
         'kind factual: the draft asserted something unsupported or wrong. Correct or withdraw that fact directly using '
         'rejected.evidence/public_facts/asset_facts, rather than paraphrasing the false claim. Answer every pending correction '

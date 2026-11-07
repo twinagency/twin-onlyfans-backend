@@ -102,10 +102,65 @@ def _claimed_words(clause,match,end):
     return tail,''
 
 
-def history_problem(snapshot,texts):
+_KNEELING_TOPIC = re.compile(r"\b(?:kneel(?:ing|s)?|on (?:my|her|your) knees)\b", re.I)
+_ROLEPLAY_LIMIT = re.compile(
+    r"\bi\s+(?:don't|do not|won't|will not|never)\s+(?:play\b[^.!?;]{0,40}\bout\b|roleplay\b)"
+    r"|\b(?:not something i play out|not mine to play out)\b", re.I)
+_REAL_OR_MEDIA = re.compile(
+    r"\b(?:in person|in real life|meet up|actual meeting|(?:send|film|record|sell)\b.{0,25}"
+    r"\b(?:photo|pic|video|clip|content|card)s?)\b", re.I)
+
+
+def _unsupported_kneeling_limit(snapshot, text, context):
+    """Screen the observed unsupported standing roleplay limit, not an actual safety refusal."""
+    if not _KNEELING_TOPIC.search(text + ' ' + context):
+        return False
+    instructions = snapshot.get('instructions', {})
+    from .configuration import permission_context
+    if not permission_context(instructions, snapshot.get('fan_state', {}), 'sexting')['allowed']:
+        return False
+    # An explicit source reference to the act leaves its scope and conditions
+    # to the creator rule. Outgoing text and media catalogue terms are not rules.
+    if any(rule.get('key') != 'prohibited_categories'
+           and _KNEELING_TOPIC.search(str(rule.get('instruction', '')) + ' ' + str(rule.get('value', '')))
+           for rule in instructions.get('rules', [])):
+        return False
+    for clause in clauses(text):
+        if _REAL_OR_MEDIA.search(clause) or _RETRACT.search(clause):
+            continue
+        match = _ROLEPLAY_LIMIT.search(clause)
+        if match and not any(start <= match.start() < end for start, end, _ in quotes(clause)):
+            return True
+    return False
+
+
+def accepted_idea(snapshot):
+    """Anchor a short acceptance to the immediately preceding creator invitation."""
+    batch = pending_messages(snapshot)
+    if not batch:
+        return None
+    incoming = batch[-1]
+    answer = incoming.get('text', '').strip().casefold().rstrip(' .!?')
+    if not re.fullmatch(r"(?:tell me|(?:yes|yeah|sure)[, ]+tell me|what(?:'s| is) (?:it|the idea))", answer):
+        return None
+    history = snapshot.get('history', [])
+    position = next((i for i, row in enumerate(history) if row.get('id') == incoming.get('id')), None)
+    if position is None or position == 0:
+        return None
+    offer = history[position - 1]
+    if (offer.get('direction') != 'out'
+            or not re.search(r"\bi(?: (?:got|have|have got)|'ve got) an idea\b", offer.get('text', ''), re.I)):
+        return None
+    return {'creator_message_id': offer['id'], 'fan_message_id': incoming['id'], 'text': offer['text']}
+
+
+def history_problem(snapshot,texts,*,context=None):
+    if context is None:
+        context = ' '.join(m.get('text', '') for m in pending_messages(snapshot))
     fan_spans=_fan_spans(snapshot)
     for text in texts:
         if is_technical_fallback(text):return 'customer_facing_technical_fallback'
+        if _unsupported_kneeling_limit(snapshot, text, context):return 'unsupported_roleplay_boundary'
         for clause in clauses(text):
             quote_spans=quotes(clause)
             def known_creator_quote(position):
@@ -161,9 +216,13 @@ def speaker_evidence(snapshot,texts):
 
 def unverified_history_claims(snapshot):
     result=[]
-    for m in snapshot.get('history',[])[-20:]:
-        if m['direction']!='out':continue
-        problem=history_problem(snapshot,[m.get('text','')])
+    history = snapshot.get('history', [])
+    for index, m in enumerate(history):
+        if index < len(history) - 20 or m['direction'] != 'out':
+            continue
+        previous = history[index - 1] if index else {}
+        context = previous.get('text', '') if previous.get('direction') == 'in' else ''
+        problem = history_problem(snapshot, [m.get('text', '')], context=context)
         if problem is None:continue
         record={'message_id':m['id'],'speaker':'creator','text':m['text'],'problem':problem}
         if problem=='unsupported_fan_attribution':record.update(speaker_evidence(snapshot,[m['text']]))

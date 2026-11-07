@@ -17,8 +17,8 @@ from .vault_management import InvalidVault,_identity,media_reference,digest
 
 
 def asset_fingerprint(row):
-    return digest({key:getattr(row,key) for key in ("account_id","media_id","kind","content_hash","content_hash_kind","description","tags",
-        "operator_overrides_json","locked_fields_json","ai_fields_json","removed_at")})
+    return digest({key:getattr(row,key) for key in ("account_id","media_id","kind","content_hash","content_hash_kind",
+        "description","tags","operator_overrides_json","locked_fields_json","ai_fields_json","removed_at")})
 
 
 def asset_view(row):

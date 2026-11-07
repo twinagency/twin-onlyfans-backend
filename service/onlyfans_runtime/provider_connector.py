@@ -346,7 +346,10 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 if method == "GET" and response.status_code in {408, 425, 500, 502, 503, 504}:
                     raise NativeReadTransientError()
                 if response.status_code not in accepted_statuses:
-                    raise NativeProtocolError("native HTTPS status is not delivery evidence")
+                    error = NativeProtocolError("native HTTPS status is not delivery evidence")
+                    if method == "POST":
+                        error.send_http_status = status
+                    raise error
                 if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
                     raise NativeProtocolError("encoded native HTTPS response is refused")
                 if response.status_code != 204 and response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":

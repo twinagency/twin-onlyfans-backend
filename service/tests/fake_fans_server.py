@@ -1,10 +1,11 @@
 """Loopback fake of the Fans API used by the real-transport tests (no network egress)."""
+import os
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 
-ACCT, CREATOR = 'acct_real_fixture', '323358988'
+ACCT, CREATOR = 'acct_real_fixture', os.environ.get('LIVE_TEST_CREATOR_OF_ID', 'creator-of-id')
 
 
 class FakeFans:

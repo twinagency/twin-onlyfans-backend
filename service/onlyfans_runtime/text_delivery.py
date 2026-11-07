@@ -195,6 +195,11 @@ class TextAuthority:
 
     @staticmethod
     def _media_current(s, row, policy, now):
+        from conversation_engine.delivery import media_current as engine_media_current
+        runtime = s.get(OfRuntime, row.account_id)
+        engine_result = engine_media_current(s, runtime, row)
+        if engine_result is not None:
+            return engine_result
         if row.origin == "manual" and row.catalog_snapshot_json and json.loads(row.catalog_snapshot_json).get("manual_vault") is True:
             from .manual_media import matches
             runtime = s.get(OfRuntime, row.account_id)
@@ -391,12 +396,17 @@ class TextAuthority:
 
     def prepare(self, tenant_id, account_id, fan_id, *, command_key, expected_revision,
                 body, origin, actor, work: Claim | None = None, ttl_seconds=300, native_plan_id=None,
-                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None, manual_media=None, moxy_event_id=None):
+                catalog_item_id=None, quoted_price_cents=None, campaign_id=None, engagement_action_id=None, manual_media=None, moxy_event_id=None, engine_decision_id=None):
         from onlyfans_read.agency_scope import current_scope, actor_allowed
         if current_scope.get() is not None and (origin != "manual" or not actor_allowed(actor, capability="chat")):
             raise Refused("manual messaging permission required")
         _id(fan_id)
-        if moxy_event_id is None:
+        if engine_decision_id is not None:
+            if (type(engine_decision_id) is not str or len(engine_decision_id) != 36 or origin != 'automated'
+                    or moxy_event_id is not None or work is not None or native_plan_id is not None
+                    or manual_media is not None):
+                raise Refused('invalid_engine_decision_reference')
+        elif moxy_event_id is None:
             from moxy_replacement.routing import route_legacy
             route_legacy(self, tenant_id, account_id, fan_id, origin, command_key,
                 {'campaign_id': campaign_id, 'engagement_action_id': engagement_action_id})
@@ -425,9 +435,9 @@ class TextAuthority:
             raise Refused("work scope mismatch")
         if catalog_item_id is not None:
             _id(catalog_item_id)
-            if origin == "automated" and native_plan_id is None and moxy_event_id is None:
+            if origin == "automated" and native_plan_id is None and moxy_event_id is None and engine_decision_id is None:
                 raise Refused("automated media requires its native plan")
-        if quoted_price_cents is not None and (catalog_item_id is None or (native_plan_id is None and moxy_event_id is None)):
+        if quoted_price_cents is not None and (catalog_item_id is None or (native_plan_id is None and moxy_event_id is None and engine_decision_id is None)):
             raise Refused("only a recorded native quote may change the sticker price")
         if manual_media is not None:
             from .manual_media import normalize
@@ -439,6 +449,8 @@ class TextAuthority:
                        actor=actor, work=asdict(work) if work else None, ttl_seconds=ttl_seconds)
         if moxy_event_id is not None:
             request['moxy_event_id'] = moxy_event_id
+        if engine_decision_id is not None:
+            request['engine_decision_id'] = engine_decision_id
         if campaign_id is not None:
             request["campaign_id"] = campaign_id
         if engagement_action_id is not None:
@@ -472,6 +484,9 @@ class TextAuthority:
                 OfDeliveryPolicy.account_id == account_id).with_for_update())
             state = s.get(OfConversationState, (account_id, fan_id))
             fan = s.get(Fan, (account_id, fan_id))
+            from conversation_engine.delivery import prepare as prepare_engine_decision
+            engine_decision = prepare_engine_decision(s, runtime, fan_id, origin, engine_decision_id, body,
+                                                      catalog_item_id, quoted_price_cents)
             from .conversation_policy import action_of
             moxy_event = None
             moxy_terms = None
@@ -515,6 +530,13 @@ class TextAuthority:
                 if not policy.media_enabled or moxy_terms['item']['id'] != catalog_item_id or moxy_terms['price_cents'] != quoted_price_cents:
                     raise Refused('moxy_media_terms_changed')
                 terms = moxy_terms
+            elif engine_decision is not None and engine_decision.action == 'offer':
+                from conversation_engine.commerce import verified_terms
+                from db.onlyfans_engine_models import OfEngineOfferGrant, OfEngineOwner
+                grant = s.get(OfEngineOfferGrant, (account_id, engine_decision.offer_grant_id))
+                terms = verified_terms(s, runtime, s.get(OfEngineOwner, (account_id, fan_id)), grant)
+                if terms['item']['id'] != catalog_item_id or terms['price_cents'] != quoted_price_cents:
+                    raise Refused('engine offer terms changed')
             elif catalog_item_id is not None:
                 from .media_delivery import catalog_terms, assert_unowned
                 if not policy.media_enabled:
@@ -538,7 +560,7 @@ class TextAuthority:
                         "source_quote": saved["source_quote"], "source_message_id": saved["source_message_id"]}
                     if terms["price_cents"] != quoted_price_cents:
                         raise Refused("native price snapshot changed")
-            if origin == "automated" and moxy_event is None:
+            if origin == "automated" and moxy_event is None and engine_decision is None:
                 row = s.get(OfWork, (account_id, fan_id))
                 if not self._valid_work(work, row, state, now):
                     raise Refused("stale planning claim")
@@ -582,6 +604,9 @@ class TextAuthority:
                                preview_json=_json(terms["preview_ids"]) if terms else "[]",
                                price_cents=terms["price_cents"] if terms else 0)
             s.add(intent)
+            if engine_decision is not None:
+                from conversation_engine.delivery import attached as attach_engine_decision
+                attach_engine_decision(s, engine_decision, intent)
             if moxy_event is not None:
                 moxy_event.status, moxy_event.intent_id = 'queued', identity
                 from moxy_replacement.campaigns import attach as attach_moxy_campaign
@@ -642,8 +667,12 @@ class TextAuthority:
             if not obsolete and intent.origin == "manual":
                 obsolete = not staff_owns_takeover(s, account_id, intent.fan_id, state, intent.actor)
             if not obsolete:
-                from moxy_replacement.runtime import current
-                obsolete = not current(s, intent)
+                from conversation_engine.delivery import current as engine_current
+                owner_valid, engine_action = engine_current(s, runtime, intent)
+                obsolete = not owner_valid
+                if not obsolete and not engine_action:
+                    from moxy_replacement.runtime import current
+                    obsolete = not current(s, intent)
             if not obsolete and intent.native_plan_id is not None:
                 from .native_context import matches
                 obsolete = not matches(s, intent)
@@ -663,6 +692,8 @@ class TextAuthority:
             if reason:
                 intent.status = "cancelled" if obsolete else "refused"
                 intent.reason, intent.updated_at = reason, now
+                from conversation_engine.delivery import unsent_cancelled as engine_unsent_cancelled
+                engine_unsent_cancelled(s, intent)
                 if policy is not None:
                     policy.queued_count -= 1
                 return intent.status
@@ -701,6 +732,8 @@ class TextAuthority:
             intent.dispatched_at, intent.deadline = now, now + timedelta(seconds=DISPATCH_SECONDS)
             intent.reservation_held = True
             state.unresolved_attempt_id, state.updated_at = attempt, now
+            from conversation_engine.delivery import attempt_started as engine_attempt_started
+            engine_attempt_started(s, intent)
             return self._grant(intent)
 
     @staticmethod
@@ -792,8 +825,12 @@ class TextAuthority:
             if not obsolete and row.origin == "manual":
                 obsolete = not staff_owns_takeover(s, row.account_id, row.fan_id, state, row.actor)
             if not obsolete:
-                from moxy_replacement.runtime import current
-                obsolete = not current(s, row)
+                from conversation_engine.delivery import current as engine_current
+                owner_valid, engine_action = engine_current(s, runtime, row)
+                obsolete = not owner_valid
+                if not obsolete and not engine_action:
+                    from moxy_replacement.runtime import current
+                    obsolete = not current(s, row)
             if not obsolete and row.native_plan_id is not None:
                 from .native_context import matches
                 obsolete = not matches(s, row)
@@ -847,6 +884,8 @@ class TextAuthority:
                     raise Refused("delivery reservation unavailable")
                 row.status = "cancelled" if obsolete else "refused"
                 row.reason, row.updated_at = "prewire_" + reason, now
+                from conversation_engine.delivery import unsent_cancelled as engine_unsent_cancelled
+                engine_unsent_cancelled(s, row)
                 if row.reservation_held:
                     policy.used_units -= 1
                     row.reservation_held = False
@@ -896,6 +935,8 @@ class TextAuthority:
     @staticmethod
     def _hold_unknown(s, row, reason, tenant_id=None):
         row.status, row.reason, row.updated_at = "unknown", reason, utcnow()
+        from conversation_engine.delivery import unknown as engine_unknown
+        engine_unknown(s, row)
         state = s.get(OfConversationState, (row.account_id, row.fan_id))
         state.unresolved_attempt_id, state.requires_attention, state.updated_at = row.attempt_id, True, utcnow()
         policy = s.get(OfDeliveryPolicy, row.account_id)
@@ -953,6 +994,8 @@ class TextAuthority:
                 from .quote import ACCEPTED
                 row.quote_lifecycle = ACCEPTED
             row.provider_message_id = receipt.message_id
+            from conversation_engine.delivery import attempt_settled as engine_attempt_settled
+            engine_attempt_settled(s, row, 'accepted', encoded)
             return "accepted"
 
     @staticmethod
@@ -1018,6 +1061,9 @@ class TextAuthority:
                 from .quote import CANCELLED
                 row.quote_lifecycle = CANCELLED
             row.receipt_json, row.evidence_ref = encoded, rejection.evidence_ref
+            from conversation_engine.delivery import attempt_settled as engine_attempt_settled, not_accepted as engine_not_accepted
+            engine_attempt_settled(s, row, 'not_accepted', encoded)
+            engine_not_accepted(s, row)
             if row.reservation_held:
                 policy = s.scalar(select(OfDeliveryPolicy).where(
                     OfDeliveryPolicy.account_id == account_id).with_for_update())
@@ -1067,10 +1113,12 @@ class TextAuthority:
                 # A human send is stamped with the Twin-staff sentinel when an operator has
                 # created it, so FASTT can tell it from the AI; absent, the column stays NULL.
                 from .staff_sentinels import human_employee_id
+                from conversation_engine.delivery import is_engine_intent
+                engine_authored = is_engine_intent(s, row)
                 s.add(Message(account_id=account_id, fan_id=row.fan_id, message_id=proof.message_id,
                               direction="out", body=row.body, created_at=stamp, raw_json=row.receipt_json,
                               media_ids=row.media_json, media_count=len(json.loads(row.media_json)),
-                              price_cents=row.price_cents, is_paid=False if row.price_cents else None,
+                              price_cents=row.price_cents, is_paid=None if engine_authored else False if row.price_cents else None,
                               automation_kind=kind,
                               sent_by_employee_id=human_employee_id(s) if kind is None else None))
                 state.input_revision += 1
@@ -1097,12 +1145,15 @@ class TextAuthority:
                 from moxy_replacement.runtime import delivered
                 delivered(s, row)
             row.projected_at, row.updated_at = utcnow(), utcnow()
+            from conversation_engine.delivery import completed as engine_completed
+            engine_completed(s, row)
             self._release_hold(s, row, tenant_id)
             return True
 
     def dispatch(self, tenant_id, account_id, intent_id, transport):
         from .provider_connector import NativeProviderConnector
         from .fastt_manual import FasttManualTransport, fastt_owned
+        from fans_api_adapter.synthetic_transport import FansApiSyntheticTransport
         # One sender per owned fan: only the FASTT runner's transport may send a
         # operator-authored manual/campaign message for it. Campaign origin
         # retains automated-history and campaign-control validation.
@@ -1116,7 +1167,7 @@ class TextAuthority:
         transport_generation = None
         if type(transport) is FasttManualTransport:
             transport_generation = transport.policy_revision
-        elif type(transport) is not SyntheticTextTransport:
+        elif type(transport) not in {SyntheticTextTransport, FansApiSyntheticTransport}:
             try:
                 from .loopback_transport import LoopbackTextTransport
                 from .native_connector import NativeLoopbackConnector

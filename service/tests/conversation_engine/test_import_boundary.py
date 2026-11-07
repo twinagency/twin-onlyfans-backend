@@ -7,7 +7,7 @@ class ImportBoundaryTests(unittest.TestCase):
     def test_new_primitives_do_not_import_legacy_writers_or_network_clients(self):
         service_root = Path(__file__).resolve().parents[2]
         forbidden = {"moxy_replacement", "native_pilot", "twin_bridge", "automations",
-                     "onlyfans_runtime", "socket", "requests", "httpx", "urllib.request", "subprocess"}
+                     "socket", "requests", "httpx", "urllib.request", "subprocess"}
         for package in ("conversation_engine", "fans_api_adapter"):
             for path in (service_root / package).glob("*.py"):
                 tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -21,6 +21,8 @@ class ImportBoundaryTests(unittest.TestCase):
                     for module in modules:
                         with self.subTest(path=path.name, module=module):
                             self.assertFalse(any(module == name or module.startswith(name + ".") for name in forbidden))
+                            if path.name in {"identity.py", "evidence.py", "recovery.py", "sales.py"}:
+                                self.assertFalse(module.startswith("onlyfans_runtime"))
 
 
 if __name__ == "__main__":

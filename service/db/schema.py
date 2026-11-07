@@ -62,7 +62,8 @@ HISTORY_RELEASE_MERGE = "0109_history_release_merge"
 RECENT_HISTORY = "0110_recent_history"
 MOXY = '0111_moxy_owner'
 VAULT_WINDOW = '0112_vault_recent_window'
-HEAD = VAULT_WINDOW
+ENGINE = '0113_conversation_engine'
+HEAD = ENGINE
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -81,6 +82,7 @@ REVISION_RANK[HISTORY_RELEASE_MERGE] = 109
 REVISION_RANK[RECENT_HISTORY] = 110
 REVISION_RANK[MOXY] = 111
 REVISION_RANK[VAULT_WINDOW] = 112
+REVISION_RANK[ENGINE] = 113
 
 
 class SchemaMismatch(RuntimeError):
@@ -89,7 +91,7 @@ class SchemaMismatch(RuntimeError):
 
 def _metadata():
     from .models import Base
-    from . import onlyfans_moxy_models
+    from . import onlyfans_moxy_models, onlyfans_engine_models
     from . import onlyfans_models  # noqa: F401 — register current tables
     from . import onlyfans_delivery_models  # noqa: F401 — register current tables
     from . import onlyfans_campaign_models,onlyfans_connection_models,onlyfans_content_models  # noqa: F401
@@ -193,6 +195,10 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 predicate = str(other.get("dialect_options", {}).get("postgresql_where", ""))
                 if not predicate or (index.name == "uq_of_creator_bindings_active_account" and predicate.replace("(", "").replace(")", "").strip() != "revoked_at IS NULL"):
                     failures.append(f"incompatible predicate {index.name}")
+                if index.name in {"uq_fans_connection_active", "uq_fans_provider_account_active"}:
+                    normal = predicate.replace("(", "").replace(")", "").replace("::text", "").replace("::character varying", "").strip()
+                    if normal != "status = 'active'":
+                        failures.append(f"incompatible predicate {index.name}")
         actual_fks = {(tuple(f["constrained_columns"]), f["referred_table"], tuple(f["referred_columns"])) for f in inspector.get_foreign_keys(table.name)}
         for fk in table.foreign_key_constraints:
             if any(since_rank(c) > expected_rank for c in fk.columns):
@@ -245,6 +251,31 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 or rows[0][3] != trigger or rows[0][5] != "plpgsql"
                 or " ".join(rows[0][4].split()) != f"BEGIN RAISE EXCEPTION '{message}'; END;"):
             failures.append(f"missing append-only protection {table}")
+    if expected_rank >= 113:
+        # A matching revision is insufficient if the immutable evidence guards
+        # or row security have been removed from an existing database.
+        for table, trigger, digest in [
+            ("of_engine_offer_grant", "of_engine_offer_grant_guard", "4047964965e2da94c621737aaf4c7a37cfb3f29a71c1f1460e33ecb02d03667f"),
+            ("of_engine_access_evidence", "of_engine_access_immutable", "b1ca5e7cec1420390577f7847545d2176356f7c3240201d3149e5f19fab9d56b"),
+            ("of_fans_connection", "of_fans_connection_guard", "264c6c5c69c11743c33f0596fa521dee3b782e9dc6f769e66fd99f04c118f074"),
+            ("of_fans_webhook_conflict", "of_fans_webhook_conflict_immutable", "39d01166ca3144e7023fbc6732a73c9ee1866f05b9b9a9cdb8642133c85ae7e2"),
+            ("of_fans_webhook", "of_fans_webhook_immutable", "8bb75b1834fff575d53602b879ee8c46244cc4f8ab640b0b130ce550e513c093"),
+            ("of_engine_attempt", "of_engine_attempt_guard", "1e18c0a1170d1c166ea160c12575d140d0a0fce8638b667807c7f79cb2318c4b"),
+            ("of_engine_decision", "of_engine_decision_guard", "1b56e33ccf1012b5e32442f732e8ac24c939e47f104313fc12d8b6b597c146c7"),
+        ]:
+            guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+                FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+                WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+                {"table": table, "trigger": trigger}).all()
+            if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+                    or guard[0][2] != trigger or guard[0][4] != "plpgsql"
+                    or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != digest):
+                failures.append(f"missing engine evidence protection {table}")
+        for table in ("of_engine_owner", "of_engine_request", "of_engine_decision", "of_engine_offer_grant",
+                      "of_engine_access_evidence", "of_engine_attempt", "of_fans_connection", "of_fans_webhook",
+                      "of_fans_webhook_conflict"):
+            if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
+                failures.append(f"missing engine row security {table}")
     if expected_rank >= 95:
         marker = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.prosrc::text
             FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid

@@ -20,5 +20,12 @@
     "policy_sha256": "01842f467d85ae536613619d1155504a94ddfbeb5a32c4ff555d6c764fcf5b11",
     "child_change": "Same producer/guards/deadlines; scope guard and newest-first automatic selection when enabled",
     "poll_seconds": 7200
+  },
+  "twin_offline_integration": {
+    "status": "offline candidate; not a deployment or provider qualification",
+    "vault_api_sha256": "764d8f9158382dd10dcc23c1aee49a507fa608cff93d93d9609d529955bce8f5",
+    "category_evidence_sha256": "b9f12036c824a1cfd5b8f23e579001d85b8ce1f7ad125b5d639b0cff686fda64",
+    "category_evidence_origin": "unchanged copy of compat/baseline/generic/vault_category_evidence.py",
+    "change": "preserve content-bound human corrections and recheck content and locks at write time"
   }
 }

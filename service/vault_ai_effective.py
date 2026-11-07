@@ -24,6 +24,7 @@ overwrite an existing description with a refusal/blank").
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -122,16 +123,66 @@ def normalize_tags(v: Any) -> list[str]:
 
 
 
-def project_operator_text(field, raw, overrides, locked, columns):
-    """Shared override, lock and compat projection for existing text/tag edits.
+def _description_binding(item: Any, value: str, content_stamp: str | None) -> dict:
+    return {"account_id": item.account_id, "media_id": item.media_id, "kind": item.kind,
+            "content_stamp": content_stamp,
+            "text_sha256": hashlib.sha256(value.strip().encode("utf-8")).hexdigest()}
 
-    Each caller admits its own editable fields. The value and precedence rules
-    stay the same for the legacy editor and the scoped native adapter.
+
+def preserve_stale_operator_descriptions(item: Any) -> dict:
+    """Keep known old-version human evidence before an AI stamp is refreshed.
+
+    A missing or matching legacy stamp remains unknown; it is never promoted to
+    verified evidence. Existing explicit bindings are never rewritten.
     """
-    value=normalize_tags(raw) if field=="tags" else None if raw is None else str(raw)
-    overrides[field]=value
+    import vault_describe_state as vds
+    saved = overrides(item)
+    if not isinstance(saved, dict):
+        raise ValueError("invalid operator overrides")
+    saved = dict(saved)
+    old_stamp = vds.fields_of(item).get("_content_stamp")
+    current_stamp = vds.stamp_of(item)
+    if not isinstance(old_stamp, str) or not old_stamp or not current_stamp or old_stamp == current_stamp:
+        return saved
+    bindings = saved.get("_description_bindings_v1")
+    if bindings is not None and not isinstance(bindings, dict):
+        return saved  # malformed evidence remains invalid, never silently repaired
+    bindings = dict(bindings or {})
+    changed = False
+    for field in ("description", "video_description"):
+        value = effective_value(item, field)
+        if field in locked_fields(item) and field not in bindings and isinstance(value, str) and value.strip():
+            bindings[field] = _description_binding(item, value, old_stamp)
+            changed = True
+    if changed:
+        saved["_description_bindings_v1"] = bindings
+    return saved
+
+
+def project_operator_text(field, raw, overrides, locked, columns, *, item=None):
+    """Project a human edit and bind descriptions to the currently viewed media.
+
+    Binding is evidence of the reviewed fingerprint, not approval of products
+    or proof of the full underlying media bytes.
+    """
+    value = normalize_tags(raw) if field == "tags" else None if raw is None else str(raw)
+    if field in {"description", "video_description"} and item is not None:
+        import vault_describe_state as vds
+        bindings = overrides.get("_description_bindings_v1")
+        if bindings is not None and not isinstance(bindings, dict):
+            raise ValueError("invalid description binding")
+        bindings = dict(bindings or {})
+        if isinstance(value, str) and value.strip():
+            bindings[field] = _description_binding(item, value, vds.stamp_of(item))
+        else:
+            bindings.pop(field, None)
+        if bindings:
+            overrides["_description_bindings_v1"] = bindings
+        else:
+            overrides.pop("_description_bindings_v1", None)
+    overrides[field] = value
     locked.add(field)
-    columns[field]=json.dumps(value) if field=="tags" else value
+    columns[field] = json.dumps(value) if field == "tags" else value
     return value
 
 

@@ -267,6 +267,15 @@ async def get_conversation(
             detail["financials"] = None
     spend = getattr(repo, "fan_spend", None)
     if callable(spend):detail["spend"] = await spend(account_id=account, fan_id=fan_id)
+    engine_status = getattr(repo, "engine_status", None)
+    if callable(engine_status):
+        try:
+            engine_view = await engine_status(account_id=account, fan_id=fan_id)
+            if engine_view is not None:
+                detail["engineStatus"] = engine_view
+        except Unavailable:
+            # An optional projection failure must not hide the canonical transcript.
+            detail["engineStatus"] = {"schemaVersion": "of-engine.v1", "state": "unavailable"}
     detail["previousCursor"] = (encode_thread_cursor(account_id=account, fan_id=fan_id,
         before_message_id=messages[0].message_id) if len(messages) == DETAIL_MESSAGE_LIMIT else None)
     return conversation_envelope(account_id=account, conversation=detail)

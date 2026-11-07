@@ -485,6 +485,38 @@ class SqlOnlyFansReadRepo:
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
 
+    async def engine_status(self, *, account_id: str, fan_id: int) -> dict | None:
+        """A bounded, versioned view of durable engine requests; no send rights."""
+        from db.onlyfans_delivery_models import OfTextIntent
+        from db.onlyfans_engine_models import OfEngineDecision, OfEngineOwner, OfEngineRequest
+        try:
+            async with get_session() as s:
+                await lock_read_scope(s, account_id)
+                row = (await s.execute(select(OfEngineOwner, OfRuntime.binding_id).join(OfRuntime,
+                    OfRuntime.account_id == OfEngineOwner.account_id).where(OfEngineOwner.account_id == account_id,
+                    OfEngineOwner.fan_id == fan_id))).first()
+                if row is None:
+                    return None
+                owner, current_binding = row
+                if owner.binding_id != current_binding:
+                    return {'schemaVersion': 'of-engine.v1', 'state': 'unavailable'}
+                rows = (await s.execute(select(OfEngineRequest, OfEngineDecision.status, OfTextIntent.status, OfEngineDecision.action)
+                    .outerjoin(OfEngineDecision, and_(OfEngineDecision.account_id == OfEngineRequest.account_id,
+                        OfEngineDecision.request_id == OfEngineRequest.request_id))
+                    .outerjoin(OfTextIntent, and_(OfTextIntent.account_id == OfEngineDecision.account_id,
+                        OfTextIntent.intent_id == OfEngineDecision.intent_id))
+                    .where(OfEngineRequest.account_id == account_id, OfEngineRequest.fan_id == fan_id,
+                           OfEngineRequest.binding_id == current_binding)
+                    .order_by(OfEngineRequest.created_at.desc(), OfEngineRequest.request_id.desc()).limit(21))).all()
+                return {'schemaVersion': 'of-engine.v1', 'state': 'current', 'accountId': account_id,
+                    'conversationId': f'{account_id}:{fan_id}', 'environment': 'simulation',
+                    'mode': owner.mode, 'salesMode': owner.sales_mode, 'truncated': len(rows) > 20,
+                    'requests': [{'requestId': r.request_id, 'sourceMessageId': str(r.source_message_id),
+                        'status': r.status, 'owner': r.owner, 'nextStep': r.next_step,
+                        'actionOutcome': intent_status or decision_status, 'actionType': action} for r, decision_status, intent_status, action in rows[:20]]}
+        except SQLAlchemyError as exc:
+            raise _storage_failure(exc) from exc
+
     async def conversation_page(
         self, *, account_id: str, before: tuple[datetime | None, int] | None, limit: int, ai_only: bool = False, query: str = "", filter: str | None = None, search: str | None = None
     ) -> list[ConversationRow]:

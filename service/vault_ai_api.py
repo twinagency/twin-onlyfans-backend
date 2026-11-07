@@ -2932,8 +2932,14 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
     # The flags are a different reading of the SAME image, so they stay valid
     # across a re-describe. A locked dispute fix outranks model and carried alike.
     prev = load_json(item.ai_fields_json, {}) or {}
-    for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
-                "_flags_v", "_flags_model", "_flags_frames", "_flags_arc", "_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
+    # A new content fingerprint invalidates automatic visual observations. It
+    # does not erase folder workflow markers or explicit human corrections.
+    if not vds.content_changed(item):
+        for key in (*vault_ai_brief.FLAG_KEYS, *vault_ai_brief.OVER_KEYS.values(),
+                    "_flags_v", "_flags_model", "_flags_frames", "_flags_arc"):
+            if key in prev:
+                data[key] = prev[key]
+    for key in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
         if key in prev:
             data[key] = prev[key]
     for key, val in (load_json(item.operator_overrides_json, {}) or {}).items():
@@ -2970,14 +2976,32 @@ async def _describe_one_locked(account_id: str, media_id: int, model: str = "qwe
             await scope_guard(s, media_id, phase="write")
         # A concurrent backfill may have assigned folders while vision ran.
         # Carry its marker from the current row, not just the earlier snapshot.
-        current_fields = await s.scalar(select(VaultItem.ai_fields_json).where(
+        current = await s.scalar(select(VaultItem).where(
             VaultItem.account_id == account_id, VaultItem.media_id == media_id).with_for_update())
-        current_fields = load_json(current_fields, {}) or {}
+        if current is None or (current.kind, vds.stamp_of(current)) != (item.kind, vds.stamp_of(item)):
+            return {"media_id": media_id, "ok": False, "status": "stale_content",
+                    "detail": "Media changed while the description was being prepared."}
+        from vault_ai_effective import preserve_stale_operator_descriptions
+        current_overrides = load_json(current.operator_overrides_json, {}) or {}
+        preserved = preserve_stale_operator_descriptions(current)
+        if preserved != current_overrides:
+            vals["operator_overrides_json"] = json.dumps(preserved, ensure_ascii=False, default=str)
+        current_locked = set(load_json(current.locked_fields_json, []) or [])
+        for field in ("tip_vault_flag", "tags", "explicitness_tier", "description", "video_description", "search_text"):
+            if field in current_locked:
+                vals.pop(field, None)
+        for key, val in preserved.items():
+            if key in current_locked and key in vault_ai_fix.FIXABLE:
+                if val is None:
+                    data.pop(key, None)
+                else:
+                    data[key] = val
+        current_fields = load_json(current.ai_fields_json, {}) or {}
         if isinstance(current_fields, dict):
             for marker in ("_auto_folders_v1", "_auto_folders_v2", "_auto_folder_pending_v1"):
                 if current_fields.get(marker) is True:
                     data[marker] = True
-            vals["ai_fields_json"] = json.dumps(data, ensure_ascii=False, default=str)
+        vals["ai_fields_json"] = json.dumps(data, ensure_ascii=False, default=str)
         await s.execute(
             update(VaultItem)
             .where(VaultItem.account_id == account_id, VaultItem.media_id == media_id)
@@ -3736,7 +3760,7 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
         flag_edits: dict[str, Any] = {}
         for field, raw in edits.items():
             if field == "tags":
-                project_operator_text(field,raw,overrides,locked,col_vals)
+                project_operator_text(field,raw,overrides,locked,col_vals,item=item)
                 continue
             elif field == "suggested_price_cents":
                 # Cents, non-negative. Blank/None clears it back to "no price".
@@ -3766,7 +3790,7 @@ async def edit_item(media_id: int, payload: dict = Body(...)) -> dict[str, Any]:
                 ov = str(raw).strip()[:60] if raw else None
                 flag_edits[field] = ov
             else:
-                project_operator_text(field,raw,overrides,locked,col_vals)
+                project_operator_text(field,raw,overrides,locked,col_vals,item=item)
                 continue
             overrides[field] = ov       # operator override (locked or not — read-time wins)
             locked.add(field)            # lock: a describe rerun's is_locked() skips it

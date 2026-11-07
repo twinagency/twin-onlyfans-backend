@@ -142,8 +142,10 @@ def project(session, intent, message_id, stamp):
     intent.offer_id = offer.id
     from .quote import attach_to_offer
     attach_to_offer(session, offer, snapshot, account_id=intent.account_id, fan_id=intent.fan_id)
-    from .native_sales import record_quote
-    record_quote(session, intent, message_id, stamp)
+    from conversation_engine.delivery import is_engine_intent
+    if not is_engine_intent(session, intent):
+        from .native_sales import record_quote
+        record_quote(session, intent, message_id, stamp)
     prior = session.scalars(select(VaultSend).where(VaultSend.account_id == intent.account_id,
         VaultSend.fan_id == intent.fan_id, VaultSend.message_id == message_id)).all()
     by_media = {r.media_id: r for r in prior}

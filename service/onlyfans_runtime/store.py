@@ -496,6 +496,8 @@ class Store:
             elif action == "release_takeover":
                 state.takeover_state = "none"
             state.mode, state.revision, state.updated_at = mode, state.revision + 1, utcnow()
+            from conversation_engine.delivery import control_changed as engine_control_changed
+            engine_control_changed(s, account_id, fan_id, state)
             # One transaction: the runtime stop (enforced authority) and the Twin
             # state (its display projection) commit together or not at all. For a
             # takeover this happens before any manual-send state can be observed.

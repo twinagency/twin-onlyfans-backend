@@ -17,7 +17,7 @@ from .vault_management import InvalidVault,_identity,media_reference,digest
 
 
 def asset_fingerprint(row):
-    return digest({key:getattr(row,key) for key in ("account_id","media_id","description","tags",
+    return digest({key:getattr(row,key) for key in ("account_id","media_id","kind","content_hash","content_hash_kind","description","tags",
         "operator_overrides_json","locked_fields_json","ai_fields_json","removed_at")})
 
 
@@ -132,7 +132,7 @@ def edit_asset(store,tenant,account,media_id,*,patch,expected_fingerprint,comman
             if type(locked) is not list or any(type(k) is not str for k in locked):raise ValueError()
         except (ValueError,TypeError):raise InvalidVault("Saved metadata needs review before it can be merged.") from None
         locked=set(locked);columns={}
-        for field,value in patch.items():project_operator_text(field,value,overrides,locked,columns)
+        for field,value in patch.items():project_operator_text(field,value,overrides,locked,columns,item=row)
         for field,value in columns.items():setattr(row,field,value)
         row.operator_overrides_json=canonical(overrides);row.locked_fields_json=canonical(sorted(locked))
         after=asset_view(row)

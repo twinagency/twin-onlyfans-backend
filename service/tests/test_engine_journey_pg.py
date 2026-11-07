@@ -87,7 +87,8 @@ def test_refusal_cancels_a_queued_never_dispatched_offer_and_its_queue_accountin
     grant = world.grant()
     world.reply(lambda snap: SyntheticProposal('look at this', action='offer', offer_grant_id=grant))
     draft = world.engine.plan(TENANT, ACCOUNT, FAN, ingest(world, 211, 'show me the set'))
-    intent = world.engine.queue(TENANT, ACCOUNT, draft)
+    from approval_helpers import queue_decision
+    intent = queue_decision(world.engine, TENANT, ACCOUNT, draft)
     with Session(world.database[1]) as s:
         queued = s.get(OfDeliveryPolicy, ACCOUNT).queued_count
     assert queued >= 1 and decisions(world)[draft] == 'queued'

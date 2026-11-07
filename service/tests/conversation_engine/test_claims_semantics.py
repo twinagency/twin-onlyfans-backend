@@ -147,7 +147,8 @@ def _ctx(grants=(), **over):
     snap = {'account_id': 'a', 'fan_id': 1, 'sales_mode': 'open', 'sales_scope': [], 'current_message': {'id': 9, 'body': 'hey'},
             'history': [], 'memory': {'state': 'current', 'memory': {'facts': {}}},
             'offer_reference': {'state': 'none', 'offers': []}, 'catalogue_search': {'items': []},
-            'offer_grants': [{'grantId': 'g1', 'itemId': '5', 'label': 'Beach Set', 'description': 'beach', 'mediaCount': 3}],
+            'offer_grants': [{'grantId': 'g1', 'itemId': '5', 'label': 'Beach Set', 'description': 'beach', 'mediaCount': 3,
+                             'media': {'total': 3, 'pictures': 3, 'videos': 0}}],
             'verified_purchases': []}
     snap.update(over)
     return JudgeContext(snapshot=snap, profile=PROFILE, allowed_grant_ids=frozenset(grants))

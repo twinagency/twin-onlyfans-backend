@@ -450,7 +450,8 @@ def test_regression_identity_reply_only_from_approved_wording():
 def test_regression_no_unsupported_claims_about_creator_involvement(body):
     outcome, why = reasons(ok(body), wctx(message='hello'))
     assert outcome == 'invalid' and 'identity wording' in why
-    assert reasons(ok(body + '. ' + IDENT), wctx(message='hello'))[0] == 'ok'  # the approved wording itself may say it
+    assert reasons(ok(body + '. ' + IDENT), wctx(message='hello'))[0] == 'invalid'  # appending the wording does not launder an unsupported claim
+    assert reasons(ok(IDENT), wctx(message='hello'))[0] == 'ok'  # the approved wording itself is allowed
 
 
 def test_regression_no_discount_ladder_bundle_or_timed_followup():

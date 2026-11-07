@@ -195,7 +195,9 @@ def _identity_problems(texts, ctx):
     problems, joined = [], ' '.join(texts)
     wording = (ctx.identity_line or getattr(ctx.profile, 'role_statement', '') or '').strip()
     asked = classify_turn(ctx.snapshot['current_message']['body']) == 'role_question'
-    if _INVOLVEMENT.search(joined) and not (wording and _norm_text(wording) in _norm_text(joined)):
+    # The approved wording itself may say who writes; anything else in the text may not.
+    rest = re.sub(re.escape(wording), ' ', joined, flags=re.I) if wording else joined
+    if _INVOLVEMENT.search(rest):
         problems.append('makes a claim about who reads, writes or approves the chats that is not in the approved identity wording')
     if asked:
         if not wording:

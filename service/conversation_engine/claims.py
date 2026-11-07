@@ -180,6 +180,8 @@ def _quantity_claims(text):
             # "one" is the ordinary pronoun/determiner far more often than a count; only digits or a noun right after it count
             if raw == 'one' and not re.match(r"one\s+(?:" + _FILLER + r"\w+\s+)?" + _CONTENT_NOUN + r"\b", match.group(0), re.I):
                 continue
+            if re.search(r"\b(?:minutes?|mins?|seconds?|secs?|hours?|hrs?|days?|weeks?|months?|years?)\b", match.group(0), re.I):
+                continue   # a duration ("a 10 minute video") is not a count of items
             if _negated(clause, match.start()):
                 continue
             yield number

@@ -30,6 +30,18 @@ def _digest(value):
     return sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str).encode()).hexdigest()
 
 
+def offer_body(lead, terms):
+    """Draft lead-in plus the application-rendered card line (label and price from verified terms)."""
+    label = terms['item'].get('label') or terms['item']['description_for_ai']
+    if type(label) is not str or not label.strip() or len(label.encode()) > 2000:
+        raise Refused('approved item label is unavailable')
+    cents = terms['price_cents']
+    body = f"{lead.strip()}\n\n{label.strip()} — USD {cents // 100}.{cents % 100:02d}."
+    if len(body.encode('utf-8')) > 4000:
+        raise Refused('answer plus offer exceeds the message limit')
+    return body
+
+
 @dataclass(frozen=True)
 class SyntheticProposal:
     body: str
@@ -434,15 +446,9 @@ class EngineService:
                     request.next_step, request.updated_at = 'review_offer_evidence', utcnow()
                     request.revision += 1
                 if terms is not None:
-                    label = terms['item'].get('label') or terms['item']['description_for_ai']
-                    if type(label) is not str or not label.strip() or len(label.encode()) > 2000:
-                        raise Refused('approved item label is unavailable')
-                    cents = terms['price_cents']
                     # The drafted answer stays; the commercial section is rendered
                     # by the application from the frozen terms, never from model text.
-                    body = f"{proposal.body.strip()}\n\n{label.strip()} — USD {cents // 100}.{cents % 100:02d}."
-                    if len(body.encode('utf-8')) > 4000:
-                        raise Refused('answer plus offer exceeds the message limit')
+                    body = offer_body(proposal.body, terms)
             payload_hash = TextAuthority._wire_hash(account, fan_id, body,
                 terms['media_ids'] if terms else (), terms['preview_ids'] if terms else (), terms['price_cents'] if terms else 0)
             source = s.get(Message, (account, fan_id, source_message_id))
@@ -463,6 +469,8 @@ class EngineService:
                 # make sure a held decision can no longer be retried.
                 for old in existing:
                     old.status, old.updated_at = 'cancelled', utcnow()
+                from .approval import invalidate_generation_in_session
+                invalidate_generation_in_session(s, account, request_id, existing[0].generation, 'superseded_by_regeneration')
                 request.next_step, request.updated_at = 'prepare_reply', utcnow()
                 request.revision += 1
             decision = OfEngineDecision(account_id=account, decision_id=decision_id, request_id=request_id, generation=generation, part_index=0, fan_id=fan_id,
@@ -546,6 +554,13 @@ class EngineService:
             fan, body, revision = decision.fan_id, decision.body, decision.control_revision
             terms = json.loads(decision.terms_json) if decision.terms_json else None
             item_id = decision.catalog_item_id
+            from .approval import is_gated
+            gated, fresh = is_gated(s, account), decision.status == 'ready'
+        if gated and fresh:
+            # Supervised pilot: a new outgoing action needs a current, matching, approved version of its draft.
+            # (An already queued/settled part only returns its existing intent below; nothing new is created.)
+            from .approval import authorize_send
+            authorize_send(self.store, tenant, account, decision_id)
         try:
             return TextAuthority(self.store).prepare(tenant, account, fan, command_key='engine:' + decision_id,
                 expected_revision=revision, body=body, origin='automated', actor='offline-engine',
@@ -566,6 +581,8 @@ class EngineService:
                         OfEngineDecision.status == 'ready')).all()
                     for part in parts:
                         part.status, part.updated_at = 'cancelled', utcnow()
+                    from .approval import invalidate_generation_in_session
+                    invalidate_generation_in_session(s, account, current.request_id, current.generation, str(exc))
                     request.next_step = 'review_webhook_conflict' if str(exc) == 'source webhook conflict' else 'review_changed_conversation'
                     request.updated_at = utcnow()
                     request.revision += 1
@@ -611,6 +628,8 @@ class EngineService:
                         policy.queued_count -= 1
                     item.status, item.updated_at = 'cancelled', utcnow()
                     changed = True
+                    from .approval import invalidate_generation_in_session
+                    invalidate_generation_in_session(s, account, item.request_id, item.generation, 'webhook_conflict')
                 if changed:
                     request.next_step, request.updated_at = 'review_webhook_conflict', utcnow()
                     request.revision += 1

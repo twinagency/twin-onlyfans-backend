@@ -368,3 +368,47 @@ class OfEngineModelCall(Base):
     updated_at = Column(DateTime, nullable=False)
     wire_started_at = Column(DateTime)
     settled_at = Column(DateTime)
+
+
+APPROVAL_INFO = {'onlyfans_since': '0124_engine_approval'}
+
+
+class OfEngineApproval(Base):
+    """One immutable approval version of a drafted reply/offer sequence (see conversation_engine/approval.py).
+
+    Content (parts_json, draft_hash and the bound state) never changes after insert; an edit inserts the next
+    version and invalidates the prior one. Only status, decision fields and expiry move forward.
+    """
+    __tablename__ = 'of_engine_approval'
+    __table_args__ = (
+        ForeignKeyConstraint(['account_id', 'request_id'], ['of_engine_request.account_id', 'of_engine_request.request_id'], ondelete='RESTRICT'),
+        CheckConstraint("status IN ('awaiting','approved','rejected','invalidated','expired','consumed')", name='status'),
+        CheckConstraint('version >= 1 AND generation >= 0 AND owner_epoch > 0 AND control_revision >= 0', name='numbers'),
+        CheckConstraint("status NOT IN ('approved','consumed') OR (actor IS NOT NULL AND decided_at IS NOT NULL)", name='decided'),
+        CheckConstraint("status NOT IN ('rejected','invalidated','expired') OR invalidation_reason IS NOT NULL", name='reason'),
+        Index('uq_engine_approval_live', 'account_id', 'request_id', 'generation', unique=True,
+              postgresql_where=text("status IN ('awaiting','approved')")),
+        Index('ix_engine_approval_fan', 'account_id', 'fan_id', 'status'),
+        {'info': APPROVAL_INFO},
+    )
+    account_id = Column(String, primary_key=True)
+    request_id = Column(String(36), primary_key=True)
+    generation = Column(Integer, primary_key=True)
+    version = Column(Integer, primary_key=True)
+    fan_id = Column(BigInteger, nullable=False)
+    binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
+    source_message_id = Column(BigInteger, nullable=False)
+    owner_epoch = Column(BigInteger, nullable=False)
+    control_revision = Column(Integer, nullable=False)
+    input_revision = Column(BigInteger, nullable=False)
+    connection_epoch = Column(BigInteger)
+    status = Column(String(16), nullable=False)
+    parts_json = Column(Text, nullable=False)
+    draft_hash = Column(String(64), nullable=False)
+    created_by = Column(String(128), nullable=False)
+    actor = Column(String(128))
+    decided_at = Column(DateTime)
+    expires_at = Column(DateTime, nullable=False)
+    invalidation_reason = Column(String(64))
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)

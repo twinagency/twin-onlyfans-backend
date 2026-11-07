@@ -215,10 +215,10 @@ OUTCOMES = [
     (['mismatch'], 'unknown', 1),                                        # never rotate the key
     (['validation'], 'unknown', 1),                                      # a 4xx without request_outcome=not_sent is not non-delivery
     (['validation_not_sent'], 'not_accepted', 1),                        # the provider itself says not sent
-    (['conflict', 'conflict', 'conflict'], 'unknown', 3),                # persistent 409 is not evidence of failure
-    (['conflict', 'accepted'], 'accepted', 2),
-    (['conflict', 'unavailable', 'unavailable'], 'unknown', 3),          # a later not-executed says nothing about the earlier key
-    (['conflict', 'not_sent', 'accepted'], 'accepted', 3),
+    (['conflict', 'conflict', 'conflict'], 'unknown', 1),                # a 409 leaves the earlier request unresolved
+    (['conflict', 'accepted'], 'unknown', 1),                             # never replay an uncertain POST
+    (['conflict', 'unavailable', 'unavailable'], 'unknown', 1),
+    (['conflict', 'not_sent', 'accepted'], 'unknown', 1),
 ]
 
 

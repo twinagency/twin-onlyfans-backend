@@ -19,6 +19,7 @@ from onlyfans_read.errors import OnlyFansReadError, Unavailable
 from onlyfans_commands.api import router as control_router
 from onlyfans_commands.engine_operator_api import router as engine_operator_router
 from onlyfans_commands.engine_approval_api import router as engine_approval_router
+from onlyfans_commands.plan_c_draft_webhook_api import router as plan_c_draft_webhook_router
 from onlyfans_commands.settings import configured as control_configured
 from onlyfans_commands.configuration_api import router as configuration_router,configured as configuration_configured
 from onlyfans_commands.campaign_api import router as campaign_router,configured as campaign_configured
@@ -44,6 +45,10 @@ async def lifespan(app):
         if os.environ.get("DATABASE_URL"):
             from onlyfans_runtime.store import Store
             app.state.control_store = await asyncio.to_thread(Store, os.environ["DATABASE_URL"])
+        # Default OFF. This entry point constructs only a no-send worker and
+        # refuses startup unless the shared delivery policy is disabled.
+        from model_transport.pilot_draft import build_draft_pilot
+        app.state.plan_c_draft = await asyncio.to_thread(build_draft_pilot, app.state.control_store)
         yield
     finally:
         if getattr(app.state, "control_store", None) is not None:
@@ -61,6 +66,7 @@ app.include_router(router)
 app.include_router(control_router)
 app.include_router(engine_operator_router)
 app.include_router(engine_approval_router)
+app.include_router(plan_c_draft_webhook_router)
 app.include_router(configuration_router)
 app.include_router(personality_router)
 app.include_router(engagement_router)

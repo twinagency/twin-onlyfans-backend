@@ -201,7 +201,7 @@ def test_prompt_is_short_natural_and_has_no_build_b_or_fastt_text():
     assert '\u2014' not in system and '\u2013' not in system  # no em or en dash in the prompt itself
     assert get_prompt_provider().name == 'a-original.v3-planc-nsfw'
     assert 'IDENTITY WORDING: none approved' in system
-    assert rendered.block_names == ('head', 'creator', 'rules', 'contract')
+    assert rendered.block_names == ('head', 'creator', 'rules', 'sexual', 'contract')
 
 
 def test_user_prompt_carries_memory_sales_state_purchases_history_and_untrusted_data_notice():

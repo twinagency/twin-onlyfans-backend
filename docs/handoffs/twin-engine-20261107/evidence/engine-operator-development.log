@@ -1,0 +1,37 @@
+..F
+=================================== FAILURES ===================================
+______ test_operator_http_boundary_enforces_auth_scope_version_and_replay ______
+
+database = ('postgresql://twin_lab@127.0.0.1:5432/of_test_fb70e443185546578212a21dad2f673f', Engine(postgresql://twin_lab@127.0.0.1:5432/of_test_fb70e443185546578212a21dad2f673f))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x70d981433710>
+
+    def test_operator_http_boundary_enforces_auth_scope_version_and_replay(database, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from onlyfans_commands.engine_operator_api import router, SCHEMA, HEADER
+        store, authority, engine, decision, request_id, revision = setup(database)
+        monkeypatch.setenv('ONLYFANS_PROCESS_ROLE', 'api')
+        monkeypatch.setenv('ONLYFANS_CONTROL_TOKEN', 'fixture-control-token')
+        monkeypatch.setenv('ONLYFANS_CONTROL_TENANT', TENANT)
+        for key in ('ONLYFANS_API_TOKEN','ONLYFANS_CONFIGURATION_TOKEN','ONLYFANS_CAMPAIGN_TOKEN','ONLYFANS_CONTENT_TOKEN','ONLYFANS_CONNECTION_TOKEN'):
+            monkeypatch.delenv(key, raising=False)
+        app = FastAPI(); app.state.control_store = store; app.include_router(router)
+        route = f'/onlyfans/control/v1/accounts/{ACCOUNT}/conversations/{ACCOUNT}:{FAN}/requests/{request_id}'
+        headers = {'Authorization':'Bearer fixture-control-token', HEADER:SCHEMA}
+        body = {'action':'request_handover','expectedRevision':revision,'commandKey':'7'*64,'actor':ACTOR,'target':ACTOR}
+        with TestClient(app) as client:
+            assert client.post(route, json=body, headers={**headers,'Authorization':'Bearer wrong'}).status_code == 401
+            assert client.post(route, json=body, headers={**headers,HEADER:'old'}).status_code == 400
+>           assert client.post(route.replace(f':{FAN}/', ':999/'), json=body, headers=headers).status_code == 409
+E           AssertionError: assert 400 == 409
+E            +  where 400 = <Response [400 Bad Request]>.status_code
+E            +    where <Response [400 Bad Request]> = post('/onlyfans/control/v1/accounts/acc-a/conversations/acc-a:999/requests/3875612e-2ced-41b7-a49a-962f0f9c0b84', json={'action': 'request_handover', 'actor': 'op-session:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'commandKey': '7777777777777777777777777777777777777777777777777777777777777777', 'expectedRevision': 0, ...}, headers={'Authorization': 'Bearer fixture-control-token', 'X-OnlyFans-Engine-Operator-Version': 'of-engine-operator.v1'})
+E            +      where post = <starlette.testclient.TestClient object at 0x70d981bff5f0>.post
+E            +      and   '/onlyfans/control/v1/accounts/acc-a/conversations/acc-a:999/requests/3875612e-2ced-41b7-a49a-962f0f9c0b84' = <built-in method replace of str object at 0x70d98431e6f0>(':101/', ':999/')
+E            +        where <built-in method replace of str object at 0x70d98431e6f0> = '/onlyfans/control/v1/accounts/acc-a/conversations/acc-a:101/requests/3875612e-2ced-41b7-a49a-962f0f9c0b84'.replace
+
+service/tests/test_engine_operator_pg.py:99: AssertionError
+=========================== short test summary info ============================
+FAILED service/tests/test_engine_operator_pg.py::test_operator_http_boundary_enforces_auth_scope_version_and_replay
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 2 passed, 19 warnings in 19.83s

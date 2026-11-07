@@ -1,0 +1,8 @@
+...                                                                      [100%]
+=============================== warnings summary ===============================
+service/tests/test_engine_offer_pg.py: 27 warnings
+  /workspace/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+3 passed, 27 warnings in 25.89s

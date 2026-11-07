@@ -1,0 +1,30 @@
+............................................................F
+=================================== FAILURES ===================================
+___ test_generic_refresh_retains_stale_human_binding_and_discards_old_flags ____
+
+rig = <test_vault_description_coverage_pg.Rig object at 0x7e6927b360f0>
+
+    def test_generic_refresh_retains_stale_human_binding_and_discards_old_flags(rig):
+>       api = compatibility_api()
+
+service/tests/test_vault_generic_compat_pg.py:30: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+service/tests/test_vault_generic_compat_pg.py:19: in compatibility_api
+    category_spec.loader.exec_module(category)
+<frozen importlib._bootstrap_external>:995: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1132: in get_code
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <_frozen_importlib_external.SourceFileLoader object at 0x7e6926e6b290>
+path = '/app/compat/candidate/generic/vault_category_evidence.py'
+
+>   ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/app/compat/candidate/generic/vault_category_evidence.py'
+
+<frozen importlib._bootstrap_external>:1190: FileNotFoundError
+=========================== short test summary info ============================
+FAILED service/tests/test_vault_generic_compat_pg.py::test_generic_refresh_retains_stale_human_binding_and_discards_old_flags
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 60 passed, 534 warnings in 242.06s (0:04:02)

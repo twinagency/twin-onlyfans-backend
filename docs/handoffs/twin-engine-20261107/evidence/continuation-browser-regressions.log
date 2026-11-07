@@ -1,0 +1,3 @@
+Engine journey browser: 19 assertions passed at desktop and mobile widths using backend-generated projections and a simulated action handler.
+Synthetic component review built: /evidence/browser-preview-qualified
+OnlyFans UI synthetic browser: 267 assertions passed, 0 failed; 48 page/viewport cases. No live-account or provider acceptance.

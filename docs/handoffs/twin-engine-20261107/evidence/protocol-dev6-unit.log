@@ -1,0 +1,25 @@
+........F
+=================================== FAILURES ===================================
+_____________ test_https_transport_and_client_with_in_process_mock _____________
+
+    def test_https_transport_and_client_with_in_process_mock():
+        calls = []
+        def handler(request):
+            calls.append(request)
+            assert request.headers["authorization"] == "Bearer fixture"
+            assert request.headers["accept-encoding"] == "identity"
+            return httpx.Response(200, json=[{"id":"acct_test","onlyfans_id":123,"is_authenticated":True}])
+        wire = FansHttpsTransport(enabled=True, transport=httpx.MockTransport(handler))
+        client = FansApiClient(account="acct_test", creator_id="123", epoch=1, token="fixture",
+                               http=wire, timeout=1, enabled=True)
+>       assert client.identity().state == "verified"
+E       AssertionError: assert 'unavailable' == 'verified'
+E         
+E         - verified
+E         + unavailable
+
+service/tests/conversation_engine/test_provider_seams.py:20: AssertionError
+=========================== short test summary info ============================
+FAILED service/tests/conversation_engine/test_provider_seams.py::test_https_transport_and_client_with_in_process_mock
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 8 passed in 2.52s

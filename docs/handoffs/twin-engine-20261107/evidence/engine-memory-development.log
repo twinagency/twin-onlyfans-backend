@@ -1,0 +1,83 @@
+.........F
+=================================== FAILURES ===================================
+____________ test_proof_and_admission_cannot_be_erased_by_downgrade ____________
+
+database = ('postgresql://twin_lab@127.0.0.1:5432/of_test_217761534c6f4cf3a612d055033dbfbb', Engine(postgresql://twin_lab@127.0.0.1:5432/of_test_217761534c6f4cf3a612d055033dbfbb))
+
+    def test_proof_and_admission_cannot_be_erased_by_downgrade(database):
+        store, authority, engine, provider, wire, first = setup(database)
+        decision, intent = arithmetic(engine, store)
+        unthrottle(database[1])
+        assert authority.dispatch(TENANT, ACCOUNT, intent, wire) == 'accepted'
+        with pytest.raises(DBAPIError, match='independence proof is append-only'):
+            with database[1].begin() as c:
+                c.execute(text('DELETE FROM of_engine_independence_proof WHERE decision_id=:id'), {'id':decision})
+        from alembic import command
+        from db.schema import _config, check_schema
+        with pytest.raises(RuntimeError, match='Preserve independent action evidence'):
+            with database[1].begin() as c:
+>               command.downgrade(_config(c), '0113_conversation_engine')
+
+service/tests/test_engine_independence_pg.py:133: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.12/site-packages/alembic/command.py:453: in downgrade
+    script.run_env()
+/usr/local/lib/python3.12/site-packages/alembic/script/base.py:586: in run_env
+    util.load_python_file(self.dir, "env.py")
+/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py:95: in load_python_file
+    module = load_module_py(module_id, path)
+/usr/local/lib/python3.12/site-packages/alembic/util/pyfiles.py:113: in load_module_py
+    spec.loader.exec_module(module)  # type: ignore
+<frozen importlib._bootstrap_external>:999: in exec_module
+    ???
+<frozen importlib._bootstrap>:488: in _call_with_frames_removed
+    ???
+service/db/migrations/env.py:113: in <module>
+    run_migrations_online()
+service/db/migrations/env.py:98: in run_migrations_online
+    run(supplied)
+service/db/migrations/env.py:94: in run
+    context.run_migrations()
+<string>:8: in run_migrations
+    ???
+/usr/local/lib/python3.12/site-packages/alembic/runtime/environment.py:946: in run_migrations
+    self.get_context().run_migrations(**kw)
+/usr/local/lib/python3.12/site-packages/alembic/runtime/migration.py:628: in run_migrations
+    step.migration_fn(**kw)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    def downgrade():
+        if op.get_bind().execute(sa.text('SELECT 1 FROM of_engine_memory_binding LIMIT 1')).first():
+>           raise RuntimeError('Preserve engine memory binding evidence; use a compatible rollback')
+E           RuntimeError: Preserve engine memory binding evidence; use a compatible rollback
+
+service/db/migrations/versions/20261107_0300_engine_memory.py:36: RuntimeError
+
+During handling of the above exception, another exception occurred:
+
+database = ('postgresql://twin_lab@127.0.0.1:5432/of_test_217761534c6f4cf3a612d055033dbfbb', Engine(postgresql://twin_lab@127.0.0.1:5432/of_test_217761534c6f4cf3a612d055033dbfbb))
+
+    def test_proof_and_admission_cannot_be_erased_by_downgrade(database):
+        store, authority, engine, provider, wire, first = setup(database)
+        decision, intent = arithmetic(engine, store)
+        unthrottle(database[1])
+        assert authority.dispatch(TENANT, ACCOUNT, intent, wire) == 'accepted'
+        with pytest.raises(DBAPIError, match='independence proof is append-only'):
+            with database[1].begin() as c:
+                c.execute(text('DELETE FROM of_engine_independence_proof WHERE decision_id=:id'), {'id':decision})
+        from alembic import command
+        from db.schema import _config, check_schema
+>       with pytest.raises(RuntimeError, match='Preserve independent action evidence'):
+E       AssertionError: Regex pattern did not match.
+E        Regex: 'Preserve independent action evidence'
+E        Input: 'Preserve engine memory binding evidence; use a compatible rollback'
+
+service/tests/test_engine_independence_pg.py:131: AssertionError
+----------------------------- Captured stderr call -----------------------------
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running downgrade 0115_engine_memory -> 0114_independent_replies, Bind each engine decision to the shared scoped memory projection.
+=========================== short test summary info ============================
+FAILED service/tests/test_engine_independence_pg.py::test_proof_and_admission_cannot_be_erased_by_downgrade
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 9 passed, 72 warnings in 44.81s

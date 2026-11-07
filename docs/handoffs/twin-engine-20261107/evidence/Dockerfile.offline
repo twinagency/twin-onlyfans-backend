@@ -1,0 +1,15 @@
+# Reproducible offline qualification images. No install, network or deployment.
+ARG BASE_IMAGE=moxy-current-base:verified-e5f092544145
+FROM ${BASE_IMAGE} AS main
+WORKDIR /app
+# This removes only the inherited source directory inside the new image layer.
+RUN rm -rf /app/service
+COPY --chown=1000:1000 service/ /app/service/
+ENV PYTHONPATH=/app/service:/app PYTHONDONTWRITEBYTECODE=1
+ARG SOURCE_COMMIT
+LABEL io.twin.offline-qualification="true" org.opencontainers.image.revision=${SOURCE_COMMIT}
+CMD ["python", "-c", "raise SystemExit('Offline qualification image: no service is started')"]
+
+FROM main AS generic-vault
+COPY --chown=1000:1000 compat/candidate/generic/ /app/service/
+LABEL io.twin.offline-variant="generic-vault"

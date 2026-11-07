@@ -1,0 +1,52 @@
+TAP version 13
+# Subtest: operator transport sends a scoped versioned command and verifies its acknowledgement
+ok 1 - operator transport sends a scoped versioned command and verifies its acknowledgement
+  ---
+  duration_ms: 109.427728
+  type: 'test'
+  ...
+# Subtest: scope mismatches, malformed acknowledgements, and lost replies cannot claim success
+ok 2 - scope mismatches, malformed acknowledgements, and lost replies cannot claim success
+  ---
+  duration_ms: 1.83585
+  type: 'test'
+  ...
+# Subtest: chat access permits only the explicitly scoped request route
+ok 3 - chat access permits only the explicitly scoped request route
+  ---
+  duration_ms: 1.41697
+  type: 'test'
+  ...
+# Subtest: engine status is scoped, versioned and preserves uncertainty
+ok 4 - engine status is scoped, versioned and preserves uncertainty
+  ---
+  duration_ms: 1.989926
+  type: 'test'
+  ...
+# Subtest: accepted handover is not presented as a completed request
+ok 5 - accepted handover is not presented as a completed request
+  ---
+  duration_ms: 0.259206
+  type: 'test'
+  ...
+# Subtest: offer, purchase and access are not conflated
+ok 6 - offer, purchase and access are not conflated
+  ---
+  duration_ms: 0.225004
+  type: 'test'
+  ...
+# Subtest: ordered reply parts remain one outstanding request
+ok 7 - ordered reply parts remain one outstanding request
+  ---
+  duration_ms: 0.227311
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1421.476474

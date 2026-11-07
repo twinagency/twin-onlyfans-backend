@@ -1,0 +1,20 @@
+.....                                                                    [100%]
+=============================== warnings summary ===============================
+../usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /usr/local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+service/tests/test_moxy_media_descriptions_pg.py: 7 warnings
+service/tests/test_onlyfans_vault_editing_pg.py: 5 warnings
+service/tests/test_vault_description_coverage_pg.py: 8 warnings
+  /workspace/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+service/tests/test_vault_description_coverage_pg.py::test_forced_model_refresh_cannot_renew_a_stale_legacy_operator_correction
+service/tests/test_vault_description_coverage_pg.py::test_automatic_visual_flags_are_not_carried_to_changed_content[False]
+service/tests/test_vault_description_coverage_pg.py::test_automatic_visual_flags_are_not_carried_to_changed_content[True]
+  /workspace/service/vault_ai_api.py:2956: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    "describe_generated_at": datetime.utcnow(),
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5 passed, 24 warnings in 33.26s

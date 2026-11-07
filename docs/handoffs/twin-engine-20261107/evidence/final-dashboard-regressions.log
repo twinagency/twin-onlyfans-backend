@@ -1,0 +1,225 @@
+TAP version 13
+# (node:13) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./tests/contracts/resolve-typescript.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:13) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/lib/onlyfans/engine-status.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /workspace/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: engine status is scoped, versioned and preserves uncertainty
+ok 1 - engine status is scoped, versioned and preserves uncertainty
+  ---
+  duration_ms: 4.739174
+  type: 'test'
+  ...
+# Subtest: accepted handover is not presented as a completed request
+ok 2 - accepted handover is not presented as a completed request
+  ---
+  duration_ms: 0.265951
+  type: 'test'
+  ...
+# Subtest: offer, purchase and access are not conflated
+ok 3 - offer, purchase and access are not conflated
+  ---
+  duration_ms: 0.298044
+  type: 'test'
+  ...
+# (node:14) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./tests/contracts/resolve-typescript.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:14) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/lib/onlyfans/controls.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /workspace/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: manual acknowledgement means a queued intent, not delivery
+ok 4 - manual acknowledgement means a queued intent, not delivery
+  ---
+  duration_ms: 82.328063
+  type: 'test'
+  ...
+# Subtest: control request carries the exact scope and version, and writes once
+ok 5 - control request carries the exact scope and version, and writes once
+  ---
+  duration_ms: 138.641548
+  type: 'test'
+  ...
+# Subtest: stale revision, permission denial and unconfigured backend stay refusals
+ok 6 - stale revision, permission denial and unconfigured backend stay refusals
+  ---
+  duration_ms: 1.918531
+  type: 'test'
+  ...
+# Subtest: lost, malformed or server-error acknowledgement remains unconfirmed without retry
+ok 7 - lost, malformed or server-error acknowledgement remains unconfirmed without retry
+  ---
+  duration_ms: 1.194787
+  type: 'test'
+  ...
+# Subtest: read authorization precedes access; cross-account responses are refused
+ok 8 - read authorization precedes access; cross-account responses are refused
+  ---
+  duration_ms: 0.684188
+  type: 'test'
+  ...
+# Subtest: configuration acknowledgements retain account, schema and revision checks
+ok 9 - configuration acknowledgements retain account, schema and revision checks
+  ---
+  duration_ms: 0.284368
+  type: 'test'
+  ...
+# Subtest: purpose credentials must be present and distinct
+ok 10 - purpose credentials must be present and distinct
+  ---
+  duration_ms: 0.880723
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1295.20365
+PASS signed webhook to canonical receipt, API response, dashboard reader and rendered inbox
+PASS synthetic offer, purchase, access and revocation are rendered as distinct states
+
+1. The operator session is verified positively, and nothing else is admitted
+  ok   a request with no verified session is refused
+  ok   an agency identity alone does not authorize an OnlyFans read
+  ok   an agency session is refused even with a verified session behind it
+  ok   a view-as session is refused
+  ok   the verified internal operator is admitted
+  ok   the route wrapper verifies the session cookie itself
+  ok   and it does not treat a null dashboard access as authentication
+  ok   it consults neither the environment nor the dashboard's no-auth switch
+  ok   nor does the read service
+  ok   every OnlyFans route calls it before doing anything
+  ok   and the read-only boundary exposes no write handler
+
+2. An answer can never cross a creator or an account boundary
+  ok   an account belonging to another creator is refused
+  ok   and the refusal does not repeat the record it refused
+  ok   the creator's own accounts are returned
+  ok   and the read model carries the requested scope rather than a guess
+  ok   the read model is stamped with the schema version
+  ok   a conversation belonging to another account is refused
+  ok   a backend answering with a different conversation than the one asked for is refused
+  ok   a list carrying another account's rows is refused
+  ok   a backend refusal is passed through as a denial
+
+3. The selected account is carried in the URL and survives a reload
+  ok   an empty URL asks for nothing
+  ok   and names no creator
+  ok   a scoped link carries both ids
+  ok   and reloading that link restores the same scope
+  ok   the query string is empty when nothing is selected
+  ok   a Back to another account reads that account out of the URL
+  ok   a path-traversal id is not a request
+  ok   an over-long id is not a request
+  ok   an empty id is not a request
+  ok   a malformed id in the URL selects nothing rather than being forwarded
+  ok   changing the creator drops the account selected under the old one
+  ok   and keeping the creator keeps the account
+  ok   selecting an account keeps the creator
+  ok   the workspace parses its scope from the URL
+  ok   the workspace writes the scope back to the URL
+  ok   an account the read did not return is not selected
+  ok   the requested account is passed to the read as a scope, not as an assertion
+  ok   no fixture creator is hardcoded in the workspace
+  ok   and the workspace does not build a second, local account filter
+  ok   Accounts -> Open inbox scopes the link to that account
+  ok   and takes the creator from the server's binding rather than a fixture index
+
+4. Paging keeps its cursor, its rows and its scope
+  ok   the page read is scoped to of-acc-ava-001
+  ok   the first page arrives as ready data
+  ok   the first page lands on the list
+  ok   and it tells the client where the next page is
+  ok   the page read is scoped to of-acc-ava-001
+  ok   the cursor is forwarded to the backend
+  ok   and the second page is the backend's second page
+  ok   appending the next page keeps the rows that were already there
+  ok   and the list now says there is no further page
+
+5. Incomplete synchronization stays stale, and late responses cannot overwrite newer selections
+  ok   successful account reads preserve unknown synchronization
+  ok   selecting an unverified account keeps it stale
+  ok   a current account is not made stale by another account
+  ok   unknown synchronization wins over an older known timestamp
+  ok   a successful detail read preserves its incomplete synchronization
+  ok   the newer read answers empty
+  ok   the newer read is the one on screen
+  ok   the deliberately slow read does answer
+  ok   the late read of the same list is dropped
+  ok   a scope reset moves the generation on
+  ok   so an answer from the previous scope is refused
+  ok   a stale list is reported as stale
+  ok   and it carries the freshness, so it cannot read as current
+  ok   a conversation selected inside its own account is selected
+
+6. Failures are visible, and nothing falls back to fixtures
+  ok   an unconfigured backend reports unavailable rather than empty
+  ok   a rejected service credential is an operational problem, not a refusal of the operator
+  ok   a backend failure is an error, not an absence
+  ok   an unreachable backend is unavailable, not an error
+  ok   live reads are identified as live
+  ok   an unavailable transport maps to unavailable
+  ok   a failed transport maps to an error
+  ok   a denied transport maps to an error
+  ok   an empty authorized list is empty, not unavailable
+  ok   and an empty page is empty rather than a zero-row table
+  ok   the live adapter imports no fixtures
+  ok   and it references no fixture module or fixture builder
+  ok   fixture mode still labels itself as sample data
+  ok   a production build still refuses fixture data outright
+  ok   the real inbox route reads from the server
+  ok   the real accounts route reads from the server
+  ok   the isolated preview reads fixtures
+  ok   and the source mode has no default to get wrong
+  ok   the live surfaces render no sample-data chrome
+
+7. The backend client maps every answer honestly
+  ok   a valid answer is returned
+  ok   the request is built from the documented path
+  ok   it sends its own scoped credential
+  ok   it sends no browser cookie
+  ok   and never caches a private read
+  ok   and it states the schema version it speaks, because the service requires one
+  ok   a rejected service credential is passed through for the service to classify
+  ok   403 is passed through as a refusal
+  ok   404 is passed through as a refusal
+  ok   500 is an error, not an absence
+  ok   503 is unavailable
+  ok   an HTML answer is never parsed as data
+  ok   a correctly versioned but malformed envelope is reported as malformed
+  ok   an unversioned malformed envelope is reported as a version mismatch
+  ok   an answer with no schema version is refused, not shape-checked
+  ok   and the refusal names it as a version problem
+  ok   an answer from an unimplemented version is refused
+  ok   and the operator is told which two versions disagreed
+  ok   so the read surfaces an error rather than a missing backend
+  ok   and never as an empty list of accounts
+  ok   an unreachable host is unavailable
+  ok   an id that is not an id is refused before it reaches the wire
+  ok   no configuration means no backend
+  ok   a base URL without a credential is not configured
+  ok   both together configure it
+  ok   a malformed base URL disables the live path
+
+8. The dashboard transport reads the handlers' answers, and only those
+  ok   the transport reads the accounts envelope
+  ok   the transport reads an empty page as ok rather than as a failure
+  ok   the transport reads the conversation envelope
+  ok   a 401 is reported as denied with the server's message
+  ok   a network failure is unavailable rather than a crash
+  ok   a login redirect is never parsed as data
+  ok   an envelope of the wrong shape is unavailable
+
+116 checks, 0 failed.
+OnlyFans read-boundary checks passed.
+PASS fan memory: labelled grouping, source dates, original wording, unknown-text retention, empty categories and isolated per-fan rendering.
+PASS OnlyFans UI: bounded, isolated Overview reads; unknown account refusal; partial/unavailable data; rolling periods; preserved payment meanings; read-only page and Operations restrictions.
+All stored V1 history: no age cutoff, stable paging, reverse paging, microsecond/bigint cursors and malformed-input rejection passed.
+Unified Telegram: scoped fan matching, V2-only identities, partner revenue isolation, mixed-source pagination, microsecond boundaries, source failures and legacy fallback passed.

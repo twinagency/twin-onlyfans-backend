@@ -1,0 +1,13 @@
+test_absence_requires_exact_scope_complete_fresh_authorized_coverage (test_foundations.FoundationTests.test_absence_requires_exact_scope_complete_fresh_authorized_coverage) ... ok
+test_incomplete_or_missing_history_cannot_prove_safe_retry (test_foundations.FoundationTests.test_incomplete_or_missing_history_cannot_prove_safe_retry) ... ok
+test_key_mismatch_stops_and_changed_payload_or_binding_never_retries (test_foundations.FoundationTests.test_key_mismatch_stops_and_changed_payload_or_binding_never_retries) ... ok
+test_opaque_ids_remain_distinct_and_reject_implicit_numeric_conversion (test_foundations.FoundationTests.test_opaque_ids_remain_distinct_and_reject_implicit_numeric_conversion) ... ok
+test_receipt_projection_and_uncertainty_are_distinct (test_foundations.FoundationTests.test_receipt_projection_and_uncertainty_are_distinct) ... ok
+test_replay_is_deduplicated_but_conflicting_evidence_is_not (test_foundations.FoundationTests.test_replay_is_deduplicated_but_conflicting_evidence_is_not) ... ok
+test_sales_refusal_persists_until_explicit_scoped_reopening (test_foundations.FoundationTests.test_sales_refusal_persists_until_explicit_scoped_reopening) ... ok
+test_unknown_survives_a_later_not_sent_response_and_retry_permission (test_foundations.FoundationTests.test_unknown_survives_a_later_not_sent_response_and_retry_permission) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.002s
+
+OK

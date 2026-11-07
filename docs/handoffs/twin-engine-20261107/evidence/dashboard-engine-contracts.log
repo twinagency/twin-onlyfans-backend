@@ -1,0 +1,78 @@
+TAP version 13
+# (node:12) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./tests/contracts/resolve-typescript.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:12) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/lib/onlyfans/engine-status.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /workspace/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: engine status is scoped, versioned and preserves uncertainty
+ok 1 - engine status is scoped, versioned and preserves uncertainty
+  ---
+  duration_ms: 1.67118
+  type: 'test'
+  ...
+# Subtest: accepted handover is not presented as a completed request
+ok 2 - accepted handover is not presented as a completed request
+  ---
+  duration_ms: 0.203576
+  type: 'test'
+  ...
+# (node:13) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./tests/contracts/resolve-typescript.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:13) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/lib/onlyfans/controls.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /workspace/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: manual acknowledgement means a queued intent, not delivery
+ok 3 - manual acknowledgement means a queued intent, not delivery
+  ---
+  duration_ms: 82.960825
+  type: 'test'
+  ...
+# Subtest: control request carries the exact scope and version, and writes once
+ok 4 - control request carries the exact scope and version, and writes once
+  ---
+  duration_ms: 102.950693
+  type: 'test'
+  ...
+# Subtest: stale revision, permission denial and unconfigured backend stay refusals
+ok 5 - stale revision, permission denial and unconfigured backend stay refusals
+  ---
+  duration_ms: 1.697605
+  type: 'test'
+  ...
+# Subtest: lost, malformed or server-error acknowledgement remains unconfirmed without retry
+ok 6 - lost, malformed or server-error acknowledgement remains unconfirmed without retry
+  ---
+  duration_ms: 1.078235
+  type: 'test'
+  ...
+# Subtest: read authorization precedes access; cross-account responses are refused
+ok 7 - read authorization precedes access; cross-account responses are refused
+  ---
+  duration_ms: 0.68501
+  type: 'test'
+  ...
+# Subtest: configuration acknowledgements retain account, schema and revision checks
+ok 8 - configuration acknowledgements retain account, schema and revision checks
+  ---
+  duration_ms: 0.272264
+  type: 'test'
+  ...
+# Subtest: purpose credentials must be present and distinct
+ok 9 - purpose credentials must be present and distinct
+  ---
+  duration_ms: 0.954188
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1010.202529

@@ -1,0 +1,16 @@
+# Fans API protocol inventory and offline seam
+
+This is a working inventory, not a claim of provider qualification. Provider sources read 7 November 2026. No account or API requests were made. All HTTP in tests is injected in-process.
+
+| Interface | Documentation | Status |
+| --- | --- | --- |
+| Account identity | https://docs.onlyfansapi.com/api-reference/account/list-accounts | Explicit API account/creator/epoch; list verifies stable creator ID and authenticated account. Runtime credentials alone do not activate a client. |
+| History | https://docs.onlyfansapi.com/api-reference/chat-messages/list-chat-messages | Bounded page, explicit continuation and strict host/path/query check. Short page is not evidence of completion. Full canonical history ingestion still needs the provider read-governor seam. |
+| Message send | https://docs.onlyfansapi.com/api-reference/chat-messages/send-message | Exact path, bearer, idempotency key, UTF-8 body, ordered media/previews and USD cents serialization. One attempt only; 2xx must contain a valid ID and timestamp. Protocol mapping is exercised through the existing authority in a synthetic-only transport. An explicitly constructed single-attempt HTTPS transport exists and is tested with in-process httpx MockTransport; it is intentionally not registered for live sends and bypass prevention still requires integration with the durable authority. |
+| Uncertain send | https://docs.onlyfansapi.com/introduction/essentials/idempotency | Explicit documented not-sent, conflict and mismatch classified; malformed success, timeout, 429 and other errors stay unknown. No POST retry or alternate-provider fallback. Provider retention is not treated as an unconditional exactly-once guarantee. |
+| Webhook | https://docs.onlyfansapi.com/webhooks/protecting-your-webhooks and https://docs.onlyfansapi.com/webhooks/available-events | HMAC verified on raw bytes; message events enter the canonical inbox. Other supported observations are retained as immutable synthetic webhook evidence with duplicate/conflict handling and epoch binding; they are not silently projected as purchases. Live listener registration and delivery semantics remain unqualified. |
+| Transactions | https://docs.onlyfansapi.com/api-reference/transactions/list-transactions | Bounded observed rows and opaque marker with non-advancing-page refusal; not proof of media ownership or absence. Mapping to the canonical ledger requires approved authoritative status/linkage semantics and coverage. |
+| Chargebacks | https://docs.onlyfansapi.com/api-reference/chargebacks/list-chargebacks | Request is mapped; returned records are explicitly unverified observations. Reversal mapping and authoritative evidence require a decision/qualification. |
+| Unlock/access | https://docs.onlyfansapi.com/webhooks/available-events | Authenticated raw event retained separately; it does not establish a complete purchase, receipt or current access. |
+
+Public docs examples are contract fixtures only. They do not prove production account permissions, real model behavior, creator identity, money linkage, send outcome, or access. Existing native financial owners and delivery authority remain authoritative. The historical `openrouter/deepseek-v4.1-flash` selection is evidence, not an approved model change or fallback.

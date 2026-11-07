@@ -1,0 +1,16 @@
+{
+  "backend": {
+    "repo": "backend",
+    "blobs_scanned": 228,
+    "findings": [],
+    "scope": "new reachable history since existing GitHub handoff",
+    "limits": "Pattern-based pre-publication check; not a general security audit. No values printed."
+  },
+  "dashboard": {
+    "repo": "dashboard",
+    "blobs_scanned": 1681,
+    "findings": [],
+    "scope": "entire dashboard snapshot history",
+    "limits": "Pattern-based pre-publication check; not a general security audit. No values printed."
+  }
+}

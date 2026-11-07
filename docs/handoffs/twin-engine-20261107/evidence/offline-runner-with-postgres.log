@@ -1,0 +1,95 @@
+test_control_requires_a_purpose_specific_token_and_explicit_manual_enablement (test_facade_contract.ExistingFacadeContractTests.test_control_requires_a_purpose_specific_token_and_explicit_manual_enablement) ... ok
+test_conversation_and_cursor_are_scoped_to_the_account (test_facade_contract.ExistingFacadeContractTests.test_conversation_and_cursor_are_scoped_to_the_account) ... ok
+test_unknown_and_queued_are_not_sent (test_facade_contract.ExistingFacadeContractTests.test_unknown_and_queued_are_not_sent) ... ok
+test_versions_and_namespaces_are_frozen (test_facade_contract.ExistingFacadeContractTests.test_versions_and_namespaces_are_frozen) ... ok
+test_next_page_cannot_leave_the_exact_account_and_chat (test_fans_api_contract.SyntheticFansApiTests.test_next_page_cannot_leave_the_exact_account_and_chat) ... ok
+test_only_specific_documented_errors_prove_this_attempt_not_sent (test_fans_api_contract.SyntheticFansApiTests.test_only_specific_documented_errors_prove_this_attempt_not_sent) ... ok
+test_short_page_keeps_its_next_page_and_missing_cursor_is_not_complete (test_fans_api_contract.SyntheticFansApiTests.test_short_page_keeps_its_next_page_and_missing_cursor_is_not_complete) ... ok
+test_signature_uses_exact_raw_bytes_and_rejects_invalid_inputs (test_fans_api_contract.SyntheticFansApiTests.test_signature_uses_exact_raw_bytes_and_rejects_invalid_inputs) ... ok
+test_unavailable_idempotency_does_not_resolve_older_unknown (test_fans_api_contract.SyntheticFansApiTests.test_unavailable_idempotency_does_not_resolve_older_unknown) ... ok
+test_absence_requires_exact_scope_complete_fresh_authorized_coverage (test_foundations.FoundationTests.test_absence_requires_exact_scope_complete_fresh_authorized_coverage) ... ok
+test_incomplete_or_missing_history_cannot_prove_safe_retry (test_foundations.FoundationTests.test_incomplete_or_missing_history_cannot_prove_safe_retry) ... ok
+test_key_mismatch_stops_and_changed_payload_or_binding_never_retries (test_foundations.FoundationTests.test_key_mismatch_stops_and_changed_payload_or_binding_never_retries) ... ok
+test_opaque_ids_remain_distinct_and_reject_implicit_numeric_conversion (test_foundations.FoundationTests.test_opaque_ids_remain_distinct_and_reject_implicit_numeric_conversion) ... ok
+test_receipt_projection_and_uncertainty_are_distinct (test_foundations.FoundationTests.test_receipt_projection_and_uncertainty_are_distinct) ... ok
+test_replay_is_deduplicated_but_conflicting_evidence_is_not (test_foundations.FoundationTests.test_replay_is_deduplicated_but_conflicting_evidence_is_not) ... ok
+test_sales_refusal_persists_until_explicit_scoped_reopening (test_foundations.FoundationTests.test_sales_refusal_persists_until_explicit_scoped_reopening) ... ok
+test_unknown_survives_a_later_not_sent_response_and_retry_permission (test_foundations.FoundationTests.test_unknown_survives_a_later_not_sent_response_and_retry_permission) ... ok
+test_new_primitives_do_not_import_legacy_writers_or_network_clients (test_import_boundary.ImportBoundaryTests.test_new_primitives_do_not_import_legacy_writers_or_network_clients) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.013s
+
+OK
+TAP version 13
+# (node:12) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./tests/contracts/resolve-typescript.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:12) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/lib/onlyfans/controls.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /workspace/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: manual acknowledgement means a queued intent, not delivery
+ok 1 - manual acknowledgement means a queued intent, not delivery
+  ---
+  duration_ms: 2.002117
+  type: 'test'
+  ...
+# Subtest: control request carries the exact scope and version, and writes once
+ok 2 - control request carries the exact scope and version, and writes once
+  ---
+  duration_ms: 185.058916
+  type: 'test'
+  ...
+# Subtest: stale revision, permission denial and unconfigured backend stay refusals
+ok 3 - stale revision, permission denial and unconfigured backend stay refusals
+  ---
+  duration_ms: 1.776901
+  type: 'test'
+  ...
+# Subtest: lost, malformed or server-error acknowledgement remains unconfirmed without retry
+ok 4 - lost, malformed or server-error acknowledgement remains unconfirmed without retry
+  ---
+  duration_ms: 1.082542
+  type: 'test'
+  ...
+# Subtest: read authorization precedes access; cross-account responses are refused
+ok 5 - read authorization precedes access; cross-account responses are refused
+  ---
+  duration_ms: 0.771132
+  type: 'test'
+  ...
+# Subtest: configuration acknowledgements retain account, schema and revision checks
+ok 6 - configuration acknowledgements retain account, schema and revision checks
+  ---
+  duration_ms: 0.332199
+  type: 'test'
+  ...
+# Subtest: purpose credentials must be present and distinct
+ok 7 - purpose credentials must be present and distinct
+  ---
+  duration_ms: 0.982756
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 658.133159
+..                                                                       [100%]
+=============================== warnings summary ===============================
+service/tests/test_onlyfans_text_delivery_pg.py::test_projection_crash_is_repaired_without_a_second_wire_call
+service/tests/test_onlyfans_text_delivery_pg.py::test_projection_crash_is_repaired_without_a_second_wire_call
+service/tests/test_onlyfans_text_delivery_pg.py::test_projection_crash_is_repaired_without_a_second_wire_call
+service/tests/test_onlyfans_text_delivery_pg.py::test_projection_crash_is_repaired_without_a_second_wire_call
+service/tests/test_onlyfans_text_delivery_pg.py::test_projection_crash_is_repaired_without_a_second_wire_call
+service/tests/test_onlyfans_text_delivery_pg.py::test_projection_crash_is_repaired_without_a_second_wire_call
+  /workspace/service/db/models.py:80: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    return datetime.utcnow()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2 passed, 6 warnings in 27.73s

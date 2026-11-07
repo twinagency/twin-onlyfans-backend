@@ -1,0 +1,39 @@
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            BuildKit is currently disabled; enable it by removing the DOCKER_BUILDKIT=0
+            environment-variable.
+
+Sending build context to Docker daemon  58.15MB
+Step 1/12 : ARG BASE_IMAGE=moxy-current-base:verified-e5f092544145
+Step 2/12 : FROM ${BASE_IMAGE} AS main
+ ---> e5f092544145
+Step 3/12 : WORKDIR /app
+ ---> Using cache
+ ---> ed3af89ca911
+Step 4/12 : RUN rm -rf /app/service
+ ---> Using cache
+ ---> 3a23de53f207
+Step 5/12 : COPY --chown=1000:1000 service/ /app/service/
+ ---> Using cache
+ ---> d5302179adad
+Step 6/12 : ENV PYTHONPATH=/app/service:/app PYTHONDONTWRITEBYTECODE=1
+ ---> Using cache
+ ---> 8664c221b3a1
+Step 7/12 : ARG SOURCE_COMMIT
+ ---> Using cache
+ ---> fb139da0a032
+Step 8/12 : LABEL io.twin.offline-qualification="true" org.opencontainers.image.revision=${SOURCE_COMMIT}
+ ---> Using cache
+ ---> 767d904f227c
+Step 9/12 : CMD ["python", "-c", "raise SystemExit('Offline qualification image: no service is started')"]
+ ---> Using cache
+ ---> cc4b4f855401
+Step 10/12 : FROM main AS generic-vault
+ ---> cc4b4f855401
+Step 11/12 : COPY --chown=1000:1000 compat/candidate/generic/ /app/service/
+ ---> 3991e0af4dd3
+Step 12/12 : LABEL io.twin.offline-variant="generic-vault"
+ ---> Running in 609d94ed4680
+ ---> Removed intermediate container 609d94ed4680
+ ---> c54665a7c12d
+Successfully built c54665a7c12d
+Successfully tagged twin-engine-offline-generic:20261107-r4

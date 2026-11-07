@@ -1,0 +1,32 @@
+Sending build context to Docker daemon  57.95MB
+Step 1/9 : ARG BASE_IMAGE=moxy-current-base:verified-e5f092544145
+Step 2/9 : FROM ${BASE_IMAGE} AS main
+ ---> e5f092544145
+Step 3/9 : WORKDIR /app
+ ---> Running in d3ee959e3ebd
+ ---> Removed intermediate container d3ee959e3ebd
+ ---> ed3af89ca911
+Step 4/9 : RUN rm -rf /app/service
+ ---> Running in 8e9e5a7a482b
+ ---> Removed intermediate container 8e9e5a7a482b
+ ---> 3a23de53f207
+Step 5/9 : COPY service/ /app/service/
+ ---> 920031b187ea
+Step 6/9 : ENV PYTHONPATH=/app/service:/app PYTHONDONTWRITEBYTECODE=1
+ ---> Running in 643f9edb9231
+ ---> Removed intermediate container 643f9edb9231
+ ---> 0f35b04b9e68
+Step 7/9 : ARG SOURCE_COMMIT
+ ---> Running in e336bf8dc327
+ ---> Removed intermediate container e336bf8dc327
+ ---> f4fd014a14f2
+Step 8/9 : LABEL io.twin.offline-qualification="true" org.opencontainers.image.revision=${SOURCE_COMMIT}
+ ---> Running in ea2b1867f9f8
+ ---> Removed intermediate container ea2b1867f9f8
+ ---> 0059461aa879
+Step 9/9 : CMD ["python", "-c", "raise SystemExit('Offline qualification image: no service is started')"]
+ ---> Running in e1da47322044
+ ---> Removed intermediate container e1da47322044
+ ---> 1c8e7a972afb
+Successfully built 1c8e7a972afb
+Successfully tagged twin-engine-offline-main:20261107

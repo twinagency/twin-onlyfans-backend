@@ -1,0 +1,24 @@
+{
+  "extends": "/workspace/tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "noEmit": true
+  },
+  "include": [
+    "/workspace/lib/onlyfans/engine-status.ts",
+    "/workspace/lib/onlyfans/engine-operator.ts",
+    "/workspace/lib/onlyfans/agency-scope.ts",
+    "/workspace/components/onlyfans-preview/EngineStatus.tsx",
+    "/workspace/components/onlyfans-preview/InboxView.tsx",
+    "/workspace/components/onlyfans-preview/OnlyFansWorkspace.tsx",
+    "/workspace/app/api/onlyfans-controls/accounts/[accountId]/conversations/[conversationId]/requests/[requestId]/route.ts",
+    "/workspace/tests/contracts/engine-operator.test.ts",
+    "/workspace/tests/browser/engine-journey.tsx",
+    "/workspace/tests/contracts/full-journey-render.tsx",
+    "/workspace/tests/contracts/offer-journey-render.tsx",
+    "/evidence/dashboard-css-modules.d.ts"
+  ],
+  "exclude": [
+    "/workspace/node_modules"
+  ]
+}

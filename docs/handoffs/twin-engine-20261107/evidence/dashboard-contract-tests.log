@@ -1,0 +1,59 @@
+TAP version 13
+# (node:12) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./tests/contracts/resolve-typescript.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:12) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///workspace/lib/onlyfans/controls.ts is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /workspace/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: manual acknowledgement means a queued intent, not delivery
+ok 1 - manual acknowledgement means a queued intent, not delivery
+  ---
+  duration_ms: 1.94723
+  type: 'test'
+  ...
+# Subtest: control request carries the exact scope and version, and writes once
+ok 2 - control request carries the exact scope and version, and writes once
+  ---
+  duration_ms: 109.839541
+  type: 'test'
+  ...
+# Subtest: stale revision, permission denial and unconfigured backend stay refusals
+ok 3 - stale revision, permission denial and unconfigured backend stay refusals
+  ---
+  duration_ms: 1.60094
+  type: 'test'
+  ...
+# Subtest: lost, malformed or server-error acknowledgement remains unconfirmed without retry
+ok 4 - lost, malformed or server-error acknowledgement remains unconfirmed without retry
+  ---
+  duration_ms: 1.070344
+  type: 'test'
+  ...
+# Subtest: read authorization precedes access; cross-account responses are refused
+ok 5 - read authorization precedes access; cross-account responses are refused
+  ---
+  duration_ms: 0.908949
+  type: 'test'
+  ...
+# Subtest: configuration acknowledgements retain account, schema and revision checks
+ok 6 - configuration acknowledgements retain account, schema and revision checks
+  ---
+  duration_ms: 0.284911
+  type: 'test'
+  ...
+# Subtest: purpose credentials must be present and distinct
+ok 7 - purpose credentials must be present and distinct
+  ---
+  duration_ms: 0.846163
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 696.523634

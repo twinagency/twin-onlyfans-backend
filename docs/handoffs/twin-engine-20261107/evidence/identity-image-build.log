@@ -1,0 +1,34 @@
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            BuildKit is currently disabled; enable it by removing the DOCKER_BUILDKIT=0
+            environment-variable.
+
+Sending build context to Docker daemon  58.15MB
+Step 1/9 : ARG BASE_IMAGE=moxy-current-base:verified-e5f092544145
+Step 2/9 : FROM ${BASE_IMAGE} AS main
+ ---> e5f092544145
+Step 3/9 : WORKDIR /app
+ ---> Using cache
+ ---> ed3af89ca911
+Step 4/9 : RUN rm -rf /app/service
+ ---> Using cache
+ ---> 3a23de53f207
+Step 5/9 : COPY --chown=1000:1000 service/ /app/service/
+ ---> e63454b4b2fb
+Step 6/9 : ENV PYTHONPATH=/app/service:/app PYTHONDONTWRITEBYTECODE=1
+ ---> Running in 0a2a06031a56
+ ---> Removed intermediate container 0a2a06031a56
+ ---> 873e88fba81b
+Step 7/9 : ARG SOURCE_COMMIT
+ ---> Running in 9149920cb4a2
+ ---> Removed intermediate container 9149920cb4a2
+ ---> e535267aaa53
+Step 8/9 : LABEL io.twin.offline-qualification="true" org.opencontainers.image.revision=${SOURCE_COMMIT}
+ ---> Running in 9276f094bdb4
+ ---> Removed intermediate container 9276f094bdb4
+ ---> a35ab64e0960
+Step 9/9 : CMD ["python", "-c", "raise SystemExit('Offline qualification image: no service is started')"]
+ ---> Running in d51914692c7c
+ ---> Removed intermediate container d51914692c7c
+ ---> a66c86adeb7b
+Successfully built a66c86adeb7b
+Successfully tagged twin-engine-offline-main:20261107-dev10

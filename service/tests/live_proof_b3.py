@@ -1,12 +1,13 @@
-"""LIVE proof, Maile -> test fan 601164546 only. Skipped unless LIVE_FANSAPI_B3=1.
+"""LIVE proof, Maile -> test fan <test-fan-chat> only. Skipped unless LIVE_FANSAPI_B3=1.
 Limits enforced in code: chat id asserted before every POST, <=15 sends, <=2 paid cards at $3, <=150 credits."""
+import os
 import json, os, time
 from datetime import timedelta
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-CHAT = '601164546'
+CHAT = os.environ.get('LIVE_TEST_FAN_CHAT', 'test-fan-chat')
 MAX_SENDS, MAX_PAID, MAX_CREDITS = 15, 2, 150
 pytestmark = pytest.mark.skipif(os.environ.get('LIVE_FANSAPI_B3') != '1', reason='live proof is opt-in')
 
@@ -66,7 +67,7 @@ def test_live_proof(database, monkeypatch, capsys):
     authority.configure(TENANT, ACCOUNT, expected_revision=2, enabled=True, limit_units=20,
                         throttle_seconds=1, actor='live-operator', reason='B3 live proof real kind',
                         transport_kind='fansapi')
-    creator = '323358988'
+    creator = os.environ.get('LIVE_TEST_CREATOR_OF_ID', 'creator-of-id')
     adapter = FansWebhookAdapter(store)
     adapter.bind_simulated(TENANT, ACCOUNT, config.provider_account, creator)
     client = build_client(config, creator_id=creator, epoch=1)

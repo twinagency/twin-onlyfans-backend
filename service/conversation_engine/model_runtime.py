@@ -32,8 +32,8 @@ import uuid
 
 from onlyfans_runtime.store import Refused
 
-from .model_client import (ChatRequest, ModelBusy, ModelCallError, ModelHTTPStatus, ModelNotSent, ModelOutcomeUnknown,
-                           ModelUnavailable)
+from .model_client import (ChatRequest, ModelBusy, ModelCallError, ModelHTTPStatus, ModelIncompleteResponse,
+                           ModelNotSent, ModelOutcomeUnknown, ModelUnavailable)
 from .model_config import input_token_upper_bound
 from .model_ledger import CONTENT_FAILURES, ModelLedger
 from .model_output import JudgeContext, Verdict, judge
@@ -163,12 +163,16 @@ class ModelRuntime:
             same = row.snapshot_sha256 == turn.snapshot_sha256
             if row.status in ('reserved', 'calling'):
                 raise ModelBusy('a model call is already in flight for this request')
-            if row.response_text is not None and row.outcome in (None, 'ok'):
+            if cfg.upstream_provider and row.response_text is not None and same and row.outcome in (None, 'ok', 'identity_pending', 'identity_unverified'):
+                turn.handover('model_identity_unverified', {'outcome': row.outcome or 'not_recorded'})
+                raise Refused('model identity is unverified; request handed to a human')
+            if row.response_text is not None and row.outcome in (None, 'ok', 'identity_verified', 'verified_ok'):
                 if not same:
-                    continue  # produced from an older view of the conversation: never reuse
+                    continue  # produced from an older view or model configuration: never reuse
                 verdict = judge(row.response_text, jctx)  # a stored answer: reuse, never pay twice
-                if verdict.outcome != row.outcome:
-                    ledger.set_outcome(turn.account, row.call_id, verdict.outcome)
+                recorded_outcome = 'verified_ok' if cfg.upstream_provider and verdict.outcome == 'ok' else verdict.outcome
+                if recorded_outcome != row.outcome:
+                    ledger.set_outcome(turn.account, row.call_id, recorded_outcome)
                 if verdict.outcome == 'ok':
                     turn.recheck()
                     return verdict.proposal
@@ -231,9 +235,14 @@ class ModelRuntime:
                 unavailable, blocked = unavailable or is_availability_failure(exc.error_class), blocked or not is_availability_failure(exc.error_class)
                 continue
             except ModelOutcomeUnknown as exc:
-                ledger.mark_unknown(turn.account, reservation.call_id, self.worker_id, outcome='timeout', error_class=exc.error_class)
+                incomplete = isinstance(exc, ModelIncompleteResponse)
+                ledger.mark_unknown(turn.account, reservation.call_id, self.worker_id,
+                                    outcome='provider_incomplete' if incomplete else 'timeout', error_class=exc.error_class)
                 dead.add(model); pos = chain_pos + 1
-                unavailable = True  # the unknown call keeps its reservation while the fallback (if any) runs
+                if incomplete:
+                    blocked = True  # an error-bearing partial response is not a fallback permission
+                else:
+                    unavailable = True  # unknown usage keeps its reservation
                 continue
             except Exception as exc:  # unclassified client failure: assume it may have been charged
                 ledger.mark_unknown(turn.account, reservation.call_id, self.worker_id, outcome='client_error',
@@ -244,14 +253,29 @@ class ModelRuntime:
             raw = result.text if type(getattr(result, 'text', None)) is str else ''
             oversize = len(raw.encode('utf-8')) > cfg.max_output_bytes
             text = raw.encode('utf-8')[:cfg.max_output_bytes].decode('utf-8', 'ignore') if oversize else raw
-            ledger.settle(turn.account, reservation.call_id, self.worker_id, text_value=text, usage=result.usage)
+            ledger.settle(turn.account, reservation.call_id, self.worker_id, text_value=text, usage=result.usage,
+                          identity_pending=bool(cfg.upstream_provider))
+            returned_model = getattr(result, 'model', '') if type(getattr(result, 'model', '')) is str else ''
+            returned_provider = getattr(result, 'provider', '') if type(getattr(result, 'provider', '')) is str else ''
             ledger.note_identity(turn.account, reservation.call_id, self.worker_id, requested=model,
-                                 returned=getattr(result, 'model', '') or '', provider=getattr(result, 'provider', '') or '',
+                                 returned=returned_model, provider=returned_provider,
                                  prompt_version=getattr(self.prompts, 'name', ''), config_version=cfg.version(),
                                  chain_step=chain_step)
             turn.recheck()  # the world may have moved during the call: a stale answer is never accepted
+            if cfg.upstream_provider and (returned_model != model
+                    or returned_provider.casefold() != cfg.upstream_reported_name.casefold()):
+                # A configured single-provider pilot must verify the returned
+                # identity; do not auto-retry or use an unverified answer.
+                ledger.finish_identity(turn.account, reservation.call_id, self.worker_id, verified=False)
+                turn.handover('model_identity_unverified', {'requested_model': model,
+                    'returned_model': returned_model[:128], 'expected_provider': cfg.upstream_reported_name,
+                    'returned_provider': returned_provider[:64]})
+                raise Refused('model identity is unverified; request handed to a human')
+            if cfg.upstream_provider:
+                ledger.finish_identity(turn.account, reservation.call_id, self.worker_id, verified=True)
             verdict = Verdict('invalid', reasons=('answer was longer than the output bound',)) if oversize else judge(text, jctx)
-            ledger.set_outcome(turn.account, reservation.call_id, verdict.outcome)
+            recorded_outcome = 'verified_ok' if cfg.upstream_provider and verdict.outcome == 'ok' else verdict.outcome
+            ledger.set_outcome(turn.account, reservation.call_id, recorded_outcome)
             if verdict.outcome == 'ok':
                 return verdict.proposal
             content_failed = True

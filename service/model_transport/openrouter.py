@@ -8,16 +8,19 @@ never logged, never included in an error, and is redacted in repr().
 Failure classification (it decides how the ledger counts the call):
   ConnectError/ConnectTimeout/PoolTimeout           -> ModelNotSent        (proved unsent: released, cost 0)
   non-200 response                                  -> ModelHTTPStatus     (provider refused: released, cost 0)
-  read/write timeout, reset, protocol error, junk   -> ModelOutcomeUnknown (may have been charged: counted as spent)
+  read/write timeout, reset, protocol error, junk, or an error inside HTTP 200
+                                                    -> ModelOutcomeUnknown (may have been charged: counted as spent)
 """
 import json
 import os
+import re
 import stat
 from urllib.parse import urlsplit
 
 import httpx
 
-from conversation_engine.model_client import (ChatResult, ModelHTTPStatus, ModelNotSent, ModelOutcomeUnknown, Usage)
+from conversation_engine.model_client import (ChatResult, ModelHTTPStatus, ModelIncompleteResponse, ModelNotSent,
+                                              ModelOutcomeUnknown, Usage)
 
 _NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.UnsupportedProtocol,
              httpx.InvalidURL, httpx.LocalProtocolError, httpx.ProxyError)
@@ -63,7 +66,7 @@ class OpenRouterClient:
     provider = 'openrouter'
 
     def __init__(self, *, base_url='https://openrouter.ai/api/v1', key_file='', key_env='', environ=None, transport=None,
-                 title='twin-engine'):
+                 title='twin-engine', upstream_provider='', price_caps=None):
         parts = urlsplit(base_url)
         if parts.scheme != 'https' or not parts.hostname or parts.username or parts.password:
             raise ValueError('the model base URL must be https without credentials')
@@ -71,6 +74,16 @@ class OpenRouterClient:
         self._key = load_key(key_file=key_file, key_env=key_env, environ=environ)
         self._transport = transport  # httpx.MockTransport in tests; None = the real network
         self._title = title
+        if (type(upstream_provider) is not str or upstream_provider
+                and not re.fullmatch(r'[a-z0-9][a-z0-9._:/-]{0,127}', upstream_provider)):
+            raise ValueError('invalid upstream provider')
+        if upstream_provider and (type(price_caps) is not dict or not price_caps or any(
+                type(model) is not str or not model or type(prices) is not tuple or len(prices) != 2
+                or any(type(price) is not int or not 0 < price <= 10**12 for price in prices)
+                for model, prices in price_caps.items())):
+            raise ValueError('single-provider routing requires bounded token prices')
+        self._upstream_provider = upstream_provider
+        self._price_caps = dict(price_caps or {})
 
     def __repr__(self):
         return f'OpenRouterClient(url={self._url!r}, key=<redacted>)'
@@ -80,7 +93,15 @@ class OpenRouterClient:
                 'max_tokens': request.max_tokens, 'usage': {'include': True}}
         if request.json_mode:
             body['response_format'] = {'type': 'json_object'}
-        headers = {'Authorization': 'Bearer ' + self._key, 'Content-Type': 'application/json', 'X-Title': self._title}
+        if self._upstream_provider:
+            prices = self._price_caps.get(request.model)
+            if prices is None:
+                raise ModelNotSent('model has no configured price bound')
+            body['provider'] = {'only': [self._upstream_provider], 'allow_fallbacks': False,
+                'require_parameters': True,
+                'max_price': {'prompt': prices[0] / 1_000_000, 'completion': prices[1] / 1_000_000}}
+        headers = {'Authorization': 'Bearer ' + self._key, 'Content-Type': 'application/json', 'X-Title': self._title,
+                   'X-OpenRouter-Metadata': 'enabled'}
         try:
             with httpx.Client(transport=self._transport, timeout=httpx.Timeout(request.timeout_seconds),
                               follow_redirects=False, trust_env=False) as client:
@@ -97,16 +118,29 @@ class OpenRouterClient:
             raise ModelOutcomeUnknown('provider answered with an unreadable body') from None
         if type(data) is not dict:
             raise ModelOutcomeUnknown('provider answered with an unreadable body')
+        if data.get('error') is not None:
+            raise ModelIncompleteResponse('provider reported an incomplete response')
         usage = data.get('usage') if type(data.get('usage')) is dict else {}
         parsed = Usage(prompt_tokens=_count(usage.get('prompt_tokens')), completion_tokens=_count(usage.get('completion_tokens')),
                        cost_microusd=_microusd(usage.get('cost')))
         choices = data.get('choices')
         choice = choices[0] if type(choices) is list and choices and type(choices[0]) is dict else {}
+        if choice.get('error') is not None or choice.get('finish_reason') == 'error':
+            raise ModelIncompleteResponse('provider reported an incomplete response')
         message = choice.get('message') if type(choice.get('message')) is dict else {}
         text = message.get('content') if type(message.get('content')) is str else ''
         # `model` is what the provider says answered. A response without one is recorded as such (empty), never
         # silently replaced by the requested id, so the ledger can tell "same model" from "not reported".
         returned = data.get('model') if type(data.get('model')) is str else ''
         upstream = data.get('provider') if type(data.get('provider')) is str else ''
+        meta = data.get('openrouter_metadata') if type(data.get('openrouter_metadata')) is dict else {}
+        endpoints = meta.get('endpoints') if type(meta.get('endpoints')) is dict else {}
+        available = endpoints.get('available') if type(endpoints.get('available')) is list else []
+        selected = [row.get('provider') for row in available if type(row) is dict and row.get('selected') is True
+                    and type(row.get('provider')) is str and row.get('provider')]
+        if len(selected) == 1:
+            upstream = selected[0] if not upstream or upstream.casefold() == selected[0].casefold() else ''
+        elif selected:
+            upstream = ''  # conflicting metadata is not a verified identity
         return ChatResult(text=text, usage=parsed, model=returned[:128], provider=upstream[:64],
                           finish_reason=choice.get('finish_reason') if type(choice.get('finish_reason')) is str else None)

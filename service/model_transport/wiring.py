@@ -1,7 +1,11 @@
 """Select the real model runtime through normal application configuration (environment variables). Default OFF.
 
     ENGINE_MODEL_ENABLED=1                      turns the runtime on (anything else: build_* return None)
-    ENGINE_MODEL_PRIMARY / ENGINE_MODEL_ALLOWED the ONE model, e.g. deepseek/deepseek-v4.1-flash 
+    ENGINE_MODEL_PRIMARY / ENGINE_MODEL_ALLOWED the ONE model, e.g. deepseek/deepseek-v4.1-flash
+    ENGINE_MODEL_UPSTREAM / ENGINE_MODEL_UPSTREAM_REPORTED_NAME one provider slug and its expected response name;
+                                                paired, required by the Plan C draft startup. Provider fallback is
+                                                disabled, configured token prices are sent as filters, and returned
+                                                identity must match before an answer can be reused.
     ENGINE_MODEL_FALLBACK_ENABLED=1             OFF by default. Needs ENGINE_MODEL_FALLBACK (e.g. x-ai/grok-4.1-fast) and its own
                                                 ENGINE_MODEL_FALLBACK_PROMPT_MICROUSD_PER_MTOK / _COMPLETION_ prices, else startup
                                                 refuses. Used only after an AVAILABILITY failure of the primary; never after a

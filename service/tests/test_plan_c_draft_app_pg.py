@@ -40,6 +40,7 @@ def configured_draft(world, tmp_path):
         'TWIN_PLAN_C_FANS':str(FAN), 'TWIN_PLAN_C_ITEM_ID':str(world.item), 'TWIN_PLAN_C_PRICE_CENTS':str(price),
         'TWIN_PLAN_C_MEDIA_IDS':','.join(map(str, media)), 'TWIN_PLAN_C_PREVIEW_IDS':','.join(map(str, previews)),
         'TWIN_PLAN_C_WEBHOOK_SECRET_FILE':str(secret), 'ENGINE_MODEL_ENABLED':'1', 'ENGINE_MODEL_PRIMARY':'m/primary',
+        'ENGINE_MODEL_UPSTREAM':'fixture-provider', 'ENGINE_MODEL_UPSTREAM_REPORTED_NAME':'Fixture Provider',
         'ENGINE_MODEL_ALLOWED':'m/primary', 'ENGINE_MODEL_ACCOUNTS':ACCOUNT, 'ENGINE_MODEL_KEY_ENV':'FIXTURE_KEY',
         'FIXTURE_KEY':'fixture-not-a-real-key', 'ENGINE_MODEL_PROMPT_MICROUSD_PER_MTOK':'1000000',
         'ENGINE_MODEL_COMPLETION_MICROUSD_PER_MTOK':'2000000', 'ENGINE_MODEL_DAILY_CAP_MICROUSD':'1000000',
@@ -48,7 +49,8 @@ def configured_draft(world, tmp_path):
     def respond(request):
         seen.append(json.loads(request.content))
         return httpx.Response(200, json={'model':'m/primary', 'choices':[{'message':{'content':json.dumps({'body':'hey you'})},
-            'finish_reason':'stop'}], 'usage':{'prompt_tokens':100, 'completion_tokens':5, 'cost':0.0001}})
+            'finish_reason':'stop'}], 'usage':{'prompt_tokens':100, 'completion_tokens':5, 'cost':0.0001},
+            'openrouter_metadata':{'endpoints':{'available':[{'provider':'Fixture Provider', 'selected':True}]}}})
     transport = httpx.MockTransport(respond)
     yield world, env, transport, seen
     set_active_profiles(None)
@@ -66,6 +68,7 @@ def test_draft_startup_is_default_off_and_scoped_before_model_calls(configured_d
     assert build_draft_pilot(world.store, {**env, 'TWIN_PLAN_C_DRAFT_ONLY':'0'}) is None
     for change in ({'TWIN_PLAN_C_FANS':''}, {'TWIN_PLAN_C_FANS':str(FAN)+','+str(FAN)},
                    {'ENGINE_MODEL_ACCOUNTS':ACCOUNT+',other'}, {'ENGINE_MODEL_ALLOWED':'m/primary,m/other'},
+                   {'ENGINE_MODEL_UPSTREAM':'', 'ENGINE_MODEL_UPSTREAM_REPORTED_NAME':''},
                    {'TWIN_PLAN_C_PRICE_CENTS':'999'}, {'TWIN_PLAN_C_MEDIA_IDS':'999'},
                    {'TWIN_PLAN_C_PREVIEW_IDS':'999'},
                    {'ENGINE_MODEL_FALLBACK_ENABLED':'1', 'ENGINE_MODEL_FALLBACK':'m/fallback',
@@ -150,6 +153,8 @@ def test_actual_app_signed_webhook_stages_only_and_survives_redelivery(configure
             request, generation, version = staged[0].request_id, staged[0].generation, staged[0].version
             decision_id = decisions[0].decision_id
         assert len(seen) == 1 and seen[0]['model'] == 'm/primary' and world.fans.posts == []
+        assert seen[0]['provider'] == {'only':['fixture-provider'], 'allow_fallbacks':False,
+            'require_parameters':True, 'max_price':{'prompt':1.0, 'completion':2.0}}
         approval.approve(world.store, TENANT, ACCOUNT, request, generation,
                          expected_version=version, actor='op-session:'+'a'*64)
         assert module.app.state.plan_c_draft.worker.send_approved(TENANT, ACCOUNT, decision_id)['outcome'] == 'draft_only'

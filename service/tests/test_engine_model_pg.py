@@ -602,6 +602,103 @@ def test_stored_answer_is_reused_after_a_crash_between_settle_and_decision(datab
     store.close()
 
 
+@pytest.mark.parametrize('returned_model,returned_provider', [('', 'Fixture Host'), ('m/other', 'Fixture Host'),
+                                                              ('m/primary', ''), ('m/primary', 'Other Host')])
+def test_pinned_model_requires_verified_returned_identity(database, returned_model, returned_provider):
+    cfg = config(upstream_provider='fixture-host', upstream_reported_name='Fixture Host')
+    answer = ChatResult(text=ok('hello'), usage=Usage(100, 10, 500), model=returned_model, provider=returned_provider)
+    store, authority, engine, runtime, client, _ = with_model(database, [answer], cfg=cfg)
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='identity is unverified'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    [row] = rows(database)
+    assert row.status == 'settled' and row.actual_microusd == 500 and row.outcome == 'identity_unverified'
+    assert len(client.requests) == 1
+    with Session(database[1]) as s:
+        assert s.scalar(select(OfEngineRequest.status)) == 'handover_pending'
+        assert s.scalar(select(func.count()).select_from(OfEngineDecision)) == 0
+    store.close()
+
+
+def test_incomplete_provider_response_keeps_budget_and_never_falls_back(database):
+    from conversation_engine.model_client import ModelIncompleteResponse
+    store, authority, engine, runtime, client, _ = with_model(database,
+        [ModelIncompleteResponse('partial response'), ok('must not run')], cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    with pytest.raises(ModelUnavailable):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    [row] = rows(database)
+    assert row.status == 'unknown' and row.outcome == 'provider_incomplete'
+    assert row.error_class == 'provider_incomplete' and len(client.requests) == 1
+    assert runtime.ledger.committed(day=row.cost_day) == row.reserved_microusd
+    store.close()
+
+
+def test_pinned_model_crash_before_identity_verification_never_reuses_answer(database):
+    cfg = config(upstream_provider='fixture-host', upstream_reported_name='Fixture Host')
+    answer = ChatResult(text=ok('stored answer'), usage=Usage(100, 10, 500), model='m/primary', provider='Fixture Host')
+    store, authority, engine, runtime, client, _ = with_model(database, [answer], cfg=cfg)
+    incoming(store, 1, 'hello')
+    original = engine._model_recheck
+    calls = {'n':0}
+    def crash_after_settle(*args, **kwargs):
+        calls['n'] += 1
+        if calls['n'] == 2:
+            raise RuntimeError('simulated crash before identity verification')
+        return original(*args, **kwargs)
+    engine._model_recheck = crash_after_settle
+    with pytest.raises(RuntimeError):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    engine._model_recheck = original
+    assert rows(database)[0].outcome == 'identity_pending' and len(client.requests) == 1
+    with pytest.raises(Refused, match='identity is unverified'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert len(client.requests) == 1
+    store.close()
+
+
+def test_pinned_verified_answer_is_reused_after_crash_before_decision(database):
+    cfg = config(upstream_provider='fixture-host', upstream_reported_name='Fixture Host')
+    answer = ChatResult(text=ok('stored answer'), usage=Usage(100, 10, 500), model='m/primary', provider='Fixture Host')
+    store, authority, engine, runtime, client, _ = with_model(database, [answer], cfg=cfg)
+    incoming(store, 1, 'hello')
+    original = runtime.propose
+    def crash_after_verification(turn):
+        original(turn)
+        raise RuntimeError('simulated crash after verification')
+    runtime.propose = crash_after_verification
+    with pytest.raises(RuntimeError):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    runtime.propose = original
+    assert rows(database)[0].outcome == 'verified_ok'
+    assert engine.plan(TENANT, ACCOUNT, FAN, 1) and len(client.requests) == 1
+    store.close()
+
+
+def test_changed_upstream_does_not_reuse_prior_verified_answer(database):
+    from dataclasses import replace
+    cfg = config(upstream_provider='first-host', upstream_reported_name='First Host')
+    answers = [ChatResult(text=ok('stored answer'), usage=Usage(100, 10, 500), model='m/primary', provider='First Host'),
+               ChatResult(text=ok('hello babe, how was your day?'), usage=Usage(100, 10, 500), model='m/primary', provider='Second Host')]
+    store, authority, engine, runtime, client, _ = with_model(database, answers, cfg=cfg)
+    incoming(store, 1, 'hello')
+    original = runtime.propose
+    def crash_after_verification(turn):
+        original(turn)
+        raise RuntimeError('simulated crash after verification')
+    runtime.propose = crash_after_verification
+    with pytest.raises(RuntimeError):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    runtime.propose = original
+    runtime.config = replace(cfg, upstream_provider='second-host', upstream_reported_name='Second Host')
+    runtime.ledger.config = runtime.config
+    decision = engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert decision and len(client.requests) == 2
+    with Session(database[1]) as s:
+        assert s.get(OfEngineDecision, (ACCOUNT, decision)).body == 'hello babe, how was your day?'
+    store.close()
+
+
 # ---- stale generation is never sent -----------------------------------------------------------------
 def test_new_fan_message_during_the_call_means_the_stale_answer_is_not_planned(database):
     holder = {}

@@ -142,9 +142,9 @@ def build_draft_pilot(store, environ=None, *, model_transport=None):
     if not set(previews).issubset(media):
         raise Refused('draft pilot previews must belong to the product')
     cfg = ModelConfig.from_env(env)
-    if (not cfg.enabled or cfg.fallback_enabled or cfg.enabled_accounts != frozenset({account})
-            or cfg.allowed_models != (cfg.primary_model,)):
-        raise Refused('draft pilot needs one configured model and account without fallback')
+    if (not cfg.enabled or cfg.fallback_enabled or not cfg.upstream_provider or not cfg.upstream_reported_name
+            or cfg.enabled_accounts != frozenset({account}) or cfg.allowed_models != (cfg.primary_model,)):
+        raise Refused('draft pilot needs one configured model and upstream without fallback')
     secret = _secret(env.get('TWIN_PLAN_C_WEBHOOK_SECRET_FILE', ''))
     profiles = JsonFileCreatorProfiles(env.get('ENGINE_MODEL_PROFILES_FILE', ''))
     # Validate shared policy before loading a model credential or constructing a client.

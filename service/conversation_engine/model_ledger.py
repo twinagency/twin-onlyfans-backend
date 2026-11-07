@@ -174,7 +174,9 @@ class ModelLedger:
         if lapsed:
             raise Refused('model call lease expired before the call')
 
-    def settle(self, account, call_id, worker_id, *, text_value, usage):
+    def settle(self, account, call_id, worker_id, *, text_value, usage, identity_pending=False):
+        if type(identity_pending) is not bool:
+            raise Refused('invalid identity verification state')
         cfg = self.config
         cost = usage.cost_microusd
         with Session(self.engine) as s, s.begin():
@@ -188,6 +190,8 @@ class ModelLedger:
             now = self.clock()
             row.response_text = text_value
             row.response_sha256 = sha256(text_value.encode('utf-8')).hexdigest()
+            if identity_pending:
+                row.outcome = 'identity_pending'  # never replay until the provider identity is verified
             row.prompt_tokens, row.completion_tokens = usage.prompt_tokens, usage.completion_tokens
             row.settled_at = row.updated_at = now
             if cost is not None:
@@ -209,10 +213,22 @@ class ModelLedger:
             row = self._mine(s, account, call_id, worker_id, 'calling')
             row.status, row.outcome, row.error_class, row.updated_at = 'unknown', outcome, error_class, self.clock()
 
+    def finish_identity(self, account, call_id, worker_id, *, verified):
+        if type(verified) is not bool:
+            raise Refused('invalid model identity verdict')
+        with Session(self.engine) as s, s.begin():
+            row = s.get(OfEngineModelCall, (account, call_id), with_for_update=True)
+            if (row is None or row.lease_owner != worker_id or row.status not in ('settled', 'unknown')
+                    or row.outcome != 'identity_pending'):
+                raise Refused('model identity verification is no longer current')
+            row.outcome = 'identity_verified' if verified else 'identity_unverified'
+            row.updated_at = self.clock()
+
     def set_outcome(self, account, call_id, outcome):
         with Session(self.engine) as s, s.begin():
             row = s.get(OfEngineModelCall, (account, call_id), with_for_update=True)
-            if row is not None and row.outcome in (None, 'ok') + tuple(CONTENT_FAILURES) and row.status in ('settled', 'unknown'):
+            if (row is not None and row.status in ('settled', 'unknown')
+                    and row.outcome in (None, 'ok', 'identity_verified', 'verified_ok') + tuple(CONTENT_FAILURES)):
                 row.outcome, row.updated_at = outcome, self.clock()
 
     # ---- identity, reconciliation -----------------------------------------------------

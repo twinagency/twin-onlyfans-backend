@@ -63,6 +63,11 @@ class ModelOutcomeUnknown(ModelCallError):
     error_class = 'unknown_outcome'
 
 
+class ModelIncompleteResponse(ModelOutcomeUnknown):
+    # Cost and output are not trustworthy after a provider-reported error.
+    error_class = 'provider_incomplete'
+
+
 class ModelUnavailable(Refused):
     """Every transport attempt failed; the request stays open and may be retried later."""
 

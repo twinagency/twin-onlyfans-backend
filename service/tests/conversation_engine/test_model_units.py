@@ -489,7 +489,7 @@ def test_em_dashes_are_cleaned_from_fan_text_and_the_prompt():
 
 def test_journey_rules_reach_the_judge_so_a_violation_gets_one_corrected_draft():
     snap = wctx(message='hello').snapshot
-    snap = dict(snap, journey={'offers_allowed': False, 'sales_mode': 'open', 'compliment_after_purchase': True})
+    snap = dict(snap, journey={'offers_allowed': False, 'sales_mode': 'open', 'compliment_after_unlock': True})
     ctx = judge_ctx(snap, profile=WRITER, grants=[GRANT])
     outcome, why = reasons(offer_text('another set for you'), ctx)
     assert outcome == 'invalid' and 'no offer is allowed' in why and 'complimented' in why
@@ -505,8 +505,8 @@ def test_journey_problems_pure_rules():
     assert 'paused' in ' '.join(journey_problems({'offers_allowed': True, 'sales_mode': 'paused'}, offer))
     reopen = SyntheticProposal('x', action='offer', offer_grant_id=GRANT, sales_signal='reopen', item_scope=('5',), pitch=True)
     assert journey_problems({'offers_allowed': True, 'sales_mode': 'paused'}, reopen) == []
-    assert journey_problems({'compliment_after_purchase': True}, plain) == []  # a plain reply to a compliment is fine
-    assert journey_problems({'compliment_after_purchase': True}, offer)
+    assert journey_problems({'compliment_after_unlock': True}, plain) == []  # a plain reply to a compliment is fine
+    assert journey_problems({'compliment_after_unlock': True}, offer)
     assert journey_problems({'no_promise': True}, SyntheticProposal("i'll make you a custom video")) != []
     line = {'approved_identity_line': IDENT}
     assert journey_problems(line, SyntheticProposal(IDENT)) == [] and journey_problems(line, SyntheticProposal('just me'))
@@ -551,6 +551,52 @@ def test_openrouter_success_and_usage_parsing(monkeypatch):
                                          'usage': {'prompt_tokens': 10, 'completion_tokens': 3, 'cost': 0.0002}})
     result = client(handler, monkeypatch).chat(chat_request())
     assert (result.text, result.usage.cost_microusd, result.usage.prompt_tokens) == ('hi', 200, 10)
+
+
+def test_openrouter_single_upstream_has_no_fallback_and_price_caps(monkeypatch):
+    from model_transport.openrouter import OpenRouterClient
+    monkeypatch.setenv('UNIT_KEY', 'fixture-key')
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.content))
+        assert request.headers['X-OpenRouter-Metadata'] == 'enabled'
+        return httpx.Response(200, json={'model':'m/x', 'choices':[{'message':{'content':'hello'}, 'finish_reason':'stop'}],
+            'usage':{'prompt_tokens':10, 'completion_tokens':3, 'cost':0.0002},
+            'openrouter_metadata':{'endpoints':{'available':[{'provider':'Fixture Host', 'selected':True}]}}})
+    value = OpenRouterClient(base_url='https://or.test/api/v1', key_env='UNIT_KEY',
+        upstream_provider='fixture-host', price_caps={'m/x':(1_000_000,2_000_000)}, transport=httpx.MockTransport(handler))
+    result = value.chat(chat_request())
+    assert result.provider == 'Fixture Host' and result.model == 'm/x'
+    assert seen[0]['provider'] == {'only':['fixture-host'], 'allow_fallbacks':False, 'require_parameters':True,
+                                   'max_price':{'prompt':1.0, 'completion':2.0}}
+    with pytest.raises(ModelNotSent):
+        value.chat(ChatRequest(model='m/unconfigured', messages=({'role':'user','content':'hi'},), timeout_seconds=5))
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize('body', [
+    {'error':{'message':'temporary'}},
+    {'choices':[{'message':{'content':'partial reply'}, 'finish_reason':'error'}]},
+    {'choices':[{'message':{'content':'partial reply'}, 'error':{'message':'failed'}}]},
+])
+def test_openrouter_http_200_with_provider_error_never_uses_partial_text(monkeypatch, body):
+    with pytest.raises(ModelOutcomeUnknown):
+        client(lambda request: httpx.Response(200, json=body), monkeypatch).chat(chat_request())
+
+
+def test_openrouter_conflicting_selected_provider_metadata_is_unverified(monkeypatch):
+    body = {'model':'m/x', 'provider':'Other', 'choices':[{'message':{'content':'hi'}}],
+            'openrouter_metadata':{'endpoints':{'available':[{'provider':'Fixture Host','selected':True}]}}}
+    assert client(lambda request: httpx.Response(200, json=body), monkeypatch).chat(chat_request()).provider == ''
+
+
+def test_upstream_identity_is_explicit_and_changes_config_version():
+    base = dict(enabled=True, primary_model='m/x', **PRICES)
+    with pytest.raises(ValueError):
+        ModelConfig(**base, upstream_provider='fixture-host')
+    first = ModelConfig(**base, upstream_provider='fixture-host', upstream_reported_name='Fixture Host')
+    second = ModelConfig(**base, upstream_provider='another-host', upstream_reported_name='Another Host')
+    assert first.version() != second.version() != ModelConfig(**base).version()
 
 
 def test_openrouter_missing_cost_is_unknown_usage_not_zero(monkeypatch):

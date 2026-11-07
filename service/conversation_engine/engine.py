@@ -395,7 +395,9 @@ class EngineService:
         if type(self.model) is ModelRuntime:
             turn = ModelTurn(account=account, fan_id=fan_id, request_id=request_id,
                 generation=0 if observed_generation is None else observed_generation + 1, binding_id=binding,
-                owner_epoch=epoch, snapshot=snapshot, snapshot_sha256=_digest(snapshot),
+                owner_epoch=epoch, snapshot=snapshot,
+                snapshot_sha256=_digest({'snapshot': snapshot, 'model_config': self.model.config.version()})
+                    if self.model.config.upstream_provider else _digest(snapshot),
                 recheck=lambda: self._model_recheck(tenant, account, fan_id, source_message_id, request_id, epoch,
                     binding, snapshot, observed_generation, memory_fingerprint, offer_fingerprint),
                 handover=lambda reason, detail=None: self._handover_model(tenant, account, request_id,

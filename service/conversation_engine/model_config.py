@@ -16,6 +16,7 @@ Plan C pilot rules enforced here, not left to prose:
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import re
 
 
 # The Plan C pilot model (Ronan, 2026-11-07). Used as the documented example; never selected implicitly.
@@ -59,6 +60,8 @@ def input_token_upper_bound(messages):
 class ModelConfig:
     enabled: bool = False                          # ENGINE_MODEL_ENABLED
     provider: str = 'openrouter'                   # ENGINE_MODEL_PROVIDER
+    upstream_provider: str = ''                    # ENGINE_MODEL_UPSTREAM: one OpenRouter provider slug
+    upstream_reported_name: str = ''               # ENGINE_MODEL_UPSTREAM_REPORTED_NAME: expected response identity
     primary_model: str = ''                        # ENGINE_MODEL_PRIMARY (the ONE pilot model, e.g. DEFAULT_PILOT_MODEL)
     fallback_enabled: bool = False                 # ENGINE_MODEL_FALLBACK_ENABLED (OFF by default)
     fallback_model: str = ''                       # ENGINE_MODEL_FALLBACK (e.g. DEFAULT_PILOT_FALLBACK_MODEL); at most ONE
@@ -105,6 +108,13 @@ class ModelConfig:
             raise ValueError('configure a key file or a key env var name, not both')
         if type(self.enabled_accounts) is not frozenset:
             raise ValueError('enabled_accounts must be a frozenset')
+        if (type(self.upstream_provider) is not str or type(self.upstream_reported_name) is not str
+                or bool(self.upstream_provider) != bool(self.upstream_reported_name)
+                or self.upstream_provider and not re.fullmatch(r'[a-z0-9][a-z0-9._:/-]{0,127}', self.upstream_provider)
+                or self.upstream_reported_name and (len(self.upstream_reported_name) > 64
+                    or self.upstream_reported_name != self.upstream_reported_name.strip()
+                    or any(ord(ch) < 32 for ch in self.upstream_reported_name))):
+            raise ValueError('upstream provider and reported name must be explicitly paired')
         model = self.primary_model
 
         def explicit(value):
@@ -132,6 +142,8 @@ class ModelConfig:
         return cls(
             enabled=_flag(environ, 'ENGINE_MODEL_ENABLED'),
             provider=environ.get('ENGINE_MODEL_PROVIDER', 'openrouter'),
+            upstream_provider=environ.get('ENGINE_MODEL_UPSTREAM', ''),
+            upstream_reported_name=environ.get('ENGINE_MODEL_UPSTREAM_REPORTED_NAME', ''),
             primary_model=environ.get('ENGINE_MODEL_PRIMARY', ''),
             fallback_enabled=_flag(environ, 'ENGINE_MODEL_FALLBACK_ENABLED'),
             fallback_model=environ.get('ENGINE_MODEL_FALLBACK', ''),
@@ -191,6 +203,8 @@ class ModelConfig:
                  'fallback': [self.fallback_model, self.fallback_prompt_microusd_per_mtok,
                               self.fallback_completion_microusd_per_mtok] if self.fallback_enabled else None,
                  'attempts': self.max_calls_per_generation}
+        if self.upstream_provider:
+            shape['upstream'] = [self.upstream_provider, self.upstream_reported_name]
         return 'cfg-' + sha256(json.dumps(shape, sort_keys=True).encode()).hexdigest()[:12]
 
     def chain(self):

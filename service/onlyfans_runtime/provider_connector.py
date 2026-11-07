@@ -374,7 +374,7 @@ class NativeProviderConnector(NativeLoopbackConnector):
                 raise failure from None
             raise NativeProtocolError("native HTTPS request outcome is uncertain") from None
 
-    def vault_page(self, *, offset, limit=24):
+    def vault_page(self, *, offset, limit=24, kind="all"):
         """Read one bounded selected-account vault page, without importing it.
 
         The vault job owner validates the full page and persists catalogue
@@ -384,11 +384,12 @@ class NativeProviderConnector(NativeLoopbackConnector):
         """
         self._ready()
         if (type(offset) is not int or not 0 <= offset <= 1000000
-                or type(limit) is not int or not 1 <= limit <= 24):
+                or type(limit) is not int or not 1 <= limit <= 24 or kind not in {"all", "photo", "video"}):
             raise Refused("invalid bounded native vault page")
         self.verify_identity()
-        path = API_PATH + "/vault/media?" + urlencode(
-            {"limit":limit,"offset":offset,"sort":"desc","field":"recent","list":"all"})
+        params = {"limit":limit,"offset":offset,"sort":"desc","field":"recent","list":"all"}
+        if kind != "all": params["type"] = kind
+        path = API_PATH + "/vault/media?" + urlencode(params)
         return self._call("GET", path)
 
     def vault_media_by_id(self, media_id):

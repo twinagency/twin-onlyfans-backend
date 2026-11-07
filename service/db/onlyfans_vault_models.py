@@ -32,6 +32,7 @@ class OfVaultSyncJob(Base):
     items_seen = Column(Integer, nullable=False)
     lease_token = Column(String(36))
     lease_until = Column(DateTime)
+    window_json = Column(Text, info={"onlyfans_since": "0112_vault_recent_window"})
     last_page_hash = Column(String(64))
     last_error = Column(String(64))
     requested_at = Column(DateTime, nullable=False)

@@ -1,0 +1,477 @@
+--- a/service/vault_ai_api.py
++++ b/service/vault_ai_api.py
+@@ -440,7 +440,7 @@
+     except Exception:  # noqa: BLE001
+         base = {"id": item.media_id, "type": item.kind}
+     base["_ai"] = {
+-        "describe_status": item.describe_status,
++        "describe_status": description_status(item),
+         "description": item.description,
+         "video_description": item.video_description,
+         "tags": load_json(item.tags, []),
+@@ -465,7 +465,7 @@
+             k: v for k, v in ai.items()
+             # `description`/`tags` are already served from their columns (which
+             # carry any operator override); don't shadow them with the raw AI value.
+-            if k not in ("description", "tags")
++            if k not in ("description", "tags", "describe_status")
+         }
+     # Stable, signature-free cached-thumb URL (self-heals on miss). Frontend
+     # prefers this over the expiring OF url so tiles never break.
+@@ -2784,13 +2784,14 @@
+         used_model = attempt_model
+         if not vision.is_refusal(result.content):
+             parsed = _parse_describe(result.content)
+-            if parsed.get("description") or parsed.get("tags"):
++            description = parsed.get("description")
++            if isinstance(description, str) and description.strip():
+                 data = parsed
+                 break
+         if attempt_model == verifier_model:
+             break  # escalation also failed
+ 
+-    if not (data.get("description") or data.get("tags")):
++    if not data:
+         async with get_session() as s:
+             if scope_guard is not None:
+                 await scope_guard(s, media_id, phase="write")
+@@ -2807,27 +2808,25 @@
+ 
+     if accurate:
+         candidates = proposals(data, kind=item.kind, source=source, frame_count=len(got.images))
+-        verification = {}
+-        if candidates:
+-            check_content = [{"type": "text", "text": verification_prompt(candidates, item.kind)
+-                + "\nDescription to check: " + str(data.get("description") or "")[:2000]}]
+-            check_content += [{"type": "image_url", "image_url": {"url": u}} for u in got.images]
+-            try:
+-                checked = await llm_client.chat(model=verifier_model,
+-                    messages=[{"role": "user", "content": check_content}], purpose="describe_media",
+-                    account_id=account_id, temperature=0.0)
+-                verification = _parse_describe(checked.content)
+-            except LLMCapExceeded:
+-                return {"media_id": media_id, "ok": False, "status": "capped"}
+-            except LLMError:
+-                # Do not publish the first pass as verified when checking failed.
+-                async with get_session() as s:
+-                    if scope_guard is not None:
+-                        await scope_guard(s, media_id, phase="write")
+-                    await s.execute(update(VaultItem).where(VaultItem.account_id == account_id,
+-                        VaultItem.media_id == media_id).values(describe_status="failed", describe_generated_at=datetime.utcnow()))
+-                    await s.commit()
+-                return {"media_id": media_id, "ok": False, "status": "verification_pending"}
++        check_content = [{"type": "text", "text": verification_prompt(candidates, item.kind)
++            + "\nDescription to check: " + str(data.get("description") or "")[:2000]}]
++        check_content += [{"type": "image_url", "image_url": {"url": u}} for u in got.images]
++        try:
++            checked = await llm_client.chat(model=verifier_model,
++                messages=[{"role": "user", "content": check_content}], purpose="describe_media",
++                account_id=account_id, temperature=0.0)
++            verification = _parse_describe(checked.content)
++        except LLMCapExceeded:
++            return {"media_id": media_id, "ok": False, "status": "capped"}
++        except LLMError:
++            # Do not publish the first pass as verified when checking failed.
++            async with get_session() as s:
++                if scope_guard is not None:
++                    await scope_guard(s, media_id, phase="write")
++                await s.execute(update(VaultItem).where(VaultItem.account_id == account_id,
++                    VaultItem.media_id == media_id).values(describe_status="failed", describe_generated_at=datetime.utcnow()))
++                await s.commit()
++            return {"media_id": media_id, "ok": False, "status": "verification_pending"}
+         data[CATEGORY_KEY] = receipt(data, verification, got.images, account=account_id,
+             media_id=media_id, kind=item.kind, source=source)
+         if verification.get("description_accurate") is not True:
+@@ -2839,7 +2838,8 @@
+             data[CATEGORY_KEY]["metadata_digest"] = metadata_digest(data)
+ 
+     tags = [str(t).lower().strip() for t in (data.get("tags") or []) if str(t).strip()][:12]
+-    desc = str(data.get("description") or "")
++    desc = str(data.get("description") or "").strip()
++    description_status = "described" if desc else "needs_review"
+     tier = data.get("explicitness")  # sfw|suggestive|explicit|hardcore
+     nsfw = bool(data.get("nsfw")) if data.get("nsfw") is not None else None
+     sellable = bool(data.get("sellable")) if data.get("sellable") is not None else None
+@@ -2895,7 +2895,7 @@
+         else:
+             data[key] = val
+     vals: dict[str, Any] = {
+-        "describe_status": "described",
++        "describe_status": description_status,
+         "describe_model": used_model,
+         "describe_call_id": result.call_id if result else None,
+         "describe_generated_at": datetime.utcnow(),
+@@ -2951,7 +2951,7 @@
+     except Exception:
+         log.exception("automatic folders failed account=%s media=%s", account_id, media_id)
+     return {
+-        "media_id": media_id, "ok": True, "status": "described",
++        "media_id": media_id, "ok": bool(desc), "status": description_status,
+         "description": desc, "tags": tags,
+         "explicitness_tier": str(tier) if tier else None,
+         "nsfw": nsfw, "sellable": sellable,
+@@ -3611,7 +3611,7 @@
+ # rerun's is_locked() skips it (see _describe_one's locked-skip). We read the
+ # result back ONLY through effective_value(), never the raw column.
+ 
+-from vault_ai_effective import effective_value, locked_fields as _locked_fields  # noqa: E402
++from vault_ai_effective import description_status, effective_value, locked_fields as _locked_fields  # noqa: E402
+ 
+ # The only fields the editor may override+lock. `tags` is stored as a JSON list;
+ # every other field is free text.
+@@ -3651,7 +3651,7 @@
+         "suggested_caption": effective_value(item, "suggested_caption"),
+         "suggested_script": effective_value(item, "suggested_script"),
+         "suggested_price_cents": effective_value(item, "suggested_price_cents"),
+-        "describe_status": item.describe_status,
++        "describe_status": description_status(item),
+         "locked_fields": locked,
+     }
+ 
+--- a/service/native_pilot/tools/describe_imported_vault.py
++++ b/service/native_pilot/tools/describe_imported_vault.py
+@@ -35,7 +35,9 @@
+             VaultItem.account_id == account, VaultItem.kind == kind, pending(utcnow()))
+         if kind == "photo":
+             query = query.order_by(case((VaultItem.describe_status == "described", 0), else_=1))
+-        return list(session.scalars(query.order_by(VaultItem.media_id).limit(count)))
++        from vault_import_policy import enabled
++        order = (VaultItem.created_at.desc(), VaultItem.media_id.desc()) if enabled() else (VaultItem.media_id,)
++        return list(session.scalars(query.order_by(*order).limit(count)))
+ 
+     video = pick("video", 1)
+     if limit == 1:
+@@ -115,6 +117,11 @@
+                         or item.removed_at is not None
+                         or not _provenance(item, observation, job, connection, args.binding, current_revision=False)):
+                         raise Refused("caption generation changed")
++                    from vault_import_policy import automatic_window, enabled
++                    if enabled() and not await session.scalar(select(VaultItem.media_id).where(
++                            VaultItem.account_id == args.account, VaultItem.media_id == media_id,
++                            automatic_window())):
++                        raise Refused("caption item left recent window")
+                     settings = json.loads(config.vault_ai_config_json or "{}") if config else {}
+                     if not isinstance(settings, dict) or settings.get("auto_describe_on_import") is False:
+                         raise Refused("caption analysis paused")
+@@ -256,7 +263,10 @@
+                         return
+                     result = await api._describe_one(args.account, media_id, model=caption_vault.DEFAULT_MODEL,
+                         prompt_version="v3", scope_guard=guard)
+-                    summary["described" if result.get("ok") else "failed"] += 1
++                    if result.get("status") == "needs_review":
++                        summary["needsReview"] = summary.get("needsReview", 0) + 1
++                    else:
++                        summary["described" if result.get("ok") else "failed"] += 1
+                     if result.get("status") == "capped":
+                         summary["state"] = "budget_paused"
+                         capped.set()
+--- a/service/onlyfans_runtime/vault_description_worker.py
++++ b/service/onlyfans_runtime/vault_description_worker.py
+@@ -22,7 +22,8 @@
+ 
+ def pending(now):
+     """Keep successful/manual descriptions and terminal refusals untouched."""
+-    return and_(VaultItem.removed_at.is_(None), VaultItem.kind.in_(("photo", "video")),
++    from vault_import_policy import automatic_window
++    return and_(automatic_window(), VaultItem.removed_at.is_(None), VaultItem.kind.in_(("photo", "video")),
+         func.coalesce(VaultItem.ai_fields_json, "").not_like('%"_folder_evidence_v1"%'),
+         func.coalesce(VaultItem.locked_fields_json, "").not_like('%"description"%'),
+         func.coalesce(VaultItem.locked_fields_json, "").not_like('%"video_description"%'),
+--- /dev/null
++++ b/service/vault_ai_effective.py
+@@ -0,0 +1,156 @@
++"""Vault-AI effective-value resolution — the ONE server-side read path.
++
++Every consumer that needs the operator-effective value of an AI-populated
++`vault_items` field (description, tags, explicitness_tier, suggested_price_cents,
++story_score, tip_vault_score, suggested_caption/script, …) MUST route through
++`effective_value()` here — never read the raw column or `ai_fields_json`
++directly. Keeping one resolver guarantees override/lock precedence is applied
++identically in the API, the review builders, and the send consumers (the plan's
++"one server-side effective-value write path, not UI-side").
++
++Precedence (VAULT_AI_PLAN §1, kept by correction #10):
++
++    locked operator override  >  unlocked operator override  >  AI field  >  legacy/default
++
++Both override tiers read from `operator_overrides_json`; the LOCK only matters at
++WRITE time — a forced describe rerun must refresh `ai_fields_json` yet never
++clobber a locked effective field. Enforce that with `is_locked()` before writing.
++At READ time an override always beats the AI field, so the two override tiers
++collapse to a single `operator_overrides_json` lookup here.
++
++A blank/None AI value never wins: it is treated as absent so resolution falls
++through to the legacy column or default (mirrors the describe rule "never
++overwrite an existing description with a refusal/blank").
++"""
++from __future__ import annotations
++
++import json
++import re
++from typing import Any
++
++from jsonsafe import load_json
++
++
++
++
++
++def _is_blank(value: Any) -> bool:
++    """AI-tier emptiness: None, empty/whitespace string, or empty list/dict."""
++    if value is None:
++        return True
++    if isinstance(value, str):
++        return value.strip() == ""
++    if isinstance(value, (list, dict, tuple, set)):
++        return len(value) == 0
++    return False
++
++
++def overrides(item: Any) -> dict:
++    """Operator override map from `item.operator_overrides_json` ({} if unset)."""
++    return load_json(getattr(item, "operator_overrides_json", None), {}) or {}
++
++
++def ai_fields(item: Any) -> dict:
++    """Raw AI output map from `item.ai_fields_json` ({} if unset)."""
++    return load_json(getattr(item, "ai_fields_json", None), {}) or {}
++
++
++def locked_fields(item: Any) -> set[str]:
++    """Set of field names the operator has locked (AI may never overwrite)."""
++    raw = load_json(getattr(item, "locked_fields_json", None), [])
++    return set(raw) if isinstance(raw, (list, tuple, set)) else set()
++
++
++def is_locked(item: Any, field: str) -> bool:
++    """True if `field` is locked — a describe rerun MUST NOT rewrite it."""
++    return field in locked_fields(item)
++
++
++def effective_value(item: Any, field: str, config: Any = None, *, default: Any = None) -> Any:
++    """Resolve the operator-effective value of `field` on a `vault_items` row.
++
++    Args:
++        item:   a VaultItem (or any object exposing the JSON columns + attrs).
++        field:  the field name, e.g. "explicitness_tier", "suggested_price_cents".
++        config: parsed `vault_ai_config_json` (dict) — searched last, under a
++                top-level "defaults" map, for a config-level default.
++        default: explicit fallback used when nothing else resolves.
++
++    Returns the value chosen by the precedence documented at module top.
++    An override present by KEY wins even if empty (an operator blanking a field
++    is intentional); an AI value that is blank/None is skipped.
++    """
++    ov = overrides(item)
++    if field in ov:  # covers both locked and unlocked overrides (lock ⇒ write-time only)
++        return ov[field]
++
++    ai = ai_fields(item).get(field)
++    if not _is_blank(ai):
++        return ai
++
++    # Legacy/compat column of the same name (e.g. description, tags,
++    # suggested_price_cents, explicitness_tier) — the pre-AI durable value.
++    legacy = getattr(item, field, None)
++    if not _is_blank(legacy):
++        return legacy
++
++    if isinstance(config, dict):
++        cfg_default = (config.get("defaults") or {}).get(field)
++        if not _is_blank(cfg_default):
++            return cfg_default
++
++    return default
++
++
++def normalize_tags(v: Any) -> list[str]:
++    """Accept a list OR a comma/newline-separated string → deduped, lower-cased,
++    trimmed tag list (cap 12, matching the describe path)."""
++    if isinstance(v, str):
++        parts = re.split(r"[,\n]", v)
++    elif isinstance(v, (list, tuple)):
++        parts = [str(x) for x in v]
++    else:
++        parts = []
++    out: list[str] = []
++    seen: set[str] = set()
++    for p in parts:
++        t = str(p).strip().lower()
++        if t and t not in seen:
++            seen.add(t)
++            out.append(t)
++    return out[:12]
++
++
++
++def project_operator_text(field, raw, overrides, locked, columns):
++    """Shared override, lock and compat projection for existing text/tag edits.
++
++    Each caller admits its own editable fields. The value and precedence rules
++    stay the same for the legacy editor and the scoped native adapter.
++    """
++    value=normalize_tags(raw) if field=="tags" else None if raw is None else str(raw)
++    overrides[field]=value
++    locked.add(field)
++    columns[field]=json.dumps(value) if field=="tags" else value
++    return value
++
++
++def description_status(item: Any) -> str | None:
++    """Report legacy empty successes honestly without rewriting verification evidence.
++
++    Folder-only review does not reject a nonblank description. Rejected text
++    and intentional human blanks need review; an accidental blank is pending.
++    """
++    status = getattr(item, "describe_status", None)
++    if status != "described":
++        return status
++    if any(isinstance(v, str) and v.strip() for v in
++           (effective_value(item, "description"), effective_value(item, "video_description"))):
++        return status
++    fields = ai_fields(item)
++    receipt = fields.get("_folder_evidence_v1") if isinstance(fields, dict) else None
++    rejected = isinstance(receipt, dict) and isinstance(receipt.get("rejected_analysis"), dict)
++    if (rejected or getattr(item, "review_state", None) == "needs_review"
++            or locked_fields(item) & {"description", "video_description"}):
++        return "needs_review"
++    return "pending"
+--- /dev/null
++++ b/service/vault_import_policy.py
+@@ -0,0 +1,136 @@
++"""Deterministic recent-media policy for the existing vault job and workers.
++
++No queue, catalogue approval, delivery, model call or destructive operation lives
++here. Older metadata and approved products retain their existing owners.
++"""
++import copy
++from datetime import datetime, timedelta
++import json
++import os
++
++PHOTO_CAP = 1500
++VIDEO_CAP = 700
++CAPS = {'photo': PHOTO_CAP, 'video': VIDEO_CAP}
++POLL_SECONDS = 7200
++RECONCILE_SECONDS = 86400
++POLICY = {'version': 1, 'photos': PHOTO_CAP, 'videos': VIDEO_CAP, 'order': 'recent'}
++
++
++def enabled():
++    return os.environ.get('ONLYFANS_VAULT_RECENT_WINDOW_ENABLED') == '1'
++
++
++def scope():
++    return {'selection': 'newest_per_type', **POLICY}
++
++
++def stamp(now):
++    return now.isoformat()
++
++
++def nodes():
++    return {kind: {'offset': 0, 'done': False, 'known': 0, 'hash': None} for kind in CAPS}
++
++
++def start(now, mode='window'):
++    if mode not in ('window', 'head'):
++        raise ValueError('invalid vault window mode')
++    return {'policy': dict(POLICY), 'mode': mode, 'started': stamp(now),
++            'next': 'photo', 'last_head': stamp(now), 'head': None, **nodes()}
++
++
++def load(raw):
++    if raw is None:
++        return None
++    if type(raw) is not str or len(raw) > 16384:
++        raise ValueError('invalid vault window progress')
++    value = json.loads(raw)
++    if type(value) is not dict or value.get('policy') != POLICY or value.get('mode') not in ('window', 'head'):
++        raise ValueError('invalid vault window policy')
++    validate_lane(value)
++    datetime.fromisoformat(value['started'])
++    datetime.fromisoformat(value['last_head'])
++    if value.get('head') is not None:
++        validate_lane(value['head'])
++        datetime.fromisoformat(value['head']['started'])
++    return value
++
++
++def validate_lane(value):
++    if value.get('next') not in CAPS:
++        raise ValueError('invalid vault window kind')
++    for kind, cap in CAPS.items():
++        node = value.get(kind)
++        if (type(node) is not dict or type(node.get('offset')) is not int
++                or not 0 <= node['offset'] <= cap or type(node.get('done')) is not bool
++                or type(node.get('known')) is not int or not 0 <= node['known'] <= cap
++                or (node.get('hash') is not None and
++                    (type(node['hash']) is not str or len(node['hash']) != 64))):
++            raise ValueError('invalid vault window cursor')
++
++
++def dump(value):
++    raw = json.dumps(value, separators=(',', ':'), sort_keys=True)
++    load(raw)
++    return raw
++
++
++def complete(value):
++    return value['head'] is None and all(value[k]['done'] for k in CAPS)
++
++
++def next_read(value, now, page_size):
++    """Alternate photo/video pages; check fresh heads during a long first scan."""
++    value = copy.deepcopy(value)
++    if (value['mode'] == 'window' and value['head'] is None
++            and not all(value[k]['done'] for k in CAPS)
++            and now - datetime.fromisoformat(value['last_head']) >= timedelta(seconds=POLL_SECONDS)):
++        value['head'] = {'started': stamp(now), 'next': 'photo', **nodes()}
++    lane = value['head'] or value
++    kind = lane['next']
++    if lane[kind]['done']:
++        kind = 'video' if kind == 'photo' else 'photo'
++    node = lane[kind]
++    if node['done']:
++        raise ValueError('completed vault window has no page')
++    limit = min(page_size, CAPS[kind] - node['offset'])
++    if limit <= 0:
++        raise ValueError('invalid vault window bound')
++    return value, {'kind': kind, 'offset': node['offset'], 'limit': limit,
++                   'head': value['head'] is not None or value['mode'] == 'head',
++                   'started': lane['started']}
++
++
++def advance(value, read, rows, more, known, page_hash, now, page_size):
++    if len(rows) > read['limit'] or len(rows) != len(known) or any(r['type'] != read['kind'] for r in rows):
++        raise ValueError('vault provider did not honour type/window bound')
++    lane = value['head'] or value
++    node = lane[read['kind']]
++    if more and page_hash == node['hash']:
++        raise ValueError('repeated vault window page')
++    node['hash'] = page_hash
++    node['offset'] += len(rows)
++    for seen in known:
++        node['known'] = node['known'] + 1 if seen else 0
++    node['done'] = (not more or node['offset'] >= CAPS[read['kind']]
++                    or read['head'] and node['known'] >= min(page_size, read['limit']))
++    lane['next'] = 'video' if read['kind'] == 'photo' else 'photo'
++    if value['head'] is not None and all(lane[k]['done'] for k in CAPS):
++        value['head'] = None
++        value['last_head'] = stamp(now)
++    return value
++
++
++def automatic_window():
++    """Only bound automatic work. Approved product eligibility is unchanged."""
++    from sqlalchemy import and_, or_, select, true
++    from sqlalchemy.orm import aliased
++    from db.models import VaultItem
++    if not enabled():
++        return true()
++    item = aliased(VaultItem)
++    return or_(*[and_(VaultItem.kind == kind, VaultItem.media_id.in_(
++        select(item.media_id).where(item.account_id == VaultItem.account_id,
++            item.kind == kind, item.removed_at.is_(None))
++        .order_by(item.created_at.desc(), item.media_id.desc()).limit(cap).correlate(VaultItem)))
++        for kind, cap in CAPS.items()])

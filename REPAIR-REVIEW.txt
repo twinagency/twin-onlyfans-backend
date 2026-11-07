@@ -1,0 +1,84 @@
+FOCUSED VAULT REPAIR — REVIEW CANDIDATE, 6 NOVEMBER 2026
+
+Scope: improve the existing media/context pipeline. No second planner, sender,
+catalogue authority, durable queue, schema migration or full-vault sales gate.
+
+IMPLEMENTED
+- The main producer accepts only actual nonblank string descriptions. Tags,
+  whitespace and objects cannot be persisted as successful descriptions.
+- Existing worker/caption selection recovers genuinely blank legacy successes.
+  Saved verification receipts, review decisions, human locks, refusal handling,
+  retry backoff and per-content attempt ceilings remain in their existing owners.
+- Shared read reporting maps old empty successes to pending or needs_review.
+  Saved rows, rejected analyses and audit evidence are not rewritten. Model
+  metadata cannot override the system's reported description status.
+- The generic dedicated producer patch uses the exact description/verification
+  behavior already deployed for Amelia. It verifies description text even when
+  no folder categories were proposed, and records rejected text as needs_review.
+  The patched producer function is identical to that live Amelia version.
+- Dedicated-child summaries distinguish review outcomes from success/failure.
+  Its remaining code, including guards, concurrency and deadlines, is unchanged.
+- Existing vault coverage exposes initialImport progress and a 24-hour
+  needsAttention checkpoint based on the current binding's original connection
+  time. Credential renewal, refresh jobs and restarts do not reset it. A completed
+  import is remembered beyond the latest ten jobs. This API flag does not stop
+  sync or alter product/sale eligibility; no new dashboard notification was added.
+
+QUALIFICATION
+139 tests passed on the final runtime: real disposable PostgreSQL, actual worker
+selection/advisory locks/persistence, synthetic media/model/provider boundaries.
+34 additional integration cases passed with the exact seven runtime files applied
+to e0867b06068b1fc7857ddea9b615dd42e344aff2 (the available recovery candidate).
+Counts overlap and must not be added as one unique suite total.
+The unchanged common baseline fails four targeted regressions. The unchanged
+generic producer fails three. All those assertions pass on this repair.
+Earlier exploratory receipts, including fixture failures, are retained. Only
+final-qualified.xml and recovery-integration-final.xml qualify the final source.
+
+Checks include accepted approved media delivery despite an unrelated pending
+video, description changes requiring explicit product re-approval, human edit
+fencing, video sampling limitations, provider deferral without a false media
+failure, retry bounds and restart recovery without another synthetic model call.
+The final launcher removes service credentials and disallows non-loopback socket
+connections. All databases belong to the task's localhost-only PG container.
+No live media fetch, actual model call, customer send or purchase was performed.
+
+BACKFILL REVIEW
+See evidence/backfill-estimate.json and backfill-workload.json for the timestamp
+and assumptions. At that snapshot, currently verified connections had 9,899
+unattempted/fetch-retry items (6,509 photos and 3,390 videos), excluding 6,117
+verification-review items. No unclassified empty legacy successes were found.
+Recent recorded completed-call means imply about US$14.49 for one caption and
+one verifier per item, or US$22.72 if every item also needs one escalation.
+These are scenarios, not a quote or cap; fetch success, frames, failed calls,
+provider prices and continuing work change the result. Backfill spend is zero
+in this task. The conversation-testing budget is separate. Existing valid
+descriptions and verification rejections are not a bulk reprocessing list.
+
+INTEGRATION AND RELEASE LIMITS
+The common baseline is e26c7412eb3142da2be4552411dd461807da7ec0. The changed
+vault files were compared with production source identities in source-comparison.
+The independent runtime diff contains seven files and no Moxy writer, contract,
+pricing, ownership, purchase or delivery-recovery edits. The generic dedicated
+image needs compat/generic-runtime.patch and the shared helper, not replacement
+with an older main-worker image. Preserve each service's existing image-specific
+routing, verification, scoped credentials, provider controls and deadlines.
+Compatibility fixtures are test data, not services to deploy.
+
+The cloud conversation candidate f9b55ebc3b90933959abbe718789256bc42b973b is
+not available in this checkout. Final integration with that candidate or its
+successor is unverified. The e0867b0 probe is compatibility evidence, not a
+decision to replace the cloud builder's writer or select a production release.
+Before release: apply this delta to the exact selected integrated source, retain
+newer service overlays, qualify changed paths, build/hash immutable service images
+on Work Server, and review the concrete release and paid backfill budget.
+
+Actual video fetch failures were not proved repaired live. Existing bounded
+fetch/defer behavior was retained and tested synthetically. Missing or protected
+sources stay explicit; no poster is promoted to knowledge of a full video.
+Nonblank text alone does not prove all video details or product approval.
+Changed product facts continue to require the existing audited re-approval path;
+the repair does not auto-rebind products or rewrite old cards/purchase records.
+
+No production source/configuration/database rows were changed, no worker was
+restarted and no paused creator or feature was enabled. No deployment is approved.

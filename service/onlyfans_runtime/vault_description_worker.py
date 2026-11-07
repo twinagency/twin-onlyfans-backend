@@ -41,12 +41,20 @@ def pending(now):
     unlocked = and_(locked.not_like('%"description"%'), locked.not_like('%"video_description"%'))
     blank = and_(func.trim(func.coalesce(VaultItem.description, "")) == "",
         func.trim(func.coalesce(VaultItem.video_description, "")) == "",
-        or_(VaultItem.describe_status.is_(None), failure_retry))
+        or_(VaultItem.describe_status.is_(None), failure_retry,
+            # Legacy false successes may be recovered. A saved verification
+            # rejection is an explicit review decision, never a paid retry.
+            and_(VaultItem.describe_status == "described",
+                 or_(VaultItem.review_state.is_(None), VaultItem.review_state != "needs_review"),
+                 fields.not_like('%"_folder_evidence_v1"%'))))
     changed = and_(VaultItem.content_hash.is_not(None), fields.like('%"_content_stamp"%'),
         fields.not_like(literal('%') + stamp + '%'),
         or_(VaultItem.describe_status.in_(("described", "refused")) | VaultItem.describe_status.is_(None), failure_retry))
-    return and_(VaultItem.removed_at.is_(None), VaultItem.kind.in_(("photo", "video")),
-        unlocked, ~exhausted_now, or_(blank, changed))
+    from vault_import_policy import automatic_window
+    return and_(automatic_window(), VaultItem.removed_at.is_(None), VaultItem.kind.in_(("photo", "video")),
+        unlocked, ~exhausted_now,
+        or_(VaultItem.review_state.is_(None), VaultItem.review_state != "needs_review"),
+        or_(blank, changed))
 
 
 def accounts(store, tenant, after=None):

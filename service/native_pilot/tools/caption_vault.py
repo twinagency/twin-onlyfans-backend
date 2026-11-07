@@ -57,11 +57,15 @@ async def candidates(api, account: str, limit: int, *, fresh_only: bool = False,
         VaultItem.account_id == account, VaultItem.removed_at.is_(None),
         VaultItem.kind.in_(api._DESCRIBABLE_KINDS),
     )
+    from vault_import_policy import automatic_window
+    stmt = stmt.where(automatic_window())
     if fresh_only:
         stmt = stmt.where(VaultItem.describe_status.is_(None))
     else:
         # IS DISTINCT FROM: portable (a bare IS NOT 'text' is SQLite-only and fails on PostgreSQL).
-        stmt = stmt.where(VaultItem.describe_status.is_distinct_from("described"))
+        from onlyfans_runtime.vault_description_worker import pending
+        from onlyfans_runtime.store import utcnow
+        stmt = stmt.where(pending(utcnow()))
     if shard[1] > 1:  # parallel workers split the vault by media id, never the same item twice
         stmt = stmt.where(VaultItem.media_id % shard[1] == shard[0])
     stmt = stmt.order_by(VaultItem.created_at.desc(), VaultItem.media_id.desc()).limit(limit)

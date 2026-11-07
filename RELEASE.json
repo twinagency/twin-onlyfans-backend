@@ -1,0 +1,46 @@
+{
+  "at_utc": "2026-11-06T06:02:56.286746+00:00",
+  "base": "e26c7412eb3142da2be4552411dd461807da7ec0",
+  "branch": "codex/vault-description-repair-20261106",
+  "source_sha256": {
+    "service/native_pilot/tools/caption_vault.py": "419277ea69ec7d7f75b4d4360ac676e82ce144c08636d20c09b8aa988e0f4012",
+    "service/native_pilot/tools/describe_imported_vault.py": "92325abc055510a2bd947691fa3d5a152b01a011e269599308c84602f5ee0da4",
+    "service/onlyfans_runtime/content_sync.py": "02e4de2b6a1225c694bcc05a83ae7281506df3a75bde393c1c43d2e94bb64026",
+    "service/onlyfans_runtime/vault_description_worker.py": "bedb9c82d74d8ef314c4c5a443eb0da84c5e95c3e4836b7cc0e9b45db45fbbb0",
+    "service/vault_ai_api.py": "f14d7c09c2f4a51571bc916a89872f1e57212f4341bccbd52903dce9fc67e8fd",
+    "service/vault_ai_effective.py": "7b2fcbb09f6e0175bd74b2607a63662eb551b07e01d4267fe4624ebe73fc14bc",
+    "service/vault_describe_state.py": "3a2c52b534b248d5b0c030348586d305d0cd594285ec24e981c720c17052ff31"
+  },
+  "tests": {
+    "final-qualified.xml": {
+      "cases": 139,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "recovery-integration-final.xml": {
+      "cases": 34,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "baseline-main.xml": {
+      "cases": 4,
+      "failures": 4,
+      "errors": 0,
+      "skipped": 0
+    },
+    "baseline-producer.xml": {
+      "cases": 3,
+      "failures": 3,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "test_network": "loopback only; no service credentials",
+  "model_calls": 0,
+  "production_changed": false,
+  "integration_probe_base": "e0867b06068b1fc7857ddea9b615dd42e344aff2",
+  "cloud_candidate_integration": "unverified; exact final source required",
+  "generic_patch_apply_check": true
+}

@@ -68,7 +68,9 @@ def select_batch(session, account, limit):
         if kind == "photo":
             query = query.order_by(case((VaultItem.describe_status.is_(None), 0), else_=1))
         # Eligible video retries keep their place among newly imported clips.
-        return list(session.scalars(query.order_by(VaultItem.media_id).limit(n)))
+        from vault_import_policy import enabled
+        order = (VaultItem.created_at.desc(), VaultItem.media_id.desc()) if enabled() else (VaultItem.media_id,)
+        return list(session.scalars(query.order_by(*order).limit(n)))
     video = pick("video", 1)
     if limit == 1:
         return sorted(pick("photo", 1) + video)[:1]
@@ -147,6 +149,11 @@ async def run(args):
                         or item.removed_at is not None
                         or not _provenance(item, observation, job, connection, args.binding, current_revision=False)):
                         raise Refused("caption generation changed")
+                    from vault_import_policy import automatic_window, enabled
+                    if enabled() and not await session.scalar(select(VaultItem.media_id).where(
+                            VaultItem.account_id == args.account, VaultItem.media_id == media_id,
+                            automatic_window())):
+                        raise Refused("caption item left recent window")
                     settings = json.loads(config.vault_ai_config_json or "{}") if config else {}
                     if not isinstance(settings, dict) or settings.get("auto_describe_on_import") is False:
                         raise Refused("caption analysis paused")
@@ -261,8 +268,7 @@ async def run(args):
                         await guard(session, media_id)
                         item = await session.get(VaultItem, (args.account, media_id))
                         if ("description" in locked_fields(item) or "video_description" in locked_fields(item)
-                            or ((effective_value(item, "description") or effective_value(item, "video_description"))
-                                and not vds.content_changed(item))):
+                            or (vds.has_description(item) and not vds.content_changed(item))):
                             summary["skipped"] += 1
                             continue
                     preview_ready = await warm_preview(media_id)

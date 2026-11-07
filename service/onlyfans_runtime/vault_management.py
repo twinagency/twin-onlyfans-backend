@@ -29,6 +29,8 @@ from .native_context import canonical
 from .native_protocol import MAX_VAULT_BYTES, NativeProtocolError, load
 from .store import Refused, _id, utcnow
 
+import vault_import_policy as window_policy
+
 PAGE_SIZE = 24
 MAX_PAGES = 200
 CATALOGUE_BOUND = 2000
@@ -162,19 +164,27 @@ def deferred_error(problem):
 def job_view(row):
     def date(value):
         return value.isoformat() + "Z" if value else None
-    return {"jobId": row.job_id, "commandKey": row.command_key, "status": row.status,
+    window = window_policy.load(getattr(row, "window_json", None))
+    view = {"jobId": row.job_id, "commandKey": row.command_key, "status": row.status,
         "pagesRead": row.pages_read, "itemsSeen": row.items_seen, "lastError": row.last_error,
         "requestedAt": date(row.requested_at), "updatedAt": date(row.updated_at), "completedAt": date(row.completed_at),
         # A deferred job reuses lease_until as its retry deadline; surface it so a stalled import is diagnosable.
         "retryAt": date(row.lease_until) if str(row.last_error or "").startswith("provider_read_deferred") else None,
         "pageOffset": row.page_offset}
+    if window is not None:
+        view["scope"] = window_policy.scope()
+        view["refreshMode"] = window["mode"]
+        view["kindOffsets"] = {kind: window[kind]["offset"] for kind in window_policy.CAPS}
+    return view
 
 
 def request_sync(store, tenant, account, *, expected_connection_revision, command_key, actor):
     _identity(command_key, actor)
     if type(expected_connection_revision) is not int or not 1 <= expected_connection_revision < 2**31:
         raise InvalidVault("A current verified connection revision is required.")
-    fingerprint = digest({"expectedConnectionRevision": expected_connection_revision})
+    request = {"expectedConnectionRevision": expected_connection_revision}
+    if window_policy.enabled(): request["windowPolicy"] = window_policy.POLICY
+    fingerprint = digest(request)
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
         prior = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account, OfVaultSyncJob.command_key == command_key))
@@ -193,16 +203,32 @@ def request_sync(store, tenant, account, *, expected_connection_revision, comman
         # restarting a multi-hour import from zero. A short overlap re-reads the last
         # page so items that shifted while the job was down are not skipped.
         offset = pages = 0
+        window = None
         previous = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
             OfVaultSyncJob.binding_id == runtime.binding_id).order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
-        if (previous is not None and previous.status in {"failed", "superseded"}
+        if window_policy.enabled():
+            # Full selected windows run initially and daily. Ordinary refreshes
+            # scan newest-first only until a page of already known IDs overlaps.
+            full = s.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
+                OfVaultSyncJob.binding_id == runtime.binding_id, OfVaultSyncJob.status == "complete",
+                OfVaultSyncJob.window_json.like('%"mode":"window"%'))
+                .order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
+            mode = "head" if full is not None and full.completed_at is not None and now - full.completed_at < timedelta(seconds=window_policy.RECONCILE_SECONDS) else "window"
+            window = window_policy.start(now, mode)
+            if (previous is not None and previous.status in {"failed", "superseded"}
+                    and previous.last_error in RESUMABLE_ERRORS and previous.owner_id == connection.owner_id
+                    and previous.window_json is not None):
+                window = window_policy.load(previous.window_json)
+                offset, pages = previous.page_offset, previous.pages_read
+        elif (previous is not None and previous.status in {"failed", "superseded"}
                 and previous.last_error in RESUMABLE_ERRORS and previous.owner_id == connection.owner_id
                 and previous.page_offset > 0):
             offset, pages = max(0, previous.page_offset - RESUME_OVERLAP), previous.pages_read
         row = OfVaultSyncJob(account_id=account, job_id=str(uuid.uuid4()), binding_id=runtime.binding_id,
             command_key=command_key, request_hash=fingerprint, actor=actor,
             connection_revision=connection.revision, owner_id=connection.owner_id, max_pages=MAX_PAGES,
-            status="pending", page_offset=offset, pages_read=pages, items_seen=offset, requested_at=now, updated_at=now)
+            status="pending", page_offset=offset, pages_read=pages, items_seen=offset, requested_at=now, updated_at=now,
+            window_json=window_policy.dump(window) if window is not None else None)
         s.add(row)
         s.flush()
         return job_view(row)
@@ -494,6 +520,7 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             break
         account, identity = candidate
         page_size = _page_size(account)
+        window = window_read = None
         with Session(store.engine) as s, s.begin():
             runtime = store._runtime(s, tenant, account)
             job = s.get(OfVaultSyncJob, (account, identity))
@@ -503,6 +530,18 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
             if not _current(runtime, connection, job):
                 _terminal(job, "superseded", "connection_changed")
                 continue
+            if window_policy.enabled() and job.window_json is None:
+                # Fence an uncapped active scan; the existing scheduler queues
+                # its capped successor. Retain its observations and history.
+                _terminal(job, "superseded", "vault_policy_changed")
+                continue
+            if job.window_json is not None:
+                try:
+                    window, window_read = window_policy.next_read(window_policy.load(job.window_json), utcnow(), page_size)
+                    job.window_json = window_policy.dump(window)
+                except (ValueError, TypeError, KeyError):
+                    _terminal(job, "failed", "invalid_vault_window")
+                    continue
             if utcnow() - job.requested_at > timedelta(hours=1):
                 last_progress = s.scalar(select(func.max(OfVaultObservation.observed_at)).where(OfVaultObservation.account_id == account, OfVaultObservation.job_id == identity))
                 if _vault_job_expired(job.requested_at, last_progress, utcnow()):
@@ -529,8 +568,14 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 expires_at=expires.replace(tzinfo=timezone.utc)))
             from .worker import _provider_claim
             budget=_provider_claim(store,tenant,account,transport,connection_revision,'vault')
-            raw = transport.vault_page(offset=offset, limit=page_size)
-            rows, more = parse_vault_page(raw, owner_id=owner, page_size=page_size)
+            if window_read is None:
+                raw = transport.vault_page(offset=offset, limit=page_size)
+                rows, more = parse_vault_page(raw, owner_id=owner, page_size=page_size)
+            else:
+                raw = transport.vault_page(offset=window_read["offset"], limit=window_read["limit"], kind=window_read["kind"])
+                rows, more = parse_vault_page(raw, owner_id=owner, page_size=window_read["limit"])
+                if any(media["type"] != window_read["kind"] for media in rows):
+                    raise NativeProtocolError("vault provider did not honour type filter")
             if os.environ.get("ONLYFANS_VAULT_PREVIEWS_ENABLED") == "1":
                 from .vault_previews import warm_page
                 warm_page(transport, rows, binding_id=binding, owner_id=owner, stop=stop)
@@ -576,9 +621,23 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                     _terminal(job, "failed", error)
                     continue
                 page_hash = hashlib.sha256(raw).hexdigest()
-                if more and page_hash == job.last_page_hash:
+                if window is None and more and page_hash == job.last_page_hash:
                     _terminal(job, "failed", "unsupported_vault_pagination")
                     continue
+                if window is not None:
+                    known = []
+                    for media in rows:
+                        observation = s.get(OfVaultObservation, (account, media["id"]))
+                        source_job = s.get(OfVaultSyncJob, (account, observation.job_id)) if observation else None
+                        known.append(bool(observation and source_job and source_job.binding_id == binding
+                            and source_job.owner_id == owner
+                            and observation.observed_at < datetime.fromisoformat(window_read["started"])))
+                    try:
+                        window = window_policy.advance(window, window_read, rows, more, known,
+                            digest([media["id"] for media in rows]), utcnow(), page_size)
+                    except ValueError:
+                        _terminal(job, "failed", "unsupported_vault_pagination")
+                        continue
                 for media in rows:
                     values = row_values(account, media)
                     values["created_at"] = _stamp(media["createdAt"]).replace(tzinfo=None)
@@ -614,7 +673,9 @@ def process_vault_jobs(store, tenant, *, limit=1, stop=None):
                 job.pages_read += 1
                 job.last_page_hash, job.updated_at = page_hash, utcnow()
                 job.lease_token = job.lease_until = None
-                if not more:
+                if window is not None:
+                    job.window_json = window_policy.dump(window)
+                if (window is None and not more) or (window is not None and window_policy.complete(window)):
                     _terminal(job, "complete")
                 else:
                     # The cursor is committed after each bounded page. Crossing
@@ -657,10 +718,13 @@ def _removal_candidate(session, tenant):
         if latest is None or latest.status in {"pending", "running"}:
             continue
         done = session.scalar(select(OfVaultSyncJob).where(OfVaultSyncJob.account_id == account,
-            OfVaultSyncJob.status == "complete").order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
+            OfVaultSyncJob.status == "complete",
+            or_(OfVaultSyncJob.window_json.is_(None), OfVaultSyncJob.window_json.like('%"mode":"window"%')))
+            .order_by(OfVaultSyncJob.requested_at.desc()).limit(1))
+        if done is None: continue
         rows = session.execute(select(VaultItem.media_id).join(OfVaultObservation, and_(
             OfVaultObservation.account_id == VaultItem.account_id, OfVaultObservation.media_id == VaultItem.media_id))
-            .where(VaultItem.account_id == account, VaultItem.media_id > 0, VaultItem.removed_at.is_(None),
+            .where(VaultItem.account_id == account, VaultItem.media_id > 0, VaultItem.removed_at.is_(None), window_policy.automatic_window(),
                 OfVaultObservation.observed_at < done.requested_at)
             .order_by(OfVaultObservation.observed_at).limit(20)).all()
         for (media_id,) in rows:

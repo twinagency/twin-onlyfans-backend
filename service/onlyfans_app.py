@@ -18,6 +18,7 @@ from onlyfans_read.api import router, _authenticate, _refusal, _PRIVATE_HEADERS
 from onlyfans_read.errors import OnlyFansReadError, Unavailable
 from onlyfans_commands.api import router as control_router
 from onlyfans_commands.engine_operator_api import router as engine_operator_router
+from onlyfans_commands.engine_approval_api import router as engine_approval_router
 from onlyfans_commands.settings import configured as control_configured
 from onlyfans_commands.configuration_api import router as configuration_router,configured as configuration_configured
 from onlyfans_commands.campaign_api import router as campaign_router,configured as campaign_configured
@@ -59,6 +60,7 @@ app.state.personality_credential_status_reader = personality_credential_status
 app.include_router(router)
 app.include_router(control_router)
 app.include_router(engine_operator_router)
+app.include_router(engine_approval_router)
 app.include_router(configuration_router)
 app.include_router(personality_router)
 app.include_router(engagement_router)

@@ -1,0 +1,479 @@
+"""Plan C operator surface (v2): drafts, conversation controls and unresolved work for 'fansapi' accounts.
+
+Everything here is a thin, audited layer over modules that already own the behaviour:
+  drafts        conversation_engine.approval (approve / reject / edit / pending)
+  controls      Store.control (stop = pause_automation, takeover = request_takeover, handback = release_takeover)
+  unresolved    read-only views over of_text_intent, of_fans_evidence, of_engine_access_evidence, of_conversation_state,
+                of_engine_request
+  reconcile     an audited operator observation; it changes canonical state only where an existing mechanism does
+
+Nothing here approves, hands back or sends by itself. Handback is NOT an approval: it only makes the conversation
+eligible for a fresh plan (the owner epoch change withdraws every live approval of the fan).
+
+Idempotency: a command carries a 64-hex commandKey. Draft and reconcile commands are recorded in of_launch_command
+(kind 'plan_c_*', request hash over path ids and body); conversation controls use of_control_audit (Store.control).
+The same key with the same body replays the stored acknowledgement; the same key with a different body is a Conflict.
+"""
+import hashlib
+import json
+import re
+import threading
+from datetime import datetime, timedelta
+from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from db.models import Fan, Message, OfConversationState
+from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
+from db.onlyfans_engine_models import OfEngineAccessEvidence, OfEngineOwner, OfEngineRequest
+from db.onlyfans_fans_intake_models import OfFansEvidence
+from onlyfans_read.agency_scope import ACTOR_PATTERN
+from onlyfans_read.contract import conversation_id_for
+from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+from onlyfans_runtime.store import Refused, utcnow
+from . import approval
+from .history_scope import current_binding_message
+from .operator import FANSAPI_EVIDENCE_PREFIX, evidence_allowed
+
+PLAN_C_TRANSPORT = 'fansapi'
+MESSAGES_SHOWN = 10
+STALE_PENDING = timedelta(minutes=15)
+CONTROL = {'stop': ('paused', 'pause_automation'),
+           'takeover': ('human_controlled', 'request_takeover'),
+           'handback': ('automated', 'release_takeover')}
+_HEX64 = re.compile(r'[a-f0-9]{64}')
+_UUID = re.compile(r'[0-9a-f-]{36}')
+_LOCKS = [threading.Lock() for _ in range(64)]
+
+
+class NotFound(Refused):
+    """The scope, draft, conversation or item does not exist (HTTP 404)."""
+
+
+class Conflict(Refused):
+    """Version or revision conflict, an unavailable state, or a reused command key (HTTP 409)."""
+
+
+class BadRequest(ValueError):
+    """The command itself is malformed (HTTP 400)."""
+
+
+def _iso(value):
+    if value is None:
+        return None
+    text = value.isoformat()
+    return text if value.tzinfo is not None else text + 'Z'
+
+
+def _zulu(text):
+    """approval.py reports naive UTC timestamps as text; the browser must not read them as local time."""
+    return None if text is None else _iso(datetime.fromisoformat(text))
+
+
+def _digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+
+
+def _lock(account, key):
+    return _LOCKS[int(hashlib.sha256(f'{account}:{key}'.encode()).hexdigest()[:8], 16) % len(_LOCKS)]
+
+
+def _actor(actor):
+    """A named human only. The pattern admits operator sessions and agency users; automated names cannot match it."""
+    if type(actor) is not str or not re.fullmatch(ACTOR_PATTERN, actor):
+        raise BadRequest('named human actor required')
+    return actor
+
+
+def _key(command_key):
+    if type(command_key) is not str or not _HEX64.fullmatch(command_key):
+        raise BadRequest('invalid command key')
+    return command_key
+
+
+def _int(value, low=0, high=2 ** 31 - 2):
+    if type(value) is not int or not low <= value <= high:
+        raise BadRequest('invalid integer')
+    return value
+
+
+def _scope(store, tenant, account):
+    """(binding id, gated) for the account; NotFound when the account is not in this tenant's scope."""
+    with Session(store.engine) as s, s.begin():
+        try:
+            runtime = store._runtime(s, tenant, account, lock=False)
+        except Refused:
+            raise NotFound('scope unavailable') from None
+        policy = s.get(OfDeliveryPolicy, account)
+        return runtime.binding_id, policy is not None and policy.transport_kind == PLAN_C_TRANSPORT
+
+
+def _require_gated(store, tenant, account):
+    binding, gated = _scope(store, tenant, account)
+    if not gated:
+        raise Conflict('the operator surface is limited to fansapi pilot accounts')
+    return binding
+
+
+# ------------------------------------------------------------------ idempotent command record
+def _prior(s, account, key, kind, request_hash):
+    row = s.get(OfLaunchCommand, (account, key))
+    if row is None:
+        return None
+    if row.kind != kind or row.request_hash != request_hash:
+        raise Conflict('command key reused with a different command')
+    return json.loads(row.result_json)
+
+
+def _record(s, account, binding, key, kind, request_hash, actor, reason, before, result):
+    s.add(OfLaunchCommand(account_id=account, command_key=key, binding_id=binding, kind=kind, request_hash=request_hash,
+                          actor=actor, reason=reason[:512], before_json=json.dumps(before, sort_keys=True),
+                          result_json=json.dumps(result, sort_keys=True), created_at=utcnow()))
+    s.flush()
+
+
+def _idempotent(store, account, binding, key, kind, request_hash, actor, reason, before, run):
+    """Replay a recorded command, else run it and record its acknowledgement. One process-wide lock per key keeps two
+    identical in-flight requests from both running; the primary key settles a race between processes."""
+    with _lock(account, key):
+        with Session(store.engine) as s, s.begin():
+            prior = _prior(s, account, key, kind, request_hash)
+        if prior is not None:
+            return {**prior, 'replayed': True}
+        result = run()
+        try:
+            with Session(store.engine) as s, s.begin():
+                _record(s, account, binding, key, kind, request_hash, actor, reason, before, result)
+        except IntegrityError:
+            with Session(store.engine) as s, s.begin():
+                prior = _prior(s, account, key, kind, request_hash)
+            if prior is None:
+                raise
+            return {**prior, 'replayed': True}
+        return {**result, 'replayed': False}
+
+
+# ------------------------------------------------------------------ drafts
+def _recent_messages(s, binding, account, fan_id):
+    rows = list(s.scalars(select(Message).where(Message.account_id == account, Message.fan_id == fan_id,
+        Message.is_unsent.is_(False), current_binding_message(binding))
+        .order_by(Message.created_at.desc(), Message.message_id.desc()).limit(MESSAGES_SHOWN)))
+    return [{'direction': 'fan' if m.direction == 'in' else 'creator' if m.direction == 'out' else m.direction,
+             'text': m.body or '', 'at': _iso(m.created_at)} for m in reversed(rows)]
+
+
+def _fan_evidence(s, account, fan_id):
+    """What a person must know before approving: unresolved sends and held payment evidence of THIS fan."""
+    notes = []
+    unknown = s.scalars(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account,
+        OfTextIntent.fan_id == fan_id, OfTextIntent.status.in_(('dispatching', 'unknown')))).all()
+    if unknown:
+        notes.append(f'{len(unknown)} unresolved send(s) to this fan: do not resend')
+    held = s.scalars(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account,
+        OfFansEvidence.fan_id == fan_id, OfFansEvidence.status == 'held',
+        OfFansEvidence.kind != 'human_sent')).all()
+    if held:
+        notes.append(f'{len(held)} held payment record(s) need review')
+    return '; '.join(notes) or None
+
+
+def list_drafts(store, tenant, account):
+    """Live (awaiting or approved) draft versions in the shape the dashboard parses (planc-dash plan-c.ts)."""
+    binding, gated = _scope(store, tenant, account)
+    if not gated:
+        return []
+    approval.expire_stale(store, tenant, account)
+    views = approval.pending(store, tenant, account)
+    out = []
+    with Session(store.engine) as s, s.begin():
+        for view in views:
+            fan_id = int(view['fanId'])
+            state = s.get(OfConversationState, (account, fan_id))
+            parts = view['parts']
+            offers = [p for p in parts if p['action'] == 'offer']
+            draft = {'requestId': view['requestId'], 'generation': view['generation'], 'draftVersion': view['version'],
+                     'draftHash': view['draftHash'], 'status': view['status'],
+                     'action': 'offer' if offers else 'reply', 'fanId': str(fan_id),
+                     'conversationId': conversation_id_for(account, fan_id), 'expiresAt': _zulu(view['expiresAt']),
+                     'parts': parts,
+                     'conversation': {'revision': state.revision if state else 0,
+                                      'messages': _recent_messages(s, binding, account, fan_id)},
+                     'evidence': _fan_evidence(s, account, fan_id),
+                     'approvedBy': view['actor'] if view['status'] == 'approved' else None,
+                     'approvedAt': _zulu(view['decidedAt']) if view['status'] == 'approved' else None}
+            if offers:
+                head = offers[0]
+                draft['offer'] = {'productId': None if head['catalog_item_id'] is None else str(head['catalog_item_id']),
+                                  'mediaIds': [str(m) for m in head['media_ids']], 'mediaCount': len(head['media_ids']),
+                                  'priceCents': head['price_cents'], 'currency': head['currency']}
+            out.append(draft)
+    return out
+
+
+_DRAFT_KEYS = {'approve': {'expectedVersion', 'commandKey', 'actor'},
+               'reject': {'expectedVersion', 'commandKey', 'actor', 'reason'},
+               'edit': {'expectedVersion', 'commandKey', 'actor', 'parts'}}
+
+
+def _refusal(exc):
+    """Map an approval/Store refusal to our error classes (the message is a fixed internal string, never fan text)."""
+    text = str(exc)
+    if text in ('approval not found', 'scope unavailable', 'conversation unavailable', 'engine decision unavailable'):
+        return NotFound(text)
+    if text.startswith(('approval needs', 'invalid edited text', 'edited text must not', 'an edit keeps', 'an offer draft has')):
+        return BadRequest(text)
+    return Conflict(text)
+
+
+def draft_command(store, tenant, account, request_id, generation, action, body):
+    """approve | reject | edit one draft version. Returns the acknowledgement dict (replayed true on a replay)."""
+    if action not in _DRAFT_KEYS or type(body) is not dict or set(body) != _DRAFT_KEYS[action]:
+        raise BadRequest('exact command keys required')
+    if type(request_id) is not str or not _UUID.fullmatch(request_id) or type(generation) is not int or not 0 <= generation < 2 ** 31:
+        raise BadRequest('invalid draft id')
+    key, actor, version = _key(body['commandKey']), _actor(body['actor']), _int(body['expectedVersion'], 1)
+    reason = parts = None
+    if action == 'reject':
+        reason = body['reason']
+        if type(reason) is not str or not reason.strip() or len(reason.strip()) > 200 or re.search(r'[\x00-\x1f]', reason):
+            raise BadRequest('a reason is required')
+        reason = reason.strip()
+    if action == 'edit':
+        parts = body['parts']
+        if (type(parts) is not list or not 1 <= len(parts) <= 4
+                or any(type(t) is not str or not t.strip() or len(t) > 2000 or re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', t) for t in parts)):
+            raise BadRequest('invalid edited text')
+    binding = _require_gated(store, tenant, account)
+    kind = 'plan_c_' + action
+    request_hash = _digest([account, action, request_id, generation, {k: v for k, v in body.items() if k != 'commandKey'}])
+
+    def run():
+        try:
+            if action == 'approve':
+                view = approval.approve(store, tenant, account, request_id, generation, expected_version=version, actor=actor)
+            elif action == 'reject':
+                view = approval.reject(store, tenant, account, request_id, generation, expected_version=version,
+                                       actor=actor, reason=reason)
+            else:
+                view = approval.edit(store, tenant, account, request_id, generation, expected_version=version,
+                                     actor=actor, parts=parts)
+        except Refused as exc:
+            raise _refusal(exc) from None
+        # An edit supersedes the draft with generation + 1 (decision rows are immutable): report the generation to use next.
+        return {'ok': True, 'accountId': account, 'requestId': request_id, 'generation': view['generation'], 'action': action,
+                'commandKey': key, 'recordedVersion': view['version'], 'status': view['status'],
+                'draftHash': view['draftHash']}
+    return _idempotent(store, account, binding, key, kind, request_hash, actor, f'{action} {request_id}/{generation}',
+                       {'expectedVersion': version}, run)
+
+
+# ------------------------------------------------------------------ conversation controls
+def conversation_command(store, tenant, account, fan_id, action, body):
+    """stop | takeover | handback. Handback never approves or replays a draft: the control change withdraws every
+    live approval and the conversation only becomes eligible for a fresh plan."""
+    from db.onlyfans_models import OfControlAudit
+    if action not in CONTROL or type(body) is not dict or set(body) != {'commandKey', 'actor', 'expectedRevision'}:
+        raise BadRequest('exact command keys required')
+    key, actor, revision = _key(body['commandKey']), _actor(body['actor']), _int(body['expectedRevision'])
+    binding = _require_gated(store, tenant, account)
+    with Session(store.engine) as s, s.begin():
+        owner = s.get(OfEngineOwner, (account, fan_id))
+        if s.get(Fan, (account, fan_id)) is None:
+            raise NotFound('conversation unavailable')
+        if owner is None or owner.binding_id != binding:
+            raise Conflict('the conversation is not in the pilot scope')
+    mode, control_action = CONTROL[action]
+    reason = f'Plan C operator: {action}'
+    with _lock(account, key):
+        with Session(store.engine) as s, s.begin():
+            prior = s.get(OfControlAudit, (account, key))
+            if prior is not None:
+                if (prior.fan_id, prior.mode, prior.previous_revision, prior.actor, prior.reason, prior.action) != (
+                        fan_id, mode, revision, actor, reason, control_action):
+                    raise Conflict('command key reused with a different command')
+                return _control_ack(account, fan_id, action, key, prior.revision, True)
+        try:
+            recorded = store.control(tenant, account, fan_id, mode=mode, expected_revision=revision, command_key=key,
+                                     actor=actor, reason=reason, action=control_action)
+        except Refused as exc:
+            raise _refusal(exc) from None
+        return _control_ack(account, fan_id, action, key, recorded, False)
+
+
+def _control_ack(account, fan_id, action, key, revision, replayed):
+    return {'ok': True, 'accountId': account, 'conversationId': conversation_id_for(account, fan_id), 'action': action,
+            'commandKey': key, 'recordedRevision': revision, 'replayed': replayed}
+
+
+# ------------------------------------------------------------------ unresolved work
+def _item(kind, ident, owner, next_step, summary, conversation=None, revision=None, created=None, **extra):
+    row = {'id': f'{kind}:{ident}', 'kind': kind, 'owner': owner, 'nextStep': next_step, 'summary': summary[:1000]}
+    if conversation is not None:
+        row['conversationId'] = conversation
+    if revision is not None:
+        row['revision'] = revision
+    if created is not None:
+        row['createdAt'] = _iso(created)
+    row.update(extra)
+    return row
+
+
+def _acknowledged(s, account):
+    """Item ids an operator already reconciled (plan_c_reconcile records); the record itself is permanent."""
+    out = {}
+    for row in s.scalars(select(OfLaunchCommand).where(OfLaunchCommand.account_id == account,
+            OfLaunchCommand.kind == 'plan_c_reconcile').order_by(OfLaunchCommand.created_at)):
+        before = json.loads(row.before_json)
+        out[before['id']] = row
+    return out
+
+
+def unresolved(store, tenant, account):
+    """Every item has an owner and a next step. Owners are roles (the dashboard limits owner to 64 characters)."""
+    binding, gated = _scope(store, tenant, account)
+    if not gated:
+        return []
+    items = []
+    with Session(store.engine) as s, s.begin():
+        seen = _acknowledged(s, account)
+        pilot = {f for (f,) in s.execute(select(OfEngineOwner.fan_id).where(OfEngineOwner.account_id == account,
+                                                                             OfEngineOwner.binding_id == binding))}
+
+        def conv(fan_id):
+            state = s.get(OfConversationState, (account, fan_id))
+            return conversation_id_for(account, fan_id), (state.revision if state else 0)
+
+        # 1. Sends whose outcome is unknown. They are never resent and never called "not sent" without proof.
+        for row in s.scalars(select(OfTextIntent).where(OfTextIntent.account_id == account, OfTextIntent.binding_id == binding,
+                OfTextIntent.status.in_(('dispatching', 'unknown'))).order_by(OfTextIntent.created_at).limit(200)):
+            cid, revision = conv(row.fan_id)
+            item_id = f'unknown_send:{row.intent_id}'
+            note = seen.get(item_id)
+            summary = (f'A send to fan {row.fan_id} may have reached the fan (status {row.status}). Do not resend. '
+                       'Only provider history showing the exact message releases the hold.')
+            step = 'reconcile_with_provider_history'
+            if note is not None:
+                step = 'awaiting_provider_proof'
+                summary += f' Operator evidence recorded by {note.actor[:20]}: {note.reason[:120]}; it does not release the hold.'
+            items.append(_item('unknown_send', row.intent_id, 'operator', step, summary, cid, revision,
+                               row.wire_started_at or row.created_at))
+        # 2. Money that is not linked to an unlock (kept apart from access evidence until a person links or dismisses it).
+        stale = utcnow() - STALE_PENDING
+        for row in s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
+                OfFansEvidence.kind.in_(('transaction', 'chargeback')), OfFansEvidence.status.in_(('pending', 'held')),
+                OfFansEvidence.peer_id.is_(None), OfFansEvidence.intent_id.is_(None))
+                .order_by(OfFansEvidence.created_at).limit(200)):
+            if row.status == 'pending' and (row.kind != 'transaction' or row.created_at > stale):
+                continue   # still inside its normal matching window (a pending chargeback is handled by commerce)
+            cid, revision = conv(row.fan_id) if row.fan_id in pilot else (None, None)
+            amount = '' if row.amount_cents is None else f' of {row.amount_cents} cents'
+            items.append(_item('unlinked_transaction', row.evidence_id, 'operator',
+                               'review_and_reconcile' if row.status == 'held' else 'link_or_dismiss_unmatched_transaction',
+                               f'{row.kind}{amount} for fan {row.fan_id} has no linked unlock ({row.reason or row.status}). '
+                               'It is not treated as a purchase.', cid, revision, row.created_at, evidenceId=row.evidence_id))
+        # 3. Access evidence that is not confirmed.
+        for row in s.scalars(select(OfEngineAccessEvidence).where(OfEngineAccessEvidence.account_id == account,
+                (OfEngineAccessEvidence.status != 'confirmed') | OfEngineAccessEvidence.applied.is_(False))
+                .order_by(OfEngineAccessEvidence.created_at).limit(200)):
+            item_id = f'unreconciled_access:access-{row.evidence_key}'
+            if item_id in seen:
+                continue
+            cid, revision = conv(row.fan_id) if row.fan_id in pilot else (None, None)
+            items.append(_item('unreconciled_access', f'access-{row.evidence_key}', 'operator', 'confirm_access_evidence',
+                               f'Access evidence for fan {row.fan_id} is {row.status} (applied={row.applied}). '
+                               'Do not assert the fan has access.', cid, revision, row.created_at))
+        for row in s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
+                OfFansEvidence.kind == 'unlock', OfFansEvidence.status.in_(('pending', 'paired', 'held')))
+                .order_by(OfFansEvidence.created_at).limit(200)):
+            if row.status != 'held' and row.created_at > stale:
+                continue
+            cid, revision = conv(row.fan_id) if row.fan_id in pilot else (None, None)
+            items.append(_item('unreconciled_access', row.evidence_id, 'operator',
+                               'review_and_reconcile' if row.status == 'held' else 'await_payment_match_or_review',
+                               f'Unlock for fan {row.fan_id} is {row.status} ({row.reason or "no reason"}). Not yet confirmed access.',
+                               cid, revision, row.created_at, evidenceId=row.evidence_id))
+        # 4. Conversations a human holds, waiting for an explicit hand back.
+        for state, owner in s.execute(select(OfConversationState, OfEngineOwner).join(OfEngineOwner, and_(
+                OfEngineOwner.account_id == OfConversationState.account_id, OfEngineOwner.fan_id == OfConversationState.fan_id))
+                .where(OfConversationState.account_id == account, OfEngineOwner.binding_id == binding,
+                       OfConversationState.mode == 'human_controlled').order_by(OfConversationState.updated_at).limit(200)):
+            waiting = state.takeover_state == 'requested'
+            items.append(_item('human_hold', state.fan_id, 'human',
+                               'await_delivery_resolution_then_handback' if waiting else 'awaiting_handback',
+                               f'A human holds fan {state.fan_id}. The engine is silent until an explicit hand back; '
+                               'a hand back only allows a fresh plan.', conversation_id_for(account, state.fan_id),
+                               state.revision, state.updated_at))
+        # 5. Requests in a handover state (resolved through the request workflow: accept, then complete or decline).
+        for request in s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account,
+                OfEngineRequest.binding_id == binding,
+                OfEngineRequest.status.in_(('handover_pending', 'handover_accepted'))).order_by(OfEngineRequest.updated_at).limit(200)):
+            cid, revision = conv(request.fan_id)
+            items.append(_item('handover_request', request.request_id, 'human',
+                               'accept_handover' if request.status == 'handover_pending' else 'complete_or_decline_with_evidence',
+                               f'Request for fan {request.fan_id} is {request.status}.', cid, revision, request.updated_at,
+                               requestId=request.request_id, requestRevision=request.revision))
+    return items[:500]
+
+
+# ------------------------------------------------------------------ reconcile
+def reconcile(store, tenant, account, item_id, body):
+    """Record the operator's checked evidence for one unresolved item.
+
+    unknown_send: audit only. The intent stays unknown and its fan stays held, no key is replaced, nothing is
+      resent and it is never marked not-sent: releasing it needs positive provider history (send_recovery.reconcile).
+    unlinked_transaction / unreconciled_access on an of_fans_evidence row: a held row (or a stale pending
+      transaction) is dismissed with the operator as resolved_by; it is never converted into a grant.
+    unreconciled_access on revoked access evidence: audit only (acknowledged, state untouched).
+    human_hold / handover_request: refused; they end with hand back or the request workflow."""
+    if type(body) is not dict or set(body) != {'commandKey', 'actor', 'evidenceRef'}:
+        raise BadRequest('exact command keys required')
+    key, actor = _key(body['commandKey']), _actor(body['actor'])
+    binding = _require_gated(store, tenant, account)
+    if type(item_id) is not str or not re.fullmatch(r'[A-Za-z0-9._:-]{1,100}', item_id) or ':' not in item_id:
+        raise NotFound('item unavailable')
+    if not evidence_allowed(PLAN_C_TRANSPORT, body['evidenceRef']):
+        raise BadRequest('evidence reference required (%s...)' % FANSAPI_EVIDENCE_PREFIX)
+    evidence = body['evidenceRef']
+    kind, _, ident = item_id.partition(':')
+    request_hash = _digest([account, 'reconcile', item_id, actor, evidence])
+
+    def run():
+        now = utcnow()
+        with Session(store.engine) as s, s.begin():
+            try:
+                runtime = store._runtime(s, tenant, account)
+            except Refused:
+                raise NotFound('scope unavailable') from None
+            if runtime.binding_id != binding:
+                raise Conflict('scope changed')
+            outcome = 'recorded'
+            if kind == 'unknown_send':
+                row = s.get(OfTextIntent, (account, ident))
+                if row is None or row.binding_id != binding or row.status not in ('dispatching', 'unknown'):
+                    raise NotFound('item unavailable')
+                outcome = 'evidence_recorded_hold_retained'
+            elif kind in ('unlinked_transaction', 'unreconciled_access') and ident.startswith('access-'):
+                row = s.get(OfEngineAccessEvidence, (account, ident[len('access-'):]))
+                if row is None or (row.status == 'confirmed' and row.applied):
+                    raise NotFound('item unavailable')
+                outcome = 'acknowledged'
+            elif kind in ('unlinked_transaction', 'unreconciled_access'):
+                row = s.get(OfFansEvidence, (account, ident), with_for_update=True)
+                expected = ('transaction', 'chargeback') if kind == 'unlinked_transaction' else ('unlock',)
+                if row is None or row.kind not in expected:
+                    raise NotFound('item unavailable')
+                if row.status == 'dismissed' or row.status == 'applied':
+                    raise Conflict('item is already resolved')
+                if row.status == 'held' or (row.status == 'pending' and row.kind == 'transaction' and row.peer_id is None
+                                            and kind == 'unlinked_transaction'):
+                    row.status, row.resolved_by, row.reason, row.updated_at = 'dismissed', actor, 'operator_reconciled', now
+                    outcome = 'dismissed'
+                else:
+                    raise Conflict('item is not ready for reconciliation')
+            elif kind in ('human_hold', 'handover_request'):
+                raise Conflict('use hand back or the request workflow for this item')
+            else:
+                raise NotFound('item unavailable')
+        return {'ok': True, 'accountId': account, 'id': item_id, 'action': 'reconcile', 'commandKey': key,
+                'outcome': outcome, 'resolved': outcome in ('dismissed', 'acknowledged')}
+    return _idempotent(store, account, binding, key, 'plan_c_reconcile', request_hash, actor, evidence, {'id': item_id}, run)

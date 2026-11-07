@@ -1,4 +1,9 @@
-"""Audited synthetic-only request ownership and resolution commands."""
+"""Audited request ownership and resolution commands for synthetic labs and the Plan C 'fansapi' pilot.
+
+Synthetic accounts keep 'synthetic:' resolution evidence. A 'fansapi' account may use the same workflow only through an
+authorized human actor (an operator session or an agency user, never an automated name) and with explicit evidence of the
+form 'operator:fansapi:<what the person checked>' (6 to 108 characters after the prefix). Completing an offer still
+needs confirmed access evidence, and unresolved deliveries still refuse completion, whatever the transport."""
 from hashlib import sha256
 import json
 import re
@@ -11,6 +16,23 @@ from db.onlyfans_engine_models import (OfEngineAccessEvidence, OfEngineDecision,
 from onlyfans_read.agency_scope import ACTOR_PATTERN, actor_allowed
 from onlyfans_runtime.handover import staff_owns_takeover
 from onlyfans_runtime.store import Refused, utcnow
+
+
+FANSAPI_EVIDENCE_PREFIX = 'operator:fansapi:'
+SYNTHETIC_EVIDENCE_PREFIX = 'synthetic:'
+WORKFLOW_TRANSPORTS = {'synthetic', 'fansapi'}
+
+
+def evidence_allowed(transport_kind, evidence_ref):
+    """Evidence a person may cite for this transport: 'synthetic:...' (<=128) in the lab, 'operator:fansapi:...' for the pilot."""
+    if type(evidence_ref) is not str or re.search(r'[\x00-\x1f]', evidence_ref):
+        return False
+    if transport_kind == 'synthetic':
+        return evidence_ref.startswith(SYNTHETIC_EVIDENCE_PREFIX) and len(evidence_ref) <= 128
+    if transport_kind == 'fansapi':
+        return (evidence_ref.startswith(FANSAPI_EVIDENCE_PREFIX)
+                and 6 <= len(evidence_ref) - len(FANSAPI_EVIDENCE_PREFIX) <= 108 and bool(evidence_ref[len(FANSAPI_EVIDENCE_PREFIX):].strip()))
+    return False
 
 
 def execute(store, tenant, account, request_id, *, action, expected_revision, command_key, actor,
@@ -27,8 +49,8 @@ def execute(store, tenant, account, request_id, *, action, expected_revision, co
     elif target is not None:
         raise Refused('unexpected handover target')
     if action in {'complete','decline'}:
-        if type(evidence_ref) is not str or not evidence_ref.startswith('synthetic:') or len(evidence_ref) > 128:
-            raise Refused('synthetic resolution evidence required')
+        if type(evidence_ref) is not str or len(evidence_ref) > 128:
+            raise Refused('resolution evidence required')
     elif evidence_ref is not None:
         raise Refused('unexpected resolution evidence')
     payload = {'requestId':request_id, 'action':action, 'expectedRevision':expected_revision,
@@ -37,8 +59,10 @@ def execute(store, tenant, account, request_id, *, action, expected_revision, co
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
         policy = s.get(OfDeliveryPolicy, account, with_for_update=True)
-        if policy is None or policy.transport_kind != 'synthetic':
-            raise Refused('operator workflow is limited to the synthetic lab')
+        if policy is None or policy.transport_kind not in WORKFLOW_TRANSPORTS:
+            raise Refused('operator workflow is limited to the synthetic lab and the fansapi pilot')
+        if action in {'complete', 'decline'} and not evidence_allowed(policy.transport_kind, evidence_ref):
+            raise Refused('resolution evidence for this transport required')
         request = s.get(OfEngineRequest, (account, request_id), with_for_update=True)
         if (request is None or request.binding_id != runtime.binding_id
                 or (expected_fan_id is not None and request.fan_id != expected_fan_id)):
@@ -98,6 +122,11 @@ def execute(store, tenant, account, request_id, *, action, expected_revision, co
                             intent.status, intent.reason, intent.updated_at = 'cancelled', 'operator_resolution', utcnow()
                             policy.queued_count -= 1
                     item.status, item.updated_at = 'cancelled', utcnow()
+            if policy.transport_kind == 'fansapi':
+                # Closing a request is never an approval: it withdraws the live approval of the draft it cancels.
+                from .approval import invalidate_generation_in_session
+                for generation in {item.generation for item in decisions}:
+                    invalidate_generation_in_session(s, account, request_id, generation, 'request_closed')
             request.status = 'completed' if action == 'complete' else 'declined'
             request.next_step = 'none'
         request.revision += 1

@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Fan, Message, OfConversationState
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
-from db.onlyfans_engine_models import (OfEngineAccessEvidence, OfEngineApproval, OfEngineModelCall,
+from db.onlyfans_engine_models import (OfEngineAccessEvidence, OfEngineApproval, OfEngineDecision, OfEngineModelCall,
                                        OfEngineOwner, OfEngineRequest)
 from db.onlyfans_fans_intake_models import OfFansEvidence
 from onlyfans_read.agency_scope import ACTOR_PATTERN
@@ -233,6 +233,59 @@ def _refusal(exc):
     if text.startswith(('approval needs', 'invalid edited text', 'edited text must not', 'an edit keeps', 'an offer draft has')):
         return BadRequest(text)
     return Conflict(text)
+
+
+def list_receipts(store, tenant, account):
+    """Recent provider acceptances for approved engine sends in this creator binding.
+
+    A receipt means the provider accepted a message; it does not establish a
+    fan read, payment, settlement, or access. Unknown sends are never included.
+    """
+    binding, gated = _scope(store, tenant, account)
+    if not gated:
+        return []
+    with Session(store.engine) as s, s.begin():
+        try:
+            runtime = store._runtime(s, tenant, account)
+        except Refused:
+            raise NotFound('scope unavailable') from None
+        if runtime.binding_id != binding:
+            raise NotFound('scope unavailable')
+        approved = select(OfEngineApproval.request_id).where(
+            OfEngineApproval.account_id == OfEngineDecision.account_id,
+            OfEngineApproval.binding_id == binding, OfEngineApproval.fan_id == OfEngineDecision.fan_id,
+            OfEngineApproval.request_id == OfEngineDecision.request_id,
+            OfEngineApproval.generation == OfEngineDecision.generation,
+            OfEngineApproval.status.in_(('approved', 'consumed', 'invalidated', 'expired')),
+            OfEngineApproval.actor.is_not(None), OfEngineApproval.decided_at.is_not(None)).exists()
+        rows = s.execute(select(OfTextIntent, OfEngineDecision).join(OfEngineDecision, and_(
+            OfEngineDecision.account_id == OfTextIntent.account_id,
+            OfEngineDecision.intent_id == OfTextIntent.intent_id)).join(OfEngineOwner, and_(
+            OfEngineOwner.account_id == OfTextIntent.account_id, OfEngineOwner.fan_id == OfTextIntent.fan_id))
+            .where(OfTextIntent.account_id == account, OfTextIntent.binding_id == binding,
+                OfEngineDecision.binding_id == binding, OfEngineOwner.binding_id == binding,
+                OfEngineDecision.fan_id == OfTextIntent.fan_id, OfEngineDecision.payload_hash == OfTextIntent.payload_hash,
+                OfTextIntent.status == 'accepted',
+                OfTextIntent.provider_message_id.is_not(None), OfTextIntent.receipt_json.is_not(None), approved)
+            .order_by(OfTextIntent.updated_at.desc(), OfTextIntent.intent_id).limit(50)).all()
+        result = []
+        for intent, decision in rows:
+            try:
+                proof = json.loads(intent.receipt_json)
+                stamp = proof['occurred_at']
+                parsed = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+                if (type(proof) is not dict or type(stamp) is not str or parsed.tzinfo is None
+                        or parsed.utcoffset() is None or proof.get('account_id') != account
+                        or proof.get('fan_id') != intent.fan_id or proof.get('intent_id') != intent.intent_id
+                        or proof.get('attempt_id') != intent.attempt_id or proof.get('payload_hash') != intent.payload_hash
+                        or proof.get('evidence_ref') != intent.evidence_ref or proof.get('message_id') != intent.provider_message_id):
+                    continue
+            except (TypeError, ValueError, KeyError, AttributeError):
+                continue
+            result.append({'intentId': intent.intent_id, 'fanId': str(intent.fan_id),
+                           'messageId': str(intent.provider_message_id), 'acceptedAt': stamp,
+                           'action': decision.action, 'projected': intent.projected_at is not None})
+        return result
 
 
 def draft_command(store, tenant, account, request_id, generation, action, body):

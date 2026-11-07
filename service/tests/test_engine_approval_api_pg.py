@@ -518,6 +518,62 @@ def test_access_review_refuses_evidence_from_an_earlier_creator_binding(api, mon
                 {'commandKey':key(871), 'actor':ACTOR, 'evidenceRef':EVIDENCE}).status_code == 404
 
 
+def test_dashboard_receipts_show_only_approved_current_creator_acceptances(api):
+    from db.models import OfCreatorBinding
+    staged, _ = stage(api)
+    draft = drafts(api)[0]
+    assert get(api, 'drafts').json()['receipts'] == []
+    assert post(api, draft_path(draft, 'approve'), approve_body(draft, 872)).status_code == 200
+    assert send(api, staged)['outcome'] == 'accepted'
+    body = get(api, 'drafts').json()
+    assert body['drafts'] == []
+    [receipt] = body['receipts']
+    assert receipt['fanId'] == str(FAN) and receipt['messageId'] == '7001'
+    assert receipt['action'] == 'reply' and receipt['projected'] is True and ISO.match(receipt['acceptedAt'])
+    assert 'purchase' not in json.dumps(receipt).lower()
+    with Session(api.database[1]) as s, s.begin():
+        s.add(OfCreatorBinding(id='old-receipt-binding', tenant_id='old-tenant', creator_id='old-creator',
+                               account_id=ACCOUNT, channel='onlyfans', revoked_at=utcnow()))
+        s.flush()
+        s.get(OfTextIntent, (ACCOUNT, receipt['intentId'])).binding_id = 'old-receipt-binding'
+    assert get(api, 'drafts').json()['receipts'] == []
+
+
+def test_rejected_draft_does_not_count_as_approval_for_a_receipt(api):
+    # Corrupt/inconsistent historical state is synthesized only inside this
+    # throwaway database: rejected evidence must never be read as an approval.
+    first, _ = stage(api)
+    first_draft = drafts(api)[0]
+    assert post(api, draft_path(first_draft, 'approve'), approve_body(first_draft, 873)).status_code == 200
+    assert send(api, first)['outcome'] == 'accepted'
+    rejected, _ = stage(api, say='another fixture message')
+    rejected_draft = drafts(api)[0]
+    result = post(api, draft_path(rejected_draft, 'reject'),
+                  {'expectedVersion':rejected_draft['draftVersion'], 'commandKey':key(874),
+                   'actor':ACTOR, 'reason':'fixture rejection'})
+    assert result.status_code == 200
+    with Session(api.database[1]) as s, s.begin():
+        source = s.scalar(select(OfTextIntent).where(OfTextIntent.status == 'accepted'))
+        values = {column.key:getattr(source, column.key) for column in OfTextIntent.__table__.columns}
+        fake_intent, fake_attempt = str(uuid.uuid4()), str(uuid.uuid4())
+        proof = json.loads(source.receipt_json)
+        proof.update(intent_id=fake_intent, attempt_id=fake_attempt, message_id=8001)
+        values.update(intent_id=fake_intent, attempt_id=fake_attempt, command_key=key(875),
+                      provider_message_id=8001, receipt_json=json.dumps(proof, sort_keys=True))
+        s.add(OfTextIntent(**values)); s.flush()
+        decision = s.get(OfEngineDecision, (ACCOUNT, rejected['decisionId']))
+        assert decision.payload_hash == source.payload_hash and decision.intent_id is None
+        decision.intent_id = fake_intent
+    receipts = get(api, 'drafts').json()['receipts']
+    assert [entry['messageId'] for entry in receipts] == ['7001']
+
+
+def test_dashboard_does_not_label_unknown_send_as_a_receipt(api):
+    unknown_send(api)
+    assert get(api, 'drafts').json()['receipts'] == []
+    assert any(item['kind'] == 'unknown_send' for item in get(api, 'unresolved').json()['items'])
+
+
 def test_unresolved_displays_unknown_model_cost_and_open_request(api):
     from conversation_engine.model_client import FixtureChatClient, ModelOutcomeUnknown
     from conversation_engine.model_runtime import ModelRuntime

@@ -112,9 +112,10 @@ async def drafts(request: Request, account_id: str):
         return refusal
     try:
         items = await asyncio.to_thread(v2.list_drafts, store, tenant, account_id)
+        receipts = await asyncio.to_thread(v2.list_receipts, store, tenant, account_id)
     except (v2.NotFound, Refused) as exc:
         return failure(exc)
-    return answer({'ok': True, 'accountId': account_id, 'drafts': items})
+    return answer({'ok': True, 'accountId': account_id, 'drafts': items, 'receipts': receipts})
 
 
 @router.get('/accounts/{account_id}/unresolved')

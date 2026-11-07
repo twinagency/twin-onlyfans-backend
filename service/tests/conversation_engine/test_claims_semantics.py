@@ -140,7 +140,7 @@ def test_grounding_from_snapshot_uses_only_the_granted_offer_and_owned_items():
 
 
 # ---- the same checks on the real judge() path, including the PDF regressions -------------------------------
-PROFILE = CreatorProfile.from_facts('Riley', {'age': '27'}, voice='warm')
+PROFILE = CreatorProfile.from_facts('Riley', {'age': '27'}, voice='warm', offers_permitted=True, approved_item_ids=('5',))
 
 
 def _ctx(grants=(), **over):

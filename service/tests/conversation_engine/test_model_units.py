@@ -756,6 +756,32 @@ def test_fan_pushing_a_banned_theme_is_routed_to_a_human_by_journey_signals():
         assert 'platform_banned' not in journey_signals(text), text
 
 
+@pytest.mark.parametrize('fan,reply', [
+    ('my stepsister got a new job', "that's great news about your stepsister"),
+    ('my kids are on holiday', 'hope your kids enjoy their holiday'),
+    ('my daughter passed her driving test', "that's wonderful news for your daughter"),
+    ('my little boy started school', 'your little boy must be excited'),
+    ('i had a minor problem at work', 'hope that minor problem is sorted'),
+])
+def test_ordinary_family_and_age_mentions_are_not_platform_banned(fan, reply):
+    assert 'platform_banned' not in journey_signals(fan)
+    outcome, why = reasons(ok(reply), wctx(message=fan, profile=_writer('explicit')))
+    assert outcome == 'ok', why
+
+
+def test_direct_underage_identity_assertion_remains_a_safety_hold():
+    assert 'platform_banned' in journey_signals('are you a teen?')
+    assert 'platform_banned' in journey_signals('are you a minor?')
+    outcome, why = reasons(ok('you are a minor'), wctx(message='how old am i', profile=_writer('explicit')))
+    assert outcome == 'invalid' and 'platform-banned' in why
+
+
+def test_contextual_family_words_do_not_hide_an_independent_banned_match():
+    outcome, why = reasons(ok('your kids are well, but rape is unacceptable'),
+                           wctx(message='my kids are doing well', profile=_writer('explicit')))
+    assert outcome == 'invalid' and 'platform-banned' in why
+
+
 def test_json_creator_chat_permission_is_preserved_and_conflicts_fail_closed(tmp_path):
     from conversation_engine.writer_context import CreatorProfile, JsonFileCreatorProfiles
     for level in ('none', 'suggestive', 'explicit'):

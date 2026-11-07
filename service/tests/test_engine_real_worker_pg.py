@@ -309,6 +309,13 @@ def test_default_off_flag_policy_and_scope(world, monkeypatch):
         world.worker.handle('other-tenant', ACCOUNT, raw_body=b'{}', signature='x', secret=SECRET, event_key='k')
 
 
+def test_ordinary_family_message_does_not_trigger_a_human_hold(world):
+    world.say_plain('That sounds like good news')
+    result, _ = world.say('My stepsister got a new job')
+    assert result['outcome'] == 'accepted'
+    assert len(world.fans.posts) == 1
+
+
 def test_synthetic_worker_is_unchanged_and_refuses_the_real_transport(world):
     with pytest.raises(Refused, match='invalid synthetic worker dependencies'):
         SyntheticConversationWorker(world.engine, FansWebhookAdapter(world.store), world.transport)
@@ -637,24 +644,33 @@ def test_identity_question_is_answered_when_an_approved_line_is_configured(world
     assert world.snaps[-1]['journey']['approved_identity_line'] == 'I am a virtual assistant for the creator.'
 
 
-def test_second_offplatform_ask_pauses_selling_and_flags_third_push_goes_to_a_human(world):
+def test_repeated_offplatform_asks_flag_without_inventing_a_sales_refusal(world):
     world.backfilled(FAN)
     world.say_plain('stay here with me')
     grant = world.grant()
     first, _ = world.say('add me on snapchat')
     assert first['outcome'] == 'accepted' and world.owner()[1] == 'open' and world.cases('offplatform_ask') == []
-    second, mid2 = world.say('whats your whatsapp then?', seconds=1)
-    assert second['outcome'] == 'accepted'                            # chat continues
-    assert world.owner()[1] == 'paused' and world.owner()[2] == mid2
+    second, _ = world.say('whats your whatsapp then?', seconds=1)
+    assert second['outcome'] == 'accepted' and world.owner()[1] == 'open'
     assert ('offplatform_ask', 'offer', 'open') in world.cases()
-    world.reply(lambda snap: SyntheticProposal('anyway, look', action='offer', offer_grant_id=grant))
-    pitched, _ = world.say('so what do you do all day', seconds=2)
-    assert pitched['outcome'] == 'refused'                            # selling stays paused
+    world.reply(lambda snap: SyntheticProposal('here is the set', action='offer', offer_grant_id=grant))
+    pitched, _ = world.say('show me the set', seconds=2)
+    assert pitched['outcome'] == 'accepted'  # an explicit on-platform request remains eligible
     world.say_plain('ok')
     third, _ = world.say('ok lets meet up this weekend', seconds=3)
     assert third['outcome'] == 'handed_to_human' and third['reason'] == 'limit_push'
     assert world.owner()[0] == 'human'
     assert world.rows(OfEngineRequest, OfEngineRequest.status == 'handover_pending')
+
+
+def test_contact_questions_do_not_reopen_an_existing_sales_refusal(world):
+    world.say_plain('no problem')
+    world.say('no thanks, not buying')
+    assert world.owner()[1] == 'paused'
+    world.say('add me on snapchat', seconds=1)
+    world.say('whats your whatsapp then?', seconds=2)
+    assert world.owner()[1] == 'paused'
+    assert ('offplatform_ask', 'offer', 'open') in world.cases()
 
 
 def test_a_third_push_past_configured_limits_goes_to_a_human(world):

@@ -130,7 +130,7 @@ _PROMISE = re.compile(
 
 
 _BANNED_FAN = re.compile(
-    r"\b(under ?age|under 18|jailbait|loli|lolita|shota|pedo\w*|school ?girl|teen(?:age|ager|s)?|(?:little|young) (?:girl|boy)|"
+    r"\b(under ?age|under 18|minors?|jailbait|loli|lolita|shota|pedo\w*|school ?girl|teen(?:age|ager|s)?|(?:little|young) (?:girl|boy)|"
     r"step ?(?:sis|sister|bro|brother|daughter|son|mom|mum|mother|dad|father)|incest|rape|raping|roofie|drugged|"
     r"(?:passed out|unconscious) (?:and|while|girl|you)|bestiality|zoophil\w*|(?:dog|horse|animal)s? (?:fuck\w*|sex|cock|dick)|"
     r"scat|golden shower|piss on|(?:blood|bleeding) (?:play|kink)|necro\w*|(?:pay|paying|paid)\b[^.?!]{0,24}?\b(?:to|for) (?:meet|a meet|sex|fuck)|"
@@ -146,7 +146,8 @@ def signals(text, config=None):
     value = _norm(text)
     config = config or _CONFIG
     found = set()
-    if _BANNED_FAN.search(value):
+    from .safety_context import sensitive_match
+    if sensitive_match(_BANNED_FAN, value):
         found.add('platform_banned')
     if _IDENTITY.search(value):
         found.add('identity')
@@ -240,7 +241,7 @@ def decide(s, runtime, owner, message, config=None):
     """Pure verdict for one inbound message. Returns a dict; writes nothing.
 
     human: reason that needs a person (engine stays silent), pause: selling must be paused by this message
-    ('refusal' temporary, 'sales_optout' explicit, 'offplatform_ask'), flags: operator flags to raise,
+    ('refusal' temporary or 'sales_optout' explicit), flags: operator flags to raise,
     no_promise: the reply must not promise anything.
     """
     config = config or _CONFIG
@@ -256,9 +257,10 @@ def decide(s, runtime, owner, message, config=None):
     if found & {'offplatform', 'meetup', 'limit'} and push_count >= 3 and verdict['human'] is None:
         verdict['human'] = 'limit_push'
     if found & {'offplatform', 'meetup'} and ask_count >= 2:
-        verdict['pause'] = 'offplatform_ask'
+        # A contact request is not a sales refusal. Preserve the operator flag,
+        # but don't pause unrelated approved on-platform selling by itself.
         verdict['flags'].append('offplatform_ask')
-    if 'refusal' in found and verdict['pause'] is None:
+    if 'refusal' in found:
         verdict['pause'] = 'sales_optout' if 'sales_optout' in found else 'refusal'
     if 'custom' in found:
         verdict['no_promise'] = True

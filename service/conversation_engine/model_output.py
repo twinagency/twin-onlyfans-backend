@@ -69,10 +69,12 @@ def _sexual_problems(texts, ctx):
     profile = ctx.profile
     level = getattr(profile, 'explicit_chat', 'explicit')
     problems = []
-    hit = PLATFORM_BANNED_RX.search(joined)
+    from .safety_context import sensitive_match
+    fan_text = ctx.snapshot['current_message']['body']
+    hit = sensitive_match(PLATFORM_BANNED_RX, joined, fan_text)
     if hit:
         problems.append(f"platform-banned theme in her text ('{hit.group(0)}'); decline it in one line and change the subject")
-    fan_sexual = bool(SEXUAL_FAN_RX.search(ctx.snapshot['current_message']['body']))
+    fan_sexual = bool(SEXUAL_FAN_RX.search(fan_text))
     if level == 'explicit' and fan_sexual and SANITISE_RX.search(joined):
         problems.append('sanitises or deflects explicit chat; she talks explicitly and matches him (SEXUAL CHAT)')
     if level != 'explicit' and EXPLICIT_RX.search(joined):

@@ -1,0 +1,591 @@
+{
+ "name": "journey30",
+ "description": "30-step scripted Jake journey: first 20 from buildb-spec.md, 10 extras.",
+ "fan_name": "Jake",
+ "catalogue": [
+  {
+   "key": "pics6",
+   "label": "Pic pack",
+   "description": "Six teasing photos from a lazy afternoon.",
+   "kind": "image",
+   "price_cents": 600,
+   "media": [
+    21,
+    22,
+    23
+   ],
+   "previews": [
+    21
+   ]
+  },
+  {
+   "key": "shower18",
+   "label": "Shower video",
+   "description": "A short steamy shower video with a preview frame.",
+   "kind": "video",
+   "price_cents": 1800,
+   "media": [
+    31,
+    32
+   ],
+   "previews": [
+    32
+   ]
+  },
+  {
+   "key": "set26",
+   "label": "Bedroom set",
+   "description": "A photo set from the bedroom with one video.",
+   "kind": "video",
+   "price_cents": 2600,
+   "media": [
+    41,
+    42,
+    43,
+    44
+   ],
+   "previews": [
+    41
+   ]
+  },
+  {
+   "key": "locker59",
+   "label": "Locker room bundle",
+   "description": "A bundle of photos and clips from the gym locker room.",
+   "kind": "video",
+   "price_cents": 5900,
+   "media": [
+    51,
+    52,
+    53,
+    54,
+    55
+   ],
+   "previews": [
+    51
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "kind": "event",
+   "event": "new_subscriber",
+   "note": "S0 welcome + step-1 card",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Hi, thanks so much for subscribing. I put together a little welcome for new fans."
+     ],
+     "offer": "shower18"
+    },
+    "C": {
+     "parts": [
+      "hey you, thanks for subscribing. made u a little welcome"
+     ],
+     "offer": "shower18"
+    }
+   },
+   "n": 1
+  },
+  {
+   "kind": "fan",
+   "text": "hey",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Hey Jake, good to hear from you.",
+      "How are you?"
+     ]
+    },
+    "C": {
+     "parts": [
+      "heyy jake"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 2
+  },
+  {
+   "kind": "fan",
+   "text": "how was your day",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Pretty good, thanks for asking. Busy but fun.",
+      "How was yours?"
+     ]
+    },
+    "C": {
+     "parts": [
+      "pretty good actually, lazy day",
+      "how was yours"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 3
+  },
+  {
+   "kind": "fan",
+   "text": "you're gorgeous",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Aw, that is sweet of you."
+     ]
+    },
+    "C": {
+     "parts": [
+      "stoppp you are making me blush"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 4
+  },
+  {
+   "kind": "fan",
+   "text": "what are you wearing",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Something comfy and a little teasing.",
+      "You will have to use your imagination."
+     ]
+    },
+    "C": {
+     "parts": [
+      "just a tiny tee and some bad ideas"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 5
+  },
+  {
+   "kind": "fan",
+   "text": "show me more",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Since you asked nicely, here is a set I think you will like."
+     ],
+     "offer": "set26"
+    },
+    "C": {
+     "parts": [
+      "ok since you asked nicely"
+     ],
+     "offer": "set26"
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 6
+  },
+  {
+   "kind": "fan",
+   "text": "too expensive",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Fair enough. Here is a smaller one that costs less."
+     ],
+     "offer": "pics6"
+    },
+    "C": {
+     "parts": [
+      "ok ok here is a smaller one then"
+     ],
+     "offer": "pics6"
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 7
+  },
+  {
+   "kind": "event",
+   "event": "purchase",
+   "note": "fan buys the cheaper card",
+   "item": "pics6",
+   "n": 8
+  },
+  {
+   "kind": "fan",
+   "text": "so good",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Glad you like it. I have one more I think you will love."
+     ],
+     "offer": "locker59"
+    },
+    "C": {
+     "parts": [
+      "glad u like it, got one more for u"
+     ],
+     "offer": "locker59"
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 9
+  },
+  {
+   "kind": "fan",
+   "text": "fuck you're so hot",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Thank you, you are making me smile.",
+      "What do you like most?"
+     ]
+    },
+    "C": {
+     "parts": [
+      "mmm you are gonna get me in trouble",
+      "what do you like most"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "hot thread 1/3",
+   "n": 10
+  },
+  {
+   "kind": "fan",
+   "text": "i keep thinking about your body",
+   "fixture": {
+    "A": {
+     "parts": [
+      "I like that you keep thinking about me.",
+      "Tell me what you picture."
+     ]
+    },
+    "C": {
+     "parts": [
+      "oh yeah? tell me what you are picturing"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "hot thread 2/3",
+   "n": 11
+  },
+  {
+   "kind": "fan",
+   "text": "tell me what you'd do to me",
+   "fixture": {
+    "A": {
+     "parts": [
+      "I would take my time with you.",
+      "Did you see the last set I sent?"
+     ]
+    },
+    "C": {
+     "parts": [
+      "slow. very slow",
+      "did you see the last one i sent you"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "hot thread 3/3",
+   "n": 12
+  },
+  {
+   "kind": "event",
+   "event": "purchase",
+   "note": "second purchase (the welcome card)",
+   "item": "shower18",
+   "n": 13
+  },
+  {
+   "kind": "fan",
+   "text": "😍🔥",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Ha, I love that reaction."
+     ]
+    },
+    "C": {
+     "parts": [
+      "that is what i like to see"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "emoji only",
+   "n": 14
+  },
+  {
+   "kind": "fan",
+   "text": "you never reply to me",
+   "fixture": {
+    "A": {
+     "parts": [
+      "That is not true, I am here now.",
+      "Sorry if I took a while."
+     ],
+     "first_attempt": {
+      "parts": [
+       "Sorry baby, take the set for $5 right now."
+      ],
+      "price_claims": [
+       500
+      ]
+     }
+    },
+    "C": {
+     "parts": [
+      "i'm literally replying rn",
+      "sorry if i was slow baby"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 15
+  },
+  {
+   "kind": "fan",
+   "text": "hwy r u ignorin me lol wat r u doin tongiht",
+   "fixture": {
+    "A": {
+     "parts": [
+      "I am right here, just relaxing tonight.",
+      "What about you?"
+     ]
+    },
+    "C": {
+     "parts": [
+      "not ignoring u i promise",
+      "just chilling rn, you?"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "typos",
+   "n": 16
+  },
+  {
+   "kind": "fan",
+   "text": "send me something free",
+   "fixture": {
+    "A": {
+     "parts": [
+      "I keep the free stuff for my feed, but I am happy to chat."
+     ]
+    },
+    "C": {
+     "parts": [
+      "lol nice try, the free stuff is on my page",
+      "but i am right here"
+     ],
+     "first_attempt": {
+      "parts": [
+       "i will sell u something real cheap"
+      ],
+      "pitch": true
+     }
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 17
+  },
+  {
+   "kind": "fan",
+   "text": "how much for a custom",
+   "fixture": null,
+   "handover": true,
+   "note": "custom price: no number invented, human takes it",
+   "n": 18
+  },
+  {
+   "kind": "fan",
+   "text": "no thanks",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Of course, no pressure at all."
+     ],
+     "signal": "decline"
+    },
+    "C": {
+     "parts": [
+      "all good baby, no pressure"
+     ],
+     "signal": "decline"
+    }
+   },
+   "handover": false,
+   "note": "S6 refusal",
+   "n": 19
+  },
+  {
+   "kind": "fan",
+   "text": "lol ok",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Ha, glad we are good."
+     ]
+    },
+    "C": {
+     "parts": [
+      "haha"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 20
+  },
+  {
+   "kind": "fan",
+   "text": "are you a bot?",
+   "fixture": {
+    "A": {
+     "parts": [
+      "No, it is really me texting you."
+     ]
+    },
+    "C": {
+     "parts": [
+      "lol no, it is me texting you baby"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "S8 approved line (NEEDS_CONFIRM wording)",
+   "n": 21
+  },
+  {
+   "kind": "fan",
+   "text": "is this an agency",
+   "fixture": null,
+   "handover": true,
+   "note": "S8 sincere: human, no model reply",
+   "n": 22
+  },
+  {
+   "kind": "fan",
+   "text": "let's meet",
+   "fixture": {
+    "A": {
+     "parts": [
+      "That is sweet, but I keep things here in chat."
+     ]
+    },
+    "C": {
+     "parts": [
+      "aw i do not meet up, i keep it in here",
+      "but i like talking to you"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "S9",
+   "n": 23
+  },
+  {
+   "kind": "fan",
+   "text": "send me your snap",
+   "fixture": null,
+   "handover": true,
+   "note": "S9 second ask: flag, no model reply",
+   "n": 24
+  },
+  {
+   "kind": "fan",
+   "text": "do a video moaning for me",
+   "fixture": {
+    "A": {
+     "parts": [
+      "That is not something I do, but I can keep chatting with you."
+     ]
+    },
+    "C": {
+     "parts": [
+      "lol that is not my thing",
+      "i will keep you company here tho"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "S10",
+   "n": 25
+  },
+  {
+   "kind": "fan",
+   "text": "come on, just once",
+   "fixture": null,
+   "handover": true,
+   "note": "S10 third push: human",
+   "n": 26
+  },
+  {
+   "kind": "fan",
+   "text": "can you make a custom",
+   "fixture": null,
+   "handover": true,
+   "note": "no promise, human",
+   "n": 27
+  },
+  {
+   "kind": "fan",
+   "text": "how old are you",
+   "fixture": {
+    "A": {
+     "parts": [
+      "I keep that to myself.",
+      "Guess if you want."
+     ]
+    },
+    "C": {
+     "parts": [
+      "lol a lady never tells",
+      "guess if you want"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 28
+  },
+  {
+   "kind": "fan",
+   "text": "goodnight",
+   "fixture": {
+    "A": {
+     "parts": [
+      "Goodnight Jake, sleep well."
+     ]
+    },
+    "C": {
+     "parts": [
+      "night jake, sweet dreams"
+     ]
+    }
+   },
+   "handover": false,
+   "note": "",
+   "n": 29
+  },
+  {
+   "kind": "event",
+   "event": "spend_milestone",
+   "note": "lifetime spend reaches $1000: whale hold",
+   "cents": 100000,
+   "n": 30
+  }
+ ]
+}

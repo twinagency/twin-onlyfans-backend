@@ -300,7 +300,10 @@ def proposal_problems(proposal, ctx):
         problems.append('item_scope names an item that is not in the approved catalogue match')
     from .claims import check_plain_text, grounding_from_snapshot
     try:
-        check_plain_text(texts, proposal, _effective_sales_mode(snapshot, proposal),
+        wording = (ctx.identity_line or getattr(ctx.profile, 'role_statement', '') or '').strip()
+        # The approved identity wording is the one sanctioned statement about who writes; it is not re-judged as a claim.
+        checked = [t.replace(wording, '') for t in texts] if wording else texts
+        check_plain_text(checked, proposal, _effective_sales_mode(snapshot, proposal),
                          {offer['priceCents'] for offer in snapshot['offer_reference']['offers']},
                          grounding=grounding_from_snapshot(snapshot, proposal))
     except Refused as exc:

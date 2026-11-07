@@ -37,6 +37,11 @@ def grounding_from_snapshot(snapshot, proposal=None):
     for grant in grants:
         if type(grant.get('mediaCount')) is int and grant['mediaCount'] > 0:
             quantities.add(grant['mediaCount'])
+        media = grant.get('media')
+        if isinstance(media, dict):   # payload facts: total plus per-kind counts (the writer judge checks which noun)
+            for key in ('total', 'pictures', 'videos'):
+                if type(media.get(key)) is int and media[key] > 0:
+                    quantities.add(media[key])
     for row in snapshot.get('history') or []:
         if row.get('direction') == 'out' and type(row.get('media_count')) is int and row['media_count'] > 0:
             quantities.add(row['media_count'])

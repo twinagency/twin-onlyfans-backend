@@ -334,6 +334,11 @@ class EngineService:
                     # Extra writer context, built only for a real model so fixture snapshots stay unchanged.
                     snapshot['offer_grants'] = _offer_grants(s, runtime, fan_id)
                     snapshot['verified_purchases'] = _verified_purchases(s, runtime, fan_id)
+                # JOURNEY-HOOK-1 (A7): deterministic journey facts for the model; no-op unless the account is 'fansapi'.
+                from .journey import journey_context
+                _journey = journey_context(s, runtime, owner, request, message)
+                if _journey:
+                    snapshot['journey'] = _journey
                 request_id, epoch, binding = request.request_id, owner.epoch, runtime.binding_id
         if stale:
             raise Refused('newer incoming message needs review')
@@ -366,6 +371,9 @@ class EngineService:
                 or type(proposal.price_claims) is not tuple
                 or any(type(x) is not int or isinstance(x, bool) or x < 0 for x in proposal.price_claims)):
             raise Refused('invalid synthetic proposal')
+        # JOURNEY-HOOK-2 (A7): the journey rules are enforced on the proposal, not just described to the model.
+        from .journey import enforce_journey
+        enforce_journey(snapshot.get('journey'), proposal)
         if proposal.sales_signal == 'reopen' and not proposal.item_scope:
             raise Refused('explicit buying scope required')
         if proposal.sales_signal != 'reopen' and proposal.item_scope:

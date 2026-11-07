@@ -140,7 +140,7 @@ class FansBackfill:
                 if self.intake.ingest_history_item(tenant, account, chat, item) in ('accepted', 'ok'):
                     new += 1
             if result.next_page is None or oldest_in_window:
-                state['chats'].pop(0)
+                state.setdefault('done_chats', []).append(state['chats'].pop(0))
                 state['hist_next'] = None
                 if not state['chats']:
                     state['phase'] = 'done'

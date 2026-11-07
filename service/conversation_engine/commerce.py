@@ -106,6 +106,11 @@ def verified_terms(s, runtime, owner, grant, *, intent_id=None):
     if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or not policy.media_enabled
             or not grant.coverage_ref.startswith(_COVERAGE_PREFIX[policy.transport_kind])):
         raise Refused('synthetic media is unavailable')
+    if policy.transport_kind == 'fansapi':
+        # A real offer waits for a finished backfill of this fan's history and transactions (journey.py).
+        from .journey import backfill_complete
+        if not backfill_complete(s, runtime.account_id, owner.fan_id):
+            raise Refused('offers wait for a finished backfill of this fan')
     terms = catalog_terms(s, runtime.account_id, grant.item_id)
     if _hash(terms) != grant.terms_hash:
         raise Refused('approved offer terms changed')

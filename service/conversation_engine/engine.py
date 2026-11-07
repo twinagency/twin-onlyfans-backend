@@ -423,9 +423,12 @@ class EngineService:
             effective_sales_mode = ('paused' if proposal.sales_signal == 'decline'
                                     else 'reopened_scoped' if proposal.sales_signal == 'reopen' and owner.sales_mode != 'open'
                                     else owner.sales_mode)
-            from .claims import check_plain_text
+            from .claims import check_plain_text, grounding_from_snapshot
+            # Backstop with the same grounding the judge used: payload quantities and verified purchases are facts,
+            # not invented claims. Fixture snapshots carry neither, so synthetic behaviour is unchanged (strict).
             check_plain_text([proposal.body, *proposal.parts], proposal, effective_sales_mode,
-                {offer['priceCents'] for offer in snapshot['offer_reference']['offers']})
+                {offer['priceCents'] for offer in snapshot['offer_reference']['offers']},
+                grounding=grounding_from_snapshot(snapshot, proposal))
             if proposal.sales_signal == 'decline':
                 owner.sales_mode, owner.sales_scope_json, owner.sales_source_message_id = 'paused', '[]', source_message_id
                 owner.revision += 1; owner.updated_at = utcnow()

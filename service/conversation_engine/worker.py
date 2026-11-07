@@ -8,6 +8,7 @@ import json
 from fans_api_adapter.intake import FansWebhookAdapter, _message
 from fans_api_adapter.synthetic_transport import FansApiSyntheticTransport
 from fans_api_adapter.local_http import FansApiLocalHttpTransport
+from fans_api_adapter.protocol_lab import FansApiProtocolLabTransport
 from onlyfans_runtime.store import Refused
 from onlyfans_runtime.text_delivery import TextAuthority
 from .engine import EngineService
@@ -16,14 +17,14 @@ from .engine import EngineService
 class SyntheticConversationWorker:
     def __init__(self, engine, adapter, transport):
         if (type(engine) is not EngineService or type(adapter) is not FansWebhookAdapter
-                or type(transport) not in {FansApiSyntheticTransport, FansApiLocalHttpTransport}
+                or type(transport) not in {FansApiSyntheticTransport, FansApiLocalHttpTransport, FansApiProtocolLabTransport}
                 or engine.store is not adapter.store or engine.store is not transport.store):
             raise Refused('invalid synthetic worker dependencies')
         self.engine, self.adapter, self.transport = engine, adapter, transport
 
     def handle(self, tenant, account, *, raw_body, signature, secret, event_key):
         if (type(self.engine) is not EngineService or type(self.adapter) is not FansWebhookAdapter
-                or type(self.transport) not in {FansApiSyntheticTransport, FansApiLocalHttpTransport}
+                or type(self.transport) not in {FansApiSyntheticTransport, FansApiLocalHttpTransport, FansApiProtocolLabTransport}
                 or self.engine.store is not self.adapter.store or self.engine.store is not self.transport.store
                 or tenant != self.transport.tenant_id or account != self.transport.account_id):
             raise Refused('synthetic worker scope mismatch')

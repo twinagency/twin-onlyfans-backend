@@ -1220,6 +1220,7 @@ class TextAuthority:
         from .fastt_manual import FasttManualTransport, fastt_owned
         from fans_api_adapter.synthetic_transport import FansApiSyntheticTransport
         from fans_api_adapter.local_http import FansApiLocalHttpTransport
+        from fans_api_adapter.protocol_lab import FansApiProtocolLabTransport
         # One sender per owned fan: only the FASTT runner's transport may send a
         # operator-authored manual/campaign message for it. Campaign origin
         # retains automated-history and campaign-control validation.
@@ -1233,7 +1234,7 @@ class TextAuthority:
         transport_generation = None
         if type(transport) is FasttManualTransport:
             transport_generation = transport.policy_revision
-        elif type(transport) not in {SyntheticTextTransport, FansApiSyntheticTransport, FansApiLocalHttpTransport}:
+        elif type(transport) not in {SyntheticTextTransport, FansApiSyntheticTransport, FansApiLocalHttpTransport, FansApiProtocolLabTransport}:
             try:
                 from .loopback_transport import LoopbackTextTransport
                 from .native_connector import NativeLoopbackConnector

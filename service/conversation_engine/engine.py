@@ -1,6 +1,6 @@
 """Offline-only engine orchestration around canonical inbox and delivery records.
 
-The only accepted model is the in-process fixture below. This is deliberately
+Only in-process fixture models are accepted. This is deliberately
 not a production writer: provider/model approval and creator operating rules
 are still required before a real model can be admitted.
 """
@@ -52,8 +52,9 @@ class SyntheticModel:
 
 class EngineService:
     def __init__(self, store, model):
-        if type(model) is not SyntheticModel:
-            raise Refused('only the offline synthetic model is available')
+        from .model_contract import StructuredFixtureModel
+        if type(model) not in (SyntheticModel, StructuredFixtureModel):
+            raise Refused('only offline fixture models are available')
         self.store = store
         self.engine = store.engine
         self.model = model
@@ -224,8 +225,9 @@ class EngineService:
                 request_id, epoch, binding = request.request_id, owner.epoch, runtime.binding_id
         if stale:
             raise Refused('newer incoming message needs review')
-        if type(self.model) is not SyntheticModel:
-            raise Refused('only the offline synthetic model is available')
+        from .model_contract import StructuredFixtureModel
+        if type(self.model) not in (SyntheticModel, StructuredFixtureModel):
+            raise Refused('only offline fixture models are available')
         proposal = self.model.generate(snapshot)  # no DB transaction across model work
         if (type(proposal) is not SyntheticProposal or type(proposal.body) is not str or not proposal.body.strip()
                 or len(proposal.body.encode('utf-8')) > 4000 or proposal.sales_signal not in {'none', 'decline', 'reopen'}

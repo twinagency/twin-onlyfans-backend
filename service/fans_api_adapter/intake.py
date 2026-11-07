@@ -104,8 +104,11 @@ class FansWebhookAdapter:
                 status='active', created_at=utcnow()))
             return epoch
 
-    def accept(self, raw_body, signature, secret, event_key, *, expected_tenant=None, expected_account=None):
-        if (expected_tenant is None) != (expected_account is None):
+    def accept(self, raw_body, signature, secret, event_key, *, expected_tenant=None, expected_account=None, expected_epoch=None, expected_creator_id=None):
+        if ((expected_tenant is None) != (expected_account is None)
+                or (expected_epoch is None) != (expected_creator_id is None)
+                or (expected_epoch is not None and (expected_account is None or type(expected_epoch) is not int or expected_epoch < 1
+                    or type(expected_creator_id) is not str or not expected_creator_id))):
             raise Refused('complete expected scope required')
         if (type(raw_body) is not bytes or len(raw_body) > 1_000_000 or not verify_signature(raw_body, signature, secret)
                 or type(event_key) is not str or not 1 <= len(event_key) <= 255 or event_key != event_key.strip()):
@@ -136,7 +139,8 @@ class FansWebhookAdapter:
                 raise Refused('webhook intake is limited to the synthetic lab')
             runtime = self.store._runtime(s, binding.tenant_id, connection.account_id)
             connection = s.get(OfFansConnection, (connection.account_id, connection.epoch), with_for_update=True)
-            if connection.status != 'active' or connection.binding_id != runtime.binding_id:
+            if (connection.status != 'active' or connection.binding_id != runtime.binding_id
+                    or expected_epoch is not None and (connection.epoch != expected_epoch or connection.provider_creator_id != expected_creator_id)):
                 raise Refused('provider binding changed')
             digest = sha256(raw_body).hexdigest()
             existing = s.get(OfFansWebhook, (connection.account_id, connection.epoch, event_key))
@@ -162,3 +166,42 @@ class FansWebhookAdapter:
                 event_key=event_key, event_type='messages.received', payload_sha256=digest,
                 raw_body=raw_body, status='accepted', received_at=utcnow()))
             return 'accepted' if result == 'accepted' else 'duplicate'
+
+
+    def accept_protocol_observation(self, client, raw_body, signature, secret, event_key, *, tenant, account):
+        """Retain authenticated non-message observations, without inventing financial links.
+
+        This isolated seam does not interpret an unlock as a purchase or update
+        a canonical ledger. Authoritative mapping and coverage remain explicit.
+        """
+        from .protocol import FansApiClient
+        if type(client) is not FansApiClient or not client._identity_verified:
+            raise Refused('verified provider protocol required')
+        observation = client.webhook(raw_body, signature=signature, secret=secret, event_key=event_key)
+        if observation.state != 'observation':
+            raise Refused('invalid protocol observation')
+        if observation.data['event'] == 'messages.received':
+            return self.accept(raw_body, signature, secret, event_key, expected_tenant=tenant, expected_account=account,
+                               expected_epoch=client.epoch, expected_creator_id=client.creator_id)
+        with Session(self.engine) as s, s.begin():
+            runtime = self.store._runtime(s, tenant, account)
+            policy = s.get(OfDeliveryPolicy, account)
+            connection = s.get(OfFansConnection, (account, client.epoch), with_for_update=True)
+            if (policy is None or policy.transport_kind != 'synthetic' or connection is None
+                    or connection.status != 'active' or connection.binding_id != runtime.binding_id
+                    or connection.provider_account_id != client.account or connection.provider_creator_id != client.creator_id):
+                raise Refused('protocol observation scope mismatch')
+            digest = sha256(raw_body).hexdigest()
+            prior = s.get(OfFansWebhook, (account, client.epoch, event_key))
+            if prior is not None:
+                if prior.payload_sha256 == digest:
+                    return 'duplicate' if prior.status == 'accepted' else 'quarantined'
+                key = (account, client.epoch, event_key, digest)
+                if s.get(OfFansWebhookConflict, key) is None:
+                    s.add(OfFansWebhookConflict(account_id=account, epoch=client.epoch,
+                        event_key=event_key, payload_sha256=digest, raw_body=raw_body, received_at=utcnow()))
+                return 'quarantined'
+            s.add(OfFansWebhook(account_id=account, epoch=client.epoch, event_key=event_key,
+                event_type=observation.data['event'], payload_sha256=digest, raw_body=raw_body,
+                status='accepted', received_at=utcnow()))
+            return 'accepted'

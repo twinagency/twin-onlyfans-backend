@@ -54,6 +54,12 @@ def _id(value):
     raise ValueError('invalid numeric provider identity')
 
 
+def _date(value):
+    if type(value) is not str or not re.fullmatch(r'20[0-9]{2}-[01][0-9]-[0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9]', value):
+        raise ValueError('invalid provider start date')
+    return value
+
+
 def _media_id(value):
     if type(value) is str and re.fullmatch(r'ofapi_media_[A-Za-z0-9_-]{1,200}', value):
         return value
@@ -198,12 +204,14 @@ class FansApiClient:
                  else 'conflict' if outcome is Outcome.CONFLICT else 'unknown')
         return Result(state, trace_id=trace, http_status=status, original_trace_id=original_trace)
 
-    def transactions(self, *, limit=10, marker=None):
+    def transactions(self, *, limit=10, marker=None, start_date=None):
         if not self._identity_verified: raise ValueError('verified provider identity required')
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError('invalid transaction page bound')
         from transaction_contract import transaction_marker
         params = {'limit':limit}
+        if start_date is not None:
+            params['startDate'] = _date(start_date)
         if marker is not None:
             params['marker'] = transaction_marker(marker)
         status, body, trace, original_trace = self._request('GET', BASE + f'/api/{self.account}/transactions?' + urlencode(params))
@@ -226,11 +234,11 @@ class FansApiClient:
         # Observations are not proof of item ownership or absence.
         return Result('observed', tuple(data['list']), marker_out, trace, status, original_trace)
 
-    def chargebacks(self, *, limit=10, offset=0):
+    def chargebacks(self, *, limit=10, offset=0, start_date=None):
         if not self._identity_verified: raise ValueError('verified provider identity required')
         if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or not 0 <= offset <= 1_000_000:
             raise ValueError('invalid chargeback page')
-        status, body, trace, original_trace = self._request('GET', BASE + f'/api/{self.account}/chargebacks?' + urlencode({'limit':limit, 'offset':offset}))
+        status, body, trace, original_trace = self._request('GET', BASE + f'/api/{self.account}/chargebacks?' + urlencode({'limit':limit, 'offset':offset, **({'start_date':_date(start_date)} if start_date is not None else {})}))
         # Provider response layout/evidence semantics still need qualification.
         if status != 200 or body is None:
             return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)

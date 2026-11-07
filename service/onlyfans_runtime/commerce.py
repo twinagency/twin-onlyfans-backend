@@ -62,6 +62,14 @@ def _unlinked_paid(account_id, fan_id=None, *, excluded=True, unknown_recipient=
     return query.limit(1)
 
 
+def _provider_evidence_held(s, account_id, fan_id):
+    """Fans API payment evidence a person must review (amount mismatch, ambiguity, no grant) holds only that fan."""
+    from db.onlyfans_fans_intake_models import OfFansEvidence
+    return s.scalar(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account_id,
+        OfFansEvidence.fan_id == fan_id, OfFansEvidence.status == "held",
+        OfFansEvidence.kind != "human_sent").limit(1)) is not None
+
+
 def held(s, account_id, fan_id=None):
     """Commerce hold. Account-wide when ``fan_id`` is None; for a given fan it is that fan's own scope.
 
@@ -95,7 +103,8 @@ def held(s, account_id, fan_id=None):
         # Unlinked purchases from before the current binding was created cannot
         # be sales this binding made, so they stay visible but do not hold it.
         or (fan_id is None and s.scalar(_unlinked_paid(account_id, excluded=False)) is not None)
-        or (fan_id is not None and (s.scalar(_unlinked_paid(account_id, fan_id)) is not None
+        or (fan_id is not None and (_provider_evidence_held(s, account_id, fan_id)
+            or s.scalar(_unlinked_paid(account_id, fan_id)) is not None
             or s.scalar(_unlinked_paid(account_id, excluded=False, unknown_recipient=True)) is not None))
         or s.scalar(select(OfLedgerScan.account_id).where(OfLedgerScan.account_id == account_id,
             ((OfLedgerScan.status == "held") | (OfLedgerScan.last_complete_at.is_(None)))).limit(1)) is not None)
@@ -125,7 +134,8 @@ def manual_held(s, account_id, fan_id):
                     OfLedgerResolution.account_id == OfLedgerEvidence.account_id,
                     OfLedgerResolution.evidence_hash == OfLedgerEvidence.evidence_hash,
                     OfLedgerResolution.binding_id == OfRuntime.binding_id).exists()).limit(1)) is not None
-        or s.scalar(_unlinked_paid(account_id, fan_id)) is not None)
+        or s.scalar(_unlinked_paid(account_id, fan_id)) is not None
+        or _provider_evidence_held(s, account_id, fan_id))
 
 
 class CommerceIntake:

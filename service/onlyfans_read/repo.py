@@ -485,8 +485,23 @@ class SqlOnlyFansReadRepo:
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
 
-    async def engine_status(self, *, account_id: str, fan_id: int) -> dict | None:
-        """A bounded, versioned view of durable engine requests; no send rights."""
+    async def engine_status(self, *, account_id: str, fan_id: int, cursor: str | None = None, limit: int = 20) -> dict | None:
+        """A bounded, versioned view of durable engine requests; no send rights.
+
+        Unresolved requests come first (newest first), then finished ones. Pages
+        continue with an opaque keyset `nextCursor`, so old unresolved work is
+        never hidden behind newer completed requests.
+        """
+        import base64
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        anchor = None
+        if cursor is not None:
+            try:
+                resolved_flag, created_text, anchor_id = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+                anchor = (int(resolved_flag), datetime.fromisoformat(created_text), str(anchor_id))
+            except (ValueError, TypeError, KeyError, UnicodeError):
+                raise ValueError("invalid engine status cursor") from None
         from db.onlyfans_delivery_models import OfTextIntent
         from db.onlyfans_engine_models import OfEngineDecision, OfEngineOwner, OfEngineRequest
         try:
@@ -500,19 +515,35 @@ class SqlOnlyFansReadRepo:
                 owner, current_binding = row
                 if owner.binding_id != current_binding:
                     return {'schemaVersion': 'of-engine.v1', 'state': 'unavailable'}
-                rows = list((await s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account_id,
+                finished = case((OfEngineRequest.status.in_(("completed", "declined", "cancelled")), 1), else_=0)
+                query = select(OfEngineRequest).where(OfEngineRequest.account_id == account_id,
                     OfEngineRequest.fan_id == fan_id, OfEngineRequest.binding_id == current_binding)
-                    .order_by(OfEngineRequest.created_at.desc(), OfEngineRequest.request_id.desc()).limit(21))).all())
-                page = rows[:20]
+                if anchor is not None:
+                    query = query.where(or_(finished > anchor[0], and_(finished == anchor[0], or_(
+                        OfEngineRequest.created_at < anchor[1], and_(OfEngineRequest.created_at == anchor[1],
+                        OfEngineRequest.request_id < anchor[2])))))
+                rows = list((await s.scalars(query.order_by(finished, OfEngineRequest.created_at.desc(),
+                    OfEngineRequest.request_id.desc()).limit(limit + 1))).all())
+                page = rows[:limit]
+                next_cursor = None
+                if len(rows) > limit:
+                    last = page[-1]
+                    next_cursor = base64.urlsafe_b64encode(json.dumps([
+                        1 if last.status in ("completed", "declined", "cancelled") else 0,
+                        last.created_at.isoformat(), last.request_id]).encode()).decode()
                 ids = [row.request_id for row in page]
                 action_rows = (await s.execute(select(OfEngineDecision, OfTextIntent.status)
                     .outerjoin(OfTextIntent, and_(OfTextIntent.account_id == OfEngineDecision.account_id,
                         OfTextIntent.intent_id == OfEngineDecision.intent_id))
                     .where(OfEngineDecision.account_id == account_id, OfEngineDecision.request_id.in_(ids))
-                    .order_by(OfEngineDecision.request_id, OfEngineDecision.part_index))).all() if ids else []
+                    .order_by(OfEngineDecision.request_id, OfEngineDecision.generation, OfEngineDecision.part_index))).all() if ids else []
                 grouped = {identity: [] for identity in ids}
                 for decision, intent_status in action_rows:
                     grouped[decision.request_id].append((decision, intent_status))
+                for identity, entries in grouped.items():
+                    if entries:  # only the active (newest) generation describes current work
+                        newest = max(entry[0].generation for entry in entries)
+                        grouped[identity] = [entry for entry in entries if entry[0].generation == newest]
                 requests = []
                 for r in page:
                     actions = grouped[r.request_id]
@@ -527,8 +558,8 @@ class SqlOnlyFansReadRepo:
                         'partsTotal':len(actions)})
                 return {'schemaVersion': 'of-engine.v1', 'state': 'current', 'accountId': account_id,
                     'conversationId': f'{account_id}:{fan_id}', 'environment': 'simulation',
-                    'mode': owner.mode, 'salesMode': owner.sales_mode, 'truncated': len(rows) > 20,
-                    'requests':requests}
+                    'mode': owner.mode, 'salesMode': owner.sales_mode, 'truncated': next_cursor is not None,
+                    'nextCursor': next_cursor, 'requests':requests}
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
 

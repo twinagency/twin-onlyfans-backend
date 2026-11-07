@@ -43,9 +43,13 @@ class SalesPermission:
         return SalesPermission(self.conversation, SalesMode.PAUSED, source_event_id)
 
     def reopen_for(self, source_event_id: str, item_ids: frozenset[str]) -> "SalesPermission":
-        """Record explicitly renewed interest only within the supplied scope."""
-        if self.mode is not SalesMode.PAUSED:
-            raise ValueError("only paused selling can be reopened")
+        """Record explicitly renewed interest only within the supplied scope.
+
+        From a paused or already-scoped state the new explicit scope replaces the
+        old one: interest in one item is never permission for another.
+        """
+        if self.mode is SalesMode.OPEN:
+            return self  # selling is already open; an explicit interest does not narrow it
         return SalesPermission(self.conversation, SalesMode.REOPENED_SCOPED, source_event_id, item_ids)
 
     def permits_offer(self, conversation: ConversationKey, item_id: str) -> bool:

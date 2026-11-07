@@ -31,6 +31,8 @@ class SyntheticConversationWorker:
         intake = self.adapter.accept(raw_body, signature, secret, event_key,
                                      expected_tenant=tenant, expected_account=account)
         if intake == 'quarantined':
+            # A conflicting duplicate makes unsent work from the first payload ineligible.
+            self.engine.fence_conflicted_sources(tenant, account)
             return {'intake': intake, 'outcome': 'quarantined'}
         # Authentication and durable intake already succeeded; the decoded
         # message identity is used only to locate the canonical inbox row.

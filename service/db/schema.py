@@ -71,7 +71,8 @@ ENGINE_PARTS = '0117_engine_message_parts'
 ENGINE_OPERATOR = '0118_engine_operator'
 ENGINE_IDENTITY = '0119_identity_independence'
 FANS_INTAKE = '0120_fans_intake'
-HEAD = FANS_INTAKE
+ENGINE_GENERATIONS = '0121_engine_generations'
+HEAD = ENGINE_GENERATIONS
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -98,6 +99,7 @@ REVISION_RANK[ENGINE_PARTS] = 117
 REVISION_RANK[ENGINE_OPERATOR] = 118
 REVISION_RANK[ENGINE_IDENTITY] = 119
 REVISION_RANK[FANS_INTAKE] = 120
+REVISION_RANK[ENGINE_GENERATIONS] = 121
 
 
 class SchemaMismatch(RuntimeError):
@@ -284,7 +286,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             ("of_fans_webhook_conflict", "of_fans_webhook_conflict_immutable", "39d01166ca3144e7023fbc6732a73c9ee1866f05b9b9a9cdb8642133c85ae7e2"),
             ("of_fans_webhook", "of_fans_webhook_immutable", "8bb75b1834fff575d53602b879ee8c46244cc4f8ab640b0b130ce550e513c093"),
             ("of_engine_attempt", "of_engine_attempt_guard", "1e18c0a1170d1c166ea160c12575d140d0a0fce8638b667807c7f79cb2318c4b"),
-            ("of_engine_decision", "of_engine_decision_guard", ("3806025b7b338519836a2d2d2aa52ca819c96185613179983f347383d7121b30" if expected_rank >= 117 else "1b56e33ccf1012b5e32442f732e8ac24c939e47f104313fc12d8b6b597c146c7")),
+            ("of_engine_decision", "of_engine_decision_guard", ("22bd18e3d99553ebd2bd6482457bd12dfc5287bd889ba16cb0184726bc99a954" if expected_rank >= 121 else "3806025b7b338519836a2d2d2aa52ca819c96185613179983f347383d7121b30" if expected_rank >= 117 else "1b56e33ccf1012b5e32442f732e8ac24c939e47f104313fc12d8b6b597c146c7")),
         ]:
             guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
                 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang

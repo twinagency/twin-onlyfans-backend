@@ -1,9 +1,11 @@
 """Use the dashboard's shared fan-memory projection with binding fencing."""
 from hashlib import sha256
+from dataclasses import asdict
 import json
 from sqlalchemy import select
 from db.models import Message, OfCreatorBinding
 from db.onlyfans_engine_models import OfEngineMemoryBinding, OfEngineRequest
+from db.onlyfans_delivery_models import OfDeliveryPolicy
 from onlyfans_runtime.launch_history_memory.memory import snapshot as shared_memory_snapshot
 from onlyfans_runtime.store import utcnow
 from .history_scope import has_unscoped_messages
@@ -30,6 +32,20 @@ def bind(s, runtime, decision, source, view, fingerprint, offer_fingerprint):
         source_sha256=sha256(source.body.encode('utf-8')).hexdigest(), status=view['state'], fingerprint=fingerprint, offer_fingerprint=offer_fingerprint, created_at=utcnow()))
 
 
+def references_fingerprint(account, policy, offer_view, catalogue_view):
+    """Bind real-pilot context to the creator profile used when the draft was made."""
+    data = {'offers': offer_view, 'catalogue': catalogue_view}
+    if policy is not None and policy.transport_kind == 'fansapi':
+        from .writer_context import CreatorProfile, active_profile
+        profile = active_profile(account)
+        if profile is not None and type(profile) is not CreatorProfile:
+            from onlyfans_runtime.store import Refused
+            raise Refused('creator profile is unavailable')
+        data['creator_profile'] = asdict(profile) if profile is not None else None
+    canonical = json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str)
+    return sha256(canonical.encode()).hexdigest()
+
+
 def current(s, runtime, decision):
     binding = s.get(OfEngineMemoryBinding, (runtime.account_id, decision.decision_id))
     request = s.get(OfEngineRequest, (runtime.account_id, decision.request_id))
@@ -45,7 +61,9 @@ def current(s, runtime, decision):
     offer_view = match_offers(s, runtime, decision.fan_id, source.body)
     from .catalogue import search_context
     catalogue_view = search_context(s, runtime, decision.fan_id, source)
-    offer_fingerprint = sha256(json.dumps({'offers':offer_view, 'catalogue':catalogue_view},
-        sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str).encode()).hexdigest()
+    policy = s.get(OfDeliveryPolicy, runtime.account_id)
+    if policy is None:
+        return False
+    offer_fingerprint = references_fingerprint(runtime.account_id, policy, offer_view, catalogue_view)
     return (binding.status == view['state'] and binding.fingerprint == fingerprint
             and binding.offer_fingerprint == offer_fingerprint)

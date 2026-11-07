@@ -345,7 +345,8 @@ class EngineService:
                 offer_match = match_offers(s, runtime, fan_id, message.body)
                 from .catalogue import search_context
                 catalogue_view = search_context(s, runtime, fan_id, message)
-                offer_fingerprint = _digest({'offers':offer_match, 'catalogue':catalogue_view})
+                from .memory import references_fingerprint
+                offer_fingerprint = references_fingerprint(account, policy, offer_match, catalogue_view)
                 snapshot = {'account_id': account, 'fan_id': fan_id, 'binding_id': runtime.binding_id,
                     'owner_epoch': owner.epoch, 'connection_epoch': connection_epoch, 'input_revision': state.input_revision, 'control_revision': state.revision,
                     'sales_mode': owner.sales_mode, 'sales_scope': json.loads(owner.sales_scope_json),
@@ -489,9 +490,10 @@ class EngineService:
                 raise Refused('fan memory changed during generation')
             from .offers import match as match_offers
             from .catalogue import search_context
-            if _digest({'offers':match_offers(s, runtime, fan_id, source.body),
-                        'catalogue':search_context(s, runtime, fan_id, source)}) != offer_fingerprint:
-                raise Refused('catalogue or offer references changed during generation')
+            from .memory import references_fingerprint
+            if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body),
+                                      search_context(s, runtime, fan_id, source)) != offer_fingerprint:
+                raise Refused('catalogue, offer or creator profile changed during generation')
             generation = 0 if observed_generation is None else observed_generation + 1
             if observed_generation is not None:
                 # Supersede proved-unsent work; keep it as append-only evidence and
@@ -560,9 +562,10 @@ class EngineService:
                 raise Refused('fan memory changed during generation')
             from .offers import match as match_offers
             from .catalogue import search_context
-            if _digest({'offers': match_offers(s, runtime, fan_id, source.body),
-                        'catalogue': search_context(s, runtime, fan_id, source)}) != offer_fingerprint:
-                raise Refused('catalogue or offer references changed during generation')
+            from .memory import references_fingerprint
+            if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body),
+                                      search_context(s, runtime, fan_id, source)) != offer_fingerprint:
+                raise Refused('catalogue, offer or creator profile changed during generation')
 
     def _handover_model(self, tenant, account, request_id, target, reason='model_handover', detail=None):
         """The writer could not produce an acceptable reply: a human takes the request. No canned line is created.

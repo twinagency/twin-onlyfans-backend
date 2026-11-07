@@ -34,7 +34,7 @@ from .webhooks import verify_signature
 ACCOUNT_EVENTS = {'accounts.connected', 'accounts.reconnected', 'accounts.session_expired',
                   'accounts.authentication_failed', 'accounts.disconnected'}
 SUPPORTED = ACCOUNT_EVENTS | {'messages.received', 'messages.sent', 'messages.ppv.unlocked',
-                              'transactions.new', 'chargebacks.new'}
+                              'transactions.new', 'chargebacks.new', 'subscriptions.new'}
 # Only the offline lab transport may be driven by this intake until the live
 # transport owner registers a Fans transport kind with the delivery policy.
 ALLOWED_TRANSPORTS = ENGINE_TRANSPORT_KINDS
@@ -202,6 +202,8 @@ class FansEventIntake:
             return ('pending', 'inbox_backpressure') if result == 'backpressure' else ('projected', result)
         if event == 'messages.sent':
             return self._sent(s, payload, raw, connection, now, after)
+        if event == 'subscriptions.new':
+            return self._subscription(s, payload, connection)
         if event == 'messages.ppv.unlocked':
             return self._unlock(s, payload, raw, connection, now, after)
         if event == 'transactions.new':
@@ -267,6 +269,23 @@ class FansEventIntake:
     # --------------------------------------------------------------- evidence
     def _drive_after(self, account, fan_id, after):
         after.append(lambda: self.drive(account, fan_id))
+
+    def _subscription(self, s, payload, connection):
+        """A new subscriber. In this event payload.user_id is the CREATOR and payload.fan.id is the fan.
+
+        Nothing is created here: the durable projection row carries the fan id
+        (`subscription_new:<fan>`) so the journey layer can start a welcome once, later.
+        """
+        link = s.get(OfFansLink, (connection.account_id, connection.provider_creator_id))
+        if str(payload.get('user_id')) != link.creator_id:
+            raise Refused('subscription does not belong to this creator')
+        fan = payload.get('fan')
+        if type(fan) is not dict:
+            raise Refused('subscription fan is missing')
+        fan_id = ev.numeric(fan.get('id'))
+        if str(fan_id) == link.creator_id:
+            raise Refused('subscription names the creator as the fan')
+        return 'projected', f'subscription_new:{fan_id}'
 
     def _unlock(self, s, payload, raw, connection, now, after):
         link = s.get(OfFansLink, (connection.account_id, connection.provider_creator_id))

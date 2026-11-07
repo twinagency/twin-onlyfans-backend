@@ -34,8 +34,9 @@ class Usage:
 class ChatResult:
     text: str
     usage: Usage = field(default_factory=Usage)
-    model: str = ''
+    model: str = ''              # the model id the PROVIDER says answered (may differ from the requested one)
     finish_reason: str | None = None
+    provider: str = ''           # upstream provider named in the response, when it names one
 
 
 # ---- errors -------------------------------------------------------------------

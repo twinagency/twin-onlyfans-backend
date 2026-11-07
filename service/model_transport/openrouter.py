@@ -104,5 +104,9 @@ class OpenRouterClient:
         choice = choices[0] if type(choices) is list and choices and type(choices[0]) is dict else {}
         message = choice.get('message') if type(choice.get('message')) is dict else {}
         text = message.get('content') if type(message.get('content')) is str else ''
-        return ChatResult(text=text, usage=parsed, model=str(data.get('model') or request.model)[:128],
+        # `model` is what the provider says answered. A response without one is recorded as such (empty), never
+        # silently replaced by the requested id, so the ledger can tell "same model" from "not reported".
+        returned = data.get('model') if type(data.get('model')) is str else ''
+        upstream = data.get('provider') if type(data.get('provider')) is str else ''
+        return ChatResult(text=text, usage=parsed, model=returned[:128], provider=upstream[:64],
                           finish_reason=choice.get('finish_reason') if type(choice.get('finish_reason')) is str else None)

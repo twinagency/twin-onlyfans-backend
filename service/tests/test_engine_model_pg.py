@@ -19,11 +19,19 @@ from conversation_engine.model_config import ModelConfig
 from conversation_engine.model_runtime import ModelRuntime
 from conversation_engine.writer_context import CreatorProfile, StaticCreatorProfiles
 from conversation_engine.writer_examples import ExampleLine
+from db.models import OfConversationState
 from db.onlyfans_engine_models import OfEngineDecision, OfEngineModelCall, OfEngineRequest
 from fans_api_adapter.synthetic_transport import FansApiSyntheticTransport, SyntheticFansProvider
 from onlyfans_runtime.store import Refused, utcnow
 
 PROFILE = CreatorProfile(name='Riley', voice='warm, teasing', facts=(('job', 'barista'),), limits=('no meetups',))
+IDENT = 'This chat is written by an AI assistant that works for her team.'
+PRICES = dict(prompt_microusd_per_mtok=1_000_000, completion_microusd_per_mtok=2_000_000)
+FALLBACK = dict(fallback_enabled=True, fallback_model='m/fallback', allowed_models=('m/primary', 'm/fallback'),
+                fallback_prompt_microusd_per_mtok=2_000_000, fallback_completion_microusd_per_mtok=4_000_000)
+FALLBACK_BOUND = 17200  # 8000 input tokens at $2/Mtok + 300 output tokens at $4/Mtok
+# upper bound per call: 8000 input tokens at $1/Mtok + 300 output tokens at $2/Mtok = 8600 micro-USD; 2 attempts per generation
+BOUND = 8600
 
 
 class Clock:
@@ -35,9 +43,9 @@ class Clock:
 
 
 def config(**overrides):
-    values = dict(enabled=True, provider='fixture', primary_model='m/primary', allowed_models=('m/primary', 'm/alt'),
+    values = dict(enabled=True, provider='fixture', primary_model='m/primary', allowed_models=('m/primary',),
                   enabled_accounts=frozenset({ACCOUNT}), daily_cap_microusd=1_000_000, creator_cap_microusd=1_000_000,
-                  turn_estimate_microusd=5000, timeout_seconds=20.0, lease_seconds=90)
+                  max_input_tokens=8000, max_tokens=300, timeout_seconds=20.0, lease_seconds=90, **PRICES)
     values.update(overrides)
     return ModelConfig(**values)
 
@@ -126,9 +134,9 @@ def test_real_client_code_path_with_mock_transport(database, monkeypatch):
     (config(enabled=False), None, 'not enabled'),
     (config(enabled_accounts=frozenset({'other'})), None, 'not enabled for this account'),
     (config(primary_model='m/rogue'), None, 'approved list'),
-    (config(alternate_model='m/rogue2'), None, 'approved list'),
     (config(provider='openrouter'), None, 'provider'),
     (config(), StaticCreatorProfiles({}), 'creator facts'),
+    (config(), StaticCreatorProfiles({ACCOUNT: CreatorProfile(name='Riley')}), 'boundaries'),
     (config(lease_seconds=10), None, 'lease'),
 ])
 def test_wrong_model_scope_or_profile_refused_before_any_network_call(database, cfg, profiles, match):
@@ -157,11 +165,30 @@ def test_owner_change_after_snapshot_is_refused_before_any_network_call(database
 
 # ---- budget ---------------------------------------------------------------------------------------
 def test_budget_caps_stop_the_call_before_it_is_made(database):
-    store, authority, engine, runtime, client, _ = with_model(database, [ok()], cfg=config(daily_cap_microusd=4000))
+    # the daily cap must cover THIS call and the retry allowance (2 attempts x 8600), each at the upper bound
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()], cfg=config(daily_cap_microusd=2 * BOUND - 1))
     incoming(store, 1, 'hello')
     with pytest.raises(ModelBudgetExhausted, match='daily'):
         engine.plan(TENANT, ACCOUNT, FAN, 1)
     assert client.requests == [] and rows(database) == []
+    store.close()
+
+
+def test_cap_exactly_covering_the_retry_allowance_lets_the_call_through(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok('fits')], cfg=config(daily_cap_microusd=2 * BOUND, creator_cap_microusd=2 * BOUND))
+    incoming(store, 1, 'hello')
+    assert engine.plan(TENANT, ACCOUNT, FAN, 1) and len(client.requests) == 1
+    [row] = rows(database)
+    assert row.reserved_microusd == BOUND and row.actual_microusd == 1000  # reserved at the bound, settled at the actual cost
+    store.close()
+
+
+def test_reservation_is_computed_from_tokens_and_prices_not_a_fixed_estimate(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()], cfg=config(
+        max_input_tokens=9000, max_tokens=400, prompt_microusd_per_mtok=3_000_000, completion_microusd_per_mtok=15_000_000))
+    incoming(store, 1, 'hello')
+    engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert rows(database)[0].reserved_microusd == 9000 * 3 + 400 * 15  # 33_000
     store.close()
 
 
@@ -177,36 +204,146 @@ def test_creator_cap_and_zero_default_cap(database):
 
 def test_actual_spend_counts_and_the_next_call_hits_the_cap(database):
     store, authority, engine, runtime, client, _ = with_model(
-        database, [ok('first'), ok('second'), ok('third')], cost=7000, cfg=config(daily_cap_microusd=12000))
+        database, [ok('first'), ok('second'), ok('third')], cost=7000, cfg=config(daily_cap_microusd=7000 * 2 + 2 * BOUND - 1))
     incoming(store, 1, 'hello')
-    run(store, authority, engine, 1, SyntheticFansProvider(message_id=9001))  # reserve 5000, settle at 7000
+    run(store, authority, engine, 1, SyntheticFansProvider(message_id=9001))  # needs 17200, settles at 7000
     unthrottle(database[1]); incoming(store, 2, 'next')
-    run(store, authority, engine, 2, SyntheticFansProvider(message_id=9002))  # 7000 + 5000 estimate = 12000 fits exactly
+    run(store, authority, engine, 2, SyntheticFansProvider(message_id=9002))  # 7000 + 17200 fits
     assert runtime.ledger.committed(day=utcnow().date()) == 14000
     unthrottle(database[1]); incoming(store, 3, 'third')
-    with pytest.raises(ModelBudgetExhausted, match='daily'):
+    with pytest.raises(ModelBudgetExhausted, match='daily'):  # 14000 + 17200 > cap
         engine.plan(TENANT, ACCOUNT, FAN, 3)
     assert len(client.requests) == 2
     store.close()
 
 
-# ---- timeouts, unknown usage ----------------------------------------------------------------------
-def test_timeout_is_unknown_usage_counted_and_falls_to_alternate(database):
-    store, authority, engine, runtime, client, _ = with_model(
-        database, [ModelOutcomeUnknown('timeout'), ok('from the alternate')], cfg=config(alternate_model='m/alt'))
+def test_provider_cost_above_the_bound_is_kept_and_flagged(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok('pricey')], cost=BOUND + 500)
     incoming(store, 1, 'hello')
-    provider = SyntheticFansProvider(message_id=9001)
-    _, outcome = run(store, authority, engine, 1, provider)
-    assert outcome == 'accepted' and provider.calls[0]['body']['text'] == 'from the alternate'
-    first, second = rows(database)
-    assert (first.model, first.status, first.outcome, first.actual_microusd) == ('m/primary', 'unknown', 'timeout', None)
-    assert (second.model, second.status) == ('m/alt', 'settled')
-    assert runtime.ledger.committed(day=first.cost_day) == 5000 + 1000  # unknown counts at the reservation
-    assert [r.model for r in client.requests] == ['m/primary', 'm/alt']  # same model is not hammered with a prefix retry
+    engine.plan(TENANT, ACCOUNT, FAN, 1)
+    [row] = rows(database)
+    assert (row.actual_microusd, row.error_class) == (BOUND + 500, 'cost_over_bound')  # never hidden by clamping to the bound
     store.close()
 
 
-def test_transport_failure_without_alternate_keeps_request_open_and_retries_later(database):
+# ---- budget and lease races ---------------------------------------------------------------------------
+def _two_requests(database, engine, runtime, client, store):
+    incoming(store, 1, 'hello'); first = _make_request(database, engine, runtime, client)
+    unthrottle(database[1]); incoming(store, 2, 'second'); 
+    engine.model = ModelRuntime(database[1], client, config(enabled=False), StaticCreatorProfiles({ACCOUNT: PROFILE}))
+    with pytest.raises(Refused, match='not enabled'):
+        engine.plan(TENANT, ACCOUNT, FAN, 2)
+    engine.model = runtime
+    with Session(database[1]) as s:
+        second = s.scalar(select(OfEngineRequest.request_id).where(OfEngineRequest.source_message_id == 2))
+    return first, second
+
+
+def _reserve_for(runtime, database, request_id, worker, results, key, barrier, model='m/primary', step='primary'):
+    from db.onlyfans_engine_models import OfEngineOwner
+    with Session(database[1]) as s:
+        owner = s.get(OfEngineOwner, (ACCOUNT, FAN))
+        epoch, binding = owner.epoch, owner.binding_id
+    barrier.wait(20)
+    try:
+        results[key] = runtime.ledger.reserve(account=ACCOUNT, request_id=request_id, generation=0, fan_id=FAN, binding_id=binding,
+            owner_epoch=epoch, chain_pos=0, chain_step=step, model=model, prefixed=False, snapshot_sha256='0' * 64,
+            prompt_sha256='1' * 64, worker_id=worker, provider='fixture')
+    except Refused as exc:
+        results[key] = exc
+
+
+def test_cap_race_two_workers_on_two_requests_only_one_reservation_fits(database):
+    # each reservation needs its call bound plus one more bound for the retry allowance (17200): the cap, one unit short of
+    # both together (8600 held + 17200), lets exactly one of two simultaneous reservations through
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()], cfg=config(
+        daily_cap_microusd=3 * BOUND - 1, creator_cap_microusd=1_000_000))
+    first, second = _two_requests(database, engine, runtime, client, store)
+    results, barrier = {}, threading.Barrier(2)
+    threads = [threading.Thread(target=_reserve_for, args=(runtime, database, rid, f'w{i}', results, i, barrier))
+               for i, rid in enumerate((first, second))]
+    [t.start() for t in threads]; [t.join(30) for t in threads]
+    won = [v for v in results.values() if not isinstance(v, Exception)]
+    lost = [v for v in results.values() if isinstance(v, ModelBudgetExhausted)]
+    assert len(won) == 1 and len(lost) == 1 and len(rows(database)) == 1
+    assert runtime.ledger.committed(day=utcnow().date()) == BOUND  # the winner holds exactly one upper-bound reservation
+    store.close()
+
+
+def test_lease_race_two_workers_on_one_request_only_one_reservation(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()])
+    incoming(store, 1, 'hello')
+    request_id = _make_request(database, engine, runtime, client)
+    results, barrier = {}, threading.Barrier(2)
+    threads = [threading.Thread(target=_reserve_for, args=(runtime, database, request_id, f'w{i}', results, i, barrier)) for i in range(2)]
+    [t.start() for t in threads]; [t.join(30) for t in threads]
+    assert sorted(type(v).__name__ for v in results.values()) == ['ModelBusy', 'Reservation'] and len(rows(database)) == 1
+    store.close()
+
+
+def test_a_lease_that_lapses_before_the_wire_is_refused_and_released_not_charged(database):
+    clock = Clock()
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()], clock=clock)
+    incoming(store, 1, 'hello')
+    request_id = _make_request(database, engine, runtime, client)
+    reservation = _reserve(runtime, database, request_id, worker='slow')
+    clock.offset = timedelta(seconds=91)  # the 90 second lease lapsed before the worker reached the wire
+    with pytest.raises(Refused, match='lease expired'):
+        runtime.ledger.mark_calling(ACCOUNT, reservation.call_id, 'slow')
+    [row] = rows(database)
+    assert (row.status, row.outcome) == ('released', 'lease_expired') and client.requests == []
+    assert runtime.ledger.committed(day=row.cost_day) == 0
+    with pytest.raises(Refused, match='lease'):
+        runtime.ledger.settle(ACCOUNT, reservation.call_id, 'other-worker', text_value='x', usage=Usage(1, 1, 1))
+    store.close()
+
+
+# ---- timeouts, unknown usage ----------------------------------------------------------------------
+def test_timeout_is_unknown_usage_and_keeps_its_full_reservation_until_reconciled(database):
+    clock = Clock()
+    store, authority, engine, runtime, client, _ = with_model(database, [ModelOutcomeUnknown('timeout'), ok('second try')], clock=clock)
+    incoming(store, 1, 'hello')
+    with pytest.raises(ModelUnavailable):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    [first] = rows(database)
+    assert (first.status, first.outcome, first.actual_microusd) == ('unknown', 'timeout', None)
+    assert runtime.ledger.committed(day=first.cost_day) == BOUND  # the whole upper bound stays counted
+    assert [r.call_id for r in runtime.ledger.unreconciled()] == [first.call_id]
+    clock.offset = timedelta(seconds=45)
+    provider = SyntheticFansProvider(message_id=9001)
+    assert engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert runtime.ledger.committed(day=first.cost_day) == BOUND + 1000  # still reserved after the retry succeeded
+    assert [r.model for r in client.requests] == ['m/primary', 'm/primary']
+    with pytest.raises(Refused, match='only an unknown'):
+        runtime.ledger.reconcile_unknown(ACCOUNT, rows(database)[1].call_id, actual_microusd=1)  # a settled call cannot be rewritten
+    with pytest.raises(Refused, match='non-negative'):
+        runtime.ledger.reconcile_unknown(ACCOUNT, first.call_id, actual_microusd=-1)
+    runtime.ledger.reconcile_unknown(ACCOUNT, first.call_id, actual_microusd=2500)  # the verified invoice replaces the bound
+    assert runtime.ledger.committed(day=first.cost_day) == 2500 + 1000 and runtime.ledger.unreconciled() == []
+    store.close()
+
+
+def test_missing_usage_keeps_the_reservation_not_zero(database):
+    nothing = ChatResult(text=ok('quiet'), usage=Usage(None, None, None), model='m/primary')
+    store, authority, engine, runtime, client, _ = with_model(database, [nothing])
+    incoming(store, 1, 'hello')
+    assert engine.plan(TENANT, ACCOUNT, FAN, 1)
+    [row] = rows(database)
+    assert (row.status, row.outcome, row.usage_known, row.actual_microusd, row.error_class) == ('unknown', 'ok', False, None, 'usage_missing')
+    assert runtime.ledger.committed(day=row.cost_day) == BOUND
+    store.close()
+
+
+def test_token_counts_without_a_provider_cost_are_priced_from_the_configured_prices(database):
+    counted = ChatResult(text=ok('quiet'), usage=Usage(2000, 100, None), model='m/primary')
+    store, authority, engine, runtime, client, _ = with_model(database, [counted])
+    incoming(store, 1, 'hello')
+    engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert rows(database)[0].actual_microusd == 2000 * 1 + 100 * 2  # 2200 micro-USD
+    store.close()
+
+
+def test_transport_failure_without_fallback_keeps_request_open_and_retries_later(database):
     clock = Clock()
     store, authority, engine, runtime, client, _ = with_model(
         database, [ModelOutcomeUnknown('timeout'), ok('back again')], clock=clock)
@@ -226,63 +363,101 @@ def test_transport_failure_without_alternate_keeps_request_open_and_retries_late
     store.close()
 
 
-def test_not_sent_and_http_refusals_release_the_reservation(database):
-    store, authority, engine, runtime, client, _ = with_model(
-        database, [ModelNotSent('x'), ModelHTTPStatus(429), ok('finally')], cfg=config(alternate_model='m/alt'))
+def test_not_sent_and_http_refusals_release_the_reservation_and_attempts_stay_bounded(database):
+    clock = Clock()
+    store, authority, engine, runtime, client, _ = with_model(database, [ModelNotSent('x'), ModelHTTPStatus(429), ok('finally')], clock=clock)
     incoming(store, 1, 'hello')
     with pytest.raises(ModelUnavailable):
         engine.plan(TENANT, ACCOUNT, FAN, 1)
     got = rows(database)
-    assert [(r.status, r.outcome) for r in got] == [('released', 'not_sent'), ('released', 'http_429')]
+    assert [(r.status, r.outcome) for r in got] == [('released', 'not_sent')]
     assert runtime.ledger.committed(day=got[0].cost_day) == 0
+    clock.offset = timedelta(seconds=45)
+    with pytest.raises(ModelUnavailable):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # second (and last) allowed attempt: refused with 429
+    assert [(r.status, r.outcome) for r in rows(database)] == [('released', 'not_sent'), ('released', 'http_429')]
+    clock.offset = timedelta(seconds=120)
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)  # total attempts are bounded: no third call, a human gets the request
+    assert len(client.requests) == 2 and len(rows(database)) == 2
+    with Session(database[1]) as s:
+        assert s.scalar(select(OfEngineRequest)).status == 'handover_pending'
     store.close()
 
 
 # ---- malformed output, refusals, validation, the chain --------------------------------------------
-def test_malformed_output_goes_through_the_chain_then_hands_to_a_human_without_a_canned_line(database):
-    store, authority, engine, runtime, client, _ = with_model(
-        database, ['not json at all', '{"body": 12}', '{"body": "x", "surprise": 1}'], cfg=config(alternate_model='m/alt'))
+def _cases(database):
+    from db.onlyfans_case_models import OfOperatorCase
+    with Session(database[1]) as s:
+        return [(c.category, c.scope, c.status, c.reason, json.loads(c.evidence_json)) for c in s.scalars(select(OfOperatorCase))]
+
+
+def test_invalid_model_output_becomes_visible_human_work_after_one_corrected_attempt(database):
+    store, authority, engine, runtime, client, _ = with_model(database, ['not json at all', '{"body": 12}', '{"body": "x", "surprise": 1}'])
     incoming(store, 1, 'hello')
     with pytest.raises(Refused, match='handed to a human'):
         engine.plan(TENANT, ACCOUNT, FAN, 1)
-    assert [r.model for r in client.requests] == ['m/primary', 'm/primary', 'm/alt']
-    assert 'Reply only with the JSON' in system_of(client.requests[1]) and 'Reply only with the JSON' not in system_of(client.requests[0])
-    assert [r.outcome for r in rows(database)] == ['malformed'] * 3
+    assert [r.model for r in client.requests] == ['m/primary', 'm/primary']  # one regeneration, no fallback, no third call
+    assert 'Reply only with the JSON' not in system_of(client.requests[1])    # no in-character "jailbreak" prefix either
+    assert 'YOUR LAST DRAFT WAS REJECTED' in client.requests[1].messages[1]['content']
+    assert [r.outcome for r in rows(database)] == ['malformed'] * 2
     with Session(database[1]) as s:
         request = s.scalar(select(OfEngineRequest))
         assert (request.status, request.handover_target, request.next_step) == ('handover_pending', 'operator', 'await_handover_acceptance')
         assert s.scalar(select(func.count()).select_from(OfEngineDecision)) == 0  # no canned line, no decision
+    [(category, scope, status, reason, evidence)] = _cases(database)  # and it is visible work for an operator
+    assert (category, scope, status, reason) == ('model_handover', 'all', 'open', 'model_rejected')
+    assert evidence['outcomes'] == ['malformed', 'malformed'] and evidence['request_id'] == request.request_id and evidence['reasons']
+    with Session(database[1]) as s:
+        assert s.scalar(select(OfConversationState)).requires_attention is True
     with pytest.raises(Refused, match='with a human'):
         engine.plan(TENANT, ACCOUNT, FAN, 1)
-    assert len(client.requests) == 3  # the handover is final: no more calls
+    assert len(client.requests) == 2  # the handover is final: no more calls
     store.close()
 
 
-def test_refusal_primary_then_in_character_retry_then_alternate(database):
+def test_refusal_is_never_re_asked_it_goes_straight_to_a_human(database):
     refusal = ok("I'm sorry, but I can't continue with this conversation")
-    store, authority, engine, runtime, client, _ = with_model(
-        database, [refusal, 'I cannot help with that request', ok('so what are you wearing rn')], cfg=config(alternate_model='m/alt'))
+    store, authority, engine, runtime, client, _ = with_model(database, [refusal, 'I cannot help with that request', ok('so what are you wearing rn')])
     incoming(store, 1, 'hello')
-    provider = SyntheticFansProvider(message_id=9001)
-    _, outcome = run(store, authority, engine, 1, provider)
-    assert outcome == 'accepted' and provider.calls[0]['body']['text'] == 'so what are you wearing rn'
-    assert [r.outcome for r in rows(database)] == ['refusal', 'refusal', 'ok']
-    assert [(r.model, 'Reply only with the JSON' in system_of(r)) for r in client.requests] == [
-        ('m/primary', False), ('m/primary', True), ('m/alt', True)]
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert len(client.requests) == 1 and [r.outcome for r in rows(database)] == ['refusal']  # no retry to dodge the refusal
+    [(category, _, status, reason, evidence)] = _cases(database)
+    assert (category, status, reason, evidence['outcomes']) == ('model_handover', 'open', 'model_refused', ['refusal'])
+    with pytest.raises(Refused, match='with a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert len(client.requests) == 1
     store.close()
 
 
-def test_invalid_commercial_output_is_regenerated_with_the_reason_then_accepted(database):
-    bad_price = ok('it is only $5 for the set')
-    bad_claim = ok('thanks for buying it earlier', purchase_claim=False)
-    store, authority, engine, runtime, client, _ = with_model(
-        database, [bad_price, bad_claim, ok('what are you up to tonight')], cfg=config(alternate_model='m/alt'))
+def test_refusal_on_the_corrected_attempt_also_stops_there(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok('it is $5 for the set'), 'As a language model I cannot continue'])
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert [r.outcome for r in rows(database)] == ['invalid', 'refusal'] and len(client.requests) == 2
+    store.close()
+
+
+def test_invalid_commercial_output_is_regenerated_once_with_the_reason_then_accepted(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok('it is only $5 for the set'), ok('what are you up to tonight')])
     incoming(store, 1, 'hello')
     provider = SyntheticFansProvider(message_id=9001)
     assert run(store, authority, engine, 1, provider)[1] == 'accepted'
-    assert [r.outcome for r in rows(database)] == ['invalid', 'invalid', 'ok']
+    assert [r.outcome for r in rows(database)] == ['invalid', 'ok']
     assert 'YOUR LAST DRAFT WAS REJECTED' in client.requests[1].messages[1]['content']
     assert 'price' in client.requests[1].messages[1]['content']
+    store.close()
+
+
+def test_two_invalid_drafts_hand_over_with_the_reasons_recorded(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok('it is only $5 for the set'), ok('thanks for buying it earlier')])
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    [(_, _, _, reason, evidence)] = _cases(database)
+    assert reason == 'model_rejected' and evidence['outcomes'] == ['invalid', 'invalid'] and any('purchase' in r for r in evidence['reasons'])
     store.close()
 
 
@@ -293,7 +468,7 @@ def test_permitted_explicit_conversation_is_not_blocked_by_any_layer(database):
     provider = SyntheticFansProvider(message_id=9001)
     assert run(store, authority, engine, 1, provider)[1] == 'accepted'
     assert 'ride you' in provider.calls[0]['body']['text'] and len(client.requests) == 1
-    assert "don't refuse, sanitise" in system_of(client.requests[0])
+    assert "don't refuse or sanitise it" in system_of(client.requests[0])
     store.close()
 
 
@@ -374,7 +549,7 @@ def test_crash_after_the_wire_started_counts_as_unknown_and_waits_before_retryin
     assert client.requests == []
     [row] = rows(database)
     assert (row.status, row.outcome) == ('unknown', 'lease_expired')
-    assert runtime.ledger.committed(day=row.cost_day) == 5000  # conservatively counted
+    assert runtime.ledger.committed(day=row.cost_day) == BOUND  # conservatively counted at the upper bound
     clock.offset = timedelta(seconds=120)
     assert engine.plan(TENANT, ACCOUNT, FAN, 1) and len(client.requests) == 1
     store.close()
@@ -480,6 +655,8 @@ def _offer_setup(database, script, **kw):
     from conversation_engine.commerce import SyntheticCoverage, approve_simulated_offer
     store, authority, engine, runtime, client, memory = with_model(database, script, **kw)
     item_id = shelf(database[1]); media_policy(authority)
+    from dataclasses import replace
+    runtime.profiles = StaticCreatorProfiles({ACCOUNT: replace(PROFILE, offers_permitted=True, approved_item_ids=(str(item_id),))})
     coverage = SyntheticCoverage(ACCOUNT, FAN, item_id, (11, 12, 13), 'synthetic:complete-ownership', utcnow() + timedelta(minutes=5))
     grant = approve_simulated_offer(store, TENANT, ACCOUNT, FAN, item_id, coverage)
     return store, authority, engine, runtime, client, item_id, grant
@@ -505,22 +682,42 @@ def test_offer_turn_uses_only_the_approved_grant_and_keeps_answer_and_engine_ren
     store.close()
 
 
-def test_offer_outside_the_granted_item_and_model_priced_offers_are_rejected(database):
-    script = [
-        lambda r: ok('here you go', action='offer', offer_grant_id='00000000-0000-4000-8000-000000000000', pitch=True),
-        lambda r: ok('it is USD 1.00 for the set', action='offer', offer_grant_id=_grant_from_prompt(r), pitch=True),
-        lambda r: ok('a scenic video with stills, want it?', action='offer', offer_grant_id=_grant_from_prompt(r), pitch=True)]
-    store, authority, engine, runtime, client, item_id, grant = _offer_setup(database, script, cfg=config(alternate_model='m/alt'))
+_OUTSIDE = lambda r: ok('here you go', action='offer', offer_grant_id='00000000-0000-4000-8000-000000000000', pitch=True)
+_PRICED = lambda r: ok('it is USD 1.00 for the set', action='offer', offer_grant_id=_grant_from_prompt(r), pitch=True)
+_GOOD = lambda r: ok('a scenic video with stills, want it?', action='offer', offer_grant_id=_grant_from_prompt(r), pitch=True)
+
+
+@pytest.mark.parametrize('bad', [_OUTSIDE, _PRICED])
+def test_offer_outside_the_granted_item_and_model_priced_offers_are_regenerated_once(database, bad):
+    store, authority, engine, runtime, client, item_id, grant = _offer_setup(database, [bad, _GOOD])
     incoming(store, 1, 'show me the scenic video')
     engine.plan(TENANT, ACCOUNT, FAN, 1)
-    assert [r.outcome for r in rows(database)] == ['invalid', 'invalid', 'ok']
+    assert [r.outcome for r in rows(database)] == ['invalid', 'ok']
+    store.close()
+
+
+def test_two_bad_offers_hand_over(database):
+    store, authority, engine, runtime, client, item_id, grant = _offer_setup(database, [_OUTSIDE, _PRICED])
+    incoming(store, 1, 'show me the scenic video')
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    store.close()
+
+
+def test_a_profile_without_commercial_permission_never_shows_or_accepts_an_offer(database):
+    store, authority, engine, runtime, client, item_id, grant = _offer_setup(database, [_GOOD, _GOOD])
+    runtime.profiles = StaticCreatorProfiles({ACCOUNT: PROFILE})  # no offers_permitted, no approved items: missing input
+    incoming(store, 1, 'show me the scenic video')
+    with pytest.raises(Refused):  # the offer is hidden from the prompt, so the model cannot legally use it
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert 'APPROVED OFFER: none' in client.requests[0].messages[1]['content']
     store.close()
 
 
 def test_paused_sales_cannot_pitch_through_the_real_model_path(database):
     pitch = ok('buy the set for USD 1.00, you already purchased it', pitch=True, purchase_claim=True)
     store, authority, engine, runtime, client, item_id, grant = _offer_setup(
-        database, [ok('understood, no problem', sales_signal='decline'), pitch, pitch, pitch], cfg=config(alternate_model='m/alt'))
+        database, [ok('understood, no problem', sales_signal='decline'), pitch, pitch, pitch], cfg=config())
     incoming(store, 1, 'no thanks')
     provider = SyntheticFansProvider(('accepted',), message_id=(9001,))
     assert run(store, authority, engine, 1, provider)[1] == 'accepted'
@@ -555,4 +752,326 @@ def test_corrected_memory_reaches_the_prompt_and_examples_are_style_only(databas
     prompt = client.requests[0].messages[1]['content']
     assert 'his city: Brisbane' in prompt and 'lazy sunday for me, u?' in prompt and 'style only' in prompt
     assert 'VERIFIED PURCHASES: none on record' in prompt
+    store.close()
+
+
+# ---- Plan C: profile source, identity, bounds, returned identity, wiring ---------------------------------------
+def _handed_over(database, reason):
+    with Session(database[1]) as s:
+        request = s.scalar(select(OfEngineRequest))
+        assert (request.status, request.next_step) == ('handover_pending', 'await_handover_acceptance')
+    cases = _cases(database)
+    assert [(c[0], c[1], c[2], c[3]) for c in cases] == [('model_handover', 'all', 'open', reason)]
+    return cases[0][4]
+
+
+def test_missing_creator_profile_is_a_visible_handover_not_a_default_and_makes_no_call(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()], profiles=StaticCreatorProfiles({}))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='creator facts are unavailable'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert client.requests == [] and rows(database) == []
+    _handed_over(database, 'creator_profile_missing')
+    store.close()
+
+
+def test_profile_without_documented_boundaries_is_missing_input_not_unlimited_permission(database):
+    store, authority, engine, runtime, client, _ = with_model(
+        database, [ok()], profiles=StaticCreatorProfiles({ACCOUNT: CreatorProfile(name='Riley', facts=(('job', 'barista'),), role_statement=IDENT)}))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='boundaries'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert client.requests == [] and _handed_over(database, 'creator_profile_incomplete')['missing'] == ['boundaries']
+    store.close()
+
+
+def test_identity_question_without_approved_wording_goes_to_a_human_before_any_call(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok('i am real, promise')])
+    incoming(store, 1, 'wait, are you a real person or a bot?')
+    with pytest.raises(Refused, match='no approved identity wording'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert client.requests == [] and rows(database) == []
+    _handed_over(database, 'identity_no_approved_wording')
+    store.close()
+
+
+def test_identity_question_is_answered_only_with_the_approved_wording(database):
+    from dataclasses import replace
+    profile = replace(PROFILE, role_statement=IDENT)
+    store, authority, engine, runtime, client, _ = with_model(
+        database, [ok('lol why would i be a bot, i am just me'), ok(IDENT + ' Anyway, how was your day?')],
+        profiles=StaticCreatorProfiles({ACCOUNT: profile}))
+    incoming(store, 1, 'wait, are you a real person or a bot?')
+    provider = SyntheticFansProvider(message_id=9001)
+    assert run(store, authority, engine, 1, provider)[1] == 'accepted'
+    assert [r.outcome for r in rows(database)] == ['invalid', 'ok']
+    assert IDENT in provider.calls[0]['body']['text'] and f'"{IDENT}"' in system_of(client.requests[0])
+    store.close()
+
+
+def test_prompt_larger_than_the_input_bound_is_never_sent_or_reserved(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()], cfg=config(max_input_tokens=200))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='input bound'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert client.requests == [] and rows(database) == []
+    assert _handed_over(database, 'model_input_too_large')['limit'] == 200
+    store.close()
+
+
+def test_oversize_answer_is_truncated_in_storage_rejected_and_handed_over(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok('x' * 5000)], cfg=config(max_output_bytes=600))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    got = rows(database)
+    assert [r.outcome for r in got] == ['invalid', 'invalid'] and all(len(r.response_text.encode()) <= 600 for r in got)
+    assert any('output bound' in r for r in _cases(database)[0][4]['reasons'])
+    store.close()
+
+
+def test_returned_model_prompt_and_config_identity_are_recorded(database, caplog):
+    import logging
+    drifted = ChatResult(text=ok('hey you'), usage=Usage(100, 20, 900), model='m/primary-2026-11-01', provider='AcmeHost')
+    store, authority, engine, runtime, client, _ = with_model(database, [drifted])
+    incoming(store, 1, 'hello')
+    with caplog.at_level(logging.INFO, logger='conversation_engine.model'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    [row] = rows(database)
+    assert row.model == 'm/primary' and row.error_class == 'ret_model:m/primary-2026-11-01'  # a DIFFERENT returned model is flagged
+    [line] = [r.getMessage() for r in caplog.records if 'model_call_identity' in r.getMessage()]
+    identity = json.loads(line.split(' ', 1)[1])
+    assert (identity['requested_model'], identity['returned_model'], identity['returned_provider']) == ('m/primary', 'm/primary-2026-11-01', 'AcmeHost')
+    assert identity['prompt_version'] == 'a-original.v2-planc1' and identity['config_version'] == config().version()
+    assert (identity['call_id'], row.prompt_tokens, row.completion_tokens, row.actual_microusd) == (row.call_id, 100, 20, 900)
+    assert len(row.prompt_sha256) == 64
+    store.close()
+
+
+def test_same_returned_model_is_clean_and_an_unnamed_model_is_flagged_not_assumed(database):
+    same = ChatResult(text=ok('hey you'), usage=Usage(100, 20, 900), model='m/primary')
+    silent = ChatResult(text=ok('hi again'), usage=Usage(100, 20, 900), model='')
+    store, authority, engine, runtime, client, _ = with_model(database, [same, silent])
+    incoming(store, 1, 'hello')
+    engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert rows(database)[0].error_class is None
+    unthrottle(database[1]); incoming(store, 2, 'again')
+    engine.plan(TENANT, ACCOUNT, FAN, 2)
+    assert rows(database)[1].error_class == 'ret_model:not_reported'
+    store.close()
+
+
+def test_fallback_is_off_by_default_so_an_availability_failure_never_reaches_another_model(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ModelHTTPStatus(503), ok('x')])
+    assert runtime.config.fallback_enabled is False and runtime.config.models() == ('m/primary',)
+    incoming(store, 1, 'hello')
+    with pytest.raises(ModelUnavailable):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert [r.model for r in client.requests] == ['m/primary'] and {r.model for r in rows(database)} == {'m/primary'}
+    store.close()
+
+
+# ---- the fallback (Ronan decision 2026-11-07): availability failures only ---------------------------------------------
+@pytest.mark.parametrize('failure,primary_status', [
+    (ModelNotSent('connect'), 'released'), (ModelHTTPStatus(429), 'released'), (ModelHTTPStatus(503), 'released'),
+    (ModelHTTPStatus(500), 'released'), (ModelOutcomeUnknown('timeout'), 'unknown')])
+def test_fallback_runs_after_an_availability_failure_of_the_primary(database, failure, primary_status):
+    store, authority, engine, runtime, client, _ = with_model(database, [failure, ok('from the fallback')], cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    provider = SyntheticFansProvider(message_id=9001)
+    _, outcome = run(store, authority, engine, 1, provider)
+    assert outcome == 'accepted' and provider.calls[0]['body']['text'] == 'from the fallback'
+    first, second = rows(database)
+    assert (first.model, first.chain_step, first.status) == ('m/primary', 'primary', primary_status)
+    assert (second.model, second.chain_step, second.status, second.outcome) == ('m/fallback', 'fallback', 'settled', 'ok')
+    assert [r.model for r in client.requests] == ['m/primary', 'm/fallback']
+    assert client.requests[0].messages == client.requests[1].messages  # the SAME inputs went to either model
+    expected = 1000 + (BOUND if primary_status == 'unknown' else 0)   # an unknown primary keeps its reservation
+    assert runtime.ledger.committed(day=first.cost_day) == expected
+    assert (first.reserved_microusd, second.reserved_microusd) == (BOUND, FALLBACK_BOUND)  # each model has its own bound
+    store.close()
+
+
+@pytest.mark.parametrize('first,reason,outcomes', [
+    (ok("I'm sorry, but I can't continue with this conversation"), 'model_refused', ['refusal']),
+    ('I cannot help with that request', 'model_refused', ['refusal']),
+    (ChatResult(text='', usage=Usage(10, 0, 100), model='m/primary'), 'model_empty', ['empty'])])
+def test_refusal_or_empty_completion_never_falls_back(database, first, reason, outcomes):
+    store, authority, engine, runtime, client, _ = with_model(database, [first, ok('fallback would happily write it')], cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert [r.model for r in client.requests] == ['m/primary'] and [r.outcome for r in rows(database)] == outcomes
+    [(category, _, _, got_reason, evidence)] = _cases(database)
+    assert (category, got_reason, evidence['outcomes']) == ('model_handover', reason, outcomes)
+    store.close()
+
+
+def test_validator_rejection_corrects_on_the_primary_and_never_falls_back(database):
+    store, authority, engine, runtime, client, _ = with_model(
+        database, [ok('it is only $5 for the set'), ok('thanks for buying it earlier'), ok('the fallback would pass')], cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert [r.model for r in client.requests] == ['m/primary', 'm/primary']  # the corrected attempt, then a human
+    assert [r.outcome for r in rows(database)] == ['invalid', 'invalid']
+    store.close()
+
+
+def test_malformed_output_never_falls_back_either(database):
+    store, authority, engine, runtime, client, _ = with_model(database, ['not json', 'still not json', ok('x')], cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert {r.model for r in client.requests} == {'m/primary'}
+    store.close()
+
+
+def test_primary_unavailable_then_fallback_rejected_is_human_work_with_no_third_call(database):
+    store, authority, engine, runtime, client, _ = with_model(
+        database, [ModelHTTPStatus(503), ok('it is only $5 for the set'), ok('third call must never happen')], cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert [r.model for r in client.requests] == ['m/primary', 'm/fallback']
+    assert [(r.chain_step, r.outcome) for r in rows(database)] == [('primary', 'http_503'), ('fallback', 'invalid')]
+    store.close()
+
+
+@pytest.mark.parametrize('failure', [ModelHTTPStatus(400), ModelHTTPStatus(401), ModelHTTPStatus(403), ModelHTTPStatus(404), RuntimeError('boom')])
+def test_failures_that_are_not_availability_never_fall_back(database, failure):
+    store, authority, engine, runtime, client, _ = with_model(database, [failure, ok('fallback')], cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    with pytest.raises(ModelUnavailable):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert [r.model for r in client.requests] == ['m/primary']
+    store.close()
+
+
+def test_total_attempts_stay_bounded_with_a_fallback_and_unknowns_stay_reserved(database):
+    clock = Clock()
+    store, authority, engine, runtime, client, _ = with_model(
+        database, [ModelOutcomeUnknown('timeout'), ModelOutcomeUnknown('timeout'), ok('never')], clock=clock, cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    with pytest.raises(ModelUnavailable):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)          # primary timed out, fallback timed out too
+    assert [r.model for r in client.requests] == ['m/primary', 'm/fallback']
+    got = rows(database)
+    assert [r.status for r in got] == ['unknown', 'unknown']
+    assert runtime.ledger.committed(day=got[0].cost_day) == BOUND + FALLBACK_BOUND  # both stay reserved until reconciled
+    clock.offset = timedelta(seconds=300)
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)          # two attempts is the bound: a human gets the request
+    assert len(client.requests) == 2
+    store.close()
+
+
+def test_one_global_cap_covers_both_models_and_the_whole_chain(database):
+    # primary reserve needs its own bound plus the largest bound for the one remaining attempt
+    need = BOUND + FALLBACK_BOUND
+    store, authority, engine, runtime, client, _ = with_model(
+        database, [ModelOutcomeUnknown('timeout'), ok('fits exactly')], cfg=config(daily_cap_microusd=need + 0, **FALLBACK))
+    incoming(store, 1, 'hello')
+    assert engine.plan(TENANT, ACCOUNT, FAN, 1) and len(client.requests) == 2  # primary unknown 8600 + fallback 17200 = cap
+    store.close()
+
+
+def test_cap_one_unit_short_refuses_before_any_call_with_two_models(database):
+    need = BOUND + FALLBACK_BOUND
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()], cfg=config(daily_cap_microusd=need - 1, **FALLBACK))
+    incoming(store, 1, 'hello')
+    with pytest.raises(ModelBudgetExhausted, match='daily'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert client.requests == [] and rows(database) == []
+    store.close()
+
+
+def test_cap_race_between_a_primary_call_and_a_fallback_call_only_one_fits(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()], cfg=config(daily_cap_microusd=40_000, **FALLBACK))
+    first, second = _two_requests(database, engine, runtime, client, store)
+    results, barrier = {}, threading.Barrier(2)
+    threads = [threading.Thread(target=_reserve_for, args=(runtime, database, first, 'wa', results, 'primary', barrier, 'm/primary', 'primary')),
+               threading.Thread(target=_reserve_for, args=(runtime, database, second, 'wb', results, 'fallback', barrier, 'm/fallback', 'fallback'))]
+    [t.start() for t in threads]; [t.join(30) for t in threads]
+    won = [k for k, v in results.items() if not isinstance(v, Exception)]
+    assert len(won) == 1 and sum(isinstance(v, ModelBudgetExhausted) for v in results.values()) == 1
+    assert runtime.ledger.committed(day=utcnow().date()) == (BOUND if won == ['primary'] else FALLBACK_BOUND)
+    store.close()
+
+
+def test_fallback_call_records_requested_returned_model_and_that_it_was_the_fallback(database, caplog):
+    import logging
+    served = ChatResult(text=ok('hey you'), usage=Usage(100, 20, 900), model='x-ai/grok-4.1-fast-20261101', provider='xAI')
+    store, authority, engine, runtime, client, _ = with_model(database, [ModelHTTPStatus(429), served], cfg=config(**FALLBACK))
+    incoming(store, 1, 'hello')
+    with caplog.at_level(logging.INFO, logger='conversation_engine.model'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    primary, fallback = rows(database)
+    assert (primary.model, primary.chain_step, primary.outcome) == ('m/primary', 'primary', 'http_429')
+    assert (fallback.model, fallback.chain_step, fallback.error_class) == ('m/fallback', 'fallback', 'ret_model:x-ai/grok-4.1-fast-20261101'[:64])
+    [line] = [r.getMessage() for r in caplog.records if 'model_call_identity' in r.getMessage()]
+    identity = json.loads(line.split(' ', 1)[1])
+    assert (identity['requested_model'], identity['returned_model'], identity['returned_provider']) == ('m/fallback', 'x-ai/grok-4.1-fast-20261101', 'xAI')
+    assert identity['is_fallback'] is True and identity['chain_step'] == 'fallback' and identity['config_version'] == config(**FALLBACK).version()
+    store.close()
+
+
+def test_fallback_model_must_be_on_the_allow_list_before_any_call(database):
+    store, authority, engine, runtime, client, _ = with_model(database, [ok()], cfg=config(**{**FALLBACK, 'allowed_models': ('m/primary',)}))
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='approved list'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert client.requests == []
+    store.close()
+
+
+def test_engine_service_accepts_the_real_runtime_selected_by_application_configuration(database, tmp_path):
+    from model_transport.wiring import build_engine_service
+    from conversation_engine.writer_context import set_active_profiles
+    store, authority, engine, model, memory = setup(database)
+    profiles = tmp_path / 'profiles.json'
+    profiles.write_text(json.dumps({ACCOUNT: {'name': 'Riley', 'facts': {'job': 'barista'}, 'limits': ['no meetups'], 'role_statement': IDENT}}))
+    env = {'ENGINE_MODEL_ENABLED': '1', 'ENGINE_MODEL_PRIMARY': 'm/primary', 'ENGINE_MODEL_ALLOWED': 'm/primary',
+           'ENGINE_MODEL_ACCOUNTS': ACCOUNT, 'ENGINE_MODEL_KEY_ENV': 'PLANC_KEY', 'PLANC_KEY': 'sk-planc-0000',
+           'ENGINE_MODEL_PROMPT_MICROUSD_PER_MTOK': '1000000', 'ENGINE_MODEL_COMPLETION_MICROUSD_PER_MTOK': '2000000',
+           'ENGINE_MODEL_MAX_INPUT_TOKENS': '8000', 'ENGINE_MODEL_MAX_TOKENS': '300', 'ENGINE_MODEL_TIMEOUT_SECONDS': '20',
+           'ENGINE_MODEL_DAILY_CAP_MICROUSD': '1000000', 'ENGINE_MODEL_CREATOR_CAP_MICROUSD': '1000000',
+           'ENGINE_MODEL_PROFILES_FILE': str(profiles)}
+    seen = {}
+
+    def handler(request):
+        seen['body'] = json.loads(request.content)
+        return httpx.Response(200, json={'model': 'm/primary', 'choices': [{'message': {'content': ok('hi there you')}, 'finish_reason': 'stop'}],
+                                         'usage': {'prompt_tokens': 500, 'completion_tokens': 10, 'cost': 0.0007}})
+    try:
+        assert build_engine_service(store, {}) is None and build_engine_service(store, {**env, 'ENGINE_MODEL_ENABLED': '0'}) is None
+        service = build_engine_service(store, env, transport=httpx.MockTransport(handler))
+        assert type(service.model).__name__ == 'ModelRuntime' and service.model.client.provider == 'openrouter'
+        incoming(store, 1, 'hello')
+        decision = service.plan(TENANT, ACCOUNT, FAN, 1)
+        with Session(database[1]) as s:
+            assert s.get(OfEngineDecision, (ACCOUNT, decision)).body == 'hi there you'
+        assert seen['body']['model'] == 'm/primary' and not {'models', 'route'} & set(seen['body'])
+        [row] = rows(database)
+        assert (row.provider, row.model, row.actual_microusd, row.error_class) == ('openrouter', 'm/primary', 700, None)
+        assert 'sk-planc' not in json.dumps(seen['body']) and 'sk-planc' not in repr(service.model.client)
+    finally:
+        set_active_profiles(None)
+        store.close()
+
+
+def test_empty_completion_is_a_silent_refusal_one_call_then_visible_human_work(database):
+    silent = ChatResult(text='', usage=Usage(300, 0, 400), model='deepseek/deepseek-v4.1-flash', provider='SomeHost')
+    store, authority, engine, runtime, client, _ = with_model(database, [silent, ok('a different answer on a second try')])
+    incoming(store, 1, 'hello')
+    with pytest.raises(Refused, match='handed to a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert len(client.requests) == 1                       # no repeat call to dodge the silence
+    [row] = rows(database)
+    assert (row.outcome, row.status, row.actual_microusd) == ('empty', 'settled', 400)  # the spend is recorded
+    [(category, _, status, reason, evidence)] = _cases(database)
+    assert (category, status, reason, evidence['outcomes']) == ('model_handover', 'open', 'model_empty', ['empty'])
+    with pytest.raises(Refused, match='with a human'):
+        engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert len(client.requests) == 1
     store.close()

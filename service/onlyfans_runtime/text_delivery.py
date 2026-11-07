@@ -293,18 +293,27 @@ class TextAuthority:
             import logging
             logging.getLogger("onlyfans.safety").exception("safety scan failed")
 
-    def _safety_scan_intent(self, tenant_id, account_id, intent_id):
+    def _safety_scan_intent(self, tenant_id, account_id, intent_id, *, status="queued"):
         with Session(self.engine) as s:
             row = s.get(OfTextIntent, (account_id, intent_id))
-            target = (row.fan_id, row.origin) if row is not None and row.status == "queued" else None
+            from conversation_engine.delivery import is_engine_intent
+            target = ((row.fan_id, row.origin) if row is not None and row.status == status
+                      and not is_engine_intent(s, row) else None)
         if target is not None:
             self._safety_scan(tenant_id, account_id, *target)
 
     @staticmethod
-    def _retained_hold(s, account_id, fan_id):
-        return Store._native_unresolved(s, account_id, fan_id) or s.scalar(select(OfMessageDelivery.message_id).where(
+    def _retained_hold(s, account_id, fan_id, *, own_attempt_id=None):
+        from db.onlyfans_engine_models import OfEngineIndependentAdmission
+        independent = select(OfEngineIndependentAdmission.attempt_id).where(
+            OfEngineIndependentAdmission.account_id == account_id, OfEngineIndependentAdmission.fan_id == fan_id,
+            OfEngineIndependentAdmission.status.in_(("dispatching", "unknown")))
+        if own_attempt_id is not None:
+            independent = independent.where(OfEngineIndependentAdmission.attempt_id != own_attempt_id)
+        return (Store._native_unresolved(s, account_id, fan_id) or s.scalar(independent.limit(1)) is not None
+            or s.scalar(select(OfMessageDelivery.message_id).where(
             OfMessageDelivery.account_id == account_id, OfMessageDelivery.fan_id == fan_id,
-            OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES)).limit(1)) is not None
+            OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES)).limit(1)) is not None)
 
     @staticmethod
     def _manual_attachment(row):
@@ -342,7 +351,7 @@ class TextAuthority:
                 and fan_history_current(s, runtime.account_id, fan.fan_id))
 
     def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None,
-                     manual_attachment=False, action=None):
+                     manual_attachment=False, action=None, engine_action=False, independent=False):
         if policy is None or not policy.enabled or policy.transport_kind not in {"synthetic", "native"}:
             return "delivery_disabled"
         if not runtime.enabled:
@@ -371,6 +380,13 @@ class TextAuthority:
                     OfIngress.fan_id.is_(None) | (OfIngress.fan_id == fan.fan_id))
                 if s.scalar(recipient_conflict.limit(1)) is not None:
                     return "history_quarantined"
+        if engine_action:
+            from conversation_engine.controls import reason as engine_hold_reason
+            unresolved = ((state is not None and state.unresolved_attempt_id is not None
+                           and state.unresolved_attempt_id != own_attempt_id)
+                          or (fan is not None and self._retained_hold(s, runtime.account_id, fan.fan_id, own_attempt_id=own_attempt_id)))
+            return engine_hold_reason(s, runtime.account_id, fan.fan_id if fan is not None else 0,
+                                      state, fan, unresolved=unresolved and not independent, commercial=action == 'commercial')
         # The conversation-hold policy is ONE pure function shared with the FASTT runner plane (conversation_policy).
         # Everything below this line is a caller of it: this method only reads the durable facts.
         from . import conversation_policy as policy_module, operator_cases
@@ -378,7 +394,7 @@ class TextAuthority:
             return "conversation_unavailable"
         skip, critical, cases = operator_cases.policy_facts(s, runtime.account_id, fan.fan_id)
         unresolved = ((state.unresolved_attempt_id is not None and state.unresolved_attempt_id != own_attempt_id)
-                      or self._retained_hold(s, runtime.account_id, fan.fan_id))
+                      or self._retained_hold(s, runtime.account_id, fan.fan_id, own_attempt_id=own_attempt_id))
         decision = policy_module.decide(
             policy_module.Facts(mode=state.mode, takeover_state=state.takeover_state, muted=bool(fan.is_muted),
                                 skip_reason=skip, unresolved=unresolved, critical_flag=critical, cases=cases),
@@ -467,7 +483,8 @@ class TextAuthority:
         fingerprint = hashlib.sha256(_json(request).encode()).hexdigest()
         # Plan-time safety scan (R1): a stop / distress / consent / complaint message is recorded (shadow) or enforced
         # (live) BEFORE this transaction takes its locks, so the eligibility check below sees the hold.
-        self._safety_scan(tenant_id, account_id, fan_id, origin)
+        if engine_decision_id is None:
+            self._safety_scan(tenant_id, account_id, fan_id, origin)
         with Session(self.engine) as s, s.begin():
             runtime = self.store._delivery_runtime(s, tenant_id, account_id)
             now = self._db_now(s)
@@ -487,6 +504,8 @@ class TextAuthority:
             from conversation_engine.delivery import prepare as prepare_engine_decision
             engine_decision = prepare_engine_decision(s, runtime, fan_id, origin, engine_decision_id, body,
                                                       catalog_item_id, quoted_price_cents)
+            from conversation_engine.independence import certified_anchor
+            independent_anchor = certified_anchor(s, runtime, engine_decision, state, policy) if engine_decision is not None else None
             from .conversation_policy import action_of
             moxy_event = None
             moxy_terms = None
@@ -495,7 +514,9 @@ class TextAuthority:
                 from moxy_replacement.delivery import prepare_decision
                 moxy_event, moxy_terms, moxy_action = prepare_decision(s, account_id, fan_id, moxy_event_id, body)
             reason = self._eligibility(s, runtime, policy, state, fan, origin, now,
-                manual_attachment=manual_media is not None, action=moxy_action or action_of(origin, catalog_item_id))
+                manual_attachment=manual_media is not None,
+                action=('commercial' if catalog_item_id is not None else 'chat') if engine_decision is not None else moxy_action or action_of(origin, catalog_item_id),
+                engine_action=engine_decision is not None, independent=independent_anchor is not None)
             if reason:
                 raise Refused(reason)
             from .handover import staff_owns_takeover
@@ -506,7 +527,7 @@ class TextAuthority:
             if policy.queued_count >= MAX_QUEUED:
                 raise Refused("delivery queue full")
             from . import concurrent_admission
-            if policy.active_intent_id and not concurrent_admission.mode(policy) == "concurrent":
+            if policy.active_intent_id and not concurrent_admission.mode(policy) == "concurrent" and independent_anchor is None:
                 raise Refused("account delivery unresolved")
             recipient = None
             if origin == "campaign":
@@ -681,8 +702,12 @@ class TextAuthority:
                 obsolete = not current(s, intent, runtime, now)
             if not obsolete and intent.origin == "engagement":
                 obsolete = not self._engagement().current(s, intent, runtime, now)
+            from conversation_engine.independence import certified_for_intent
+            independent_anchor = certified_for_intent(s, runtime, intent, state, policy) if not obsolete and engine_action else None
             reason = "snapshot_changed" if obsolete else self._eligibility(s, runtime, policy, state, fan, intent.origin, now,
-                manual_attachment=self._manual_attachment(intent), action=self._action(intent))
+                manual_attachment=self._manual_attachment(intent),
+                action=('commercial' if intent.catalog_item_id is not None else 'chat') if engine_action else self._action(intent),
+                engine_action=engine_action, independent=independent_anchor is not None)
             if reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
                 # A different fan's pending ingress can temporarily invalidate the
                 # account history check. Preserve the current, still-unsent reply;
@@ -699,7 +724,7 @@ class TextAuthority:
                 return intent.status
             from . import concurrent_admission
             concurrent = concurrent_admission.mode(policy) == "concurrent"
-            if not concurrent and (policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True)):
+            if not concurrent and (policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True)) and independent_anchor is None:
                 intent.reason = "account_busy"
                 return "queued"
             if not concurrent and policy.next_dispatch_at is not None and policy.next_dispatch_at > now:
@@ -722,7 +747,8 @@ class TextAuthority:
             policy.used_units += 1
             policy.queued_count -= 1
             if not concurrent:
-                policy.active_intent_id = intent.intent_id
+                if independent_anchor is None:
+                    policy.active_intent_id = intent.intent_id
                 policy.next_dispatch_at = now + timedelta(seconds=policy.throttle_seconds)
             intent.status, intent.reason, intent.updated_at = "dispatching", None, now
             if intent.quote_json:
@@ -731,7 +757,12 @@ class TextAuthority:
             intent.attempt_id, intent.dispatch_token = attempt, token
             intent.dispatched_at, intent.deadline = now, now + timedelta(seconds=DISPATCH_SECONDS)
             intent.reservation_held = True
-            state.unresolved_attempt_id, state.updated_at = attempt, now
+            if independent_anchor is None:
+                state.unresolved_attempt_id = attempt
+            else:
+                from conversation_engine.independence import begin_admission
+                begin_admission(s, intent, independent_anchor)
+            state.updated_at = now
             from conversation_engine.delivery import attempt_started as engine_attempt_started
             engine_attempt_started(s, intent)
             return self._grant(intent)
@@ -795,7 +826,7 @@ class TextAuthority:
         if transport_generation is not None and (type(transport_generation) is not int or transport_generation < 0):
             raise Refused("invalid transport generation")
         # Immediately-before-the-wire safety scan (R1): a stop request that landed after planning is judged now.
-        self._safety_scan(tenant_id, grant.account_id, grant.fan_id, grant.origin)
+        self._safety_scan_intent(tenant_id, grant.account_id, grant.intent_id, status="dispatching")
         with Session(self.engine) as s, s.begin():
             runtime = self._historical_runtime(s, tenant_id, grant.account_id)
             row = self._intent(s, grant.account_id, grant.intent_id)
@@ -839,9 +870,14 @@ class TextAuthority:
                 obsolete = not current(s, row, runtime, now)
             if not obsolete and row.origin == "engagement":
                 obsolete = not self._engagement().current(s, row, runtime, now)
+            from conversation_engine.independence import certified_for_intent, admission_for
+            independent_anchor = certified_for_intent(s, runtime, row, state, policy) if not obsolete and engine_action else None
+            independent_admission = admission_for(s, row)
             reason = "snapshot_changed" if obsolete else self._eligibility(
                 s, runtime, policy, state, fan, row.origin, now, own_attempt_id=row.attempt_id,
-                manual_attachment=self._manual_attachment(row), action=self._action(row))
+                manual_attachment=self._manual_attachment(row),
+                action=('commercial' if row.catalog_item_id is not None else 'chat') if engine_action else self._action(row),
+                engine_action=engine_action, independent=independent_anchor is not None)
             from . import concurrent_admission
             concurrent = concurrent_admission.mode(policy) == "concurrent"
             if concurrent:
@@ -861,6 +897,10 @@ class TextAuthority:
                 if not row.reservation_held or state.unresolved_attempt_id != row.attempt_id \
                         or not concurrent_admission.check_holder(s, tenant_id, row.account_id, row.fan_id,
                                                                   row.intent_id, now):
+                    reason = "attempt_ownership_changed"
+            elif independent_anchor is not None:
+                if (independent_admission is None or independent_admission.status != 'dispatching'
+                        or independent_admission.anchor_intent_id != independent_anchor.intent_id or not row.reservation_held):
                     reason = "attempt_ownership_changed"
             elif (policy.active_intent_id != row.intent_id or not row.reservation_held
                   or state.unresolved_attempt_id != row.attempt_id):
@@ -938,15 +978,19 @@ class TextAuthority:
         from conversation_engine.delivery import unknown as engine_unknown
         engine_unknown(s, row)
         state = s.get(OfConversationState, (row.account_id, row.fan_id))
-        state.unresolved_attempt_id, state.requires_attention, state.updated_at = row.attempt_id, True, utcnow()
         policy = s.get(OfDeliveryPolicy, row.account_id)
+        from conversation_engine.independence import retain_unknown
+        independent = retain_unknown(s, row)
+        if not independent:
+            state.unresolved_attempt_id = row.attempt_id
+        state.requires_attention, state.updated_at = True, utcnow()
         from . import concurrent_admission
-        if tenant_id is not None and concurrent_admission.mode(policy) == "concurrent":
+        if not independent and tenant_id is not None and concurrent_admission.mode(policy) == "concurrent":
             gap = max(concurrent_admission.process_conversation_gap_s(),
                       float(getattr(policy, "conversation_min_gap_seconds", 0) or 0))
             concurrent_admission.release(s, tenant_id, row.account_id, row.fan_id, row.intent_id,
                                          row.attempt_id, "unknown", utcnow(), gap)
-        else:
+        elif not independent:
             policy.active_intent_id = row.intent_id
 
     def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport"):
@@ -1009,8 +1053,12 @@ class TextAuthority:
 
     def _release_hold(self, s, row, tenant_id=None):
         policy = s.get(OfDeliveryPolicy, row.account_id)
+        state = s.get(OfConversationState, (row.account_id, row.fan_id))
+        from conversation_engine.independence import admission_for, settle_and_promote
+        own_admission = admission_for(s, row)
+        promote = settle_and_promote(s, row, policy, state)
         from . import concurrent_admission
-        if tenant_id is not None and concurrent_admission.mode(policy) == "concurrent":
+        if own_admission is None and promote is None and tenant_id is not None and concurrent_admission.mode(policy) == "concurrent":
             gap = max(concurrent_admission.process_conversation_gap_s(),
                       float(getattr(policy, "conversation_min_gap_seconds", 0) or 0))
             concurrent_admission.release(s, tenant_id, row.account_id, row.fan_id, row.intent_id,
@@ -1029,6 +1077,12 @@ class TextAuthority:
         state = s.get(OfConversationState, (row.account_id, row.fan_id))
         if state.unresolved_attempt_id == row.attempt_id:
             state.unresolved_attempt_id = None
+            state.updated_at = utcnow()
+        if promote is not None:
+            policy.active_intent_id = promote.intent_id
+            state.unresolved_attempt_id = promote.attempt_id
+            if promote.status == 'unknown':
+                state.requires_attention = True
             state.updated_at = utcnow()
         # Attention may represent another safety concern. Receipt repair never
         # clears that independent flag or resumes replies. Completing a requested
@@ -1072,11 +1126,17 @@ class TextAuthority:
             self._release_hold(s, row, tenant_id)
             return row.status
 
-    def materialize(self, tenant_id, account_id, intent_id):
+    def materialize(self, tenant_id, account_id, intent_id, *, synthetic_engine_only=False):
         """Project a saved receipt atomically. This method cannot call transport."""
         with Session(self.engine) as s, s.begin():
-            self._historical_runtime(s, tenant_id, account_id)
+            runtime = self._historical_runtime(s, tenant_id, account_id)
             row = self._intent(s, account_id, intent_id)
+            if synthetic_engine_only:
+                from conversation_engine.delivery import is_engine_intent
+                policy = s.get(OfDeliveryPolicy, account_id)
+                if (policy is None or policy.transport_kind != 'synthetic' or row.binding_id != runtime.binding_id
+                        or not is_engine_intent(s, row)):
+                    raise Refused('synthetic engine recovery scope unavailable')
             if row.status != "accepted" or not row.receipt_json:
                 raise Refused("accepted receipt required")
             if row.projected_at is not None:
@@ -1154,6 +1214,7 @@ class TextAuthority:
         from .provider_connector import NativeProviderConnector
         from .fastt_manual import FasttManualTransport, fastt_owned
         from fans_api_adapter.synthetic_transport import FansApiSyntheticTransport
+        from fans_api_adapter.local_http import FansApiLocalHttpTransport
         # One sender per owned fan: only the FASTT runner's transport may send a
         # operator-authored manual/campaign message for it. Campaign origin
         # retains automated-history and campaign-control validation.
@@ -1167,7 +1228,7 @@ class TextAuthority:
         transport_generation = None
         if type(transport) is FasttManualTransport:
             transport_generation = transport.policy_revision
-        elif type(transport) not in {SyntheticTextTransport, FansApiSyntheticTransport}:
+        elif type(transport) not in {SyntheticTextTransport, FansApiSyntheticTransport, FansApiLocalHttpTransport}:
             try:
                 from .loopback_transport import LoopbackTextTransport
                 from .native_connector import NativeLoopbackConnector
@@ -1246,25 +1307,41 @@ class TextAuthority:
                 current = policy.next_dispatch_at
                 policy.next_dispatch_at = max(current, until) if current is not None else until
 
-    def expire_dispatches(self, tenant_id, account_id, *, limit=100):
-        if type(limit) is not int or not 1 <= limit <= 100:
+    def expire_dispatches(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False):
+        if type(limit) is not int or not 1 <= limit <= 100 or type(synthetic_engine_only) is not bool:
             raise Refused("invalid recovery limit")
         with Session(self.engine) as s, s.begin():
-            self._historical_runtime(s, tenant_id, account_id)
+            runtime = self._historical_runtime(s, tenant_id, account_id)
             now = self._db_now(s)
-            rows = s.scalars(select(OfTextIntent).where(OfTextIntent.account_id == account_id,
+            query = select(OfTextIntent).where(OfTextIntent.account_id == account_id,
                 OfTextIntent.status == "dispatching", OfTextIntent.deadline <= now)
-                .order_by(OfTextIntent.deadline, OfTextIntent.intent_id).limit(limit)).all()
+            if synthetic_engine_only:
+                from db.onlyfans_engine_models import OfEngineDecision
+                policy = s.get(OfDeliveryPolicy, account_id)
+                if policy is None or policy.transport_kind != 'synthetic':
+                    raise Refused('synthetic engine recovery scope unavailable')
+                query = query.join(OfEngineDecision, (OfEngineDecision.account_id == OfTextIntent.account_id) &
+                    (OfEngineDecision.intent_id == OfTextIntent.intent_id)).where(
+                    OfTextIntent.binding_id == runtime.binding_id, OfEngineDecision.binding_id == runtime.binding_id)
+            rows = s.scalars(query.order_by(OfTextIntent.deadline, OfTextIntent.intent_id).limit(limit)).all()
             for row in rows:
                 self._hold_unknown(s, row, "dispatch_expired", tenant_id)
             return len(rows)
 
-    def repair(self, tenant_id, account_id, *, limit=100):
-        if type(limit) is not int or not 1 <= limit <= 100:
+    def repair(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False):
+        if type(limit) is not int or not 1 <= limit <= 100 or type(synthetic_engine_only) is not bool:
             raise Refused("invalid repair limit")
         with Session(self.engine) as s, s.begin():
-            self._historical_runtime(s, tenant_id, account_id)
-            ids = s.scalars(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account_id,
+            runtime = self._historical_runtime(s, tenant_id, account_id)
+            query = select(OfTextIntent.intent_id).where(OfTextIntent.account_id == account_id,
                 OfTextIntent.status == "accepted", OfTextIntent.projected_at.is_(None))
-                .order_by(OfTextIntent.created_at, OfTextIntent.intent_id).limit(limit)).all()
-        return sum(self.materialize(tenant_id, account_id, identity) for identity in ids)
+            if synthetic_engine_only:
+                from db.onlyfans_engine_models import OfEngineDecision
+                policy = s.get(OfDeliveryPolicy, account_id)
+                if policy is None or policy.transport_kind != 'synthetic':
+                    raise Refused('synthetic engine recovery scope unavailable')
+                query = query.join(OfEngineDecision, (OfEngineDecision.account_id == OfTextIntent.account_id) &
+                    (OfEngineDecision.intent_id == OfTextIntent.intent_id)).where(
+                    OfTextIntent.binding_id == runtime.binding_id, OfEngineDecision.binding_id == runtime.binding_id)
+            ids = s.scalars(query.order_by(OfTextIntent.created_at, OfTextIntent.intent_id).limit(limit)).all()
+        return sum(self.materialize(tenant_id, account_id, identity, synthetic_engine_only=synthetic_engine_only) for identity in ids)

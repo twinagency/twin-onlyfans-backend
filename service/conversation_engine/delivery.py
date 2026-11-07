@@ -27,9 +27,15 @@ def prepare(s, runtime, fan_id, origin, decision_id, body, catalog_item_id=None,
             or decision.owner_epoch != owner.epoch or decision.status != 'ready'
             or decision.action not in {'reply', 'offer'} or decision.body != body or decision.intent_id is not None
             or state is None or decision.control_revision != state.revision
-            or decision.input_revision != state.input_revision
             or policy is None or policy.transport_kind != 'synthetic'):
         raise Refused('engine decision is stale or unavailable')
+    from .sequence import prior_state
+    sequence_reason = prior_state(s, runtime, decision, state)
+    if sequence_reason is not None:
+        raise Refused('sequence ' + sequence_reason.replace('_', ' '))
+    from .memory import current as memory_current
+    if not memory_current(s, runtime, decision):
+        raise Refused('fan memory changed or is unavailable for the decision')
     if decision.action == 'reply':
         if catalog_item_id is not None or quoted_price_cents is not None or decision.terms_json is not None:
             raise Refused('plain reply carries unexpected commercial terms')
@@ -86,6 +92,9 @@ def current(s, runtime, intent):
              and decision.owner_epoch == owner.epoch and decision.body == intent.body
              and decision.payload_hash == intent.payload_hash and request is not None
              and request.fan_id == intent.fan_id and request.status == 'open')
+    if valid:
+        from .memory import current as memory_current
+        valid = memory_current(s, runtime, decision)
     if valid and decision.action == 'offer':
         valid = media_current(s, runtime, intent) is True
     return bool(valid), True
@@ -155,7 +164,10 @@ def completed(s, intent):
     elif decision.action == 'offer':
         request.status, request.next_step = 'waiting_fan', 'await_purchase_or_question'
     else:
-        request.status, request.next_step = 'completed', 'none'
+        remaining = s.scalar(select(OfEngineDecision.decision_id).where(OfEngineDecision.account_id == intent.account_id,
+            OfEngineDecision.request_id == decision.request_id, OfEngineDecision.part_index > decision.part_index,
+            OfEngineDecision.status != 'completed').limit(1))
+        request.status, request.next_step = ('open', 'send_next_part') if remaining is not None else ('completed', 'none')
     request.updated_at = utcnow()
     request.revision += 1
 
@@ -199,6 +211,11 @@ def unsent_cancelled(s, intent):
     if decision is None:
         return
     decision.status, decision.updated_at = 'cancelled', utcnow()
+    later = s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == intent.account_id,
+        OfEngineDecision.request_id == decision.request_id, OfEngineDecision.part_index > decision.part_index,
+        OfEngineDecision.status == 'ready')).all()
+    for part in later:
+        part.status, part.updated_at = 'cancelled', utcnow()
     request = s.get(OfEngineRequest, (intent.account_id, decision.request_id))
     if request.status not in {'handover_pending', 'handover_accepted'}:
         request.status = 'open'

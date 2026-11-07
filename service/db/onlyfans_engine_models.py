@@ -62,16 +62,19 @@ class OfEngineDecision(Base):
         ForeignKeyConstraint(['account_id', 'request_id'], ['of_engine_request.account_id', 'of_engine_request.request_id'], ondelete='RESTRICT'),
         ForeignKeyConstraint(['account_id', 'intent_id'], ['of_text_intent.account_id', 'of_text_intent.intent_id'], ondelete='RESTRICT'),
         ForeignKeyConstraint(['account_id', 'offer_grant_id'], ['of_engine_offer_grant.account_id', 'of_engine_offer_grant.grant_id'], ondelete='RESTRICT'),
-        UniqueConstraint('account_id', 'request_id', name='uq_engine_decision_request'),
+        UniqueConstraint('account_id', 'request_id', 'part_index', name='uq_engine_decision_request_part',
+                         info={'onlyfans_since': '0117_engine_message_parts'}),
         UniqueConstraint('account_id', 'intent_id', name='uq_engine_decision_intent'),
         CheckConstraint("status IN ('ready','queued','unknown','completed','cancelled','held')", name='status'),
         CheckConstraint("action IN ('reply','offer')", name='action'),
+        CheckConstraint('part_index BETWEEN 0 AND 3', name='part_index', info={'onlyfans_since': '0117_engine_message_parts'}),
         Index('ix_engine_decision_status', 'account_id', 'fan_id', 'status'),
         {'info': INFO},
     )
     account_id = Column(String, primary_key=True)
     decision_id = Column(String(36), primary_key=True)
     request_id = Column(String(36), nullable=False)
+    part_index = Column(Integer, nullable=False, server_default=text('0'), info={'onlyfans_since': '0117_engine_message_parts'})
     fan_id = Column(BigInteger, nullable=False)
     binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
     owner_epoch = Column(BigInteger, nullable=False)
@@ -198,4 +201,117 @@ class OfEngineAccessEvidence(Base):
     applied = Column(Boolean, nullable=False)
     evidence_ref = Column(String(128), nullable=False)
     occurred_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+# Revision 0114: a proof is derived by trusted code from a canonical source;
+# the model cannot assert that its own answer is independent.
+DEPENDENCY_INFO = {'onlyfans_since': '0114_independent_replies'}
+
+
+class OfEngineIndependenceProof(Base):
+    __tablename__ = 'of_engine_independence_proof'
+    __table_args__ = (
+        ForeignKeyConstraint(['account_id', 'decision_id'], ['of_engine_decision.account_id', 'of_engine_decision.decision_id'], ondelete='RESTRICT'),
+        ForeignKeyConstraint(['account_id', 'anchor_intent_id'], ['of_text_intent.account_id', 'of_text_intent.intent_id'], ondelete='RESTRICT'),
+        ForeignKeyConstraint(['account_id', 'fan_id', 'source_message_id'], ['messages.account_id', 'messages.fan_id', 'messages.message_id'], ondelete='RESTRICT'),
+        CheckConstraint("kind IN ('arithmetic.v1')", name='kind'),
+        {'info': DEPENDENCY_INFO},
+    )
+    account_id = Column(String, primary_key=True)
+    decision_id = Column(String(36), primary_key=True)
+    fan_id = Column(BigInteger, nullable=False)
+    source_message_id = Column(BigInteger, nullable=False)
+    anchor_intent_id = Column(String(36), nullable=False)
+    kind = Column(String(32), nullable=False)
+    source_sha256 = Column(String(64), nullable=False)
+    answer_sha256 = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+class OfEngineIndependentAdmission(Base):
+    __tablename__ = 'of_engine_independent_admission'
+    __table_args__ = (
+        ForeignKeyConstraint(['account_id', 'intent_id'], ['of_text_intent.account_id', 'of_text_intent.intent_id'], ondelete='RESTRICT'),
+        ForeignKeyConstraint(['account_id', 'anchor_intent_id'], ['of_text_intent.account_id', 'of_text_intent.intent_id'], ondelete='RESTRICT'),
+        CheckConstraint("status IN ('dispatching','unknown','settled')", name='status'),
+        Index('uq_engine_independent_active', 'account_id', unique=True,
+              postgresql_where=text("status IN ('dispatching','unknown')"),
+              sqlite_where=text("status IN ('dispatching','unknown')")),
+        {'info': DEPENDENCY_INFO},
+    )
+    account_id = Column(String, primary_key=True)
+    attempt_id = Column(String(36), primary_key=True)
+    intent_id = Column(String(36), nullable=False)
+    anchor_intent_id = Column(String(36), nullable=False)
+    fan_id = Column(BigInteger, nullable=False)
+    status = Column(String(16), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+
+
+MEMORY_INFO = {'onlyfans_since': '0115_engine_memory'}
+
+
+class OfEngineMemoryBinding(Base):
+    __tablename__ = 'of_engine_memory_binding'
+    __table_args__ = (
+        ForeignKeyConstraint(['account_id', 'decision_id'], ['of_engine_decision.account_id', 'of_engine_decision.decision_id'], ondelete='RESTRICT'),
+        ForeignKeyConstraint(['account_id', 'fan_id', 'source_message_id'], ['messages.account_id', 'messages.fan_id', 'messages.message_id'], ondelete='RESTRICT'),
+        CheckConstraint("status IN ('current','unavailable')", name='status'),
+        {'info': MEMORY_INFO},
+    )
+    account_id = Column(String, primary_key=True)
+    decision_id = Column(String(36), primary_key=True)
+    fan_id = Column(BigInteger, nullable=False)
+    source_message_id = Column(BigInteger, nullable=False)
+    binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
+    source_sha256 = Column(String(64), nullable=False)
+    status = Column(String(16), nullable=False)
+    fingerprint = Column(String(64), nullable=False)
+    offer_fingerprint = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+CATALOGUE_INFO = {'onlyfans_since': '0116_engine_catalogue'}
+
+
+class OfEngineCatalogueAlias(Base):
+    __tablename__ = 'of_engine_catalogue_alias'
+    __table_args__ = (
+        UniqueConstraint('account_id', 'binding_id', 'item_id', 'normalized', 'content_hash', name='uq_engine_catalogue_alias_version'),
+        Index('ix_engine_catalogue_alias_lookup', 'account_id', 'binding_id', 'normalized'),
+        {'info': CATALOGUE_INFO},
+    )
+    account_id = Column(String, primary_key=True)
+    alias_id = Column(String(36), primary_key=True)
+    binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
+    item_id = Column(Integer, ForeignKey('catalog_items.id', ondelete='RESTRICT'), nullable=False)
+    alias = Column(String(128), nullable=False)
+    normalized = Column(String(128), nullable=False)
+    content_hash = Column(String(64), nullable=False)
+    actor = Column(String(128), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+OPERATOR_INFO = {'onlyfans_since': '0118_engine_operator'}
+
+
+class OfEngineOperatorCommand(Base):
+    __tablename__ = 'of_engine_operator_command'
+    __table_args__ = (
+        ForeignKeyConstraint(['account_id', 'request_id'], ['of_engine_request.account_id', 'of_engine_request.request_id'], ondelete='RESTRICT'),
+        CheckConstraint("action IN ('request_handover','accept_handover','complete','decline')", name='action'),
+        {'info': OPERATOR_INFO},
+    )
+    account_id = Column(String, primary_key=True)
+    command_key = Column(String(64), primary_key=True)
+    request_id = Column(String(36), nullable=False)
+    action = Column(String(24), nullable=False)
+    actor = Column(String(128), nullable=False)
+    expected_revision = Column(Integer, nullable=False)
+    target = Column(String(128))
+    evidence_ref = Column(String(128))
+    request_hash = Column(String(64), nullable=False)
+    result_json = Column(Text, nullable=False)
     created_at = Column(DateTime, nullable=False)

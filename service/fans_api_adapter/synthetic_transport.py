@@ -22,7 +22,12 @@ from .send_outcome import classify_send_error
 class SyntheticFansProvider:
     def __init__(self, outcomes=('accepted',), *, message_id=9001):
         self.outcomes = list(outcomes)
-        self.message_id = message_id
+        if type(message_id) is tuple:
+            if not message_id or any(type(value) is not int or value <= 0 for value in message_id):
+                raise ValueError('invalid synthetic message ids')
+            self.message_ids, self.message_id = list(message_id), message_id[-1]
+        else:
+            self.message_ids, self.message_id = [], message_id
         self.calls = []
         self.accepted = {}
 
@@ -41,10 +46,13 @@ class SyntheticFansProvider:
             return 422, {'error': 'IDEMPOTENCY_KEY_MISMATCH'}
         if outcome not in {'accepted', 'accepted_lost'}:
             raise RuntimeError('invalid synthetic outcome')
-        saved = self.accepted.setdefault(request['idempotency_key'], {
-            'data': {'id': self.message_id},
-            '_fixture_scope': {'account_id': request['account_id'], 'chat_id': request['chat_id']},
-            '_fixture_request': deepcopy(request)})
+        saved = self.accepted.get(request['idempotency_key'])
+        if saved is None:
+            message_id = self.message_ids.pop(0) if self.message_ids else self.message_id
+            saved = {'data': {'id': message_id},
+                '_fixture_scope': {'account_id': request['account_id'], 'chat_id': request['chat_id']},
+                '_fixture_request': deepcopy(request)}
+            self.accepted[request['idempotency_key']] = saved
         if outcome == 'accepted_lost':
             raise TimeoutError('synthetic accepted response lost')
         return 200, saved
@@ -80,7 +88,7 @@ class FansApiSyntheticTransport:
             payload['price'] = Decimal(grant.price_cents) / Decimal(100)
         request = {'account_id': provider_account, 'chat_id': str(grant.fan_id),
                    'idempotency_key': grant.intent_id, 'body': payload}
-        status, body = self.provider.send(request)
+        status, body = self._send_provider(request)
         proof = dict(account_id=grant.account_id, fan_id=grant.fan_id, intent_id=grant.intent_id,
             attempt_id=grant.attempt_id, payload_hash=grant.payload_hash,
             occurred_at=datetime.now(timezone.utc).isoformat(), evidence_ref='synthetic-fans:' + grant.attempt_id)
@@ -97,6 +105,11 @@ class FansApiSyntheticTransport:
             return NotAccepted(**proof)
         return None  # unknown, mismatch and conflict stay unresolved
 
+
+    def _send_provider(self, request):
+        if type(self.provider) is not SyntheticFansProvider:
+            raise Refused('only the in-process provider fixture is available')
+        return self.provider.send(request)
 
     def reconcile_accepted(self, intent_id):
         """Recover a saved synthetic acceptance without making another send.

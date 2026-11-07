@@ -1,8 +1,7 @@
 """Persist authenticated synthetic Fans API intake before acknowledgement.
 
-No HTTP listener, network client, real credentials or live connection is
-provided. The adapter records webhook evidence and the canonical ingress in a
-single transaction. Unknown/unsupported identities fail closed.
+The adapter records webhook evidence and canonical ingress in one transaction.
+The separate local HTTP lab uses only synthetic credentials and loopback I/O. Unknown/unsupported identities fail closed.
 """
 from datetime import datetime
 from hashlib import sha256
@@ -36,6 +35,10 @@ def _unique_object(pairs):
             raise ValueError('duplicate JSON key')
         obj[key] = value
     return obj
+
+
+def _nonfinite(_):
+    raise ValueError('nonfinite JSON value')
 
 
 def _message(body):
@@ -108,7 +111,7 @@ class FansWebhookAdapter:
                 or type(event_key) is not str or not 1 <= len(event_key) <= 255 or event_key != event_key.strip()):
             raise Refused('webhook authentication or identity failed')
         try:
-            body = json.loads(raw_body.decode('utf-8'), object_pairs_hook=_unique_object)
+            body = json.loads(raw_body.decode('utf-8'), object_pairs_hook=_unique_object, parse_constant=_nonfinite)
         except (UnicodeError, ValueError, TypeError) as exc:
             raise Refused('invalid webhook payload') from exc
         provider_id = body.get('account_id') if type(body) is dict else None

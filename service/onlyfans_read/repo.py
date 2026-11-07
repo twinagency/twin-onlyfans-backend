@@ -500,20 +500,35 @@ class SqlOnlyFansReadRepo:
                 owner, current_binding = row
                 if owner.binding_id != current_binding:
                     return {'schemaVersion': 'of-engine.v1', 'state': 'unavailable'}
-                rows = (await s.execute(select(OfEngineRequest, OfEngineDecision.status, OfTextIntent.status, OfEngineDecision.action)
-                    .outerjoin(OfEngineDecision, and_(OfEngineDecision.account_id == OfEngineRequest.account_id,
-                        OfEngineDecision.request_id == OfEngineRequest.request_id))
+                rows = list((await s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account_id,
+                    OfEngineRequest.fan_id == fan_id, OfEngineRequest.binding_id == current_binding)
+                    .order_by(OfEngineRequest.created_at.desc(), OfEngineRequest.request_id.desc()).limit(21))).all())
+                page = rows[:20]
+                ids = [row.request_id for row in page]
+                action_rows = (await s.execute(select(OfEngineDecision, OfTextIntent.status)
                     .outerjoin(OfTextIntent, and_(OfTextIntent.account_id == OfEngineDecision.account_id,
                         OfTextIntent.intent_id == OfEngineDecision.intent_id))
-                    .where(OfEngineRequest.account_id == account_id, OfEngineRequest.fan_id == fan_id,
-                           OfEngineRequest.binding_id == current_binding)
-                    .order_by(OfEngineRequest.created_at.desc(), OfEngineRequest.request_id.desc()).limit(21))).all()
+                    .where(OfEngineDecision.account_id == account_id, OfEngineDecision.request_id.in_(ids))
+                    .order_by(OfEngineDecision.request_id, OfEngineDecision.part_index))).all() if ids else []
+                grouped = {identity: [] for identity in ids}
+                for decision, intent_status in action_rows:
+                    grouped[decision.request_id].append((decision, intent_status))
+                requests = []
+                for r in page:
+                    actions = grouped[r.request_id]
+                    unknown = next((entry for entry in actions if entry[1] == 'unknown' or entry[0].status == 'unknown'), None)
+                    unfinished = next((entry for entry in actions if entry[0].status != 'completed'), None)
+                    chosen = unknown or unfinished or (actions[-1] if actions else None)
+                    requests.append({'requestId':r.request_id, 'sourceMessageId':str(r.source_message_id),
+                        'status':r.status, 'owner':r.owner, 'nextStep':r.next_step, 'revision':r.revision,
+                        'actionOutcome':(chosen[1] or chosen[0].status) if chosen else None,
+                        'actionType':chosen[0].action if chosen else None,
+                        'partsCompleted':sum(decision.status == 'completed' for decision, _ in actions),
+                        'partsTotal':len(actions)})
                 return {'schemaVersion': 'of-engine.v1', 'state': 'current', 'accountId': account_id,
                     'conversationId': f'{account_id}:{fan_id}', 'environment': 'simulation',
                     'mode': owner.mode, 'salesMode': owner.sales_mode, 'truncated': len(rows) > 20,
-                    'requests': [{'requestId': r.request_id, 'sourceMessageId': str(r.source_message_id),
-                        'status': r.status, 'owner': r.owner, 'nextStep': r.next_step,
-                        'actionOutcome': intent_status or decision_status, 'actionType': action} for r, decision_status, intent_status, action in rows[:20]]}
+                    'requests':requests}
         except SQLAlchemyError as exc:
             raise _storage_failure(exc) from exc
 

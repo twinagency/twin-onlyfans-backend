@@ -407,12 +407,12 @@ class Store:
         runtime.pending_events -= 1
         s.flush()
 
-    def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None, bulk=False):
+    def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None, bulk=False, synthetic_engine_only=False):
         from onlyfans_read.agency_scope import current_scope, actor_allowed
         if current_scope.get() is not None and not actor_allowed(actor, capability="chat" if action in {"request_takeover", "release_takeover"} else "manage"):
             raise Refused("management permission required")
         _id(fan_id)
-        if type(bulk) is not bool or bulk and action not in {"pause_automation", "resume_automation"}:
+        if type(synthetic_engine_only) is not bool or type(bulk) is not bool or bulk and action not in {"pause_automation", "resume_automation"}:
             raise Refused("invalid bulk control")
         if mode not in {"automated", "human_controlled", "paused", "no_contact"}:
             raise Refused("invalid control mode")
@@ -426,6 +426,13 @@ class Store:
             raise Refused("invalid audit evidence")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
+            if synthetic_engine_only:
+                from db.onlyfans_delivery_models import OfDeliveryPolicy
+                from db.onlyfans_engine_models import OfEngineOwner
+                policy, owner = s.get(OfDeliveryPolicy, account_id), s.get(OfEngineOwner, (account_id, fan_id))
+                if (policy is None or policy.transport_kind != 'synthetic' or owner is None
+                        or owner.binding_id != runtime.binding_id or action != 'mark_no_contact'):
+                    raise Refused('synthetic engine control scope unavailable')
             prior = s.get(OfControlAudit, (account_id, command_key))
             if prior:
                 if (prior.fan_id, prior.mode, prior.previous_revision, prior.actor, prior.reason, prior.consent_ref, prior.action) != (fan_id, mode, expected_revision, actor, reason, consent_ref, action):
@@ -737,13 +744,17 @@ class Store:
         # Retained receipts are evidence even if an older control row never
         # acquired its pointer. Never infer resolution from a missing pointer,
         # or from the receipt falling outside the latest history page.
-        return state.unresolved_attempt_id is not None or Store._native_unresolved(s, account_id, fan_id) or s.scalar(
+        from db.onlyfans_engine_models import OfEngineIndependentAdmission
+        return (state.unresolved_attempt_id is not None or Store._native_unresolved(s, account_id, fan_id)
+            or s.scalar(select(OfEngineIndependentAdmission.attempt_id).where(
+                OfEngineIndependentAdmission.account_id == account_id, OfEngineIndependentAdmission.fan_id == fan_id,
+                OfEngineIndependentAdmission.status.in_(("dispatching", "unknown"))).limit(1)) is not None or s.scalar(
             select(OfMessageDelivery.message_id).where(
                 OfMessageDelivery.account_id == account_id,
                 OfMessageDelivery.fan_id == fan_id,
                 OfMessageDelivery.outcome.in_(UNRESOLVED_OUTCOMES),
             ).limit(1)
-        ) is not None
+        ) is not None)
 
     def complete(self, tenant_id, claim: Claim):
         with Session(self.engine) as s, s.begin():

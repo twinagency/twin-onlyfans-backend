@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 from pathlib import Path
 
 from alembic import command
@@ -63,7 +64,12 @@ RECENT_HISTORY = "0110_recent_history"
 MOXY = '0111_moxy_owner'
 VAULT_WINDOW = '0112_vault_recent_window'
 ENGINE = '0113_conversation_engine'
-HEAD = ENGINE
+INDEPENDENCE = '0114_independent_replies'
+ENGINE_MEMORY = '0115_engine_memory'
+ENGINE_CATALOGUE = '0116_engine_catalogue'
+ENGINE_PARTS = '0117_engine_message_parts'
+ENGINE_OPERATOR = '0118_engine_operator'
+HEAD = ENGINE_OPERATOR
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -83,6 +89,11 @@ REVISION_RANK[RECENT_HISTORY] = 110
 REVISION_RANK[MOXY] = 111
 REVISION_RANK[VAULT_WINDOW] = 112
 REVISION_RANK[ENGINE] = 113
+REVISION_RANK[INDEPENDENCE] = 114
+REVISION_RANK[ENGINE_MEMORY] = 115
+REVISION_RANK[ENGINE_CATALOGUE] = 116
+REVISION_RANK[ENGINE_PARTS] = 117
+REVISION_RANK[ENGINE_OPERATOR] = 118
 
 
 class SchemaMismatch(RuntimeError):
@@ -199,6 +210,11 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                     normal = predicate.replace("(", "").replace(")", "").replace("::text", "").replace("::character varying", "").strip()
                     if normal != "status = 'active'":
                         failures.append(f"incompatible predicate {index.name}")
+                if index.name == "uq_engine_independent_active":
+                    normal = re.sub(r"::(?:character varying|text)(?:\[\])?", "", predicate)
+                    normal = re.sub(r"[\s()]", "", normal)
+                    if normal != "status=ANYARRAY['dispatching','unknown']":
+                        failures.append(f"incompatible predicate {index.name}")
         actual_fks = {(tuple(f["constrained_columns"]), f["referred_table"], tuple(f["referred_columns"])) for f in inspector.get_foreign_keys(table.name)}
         for fk in table.foreign_key_constraints:
             if any(since_rank(c) > expected_rank for c in fk.columns):
@@ -211,6 +227,9 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             if constraint.__class__.__name__ == "UniqueConstraint" and since_rank(constraint) <= expected_rank and all(since_rank(c) <= expected_rank for c in constraint.columns):
                 if tuple(c.name for c in constraint.columns) not in actual_uniques:
                     failures.append(f"missing unique constraint {table.name}")
+        if table.name == "of_engine_decision" and 113 <= expected_rank < 117:
+            if ("account_id", "request_id") not in actual_uniques:
+                failures.append("missing historical engine decision uniqueness")
         if table.name == "of_content_sync_conflict" and 89 <= expected_rank < 91:
             if ("account_id", "item_id", "observation_id") not in actual_uniques:
                 failures.append("missing historical unique constraint of_content_sync_conflict")
@@ -261,7 +280,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             ("of_fans_webhook_conflict", "of_fans_webhook_conflict_immutable", "39d01166ca3144e7023fbc6732a73c9ee1866f05b9b9a9cdb8642133c85ae7e2"),
             ("of_fans_webhook", "of_fans_webhook_immutable", "8bb75b1834fff575d53602b879ee8c46244cc4f8ab640b0b130ce550e513c093"),
             ("of_engine_attempt", "of_engine_attempt_guard", "1e18c0a1170d1c166ea160c12575d140d0a0fce8638b667807c7f79cb2318c4b"),
-            ("of_engine_decision", "of_engine_decision_guard", "1b56e33ccf1012b5e32442f732e8ac24c939e47f104313fc12d8b6b597c146c7"),
+            ("of_engine_decision", "of_engine_decision_guard", ("3806025b7b338519836a2d2d2aa52ca819c96185613179983f347383d7121b30" if expected_rank >= 117 else "1b56e33ccf1012b5e32442f732e8ac24c939e47f104313fc12d8b6b597c146c7")),
         ]:
             guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
                 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
@@ -276,6 +295,57 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                       "of_fans_webhook_conflict"):
             if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
                 failures.append(f"missing engine row security {table}")
+    if expected_rank >= 114:
+        for table, trigger, digest in [
+            ("of_engine_independence_proof", "of_engine_independence_proof_immutable", "4ca0160d28a49c2a51220d1e4004ea563843b024dea37c5c9abf9e65ca8552d0"),
+            ("of_engine_independent_admission", "of_engine_independent_admission_guard", "77c6275f4c06aafa1eadce00ddd9b21cd34eb2254c566ce356dd574a80f5dc08"),
+        ]:
+            guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+                FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+                WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+                {"table": table, "trigger": trigger}).all()
+            if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+                    or guard[0][2] != trigger or guard[0][4] != "plpgsql"
+                    or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != digest):
+                failures.append(f"missing independent action protection {table}")
+            if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
+                failures.append(f"missing independent action row security {table}")
+    if expected_rank >= 115:
+        table, trigger = "of_engine_memory_binding", "of_engine_memory_binding_immutable"
+        guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+            WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+            {"table": table, "trigger": trigger}).all()
+        if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+                or guard[0][2] != trigger or guard[0][4] != "plpgsql"
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "e1014b600a6f1c19580a9fe213fd0c24b9ba4b85c7473958edf62c7aa9fac63c"):
+            failures.append("missing engine memory binding protection")
+        if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
+            failures.append("missing engine memory row security")
+    if expected_rank >= 116:
+        table, trigger = "of_engine_catalogue_alias", "of_engine_catalogue_alias_immutable"
+        guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+            WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+            {"table": table, "trigger": trigger}).all()
+        if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+                or guard[0][2] != trigger or guard[0][4] != "plpgsql"
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "06ff29df259d3fcc7819505817e3282403b166c7d34a9103e44ce7ea009526dd"):
+            failures.append("missing catalogue alias protection")
+        if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
+            failures.append("missing catalogue alias row security")
+    if expected_rank >= 118:
+        table, trigger = "of_engine_operator_command", "of_engine_operator_command_immutable"
+        guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+            WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+            {"table": table, "trigger": trigger}).all()
+        if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+                or guard[0][2] != trigger or guard[0][4] != "plpgsql"
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "7480e4f649e1856d20d9bb4ab2b9891f0fc208bfb3fd241b2493c3d1e436e921"):
+            failures.append("missing engine operator command protection")
+        if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
+            failures.append("missing engine operator row security")
     if expected_rank >= 95:
         marker = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.prosrc::text
             FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid

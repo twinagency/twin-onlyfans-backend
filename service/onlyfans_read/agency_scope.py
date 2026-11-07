@@ -114,7 +114,7 @@ class AgencyScopeMiddleware:
                 moxy_put = scope["method"] == "PUT" and bool(re.fullmatch(
                     r"/onlyfans/configuration/v1/accounts/[A-Za-z0-9._:-]{1,64}/moxy", path))
                 chat_write = grant.can_chat and scope["method"] == "POST" and bool(re.fullmatch(
-                    r"/onlyfans/(?:control/v1/accounts/[A-Za-z0-9._:-]{1,64}/conversations/[A-Za-z0-9._:-]{1,64}|configuration/v1/accounts/[A-Za-z0-9._:-]{1,64}/history-memory/fans/[1-9][0-9]{0,17}/corrections)", path))
+                    r"/onlyfans/(?:control/v1/accounts/[A-Za-z0-9._:-]{1,64}/conversations/[A-Za-z0-9._:-]{1,64}(?:/requests/[0-9a-f-]{36})?|configuration/v1/accounts/[A-Za-z0-9._:-]{1,64}/history-memory/fans/[1-9][0-9]{0,17}/corrections)", path))
                 if (not allowed
                         or scope["method"] not in ({"GET", "HEAD", "POST"} | ({"PUT"} if chunk or moxy_put else set()))
                         or (scope["method"] in {"POST", "PUT"} and not grant.can_manage and not chat_write)):

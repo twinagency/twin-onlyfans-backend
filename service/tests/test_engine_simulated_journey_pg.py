@@ -379,13 +379,24 @@ def test_bounded_history_snapshot_discloses_older_messages(database):
     engine = EngineService(store, model)
     engine.select_simulated(TENANT, ACCOUNT, FAN)
     incoming(store, 1, 'current')
+    from onlyfans_runtime.store import Event
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, TENANT, ACCOUNT)
+        for n in range(101):
+            old = Event(FAN, 1000+n, (datetime.now(timezone.utc)-timedelta(days=1, seconds=n)).isoformat(),
+                        'out', 'Historical fixture').normalized()
+            assert store._record(s, runtime, old, old.payload(), 'import', utcnow()) == 'accepted'
+    while store.drain(TENANT, ACCOUNT):
+        pass
     with Session(database[1]) as s, s.begin():
-        s.add_all(Message(account_id=ACCOUNT, fan_id=FAN, message_id=1000+n, direction='out',
-                          body='Historical fixture', created_at=utcnow()-timedelta(days=1, seconds=n))
-                  for n in range(101))
+        # A historical row with no binding evidence must never leak into a new owner's snapshot.
+        s.add(Message(account_id=ACCOUNT, fan_id=FAN, message_id=8000, direction='out',
+                      body='unscoped historical secret', created_at=utcnow()-timedelta(days=2)))
     engine.plan(TENANT, ACCOUNT, FAN, 1)
     assert len(model.calls[0]['history']) == 100
     assert model.calls[0]['history_truncated'] is True
+    assert model.calls[0]['history_scope_incomplete'] is True
+    assert all(row['body'] != 'unscoped historical secret' for row in model.calls[0]['history'])
     store.close()
 
 

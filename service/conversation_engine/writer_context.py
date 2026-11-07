@@ -62,6 +62,8 @@ class CreatorProfile:
         strs(self.avoid_phrases, 80, 60); strs(self.private_terms, 60, 60); strs(self.approved_item_ids, 20, 20)
         if type(self.offers_permitted) is not bool:
             raise ValueError('invalid commercial permission')
+        if self.explicit_chat not in EXPLICIT_LEVELS:
+            raise ValueError('invalid creator chat permission')
 
     def fact(self, key):
         return next((v for k, v in self.facts if k == key), None)
@@ -90,11 +92,20 @@ class CreatorProfile:
     def from_dict(cls, raw):
         if type(raw) is not dict:
             raise ValueError('profile must be an object')
+        facts = raw.get('facts') or {}
+        if type(facts) is not dict:
+            raise ValueError('profile facts must be an object')
+        levels = [source['explicit_chat'] for source in (raw, facts) if 'explicit_chat' in source]
+        if any(type(level) is not str for level in levels):
+            raise ValueError('invalid creator chat permission')
+        levels = [level.strip().lower() for level in levels]
+        if any(level not in EXPLICIT_LEVELS for level in levels) or len(set(levels)) > 1:
+            raise ValueError('invalid or conflicting creator chat permissions')
         return cls(name=raw['name'], voice=raw.get('voice') or '',
-                   facts=tuple((k, str(v)) for k, v in (raw.get('facts') or {}).items()),
+                   facts=tuple((k, str(v)) for k, v in facts.items() if k != 'explicit_chat'),
                    limits=tuple(raw.get('limits') or ()), limit_terms=tuple(raw.get('limit_terms') or ()),
                    role_statement=raw.get('role_statement') or '', avoid_phrases=tuple(raw.get('avoid_phrases') or ()),
-                   private_terms=tuple(raw.get('private_terms') or ()),
+                   private_terms=tuple(raw.get('private_terms') or ()), explicit_chat=levels[0] if levels else 'explicit',
                    offers_permitted=raw.get('offers_permitted') is True,
                    approved_item_ids=tuple(str(x) for x in (raw.get('approved_item_ids') or ())))
 

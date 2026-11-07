@@ -11,7 +11,7 @@ never an HTTP status alone - https://docs.onlyfansapi.com/introduction/essential
   503 SERVICE_UNAVAILABLE not_sent   retry the SAME key; still not sent after the budget -> not accepted
   503 IDEMPOTENCY_UNAVAILABLE        this attempt was not executed: retry the SAME key (never after a 409: see _post)
   503 unknown / timeout / garbage    unknown: this fan is held, nobody else is touched
-  409 IDEMPOTENCY_CONFLICT           retry the same key within the budget; still in progress -> unknown
+  409 IDEMPOTENCY_CONFLICT           unknown; do not POST again without independent evidence
   400/422 + request_outcome not_sent rejected -> not accepted (blockBannedWords=strict_ban is always sent)
   400/422 without that field         unknown (a 4xx alone is not proof of non-delivery)
   422 IDEMPOTENCY_KEY_MISMATCH       unknown (a human must fix the key mapping; never mint a new key)
@@ -25,7 +25,7 @@ The transport is inert unless built through `build_real_transport`, which needs 
 same flag and a 0600 credentials file that is not inside any git work tree. The key is
 never logged or returned.
 """
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
@@ -183,25 +183,20 @@ class FansApiRealTransport:
     def _post(self, chat_id, key, body, media, previews, price_cents):
         """At most `max_attempts` (<= 3) POSTs TOTAL, first included, same key and payload every time.
 
-        Only two provider outcomes are retried: an explicit not-sent 503 and a 409 key-in-progress. Everything
-        else (accepted, unknown, key mismatch, malformed, rejected) ends the loop on the first answer. If a 409
-        was seen, a later 'not sent' only describes that one attempt and says nothing about the earlier one (the
-        key may still be running), so the final answer can never be 'not sent' after a conflict.
+        Only an explicit, proven-not-sent response permits another POST. A conflict means a request may already
+        be executing: stop immediately. The provider does not guarantee idempotency keys remain retained, so a
+        subsequent POST cannot safely serve as a read-only status check.
         """
         result = None
-        reserved = False
         for attempt in range(self.max_attempts):
             self.sent_calls += 1
             result = self.client.send(chat_id, key=key, text=body, media=[str(v) for v in media],
                                       previews=[str(v) for v in previews], price_cents=price_cents,
                                       block_banned_words='strict_ban')
-            if result.state not in ('not_sent', 'conflict'):
+            if result.state != 'not_sent':
                 return result
-            reserved = reserved or result.state == 'conflict'
             if attempt + 1 < self.max_attempts:
                 self.sleep(self.retry_delay * (attempt + 1))
-        if reserved and result.state == 'not_sent':
-            result = replace(result, state='unknown')
         return result
 
     def recover_interrupted(self):

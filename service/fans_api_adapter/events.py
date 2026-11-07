@@ -61,7 +61,9 @@ class FansEventIntake:
         self.settle = timedelta(seconds=mismatch_settle_seconds)
 
     # ------------------------------------------------------------------ intake
-    def accept(self, raw_body, signature, secret, event_key):
+    def accept(self, raw_body, signature, secret, event_key, *, expected_tenant=None, expected_account=None):
+        if (expected_tenant is None) != (expected_account is None):
+            raise Refused('complete expected scope required')
         if (type(raw_body) is not bytes or len(raw_body) > 1_000_000
                 or not verify_signature(raw_body, signature, secret)
                 or type(event_key) is not str or not _KEY.fullmatch(event_key)):
@@ -76,6 +78,13 @@ class FansEventIntake:
             connection = self._resolve(s, body, event, now)
             if connection is None:
                 raise Refused('provider account is not bound')
+            # An authenticated provider event is not sufficient authority to
+            # project it through a worker assigned to another creator/tenant.
+            if expected_account is not None:
+                binding = s.get(OfCreatorBinding, connection.binding_id)
+                if (connection.account_id != expected_account or binding is None
+                        or binding.tenant_id != expected_tenant):
+                    raise Refused('webhook account scope mismatch')
             account, epoch = connection.account_id, connection.epoch
             existing = s.get(OfFansWebhook, (account, epoch, event_key))
             if existing is not None:

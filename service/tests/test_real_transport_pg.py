@@ -125,13 +125,13 @@ def test_503_unknown_blocks_fan_without_retry(database):
         fake.close()
 
 
-def test_conflict_in_progress_retries_same_key_then_accepts(database):
+def test_conflict_in_progress_remains_unknown_without_a_second_post(database):
     fake = FakeFans(['conflict', 'accepted'])
     try:
         store, authority, engine, transport, _ = build(database, fake)
         intent = text_intent(engine, store)
-        assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'accepted'
-        assert len({p['key'] for p in fake.posts}) == 1 and sum(fake.executions.values()) == 1
+        assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'unknown'
+        assert len(fake.posts) == 1 and status(database, intent).status == 'unknown'
     finally:
         fake.close()
 
@@ -142,7 +142,7 @@ def test_conflict_never_resolving_stays_unknown(database):
         store, authority, engine, transport, _ = build(database, fake)
         intent = text_intent(engine, store)
         assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'unknown'
-        assert len({p['key'] for p in fake.posts}) == 1 and len(fake.posts) == 3
+        assert len(fake.posts) == 1 and status(database, intent).status == 'unknown'
     finally:
         fake.close()
 
@@ -315,3 +315,14 @@ def test_missing_allowlist_is_refused_before_provider_identity_io(monkeypatch):
     with pytest.raises(Refused, match='fan allowlist'):
         real_transport.build_real_transport(None, TENANT, ACCOUNT, creator_id='777', epoch=1,
                                             env={'TWIN_ENGINE_FANSAPI_REAL': '1'})
+
+
+def test_not_sent_then_conflict_stops_without_a_third_post(database):
+    fake = FakeFans(['not_sent', 'conflict', 'accepted'])
+    try:
+        store, authority, engine, transport, _ = build(database, fake)
+        intent = text_intent(engine, store)
+        assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'unknown'
+        assert len(fake.posts) == 2 and status(database, intent).status == 'unknown'
+    finally:
+        fake.close()

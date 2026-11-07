@@ -754,3 +754,17 @@ def test_fan_pushing_a_banned_theme_is_routed_to_a_human_by_journey_signals():
         assert 'platform_banned' in journey_signals(text), text
     for text in ('my dog is cute', 'i have two kids and a busy week', 'you are so hot i want to fuck you', 'call me daddy'):
         assert 'platform_banned' not in journey_signals(text), text
+
+
+def test_json_creator_chat_permission_is_preserved_and_conflicts_fail_closed(tmp_path):
+    from conversation_engine.writer_context import CreatorProfile, JsonFileCreatorProfiles
+    for level in ('none', 'suggestive', 'explicit'):
+        assert CreatorProfile.from_dict({'name': 'A', 'explicit_chat': level}).explicit_chat == level
+        assert CreatorProfile.from_dict({'name': 'A', 'facts': {'explicit_chat': level}}).explicit_chat == level
+    with pytest.raises(ValueError):
+        CreatorProfile.from_dict({'name': 'A', 'explicit_chat': 'none', 'facts': {'explicit_chat': 'explicit'}})
+    with pytest.raises(ValueError):
+        CreatorProfile(name='A', explicit_chat='unlimited')
+    path = tmp_path / 'profiles.json'
+    path.write_text(json.dumps({'acct': {'name': 'A', 'explicit_chat': 'invalid'}}))
+    assert JsonFileCreatorProfiles(path).get('acct') is None

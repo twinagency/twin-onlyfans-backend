@@ -94,7 +94,7 @@ class RealConversationWorker:
     # ------------------------------------------------------------------ webhook
     def handle(self, tenant, account, *, raw_body, signature, secret, event_key):
         self._gate(tenant, account)
-        accepted = self.intake.accept(raw_body, signature, secret, event_key)
+        accepted = self.intake.accept(raw_body, signature, secret, event_key, expected_tenant=tenant, expected_account=account)
         outcome = accepted.get('outcome')
         if outcome == 'ignored':
             return {'intake': 'ignored', 'outcome': 'ignored', 'event': accepted.get('event')}

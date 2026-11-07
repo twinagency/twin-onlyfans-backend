@@ -45,10 +45,10 @@ def build_runtime_from_env(engine_db, environ=None, *, transport=None):
                                transport=transport, examples=examples)
 
 
-def build_engine_service(store, environ=None, *, transport=None):
+def build_engine_service(store, environ=None, *, transport=None, draft_only=False):
     """EngineService around the real ModelRuntime selected by configuration, or None when it is not enabled."""
     runtime = build_runtime_from_env(store.engine, environ, transport=transport)
     if runtime is None:
         return None
     from conversation_engine.engine import EngineService
-    return EngineService(store, runtime)
+    return EngineService(store, runtime, draft_only=draft_only)

@@ -791,3 +791,29 @@ def test_unlinked_reversal_is_visible_without_guessing_access_or_money(world):
     items = unresolved(world.store, TENANT, ACCOUNT)
     reversals = [i for i in items if i['kind'] == 'unlinked_transaction' and 'chargeback' in i['summary']]
     assert len(reversals) == 1 and 'does not automatically revoke' in reversals[0]['summary']
+
+
+def test_wrong_account_webhook_cannot_be_persisted_or_projected_through_pilot_worker(world):
+    from test_onlyfans_foundation_pg import seed
+    from db.onlyfans_models import OfIngress
+    second_account, second_tenant, second_provider = 'other-creator', 'other-tenant', 'acct_other_creator'
+    other = seed(world.database[0], world.database[1], account=second_account, tenant=second_tenant, fan=FAN)
+    try:
+        TextAuthority(other).configure(second_tenant, second_account, expected_revision=0, enabled=True,
+            limit_units=10, throttle_seconds=1, actor='synthetic-operator', reason='separate fixture')
+        FansWebhookAdapter(other).bind_simulated(second_tenant, second_account, second_provider, '888')
+        body = inbound(98765, 'separate fan message')
+        body['account_id'] = second_provider
+        raw = json.dumps(body, separators=(',', ':')).encode()
+        sig = hmac.new(SECRET, raw, hashlib.sha256).hexdigest()
+        with pytest.raises(Refused, match='webhook account scope mismatch'):
+            world.worker.handle(TENANT, ACCOUNT, raw_body=raw, signature=sig, secret=SECRET, event_key='other-account-event')
+        with Session(world.database[1]) as session:
+            assert session.get(OfFansWebhook, (second_account, 1, 'other-account-event')) is None
+            assert session.scalar(select(func.count()).select_from(OfIngress).where(OfIngress.account_id == second_account)) == 0
+            assert session.get(Message, (second_account, FAN, 98765)) is None
+        result = FansEventIntake(other).accept(raw, sig, SECRET, 'other-account-event',
+                                                expected_tenant=second_tenant, expected_account=second_account)
+        assert result['account'] == second_account and result['projection'] == 'projected'
+    finally:
+        other.close()

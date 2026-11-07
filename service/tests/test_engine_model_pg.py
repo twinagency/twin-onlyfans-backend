@@ -468,7 +468,7 @@ def test_permitted_explicit_conversation_is_not_blocked_by_any_layer(database):
     provider = SyntheticFansProvider(message_id=9001)
     assert run(store, authority, engine, 1, provider)[1] == 'accepted'
     assert 'ride you' in provider.calls[0]['body']['text'] and len(client.requests) == 1
-    assert "don't refuse or sanitise it" in system_of(client.requests[0])
+    assert "Never lecture, sanitise, deflect" in system_of(client.requests[0])
     store.close()
 
 
@@ -1045,6 +1045,8 @@ def test_engine_service_accepts_the_real_runtime_selected_by_application_configu
                                          'usage': {'prompt_tokens': 500, 'completion_tokens': 10, 'cost': 0.0007}})
     try:
         assert build_engine_service(store, {}) is None and build_engine_service(store, {**env, 'ENGINE_MODEL_ENABLED': '0'}) is None
+        draft_service = build_engine_service(store, env, transport=httpx.MockTransport(handler), draft_only=True)
+        assert draft_service.draft_only is True and seen == {}
         service = build_engine_service(store, env, transport=httpx.MockTransport(handler))
         assert type(service.model).__name__ == 'ModelRuntime' and service.model.client.provider == 'openrouter'
         incoming(store, 1, 'hello')

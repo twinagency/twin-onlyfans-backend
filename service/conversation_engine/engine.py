@@ -138,7 +138,12 @@ def _verified_purchases(s, runtime, fan_id):
             if unresolved_reversal is not None:
                 return None
             from .commerce import provider_unlocked_media
-            owned |= provider_unlocked_media(s, runtime, fan_id)
+            reported_unlocks = provider_unlocked_media(s, runtime, fan_id)
+            # An unlock is message-specific historical access, not proof of
+            # current ownership or financial settlement. Keep it for duplicate
+            # offer prevention, but do not promote it to a model purchase claim.
+            if reported_unlocks - owned:
+                return None
     except (ValueError, Refused):
         return None
     items = list(s.scalars(select(CatalogItem).where(CatalogItem.account_id == runtime.account_id,

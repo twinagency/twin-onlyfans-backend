@@ -546,7 +546,7 @@ def _sell(world, item=None):
 def test_compliment_after_a_verified_purchase_gets_a_reply_but_no_new_card(world):
     _, offer_message = _sell(world)
     second = world.second_item()
-    paid = world.send(unlock(offer_message), key='evt-unlock')       # the provider named OUR message: that is the purchase
+    paid = world.send(unlock(offer_message), key='evt-unlock')       # message-specific unlock; finances stay unlinked
     assert paid['outcome'] == 'evidence' and paid['journey']['action'] == 'none'
     access = world.rows(OfEngineAccessEvidence)
     assert [(a.status, a.applied) for a in access] == [('confirmed', True)]
@@ -767,6 +767,9 @@ def test_real_unlock_is_scoped_access_not_a_synthetic_financial_transaction(worl
         assert s.get(Fan, (ACCOUNT, FAN)).lifetime_spend_cents == 0
         assert s.get(Message, (ACCOUNT, FAN, message_id)).is_paid is not True
         assert verified_spend(s, ACCOUNT, FAN) is None
+        from conversation_engine.engine import _verified_purchases
+        from db.onlyfans_models import OfRuntime
+        assert _verified_purchases(s, s.get(OfRuntime, ACCOUNT), FAN) is None
     from conversation_engine.operator_v2 import unresolved
     items = unresolved(world.store, TENANT, ACCOUNT)
     observed = [i for i in items if i['kind'] == 'unreconciled_access' and 'Provider reported an unlock' in i['summary']]

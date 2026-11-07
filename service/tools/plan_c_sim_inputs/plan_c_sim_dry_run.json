@@ -1,0 +1,14 @@
+{
+  "schema": "plan-c-sim-dry-run.v1",
+  "note": "Dry-run only. Faults the FAKE model provider injects on a given fan turn (1-based count of the persona's 'say' steps). A fault list is consumed in order, one entry per model call that it matches. Never used by --live.",
+  "faults": [
+    {"persona": "p1", "turn": 4, "kinds": ["rate_limit_primary"], "expect": "primary http_429, then the fallback answers"},
+    {"persona": "p1", "turn": 10, "kinds": ["model_substitution"], "expect": "provider returns a different model id than requested; both ids are recorded"},
+    {"persona": "p2", "turn": 3, "kinds": ["refusal"], "expect": "refusal: no retry, no fallback, handed to a human"},
+    {"persona": "p2", "turn": 9, "kinds": ["timeout_unknown"], "expect": "unknown outcome keeps its reservation; fallback answers"},
+    {"persona": "p3", "turn": 2, "kinds": ["empty"], "expect": "empty completion: no retry, no fallback, handed to a human"},
+    {"persona": "p4", "turn": 5, "kinds": ["invalid_then_ok"], "expect": "validator rejects the first draft, one corrected regeneration"},
+    {"persona": "p4", "turn": 9, "kinds": ["rate_limit_primary", "refusal"], "expect": "primary 429, fallback refuses: handed to a human, no further call"},
+    {"persona": "p4", "turn": 21, "kinds": ["rubric_violation"], "expect": "passes the validator, violates the operator rubric (R10): rejected by sim-operator-1"}
+  ]
+}

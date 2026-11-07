@@ -1,6 +1,8 @@
 """Loopback fake of the Fans API used by the real-transport tests (no network egress)."""
 import os
 import json
+import hashlib
+import hmac
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
@@ -14,6 +16,8 @@ class FakeFans:
         self.vault = vault or []
         self.posts, self.executions, self.stored = [], {}, {}
         self.next_id = 7001
+        self.webhook_secret = b'fake-fans-webhook-secret'   # signs webhooks (sign_webhook), like the provider does
+        self.transactions = []     # rows served by GET transactions (empty = a fan with no payment history)
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -34,6 +38,13 @@ class FakeFans:
                     off, lim = int(q['offset']), int(q['limit'])
                     page = fake.vault[off:off + lim]
                     return self._json(200, {'data': {'list': page, 'hasMore': off + lim < len(fake.vault)}})
+                path = self.path.split('?')[0]
+                if path == f'/api/{ACCT}/transactions':
+                    return self._json(200, {'data': {'list': list(fake.transactions), 'hasMore': False}})
+                if path == f'/api/{ACCT}/chargebacks':
+                    return self._json(200, {'data': {'list': []}})
+                if path.startswith(f'/api/{ACCT}/chats/') and path.endswith('/messages'):
+                    return self._json(200, {'data': [], '_pagination': {'next_page': None}})   # a new fan: empty history
                 self._json(404, {})
             def do_POST(self):
                 raw = self.rfile.read(int(self.headers['Content-Length']))
@@ -65,6 +76,12 @@ class FakeFans:
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.port = self.server.server_address[1]
+
+    def sign_webhook(self, body, key=None):
+        '''(raw bytes, hex HMAC-SHA256 signature, event key) for a webhook body: the provider's normal signing path.'''
+        raw = json.dumps(body, separators=(',', ':')).encode()
+        signature = hmac.new(self.webhook_secret, raw, hashlib.sha256).hexdigest()
+        return raw, signature, key or 'evt-' + hashlib.sha256(raw).hexdigest()[:24]
 
     def transport(self):
         port = self.port

@@ -197,9 +197,9 @@ def test_prompt_is_short_natural_and_has_no_build_b_or_fastt_text():
     assert 'Riley' in system and 'barista' in system and 'no meetups' in system and 'face reveal' in system
     for banned in ('FASTT', 'inflowwkiller', 'painful', 'humanizer'):
         assert banned.lower() not in system.lower()
-    assert "don't refuse or sanitise it" in system and 'strict JSON' in system
+    assert 'SEXUAL CHAT:' in system and 'strict JSON' in system
     assert '\u2014' not in system and '\u2013' not in system  # no em or en dash in the prompt itself
-    assert get_prompt_provider().name == 'a-original.v2-planc1'
+    assert get_prompt_provider().name == 'a-original.v3-planc-nsfw'
     assert 'IDENTITY WORDING: none approved' in system
     assert rendered.block_names == ('head', 'creator', 'rules', 'contract')
 
@@ -327,7 +327,7 @@ def test_empty_completion_is_judged_empty_and_the_prompt_stays_within_creator_bo
     assert judge('', judge_ctx()).outcome == 'empty' and judge(ok(''), judge_ctx()).outcome == 'empty'
     system = get_prompt_provider().render(build_context(snapshot(), PROFILE)).messages[0]['content']
     assert 'under 18' in system and 'never agree to meet' in system and 'another app, number or site' in system
-    assert "don't refuse or sanitise it" in system   # NSFW-capable inside her limits
+    assert 'plain explicit words' in system and 'Never lecture, sanitise' in system   # NSFW-capable inside her limits
 
 
 def test_judge_cleans_dashes_and_keeps_accurate_assistant_role_answers():
@@ -683,3 +683,74 @@ def test_only_the_transport_package_imports_a_network_library():
     for path in (root / 'model_transport').glob('*.py'):
         used = {m for m in _imports(path) if any(m == f or m.startswith(f + '.') for f in forbidden)}
         assert used == ({'httpx'} if path.name == 'openrouter.py' else set()), (path.name, used)
+
+
+# ---------------------------------------------------------------- Plan C NSFW rules (sexual chat is permitted, bounded)
+from conversation_engine.journey import signals as journey_signals
+from conversation_engine.prompt_provider_a_original import SpecPromptProvider
+from conversation_engine.writer_context import build_context
+
+
+def _writer(level):
+    return CreatorProfile.from_facts('Riley', {'age': '27', 'limits': 'no meetups', 'explicit_chat': level},
+                                     role_statement=IDENT, offers_permitted=True, approved_item_ids=('5',))
+
+
+def test_prompt_carries_the_sexual_chat_block_for_each_level():
+    for level, marker in (('explicit', 'plain explicit words'), ('suggestive', 'tease, don\'t describe'), ('none', "doesn\'t do sexual talk")):
+        system = SpecPromptProvider().render(build_context(snapshot(), _writer(level))).messages[0]['content']
+        assert 'SEXUAL CHAT:' in system and marker in system and 'Absolute lines' in system, level
+        assert '—' not in system and '–' not in system
+    assert SpecPromptProvider.name == 'a-original.v3-planc-nsfw'
+
+
+def test_explicit_chat_level_is_validated():
+    with pytest.raises(ValueError):
+        CreatorProfile.from_facts('Riley', {'explicit_chat': 'wild'})
+    assert CreatorProfile.from_facts('Riley', {}).explicit_chat == 'explicit'
+
+
+HOT = 'i want you to suck my cock and ride me till i cum'
+EXPLICIT_REPLY = 'mm i want that cock in my mouth first, then you can fuck me till my pussy is dripping'
+
+
+def test_explicit_reply_is_accepted_for_an_explicit_profile():
+    assert reasons(ok(EXPLICIT_REPLY), wctx(message=HOT, profile=_writer('explicit')))[0] == 'ok'
+
+
+@pytest.mark.parametrize('level', ['suggestive', 'none'])
+def test_explicit_reply_is_rejected_when_her_level_is_not_explicit(level):
+    outcome, why = reasons(ok(EXPLICIT_REPLY), wctx(message=HOT, profile=_writer(level)))
+    assert outcome == 'invalid' and 'chat level' in why
+    assert reasons(ok('you are making me blush, keep going'), wctx(message=HOT, profile=_writer(level)))[0] == 'ok'
+
+
+@pytest.mark.parametrize('body', ["let's keep it classy babe", "i'm not comfortable with that kind of talk",
+                                  "tone it down a bit", "let's talk about something else, how was your day"])
+def test_sanitising_an_explicit_fan_is_rejected_when_she_is_explicit(body):
+    outcome, why = reasons(ok(body), wctx(message=HOT, profile=_writer('explicit')))
+    assert outcome == 'invalid' and 'sanitises' in why
+    # the same words to a non-sexual message are fine
+    assert reasons(ok(body), wctx(message='how was your day', profile=_writer('explicit')))[0] == 'ok'
+
+
+@pytest.mark.parametrize('body', ['pretend you are my little stepsister', 'i love it when you call me your teen slut',
+                                  'imagine i drugged you and you are passed out while i', 'my dog fucks better than you',
+                                  'pay me 500 to meet and fuck'])
+def test_platform_banned_themes_in_her_text_are_rejected_at_any_level(body):
+    for level in ('explicit', 'suggestive', 'none'):
+        outcome, why = reasons(ok(body), wctx(message=HOT, profile=_writer(level)))
+        assert outcome == 'invalid' and 'platform-banned' in why, (level, body)
+
+
+def test_her_short_decline_of_a_banned_ask_passes():
+    verdict = reasons(ok('haha nope, not my thing at all. tell me what you are doing tonight instead'),
+                      wctx(message='call me daddy and pretend you are 15', profile=_writer('explicit')))
+    assert verdict[0] == 'ok'
+
+
+def test_fan_pushing_a_banned_theme_is_routed_to_a_human_by_journey_signals():
+    for text in ('pretend you are my stepsister', 'are you under 18', 'how much to meet and fuck', 'my dog sex fantasy'):
+        assert 'platform_banned' in journey_signals(text), text
+    for text in ('my dog is cute', 'i have two kids and a busy week', 'you are so hot i want to fuck you', 'call me daddy'):
+        assert 'platform_banned' not in journey_signals(text), text

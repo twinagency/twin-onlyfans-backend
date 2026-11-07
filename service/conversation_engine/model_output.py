@@ -38,8 +38,48 @@ ASSISTANT_RX = re.compile(
     r"(reply|response|message|draft|option|version|bubbles?)|\bi'?d be happy to\b|\bi'?m here to help\b|\bhow can i (assist|help)\b|"
     r"\blet me know if (you|there)\b|\bfeel free to\b|\bi understand (that|you)\b|\*\*|^#{1,4} ", re.I | re.M)
 
-# Platform-safety and accuracy backstops only. There is deliberately NO rule about sexual or explicit wording:
-# permitted adult conversation is limited only by the creator's documented limits (profile.limit_terms).
+# Sexual chat (Plan C NSFW rules). Explicit adult talk is PERMITTED by default and is never blocked for being explicit; the
+# profile's explicit_chat level ('explicit' | 'suggestive' | 'none') and her documented limits are the only limits.
+# Three things are rejected: (1) a platform-banned theme in HER text, at any level; (2) her sanitising or deflecting an
+# explicit fan when her level is explicit (that is a soft refusal: fixed once, then a human); (3) explicit wording when
+# her level is suggestive or none.
+PLATFORM_BANNED_RX = re.compile(
+    r"\b(under ?age|under 18|minors?|jailbait|loli|lolita|shota|school ?girl|school ?boy|teen(?:age|ager|s)?|(?:little|young) "
+    r"(?:girl|boy)|kiddo|child(?:ren)?|kids?|pedo\w*|step ?(?:sis|sister|bro|brother|daughter|son|mom|mum|mother|dad|father)|"
+    r"incest|(?:my|your) (?:daughter|son|niece|nephew)|rape|raping|force (?:you|her|me) to|against (?:your|her|my) will|"
+    r"(?:passed out|unconscious|asleep) (?:and|while)|roofie|drugged|spike(?:d)? (?:your|her|my) drink|bestiality|zoophil\w*|"
+    r"(?:dog|horse|animal)s? (?:fuck\w*|sex|cock|dick)|scat|piss(?:ing)? on|golden shower|(?:blood|bleeding) (?:play|kink)|"
+    r"(?:knife|gun|choke you out|strangle)|necro\w*|(?:pay|paying|paid)\b[^.?!]{0,24}?\b(?:to|for) (?:meet|a meet|sex|fuck))\b", re.I)
+EXPLICIT_RX = re.compile(r"\b(cocks?|dicks?|pussy|pussies|cum(?:ming|s)?|cunt|fuck(?:ing|ed|s)?|blowjob|suck(?:ing)? (?:it|me|you|him|cock|dick)|"
+                         r"anal|orgasm\w*|masturbat\w*|jerk(?:ing)? off|finger(?:ing)? (?:myself|me|you|her)|squirt\w*|creampie|deepthroat\w*|"
+                         r"nipples?|clit|tits|titties|boobs|ass(?:hole)?|naked|nude(?:s)?|dildo|vibrator)\b", re.I)
+SEXUAL_FAN_RX = re.compile(r"\b(horny|hard|wet|fuck\w*|cocks?|dicks?|pussy|cum\w*|suck\w*|lick\w*|naked|nudes?|tits|boobs|ass|sex|"
+                           r"sexy|turn(?:ed|s)? me on|jerk\w*|stroke\w*|touch(?:ing)? (?:myself|yourself)|blowjob|ride (?:me|you)|"
+                           r"moan\w*|orgasm\w*|dirty|kinky|spank\w*|daddy|slut|whore)\b", re.I)
+SANITISE_RX = re.compile(
+    r"\b(let'?s keep (?:it|this|things) (?:clean|classy|pg|respectful|tasteful|chill|light)|keep it (?:respectful|clean|classy|pg)|"
+    r"i(?:'m| am) not comfortable (?:with|talking|going)|not (?:really )?(?:my|the) (?:kind of|type of) (?:talk|thing|chat)|"
+    r"i(?:'d| would) (?:rather|prefer) (?:not|we) (?:talk|get|go)|tone it down|slow down (?:a bit|there)|let'?s not go there|"
+    r"too (?:explicit|graphic|much) for (?:me|here|chat)|i don'?t (?:do|talk) (?:that|like that|dirty)|be respectful|"
+    r"keep (?:things|it) (?:appropriate|decent)|let'?s (?:talk|chat) about something else)\b", re.I)
+
+
+def _sexual_problems(texts, ctx):
+    joined = ' '.join(texts)
+    profile = ctx.profile
+    level = getattr(profile, 'explicit_chat', 'explicit')
+    problems = []
+    hit = PLATFORM_BANNED_RX.search(joined)
+    if hit:
+        problems.append(f"platform-banned theme in her text ('{hit.group(0)}'); decline it in one line and change the subject")
+    fan_sexual = bool(SEXUAL_FAN_RX.search(ctx.snapshot['current_message']['body']))
+    if level == 'explicit' and fan_sexual and SANITISE_RX.search(joined):
+        problems.append('sanitises or deflects explicit chat; she talks explicitly and matches him (SEXUAL CHAT)')
+    if level != 'explicit' and EXPLICIT_RX.search(joined):
+        problems.append(f'explicit wording but her chat level is {level}; tease only')
+    return problems
+
+# Platform-safety and accuracy backstops. Being sexual or explicit is NOT itself a rule here (see _sexual_problems).
 _RULES = (
     ('promises to meet', re.compile(r"\b(meet (up|you|irl)|come over|my place|your place|see you (irl|in person)|take me out)\b", re.I)),
     ('contact details or socials', re.compile(r"[\w.+-]+@[\w-]+\.\w{2,}|(?<!\d)\+?\d[\d\s().-]{8,}\d(?!\d)|(?<![\w@])@[a-z][\w.]{2,}|"
@@ -322,6 +362,7 @@ def proposal_problems(proposal, ctx):
     if _LOCATION.search(joined) and not (profile.fact('home_city') if hasattr(profile, 'fact') else None):
         problems.append('states where she lives or is from; no such fact is documented')
     problems.extend(_writing_problems(proposal, ctx, texts))
+    problems.extend(_sexual_problems(texts, ctx))
     low = joined.lower()
     for term in getattr(profile, 'private_terms', ()) or ():
         if term and re.search(r'\b' + re.escape(term.lower()) + r'\b', low):

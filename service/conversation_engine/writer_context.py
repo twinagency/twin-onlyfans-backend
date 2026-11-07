@@ -17,6 +17,9 @@ TURN_KINDS = ('chat', 'content_request', 'role_question')
 
 
 # ---- creator facts ---------------------------------------------------------------
+EXPLICIT_LEVELS = ('explicit', 'suggestive', 'none')
+
+
 @dataclass(frozen=True)
 class CreatorProfile:
     """The engine's creator facts as the writer sees them.
@@ -39,6 +42,7 @@ class CreatorProfile:
     role_statement: str = ''              # APPROVED identity wording: the only answer to "what am I talking to"
     avoid_phrases: tuple = ()
     private_terms: tuple = ()
+    explicit_chat: str = 'explicit'        # 'explicit' (adult site default) | 'suggestive' | 'none'; her documented chat level
     offers_permitted: bool = False        # commercial permission: may the engine offer anything at all
     approved_item_ids: tuple = ()         # catalogue item ids that may be offered (the pilot's one approved product)
 
@@ -75,7 +79,11 @@ class CreatorProfile:
         if type(facts) is not dict:
             raise ValueError('facts must be an object')
         limits = tuple(x.strip() for x in str(facts.get('limits') or '').split(';') if x.strip())
-        shown = tuple((k, str(v)) for k, v in sorted(facts.items()) if k != 'limits' and v not in (None, ''))
+        shown = tuple((k, str(v)) for k, v in sorted(facts.items()) if k not in ('limits', 'explicit_chat') and v not in (None, ''))
+        if 'explicit_chat' in facts and 'explicit_chat' not in extra:
+            extra['explicit_chat'] = str(facts['explicit_chat']).strip().lower()
+        if extra.get('explicit_chat', 'explicit') not in EXPLICIT_LEVELS:
+            raise ValueError('explicit_chat must be one of ' + ', '.join(EXPLICIT_LEVELS))
         return cls(name=name, facts=shown, limits=limits, **extra)
 
     @classmethod

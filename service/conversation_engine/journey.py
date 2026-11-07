@@ -129,6 +129,14 @@ _PROMISE = re.compile(
     r"|\bi (?:promise|guarantee)\b|\bpromise you\b")
 
 
+_BANNED_FAN = re.compile(
+    r"\b(under ?age|under 18|jailbait|loli|lolita|shota|pedo\w*|school ?girl|teen(?:age|ager|s)?|(?:little|young) (?:girl|boy)|"
+    r"step ?(?:sis|sister|bro|brother|daughter|son|mom|mum|mother|dad|father)|incest|rape|raping|roofie|drugged|"
+    r"(?:passed out|unconscious) (?:and|while|girl|you)|bestiality|zoophil\w*|(?:dog|horse|animal)s? (?:fuck\w*|sex|cock|dick)|"
+    r"scat|golden shower|piss on|(?:blood|bleeding) (?:play|kink)|necro\w*|(?:pay|paying|paid)\b[^.?!]{0,24}?\b(?:to|for) (?:meet|a meet|sex|fuck)|"
+    r"how much (?:to|for) (?:meet|fuck|sex))\b", re.I)
+
+
 def _norm(text):
     return re.sub(r'\s+', ' ', str(text or '').lower().replace('’', "'")).strip()
 
@@ -138,6 +146,8 @@ def signals(text, config=None):
     value = _norm(text)
     config = config or _CONFIG
     found = set()
+    if _BANNED_FAN.search(value):
+        found.add('platform_banned')
     if _IDENTITY.search(value):
         found.add('identity')
     if _OFFPLATFORM.search(value):
@@ -223,6 +233,8 @@ def decide(s, runtime, owner, message, config=None):
     config = config or _CONFIG
     found = signals(message.body, config)
     verdict = {'signals': sorted(found), 'human': None, 'pause': None, 'flags': [], 'no_promise': False}
+    if 'platform_banned' in found:
+        verdict['human'] = 'platform_banned'   # a banned theme pushed by the fan: a person decides, the model never answers it
     if 'identity' in found and identity_line_for(runtime.account_id, config) is None:
         verdict['human'] = 'identity'
     history = _inbound(s, runtime, owner.fan_id, upto=message.message_id)

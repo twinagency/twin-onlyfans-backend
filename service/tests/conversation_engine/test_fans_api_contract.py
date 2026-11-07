@@ -28,7 +28,7 @@ class SyntheticFansApiTests(unittest.TestCase):
 
     def test_unavailable_idempotency_does_not_resolve_older_unknown(self):
         action = ActionIdentity(ConversationKey("tenant", "of-a", "creator", "fan"), 1,
-                                "acct_1", "action", "key", "a" * 64)
+                                "fans_api", "acct_1", "action", "key", "a" * 64)
         previous = AttemptEvidence(action, "first", Outcome.UNKNOWN, "synthetic-response")
         current = AttemptEvidence(action, "second", classify_send_error(503, {"error": "IDEMPOTENCY_UNAVAILABLE"}),
                                   "synthetic-response")

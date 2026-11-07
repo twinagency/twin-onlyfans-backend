@@ -11,7 +11,7 @@ from conversation_engine.sales import SalesMode, SalesPermission
 class FoundationTests(unittest.TestCase):
     def setUp(self):
         self.key = ConversationKey("tenant-a", "of-a", "creator-a", "fan-42")
-        self.action = ActionIdentity(self.key, 1, "acct_first", "action-1", "key-1", "a" * 64)
+        self.action = ActionIdentity(self.key, 1, "fans_api", "acct_first", "action-1", "key-1", "a" * 64)
 
     def attempt(self, attempt_id, outcome, *, action=None, receipt=None):
         return AttemptEvidence(action or self.action, attempt_id, outcome, "synthetic-provider-evidence", receipt)
@@ -60,6 +60,7 @@ class FoundationTests(unittest.TestCase):
         self.assertEqual(self.decide([self.attempt("one", Outcome.KEY_MISMATCH)]), NextStep.STOP)
         for changed in (replace(self.action, payload_sha256="b" * 64),
                         replace(self.action, binding_epoch=2),
+                        replace(self.action, provider="other_provider"),
                         replace(self.action, connection_id="acct_reconnected"),
                         replace(self.action, conversation=replace(self.key, creator_id="creator-b"))):
             with self.subTest(changed=changed):
@@ -80,7 +81,7 @@ class FoundationTests(unittest.TestCase):
 
     def test_absence_requires_exact_scope_complete_fresh_authorized_coverage(self):
         now = datetime(2026, 11, 7, 12, tzinfo=timezone.utc)
-        target = EvidenceTarget(self.key, 1, "item-a:v1")
+        target = EvidenceTarget(self.key, 1, "fans_api", "item-a:v1", "purchase", "offer-1")
         window = EvidenceWindow(now - timedelta(days=7), now - timedelta(hours=1))
         coverage = AbsenceCoverage(target, window, "approved-ledger", now, now + timedelta(minutes=5),
                                    CoverageStatus.COMPLETE, True)
@@ -92,6 +93,9 @@ class FoundationTests(unittest.TestCase):
             self.assertFalse(candidate.establishes_absence(target, window, now=now, records_found=False))
         self.assertFalse(coverage.establishes_absence(target, window, now=now + timedelta(minutes=6), records_found=False))
         self.assertFalse(coverage.establishes_absence(replace(target, binding_epoch=2), window, now=now, records_found=False))
+        self.assertFalse(coverage.establishes_absence(replace(target, provider="other_provider"), window, now=now, records_found=False))
+        self.assertFalse(coverage.establishes_absence(replace(target, evidence_kind="delivery"), window, now=now, records_found=False))
+        self.assertFalse(coverage.establishes_absence(replace(target, subject_id="offer-2"), window, now=now, records_found=False))
         self.assertFalse(coverage.establishes_absence(replace(target, conversation=replace(self.key, fan_id="fan-43")), window, now=now, records_found=False))
         self.assertFalse(coverage.establishes_absence(target, window, now=now, records_found=True))
         wider = EvidenceWindow(window.start - timedelta(seconds=1), window.end)

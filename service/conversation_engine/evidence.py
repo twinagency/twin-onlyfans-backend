@@ -27,14 +27,20 @@ class CoverageStatus(Enum):
 class EvidenceTarget:
     conversation: ConversationKey
     binding_epoch: int
+    provider: str
     item_version: str
+    evidence_kind: str
+    subject_id: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.conversation, ConversationKey):
             raise ValueError("conversation must be a ConversationKey")
         if type(self.binding_epoch) is not int or self.binding_epoch < 1:
             raise ValueError("binding_epoch must be a positive integer")
+        require_identifier(self.provider, "provider")
         require_identifier(self.item_version, "item_version")
+        require_identifier(self.evidence_kind, "evidence_kind")
+        require_identifier(self.subject_id, "subject_id")
 
 
 @dataclass(frozen=True, slots=True)

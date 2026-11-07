@@ -28,6 +28,7 @@ class ConversationKey:
 class ActionIdentity:
     conversation: ConversationKey
     binding_epoch: int
+    provider: str
     connection_id: str
     action_id: str
     idempotency_key: str
@@ -38,7 +39,7 @@ class ActionIdentity:
             raise ValueError("conversation must be a ConversationKey")
         if type(self.binding_epoch) is not int or self.binding_epoch < 1:
             raise ValueError("binding_epoch must be a positive integer")
-        for name in ("connection_id", "action_id", "idempotency_key"):
+        for name in ("provider", "connection_id", "action_id", "idempotency_key"):
             require_identifier(getattr(self, name), name)
         if type(self.payload_sha256) is not str or not re.fullmatch(r"[0-9a-f]{64}", self.payload_sha256):
             raise ValueError("payload_sha256 must be a lowercase SHA-256 digest")

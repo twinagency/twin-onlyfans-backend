@@ -4,7 +4,12 @@
       -> quarantined?         EngineService.fence_conflicted_sources
       -> payment evidence?    JourneyService.after_evidence (whale hold / flag)
       -> inbound message?     drain -> select owner -> JourneyService.before_plan (handover / pause / flag / welcome grant)
-                              -> EngineService.plan -> for every part: re-check -> queue -> re-check -> TextAuthority.dispatch
+                              -> EngineService.plan -> approval.create_draft_approval -> outcome 'awaiting_approval' (NO SEND)
+
+    A named operator then approves an exact version (approval.approve) and calls `send_approved`, which for every part
+    does: re-check -> authorize_send -> queue (approval checked again atomically) -> re-check -> authorize_send ->
+    TextAuthority.dispatch (approval checked again at admission and just before the wire). Nothing in this class
+    approves a draft, hands a conversation back or retries a refusal into a send.
 
 Default OFF. The worker refuses to run unless TWIN_ENGINE_FANSAPI_REAL=1 AND the account's delivery policy is
 transport_kind 'fansapi' and enabled. `SyntheticConversationWorker` is unchanged and still accepts only simulators.
@@ -25,6 +30,7 @@ from fans_api_adapter.events import FansEventIntake
 from fans_api_adapter.real_transport import FansApiRealTransport, real_transport_enabled
 from onlyfans_runtime.store import Refused, utcnow
 from onlyfans_runtime.text_delivery import TextAuthority
+from . import approval
 from .delivery import unsent_cancelled
 from .engine import EngineService
 from .history_scope import current_binding_message
@@ -109,6 +115,7 @@ class RealConversationWorker:
         self._gate(tenant, account)
         store = self.engine.store
         store.drain(tenant, account)
+        approval.retire_superseded(store, tenant, account, fan_id, message_id)   # older unsent drafts lose their approval
         try:
             self.engine.select_simulated(tenant, account, fan_id)  # 'simulated' by name only: any engine kind
         except Refused as exc:
@@ -126,6 +133,10 @@ class RealConversationWorker:
             return {'outcome': 'handed_to_human', 'reason': verdict['reason']}
         try:
             decision = self.engine.plan(tenant, account, fan_id, message_id)
+            if approval.retire_dead_draft(store, tenant, account, decision):
+                # Its approval was withdrawn (takeover, hand-back, expiry) and it never reached delivery: a hand-back
+                # restores eligibility for a FRESH plan, never for replaying the old draft.
+                decision = self.engine.plan(tenant, account, fan_id, message_id)
         except Refused as exc:
             return {'outcome': 'refused', 'detail': str(exc), 'journey': verdict}
         return self._send(tenant, account, decision)
@@ -134,25 +145,74 @@ class RealConversationWorker:
         """Plan again for the same inbound message (for example after its offer waited for a backfill)."""
         return self.turn(tenant, account, fan_id, message_id)
 
+    _STAGED = {'awaiting': 'awaiting_approval', 'approved': 'approved_pending_send', 'held': 'held',
+               'rejected': 'rejected', 'invalidated': 'approval_invalidated', 'expired': 'approval_expired',
+               'consumed': 'already_sent'}
+
     def _send(self, tenant, account, decision):
-        sequence = self.engine.sequence(tenant, account, decision)
+        """Stage a planned draft for the operator. Never queues, dispatches or approves anything."""
+        try:
+            info = approval.create_draft_approval(self.engine.store, tenant, account, decision, created_by='engine')
+        except Refused as exc:
+            sequence = self.engine.sequence(tenant, account, decision)
+            self._supersede(tenant, account, sequence, str(exc))
+            return {'decisionId': decision, 'intentId': None, 'outcome': 'superseded:' + str(exc)}
+        result = {'decisionId': decision, 'intentId': None, 'outcome': self._STAGED[info['status']]}
+        if info['version']:
+            result['approval'] = {key: info[key] for key in ('requestId', 'generation', 'version', 'status', 'expiresAt')}
+        return result
+
+    def _guard(self, tenant, account, part):
+        """None when the part may still go out, else why not: nothing newer from the fan AND a current matching approval."""
+        reason = self.recheck(tenant, account, part)
+        if reason:
+            return reason
+        try:
+            approval.authorize_send(self.engine.store, tenant, account, part)
+        except Refused as exc:
+            return str(exc)
+        return None
+
+    def _part_state(self, tenant, account, part):
+        with Session(self.engine.engine) as s:
+            decision = s.get(OfEngineDecision, (account, part))
+            intent = s.get(OfTextIntent, (account, decision.intent_id)) if decision is not None and decision.intent_id else None
+            return (decision.status if decision else None, intent.intent_id if intent else None,
+                    intent.status if intent else None)
+
+    def send_approved(self, tenant, account, decision_id):
+        """Deliver an approved draft sequence, part by part. Safe to repeat after a crash or a duplicate click: queue
+        reuses its command key and dispatch never resends a settled, unknown or in-flight part."""
+        self._gate(tenant, account)
+        sequence = self.engine.sequence(tenant, account, decision_id)
         results = []
         for part in sequence:
-            reason = self.recheck(tenant, account, part)
+            state, existing_intent, intent_status = self._part_state(tenant, account, part)
+            if state == 'completed':
+                results.append({'decisionId': part, 'intentId': existing_intent, 'outcome': 'accepted'})
+                continue
+            if state in {'cancelled', 'held', 'unknown'} or state is None:
+                results.append({'decisionId': part, 'intentId': existing_intent, 'outcome': 'not_sent:' + str(state)})
+                break
+            if existing_intent is not None and intent_status != 'queued':
+                # Already past admission (dispatching/unknown/accepted): report it, never create or resend anything.
+                outcome = self.authority.dispatch(tenant, account, existing_intent, self.transport)
+                results.append({'decisionId': part, 'intentId': existing_intent, 'outcome': outcome})
+                if outcome != 'accepted':
+                    break
+                continue
+            reason = self._guard(tenant, account, part)
             if reason:
-                results.append({'decisionId': part, 'intentId': None, 'outcome': 'superseded:' + reason})
-                self._supersede(tenant, account, sequence[sequence.index(part):], reason)
+                results.append(self._blocked(tenant, account, part, None, reason, sequence))
                 break
             try:
                 intent = self.engine.queue(tenant, account, part)
             except Refused as exc:
                 results.append({'decisionId': part, 'intentId': None, 'outcome': 'not_queued:' + str(exc)})
                 break
-            reason = self.recheck(tenant, account, part)  # immediately before submission
+            reason = self._guard(tenant, account, part)  # immediately before submission
             if reason:
-                self._cancel_queued(tenant, account, intent, reason)
-                results.append({'decisionId': part, 'intentId': intent, 'outcome': 'superseded:' + reason})
-                self._supersede(tenant, account, sequence[sequence.index(part) + 1:], reason)
+                results.append(self._blocked(tenant, account, part, intent, reason, sequence))
                 break
             outcome = self._dispatch_paced(tenant, account, part, intent)
             if outcome.startswith('superseded:'):
@@ -163,11 +223,21 @@ class RealConversationWorker:
             if outcome != 'accepted':
                 break
         last = results[-1] if results else {'outcome': 'nothing_to_send', 'intentId': None}
-        result = {'decisionId': decision, 'intentId': results[0]['intentId'] if results else None,
+        result = {'decisionId': decision_id, 'intentId': results[0]['intentId'] if results else None,
                   'outcome': last['outcome']}
         if len(sequence) > 1 or last['outcome'] != 'accepted':
             result['parts'] = results
         return result
+
+    def _blocked(self, tenant, account, part, intent, reason, sequence):
+        if reason in approval.PASSIVE_REASONS or reason.startswith('approval_') and reason != 'approval_mismatch':
+            if intent is not None:
+                self._cancel_queued(tenant, account, intent, reason)
+            return {'decisionId': part, 'intentId': intent, 'outcome': 'not_authorized:' + reason}
+        if intent is not None:
+            self._cancel_queued(tenant, account, intent, reason)
+        self._supersede(tenant, account, sequence[sequence.index(part):], reason)
+        return {'decisionId': part, 'intentId': intent, 'outcome': 'superseded:' + reason}
 
     def _dispatch_paced(self, tenant, account, part, intent):
         """Dispatch; when only the account's pacing gap holds the part back, wait for it (bounded) and re-check."""
@@ -186,7 +256,7 @@ class RealConversationWorker:
                 return outcome
             self.sleep(gap)
             waited += gap
-            reason = self.recheck(tenant, account, part)
+            reason = self._guard(tenant, account, part)
             if reason:
                 self._cancel_queued(tenant, account, intent, reason)
                 return 'superseded:' + reason
@@ -206,17 +276,7 @@ class RealConversationWorker:
             request = s.get(OfEngineRequest, (account, decision.request_id)) if decision else None
             if decision is None or request is None:
                 return 'decision_unavailable'
-            pending = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account,
-                OfIngress.fan_id == decision.fan_id, OfIngress.status == 'pending').limit(1))
-            if pending is not None:
-                return 'new_inbound_pending'
-            latest = s.scalar(select(Message.message_id).where(Message.account_id == account,
-                Message.fan_id == decision.fan_id, Message.direction == 'in', Message.is_unsent.is_(False),
-                current_binding_message(runtime.binding_id))
-                .order_by(Message.created_at.desc(), Message.message_id.desc()).limit(1))
-            if latest != request.source_message_id:
-                return 'newer_inbound'
-        return None
+            return approval.newer_input_reason(s, runtime, decision, request)
 
     def _supersede(self, tenant, account, decision_ids, reason):
         """Cancel parts that were never queued; a part that reached the wire is never touched."""
@@ -232,6 +292,7 @@ class RealConversationWorker:
                 request = s.get(OfEngineRequest, (account, decision.request_id), with_for_update=True)
                 if decision.status == 'ready' and decision.intent_id is None:
                     decision.status, decision.updated_at = 'cancelled', utcnow()
+                approval.invalidate_generation_in_session(s, account, decision.request_id, decision.generation, reason)
             if request is not None and request.status in {'open', 'waiting_fan'}:
                 request.next_step, request.updated_at = 'review_changed_conversation', utcnow()
                 request.revision += 1

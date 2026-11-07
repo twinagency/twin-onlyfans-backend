@@ -45,6 +45,8 @@ def build(database, fake, *, offer=False, model=None, **kw):
         item_id = shelf(database[1]); media_policy(authority)
         with Session(database[1]) as s, s.begin():
             for v in s.scalars(select(VaultItem)): v.content_hash_kind = 'vault-metadata-v1'
+        from approval_helpers import finished_backfill
+        finished_backfill(database[1], ACCOUNT, FAN)     # real offers wait for a finished backfill of the fan
     real_policy(database, authority)
     adapter = FansWebhookAdapter(store)
     adapter.bind_simulated(TENANT, ACCOUNT, ACCT, CREATOR)
@@ -61,7 +63,8 @@ def text_intent(engine, store, body='Hi there'):
     engine.model = SyntheticModel({'hello': SyntheticProposal(body)})
     store.record(TENANT, ACCOUNT, event(mid=1, fan=FAN, body='hello'))
     store.drain(TENANT, ACCOUNT)
-    return engine.queue(TENANT, ACCOUNT, engine.plan(TENANT, ACCOUNT, FAN, 1))
+    from approval_helpers import queue_decision
+    return queue_decision(engine, TENANT, ACCOUNT, engine.plan(TENANT, ACCOUNT, FAN, 1))
 
 
 def status(database, intent):
@@ -223,7 +226,8 @@ def test_paid_offer_carries_vault_ids_previews_and_dollar_price(database):
         grant = approve_catalogue_offer(store, TENANT, ACCOUNT, FAN, item_id, cov)
         engine.model = SyntheticModel({'show me the set': SyntheticProposal('x', action='offer', offer_grant_id=grant)})
         store.record(TENANT, ACCOUNT, event(mid=1, fan=FAN, body='show me the set')); store.drain(TENANT, ACCOUNT)
-        intent = engine.queue(TENANT, ACCOUNT, engine.plan(TENANT, ACCOUNT, FAN, 1))
+        from approval_helpers import queue_decision
+        intent = queue_decision(engine, TENANT, ACCOUNT, engine.plan(TENANT, ACCOUNT, FAN, 1))
         assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'accepted'
         body = fake.posts[0]['body']
         assert body['mediaFiles'] == ['11', '12', '13'] and body['previews'] == ['11']

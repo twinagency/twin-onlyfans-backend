@@ -92,6 +92,14 @@ class NotWired(RuntimeError):
     pass
 
 
+class RealRuntimePort(ModelPort):
+    """Marker: the Journey builds A6's ModelRuntime itself (model_transport.build_model_runtime)."""
+    name = 'real'
+
+    def propose(self, ctx, snapshot):
+        raise NotWired('real model runs through EngineService(store, ModelRuntime), not the shim')
+
+
 class RealModelAdapter(ModelPort):
     """Seam for A6's ModelClient (branch claude/engine-model-20261107). NOT WIRED YET.
 
@@ -271,9 +279,28 @@ class Journey:
         adapter = FansWebhookAdapter(self.store)
         adapter.bind_simulated(TENANT, ACCOUNT, 'acct_sim', 'creator-sim')
         self.adapter = adapter
-        shim = SyntheticModel({})
-        shim.generate = self._generate          # EngineService type-gates on SyntheticModel
-        self.engine = EngineService(self.store, shim)
+        self.real = self.port.name == 'real'
+        if self.real:
+            from conversation_engine.model_config import ModelConfig
+            from conversation_engine.writer_context import CreatorProfile, StaticCreatorProfiles
+            from model_transport import build_model_runtime
+            profile = CreatorProfile.from_facts('Maile', {
+                'age': 'private: never say or hint at her age',
+                'location': 'private: never say where she lives',
+                'pet_names': 'babe, baby, hun',
+                'explicit_adult_chat': 'allowed within her limits',
+                'limits': 'no explicit videos (no moaning, no sex acts on video)'},
+                voice='flirty, teasing, a little cheeky; short, texty replies',
+                limit_terms=('moaning', 'sex act'))
+            runtime = build_model_runtime(self.engine_db, ModelConfig.from_env(os.environ),
+                                          StaticCreatorProfiles({ACCOUNT: profile}))
+            if runtime is None:
+                raise NotWired('ENGINE_MODEL_ENABLED is not 1')
+            self.engine = EngineService(self.store, runtime)
+        else:
+            shim = SyntheticModel({})
+            shim.generate = self._generate          # EngineService type-gates on SyntheticModel
+            self.engine = EngineService(self.store, shim)
         self.engine.select_simulated(TENANT, ACCOUNT, FAN)
         self.provider_fx = SyntheticFansProvider(('accepted',) * 400, message_id=tuple(range(9000, 9400)))
         self.transport = FansApiSyntheticTransport(self.store, TENANT, ACCOUNT, self.provider_fx)
@@ -361,6 +388,7 @@ class Journey:
         n, kind = step['n'], step['kind']
         before = self._state()
         calls0 = len(self.provider_fx.calls)
+        mc0 = self._model_calls() if self.real else (0, 0, 0)
         rec = {'n': n, 'kind': kind, 'note': step.get('note', ''), 'fan': None, 'event': None,
                'attempts': [], 'rejections': [], 'decision': {'kind': 'none'}, 'bubbles': [],
                'sales': {'mode_before': before['sales_mode'], 'mode': before['sales_mode'], 'scope': before['sales_scope']},
@@ -387,6 +415,13 @@ class Journey:
                 self._plan_and_send(step, mid, rec)
         rec['bubbles'] = self._bubbles(calls0)
         after = self._state()
+        if self.real:
+            mc1 = self._model_calls()
+            rec['model_calls'] = mc1[0] - mc0[0]
+            rec['model_microusd'] = mc1[1] - mc0[1]
+            if rec['decision'].get('kind') not in ('none', 'rejected', 'held_for_human'):
+                rec['decision']['sales_signal'] = ('decline' if after['sales_mode'] == 'paused' and before['sales_mode'] != 'paused'
+                                                   else 'reopen' if after['sales_mode'] != before['sales_mode'] else 'none')
         rec['sales'].update(mode=after['sales_mode'], scope=after['sales_scope'])
         rec['handover'].update(conversation_mode=after['conversation_mode'], takeover_state=after['takeover_state'],
                                hold_active=after['conversation_mode'] != 'automated')
@@ -395,7 +430,28 @@ class Journey:
         rec['flags'] = analyse(rec, self.records, self.prices, human_hold_before=hold_before)
         return rec
 
+    def _model_calls(self):
+        from sqlalchemy import text
+        with self.engine_db.begin() as c:
+            row = c.execute(text("SELECT count(*), coalesce(sum(actual_microusd),0), coalesce(sum(reserved_microusd) "
+                                 "FILTER (WHERE actual_microusd IS NULL),0) FROM of_engine_model_call")).one()
+        return int(row[0]), int(row[1]), int(row[2])
+
+    def _approve_all_grants(self):
+        """A real model cannot mint grants: pre-approve each enabled item the sales state permits (best effort)."""
+        from conversation_engine.commerce import SyntheticCoverage, approve_simulated_offer
+        from onlyfans_runtime.store import utcnow
+        for key, item_id in self.item_ids.items():
+            try:
+                approve_simulated_offer(self.store, TENANT, ACCOUNT, FAN, item_id, SyntheticCoverage(
+                    ACCOUNT, FAN, item_id, tuple(self.catalogue[key]['media']), 'synthetic:sim-coverage',
+                    utcnow() + timedelta(minutes=5)))
+            except Exception:       # noqa: BLE001 - sales paused / already owned / already granted
+                pass
+
     def _plan_and_send(self, step, mid, rec):
+        if self.real:
+            self._approve_all_grants()
         from onlyfans_runtime.store import Refused
         from onlyfans_runtime.text_delivery import TextAuthority
         from sqlalchemy.orm import Session
@@ -415,6 +471,11 @@ class Journey:
                     break
             except LookupError as exc:
                 rec['rejections'].append({'attempt': attempt, 'reason': f'model: {exc}'})
+                break
+            except Exception as exc:   # noqa: BLE001 - ModelBusy / ModelUnavailable etc: record, keep the run going
+                rejection = f'{type(exc).__name__}: {exc}'
+                rec['attempts'].append({'attempt': attempt, 'result': 'error', 'reason': rejection})
+                rec['rejections'].append({'attempt': attempt, 'reason': rejection})
                 break
         if decision is None:
             rec['no_reply_reason'] = 'rejected: ' + (rejection or 'no proposal')
@@ -501,7 +562,10 @@ class Journey:
                 'totals': {'steps': len(self.records), 'bubbles': sum(len(r['bubbles']) for r in self.records),
                            'cards': sum(1 for r in self.records for b in r['bubbles'] if b['card']),
                            'flags': len(flags), 'spend_cents': self.spend_cents,
-                           'provider_calls': len(self.provider_fx.calls)}}
+                           'provider_calls': len(self.provider_fx.calls),
+                           **({'model_calls': sum(r.get('model_calls', 0) for r in self.records),
+                               'model_microusd': sum(r.get('model_microusd', 0) for r in self.records)}
+                              if self.real else {})}}
 
     def close(self):
         self.store.close()
@@ -550,6 +614,8 @@ def step_lines(r):
     h = r['handover']
     lines.append(f"     handover: {'HOLD' if h['hold_active'] else 'none'}" +
                  (f" ({h.get('reason')})" if h.get('requested') else ''))
+    if 'model_calls' in r:
+        lines.append(f"     model calls: {r['model_calls']} (${r['model_microusd'] / 1e6:.4f})")
     for x in r['rejections']:
         lines.append(f"     REJECTED (attempt {x['attempt']}): {x['reason']}")
     for f in r['flags']:
@@ -587,7 +653,7 @@ def _port(name):
     if name == 'fixture':
         return FixtureModel()
     if name == 'real':
-        return RealModelAdapter()
+        return RealRuntimePort()
     raise SystemExit(f'unknown model {name}')
 
 
@@ -606,8 +672,9 @@ def main(argv=None):
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     if args.cmd == 'run':
         res = run_journey(script, _port(args.model), args.provider)
-        (out / f'sim_{args.provider}.txt').write_text(render_text(res), encoding='utf-8')
-        (out / f'sim_{args.provider}.json').write_text(json.dumps(res, indent=1, ensure_ascii=False), encoding='utf-8')
+        tag = args.provider + ('_real' if args.model == 'real' else '')
+        (out / f'sim_{tag}.txt').write_text(render_text(res), encoding='utf-8')
+        (out / f'sim_{tag}.json').write_text(json.dumps(res, indent=1, ensure_ascii=False), encoding='utf-8')
         print(render_text(res))
     else:
         ra = run_journey(script, _port(args.model), 'A')

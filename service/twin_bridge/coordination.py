@@ -771,7 +771,7 @@ def guarded_send(account_id: object, fan_id: object, *, purpose: str,
     from moxy_replacement.routing import refuse_legacy
     # Fail closed: a Moxy-selected (or undeterminable) account refuses every
     # automated legacy write; only a manual operator send passes.
-    refuse_legacy(account_id, purpose)
+    refuse_legacy(account_id, purpose, fan_id)
     key = _key(account_id, fan_id)
     with _REGISTRY_LOCK:
         process_reserved = key in _RESERVED

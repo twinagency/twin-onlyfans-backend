@@ -1,8 +1,9 @@
 """Offline-only engine orchestration around canonical inbox and delivery records.
 
-Only in-process fixture models are accepted. This is deliberately
-not a production writer: provider/model approval and creator operating rules
-are still required before a real model can be admitted.
+In-process fixture models are always accepted. A real model is accepted only as a
+ModelRuntime (model_runtime.py): default OFF, allow-listed models and accounts,
+reserved budget, calls made outside database locks, and every engine control
+re-checked after the call. The model has no send or charge authority.
 """
 from dataclasses import dataclass
 from hashlib import sha256
@@ -44,6 +45,13 @@ class SyntheticProposal:
     purchase_claim: bool = False
 
 
+class _AlreadyPlanned(Exception):
+    """Another worker finished this request generation while a model call was in flight."""
+    def __init__(self, decision_id):
+        super().__init__(decision_id)
+        self.decision_id = decision_id
+
+
 def _latest_generation(s, account, request_id):
     rows = list(s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == account,
         OfEngineDecision.request_id == request_id).order_by(OfEngineDecision.generation.desc(),
@@ -74,6 +82,54 @@ def _proved_unsent(s, account, parts):
     return True
 
 
+def _offer_grants(s, runtime, fan_id):
+    """Approved, unexpired, unused offer grants for this fan whose frozen terms still match the catalogue."""
+    from .commerce import _hash
+    from onlyfans_runtime.media_delivery import catalog_terms
+    out = []
+    grants = s.scalars(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == runtime.account_id,
+        OfEngineOfferGrant.fan_id == fan_id, OfEngineOfferGrant.binding_id == runtime.binding_id,
+        OfEngineOfferGrant.used_intent_id.is_(None), OfEngineOfferGrant.expires_at > utcnow())
+        .order_by(OfEngineOfferGrant.grant_id).limit(6)).all()
+    for grant in grants[:5]:
+        try:
+            terms = catalog_terms(s, runtime.account_id, grant.item_id, lock=False)
+        except Refused:
+            continue
+        if _hash(terms) != grant.terms_hash:
+            continue
+        item = terms['item']
+        out.append({'grantId': grant.grant_id, 'itemId': str(grant.item_id),
+                    'label': item.get('label') or item.get('description_for_ai'),
+                    'description': item.get('description_for_ai')})
+    return out
+
+
+def _verified_purchases(s, runtime, fan_id):
+    """Catalogue items whose every media file the fan verifiably owns; None when ownership evidence is unavailable."""
+    from db.models import CatalogItem
+    from onlyfans_runtime.media_delivery import catalog_terms
+    from ownership import owned_media_in_session
+    try:
+        owned = set(owned_media_in_session(s, runtime.account_id, fan_id, limit=10000))
+    except ValueError:
+        return None
+    items = list(s.scalars(select(CatalogItem).where(CatalogItem.account_id == runtime.account_id,
+        CatalogItem.enabled.is_(True), CatalogItem.script_id.is_(None)).order_by(CatalogItem.id).limit(201)))
+    if len(items) > 200:
+        return None
+    out = []
+    for item in items:
+        try:
+            terms = catalog_terms(s, runtime.account_id, item.id, lock=False)
+        except Refused:
+            continue
+        media = set(terms['media_ids'])
+        if media and media <= owned:
+            out.append({'itemId': str(item.id), 'label': item.label or item.description_for_ai})
+    return out
+
+
 class SyntheticModel:
     """Deterministic fixture; no credentials, I/O, fallback or model inference."""
     def __init__(self, replies):
@@ -91,8 +147,9 @@ class SyntheticModel:
 class EngineService:
     def __init__(self, store, model):
         from .model_contract import StructuredFixtureModel
-        if type(model) not in (SyntheticModel, StructuredFixtureModel):
-            raise Refused('only offline fixture models are available')
+        from .model_runtime import ModelRuntime
+        if type(model) not in (SyntheticModel, StructuredFixtureModel, ModelRuntime):
+            raise Refused('only fixture models or a configured ModelRuntime are available')
         self.store = store
         self.engine = store.engine
         self.model = model
@@ -214,6 +271,8 @@ class EngineService:
             if existing and (request.status != 'open' or existing[0].generation + 1 >= MAX_GENERATIONS
                              or not _proved_unsent(s, account, existing)):
                 return existing[0].decision_id
+            if not existing and request.status in {'handover_pending', 'handover_accepted'}:
+                raise Refused('request is with a human')
             if (fan_id, source_message_id) in conflicted_sources(s, account):
                 raise Refused('source message has conflicting webhook evidence')
             latest = s.scalar(select(Message).where(Message.account_id == account, Message.fan_id == fan_id,
@@ -271,13 +330,30 @@ class EngineService:
                     'open_requests': [{'request_id': r.request_id, 'source_message_id': r.source_message_id,
                         'status': r.status, 'owner': r.owner, 'next_step': r.next_step} for r in open_rows[:50]],
                     'open_requests_truncated': len(open_rows) > 50}
+                if type(self.model).__name__ == 'ModelRuntime':
+                    # Extra writer context, built only for a real model so fixture snapshots stay unchanged.
+                    snapshot['offer_grants'] = _offer_grants(s, runtime, fan_id)
+                    snapshot['verified_purchases'] = _verified_purchases(s, runtime, fan_id)
                 request_id, epoch, binding = request.request_id, owner.epoch, runtime.binding_id
         if stale:
             raise Refused('newer incoming message needs review')
         from .model_contract import StructuredFixtureModel
-        if type(self.model) not in (SyntheticModel, StructuredFixtureModel):
-            raise Refused('only offline fixture models are available')
-        proposal = self.model.generate(snapshot)  # no DB transaction across model work
+        from .model_runtime import ModelRuntime, ModelTurn
+        if type(self.model) not in (SyntheticModel, StructuredFixtureModel, ModelRuntime):
+            raise Refused('only fixture models or a configured ModelRuntime are available')
+        if type(self.model) is ModelRuntime:
+            turn = ModelTurn(account=account, fan_id=fan_id, request_id=request_id,
+                generation=0 if observed_generation is None else observed_generation + 1, binding_id=binding,
+                owner_epoch=epoch, snapshot=snapshot, snapshot_sha256=_digest(snapshot),
+                recheck=lambda: self._model_recheck(tenant, account, fan_id, source_message_id, request_id, epoch,
+                    binding, snapshot, observed_generation, memory_fingerprint, offer_fingerprint),
+                handover=lambda reason: self._handover_model(tenant, account, request_id, self.model.config.handover_target))
+            try:
+                proposal = self.model.propose(turn)  # reserve/call/settle each use their own short transaction
+            except _AlreadyPlanned as done:
+                return done.decision_id
+        else:
+            proposal = self.model.generate(snapshot)  # no DB transaction across model work
         if (type(proposal) is not SyntheticProposal or type(proposal.body) is not str or not proposal.body.strip()
                 or len(proposal.body.encode('utf-8')) > 4000 or proposal.sales_signal not in {'none', 'decline', 'reopen'}
                 or type(proposal.item_scope) is not tuple or type(proposal.parts) is not tuple or len(proposal.parts) > 3
@@ -404,6 +480,55 @@ class EngineService:
                 s.add(additional); s.flush()
                 bind_memory(s, runtime, additional, source, current_memory, current_fingerprint, offer_fingerprint)
             return decision_id
+
+    def _model_recheck(self, tenant, account, fan_id, source_message_id, request_id, epoch, binding, snapshot,
+                       observed_generation, memory_fingerprint, offer_fingerprint):
+        """Re-validate the world a model answer depends on. Short read-only transaction; raises when anything moved."""
+        with Session(self.engine) as s, s.begin():
+            runtime = self.store._runtime(s, tenant, account)
+            owner = s.get(OfEngineOwner, (account, fan_id))
+            state = s.get(OfConversationState, (account, fan_id))
+            policy = s.get(OfDeliveryPolicy, account)
+            request = s.get(OfEngineRequest, (account, request_id))
+            existing = _latest_generation(s, account, request_id)
+            connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account, OfFansConnection.status == 'active'))
+            if existing:
+                if (existing[0].generation != observed_generation or request is None or request.status != 'open'
+                        or not _proved_unsent(s, account, existing)):
+                    raise _AlreadyPlanned(existing[0].decision_id)
+            elif observed_generation is not None:
+                raise Refused('conversation changed during generation')
+            if (policy is None or not policy.enabled or owner is None or owner.mode != 'active' or owner.epoch != epoch
+                    or runtime.binding_id != binding or owner.binding_id != binding
+                    or (connection.epoch if connection else None) != snapshot['connection_epoch'] or state is None
+                    or state.mode != 'automated' or state.takeover_state != 'none'
+                    or state.input_revision != snapshot['input_revision'] or state.revision != snapshot['control_revision']
+                    or request is None or request.status != 'open'):
+                raise Refused('conversation changed during generation')
+            if (fan_id, source_message_id) in conflicted_sources(s, account):
+                raise Refused('source message has conflicting webhook evidence')
+            source = s.get(Message, (account, fan_id, source_message_id))
+            if source is None or source.is_unsent or source.body != snapshot['current_message']['body']:
+                raise Refused('source message changed during generation')
+            from .memory import projection as memory_projection
+            if memory_projection(s, runtime, fan_id, source)[1] != memory_fingerprint:
+                raise Refused('fan memory changed during generation')
+            from .offers import match as match_offers
+            from .catalogue import search_context
+            if _digest({'offers': match_offers(s, runtime, fan_id, source.body),
+                        'catalogue': search_context(s, runtime, fan_id, source)}) != offer_fingerprint:
+                raise Refused('catalogue or offer references changed during generation')
+
+    def _handover_model(self, tenant, account, request_id, target):
+        """The writer could not produce an acceptable reply: a human takes the request. No canned line is created."""
+        with Session(self.engine) as s, s.begin():
+            runtime = self.store._runtime(s, tenant, account)
+            request = s.get(OfEngineRequest, (account, request_id), with_for_update=True)
+            if request is None or request.binding_id != runtime.binding_id or request.status != 'open':
+                return
+            request.status, request.handover_target = 'handover_pending', target
+            request.next_step, request.updated_at = 'await_handover_acceptance', utcnow()
+            request.revision += 1
 
     def queue(self, tenant, account, decision_id):
         with Session(self.engine) as s:

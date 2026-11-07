@@ -290,6 +290,10 @@ for route in onlyfans_app.app.routes:
         assert methods == {"POST"}, route.path
     elif route.path.startswith("/onlyfans/control/v2/"):
         assert methods in ({"GET"}, {"POST"}), route.path
+    elif route.path == "/onlyfans/webhooks/plan-c-draft":
+        # Explicitly allow only the signed, default-off, no-send draft ingress.
+        assert methods == {"POST"}, route.path
+        assert route.endpoint.__module__ == "onlyfans_commands.plan_c_draft_webhook_api"
     elif route.path == "/onlyfans/content/v1/accounts/{account_id}/vault/videos/{media_id}/stream":
         assert methods == {"GET", "HEAD"}, route.path
     elif (route.path == "/onlyfans/content-sync/v1/accounts/{account_id}/drafts/{draft_id}/files/{file_id}/chunks/{index}"):

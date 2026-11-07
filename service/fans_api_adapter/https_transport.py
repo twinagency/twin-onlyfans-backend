@@ -1,13 +1,16 @@
 """Opt-in, single-attempt HTTPS transport. Construction performs no I/O.
 
-This primitive is not registered with the delivery worker. A production sender
-must still go through the durable delivery authority and receive separate
-activation approval. A custom httpx transport is accepted solely by callers
-explicitly constructing this object (e.g. MockTransport in offline tests).
+This is the ONLY module in the engine packages allowed to import httpx (the
+import-boundary test allow-lists exactly this file). It is never registered
+with the delivery worker directly: a sender reaches it only through
+real_transport.FansApiRealTransport, which runs behind the one-use TextAuthority
+attempt. Construction needs an explicit enabled=True. A custom httpx transport
+is accepted only from callers that construct this object (MockTransport or a
+loopback rewrite in offline tests).
 """
 from urllib.parse import urlsplit
 import httpx
-from .protocol import BASE, Response
+from .protocol import ALLOWED_BASES, Response
 
 MAX_BYTES = 1_000_000
 
@@ -21,7 +24,7 @@ class FansHttpsTransport:
     def __call__(self, *, method, url, headers, body, timeout, follow_redirects):
         parsed = urlsplit(url)
         if (method not in ("GET", "POST") or parsed.scheme != "https"
-                or parsed.netloc != urlsplit(BASE).netloc or parsed.username or parsed.password
+                or parsed.netloc not in {urlsplit(b).netloc for b in ALLOWED_BASES} or parsed.username or parsed.password
                 or parsed.fragment or not parsed.path.startswith("/api/")
                 or type(headers) is not dict or follow_redirects is not False
                 or type(timeout) not in (int, float) or not 0 < timeout <= 30

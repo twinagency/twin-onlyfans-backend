@@ -1,24 +1,26 @@
-"""Journey rules for the real (fansapi) path, as engine behaviour rather than runner policy.
+"""Journey rules for the real (fansapi) path (Plan C pilot subset), as engine behaviour rather than runner policy.
 
 Everything here is deterministic and reads/writes the records the engine already owns:
 
-* sales state      -> ``of_engine_owner.sales_mode`` (R1/R8: paused / reopened_scoped / open)
+* sales state      -> ``of_engine_owner.sales_mode`` (paused / reopened_scoped / open)
 * ownership        -> ``Store.control`` (request_takeover) which flips ``of_engine_owner.mode`` to ``human``
 * requests         -> ``of_engine_request`` (+ ``EngineService.request_handover``)
 * operator records -> ``of_operator_case`` (flags and human holds)
-* money            -> ``of_fans_evidence`` (applied, paired transactions and chargebacks) and ``of_engine_access_evidence``
-* welcome          -> one ``of_engine_offer_grant`` per fan, marked by its ``vault:welcome:`` coverage reference
+
+Plan C scope. KEPT: refusal / affordability pause (stops the pitch and invalidates unsent sales drafts; an explicit
+"stop offering" is a distinct opt-out that only the fan's clear request reopens; a temporary "not now" may, when
+`temporary_pause_reopen_hours` is configured (off by default), become eligible for a fresh operator-approved offer on a
+LATER inbound message, never by timed outreach), identity -> human unless an approved identity wording exists, custom-request no-promise, limit /
+off-platform / meetup human routing, "no new card just for a compliment after a purchase", and the history-coverage
+check (`backfill_complete` and unscoped messages) that holds a paid offer until the fan's history is known.
+DEFERRED (removed, handoff section 2): the subscriber welcome offer, whale hold/flag thresholds, ladder-type defaults.
 
 No new table, no model call, no send. The module is inert unless the account's delivery policy is ``fansapi``.
 Synthetic accounts never see any of it.
 
 Two entry points sit in the engine (marked ``JOURNEY-HOOK`` in engine.py): ``journey_context`` adds the facts to the
-model snapshot and ``enforce_journey`` rejects a proposal that breaks a rule. A proposal is never trusted to
-follow a rule that only exists in prose.
-
-Known limit (schema): an engine request is anchored to a canonical INBOUND message (memory binding and the
-source-message foreign keys). The welcome and the post-purchase reaction therefore ride the fan's next inbound
-message; nothing is sent proactively. See NEEDS-JOIN.md.
+model snapshot and ``enforce_journey`` rejects a proposal that breaks a rule. ``journey_problems`` is the same check as
+a list, so the model judge can send a violation back for ONE corrected draft instead of losing the turn.
 """
 from dataclasses import dataclass
 from datetime import timedelta
@@ -30,30 +32,29 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db.models import Message, OfConversationState
-from db.onlyfans_delivery_models import OfDeliveryPolicy
-from db.onlyfans_engine_models import OfEngineAccessEvidence, OfEngineOfferGrant, OfEngineOwner, OfEngineRequest
-from db.onlyfans_fans_intake_models import OfFansBackfill, OfFansEvidence, OfFansProjection
+from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
+from db.onlyfans_engine_models import OfEngineAccessEvidence, OfEngineDecision, OfEngineOwner, OfEngineRequest
+from db.onlyfans_fans_intake_models import OfFansBackfill, OfFansEvidence
 from onlyfans_runtime.store import Refused, utcnow
-from .history_scope import current_binding_message
+from .history_scope import current_binding_message, has_unscoped_messages
+from .writer_context import active_profile
 
-WELCOME_PREFIX = 'vault:welcome:'
-MAX_REACTION_CHARS = 160
 HISTORY_LIMIT = 200
 
 
 @dataclass(frozen=True)
 class JourneyConfig:
     """Operator-approved journey settings. Every default is the conservative one."""
-    welcome_item_id: int | None = None        # None: no welcome offer (the item must be an approved catalogue item)
-    welcome_ttl_hours: int = 168
-    whale_hold_cents: int = 100_000           # verified spend at which a human takes over (no model reply)
-    whale_flag_cents: int = 50_000            # softer flag, engine keeps talking
-    identity_line: str | None = None          # approved answer to "are you real / who is this"; None -> human
+    identity_line: str | None = None          # approved answer to "are you real / who is this"; None -> profile wording, else human
     limit_terms: tuple[str, ...] = ()         # creator limits (lower-case words/phrases), pushed past = limit push
     handover_target: str = 'human-queue'
     auto_backfill: bool = False               # run the fan's backfill from the worker (reads only); default: wait
     backfill_start: str = '2015-01-01 00:00:00'
     backfill_pages: int = 20
+    # A temporary "not now" / affordability pause may become eligible for a fresh, operator-approved offer on a later
+    # inbound message once this many hours passed since it (the handoff's 12-hour proposal). None (default) disables:
+    # a pause then ends only when the fan clearly asks to buy. Never applies to an explicit opt-out.
+    temporary_pause_reopen_hours: int | None = None   # OFF until Jesse records the 12-hour decision
 
 
 _CONFIG = JourneyConfig()
@@ -63,8 +64,9 @@ def configure_journey(config):
     global _CONFIG
     if type(config) is not JourneyConfig:
         raise Refused('journey configuration required')
-    if (config.whale_flag_cents < 0 or config.whale_hold_cents < config.whale_flag_cents
-            or config.welcome_ttl_hours < 1 or not config.handover_target.strip()):
+    if ((config.temporary_pause_reopen_hours is not None and (type(config.temporary_pause_reopen_hours) is not int
+                                                              or config.temporary_pause_reopen_hours < 1))
+            or not config.handover_target.strip()):
         raise Refused('journey configuration is inconsistent')
     _CONFIG = config
     return config
@@ -72,6 +74,16 @@ def configure_journey(config):
 
 def journey_config():
     return _CONFIG
+
+
+def identity_line_for(account, config=None):
+    """The APPROVED identity wording for this account: explicit journey config first, then the creator profile."""
+    config = config or _CONFIG
+    if config.identity_line and config.identity_line.strip():
+        return config.identity_line.strip()
+    profile = active_profile(account)
+    line = (getattr(profile, 'role_statement', '') or '').strip()
+    return line or None
 
 
 # ------------------------------------------------------------------ text signals
@@ -99,6 +111,17 @@ _REFUSAL = re.compile(
     r"|can(?:'|)t afford|cannot afford|don(?:'|)t have (?:the )?(?:money|cash)|i(?:'m| am) (?:broke|poor)"
     r"|out of (?:money|budget)|no money|stop (?:trying to )?(?:sell|pitch)\w*|not buying|"
     r"(?:don(?:'|)t|do not) want (?:it|that|to buy)|save my money|tight (?:on )?(?:money|budget))\b")
+_SALES_OPTOUT = re.compile(
+    r"\b(?:stop (?:trying to )?(?:sell|pitch|offer)\w*|stop (?:the )?(?:offers|pitch\w*|selling)|quit (?:selling|pitching)|"
+    r"(?:don'?t|do not|never) (?:offer|pitch|sell|send)\w* (?:me )?(?:anything|any|offers?|content|ppv|stuff|more)|"
+    r"no more (?:offers|ppv|pitches|selling)|(?:just|only) (?:chat|talk)\w*,? (?:no|not|don'?t)\b.{0,24}\b(?:sell|buy|offer|pitch))\b")
+_COMPLIMENT = re.compile(
+    r"\b(?:thank(?:s| you)|thx|love(?:d)? (?:it|that|them|this)|loved|so (?:hot|good|sexy|pretty|beautiful)|amazing|perfect|"
+    r"gorgeous|beautiful|stunning|incredible|worth it|wow|damn|that was (?:great|amazing|hot|so good)|"
+    r"you(?:'re| are) (?:so )?(?:hot|sexy|beautiful|amazing|incredible|gorgeous|perfect))\b")
+_ASKS = re.compile(
+    r"\?|\b(?:more|another|next|else|other|send|show|got any|do you have|have any|what about|buy|unlock|price|how much|"
+    r"can i|could i|do you|is there|want (?:to|more|another))\b")
 _PROMISE = re.compile(
     r"\b(?:i(?:'ll| will| can)|ill|i(?:'m| am) (?:going to|gonna)|im gonna|definitely will|sure[, ]+i(?:'ll| will))"
     r" (?:definitely |totally |absolutely |happily |gladly )?(?:make|film|record|shoot|create|personali[sz]e)\b"
@@ -126,6 +149,11 @@ def signals(text, config=None):
         found.add('custom')
     if _REFUSAL.search(value):
         found.add('refusal')
+    if _SALES_OPTOUT.search(value):
+        found.add('sales_optout')
+        found.add('refusal')
+    if _COMPLIMENT.search(value) and not _ASKS.search(value) and not found:
+        found.add('compliment')
     return frozenset(found)
 
 
@@ -158,7 +186,8 @@ def backfill_complete(s, account, fan_id):
 
 
 def verified_spend(s, account, fan_id):
-    """Cents the fan really paid: exactly paired transactions the commerce owner applied, minus applied chargebacks."""
+    """Cents the fan really paid per applied evidence rows. Evidence only: no journey decision uses it any more
+    (the whale thresholds are deferred); the amount/time pairing of a transaction is not authoritative financial linkage."""
     def total(kind):
         return s.scalar(select(func.coalesce(func.sum(OfFansEvidence.amount_cents), 0)).where(
             OfFansEvidence.account_id == account, OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind == kind,
@@ -184,18 +213,14 @@ def _inbound(s, runtime, fan_id, *, upto=None):
 def decide(s, runtime, owner, message, config=None):
     """Pure verdict for one inbound message. Returns a dict; writes nothing.
 
-    human: reason that needs a person (engine stays silent), pause: selling must be paused by this message,
-    flags: operator flags to raise, no_promise: the reply must not promise anything.
+    human: reason that needs a person (engine stays silent), pause: selling must be paused by this message
+    ('refusal' temporary, 'sales_optout' explicit, 'offplatform_ask'), flags: operator flags to raise,
+    no_promise: the reply must not promise anything.
     """
     config = config or _CONFIG
     found = signals(message.body, config)
     verdict = {'signals': sorted(found), 'human': None, 'pause': None, 'flags': [], 'no_promise': False}
-    spend = verified_spend(s, runtime.account_id, owner.fan_id)
-    if spend >= config.whale_hold_cents:
-        verdict['human'] = 'whale_hold'
-    elif spend >= config.whale_flag_cents:
-        verdict['flags'].append('vip_flag')
-    if 'identity' in found and config.identity_line is None and verdict['human'] is None:
+    if 'identity' in found and identity_line_for(runtime.account_id, config) is None:
         verdict['human'] = 'identity'
     history = _inbound(s, runtime, owner.fan_id, upto=message.message_id)
     ask_count = sum(1 for row in history if signals(row.body, config) & {'offplatform', 'meetup'})
@@ -206,38 +231,20 @@ def decide(s, runtime, owner, message, config=None):
         verdict['pause'] = 'offplatform_ask'
         verdict['flags'].append('offplatform_ask')
     if 'refusal' in found and verdict['pause'] is None:
-        verdict['pause'] = 'refusal'
+        verdict['pause'] = 'sales_optout' if 'sales_optout' in found else 'refusal'
     if 'custom' in found:
         verdict['no_promise'] = True
         verdict['flags'].append('custom_request')
     return verdict
 
 
-def _welcome_grant(s, account, fan_id):
-    return s.scalar(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == account,
-        OfEngineOfferGrant.fan_id == fan_id, OfEngineOfferGrant.coverage_ref.like(WELCOME_PREFIX + '%'))
-        .order_by(OfEngineOfferGrant.created_at).limit(1))
-
-
-def _first_request(s, account, fan_id, request):
-    earlier = s.scalar(select(func.count()).select_from(OfEngineRequest).where(
-        OfEngineRequest.account_id == account, OfEngineRequest.fan_id == fan_id,
-        OfEngineRequest.created_at < request.created_at, OfEngineRequest.request_id != request.request_id))
-    return not earlier
-
-
-def _post_purchase(s, runtime, fan_id, message):
-    """True when this inbound message is the first one after the fan's latest verified purchase."""
+def _purchase_before(s, runtime, fan_id, message):
+    """True when the fan has a verified (confirmed, applied) purchase older than this inbound message."""
     latest = s.scalar(select(OfEngineAccessEvidence).where(OfEngineAccessEvidence.account_id == runtime.account_id,
-        OfEngineAccessEvidence.fan_id == fan_id, OfEngineAccessEvidence.applied.is_(True))
+        OfEngineAccessEvidence.fan_id == fan_id, OfEngineAccessEvidence.applied.is_(True),
+        OfEngineAccessEvidence.status == 'confirmed')
         .order_by(OfEngineAccessEvidence.occurred_at.desc(), OfEngineAccessEvidence.created_at.desc()).limit(1))
-    if latest is None or latest.status != 'confirmed' or message.created_at <= latest.occurred_at:
-        return False
-    first = s.scalar(select(Message.message_id).where(Message.account_id == runtime.account_id,
-        Message.fan_id == fan_id, Message.direction == 'in', Message.is_unsent.is_(False),
-        current_binding_message(runtime.binding_id), Message.created_at > latest.occurred_at)
-        .order_by(Message.created_at, Message.message_id).limit(1))
-    return first == message.message_id
+    return latest is not None and message.created_at > latest.occurred_at
 
 
 def journey_context(s, runtime, owner, request, message):
@@ -249,47 +256,57 @@ def journey_context(s, runtime, owner, request, message):
     ctx = {'signals': verdict['signals']}
     if verdict['human']:
         ctx['human_required'] = verdict['human']
-    post = _post_purchase(s, runtime, owner.fan_id, message)
+    # No new card solely because he complimented something he already bought (he asked for nothing).
+    compliment = 'compliment' in verdict['signals'] and _purchase_before(s, runtime, owner.fan_id, message)
     gate = backfill_complete(s, runtime.account_id, owner.fan_id)
-    # Hard blocks only. The owner's sales state (paused / scoped) is the existing R1/R8 mechanism and is judged
+    unscoped = has_unscoped_messages(s, runtime.account_id, owner.fan_id, runtime.binding_id)
+    # Hard blocks only. The owner's sales state (paused / scoped) is the existing sales mechanism and is judged
     # separately so an explicit, scoped reopening by the fan can still be honoured in the same turn.
-    ctx['offers_allowed'] = bool(verdict['pause'] is None and not post and gate and not verdict['human'])
+    ctx['offers_allowed'] = bool(verdict['pause'] is None and not compliment and gate and not unscoped
+                                 and not verdict['human'])
     ctx['sales_mode'] = owner.sales_mode
     ctx['backfill_complete'] = gate
-    if post:
-        ctx['post_purchase'] = {'max_chars': MAX_REACTION_CHARS,
-                                'rule': 'one short reaction, no offer, no price, no pitch; the next offer waits for his next message'}
+    ctx['history_scope_incomplete'] = bool(unscoped)
+    if compliment:
+        ctx['compliment_after_purchase'] = True
     if verdict['no_promise']:
         ctx['no_promise'] = True
-    if config.identity_line is not None and 'identity' in verdict['signals']:
-        ctx['approved_identity_line'] = config.identity_line
-    grant = _welcome_grant(s, runtime.account_id, owner.fan_id)
-    if (grant is not None and grant.used_intent_id is None and grant.expires_at > utcnow()
-            and ctx['offers_allowed'] and request is not None and _first_request(s, runtime.account_id, owner.fan_id, request)):
-        ctx['welcome'] = {'grant_id': grant.grant_id, 'item_id': grant.item_id,
-                          'rule': 'at most this one approved catalogue offer, once ever per fan'}
+    line = identity_line_for(runtime.account_id, config)
+    if line is not None and 'identity' in verdict['signals']:
+        ctx['approved_identity_line'] = line
     return ctx
+
+
+def _norm_words(text):
+    return ' '.join(re.sub(r"[^a-z0-9 ]+", ' ', str(text).lower()).split())
+
+
+def journey_problems(ctx, proposal):
+    """Every journey rule a proposal breaks, as plain sentences (engine hook 2 and the model judge)."""
+    if not ctx:
+        return []
+    problems = []
+    if ctx.get('human_required'):
+        problems.append('journey: this conversation needs a human (' + ctx['human_required'] + ')')
+    if proposal.action == 'offer' and not ctx.get('offers_allowed', True):
+        problems.append('journey: no offer is allowed in this turn')
+    if proposal.action == 'offer' and ctx.get('sales_mode') == 'paused' and proposal.sales_signal != 'reopen':
+        problems.append('journey: selling is paused and only his explicit, scoped interest reopens it')
+    if ctx.get('compliment_after_purchase') and (proposal.action != 'reply' or proposal.pitch):
+        problems.append('journey: he only complimented what he bought; send no new card or pitch')
+    if ctx.get('no_promise') and promises_custom(proposal.body, *proposal.parts):
+        problems.append('journey: a custom request is flagged and must not be promised')
+    line = ctx.get('approved_identity_line')
+    if line and _norm_words(line) not in _norm_words(' '.join([proposal.body, *proposal.parts])):
+        problems.append('journey: answer his identity question with exactly the approved wording')
+    return problems
 
 
 def enforce_journey(ctx, proposal):
     """Reject a proposal that breaks a journey rule (engine hook 2). `ctx` is the snapshot's journey facts."""
-    if not ctx:
-        return
-    if ctx.get('human_required'):
-        raise Refused('journey: this conversation needs a human (' + ctx['human_required'] + ')')
-    if proposal.action == 'offer' and not ctx.get('offers_allowed', True):
-        raise Refused('journey: no offer is allowed in this turn')
-    if proposal.action == 'offer' and ctx.get('sales_mode') == 'paused' and proposal.sales_signal != 'reopen':
-        raise Refused('journey: selling is paused and only his explicit, scoped interest reopens it')
-    welcome = ctx.get('welcome')
-    if welcome and proposal.action == 'offer' and proposal.offer_grant_id != welcome['grant_id']:
-        raise Refused('journey: the welcome turn offers only its approved item')
-    post = ctx.get('post_purchase')
-    if post and (proposal.action != 'reply' or proposal.parts or proposal.pitch or proposal.price_claims
-                 or proposal.sales_signal == 'reopen' or len(proposal.body) > post['max_chars']):
-        raise Refused('journey: after a purchase send one short reaction and no offer')
-    if ctx.get('no_promise') and promises_custom(proposal.body, *proposal.parts):
-        raise Refused('journey: a custom request is flagged and must not be promised')
+    problems = journey_problems(ctx, proposal)
+    if problems:
+        raise Refused(problems[0])
 
 
 # ------------------------------------------------------------------ service (writes)
@@ -320,43 +337,89 @@ class JourneyService:
                     or message.direction != 'in'):
                 return {'action': 'plan', 'reason': 'journey_inactive'}
             verdict = decide(s, runtime, owner, message, self.config)
-        done = []
+        reopened = False
         if verdict['pause']:
-            done.append(self._pause_selling(tenant, account, fan_id, message_id, verdict['pause']))
+            self._pause_selling(tenant, account, fan_id, message_id, verdict['pause'])
+        else:
+            reopened = self._lapse_temporary_pause(tenant, account, fan_id, message_id)
         for flag in verdict['flags']:
             self._flag(tenant, account, fan_id, message_id, flag)
         if verdict['human']:
             self._to_human(tenant, account, fan_id, message_id, verdict['human'])
             return {'action': 'handled', 'reason': verdict['human'], 'signals': verdict['signals']}
-        self._ensure_welcome(tenant, account, fan_id, message_id)
-        return {'action': 'plan', 'reason': None, 'signals': verdict['signals'], 'paused': verdict['pause']}
+        return {'action': 'plan', 'reason': None, 'signals': verdict['signals'], 'paused': verdict['pause'],
+                'reopened': reopened}
 
     def after_evidence(self, tenant, account, fan_id):
-        """Re-evaluate the spend thresholds after payment evidence changed. Idempotent."""
-        with Session(self.db) as s:
-            if not active(s, account):
-                return {'action': 'none'}
-            spend = verified_spend(s, account, fan_id)
-            owner = s.get(OfEngineOwner, (account, fan_id))
-        if spend >= self.config.whale_hold_cents:
-            self._to_human(tenant, account, fan_id, None, 'whale_hold')
-            return {'action': 'hold', 'spend_cents': spend}
-        if spend >= self.config.whale_flag_cents and owner is not None:
-            self._flag(tenant, account, fan_id, None, 'vip_flag')
-            return {'action': 'flag', 'spend_cents': spend}
-        return {'action': 'none', 'spend_cents': spend}
+        """Payment evidence changed. The whale hold/flag thresholds are deferred for the pilot: nothing to apply."""
+        return {'action': 'none'}
 
     # -- writes
     def _pause_selling(self, tenant, account, fan_id, message_id, why):
+        """Stop the pitch NOW: pause selling and invalidate every unsent sales draft for this fan."""
         with Session(self.db) as s, s.begin():
             self.store._runtime(s, tenant, account)
             owner = s.get(OfEngineOwner, (account, fan_id), with_for_update=True)
-            if owner is None or owner.sales_mode == 'paused':
+            if owner is None:
+                return 'no_owner'
+            invalidated = self._invalidate_unsent_sales(s, account, fan_id, why)
+            if owner.sales_mode == 'paused' and owner.sales_source_message_id == message_id:
                 return 'already_paused'
+            # A newer refusal restarts the "not now" clock; a scoped reopening is replaced by the pause.
             owner.sales_mode, owner.sales_scope_json, owner.sales_source_message_id = 'paused', '[]', message_id
             owner.revision += 1
             owner.updated_at = utcnow()
-            return 'paused'
+            return 'paused' if not invalidated else f'paused:invalidated={invalidated}'
+
+    @staticmethod
+    def _invalidate_unsent_sales(s, account, fan_id, why):
+        """Cancel this fan's UNSENT offer drafts (ready, or queued and never dispatched). Anything dispatching,
+        unknown or accepted is left alone: an ambiguous or finished send is never touched."""
+        cancelled = 0
+        rows = s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == account,
+            OfEngineDecision.fan_id == fan_id, OfEngineDecision.action == 'offer',
+            OfEngineDecision.status.in_(('ready', 'queued'))).with_for_update()).all()
+        for decision in rows:
+            if decision.status == 'queued':
+                intent = s.get(OfTextIntent, (account, decision.intent_id), with_for_update=True) if decision.intent_id else None
+                policy = s.get(OfDeliveryPolicy, account, with_for_update=True)
+                if intent is None or intent.status != 'queued' or policy is None or policy.queued_count < 1:
+                    continue
+                intent.status, intent.reason, intent.updated_at = 'cancelled', ('sales_' + why)[:32], utcnow()
+                policy.queued_count -= 1
+            decision.status, decision.updated_at = 'cancelled', utcnow()
+            cancelled += 1
+        return cancelled
+
+    def _lapse_temporary_pause(self, tenant, account, fan_id, message_id):
+        """A TEMPORARY 'not now' / affordability pause becomes eligible for a fresh offer on a later inbound message.
+
+        Only when enough hours passed since the refusing message; never for an explicit sales opt-out, limit or
+        off-platform pause, or a pause whose reason is not a recognised temporary refusal. This runs on an inbound
+        message only: it never creates outreach, and the new offer still needs the operator's approval.
+        """
+        hours = self.config.temporary_pause_reopen_hours
+        if hours is None:
+            return False
+        with Session(self.db) as s, s.begin():
+            self.store._runtime(s, tenant, account)
+            owner = s.get(OfEngineOwner, (account, fan_id), with_for_update=True)
+            message = s.get(Message, (account, fan_id, message_id))
+            if (owner is None or owner.sales_mode != 'paused' or owner.sales_source_message_id is None
+                    or message is None or message.direction != 'in'):
+                return False
+            source = s.get(Message, (account, fan_id, owner.sales_source_message_id))
+            if source is None or source.direction != 'in' or source.message_id == message_id:
+                return False
+            found = signals(source.body, self.config)
+            if 'refusal' not in found or found & {'sales_optout', 'offplatform', 'meetup', 'limit'}:
+                return False
+            if message.created_at - source.created_at < timedelta(hours=hours):
+                return False
+            owner.sales_mode, owner.sales_scope_json = 'open', '[]'
+            owner.revision += 1
+            owner.updated_at = utcnow()
+            return True
 
     def _flag(self, tenant, account, fan_id, message_id, category):
         from onlyfans_runtime.operator_cases import open_case
@@ -427,32 +490,3 @@ class JourneyService:
                 if 'revision' not in str(exc):
                     raise
         return 'takeover_deferred'
-
-    def _ensure_welcome(self, tenant, account, fan_id, message_id):
-        """Create the one welcome grant per fan, once ever, when a subscriber's first message arrives."""
-        config = self.config
-        if config.welcome_item_id is None:
-            return None
-        with Session(self.db) as s:
-            if (_welcome_grant(s, account, fan_id) is not None):
-                return None
-            sub = s.scalar(select(OfFansProjection).where(OfFansProjection.account_id == account,
-                OfFansProjection.status == 'projected', OfFansProjection.detail == f'subscription_new:{fan_id}')
-                .order_by(OfFansProjection.updated_at).limit(1))
-            if sub is None:
-                return None
-            requests = s.scalars(select(OfEngineRequest.source_message_id).where(OfEngineRequest.account_id == account,
-                OfEngineRequest.fan_id == fan_id)).all()
-            if any(m != message_id for m in requests):
-                return None  # not his first conversation turn: the welcome moment has passed
-            owner = s.get(OfEngineOwner, (account, fan_id))
-            if owner is None or owner.sales_mode != 'open':
-                return None
-            ref = WELCOME_PREFIX + _key(account, fan_id, sub.epoch, sub.event_key)[:24]
-        from .commerce import RealCatalogueCoverage, approve_catalogue_offer
-        try:
-            return approve_catalogue_offer(self.store, tenant, account, fan_id, config.welcome_item_id,
-                RealCatalogueCoverage(account, fan_id, config.welcome_item_id, ref,
-                                      utcnow() + timedelta(hours=config.welcome_ttl_hours)))
-        except Refused:
-            return None

@@ -99,9 +99,14 @@ def _offer_grants(s, runtime, fan_id):
         if _hash(terms) != grant.terms_hash:
             continue
         item = terms['item']
+        kinds = [f.get('kind') for f in terms.get('files', [])]
         out.append({'grantId': grant.grant_id, 'itemId': str(grant.item_id),
                     'label': item.get('label') or item.get('description_for_ai'),
-                    'description': item.get('description_for_ai')})
+                    'description': item.get('description_for_ai'),
+                    # Payload facts: the only quantities any text may state about this card's contents.
+                    'media': {'total': len(terms['media_ids']),
+                              'pictures': sum(1 for k in kinds if k in {'image', 'photo'}),
+                              'videos': sum(1 for k in kinds if k == 'video')}})
     return out
 
 
@@ -352,7 +357,8 @@ class EngineService:
                 owner_epoch=epoch, snapshot=snapshot, snapshot_sha256=_digest(snapshot),
                 recheck=lambda: self._model_recheck(tenant, account, fan_id, source_message_id, request_id, epoch,
                     binding, snapshot, observed_generation, memory_fingerprint, offer_fingerprint),
-                handover=lambda reason: self._handover_model(tenant, account, request_id, self.model.config.handover_target))
+                handover=lambda reason, detail=None: self._handover_model(tenant, account, request_id,
+                    self.model.config.handover_target, reason, detail))
             try:
                 proposal = self.model.propose(turn)  # reserve/call/settle each use their own short transaction
             except _AlreadyPlanned as done:
@@ -440,7 +446,7 @@ class EngineService:
                     cents = terms['price_cents']
                     # The drafted answer stays; the commercial section is rendered
                     # by the application from the frozen terms, never from model text.
-                    body = f"{proposal.body.strip()}\n\n{label.strip()} — USD {cents // 100}.{cents % 100:02d}."
+                    body = f"{proposal.body.strip()}\n\n{label.strip()}, USD {cents // 100}.{cents % 100:02d}."
                     if len(body.encode('utf-8')) > 4000:
                         raise Refused('answer plus offer exceeds the message limit')
             payload_hash = TextAuthority._wire_hash(account, fan_id, body,
@@ -527,8 +533,13 @@ class EngineService:
                         'catalogue': search_context(s, runtime, fan_id, source)}) != offer_fingerprint:
                 raise Refused('catalogue or offer references changed during generation')
 
-    def _handover_model(self, tenant, account, request_id, target):
-        """The writer could not produce an acceptable reply: a human takes the request. No canned line is created."""
+    def _handover_model(self, tenant, account, request_id, target, reason='model_handover', detail=None):
+        """The writer could not produce an acceptable reply: a human takes the request. No canned line is created.
+
+        The handover is visible work: the request moves to `handover_pending` and an operator case records the reason,
+        the call outcomes and the rejection reasons (never fan text), so a rejected or unusable draft is never lost.
+        """
+        from onlyfans_runtime.operator_cases import open_case
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
             request = s.get(OfEngineRequest, (account, request_id), with_for_update=True)
@@ -537,6 +548,9 @@ class EngineService:
             request.status, request.handover_target = 'handover_pending', target
             request.next_step, request.updated_at = 'await_handover_acceptance', utcnow()
             request.revision += 1
+            open_case(s, account, request.fan_id, 'model_handover', reason=str(reason)[:64],
+                      evidence={'rule': str(reason)[:64], 'request_id': request_id, **(detail or {})},
+                      source_message_id=request.source_message_id, origin='detector', scope='all')
 
     def queue(self, tenant, account, decision_id):
         with Session(self.engine) as s:

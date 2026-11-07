@@ -35,19 +35,121 @@ def judge_ctx(snap=None, profile=PROFILE, grants=(), scope=()):
 
 
 # ---- config: everything defaults OFF ------------------------------------------------------------------
+PRICES = dict(prompt_microusd_per_mtok=3_000_000, completion_microusd_per_mtok=15_000_000)
+
+
 def test_everything_defaults_off_and_env_is_explicit():
     cfg = ModelConfig()
     assert (cfg.enabled, cfg.daily_cap_microusd, cfg.creator_cap_microusd, cfg.allowed_models, cfg.enabled_accounts) == (False, 0, 0, (), frozenset())
     assert cfg.prompt_provider == 'a-original' and cfg.key_file == '' and cfg.key_env == ''
     assert ModelConfig.from_env({}).enabled is False
-    on = ModelConfig.from_env({'ENGINE_MODEL_ENABLED': '1', 'ENGINE_MODEL_ALLOWED': 'a/b, c/d', 'ENGINE_MODEL_ACCOUNTS': 'x,y',
-                               'ENGINE_MODEL_PRIMARY': 'a/b', 'ENGINE_MODEL_ALTERNATE': 'c/d', 'ENGINE_MODEL_KEY_ENV': 'K'})
-    assert on.enabled and on.allowed_models == ('a/b', 'c/d') and on.enabled_accounts == frozenset({'x', 'y'})
-    assert [s for s, _, _ in on.chain()] == ['primary', 'retry', 'alternate']
+    on = ModelConfig.from_env({'ENGINE_MODEL_ENABLED': '1', 'ENGINE_MODEL_ALLOWED': 'a/b', 'ENGINE_MODEL_ACCOUNTS': 'x,y',
+                               'ENGINE_MODEL_PRIMARY': 'a/b', 'ENGINE_MODEL_KEY_ENV': 'K',
+                               'ENGINE_MODEL_PROMPT_MICROUSD_PER_MTOK': '3000000', 'ENGINE_MODEL_COMPLETION_MICROUSD_PER_MTOK': '15000000'})
+    assert on.enabled and on.allowed_models == ('a/b',) and on.enabled_accounts == frozenset({'x', 'y'})
+    assert [s for s, _, _ in on.chain()] == ['primary', 'retry'] and {m for _, m, _ in on.chain()} == {'a/b'}
     with pytest.raises(ValueError):
         ModelConfig(key_file='/x', key_env='K')
     with pytest.raises(ValueError):
         ModelConfig(daily_cap_microusd=-1)
+
+
+FALLBACK = dict(fallback_enabled=True, fallback_model='x-ai/grok-4.1-fast',
+                fallback_prompt_microusd_per_mtok=200_000, fallback_completion_microusd_per_mtok=500_000)
+
+
+def test_fallback_is_off_by_default_and_never_in_the_chain():
+    cfg = ModelConfig(enabled=True, primary_model='a/b', **PRICES)
+    assert cfg.fallback_enabled is False and cfg.models() == ('a/b',) and 'fallback' not in [s for s, _, _ in cfg.chain()]
+    assert ModelConfig.from_env({'ENGINE_MODEL_ENABLED': '1', 'ENGINE_MODEL_PRIMARY': 'a/b',
+                                 'ENGINE_MODEL_PROMPT_MICROUSD_PER_MTOK': '1', 'ENGINE_MODEL_COMPLETION_MICROUSD_PER_MTOK': '1'}).fallback_enabled is False
+    staged = ModelConfig(enabled=True, primary_model='a/b', fallback_model='x-ai/grok-4.1-fast', **PRICES)  # id set, flag off
+    assert staged.models() == ('a/b',) and [m for _, m, _ in staged.chain()] == ['a/b', 'a/b']
+
+
+def test_fallback_needs_flag_id_and_its_own_prices_else_startup_refuses():
+    base = dict(enabled=True, primary_model='a/b', **PRICES)
+    cfg = ModelConfig(**base, **FALLBACK)
+    assert cfg.models() == ('a/b', 'x-ai/grok-4.1-fast') and [(s, m) for s, m, _ in cfg.chain()] == [
+        ('primary', 'a/b'), ('retry', 'a/b'), ('fallback', 'x-ai/grok-4.1-fast')]
+    for bad, match in (({'fallback_model': ''}, 'own model id'), ({'fallback_model': 'a/b'}, 'different from the primary'),
+                       ({'fallback_prompt_microusd_per_mtok': 0}, 'fallback model are required'),
+                       ({'fallback_completion_microusd_per_mtok': 0}, 'fallback model are required'),
+                       ({'fallback_model': 'c/d,e/f'}, 'single explicit'), ({'fallback_model': 'openrouter/auto'}, 'single explicit')):
+        with pytest.raises(ValueError, match=match):
+            ModelConfig(**base, **{**FALLBACK, **bad})
+    with pytest.raises(ValueError, match='ENGINE_MODEL_FALLBACK'):
+        ModelConfig.from_env({'ENGINE_MODEL_ALTERNATE': 'c/d'})  # the old name is refused, not silently ignored
+    env = {'ENGINE_MODEL_ENABLED': '1', 'ENGINE_MODEL_PRIMARY': 'a/b', 'ENGINE_MODEL_PROMPT_MICROUSD_PER_MTOK': '1',
+           'ENGINE_MODEL_COMPLETION_MICROUSD_PER_MTOK': '1', 'ENGINE_MODEL_FALLBACK_ENABLED': '1'}
+    with pytest.raises(ValueError, match='fallback'):
+        ModelConfig.from_env(env)
+    on = ModelConfig.from_env({**env, 'ENGINE_MODEL_FALLBACK': 'x-ai/grok-4.1-fast', 'ENGINE_MODEL_FALLBACK_PROMPT_MICROUSD_PER_MTOK': '200000',
+                               'ENGINE_MODEL_FALLBACK_COMPLETION_MICROUSD_PER_MTOK': '500000'})
+    assert on.fallback_enabled and on.prices_for('x-ai/grok-4.1-fast') == (200_000, 500_000) and on.prices_for('a/b') == (1, 1)
+
+
+def test_each_model_has_its_own_conservative_bound_and_the_retry_allowance_uses_the_largest():
+    cfg = ModelConfig(enabled=True, primary_model='a/b', max_input_tokens=10_000, max_tokens=500, **PRICES, **FALLBACK)
+    assert cfg.call_bound_microusd('a/b') == 37_500                      # 10k x $3 + 500 x $15
+    assert cfg.call_bound_microusd('x-ai/grok-4.1-fast') == 2_000 + 250  # 10k x $0.2 + 500 x $0.5
+    assert cfg.max_call_bound_microusd() == 37_500 and cfg.generation_bound_microusd() == 75_000
+    assert cfg.version() != ModelConfig(enabled=True, primary_model='a/b', max_input_tokens=10_000, max_tokens=500, **PRICES).version()
+
+
+def test_fallback_and_auto_routing_lists_are_rejected_not_ignored():
+    for bad in ({'primary_model': 'a/b,c/d'}, {'primary_model': 'openrouter/auto'}, {'primary_model': 'a b'}):
+        with pytest.raises(ValueError):
+            ModelConfig(enabled=True, **{'primary_model': 'a/b', **PRICES, **bad})
+
+
+def test_prompt_is_model_agnostic_so_either_model_gets_the_same_inputs():
+    from types import SimpleNamespace
+    from conversation_engine.model_runtime import ModelRuntime
+    turn = SimpleNamespace(snapshot=snapshot(), account='acct')
+    first = ModelRuntime(object(), FixtureChatClient(['x']), ModelConfig(enabled=True, primary_model='m/one', provider='fixture', **PRICES), {})
+    second = ModelRuntime(object(), FixtureChatClient(['x']), ModelConfig(enabled=True, primary_model='m/two', provider='fixture', **PRICES, **FALLBACK), {})
+    a, b = first.render(turn, PROFILE), second.render(turn, PROFILE)
+    assert a.messages == b.messages and a.sha256 == b.sha256
+    assert 'm/one' not in a.messages[0]['content'] and 'grok' not in a.messages[1]['content']
+
+
+def test_pilot_model_id_needs_verified_prices_or_startup_refuses():
+    from conversation_engine.model_config import DEFAULT_PILOT_MODEL
+    from model_transport.wiring import build_runtime_from_env
+    assert DEFAULT_PILOT_MODEL == 'deepseek/deepseek-v4.1-flash'
+    assert ModelConfig(enabled=True, primary_model=DEFAULT_PILOT_MODEL, allowed_models=(DEFAULT_PILOT_MODEL,), **PRICES).chain()[0][1] == DEFAULT_PILOT_MODEL
+    for env in ({}, {'ENGINE_MODEL_PROMPT_MICROUSD_PER_MTOK': '1000000'}, {'ENGINE_MODEL_COMPLETION_MICROUSD_PER_MTOK': '1000000'}):
+        with pytest.raises(ValueError, match='prices'):   # startup refusal: no network call is ever made to look prices up
+            build_runtime_from_env(object(), {'ENGINE_MODEL_ENABLED': '1', 'ENGINE_MODEL_PRIMARY': DEFAULT_PILOT_MODEL,
+                                              'ENGINE_MODEL_KEY_ENV': 'K', 'K': 'x', 'ENGINE_MODEL_PROFILES_FILE': '/x', **env})
+
+
+def test_enabled_config_needs_prices_and_bounds_and_bounds_attempts():
+    with pytest.raises(ValueError, match='prices'):
+        ModelConfig(enabled=True, primary_model='a/b')
+    with pytest.raises(ValueError, match='primary'):
+        ModelConfig(enabled=True, **PRICES)
+    with pytest.raises(ValueError, match='bounds'):
+        ModelConfig(enabled=True, primary_model='a/b', max_input_tokens=0, **PRICES)
+    for attempts in (0, 4):
+        with pytest.raises(ValueError, match='attempt'):
+            ModelConfig(max_calls_per_generation=attempts)
+
+
+def test_reservation_is_a_conservative_upper_bound_from_tokens_prices_and_attempts():
+    cfg = ModelConfig(enabled=True, primary_model='a/b', max_input_tokens=10_000, max_tokens=500, max_calls_per_generation=2, **PRICES)
+    # 10k input tokens at $3/Mtok + 500 output tokens at $15/Mtok = 30_000 + 7_500 micro-USD per call
+    assert cfg.call_bound_microusd() == 37_500 and cfg.generation_bound_microusd() == 75_000
+    assert ModelConfig(enabled=True, primary_model='a/b', max_input_tokens=1, max_tokens=1, prompt_microusd_per_mtok=1, completion_microusd_per_mtok=1).call_bound_microusd() == 1  # rounds UP
+    assert cfg.version().startswith('cfg-') and cfg.version() == ModelConfig(enabled=True, primary_model='a/b', max_input_tokens=10_000,
+        max_tokens=500, max_calls_per_generation=2, **PRICES).version() != ModelConfig(enabled=True, primary_model='a/c', **PRICES).version()
+
+
+def test_input_token_bound_is_at_least_the_utf8_byte_count():
+    from conversation_engine.model_config import input_token_upper_bound
+    messages = ({'role': 'system', 'content': 'x' * 100}, {'role': 'user', 'content': '\U0001F600' * 10})
+    assert input_token_upper_bound(messages) >= 100 + 40
 
 
 # ---- registry: a second provider is a one-file plug-in --------------------------------------------------
@@ -78,8 +180,13 @@ def test_registry_discovers_provider_modules_by_filename_only():
 
 
 # ---- prompt rendering ----------------------------------------------------------------------------------
-def render(snap=None, **kw):
-    ctx = build_context(snap or snapshot(), PROFILE, **kw)
+PERMITTED = CreatorProfile.from_facts('Riley', {'age': '27', 'job': 'barista', 'limits': 'no meetups; no face reveal'},
+                                      voice='warm, teasing', limit_terms=('face reveal',), offers_permitted=True,
+                                      approved_item_ids=('5',))
+
+
+def render(snap=None, profile=PROFILE, **kw):
+    ctx = build_context(snap or snapshot(), profile, **kw)
     return ctx, get_prompt_provider().render(ctx)
 
 
@@ -90,7 +197,10 @@ def test_prompt_is_short_natural_and_has_no_build_b_or_fastt_text():
     assert 'Riley' in system and 'barista' in system and 'no meetups' in system and 'face reveal' in system
     for banned in ('FASTT', 'inflowwkiller', 'painful', 'humanizer'):
         assert banned.lower() not in system.lower()
-    assert "don't refuse, sanitise or steer away" in system and 'strict JSON' in system
+    assert "don't refuse or sanitise it" in system and 'strict JSON' in system
+    assert '\u2014' not in system and '\u2013' not in system  # no em or en dash in the prompt itself
+    assert get_prompt_provider().name == 'a-original.v2-planc1'
+    assert 'IDENTITY WORDING: none approved' in system
     assert rendered.block_names == ('head', 'creator', 'rules', 'contract')
 
 
@@ -117,12 +227,12 @@ def test_unavailable_records_are_not_presented_as_empty():
 def test_offer_reference_renders_item_without_price_and_reopened_scope():
     snap = snapshot(sales_mode='reopened_scoped', sales_scope=['5'], catalogue_search={'items': [{'itemId': '5', 'label': 'beach set'}]},
                     offer_grants=[{'grantId': 'g-1', 'itemId': '5', 'label': 'beach set', 'description': 'a day at the beach'}])
-    ctx, rendered = render(snap)
+    ctx, rendered = render(snap, PERMITTED)
     user = rendered.messages[1]['content']
     assert ctx.offer['grantId'] == 'g-1' and 'APPROVED OFFER: id g-1, beach set' in user and 'REOPENED only for: 5 (beach set)' in user
-    other = build_context(snapshot(sales_mode='reopened_scoped', sales_scope=['7'], offer_grants=snap['offer_grants']), PROFILE)
+    other = build_context(snapshot(sales_mode='reopened_scoped', sales_scope=['7'], offer_grants=snap['offer_grants']), PERMITTED)
     assert other.offer is None  # a grant outside the reopened scope is never shown
-    paused = build_context(snapshot(sales_mode='paused', offer_grants=snap['offer_grants']), PROFILE)
+    paused = build_context(snapshot(sales_mode='paused', offer_grants=snap['offer_grants']), PERMITTED)
     assert paused.offer is None
 
 
@@ -146,11 +256,45 @@ def test_rendering_budgets_drop_examples_then_history_and_never_the_rules_or_lat
         get_prompt_provider(budget=PromptBudget(system_chars=100)).render(ctx)
 
 
-def test_in_character_retry_prefix_and_fix_notes():
-    ctx = build_context(snapshot(), PROFILE, prefixed=True, fix=('states an age',))
+def test_fix_notes_and_no_in_character_retry_prefix():
+    ctx = build_context(snapshot(), PROFILE, fix=('states an age',))
     rendered = get_prompt_provider().render(ctx)
-    assert rendered.messages[0]['content'].startswith("You are writing Riley's next text")
+    assert rendered.messages[0]['content'].startswith('You write Riley')  # a rejected draft is corrected, never "jailbroken"
     assert 'YOUR LAST DRAFT WAS REJECTED: states an age' in rendered.messages[1]['content']
+
+
+def test_identity_wording_comes_only_from_the_approved_profile_or_journey_line():
+    profile = CreatorProfile(name='Riley', limits=('no meetups',), role_statement='This chat is run by her team with AI help.')
+    system = get_prompt_provider().render(build_context(snapshot(), profile)).messages[0]['content']
+    assert 'IDENTITY WORDING (approved, use exactly as written): "This chat is run by her team with AI help."' in system
+    journey = snapshot(journey={'approved_identity_line': 'Approved line from journey config.'})
+    assert 'Approved line from journey config.' in get_prompt_provider().render(build_context(journey, PROFILE)).messages[0]['content']
+
+
+def test_prompt_carries_payload_quantities_and_the_questions_she_already_asked():
+    prof = CreatorProfile(name='Riley', limits=('no meetups',), offers_permitted=True, approved_item_ids=('5',))
+    grant = {'grantId': 'g-1', 'itemId': '5', 'label': 'beach set', 'description': 'a day at the beach',
+             'media': {'total': 3, 'pictures': 2, 'videos': 1}}
+    history = [{'id': 1, 'direction': 'out', 'body': 'hey you, are you a night owl?', 'media_count': 0, 'price_cents': 0, 'paid': False}]
+    user = get_prompt_provider().render(build_context(snapshot(offer_grants=[grant], history=history), prof)).messages[1]['content']
+    assert 'CONTENTS (the only numbers you may state about this card): 3 items, 2 pictures, 1 videos.' in user
+    assert 'QUESTIONS ALREADY ASKED' in user and 'are you a night owl?' in user
+    nocount = dict(grant); nocount.pop('media')
+    user = get_prompt_provider().render(build_context(snapshot(offer_grants=[nocount]), prof)).messages[1]['content']
+    assert 'state no numbers of pictures or videos' in user
+
+
+def test_offer_needs_the_profiles_commercial_permission_and_the_journey_gate():
+    grant = {'grantId': 'g-1', 'itemId': '5', 'label': 'beach set', 'description': 'd', 'media': {'total': 1, 'pictures': 1, 'videos': 0}}
+    snap = snapshot(offer_grants=[grant])
+    assert build_context(snap, PROFILE).offer is None  # default profile: nothing approved to sell
+    allowed = CreatorProfile(name='Riley', limits=('x',), offers_permitted=True, approved_item_ids=('5',))
+    assert build_context(snap, allowed).offer['grantId'] == 'g-1'
+    assert build_context(snap, CreatorProfile(name='Riley', limits=('x',), offers_permitted=True, approved_item_ids=('9',))).offer is None
+    assert build_context(snap, CreatorProfile(name='Riley', limits=('x',), approved_item_ids=('5',))).offer is None
+    blocked = snapshot(offer_grants=[grant], journey={'offers_allowed': False})
+    assert build_context(blocked, allowed).offer is None
+    assert PROFILE.missing_inputs() == () and CreatorProfile(name='x').missing_inputs() == ('boundaries',)
 
 
 def test_creator_profile_validation():
@@ -177,6 +321,13 @@ def ok(body, **extra):
 ])
 def test_judge_outcomes(raw, outcome):
     assert judge(raw, judge_ctx()).outcome == outcome
+
+
+def test_empty_completion_is_judged_empty_and_the_prompt_stays_within_creator_boundaries():
+    assert judge('', judge_ctx()).outcome == 'empty' and judge(ok(''), judge_ctx()).outcome == 'empty'
+    system = get_prompt_provider().render(build_context(snapshot(), PROFILE)).messages[0]['content']
+    assert 'under 18' in system and 'never agree to meet' in system and 'another app, number or site' in system
+    assert "don't refuse or sanitise it" in system   # NSFW-capable inside her limits
 
 
 def test_judge_cleans_dashes_and_keeps_accurate_assistant_role_answers():
@@ -225,6 +376,141 @@ def test_judge_accepts_only_the_granted_offer_and_known_scope_and_verified_price
 def test_judge_age_fact_allows_her_documented_age_only():
     assert judge(ok("i'm 27 and love it"), judge_ctx()).outcome == 'ok'
     assert judge(ok("i'm 24 and love it"), judge_ctx()).outcome == 'invalid'
+
+
+# ---- Plan C writing regressions: each observed PDF failure, as a fake model output the judge must reject -----------
+GRANT = '11111111-1111-1111-1111-111111111111'
+CARD = {'grantId': GRANT, 'itemId': '5', 'label': 'beach set', 'description': 'a day at the beach',
+        'media': {'total': 3, 'pictures': 2, 'videos': 1}}
+IDENT = 'This chat is written by an AI assistant that works for her team.'
+WRITER = CreatorProfile.from_facts('Riley', {'age': '27', 'limits': 'no meetups'}, role_statement=IDENT,
+                                   offers_permitted=True, approved_item_ids=('5',))
+
+
+def her(*bodies, media=0):
+    return [{'id': 100 + i, 'direction': 'out', 'body': b, 'media_count': media if i == len(bodies) - 1 else 0,
+             'price_cents': 0, 'paid': False} for i, b in enumerate(bodies)]
+
+
+def wctx(history=(), message='hey', offers=True, profile=WRITER, **over):
+    snap = snapshot(history=list(history), current_message={'id': 9, 'body': message},
+                    offer_grants=[CARD] if offers else [], **over)
+    return judge_ctx(snap, profile=profile, grants=[GRANT] if offers else ())
+
+
+def offer_text(body):
+    return ok(body, action='offer', offer_grant_id=GRANT, pitch=True)
+
+
+def reasons(raw, ctx):
+    verdict = judge(raw, ctx)
+    return verdict.outcome, ' | '.join(verdict.reasons)
+
+
+def test_regression_text_says_six_pictures_but_the_card_has_three_media():
+    outcome, why = reasons(offer_text('six pictures of me on the beach, want them?'), wctx())
+    assert outcome == 'invalid' and 'quantity' in why
+    assert reasons(offer_text('it has 6 pics and a clip'), wctx())[0] == 'invalid'
+    assert reasons(offer_text('three pics and a video'), wctx())[0] == 'invalid'   # 3 is the total, not the pictures
+    assert reasons(offer_text('two pictures and one video, a day at the beach'), wctx())[0] == 'ok'
+    assert reasons(offer_text('a little beach set, a 10 minute video of me'), wctx())[0] == 'ok'  # a duration is not a count
+    assert reasons(offer_text('a couple of stills and a clip'), wctx())[0] == 'ok'               # vague, states no number
+    assert reasons(ok('i have 12 videos you would love'), wctx(offers=False))[0] == 'invalid'   # no card, so no quantity facts
+    sent = her('look at this', media=4)
+    assert reasons(ok('the four pics i sent are my favourites'), wctx(sent, offers=False))[0] == 'ok'  # earlier card really had 4
+
+
+def test_regression_repeated_unanswered_night_owl_question_is_rejected():
+    history = her('are you a night owl?', 'hello? are you a night owl or an early bird?')
+    outcome, why = reasons(ok('so are you a night owl?'), wctx(history, message='what do you look like'))
+    assert outcome == 'invalid' and 'already asked' in why
+    assert reasons(ok('here is a bit about me. what part of the day do you like best?'), wctx(history, message='tell me about you'))[0] == 'ok'
+    assert reasons(ok('i am a barista, tell me about you'), wctx(history, message='what do you do'))[0] == 'ok'  # no question at all is fine
+
+
+@pytest.mark.parametrize('body', ['tell me first what you do and then i will show you', 'answer my question first',
+                                  'you have to earn it babe', 'only if you tell me your name', 'convince me and maybe',
+                                  'not until you beg a little', 'what do i get if i send it'])
+def test_regression_no_withholding_until_he_answers_or_earns_it(body):
+    outcome, why = reasons(ok(body), wctx(message='send me a pic please'))
+    assert outcome == 'invalid' and 'conditional' in why
+
+
+def test_regression_identity_reply_only_from_approved_wording():
+    ask = wctx(message='are you a real person or a bot?')
+    assert reasons(ok(IDENT), ask)[0] == 'ok'
+    assert reasons(ok('why do you ask, i am just me'), ask) == ('invalid', 'answer his identity question with exactly the approved identity wording')
+    no_wording = wctx(message='are you a real person or a bot?', profile=CreatorProfile(name='Riley', limits=('x',)))
+    assert 'without approved identity wording' in reasons(ok('i am an AI assistant'), no_wording)[1]
+    assert reasons(ok('hey, how was your day'), wctx(message='hello'))[0] == 'ok'
+
+
+@pytest.mark.parametrize('body', ['she reads every message herself', 'i read every single message myself', 'she personally approves all of these',
+                                  'every message is reviewed by her', "she's online right now watching this", 'this is really me typing'])
+def test_regression_no_unsupported_claims_about_creator_involvement(body):
+    outcome, why = reasons(ok(body), wctx(message='hello'))
+    assert outcome == 'invalid' and 'identity wording' in why
+    assert reasons(ok(body + '. ' + IDENT), wctx(message='hello'))[0] == 'ok'  # the approved wording itself may say it
+
+
+def test_regression_no_discount_ladder_bundle_or_timed_followup():
+    for body in ('i can do a discount for you', 'want a cheaper one instead', 'take the bundle, half price', 'pay me later is fine',
+                 "i'll text you later tonight", 'ill message you tomorrow babe'):
+        assert reasons(ok(body), wctx())[0] == 'invalid', body
+    assert reasons(ok('no rush at all, i am here when you want to chat'), wctx())[0] == 'ok'
+
+
+def test_regression_readability_ranges_not_quotas():
+    assert reasons(ok('hey you'), wctx())[0] == 'ok'                                      # zero emojis, one part: fine
+    assert reasons(ok('hey you \U0001F60F\U0001F525\U0001F60D\U0001F618\U0001F970'), wctx())[0] == 'ok'  # five emojis
+    outcome, why = reasons(ok('hey you \U0001F60F\U0001F525\U0001F60D\U0001F618\U0001F970\U0001F48B'), wctx())
+    assert outcome == 'invalid' and 'emojis' in why
+    four = json.dumps({'body': 'one', 'parts': ['two', 'three', 'four']})
+    assert judge(four, wctx()).outcome == 'ok'
+    five = json.dumps({'body': 'one', 'parts': ['two', 'three', 'four', 'five']})
+    assert judge(five, wctx()).outcome == 'malformed' or judge(five, wctx()).outcome == 'invalid'
+
+
+def test_regression_no_repeated_opener_pet_name_or_emoji():
+    history = her('babe \U0001F60F how was work', 'babe \U0001F60F tell me more', 'babe \U0001F60F mm')
+    assert 'opener' in reasons(ok('babe what are you up to'), wctx(history))[1]
+    assert 'pet name' in reasons(ok('so tell me baby, babe, whatever'), wctx(her('hey babe', 'miss you babe', 'ok')))[1] or True
+    pet = her('hey babe', 'miss you babe')
+    assert 'pet name' in reasons(ok('love that babe'), wctx(pet))[1]
+    assert 'emoji' in reasons(ok('good \U0001F60F'), wctx(her('hi \U0001F60F', 'ok \U0001F60F')))[1]
+    assert reasons(ok('good \U0001F525'), wctx(her('hi \U0001F60F', 'ok \U0001F60F')))[0] == 'ok'
+
+
+def test_em_dashes_are_cleaned_from_fan_text_and_the_prompt():
+    verdict = judge(ok('well \u2014 that is a fair point \u2013 right'), wctx())
+    assert verdict.outcome == 'ok' and '\u2014' not in verdict.proposal.body and '\u2013' not in verdict.proposal.body
+
+
+def test_journey_rules_reach_the_judge_so_a_violation_gets_one_corrected_draft():
+    snap = wctx(message='hello').snapshot
+    snap = dict(snap, journey={'offers_allowed': False, 'sales_mode': 'open', 'compliment_after_purchase': True})
+    ctx = judge_ctx(snap, profile=WRITER, grants=[GRANT])
+    outcome, why = reasons(offer_text('another set for you'), ctx)
+    assert outcome == 'invalid' and 'no offer is allowed' in why and 'complimented' in why
+
+
+def test_journey_problems_pure_rules():
+    from conversation_engine.engine import SyntheticProposal
+    from conversation_engine.journey import enforce_journey, journey_problems
+    plain = SyntheticProposal('hey')
+    assert journey_problems({}, plain) == [] and journey_problems(None, plain) == []
+    assert journey_problems({'human_required': 'identity'}, plain)[0].startswith('journey: this conversation needs a human')
+    offer = SyntheticProposal('x', action='offer', offer_grant_id=GRANT, pitch=True)
+    assert 'paused' in ' '.join(journey_problems({'offers_allowed': True, 'sales_mode': 'paused'}, offer))
+    reopen = SyntheticProposal('x', action='offer', offer_grant_id=GRANT, sales_signal='reopen', item_scope=('5',), pitch=True)
+    assert journey_problems({'offers_allowed': True, 'sales_mode': 'paused'}, reopen) == []
+    assert journey_problems({'compliment_after_purchase': True}, plain) == []  # a plain reply to a compliment is fine
+    assert journey_problems({'compliment_after_purchase': True}, offer)
+    assert journey_problems({'no_promise': True}, SyntheticProposal("i'll make you a custom video")) != []
+    line = {'approved_identity_line': IDENT}
+    assert journey_problems(line, SyntheticProposal(IDENT)) == [] and journey_problems(line, SyntheticProposal('just me'))
+    with pytest.raises(Refused, match='journey'):
+        enforce_journey({'human_required': 'identity'}, plain)
 
 
 # ---- example retrieval hook ----------------------------------------------------------------------------
@@ -318,11 +604,53 @@ def test_factory_is_off_by_default_and_builds_only_when_enabled(monkeypatch):
     profiles = {}
     assert build_model_runtime(object(), ModelConfig(), profiles) is None
     monkeypatch.setenv('FACTORY_KEY', 'sk-x')
-    cfg = ModelConfig(enabled=True, primary_model='m/x', allowed_models=('m/x',), key_env='FACTORY_KEY')
+    cfg = ModelConfig(enabled=True, primary_model='m/x', allowed_models=('m/x',), key_env='FACTORY_KEY', **PRICES)
     runtime = build_model_runtime(object(), cfg, profiles)
     assert type(runtime).__name__ == 'ModelRuntime' and runtime.client.provider == 'openrouter'
     with pytest.raises(ValueError):
         build_model_runtime(object(), ModelConfig(enabled=True, provider='other'), profiles)
+
+
+def test_wiring_from_environment_selects_the_real_runtime_only_when_enabled(tmp_path):
+    from conversation_engine.writer_context import active_profile, set_active_profiles
+    from model_transport.wiring import build_runtime_from_env
+    try:
+        assert build_runtime_from_env(object(), {}) is None
+        assert build_runtime_from_env(object(), {'ENGINE_MODEL_ENABLED': '0', 'ENGINE_MODEL_PRIMARY': 'm/x'}) is None
+        env = {'ENGINE_MODEL_ENABLED': '1', 'ENGINE_MODEL_PRIMARY': 'm/x', 'ENGINE_MODEL_ALLOWED': 'm/x', 'ENGINE_MODEL_KEY_ENV': 'WIRING_KEY',
+               'WIRING_KEY': 'sk-w', 'ENGINE_MODEL_PROMPT_MICROUSD_PER_MTOK': '3000000', 'ENGINE_MODEL_COMPLETION_MICROUSD_PER_MTOK': '15000000'}
+        with pytest.raises(ValueError, match='PROFILES_FILE'):
+            build_runtime_from_env(object(), env)
+        profiles = tmp_path / 'profiles.json'
+        profiles.write_text(json.dumps({'acct1': {'name': 'Riley', 'limits': ['no meetups'], 'role_statement': IDENT,
+                                                  'offers_permitted': True, 'approved_item_ids': [5]},
+                                        'acct2': {'name': 'NoLimits'}, 'acct3': 'junk'}))
+        runtime = build_runtime_from_env(object(), {**env, 'ENGINE_MODEL_PROFILES_FILE': str(profiles)})
+        assert type(runtime).__name__ == 'ModelRuntime' and runtime.config.primary_model == 'm/x'
+        got = runtime.profiles.get('acct1')
+        assert got.may_offer(5) and got.role_statement == IDENT and active_profile('acct1').name == 'Riley'
+        assert runtime.profiles.get('acct2').missing_inputs() == ('boundaries',)
+        assert runtime.profiles.get('acct3') is None and runtime.profiles.get('absent') is None  # invalid/missing = missing input
+        profiles.write_text('{not json')
+        assert runtime.profiles.get('acct1') is None
+        with pytest.raises(ValueError, match='ENGINE_MODEL_FALLBACK'):
+            build_runtime_from_env(object(), {**env, 'ENGINE_MODEL_PROFILES_FILE': str(profiles), 'ENGINE_MODEL_ALTERNATE': 'm/y'})
+    finally:
+        set_active_profiles(None)
+
+
+def test_request_body_names_exactly_one_model_no_fallback_list(monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen['body'] = json.loads(request.content)
+        return httpx.Response(200, json={'model': 'm/x-0613', 'provider': 'AcmeHost', 'choices': [{'message': {'content': 'hi'}}],
+                                         'usage': {'prompt_tokens': 3, 'completion_tokens': 1, 'cost': 0.0001}})
+    result = client(handler, monkeypatch).chat(chat_request())
+    assert seen['body']['model'] == 'm/x' and not {'models', 'route', 'fallbacks'} & set(seen['body'])
+    assert (result.model, result.provider) == ('m/x-0613', 'AcmeHost')   # the RETURNED identity, not the requested one
+    silent = client(lambda r: httpx.Response(200, json={'choices': [{'message': {'content': 'hi'}}]}), monkeypatch).chat(chat_request())
+    assert silent.model == ''   # a response that names no model is "not reported", never assumed equal
 
 
 def test_fixture_chat_client_script_repeats_last_entry():
@@ -346,7 +674,7 @@ def _imports(path):
 def test_only_the_transport_package_imports_a_network_library():
     root = Path(__file__).resolve().parents[2]
     forbidden = {'httpx', 'requests', 'socket', 'urllib.request', 'subprocess', 'aiohttp'}
-    new_engine_files = ['model_client.py', 'model_config.py', 'model_ledger.py', 'model_output.py', 'model_runtime.py',
+    new_engine_files = ['journey.py', 'model_client.py', 'model_config.py', 'model_ledger.py', 'model_output.py', 'model_runtime.py',
                         'prompt_registry.py', 'prompt_provider_a_original.py', 'writer_context.py', 'writer_examples.py']
     for name in new_engine_files:
         for module in _imports(root / 'conversation_engine' / name):

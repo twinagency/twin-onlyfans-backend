@@ -19,8 +19,8 @@ from test_onlyfans_media_pg import shelf, media_policy
 from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT, configured
 from conversation_engine.commerce import RealCatalogueCoverage, approve_catalogue_offer, verified_terms
 from conversation_engine.engine import EngineService, SyntheticModel, SyntheticProposal
-from conversation_engine.journey import (JourneyConfig, JourneyService, WELCOME_PREFIX, configure_journey,
-                                         enforce_journey, journey_config, signals, verified_spend)
+from conversation_engine.journey import (JourneyConfig, JourneyService, configure_journey, enforce_journey,
+                                         journey_config, signals, verified_spend)
 from conversation_engine.real_worker import RealConversationWorker
 from conversation_engine.worker import SyntheticConversationWorker
 from db.models import CatalogItem, Message, OfConversationState, VaultItem
@@ -488,65 +488,15 @@ def test_auto_backfill_is_off_by_default_and_opt_in_runs_before_the_offer(world)
     assert [json.loads(r.marker)['done_chats'] for r in world.rows(OfFansBackfill)] == [[str(FAN)]]
 
 
-# ======================================================================== journey (a): welcome
+# ======================================================================== journey (a): welcome (DEFERRED for Plan C)
 
-def test_welcome_starts_once_ever_for_a_new_subscriber(world):
-    configure_journey(JourneyConfig(welcome_item_id=world.item))
+def test_no_welcome_offer_is_ever_created_from_a_subscription(world):
     world.backfilled(FAN)
-    sub = world.send(subscription(), key='evt-sub-1')
-    assert sub['outcome'] == 'evidence' and sub['event'] == 'subscriptions.new'
-    assert [p.detail for p in world.rows(OfFansProjection)] == [f'subscription_new:{FAN}']
-    assert world.rows(OfEngineOfferGrant) == []         # nothing is sent or granted before he writes
-    world.reply(lambda snap: SyntheticProposal('Welcome, so happy you are here', action='offer',
-                                               offer_grant_id=snap['journey']['welcome']['grant_id']))
-    result, mid = world.say('hi!')
-    assert result['outcome'] == 'accepted'
-    grants = world.rows(OfEngineOfferGrant)
-    assert len(grants) == 1 and grants[0].coverage_ref.startswith(WELCOME_PREFIX) and grants[0].used_intent_id
-    body = world.fans.posts[0]['body']
-    assert body['price'] == 10.0 and body['mediaFiles'] == ['11', '12', '13']
-    assert world.snaps[0]['journey']['welcome']['item_id'] == world.item
-    # a second subscription event and later messages never start a second welcome
-    world.send(subscription(), key='evt-sub-2')
-    world.say_plain('just chatting')
-    world.say('tell me about you')
-    assert len(world.rows(OfEngineOfferGrant)) == 1
+    world.send(subscription(), key='evt-sub-1')
+    world.say_plain('hi, glad you are here')
+    world.say('hi!')
+    assert world.rows(OfEngineOfferGrant) == []        # the welcome offer is deferred: nothing is granted or sent unprompted
     assert 'welcome' not in world.snaps[-1].get('journey', {})
-
-
-def test_welcome_offers_only_its_approved_item(world):
-    configure_journey(JourneyConfig(welcome_item_id=world.item))
-    world.backfilled(FAN)
-    other = world.second_item()
-    world.send(subscription(), key='evt-sub')
-    world.engine.select_simulated(TENANT, ACCOUNT, FAN)
-    stray = world.grant(other, ref='vault:synced')
-    world.reply(lambda snap: SyntheticProposal('here', action='offer', offer_grant_id=stray))
-    result, mid = world.say('hello')
-    assert result['outcome'] == 'refused' and 'welcome turn offers only its approved item' in result['detail']
-    assert world.fans.posts == []
-
-
-def test_no_welcome_without_a_subscription_without_an_item_or_when_selling_is_paused(world):
-    world.backfilled(FAN, FAN2)
-    world.say_plain('hello')
-    world.say('hi')
-    assert world.rows(OfEngineOfferGrant) == []                      # no item configured, no subscription seen
-    configure_journey(JourneyConfig(welcome_item_id=world.item))
-    world.say('second hello')
-    assert world.rows(OfEngineOfferGrant) == []                      # item configured but no subscriptions.new for him
-    world.send(subscription(fan=FAN2), key='evt-sub-2')
-    world.say('hi', fan=FAN2)                                        # new fan, conversation not automated: no grant
-    assert world.rows(OfEngineOfferGrant) == []
-    world.automate(FAN2)
-    world.send(subscription(), key='evt-sub-1')                      # FAN subscribes but already wrote earlier turns
-    world.say('later message')
-    assert world.rows(OfEngineOfferGrant) == []                      # the welcome moment (his first turn) is gone
-    world.mid += 1
-    world.send(inbound(world.mid, 'too expensive for me', fan=FAN2))
-    result = world.turn(TENANT, ACCOUNT, FAN2, world.mid)
-    assert world.owner(FAN2)[1] == 'paused'
-    assert world.rows(OfEngineOfferGrant) == []                      # a refusal on his first turn pauses selling, no welcome
 
 
 def test_subscription_for_another_creator_is_held(world):
@@ -568,7 +518,7 @@ def _sell(world, item=None):
     return grant, message_id
 
 
-def test_verified_purchase_gets_one_short_reaction_and_no_offer_until_his_next_message(world):
+def test_compliment_after_a_verified_purchase_gets_a_reply_but_no_new_card(world):
     _, offer_message = _sell(world)
     second = world.second_item()
     assert world.send(unlock(offer_message), key='evt-unlock')['outcome'] == 'evidence'
@@ -578,27 +528,21 @@ def test_verified_purchase_gets_one_short_reaction_and_no_offer_until_his_next_m
     access = world.rows(OfEngineAccessEvidence)
     assert [(a.status, a.applied) for a in access] == [('confirmed', True)]
     posts_before = len(world.fans.posts)
-    # his next message: the post-purchase turn. An offer, a long message or several parts are all refused.
     offer2 = world.grant(second, ref='vault:synced')
     world.reply(lambda snap: SyntheticProposal('Thank you!! Want more?', action='offer', offer_grant_id=offer2))
-    refused, mid = world.say('omg thank you', seconds=10)
+    refused, mid = world.say('omg thank you, that was so hot', seconds=10)
     assert refused['outcome'] == 'refused' and 'no offer is allowed' in refused['detail']
-    assert world.snaps[-1]['journey']['post_purchase']['max_chars'] == 160
-    world.reply(lambda snap: SyntheticProposal('x' * 400))
-    assert world.turn(TENANT, ACCOUNT, FAN, mid)['outcome'] == 'refused'
-    world.reply(lambda snap: SyntheticProposal('thank you', parts=('and also',)))
-    assert world.turn(TENANT, ACCOUNT, FAN, mid)['outcome'] == 'refused'
-    world.reply(lambda snap: SyntheticProposal('Thank you, that means a lot', pitch=True))
-    assert world.turn(TENANT, ACCOUNT, FAN, mid)['outcome'] == 'refused'
+    assert world.snaps[-1]['journey']['compliment_after_purchase'] is True
+    world.reply(lambda snap: SyntheticProposal('Thank you, that really made my day', pitch=True))
+    assert world.turn(TENANT, ACCOUNT, FAN, mid)['outcome'] == 'refused'   # a pitch on a compliment turn is refused too
     assert len(world.fans.posts) == posts_before
-    world.reply(lambda snap: SyntheticProposal('Thank you, that really made my day'))
-    reaction = world.turn(TENANT, ACCOUNT, FAN, mid)
-    assert reaction['outcome'] == 'accepted' and len(world.fans.posts) == posts_before + 1
-    assert 'price' not in world.fans.posts[-1]['body']
-    # only after his NEXT message may the next offer go out
-    world.reply(lambda snap: SyntheticProposal('Since you liked it', action='offer', offer_grant_id=offer2))
+    world.reply(lambda snap: SyntheticProposal('Thank you, that really made my day. Tell me what you liked best', parts=('and what else is on your mind',)))
+    reaction = world.turn(TENANT, ACCOUNT, FAN, mid)                        # no 160-character cap, parts allowed: only the card is barred
+    assert reaction['outcome'] == 'accepted' and len(world.fans.posts) == posts_before + 2
+    # a message that actually asks for something is not a compliment turn: the next card may go out
+    world.reply(lambda snap: SyntheticProposal('Since you asked', action='offer', offer_grant_id=offer2))
     nxt, mid2 = world.say('what else do you have', seconds=20)
-    assert 'post_purchase' not in world.snaps[-1]['journey'] and world.snaps[-1]['journey']['offers_allowed'] is True
+    assert 'compliment_after_purchase' not in world.snaps[-1]['journey'] and world.snaps[-1]['journey']['offers_allowed'] is True
     assert nxt['outcome'] == 'accepted' and world.fans.posts[-1]['body']['price'] == 15.0
 
 
@@ -609,10 +553,10 @@ def test_an_unlock_for_a_message_that_is_not_our_offer_is_not_a_purchase(world):
     assert world.rows(OfEngineAccessEvidence) == []
     world.say_plain('hello again')
     world.say('hello again?', seconds=10)
-    assert 'post_purchase' not in world.snaps[-1].get('journey', {})
+    assert 'compliment_after_purchase' not in world.snaps[-1].get('journey', {})
 
 
-# ======================================================================== journey (c): whale hold
+# ======================================================================== journey (c): whale hold (DEFERRED for Plan C)
 
 def _spend(world, cents, txid, status='applied', kind='transaction'):
     with Session(world.database[1]) as s, s.begin():
@@ -622,47 +566,18 @@ def _spend(world, cents, txid, status='applied', kind='transaction'):
             raw_sha256='0' * 64, created_at=now, updated_at=now))
 
 
-def test_whale_thresholds_default_to_500_flag_and_1000_hold():
-    config = JourneyConfig()
-    assert (config.whale_flag_cents, config.whale_hold_cents) == (50_000, 100_000)
-
-
-def test_spend_flag_at_500_keeps_the_engine_talking_and_hold_at_1000_silences_it(world):
+def test_large_spend_never_holds_flags_or_silences_the_engine(world):
     world.backfilled(FAN)
     world.say_plain('hi love')
-    _spend(world, 30_000, 'a1')
-    _spend(world, 25_000, 'a2')
-    _spend(world, 99_999, 'pending-one', status='pending')           # unmatched money is not verified spend
-    _spend(world, 5_000, 'cb', kind='chargeback')                     # a chargeback reduces verified spend
+    _spend(world, 80_000, 'a1')
+    _spend(world, 80_000, 'a2')
     with Session(world.database[1]) as s:
-        assert verified_spend(s, ACCOUNT, FAN) == 50_000
-    first, mid = world.say('hello')
-    assert first['outcome'] == 'accepted'                             # flag only: no hold
-    assert ('vip_flag', 'offer', 'open') in world.cases() and world.owner()[0] == 'active'
-    _spend(world, 50_000, 'a3')
-    calls = len(world.snaps)
-    held = world.send(tx('tx-trigger'), key='evt-trigger')            # payment evidence arrives: hold now
-    assert held['journey']['action'] == 'hold' and held['journey']['spend_cents'] >= 100_000
-    assert world.owner()[0] == 'human'
-    with Session(world.database[1]) as s:
-        state = s.get(OfConversationState, (ACCOUNT, FAN))
-        assert state.mode == 'human_controlled' and state.takeover_state in {'requested', 'effective'}
-    assert ('journey_whale_hold', 'all', 'open') in world.cases()
-    silent, mid = world.say('are you there?', seconds=5)
-    assert silent['outcome'] == 'not_ready' and len(world.snaps) == calls     # no model call, no reply
-    assert len(world.fans.posts) == 1
-
-
-def test_whale_hold_through_a_real_verified_purchase(world):
-    configure_journey(JourneyConfig(whale_hold_cents=1000, whale_flag_cents=500))
-    _, offer_message = _sell(world)
-    world.send(unlock(offer_message), key='evt-unlock')
-    paid = world.send(tx('tx-whale'), key='evt-tx')
-    assert paid['journey']['action'] == 'hold' and paid['journey']['spend_cents'] == 1000
-    assert world.owner()[0] == 'human'
-    posts = len(world.fans.posts)
-    again, mid = world.say('thanks!', seconds=10)
-    assert again['outcome'] == 'not_ready' and len(world.fans.posts) == posts
+        assert verified_spend(s, ACCOUNT, FAN) == 160_000      # still recorded as evidence
+    held = world.send(tx('tx-trigger'), key='evt-trigger')
+    assert held['journey'] == {'action': 'none'}               # whale hold/flag thresholds are deferred
+    result, mid = world.say('hello', seconds=5)
+    assert result['outcome'] == 'accepted' and world.owner()[0] == 'active'
+    assert world.cases('vip_flag') == [] and world.cases('journey_whale_hold') == []
 
 
 # ======================================================================== journey (d): handover rules
@@ -686,8 +601,11 @@ def test_agency_question_also_goes_to_a_human(world):
 
 def test_identity_question_is_answered_when_an_approved_line_is_configured(world):
     configure_journey(JourneyConfig(identity_line='I am a virtual assistant for the creator.'))
-    world.say_plain('I am the creator is virtual assistant')
-    result, mid = world.say('are you real?')
+    world.say_plain('some made up answer')
+    refused, mid = world.say('are you real?')                      # only the approved wording may answer
+    assert refused['outcome'] == 'refused' and 'approved wording' in refused['detail']
+    world.say_plain('I am a virtual assistant for the creator.')
+    result = world.turn(TENANT, ACCOUNT, FAN, mid)
     assert result['outcome'] == 'accepted' and world.owner()[0] == 'active'
     assert world.snaps[-1]['journey']['approved_identity_line'] == 'I am a virtual assistant for the creator.'
 

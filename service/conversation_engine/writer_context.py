@@ -25,15 +25,22 @@ class CreatorProfile:
     limits) plus free keys: only documented values. A fact that is absent is a documented gap, never a negative.
     `limits` are her documented boundaries (shown to the model and, as `limit_terms`, enforced in code). No other
     content restriction exists: permitted sexual conversation is never blocked by this layer.
+
+    Missing inputs are never unlimited permission (Plan C): no documented `limits` means the profile is incomplete and
+    the request goes to a human; no `role_statement` (the approved identity wording) means identity questions go to a
+    human; `offers_permitted` is False and `approved_item_ids` empty by default, so nothing may be offered until the
+    operator names the approved product(s).
     """
     name: str
     voice: str = ''                       # short description of her voice, optional
     facts: tuple = ()                     # ((key, value), ...)
     limits: tuple = ()                    # documented boundaries, plain language
     limit_terms: tuple = ()               # words/phrases that mark one of those limits being crossed (code-enforced)
-    role_statement: str = ''              # approved answer when he asks what he is talking to (optional)
+    role_statement: str = ''              # APPROVED identity wording: the only answer to "what am I talking to"
     avoid_phrases: tuple = ()
     private_terms: tuple = ()
+    offers_permitted: bool = False        # commercial permission: may the engine offer anything at all
+    approved_item_ids: tuple = ()         # catalogue item ids that may be offered (the pilot's one approved product)
 
     def __post_init__(self):
         def strs(values, limit, count):
@@ -48,10 +55,19 @@ class CreatorProfile:
                        or len(p[0]) > 40 or len(p[1]) > 300 for p in self.facts)):
             raise ValueError('invalid creator facts')
         strs(self.limits, 200, 30); strs(self.limit_terms, 60, 80)
-        strs(self.avoid_phrases, 80, 60); strs(self.private_terms, 60, 60)
+        strs(self.avoid_phrases, 80, 60); strs(self.private_terms, 60, 60); strs(self.approved_item_ids, 20, 20)
+        if type(self.offers_permitted) is not bool:
+            raise ValueError('invalid commercial permission')
 
     def fact(self, key):
         return next((v for k, v in self.facts if k == key), None)
+
+    def missing_inputs(self):
+        """Names of required inputs this profile does not supply (boundaries block every turn)."""
+        return tuple(name for name, present in (('boundaries', any(x.strip() for x in self.limits)),) if not present)
+
+    def may_offer(self, item_id):
+        return self.offers_permitted and str(item_id) in self.approved_item_ids
 
     @classmethod
     def from_facts(cls, name, facts, **extra):
@@ -70,7 +86,9 @@ class CreatorProfile:
                    facts=tuple((k, str(v)) for k, v in (raw.get('facts') or {}).items()),
                    limits=tuple(raw.get('limits') or ()), limit_terms=tuple(raw.get('limit_terms') or ()),
                    role_statement=raw.get('role_statement') or '', avoid_phrases=tuple(raw.get('avoid_phrases') or ()),
-                   private_terms=tuple(raw.get('private_terms') or ()))
+                   private_terms=tuple(raw.get('private_terms') or ()),
+                   offers_permitted=raw.get('offers_permitted') is True,
+                   approved_item_ids=tuple(str(x) for x in (raw.get('approved_item_ids') or ())))
 
 
 class CreatorProfiles(Protocol):
@@ -91,10 +109,28 @@ class JsonFileCreatorProfiles:
         self._path = path
 
     def get(self, account_id):
-        with open(self._path, encoding='utf-8') as handle:
-            raw = json.load(handle)
-        item = raw.get(account_id) if type(raw) is dict else None
-        return CreatorProfile.from_dict(item) if item is not None else None
+        # An unreadable, malformed or invalid entry is a MISSING input (the request goes to a human), never a default.
+        try:
+            with open(self._path, encoding='utf-8') as handle:
+                raw = json.load(handle)
+            item = raw.get(account_id) if type(raw) is dict else None
+            return CreatorProfile.from_dict(item) if item is not None else None
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+
+_ACTIVE_PROFILES = None
+
+
+def set_active_profiles(profiles):
+    """The profile source the running application uses (set once by model_transport.wiring). None clears it."""
+    global _ACTIVE_PROFILES
+    _ACTIVE_PROFILES = profiles
+
+
+def active_profile(account_id):
+    """The approved creator profile for an account from the active source, or None (missing input)."""
+    return _ACTIVE_PROFILES.get(account_id) if _ACTIVE_PROFILES is not None else None
 
 
 # ---- context / budget / provider interface ------------------------------------------
@@ -127,10 +163,12 @@ class PromptContext:
     offer: dict | None = None         # {grantId, itemId, label, description}: the ONE approved offer for this turn
     outstanding_card: dict | None = None   # a card already sent that his message refers to: {label, priceCents}
     purchases: tuple | None = None    # verified purchases (labels); None = records unavailable
+    identity_line: str = ''           # the APPROVED identity wording; '' = none (identity questions go to a human)
+    recent_questions: tuple = ()      # questions she already asked lately (never ask them again)
     examples: tuple = ()              # ExampleLine (style only)
     fix: tuple = ()                   # reasons the last draft was rejected
     prefixed: bool = False            # in-character retry
-    max_texts: int = 3
+    max_texts: int = 4
 
 
 @dataclass(frozen=True)
@@ -187,6 +225,35 @@ def pick_offer(snapshot, fan_text):
     return sorted(grants, key=score)[0]
 
 
+def offer_for(snapshot, profile, fan_text):
+    """The ONE approved offer this turn may use, or None.
+
+    Layers, all of which must allow it: the engine's own approved grant and sales state (pick_offer), the journey
+    facts (refusal pause, compliment after a purchase, incomplete history), and the creator profile's commercial
+    permission for that catalogue item. A missing permission is "no offer", never "any offer".
+    """
+    journey = snapshot.get('journey') or {}
+    if journey.get('offers_allowed') is False:
+        return None
+    offer = pick_offer(snapshot, fan_text)
+    if offer is None or profile is None or not profile.may_offer(offer['itemId']):
+        return None
+    return offer
+
+
+def recent_her_questions(snapshot, limit=3):
+    """Questions she asked in her last few delivered messages, oldest first (so none is asked a second time)."""
+    out = []
+    for row in snapshot.get('history', []):
+        if row.get('direction') != 'out':
+            continue
+        for sentence in re.findall(r'[^.!?\n]*\?', row.get('body') or ''):
+            sentence = ' '.join(sentence.split())
+            if len(sentence) > 4:
+                out.append(sentence[:140])
+    return tuple(out[-limit:])
+
+
 _FACT_LABELS = {'real_name': 'his name', 'his_age': 'his age', 'home_city': 'his city', 'home_country': 'his country',
                 'hobbies': 'his hobbies', 'occupation': 'his job', 'fetishes': 'turn-ons he told her'}
 
@@ -228,7 +295,9 @@ def _history_rows(snapshot, budget):
 
 def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, budget=PromptBudget()):
     fan_text = snapshot['current_message']['body']
-    offer = pick_offer(snapshot, fan_text)
+    offer = offer_for(snapshot, profile, fan_text)
+    journey = snapshot.get('journey') or {}
+    identity_line = (getattr(profile, 'role_statement', '') or journey.get('approved_identity_line') or '').strip()
     lines, excerpts, available = memory_lines_from(snapshot.get('memory'), budget)
     matched = (snapshot.get('offer_reference') or {}).get('offers') or []
     purchases = snapshot.get('verified_purchases')
@@ -240,4 +309,5 @@ def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, bud
         sales_mode=snapshot.get('sales_mode', 'open'), sales_scope=scope, scope_items=scope_items, offer=offer,
         outstanding_card=matched[0] if matched else None,
         purchases=tuple(p['label'] for p in purchases[:budget.purchases]) if isinstance(purchases, list) else None,
+        identity_line=identity_line, recent_questions=recent_her_questions(snapshot),
         examples=tuple(examples), fix=tuple(fix), prefixed=prefixed)

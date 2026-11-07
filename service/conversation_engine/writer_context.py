@@ -8,6 +8,7 @@ The model never gets send or charge authority from any provider.
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
+import os
 import re
 from typing import Protocol
 
@@ -149,7 +150,10 @@ def set_active_profiles(profiles):
 
 def active_profile(account_id):
     """The approved creator profile for an account from the active source, or None (missing input)."""
-    return _ACTIVE_PROFILES.get(account_id) if _ACTIVE_PROFILES is not None else None
+    if _ACTIVE_PROFILES is not None:
+        return _ACTIVE_PROFILES.get(account_id)
+    path = os.environ.get('ENGINE_MODEL_PROFILES_FILE', '')
+    return JsonFileCreatorProfiles(path).get(account_id) if path else None
 
 
 # ---- context / budget / provider interface ------------------------------------------

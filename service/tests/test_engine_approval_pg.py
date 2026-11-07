@@ -629,3 +629,29 @@ def test_non_allowlisted_fan_never_reaches_planning(world):
     assert world.snaps == [] and world.fans.posts == []
     with Session(world.database[1]) as s:
         assert s.get(OfEngineOwner, (ACCOUNT, FAN2)) is None
+
+
+def test_edit_requires_creator_profile_and_respects_documented_limits(world, monkeypatch):
+    from conversation_engine.writer_context import CreatorProfile, StaticCreatorProfiles, set_active_profiles
+    staged, _ = stage(world)
+    row = staged['approval']
+    set_active_profiles(None)
+    monkeypatch.delenv('ENGINE_MODEL_PROFILES_FILE', raising=False)
+    with pytest.raises(Refused, match='creator profile'):
+        approval.edit(world.store, TENANT, ACCOUNT, row['requestId'], row['generation'],
+                      expected_version=row['version'], actor=OP, parts=['Safe edited reply'])
+    set_active_profiles(StaticCreatorProfiles({ACCOUNT: CreatorProfile(name='Fixture creator', limits=('no meetups',),
+        limit_terms=('secretword',), offers_permitted=True, approved_item_ids=(str(world.item),))}))
+    with pytest.raises(Refused, match='creator or pilot rules'):
+        approval.edit(world.store, TENANT, ACCOUNT, row['requestId'], row['generation'],
+                      expected_version=row['version'], actor=OP, parts=['Here is secretword'])
+    assert posts_text(world) == []
+
+
+def test_creator_profile_change_invalidates_an_approved_draft(world):
+    from conversation_engine.writer_context import CreatorProfile, StaticCreatorProfiles, set_active_profiles
+    staged, _ = stage(world)
+    ok(world, staged)
+    set_active_profiles(StaticCreatorProfiles({ACCOUNT: CreatorProfile(name='Changed creator', limits=('no meetups',))}))
+    result = world.worker.send_approved(TENANT, ACCOUNT, staged['decisionId'])
+    assert result['outcome'] != 'accepted' and posts_text(world) == []

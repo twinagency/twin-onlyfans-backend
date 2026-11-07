@@ -33,6 +33,7 @@ handback makes the conversation eligible for a fresh plan, never for replaying a
 import json
 import os
 import uuid
+from dataclasses import asdict
 from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -161,7 +162,13 @@ def _build(s, runtime, parts, request, owner, state):
     policy = s.get(OfDeliveryPolicy, account)
     if policy is None:
         return None, None, 'delivery_policy_unavailable'
-    canon = {'v': 2, 'account': account, 'binding': runtime.binding_id, 'fan': parts[0].fan_id,
+    from .writer_context import CreatorProfile, active_profile
+    profile = active_profile(account)
+    if profile is not None and type(profile) is not CreatorProfile:
+        return None, None, 'creator_profile_unavailable'
+    profile_hash = _hash(asdict(profile)) if profile is not None else None
+    canon = {'v': 3, 'account': account, 'binding': runtime.binding_id, 'fan': parts[0].fan_id,
+             'creator_profile_hash': profile_hash,
              'delivery_policy_revision': policy.revision, 'delivery_enabled': policy.enabled,
              'request': request.request_id, 'source_message_id': request.source_message_id,
              'generation': parts[0].generation, 'owner_epoch': owner.epoch, 'control_revision': state.revision,
@@ -439,6 +446,17 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
             request = s.get(OfEngineRequest, (account, request_id))
             source = s.get(Message, (account, request.fan_id, request.source_message_id))
             head = decisions[0]
+            from .writer_context import CreatorProfile, active_profile
+            from .model_output import JudgeContext, edit_problems
+            profile = active_profile(account)
+            if type(profile) is not CreatorProfile or profile.missing_inputs():
+                raise Refused('creator profile is unavailable for edit validation')
+            if head.action == 'offer' and not profile.may_offer(head.catalog_item_id):
+                raise Refused('creator has not approved this offer')
+            context = JudgeContext(snapshot={'current_message': {'body': source.body}}, profile=profile)
+            problems = edit_problems([part.strip() for part in parts], context)
+            if problems:
+                raise Refused('edited draft violates creator or pilot rules: ' + problems[0])
             proposal = SyntheticProposal(body=parts[0].strip(), action=head.action,
                                          parts=tuple(t.strip() for t in parts[1:]) if head.action == 'reply' else (),
                                          offer_grant_id=head.offer_grant_id)

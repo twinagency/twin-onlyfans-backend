@@ -204,6 +204,9 @@ def world(database, monkeypatch):
     w.database = database
     w.store, w.authority = configured(database, mode='automated')
     w.item = shelf(database[1])
+    from conversation_engine.writer_context import CreatorProfile, StaticCreatorProfiles, set_active_profiles
+    set_active_profiles(StaticCreatorProfiles({ACCOUNT: CreatorProfile(name='Fixture creator', limits=('no meetups',),
+        offers_permitted=True, approved_item_ids=(str(w.item),))}))
     media_policy(w.authority)
     with Session(database[1]) as s, s.begin():
         for v in s.scalars(select(VaultItem)):
@@ -231,6 +234,7 @@ def world(database, monkeypatch):
     w.no_throttle = lambda: no_throttle(0)
     yield w
     configure_journey(JourneyConfig())
+    set_active_profiles(None)
     w.store.close()
 
 
@@ -796,6 +800,7 @@ def test_unlinked_reversal_is_visible_without_guessing_access_or_money(world):
 def test_wrong_account_webhook_cannot_be_persisted_or_projected_through_pilot_worker(world):
     from test_onlyfans_foundation_pg import seed
     from db.onlyfans_models import OfIngress
+    from onlyfans_runtime.text_delivery import TextAuthority
     second_account, second_tenant, second_provider = 'other-creator', 'other-tenant', 'acct_other_creator'
     other = seed(world.database[0], world.database[1], account=second_account, tenant=second_tenant, fan=FAN)
     try:

@@ -317,6 +317,49 @@ def _effective_sales_mode(snapshot, proposal):
     return mode
 
 
+def creator_problems(texts, ctx):
+    """Creator and platform checks shared by generated text and operator edits."""
+    problems = []
+    profile = ctx.profile
+    joined = ' '.join(texts)
+    for name, rx in _RULES:
+        match = rx.search(joined)
+        if match:
+            problems.append(f"{name} ('{match.group(0).strip()[:40]}')")
+    age = profile.fact('age') if hasattr(profile, 'fact') else None
+    found_age = _AGE.search(joined)
+    if found_age and (age is None or age not in found_age.group(0)):
+        problems.append('states an age that is not in her documented facts')
+    if _LOCATION.search(joined) and not (profile.fact('home_city') if hasattr(profile, 'fact') else None):
+        problems.append('states where she lives or is from; no such fact is documented')
+    problems.extend(_sexual_problems(texts, ctx))
+    low = joined.lower()
+    for term in getattr(profile, 'private_terms', ()) or ():
+        if term and re.search(r'\b' + re.escape(term.lower()) + r'\b', low):
+            problems.append(f"reveals private information ('{term}')")
+    for phrase in getattr(profile, 'avoid_phrases', ()) or ():
+        if phrase and phrase.lower() in low:
+            problems.append(f"uses a banned line ('{phrase}')")
+    for term in getattr(profile, 'limit_terms', ()) or ():
+        if term and re.search(r'\b' + re.escape(term.lower()) + r'\b', low):
+            problems.append(f"crosses one of her documented limits ('{term}')")
+    return problems
+
+
+def edit_problems(texts, ctx):
+    """Safety, identity and fixed-sale checks for a human's proposed edit."""
+    problems = creator_problems(texts, ctx)
+    joined = ' '.join(texts)
+    if _WITHHOLD.search(joined):
+        problems.append('makes an answer conditional on the fan answering')
+    if _DISCOUNT.search(joined):
+        problems.append('offers a discount, cheaper option or bundle')
+    if _LATER.search(joined):
+        problems.append('promises to message later')
+    problems.extend(_identity_problems(texts, ctx))
+    return problems
+
+
 def proposal_problems(proposal, ctx):
     """Return a list of human-readable problems (empty = acceptable). Also used as regeneration notes."""
     problems = []
@@ -350,29 +393,8 @@ def proposal_problems(proposal, ctx):
                          grounding=grounding_from_snapshot(snapshot, proposal))
     except Refused as exc:
         problems.append(str(exc))
-    joined = ' '.join(texts)
-    for name, rx in _RULES:
-        match = rx.search(joined)
-        if match:
-            problems.append(f"{name} ('{match.group(0).strip()[:40]}')")
-    age = profile.fact('age') if hasattr(profile, 'fact') else None
-    found_age = _AGE.search(joined)
-    if found_age and (age is None or age not in found_age.group(0)):
-        problems.append('states an age that is not in her documented facts')
-    if _LOCATION.search(joined) and not (profile.fact('home_city') if hasattr(profile, 'fact') else None):
-        problems.append('states where she lives or is from; no such fact is documented')
+    problems.extend(creator_problems(texts, ctx))
     problems.extend(_writing_problems(proposal, ctx, texts))
-    problems.extend(_sexual_problems(texts, ctx))
-    low = joined.lower()
-    for term in getattr(profile, 'private_terms', ()) or ():
-        if term and re.search(r'\b' + re.escape(term.lower()) + r'\b', low):
-            problems.append(f"reveals private information ('{term}')")
-    for phrase in getattr(profile, 'avoid_phrases', ()) or ():
-        if phrase and phrase.lower() in low:
-            problems.append(f"uses a banned line ('{phrase}')")
-    for term in getattr(profile, 'limit_terms', ()) or ():
-        if term and re.search(r'\b' + re.escape(term.lower()) + r'\b', low):
-            problems.append(f"crosses one of her documented limits ('{term}')")
     return problems
 
 

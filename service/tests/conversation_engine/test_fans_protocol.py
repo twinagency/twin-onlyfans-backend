@@ -98,6 +98,17 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(c.chargebacks().state,'unverified_observation')
         self.assertNotIn('owned',result.data[0])
 
+    def test_transaction_opaque_marker_and_nonadvancing_page(self):
+        fake=FakeHTTP([response(200, {'data':{'list':[{'id':'tx1'}], 'hasMore':True, 'nextMarker':'opaque+cursor'}}),
+                       response(200, {'data':{'list':[{'id':'tx2'}], 'hasMore':True, 'nextMarker':'opaque+cursor'}})])
+        c=client(fake)
+        first=c.transactions()
+        self.assertEqual(first.next_page, 'opaque+cursor')
+        self.assertEqual(c.transactions(marker=first.next_page).state, 'unavailable')
+        self.assertIn('marker=opaque%2Bcursor', fake.calls[1]['url'])
+        with self.assertRaises(ValueError): c.transactions(marker='bad\nmarker')
+        self.assertEqual(len(fake.calls), 2)
+
     def test_authenticated_webhook_scope_and_unsupported_events(self):
         c=client(FakeHTTP([])); raw=json.dumps({'account_id':'acct_test','event':'transactions.new','payload':{'id':'tx1'}}).encode()
         sig=hmac.new(b'fixture',raw,hashlib.sha256).hexdigest()

@@ -202,9 +202,10 @@ class FansApiClient:
         if not self._identity_verified: raise ValueError('verified provider identity required')
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError('invalid transaction page bound')
+        from transaction_contract import transaction_marker
         params = {'limit':limit}
         if marker is not None:
-            params['marker'] = _id(marker)
+            params['marker'] = transaction_marker(marker)
         status, body, trace, original_trace = self._request('GET', BASE + f'/api/{self.account}/transactions?' + urlencode(params))
         if status != 200 or type(body) is not dict or type(body.get('data')) is not dict:
             return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
@@ -216,8 +217,11 @@ class FansApiClient:
             return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
         marker_out = data.get('nextMarker')
         if data['hasMore']:
-            try: marker_out = _id(marker_out)
-            except ValueError: return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
+            try:
+                marker_out = transaction_marker(marker_out)
+                if marker is not None and marker_out == transaction_marker(marker):
+                    raise ValueError('non-advancing marker')
+            except (ValueError, UnicodeError): return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
         else: marker_out = None
         # Observations are not proof of item ownership or absence.
         return Result('observed', tuple(data['list']), marker_out, trace, status, original_trace)

@@ -1,5 +1,5 @@
 """Durable decision records around the existing message and delivery owners."""
-from sqlalchemy import (BigInteger, Boolean, CheckConstraint, Column, DateTime, ForeignKey,
+from sqlalchemy import (BigInteger, Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey,
                         ForeignKeyConstraint, Index, Integer, LargeBinary, String, Text, UniqueConstraint, text)
 from .models import Base
 
@@ -317,3 +317,54 @@ class OfEngineOperatorCommand(Base):
     request_hash = Column(String(64), nullable=False)
     result_json = Column(Text, nullable=False)
     created_at = Column(DateTime, nullable=False)
+
+
+MODEL_CALL_INFO = {'onlyfans_since': '0122_engine_model_calls'}
+
+
+class OfEngineModelCall(Base):
+    """One model invocation attempt: reservation, lease, settlement (see conversation_engine/model_ledger.py)."""
+    __tablename__ = 'of_engine_model_call'
+    __table_args__ = (
+        ForeignKeyConstraint(['account_id', 'request_id'], ['of_engine_request.account_id', 'of_engine_request.request_id'], ondelete='RESTRICT'),
+        UniqueConstraint('account_id', 'request_id', 'generation', 'seq', name='uq_engine_model_call_request_seq'),
+        CheckConstraint("status IN ('reserved','calling','settled','released','unknown')", name='status'),
+        CheckConstraint('reserved_microusd >= 0 AND (actual_microusd IS NULL OR actual_microusd >= 0) AND generation >= 0 AND seq >= 0 AND chain_pos >= 0 AND attempt >= 1', name='amounts'),
+        CheckConstraint("status <> 'settled' OR (usage_known AND actual_microusd IS NOT NULL)", name='settled'),
+        Index('ix_engine_model_call_day', 'cost_day', 'account_id'),
+        Index('ix_engine_model_call_open', 'account_id', 'request_id', 'generation', 'status'),
+        {'info': MODEL_CALL_INFO},
+    )
+    account_id = Column(String, primary_key=True)
+    call_id = Column(String(36), primary_key=True)
+    request_id = Column(String(36), nullable=False)
+    generation = Column(Integer, nullable=False)
+    seq = Column(Integer, nullable=False)
+    chain_pos = Column(Integer, nullable=False)
+    chain_step = Column(String(16), nullable=False)
+    fan_id = Column(BigInteger, nullable=False)
+    binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
+    owner_epoch = Column(BigInteger, nullable=False)
+    provider = Column(String(32), nullable=False)
+    model = Column(String(128), nullable=False)
+    prefixed = Column(Boolean, nullable=False)
+    status = Column(String(16), nullable=False)
+    outcome = Column(String(24))
+    reserved_microusd = Column(BigInteger, nullable=False)
+    actual_microusd = Column(BigInteger)
+    usage_known = Column(Boolean, nullable=False, server_default=text('false'))
+    prompt_tokens = Column(Integer)
+    completion_tokens = Column(Integer)
+    lease_owner = Column(String(64), nullable=False)
+    lease_expires_at = Column(DateTime, nullable=False)
+    attempt = Column(Integer, nullable=False, server_default=text('1'))
+    snapshot_sha256 = Column(String(64), nullable=False)
+    prompt_sha256 = Column(String(64), nullable=False)
+    response_text = Column(Text)
+    response_sha256 = Column(String(64))
+    error_class = Column(String(64))
+    cost_day = Column(Date, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    wire_started_at = Column(DateTime)
+    settled_at = Column(DateTime)

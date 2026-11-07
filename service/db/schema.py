@@ -71,7 +71,8 @@ ENGINE_PARTS = '0117_engine_message_parts'
 ENGINE_OPERATOR = '0118_engine_operator'
 ENGINE_IDENTITY = '0119_identity_independence'
 ENGINE_GENERATIONS = "0120_engine_generations"
-HEAD = ENGINE_GENERATIONS
+ENGINE_MODEL_CALLS = "0122_engine_model_calls"  # JOIN: chain is 0120 -> 0121 -> 0122, see NEEDS-JOIN.md
+HEAD = ENGINE_MODEL_CALLS
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -98,6 +99,7 @@ REVISION_RANK[ENGINE_PARTS] = 117
 REVISION_RANK[ENGINE_OPERATOR] = 118
 REVISION_RANK[ENGINE_IDENTITY] = 119
 REVISION_RANK[ENGINE_GENERATIONS] = 120
+REVISION_RANK[ENGINE_MODEL_CALLS] = 122
 
 
 class SchemaMismatch(RuntimeError):
@@ -358,6 +360,18 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             failures.append("missing engine operator command protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing engine operator row security")
+    if expected_rank >= 122:
+        table, trigger = "of_engine_model_call", "of_engine_model_call_guard"
+        guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+            WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+            {"table": table, "trigger": trigger}).all()
+        if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+                or guard[0][2] != trigger or guard[0][4] != "plpgsql"
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "9cac12064b4377f866c0b5d5022292418e8895e9e5e271c03628e528d4ac134e"):
+            failures.append("missing engine model call protection")
+        if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
+            failures.append("missing engine model call row security")
     if expected_rank >= 95:
         marker = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.prosrc::text
             FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid

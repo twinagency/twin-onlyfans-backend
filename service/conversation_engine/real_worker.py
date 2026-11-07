@@ -11,8 +11,8 @@
     TextAuthority.dispatch (approval checked again at admission and just before the wire). Nothing in this class
     approves a draft, hands a conversation back or retries a refusal into a send.
 
-Default OFF. The worker refuses to run unless TWIN_ENGINE_FANSAPI_REAL=1 AND the account's delivery policy is
-transport_kind 'fansapi' and enabled. `SyntheticConversationWorker` is unchanged and still accepts only simulators.
+Default OFF. Active operation requires TWIN_ENGINE_FANSAPI_REAL=1 and an enabled fansapi policy.
+Draft-only operation has no provider transport and requires the shared delivery policy to be disabled. `SyntheticConversationWorker` is unchanged and still accepts only simulators.
 No model or provider call is made here except through the supplied transport (and an opt-in backfill that reads).
 """
 import json
@@ -31,6 +31,7 @@ from fans_api_adapter.real_transport import FansApiRealTransport, real_transport
 from onlyfans_runtime.store import Refused, utcnow
 from onlyfans_runtime.text_delivery import TextAuthority
 from . import approval
+from .draft_only import DraftOnlyTransport
 from .delivery import unsent_cancelled
 from .engine import EngineService
 from .history_scope import current_binding_message
@@ -61,9 +62,12 @@ def _identify(raw_body):
 class RealConversationWorker:
     def __init__(self, engine, intake, transport, *, journey=None, backfill=None, sleep=time.sleep, max_pacing_wait=15.0):
         if (type(engine) is not EngineService or type(intake) is not FansEventIntake
-                or type(transport) is not FansApiRealTransport
+                or type(transport) not in (FansApiRealTransport, DraftOnlyTransport)
                 or engine.store is not intake.store or engine.store is not transport.store):
             raise Refused('invalid real worker dependencies')
+        self.draft_only = type(transport) is DraftOnlyTransport
+        if engine.draft_only != self.draft_only or self.draft_only and backfill is not None:
+            raise Refused('draft-only worker scope mismatch')
         if backfill is not None and (type(backfill) is not FansBackfill or backfill.intake is not intake):
             raise Refused('invalid real worker backfill')
         self.engine, self.intake, self.transport = engine, intake, transport
@@ -74,13 +78,17 @@ class RealConversationWorker:
 
     # ------------------------------------------------------------------ gate
     def _gate(self, tenant, account):
-        if not real_transport_enabled():
+        if not self.draft_only and not real_transport_enabled():
             raise Refused('real Fans API transport is not enabled')
         if tenant != self.transport.tenant_id or account != self.transport.account_id:
             raise Refused('real worker scope mismatch')
         with Session(self.engine.engine) as s:
             policy = s.get(OfDeliveryPolicy, account)
-            if policy is None or policy.transport_kind != 'fansapi' or not policy.enabled:
+            if policy is None or policy.transport_kind != 'fansapi':
+                raise Refused('real worker needs a fansapi account policy')
+            if self.draft_only and policy.enabled is not False:
+                raise Refused('draft-only requires the shared delivery policy to be disabled')
+            if not self.draft_only and policy.enabled is not True:
                 raise Refused('real worker needs an enabled fansapi account policy')
 
     # ------------------------------------------------------------------ webhook
@@ -102,7 +110,8 @@ class RealConversationWorker:
             return {'intake': outcome, 'outcome': 'projection_' + str(projection), 'event': event}
         if event != 'messages.received':
             result = {'intake': outcome, 'outcome': 'evidence', 'event': event}
-            if fan_id is not None and event in {'messages.ppv.unlocked', 'transactions.new', 'chargebacks.new'}:
+            if (fan_id is not None and str(fan_id) in self.transport.allowed_chats
+                    and event in {'messages.ppv.unlocked', 'transactions.new', 'chargebacks.new'}):
                 result['journey'] = self.journey.after_evidence(tenant, account, fan_id)
             return result
         result = self.turn(tenant, account, fan_id, message_id)
@@ -113,6 +122,8 @@ class RealConversationWorker:
     def turn(self, tenant, account, fan_id, message_id):
         """Reply to one canonical inbound message. Safe to repeat: plan/queue/dispatch reuse durable records."""
         self._gate(tenant, account)
+        if str(fan_id) not in self.transport.allowed_chats:
+            return {'outcome': 'outside_pilot_scope'}
         store = self.engine.store
         store.drain(tenant, account)
         approval.retire_superseded(store, tenant, account, fan_id, message_id)   # older unsent drafts lose their approval
@@ -184,6 +195,8 @@ class RealConversationWorker:
         """Deliver an approved draft sequence, part by part. Safe to repeat after a crash or a duplicate click: queue
         reuses its command key and dispatch never resends a settled, unknown or in-flight part."""
         self._gate(tenant, account)
+        if self.draft_only:
+            return {'decisionId': decision_id, 'intentId': None, 'outcome': 'draft_only'}
         sequence = self.engine.sequence(tenant, account, decision_id)
         results = []
         for part in sequence:

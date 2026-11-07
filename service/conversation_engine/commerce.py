@@ -36,12 +36,51 @@ def _sales_permits(owner, item_id):
     return type(scope) is list and str(item_id) in scope
 
 
+def provider_unlocked_media(s, runtime, fan_id, *, limit=10000):
+    # Access events are separate from the transaction ledger. Use the newest
+    # applied observation for each scoped intent to prevent repeat offers.
+    rows = list(s.scalars(select(OfEngineAccessEvidence).join(OfTextIntent,
+        (OfTextIntent.account_id == OfEngineAccessEvidence.account_id) &
+        (OfTextIntent.intent_id == OfEngineAccessEvidence.intent_id)).where(
+        OfEngineAccessEvidence.account_id == runtime.account_id,
+        OfEngineAccessEvidence.fan_id == fan_id, OfEngineAccessEvidence.applied.is_(True),
+        OfEngineAccessEvidence.evidence_ref.like('fansapi:%'),
+        OfTextIntent.binding_id == runtime.binding_id, OfTextIntent.status == 'accepted')
+        .order_by(OfEngineAccessEvidence.occurred_at.desc(), OfEngineAccessEvidence.evidence_key.desc())
+        .limit(limit + 1)))
+    if len(rows) > limit:
+        raise Refused('access evidence exceeds bounded read')
+    seen, media = set(), set()
+    for row in rows:
+        if row.intent_id in seen:
+            continue
+        seen.add(row.intent_id)
+        if row.status == 'confirmed':
+            try:
+                ids = json.loads(row.media_json)
+                if type(ids) is not list:
+                    raise ValueError()
+                for value in ids:
+                    _id(value)
+                media.update(ids)
+            except (ValueError, TypeError, Refused):
+                raise Refused('access evidence is invalid') from None
+    return media
+
+
 def _unowned(s, account, fan_id, terms):
     assert_unowned(s, account, fan_id, terms)
     try:
         owned = owned_media_in_session(s, account, fan_id, limit=10000)
     except ValueError as exc:
         raise Refused('ownership evidence unavailable') from exc
+    policy = s.get(OfDeliveryPolicy, account)
+    if policy is not None and policy.transport_kind == 'fansapi':
+        from db.onlyfans_models import OfRuntime
+        runtime = s.get(OfRuntime, account)
+        if runtime is None:
+            raise Refused('access scope unavailable')
+        owned |= provider_unlocked_media(s, runtime, fan_id)
     if set(terms['media_ids']) & set(owned):
         raise Refused('bundle overlaps owned media')
 
@@ -241,8 +280,23 @@ def _record_access(store, tenant, account, observation, cls, kind, prefix):
                 or intent.binding_id != runtime.binding_id or intent.fan_id != observation.fan_id
                 or intent.provider_message_id != observation.message_id or intent.media_json != encoded_media
                 or message is None or message.direction != 'out' or stamp < message.created_at
-                or observation.status == 'confirmed' and message.is_paid is not True):
+                or cls is SyntheticAccessObservation and observation.status == 'confirmed' and message.is_paid is not True):
             raise Refused('access evidence does not match the accepted purchase')
+        if cls is ProviderAccessObservation:
+            # Only the exact persisted, authenticated, message-bound unlock is
+            # accepted. An arbitrary ref or unlinked reversal is insufficient.
+            from db.onlyfans_fans_intake_models import OfFansEvidence
+            dedupe = observation.evidence_ref.removeprefix('fansapi:')
+            unlock = s.scalar(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
+                OfFansEvidence.dedupe_key == dedupe, OfFansEvidence.kind == 'unlock'))
+            if (observation.status != 'confirmed' or unlock is None or unlock.source != 'webhook'
+                    or unlock.status not in {'pending', 'applied'}
+                    or unlock.reason not in {'awaiting_commerce', 'unlock_confirmed_finance_unlinked'}
+                    or unlock.intent_id != intent.intent_id or unlock.fan_id != observation.fan_id
+                    or unlock.message_id != observation.message_id or unlock.grant_id != decision.offer_grant_id
+                    or unlock.amount_cents != intent.price_cents or unlock.occurred_at != stamp
+                    or observation.evidence_key != sha256(f'engine-access:confirmed:{unlock.evidence_id}'.encode()).hexdigest()):
+                raise Refused('verified provider unlock evidence required')
         request = s.get(OfEngineRequest, (account, decision.request_id))
         if request is None:
             raise Refused('engine request unavailable')

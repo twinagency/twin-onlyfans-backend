@@ -549,7 +549,7 @@ def test_compliment_after_a_verified_purchase_gets_a_reply_but_no_new_card(world
     world.send(tx('tx-first'), key='evt-tx')                         # a separate money record is never linked to it
     assert [(a.status, a.applied) for a in world.rows(OfEngineAccessEvidence)] == [('confirmed', True)]
     with Session(world.database[1]) as s:
-        assert verified_spend(s, ACCOUNT, FAN) == 1000
+        assert verified_spend(s, ACCOUNT, FAN) is None
     posts_before = len(world.fans.posts)
     offer2 = world.grant(second, ref='vault:synced')
     world.reply(lambda snap: SyntheticProposal('Thank you!! Want more?', action='offer', offer_grant_id=offer2))
@@ -595,7 +595,7 @@ def test_large_spend_never_holds_flags_or_silences_the_engine(world):
     _spend(world, 80_000, 'a1')
     _spend(world, 80_000, 'a2')
     with Session(world.database[1]) as s:
-        assert verified_spend(s, ACCOUNT, FAN) == 160_000      # still recorded as evidence
+        assert verified_spend(s, ACCOUNT, FAN) is None         # an unlock is not cleared ledger spend
     held = world.send(tx('tx-trigger'), key='evt-trigger')
     assert held['journey'] == {'action': 'none'}               # whale hold/flag thresholds are deferred
     result, mid = world.say('hello', seconds=5)
@@ -741,3 +741,53 @@ def test_synthetic_accounts_get_no_journey_facts(database, monkeypatch):
     engine.plan(TENANT, ACCOUNT, FAN, 1)
     assert 'journey' not in seen[0]
     store.close()
+
+
+def test_real_unlock_is_scoped_access_not_a_synthetic_financial_transaction(world):
+    from db.models import Fan, Transaction
+    _, message_id = _sell(world)
+    body = unlock(message_id)
+    first = world.send(body, key='event-unlock-1')
+    assert first['outcome'] == 'evidence'
+    world.send(body, key='event-unlock-2')  # distinct webhook delivery, same provider event
+    world.send(tx('unlinked-same-amount'), key='event-tx')
+    with Session(world.database[1]) as s:
+        access = list(s.scalars(select(OfEngineAccessEvidence)))
+        evidence = list(s.scalars(select(OfFansEvidence)))
+        assert len(access) == 1 and access[0].status == 'confirmed' and access[0].applied
+        assert [(e.kind, e.status, e.reason) for e in evidence if e.kind == 'unlock'] == [
+            ('unlock', 'applied', 'unlock_confirmed_finance_unlinked')]
+        assert [(e.status, e.reason) for e in evidence if e.kind == 'transaction'] == [
+            ('pending', 'unlinked_transaction')]
+        assert list(s.scalars(select(Transaction))) == []
+        assert s.get(Fan, (ACCOUNT, FAN)).lifetime_spend_cents == 0
+        assert s.get(Message, (ACCOUNT, FAN, message_id)).is_paid is not True
+        assert verified_spend(s, ACCOUNT, FAN) is None
+    from conversation_engine.operator_v2 import unresolved
+    items = unresolved(world.store, TENANT, ACCOUNT)
+    observed = [i for i in items if i['kind'] == 'unreconciled_access' and 'Provider reported an unlock' in i['summary']]
+    assert len(observed) == 1 and 'settlement are not linked' in observed[0]['summary']
+    # The confirmed unlock still protects its exact media from being re-offered.
+    with pytest.raises(Refused):
+        world.grant()
+
+
+def test_unlinked_reversal_is_visible_without_guessing_access_or_money(world):
+    from conversation_engine.operator_v2 import unresolved
+    from conversation_engine.engine import _verified_purchases
+    from db.onlyfans_models import OfRuntime
+    from db.models import Transaction
+    _, message_id = _sell(world)
+    world.send(unlock(message_id), key='unlock-before-reversal')
+    body = {'event': 'chargebacks.new', 'account_id': PROVIDER, 'payload': {
+        'id': 1, 'createdAt': iso(4), 'paymentType': 'message',
+        'payment': {'id': 'unlinked-tx', 'amount': 10, 'status': 'undo',
+                    'createdAt': iso(3), 'user': {'id': FAN}}}}
+    world.send(body, key='unlinked-reversal')
+    with Session(world.database[1]) as s:
+        assert _verified_purchases(s, s.get(OfRuntime, ACCOUNT), FAN) is None
+        assert list(s.scalars(select(Transaction))) == []
+        assert s.get(OfConversationState, (ACCOUNT, FAN)).requires_attention
+    items = unresolved(world.store, TENANT, ACCOUNT)
+    reversals = [i for i in items if i['kind'] == 'unlinked_transaction' and 'chargeback' in i['summary']]
+    assert len(reversals) == 1 and 'does not automatically revoke' in reversals[0]['summary']

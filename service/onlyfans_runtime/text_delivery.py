@@ -1257,6 +1257,8 @@ class TextAuthority:
         with Session(self.engine) as s:
             queued = s.get(OfTextIntent, (account_id, intent_id))
             if queued is not None:
+                if type(transport) is FansApiRealTransport and str(queued.fan_id) not in transport.allowed_chats:
+                    return 'refused'
                 owned_fan = fastt_owned(account_id, queued.fan_id)
                 is_fastt = type(transport) is FasttManualTransport
                 if (is_fastt and not (owned_fan and queued.origin in {"manual", "campaign"})) or (owned_fan and not is_fastt):

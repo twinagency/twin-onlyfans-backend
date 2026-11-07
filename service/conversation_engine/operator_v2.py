@@ -174,6 +174,11 @@ def _fan_evidence(s, account, fan_id):
         OfFansEvidence.kind != 'human_sent')).all()
     if held:
         notes.append(f'{len(held)} held payment record(s) need review')
+    unlocks = s.scalars(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account,
+        OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind == 'unlock',
+        OfFansEvidence.status == 'applied', OfFansEvidence.reason == 'unlock_confirmed_finance_unlinked')).all()
+    if unlocks:
+        notes.append(f'{len(unlocks)} provider-reported unlock(s); transaction and settlement remain unlinked')
     return '; '.join(notes) or None
 
 
@@ -363,14 +368,16 @@ def unresolved(store, tenant, account):
                 OfFansEvidence.kind.in_(('transaction', 'chargeback')), OfFansEvidence.status.in_(('pending', 'held')),
                 OfFansEvidence.peer_id.is_(None), OfFansEvidence.intent_id.is_(None))
                 .order_by(OfFansEvidence.created_at).limit(200)):
-            if row.status == 'pending' and (row.kind != 'transaction' or row.created_at > stale):
-                continue   # still inside its normal matching window (a pending chargeback is handled by commerce)
+            if row.status == 'pending' and row.kind == 'transaction' and row.created_at > stale:
+                continue  # allow a newly arrived transaction its normal review window
             cid, revision = conv(row.fan_id) if row.fan_id in pilot else (None, None)
             amount = '' if row.amount_cents is None else f' of {row.amount_cents} cents'
+            detail = (f'{row.kind}{amount} for fan {row.fan_id} is unlinked ({row.reason or row.status}). ')
+            detail += ('It does not automatically revoke access or adjust a purchase.' if row.kind == 'chargeback'
+                       else 'It is not attributed to a message or treated as settled by this view.')
             items.append(_item('unlinked_transaction', row.evidence_id, 'operator',
-                               'review_and_reconcile' if row.status == 'held' else 'link_or_dismiss_unmatched_transaction',
-                               f'{row.kind}{amount} for fan {row.fan_id} has no linked unlock ({row.reason or row.status}). '
-                               'It is not treated as a purchase.', cid, revision, row.created_at, evidenceId=row.evidence_id))
+                               'review_and_reconcile' if row.status == 'held' else 'review_unlinked_financial_evidence',
+                               detail, cid, revision, row.created_at, evidenceId=row.evidence_id))
         # 3. Access evidence that is not confirmed.
         for row in s.scalars(select(OfEngineAccessEvidence).where(OfEngineAccessEvidence.account_id == account,
                 (OfEngineAccessEvidence.status != 'confirmed') | OfEngineAccessEvidence.applied.is_(False))
@@ -383,14 +390,22 @@ def unresolved(store, tenant, account):
                                f'Access evidence for fan {row.fan_id} is {row.status} (applied={row.applied}). '
                                'Do not assert the fan has access.', cid, revision, row.created_at))
         for row in s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
-                OfFansEvidence.kind == 'unlock', OfFansEvidence.status.in_(('pending', 'paired', 'held')))
+                OfFansEvidence.kind == 'unlock',
+                (OfFansEvidence.status.in_(('pending', 'paired', 'held'))) |
+                ((OfFansEvidence.status == 'applied') &
+                 (OfFansEvidence.reason == 'unlock_confirmed_finance_unlinked')))
                 .order_by(OfFansEvidence.created_at).limit(200)):
-            if row.status != 'held' and row.created_at > stale:
+            if row.status not in {'held', 'applied'} and row.created_at > stale:
                 continue
             cid, revision = conv(row.fan_id) if row.fan_id in pilot else (None, None)
-            items.append(_item('unreconciled_access', row.evidence_id, 'operator',
-                               'review_and_reconcile' if row.status == 'held' else 'await_payment_match_or_review',
-                               f'Unlock for fan {row.fan_id} is {row.status} ({row.reason or "no reason"}). Not yet confirmed access.',
+            if row.status == 'applied':
+                step = 'review_unlinked_financial_evidence'
+                summary = (f'Provider reported an unlock for fan {row.fan_id}, message {row.message_id}. '
+                           'A separate transaction and settlement are not linked.')
+            else:
+                step = 'review_and_reconcile' if row.status == 'held' else 'review_unlock_evidence'
+                summary = f'Unlock for fan {row.fan_id} is {row.status} ({row.reason or "no reason"}). Not yet confirmed access.'
+            items.append(_item('unreconciled_access', row.evidence_id, 'operator', step, summary,
                                cid, revision, row.created_at, evidenceId=row.evidence_id))
         # 4. Conversations a human holds, waiting for an explicit hand back.
         for state, owner in s.execute(select(OfConversationState, OfEngineOwner).join(OfEngineOwner, and_(
@@ -464,8 +479,13 @@ def reconcile(store, tenant, account, item_id, body):
                     raise NotFound('item unavailable')
                 if row.status == 'dismissed' or row.status == 'applied':
                     raise Conflict('item is already resolved')
-                if row.status == 'held' or (row.status == 'pending' and row.kind == 'transaction' and row.peer_id is None
-                                            and kind == 'unlinked_transaction'):
+                if (row.kind == 'unlock' and row.status == 'applied'
+                        and row.reason == 'unlock_confirmed_finance_unlinked' and kind == 'unreconciled_access'):
+                    # A note is audited, but it does not invent a transaction
+                    # link or remove the still-unresolved financial issue.
+                    outcome = 'evidence_recorded_finance_unlinked'
+                elif row.status == 'held' or (row.status == 'pending' and row.kind == 'transaction' and row.peer_id is None
+                                              and kind == 'unlinked_transaction'):
                     row.status, row.resolved_by, row.reason, row.updated_at = 'dismissed', actor, 'operator_reconciled', now
                     outcome = 'dismissed'
                 else:

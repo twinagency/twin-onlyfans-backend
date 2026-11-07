@@ -129,7 +129,17 @@ def _verified_purchases(s, runtime, fan_id):
     from ownership import owned_media_in_session
     try:
         owned = set(owned_media_in_session(s, runtime.account_id, fan_id, limit=10000))
-    except ValueError:
+        policy = s.get(OfDeliveryPolicy, runtime.account_id)
+        if policy is not None and policy.transport_kind == 'fansapi':
+            from db.onlyfans_fans_intake_models import OfFansEvidence
+            unresolved_reversal = s.scalar(select(OfFansEvidence.evidence_id).where(
+                OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan_id,
+                OfFansEvidence.kind == 'chargeback', OfFansEvidence.status.in_(('pending', 'held'))).limit(1))
+            if unresolved_reversal is not None:
+                return None
+            from .commerce import provider_unlocked_media
+            owned |= provider_unlocked_media(s, runtime, fan_id)
+    except (ValueError, Refused):
         return None
     items = list(s.scalars(select(CatalogItem).where(CatalogItem.account_id == runtime.account_id,
         CatalogItem.enabled.is_(True), CatalogItem.script_id.is_(None)).order_by(CatalogItem.id).limit(201)))
@@ -162,14 +172,24 @@ class SyntheticModel:
 
 
 class EngineService:
-    def __init__(self, store, model):
+    def __init__(self, store, model, *, draft_only=False):
         from .model_contract import StructuredFixtureModel
         from .model_runtime import ModelRuntime
-        if type(model) not in (SyntheticModel, StructuredFixtureModel, ModelRuntime):
+        if type(model) not in (SyntheticModel, StructuredFixtureModel, ModelRuntime) or type(draft_only) is not bool:
             raise Refused('only fixture models or a configured ModelRuntime are available')
         self.store = store
         self.engine = store.engine
         self.model = model
+        self.draft_only = draft_only
+
+    def _planning_policy_ok(self, policy):
+        if policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS:
+            return False
+        # Draft-only work is allowed only while the shared delivery policy is
+        # durably disabled; no process-local switch can make it send.
+        if self.draft_only:
+            return policy.transport_kind == 'fansapi' and policy.enabled is False
+        return policy.enabled is True
 
     def select_simulated(self, tenant, account, fan_id):
         """Select a conversation only while the existing authority is synthetic."""
@@ -178,7 +198,7 @@ class EngineService:
             runtime = self.store._runtime(s, tenant, account)
             policy = s.get(OfDeliveryPolicy, account)
             state = s.get(OfConversationState, (account, fan_id))
-            if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or not policy.enabled
+            if (not self._planning_policy_ok(policy)
                     or state is None or state.mode != 'automated' or state.takeover_state != 'none'
                     or self.store._unresolved(s, account, fan_id, state)):
                 raise Refused('synthetic conversation is not ready')
@@ -266,7 +286,7 @@ class EngineService:
             state = s.get(OfConversationState, (account, fan_id))
             policy = s.get(OfDeliveryPolicy, account)
             if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id
-                    or policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS
+                    or not self._planning_policy_ok(policy)
                     or state is None or state.mode != 'automated' or state.takeover_state != 'none'):
                 raise Refused('engine owner is unavailable')
             message = s.get(Message, (account, fan_id, source_message_id))
@@ -412,7 +432,7 @@ class EngineService:
                     return existing[0].decision_id
             elif observed_generation is not None:
                 raise Refused('conversation changed during generation')
-            if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or not policy.enabled
+            if (not self._planning_policy_ok(policy)
                     or owner is None or owner.mode != 'active' or owner.epoch != epoch or runtime.binding_id != binding
                     or owner.binding_id != binding or current_epoch != snapshot['connection_epoch'] or state is None or state.mode != 'automated'
                     or state.takeover_state != 'none' or state.input_revision != snapshot['input_revision']
@@ -523,7 +543,7 @@ class EngineService:
                     raise _AlreadyPlanned(existing[0].decision_id)
             elif observed_generation is not None:
                 raise Refused('conversation changed during generation')
-            if (policy is None or not policy.enabled or owner is None or owner.mode != 'active' or owner.epoch != epoch
+            if (not self._planning_policy_ok(policy) or owner is None or owner.mode != 'active' or owner.epoch != epoch
                     or runtime.binding_id != binding or owner.binding_id != binding
                     or (connection.epoch if connection else None) != snapshot['connection_epoch'] or state is None
                     or state.mode != 'automated' or state.takeover_state != 'none'

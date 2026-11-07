@@ -570,3 +570,62 @@ def test_synthetic_accounts_need_no_approval_and_leave_no_rows(database):
     with pytest.raises(Refused, match='fansapi'):
         approval.create_draft_approval(store, TENANT, ACCOUNT, engine.plan(TENANT, ACCOUNT, FAN, 1))
     store.close()
+
+
+# ------------------------------------------------------------------ inactive draft-only operation
+def test_draft_only_has_no_transport_and_approval_cannot_escape_disabled_policy(world, monkeypatch):
+    from conversation_engine.draft_only import DraftOnlyTransport
+    with Session(world.database[1]) as s:
+        policy = s.get(OfDeliveryPolicy, ACCOUNT)
+        revision = policy.revision
+    world.authority.configure(TENANT, ACCOUNT, expected_revision=revision, enabled=False,
+        limit_units=200, throttle_seconds=1, media_enabled=True, actor=OP, reason='Draft-only qualification')
+    monkeypatch.delenv('TWIN_ENGINE_FANSAPI_REAL', raising=False)
+    world.engine = EngineService(world.store, SyntheticModel({}), draft_only=True)
+    world.worker = RealConversationWorker(world.engine, world.intake, DraftOnlyTransport(world.store, TENANT, ACCOUNT, allowed_chats=frozenset({str(FAN)})))
+    staged, _ = stage(world)
+    assert ok(world, staged)['status'] == 'approved'
+    assert send(world, staged)['outcome'] == 'draft_only'
+    assert world.fans.posts == [] and world.rows(OfTextIntent) == []
+    # Another process cannot use the approval while the shared policy is off,
+    # even if its own real-transport flag is enabled.
+    monkeypatch.setenv('TWIN_ENGINE_FANSAPI_REAL', '1')
+    other = EngineService(world.store, SyntheticModel({}))
+    with pytest.raises(Refused):
+        other.queue(TENANT, ACCOUNT, staged['decisionId'])
+    restarted = RealConversationWorker(
+        EngineService(world.store, SyntheticModel({}), draft_only=True),
+        world.intake, DraftOnlyTransport(world.store, TENANT, ACCOUNT, allowed_chats=frozenset({str(FAN)})))
+    assert restarted.send_approved(TENANT, ACCOUNT, staged['decisionId'])['outcome'] == 'draft_only'
+    assert world.fans.posts == []
+    # Enabling delivery changes the policy-bound approval digest. The prior
+    # approval cannot become send authority after a later mode transition.
+    with Session(world.database[1]) as s:
+        revision = s.get(OfDeliveryPolicy, ACCOUNT).revision
+    world.authority.configure(TENANT, ACCOUNT, expected_revision=revision, enabled=True,
+        limit_units=200, throttle_seconds=1, media_enabled=True, actor=OP, reason='Later review')
+    active = RealConversationWorker(other, world.intake, world.transport)
+    result = active.send_approved(TENANT, ACCOUNT, staged['decisionId'])
+    assert result['outcome'].startswith('superseded:approval_mismatch')
+    assert world.fans.posts == [] and world.rows(OfTextIntent) == []
+
+
+def test_draft_only_cannot_run_with_delivery_enabled(world):
+    from conversation_engine.draft_only import DraftOnlyTransport
+    draft = EngineService(world.store, SyntheticModel({}), draft_only=True)
+    worker = RealConversationWorker(draft, world.intake, DraftOnlyTransport(world.store, TENANT, ACCOUNT, allowed_chats=frozenset({str(FAN)})))
+    with pytest.raises(Refused, match='shared delivery policy'):
+        worker.turn(TENANT, ACCOUNT, FAN, 1)
+    with pytest.raises(Refused, match='draft-only worker scope'):
+        RealConversationWorker(world.engine, world.intake, DraftOnlyTransport(world.store, TENANT, ACCOUNT, allowed_chats=frozenset({str(FAN)})))
+
+
+def test_non_allowlisted_fan_never_reaches_planning(world):
+    world.operator_on = False
+    world.transport.allowed_chats = frozenset({str(FAN)})
+    world.say_plain('fixture reply')
+    result, _ = world.say('outside pilot', fan=FAN2)
+    assert result['outcome'] == 'outside_pilot_scope'
+    assert world.snaps == [] and world.fans.posts == []
+    with Session(world.database[1]) as s:
+        assert s.get(OfEngineOwner, (ACCOUNT, FAN2)) is None

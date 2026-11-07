@@ -110,9 +110,22 @@ def build_client(config, *, creator_id, epoch, transport=None):
     return client
 
 
+def require_allowed_chats(chats):
+    # The supervised pilot has no implicit all-fans mode.
+    if (type(chats) is not frozenset or not chats or len(chats) > 100
+            or any(type(v) is not str or not v.isascii() or not v.isdecimal()
+                   or not 1 <= len(v) <= 19 or not 0 < int(v) < 2**63
+                   or str(int(v)) != v for v in chats)):
+        raise Refused('explicit bounded fan allowlist required')
+    return chats
+
+
 def build_real_transport(store, tenant_id, account_id, *, creator_id, epoch, env=None, transport=None,
                          allowed_chats=None, **options):
     """Flag-gated factory: refuses unless TWIN_ENGINE_FANSAPI_REAL=1 and the credentials file is safe."""
+    if not real_transport_enabled(env):
+        raise Refused('real Fans API transport is not enabled')
+    require_allowed_chats(allowed_chats)  # validate before any provider identity I/O
     config = load_real_config(env, require_flag=True)
     client = build_client(config, creator_id=creator_id, epoch=epoch, transport=transport)
     return FansApiRealTransport(store, tenant_id, account_id, client, allowed_chats=allowed_chats,
@@ -124,9 +137,9 @@ class FansApiRealTransport:
     def __init__(self, store, tenant_id, account_id, client, *, allowed_chats=None, max_attempts=3,
                  retry_delay=1.0, sleep=time.sleep, enabled=False):
         if (enabled is not True or type(client) is not FansApiClient or not client._identity_verified
-                or type(max_attempts) is not int or not 1 <= max_attempts <= 3
-                or allowed_chats is not None and (type(allowed_chats) is not frozenset or not allowed_chats)):
+                or type(max_attempts) is not int or not 1 <= max_attempts <= 3):
             raise Refused('explicit real transport configuration required')
+        allowed_chats = require_allowed_chats(allowed_chats)
         self.store, self.tenant_id, self.account_id, self.client = store, tenant_id, account_id, client
         self.allowed_chats, self.max_attempts, self.retry_delay, self.sleep = allowed_chats, max_attempts, retry_delay, sleep
         self.sent_calls = 0  # POSTs issued (including same-key retries), for live-run accounting
@@ -195,36 +208,26 @@ class FansApiRealTransport:
         """Restart recovery: a started attempt with no process behind it becomes UNKNOWN (never queued or retried).
 
         An intent left 'dispatching' past its deadline may or may not have reached the provider. It is held as
-        unknown for this fan only; reconcile_accepted replays the SAME key to find out. Returns how many.
+        unknown for this fan only; positive provider evidence is needed to resolve it. Returns how many.
         """
         return TextAuthority(self.store).expire_dispatches(self.tenant_id, self.account_id, limit=100,
                                                            synthetic_engine_only=True)
 
     def reconcile_accepted(self, intent_id):
-        """Resolve an unknown attempt by replaying the SAME key and payload.
+        """Retain an unknown send; a POST is not a read-only reconciliation.
 
-        The provider returns the stored result without sending again, so at most one
-        message ever exists for the key. A 503/409/timeout leaves the attempt unknown.
+        Provider idempotency entries can expire or be evicted. Replaying even
+        the same key can therefore send a new message. Reconciliation requires
+        independently verified positive provider history through the existing
+        send_recovery authority; a missing receipt never proves non-delivery.
         """
-        authority = TextAuthority(self.store)
         with Session(self.store.engine) as s:
+            runtime = self.store._runtime(s, self.tenant_id, self.account_id)
             row = s.get(OfTextIntent, (self.account_id, intent_id))
-            if (row is None or row.status != 'unknown' or not row.attempt_id or not row.dispatch_token
-                    or row.wire_started_at is None or row.payload_hash != authority._intent_hash(row)):
-                return row.status if row is not None else 'unknown'
+            if row is None:
+                return 'unknown'
+            if row.binding_id != runtime.binding_id:
+                raise Refused('recovery binding changed')
             if self.allowed_chats is not None and str(row.fan_id) not in self.allowed_chats:
                 raise Refused('chat is outside the allowed test scope')
-            args = (row.fan_id, idempotency_key(row.account_id, row.intent_id), row.body, tuple(json.loads(row.media_json)),
-                    tuple(json.loads(row.preview_json)), row.price_cents)
-            token, attempt, fan, payload_hash = row.dispatch_token, row.attempt_id, row.fan_id, row.payload_hash
-        result = self._post(*args)
-        if result.state != 'accepted':
-            return 'unknown'
-        proof = Accepted(account_id=self.account_id, fan_id=fan, intent_id=intent_id, attempt_id=attempt,
-                         payload_hash=payload_hash, message_id=int(result.data['message_id']),
-                         occurred_at=datetime.now(timezone.utc).isoformat(),
-                         evidence_ref='fansapi-replay:' + (result.trace_id or attempt))
-        outcome = authority.record_accepted(self.tenant_id, self.account_id, intent_id, token, proof)
-        if outcome == 'accepted':
-            authority.materialize(self.tenant_id, self.account_id, intent_id)
-        return outcome
+            return row.status

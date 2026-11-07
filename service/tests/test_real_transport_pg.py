@@ -170,21 +170,22 @@ def test_key_mismatch_is_unknown_never_new_key(database):
         fake.close()
 
 
-def test_lost_response_is_unknown_then_replay_gives_exactly_one_send(database):
+def test_lost_response_remains_unknown_without_a_second_post(database):
     fake = FakeFans(['lost'])
     try:
         store, authority, engine, transport, _ = build(database, fake)
         intent = text_intent(engine, store)
         assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'unknown'
-        assert transport.reconcile_accepted(intent) == 'accepted'
-        assert len({p['key'] for p in fake.posts}) == 1 and sum(fake.executions.values()) == 1
+        assert transport.reconcile_accepted(intent) == 'unknown'
+        assert len(fake.posts) == 1 and sum(fake.executions.values()) == 1
         with Session(database[1]) as s:
-            assert s.get(Message, (ACCOUNT, FAN, 7001)).body == 'Hi there'
+            assert s.get(OfTextIntent, (ACCOUNT, intent)).status == 'unknown'
+            assert s.get(Message, (ACCOUNT, FAN, 7001)) is None
     finally:
         fake.close()
 
 
-def test_crash_after_acceptance_before_projection_sends_exactly_once(database, monkeypatch):
+def test_crash_after_acceptance_remains_unknown_without_replay(database, monkeypatch):
     fake = FakeFans()
     try:
         store, authority, engine, transport, _ = build(database, fake)
@@ -199,10 +200,11 @@ def test_crash_after_acceptance_before_projection_sends_exactly_once(database, m
         with database[1].begin() as c:
             c.execute(text("UPDATE of_text_intent SET deadline = CURRENT_TIMESTAMP - INTERVAL '1 second'"))
         assert authority.expire_dispatches(TENANT, ACCOUNT) == 1
-        assert transport.reconcile_accepted(intent) == 'accepted'
-        assert sum(fake.executions.values()) == 1 and len({p['key'] for p in fake.posts}) == 1
+        assert transport.reconcile_accepted(intent) == 'unknown'
+        assert sum(fake.executions.values()) == 1 and len(fake.posts) == 1
         with Session(database[1]) as s:
-            assert s.get(Message, (ACCOUNT, FAN, 7001)).body == 'Hi there'
+            assert s.get(OfTextIntent, (ACCOUNT, intent)).status == 'unknown'
+            assert s.get(Message, (ACCOUNT, FAN, 7001)) is None
     finally:
         fake.close()
 
@@ -291,3 +293,25 @@ def test_config_flag_and_credentials_file_rules(tmp_path):
     os.chmod(f, 0o600)
     cfg = load_real_config(env)
     assert cfg.provider_account == 'acct_x' and 'k' not in repr(cfg).replace('acct', '').replace('base', '')
+
+
+@pytest.mark.parametrize('chats', [None, frozenset(), frozenset({'0'}), frozenset({'01'}),
+                                   frozenset({'not-a-fan'}), frozenset({1})])
+def test_real_transport_requires_explicit_valid_fan_allowlist(database, chats):
+    fake = FakeFans()
+    try:
+        store, authority, engine, transport, _ = build(database, fake)
+        with pytest.raises(Refused, match='fan allowlist'):
+            FansApiRealTransport(store, TENANT, ACCOUNT, transport.client, allowed_chats=chats, enabled=True)
+    finally:
+        fake.close()
+
+
+def test_missing_allowlist_is_refused_before_provider_identity_io(monkeypatch):
+    from fans_api_adapter import real_transport
+    def should_not_load(*args, **kwargs):
+        raise AssertionError('credentials or provider accessed')
+    monkeypatch.setattr(real_transport, 'load_real_config', should_not_load)
+    with pytest.raises(Refused, match='fan allowlist'):
+        real_transport.build_real_transport(None, TENANT, ACCOUNT, creator_id='777', epoch=1,
+                                            env={'TWIN_ENGINE_FANSAPI_REAL': '1'})

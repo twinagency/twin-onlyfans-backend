@@ -197,15 +197,28 @@ def backfill_complete(s, account, fan_id):
 
 
 def verified_spend(s, account, fan_id):
-    """Cents the fan really paid: provider unlocks tied to our own accepted send that the commerce owner applied.
+    """Cleared, ledger-backed spending; None when no verified rows exist.
 
-    Unlinked transactions and reversals are NOT counted or subtracted: with no supported link to a purchase they
-    are separate evidence for a person to reconcile (see fans_api_adapter.payment_evidence)."""
-    def total(kind):
-        return s.scalar(select(func.coalesce(func.sum(OfFansEvidence.amount_cents), 0)).where(
-            OfFansEvidence.account_id == account, OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind == kind,
-            OfFansEvidence.status == 'applied')) or 0
-    return int(total('unlock'))
+    A provider unlock is a message purchase notification, not a settled
+    transaction. The synthetic lab keeps its explicitly synthetic fixture.
+    """
+    if active(s, account):
+        from db.models import Transaction
+        from db.onlyfans_ledger_models import OfLedgerEvidence
+        proof = select(OfLedgerEvidence.evidence_hash).where(
+            OfLedgerEvidence.account_id == account, OfLedgerEvidence.fan_id == fan_id,
+            OfLedgerEvidence.provider_transaction_id == Transaction.provider_transaction_id,
+            OfLedgerEvidence.transaction_id == Transaction.id,
+            OfLedgerEvidence.outcome == 'applied').exists()
+        amount, count = s.execute(select(func.coalesce(func.sum(Transaction.amount_cents), 0),
+            func.count()).where(Transaction.account_id == account, Transaction.fan_id == fan_id,
+            Transaction.status == 'cleared', Transaction.currency == 'USD',
+            Transaction.source == 'ledger', Transaction.amount_cents >= 0, proof)).one()
+        return int(amount) if count else None
+    amount = s.scalar(select(func.coalesce(func.sum(OfFansEvidence.amount_cents), 0)).where(
+        OfFansEvidence.account_id == account, OfFansEvidence.fan_id == fan_id,
+        OfFansEvidence.kind == 'unlock', OfFansEvidence.status == 'applied'))
+    return int(amount or 0)
 
 
 def _inbound(s, runtime, fan_id, *, upto=None):

@@ -135,9 +135,11 @@ def test_crash_after_the_request_may_have_left_is_unknown_after_restart_never_qu
     assert a['outcome'] != 'accepted' and posts_to(world, FAN) == []
     b, _ = world.say('hello from B', fan=FAN2, seconds=5)
     assert b['outcome'] == 'accepted'
-    # reconciliation replays the SAME key: at most one message ever exists for the logical action
-    assert world.transport.reconcile_accepted(row.intent_id) == 'accepted'
-    assert {p['key'] for p in posts_to(world, FAN)} == {idempotency_key(ACCOUNT, row.intent_id)}
+    # The wire marker does not prove a request left the process. Replaying
+    # even the same key could create a new send after an idempotency expiry.
+    assert world.transport.reconcile_accepted(row.intent_id) == 'unknown'
+    assert posts_to(world, FAN) == []
+    assert intents(world, FAN)[0].status == 'unknown'
 
 
 def test_dispatch_itself_expires_a_dead_attempt_before_admitting_new_work(world):
@@ -257,8 +259,8 @@ def test_same_action_retry_after_proven_not_sent_reuses_the_same_key(world):
 
 def test_real_transport_refuses_a_budget_above_three_attempts(world):
     with pytest.raises(Refused):
-        FansApiRealTransport(world.store, TENANT, ACCOUNT, world.transport.client, max_attempts=4, enabled=True)
-    FansApiRealTransport(world.store, TENANT, ACCOUNT, world.transport.client, max_attempts=3, enabled=True)
+        FansApiRealTransport(world.store, TENANT, ACCOUNT, world.transport.client, allowed_chats=frozenset({str(FAN)}), max_attempts=4, enabled=True)
+    FansApiRealTransport(world.store, TENANT, ACCOUNT, world.transport.client, allowed_chats=frozenset({str(FAN)}), max_attempts=3, enabled=True)
 
 
 # ============================================================ 5. event handling

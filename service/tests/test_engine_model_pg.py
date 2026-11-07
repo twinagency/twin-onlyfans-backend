@@ -842,7 +842,7 @@ def test_returned_model_prompt_and_config_identity_are_recorded(database, caplog
     [line] = [r.getMessage() for r in caplog.records if 'model_call_identity' in r.getMessage()]
     identity = json.loads(line.split(' ', 1)[1])
     assert (identity['requested_model'], identity['returned_model'], identity['returned_provider']) == ('m/primary', 'm/primary-2026-11-01', 'AcmeHost')
-    assert identity['prompt_version'] == 'a-original.v2-planc1' and identity['config_version'] == config().version()
+    assert identity['prompt_version'] == 'a-original.v3-planc-nsfw' and identity['config_version'] == config().version()
     assert (identity['call_id'], row.prompt_tokens, row.completion_tokens, row.actual_microusd) == (row.call_id, 100, 20, 900)
     assert len(row.prompt_sha256) == 64
     store.close()

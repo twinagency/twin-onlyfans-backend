@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import os
 import re
 import uuid
 
@@ -200,8 +201,8 @@ def _commerce(store):
 def _engine_access(store, account, unlock_id, now):
     """Real-provider accounts only: tell the engine its accepted offer was paid for (unlock evidence).
 
-    Commerce has already applied the purchase; a refusal here never undoes it. The reason is
-    left on the unlock row (status unchanged) so a person can see the engine was not told.
+    The provider's matching unlock is access evidence, not a transaction or settlement.
+    A refusal is retained on the evidence row for operator review.
     """
     from conversation_engine.commerce import ProviderAccessObservation, record_provider_access
     with Session(store.engine) as s:
@@ -228,12 +229,35 @@ def _engine_access(store, account, unlock_id, now):
 
 
 def settle_unlock(store, account, unlock_id, now):
-    """Hand one message-bound, provider-named unlock to the canonical owner. Returns the evidence status or 'deferred'.
+    """Record a real-provider unlock as access, without inventing a money record.
 
-    The commerce record is keyed by the unlock (``unlock:<message id>``), not by any ``transactions.new`` row:
-    no transaction is claimed as the payment. Payout is recorded as pending (no clearing evidence).
+    Synthetic lab accounts retain their explicitly synthetic commerce fixture.
     """
     from onlyfans_runtime.commerce import SyntheticCommerceEvent
+    # A real provider unlock is message-specific access evidence, not a
+    # provider transaction or settlement. Never manufacture a financial row.
+    with Session(store.engine) as s:
+        policy = s.get(OfDeliveryPolicy, account)
+        real_provider = policy is not None and policy.transport_kind == 'fansapi'
+    if real_provider:
+        if os.environ.get('ONLYFANS_PROCESS_ROLE') != 'worker':
+            return 'deferred'
+        with Session(store.engine) as s:
+            u = s.get(OfFansEvidence, (account, unlock_id))
+            if u is None or u.status != 'pending' or u.intent_id is None or u.reason != 'awaiting_commerce':
+                return u.status if u is not None else 'missing'
+        result = _engine_access(store, account, unlock_id, now)
+        with Session(store.engine) as s, s.begin():
+            u = s.get(OfFansEvidence, (account, unlock_id), with_for_update=True)
+            if u is None:
+                return 'missing'
+            if u.status != 'pending':
+                return u.status
+            if result == 'confirmed':
+                u.status, u.reason, u.updated_at = 'applied', 'unlock_confirmed_finance_unlinked', now
+            else:
+                _hold(s, u, 'unlock_access_review', now)
+            return u.status
     try:
         intake = _commerce(store)
     except Refused:

@@ -158,7 +158,11 @@ def _build(s, runtime, parts, request, owner, state):
                       'price_cents': terms['price_cents'] if terms else None, 'currency': CURRENCY if terms else None,
                       'media_ids': terms['media_ids'] if terms else [], 'preview_ids': terms['preview_ids'] if terms else [],
                       'terms_hash': _hash(terms) if terms else None})
-    canon = {'v': 1, 'account': account, 'binding': runtime.binding_id, 'fan': parts[0].fan_id,
+    policy = s.get(OfDeliveryPolicy, account)
+    if policy is None:
+        return None, None, 'delivery_policy_unavailable'
+    canon = {'v': 2, 'account': account, 'binding': runtime.binding_id, 'fan': parts[0].fan_id,
+             'delivery_policy_revision': policy.revision, 'delivery_enabled': policy.enabled,
              'request': request.request_id, 'source_message_id': request.source_message_id,
              'generation': parts[0].generation, 'owner_epoch': owner.epoch, 'control_revision': state.revision,
              'connection_epoch': connection.epoch if connection else None,

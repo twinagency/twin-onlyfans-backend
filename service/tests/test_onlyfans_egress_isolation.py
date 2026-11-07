@@ -83,10 +83,13 @@ class Probe:
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.delenv("ONLYFANS_PROCESS_ROLE", raising=False)
-    # This fixture exercises the legacy role fence on a non-Moxy account.
-    # Selected and failed owner lookups are covered by test_moxy_fence.py.
+    # Exercise the legacy role fence with both ownership lookups definitively
+    # unselected. Selected owners and unavailable stores are covered separately
+    # by the engine and Plan C writer-fence suites.
     from moxy_replacement import routing
     monkeypatch.setattr(routing, 'owner_state', lambda account: routing.NOT_SELECTED)
+    monkeypatch.setattr(routing, 'engine_owner_modes',
+                        lambda account, fan_id=None: (routing.NOT_SELECTED, frozenset()))
     probe = Probe()
     monkeypatch.setattr(provider.requests, "Session", probe.factory)
     # Converter construction is local too; even its multipart object is fake.

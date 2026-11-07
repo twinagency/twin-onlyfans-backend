@@ -560,14 +560,15 @@ def test_unlinked_money_is_listed_apart_and_reconcile_dismisses_it_without_creat
     items = {i['id']: i for i in get(api, 'unresolved').json()['items']}
     assert f'unlinked_transaction:{held}' in items and f'unlinked_transaction:{stale}' in items
     assert f'unlinked_transaction:{fresh}' not in items, 'a pending transaction still inside its matching window is not listed'
-    assert f'unlinked_transaction:{chargeback}' not in items, 'a pending chargeback belongs to commerce, not to this list'
+    assert f'unlinked_transaction:{chargeback}' in items
+    assert 'does not automatically revoke' in items[f'unlinked_transaction:{chargeback}']['summary']
     assert f'unreconciled_access:{unlock}' in items
     for item in items.values():
         assert_dashboard_item(item)
         assert item['owner'] and item['nextStep']
     assert items[f'unlinked_transaction:{held}']['conversationId'] == conv()
     summary = items[f'unlinked_transaction:{held}']['summary']
-    assert '1000' in summary and 'not treated as a purchase' in summary
+    assert '1000' in summary and 'not attributed to a message' in summary
     intents_before = [i.intent_id for i in api.rows(OfTextIntent)]
     result = post(api, f'unresolved/unlinked_transaction:{held}/reconcile', {'commandKey': key(100), 'actor': ACTOR, 'evidenceRef': EVIDENCE})
     assert result.status_code == 200 and result.json()['outcome'] == 'dismissed' and result.json()['resolved'] is True

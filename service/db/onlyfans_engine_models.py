@@ -215,7 +215,7 @@ class OfEngineIndependenceProof(Base):
         ForeignKeyConstraint(['account_id', 'decision_id'], ['of_engine_decision.account_id', 'of_engine_decision.decision_id'], ondelete='RESTRICT'),
         ForeignKeyConstraint(['account_id', 'anchor_intent_id'], ['of_text_intent.account_id', 'of_text_intent.intent_id'], ondelete='RESTRICT'),
         ForeignKeyConstraint(['account_id', 'fan_id', 'source_message_id'], ['messages.account_id', 'messages.fan_id', 'messages.message_id'], ondelete='RESTRICT'),
-        CheckConstraint("kind IN ('arithmetic.v1')", name='kind'),
+        CheckConstraint("kind IN ('arithmetic.v1','identity.v1')", name='kind'),
         {'info': DEPENDENCY_INFO},
     )
     account_id = Column(String, primary_key=True)

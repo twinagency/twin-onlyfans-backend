@@ -69,7 +69,8 @@ ENGINE_MEMORY = '0115_engine_memory'
 ENGINE_CATALOGUE = '0116_engine_catalogue'
 ENGINE_PARTS = '0117_engine_message_parts'
 ENGINE_OPERATOR = '0118_engine_operator'
-HEAD = ENGINE_OPERATOR
+ENGINE_IDENTITY = '0119_identity_independence'
+HEAD = ENGINE_IDENTITY
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -94,6 +95,7 @@ REVISION_RANK[ENGINE_MEMORY] = 115
 REVISION_RANK[ENGINE_CATALOGUE] = 116
 REVISION_RANK[ENGINE_PARTS] = 117
 REVISION_RANK[ENGINE_OPERATOR] = 118
+REVISION_RANK[ENGINE_IDENTITY] = 119
 
 
 class SchemaMismatch(RuntimeError):
@@ -310,6 +312,14 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 failures.append(f"missing independent action protection {table}")
             if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
                 failures.append(f"missing independent action row security {table}")
+    if expected_rank >= 119:
+        constraint = conn.scalar(text("""SELECT pg_get_constraintdef(oid) FROM pg_constraint
+            WHERE conrelid=to_regclass('of_engine_independence_proof')
+              AND conname='ck_of_engine_independence_proof_kind' AND contype='c'"""))
+        normal = re.sub(r"::(?:character varying|text)(?:\[\])?", "", constraint or "")
+        normal = re.sub(r"[\s()]", "", normal)
+        if normal != "CHECKkind=ANYARRAY['arithmetic.v1','identity.v1']":
+            failures.append('incompatible identity independence constraint')
     if expected_rank >= 115:
         table, trigger = "of_engine_memory_binding", "of_engine_memory_binding_immutable"
         guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text

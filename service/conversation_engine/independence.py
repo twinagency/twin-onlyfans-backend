@@ -18,6 +18,9 @@ from onlyfans_runtime.store import Store, utcnow, UNRESOLVED_OUTCOMES
 _ARITHMETIC_REPLY = re.compile(r'^(-?[0-9]{1,6}) \+ (-?[0-9]{1,6}) = (-?[0-9]{1,7})\.$')
 _NEUTRAL_ANCHORS = frozenset({'Hello.', 'Hi.', 'Thanks for your message.', 'First answer.'})
 
+_IDENTITY = re.compile(r'^\s*(?:are you (?:an? )?(?:ai|bot|artificial intelligence)|is this an? (?:ai|bot))\s*[?.!]*\s*$', re.IGNORECASE)
+_IDENTITY_REPLY = 'I am an AI assistant.'
+
 _ARITHMETIC = re.compile(r'^\s*(?:what is\s+)?(-?[0-9]{1,6})\s*\+\s*(-?[0-9]{1,6})\s*\??\s*$', re.IGNORECASE)
 
 
@@ -33,6 +36,13 @@ def arithmetic_answer(message):
         return None
     left, right = map(int, match.groups())
     return f'{left} + {right} = {left + right}.'
+
+
+def verified_answer(message):
+    if type(message) is str and _IDENTITY.fullmatch(message):
+        return 'identity.v1', _IDENTITY_REPLY
+    answer = arithmetic_answer(message)
+    return ('arithmetic.v1', answer) if answer is not None else (None, None)
 
 
 def _anchor(s, runtime, fan_id, state, policy, *, own_intent=None):
@@ -89,7 +99,7 @@ def _noninterfering_anchor(s, runtime, anchor, answer):
 
 
 def create_proof(s, runtime, decision, source, state, policy):
-    answer = arithmetic_answer(source.body)
+    kind, answer = verified_answer(source.body)
     if (decision.action != 'reply' or answer is None or decision.body != answer
             or source.direction != 'in' or source.is_unsent):
         return None
@@ -98,7 +108,7 @@ def create_proof(s, runtime, decision, source, state, policy):
         return None
     proof = OfEngineIndependenceProof(account_id=runtime.account_id, decision_id=decision.decision_id,
         fan_id=decision.fan_id, source_message_id=source.message_id, anchor_intent_id=anchor.intent_id,
-        kind='arithmetic.v1', source_sha256=_hash(source.body), answer_sha256=_hash(answer), created_at=utcnow())
+        kind=kind, source_sha256=_hash(source.body), answer_sha256=_hash(answer), created_at=utcnow())
     s.add(proof)
     return proof
 
@@ -107,7 +117,7 @@ def certified_anchor(s, runtime, decision, state, policy, *, intent=None):
     if decision is None or decision.action != 'reply':
         return None
     proof = s.get(OfEngineIndependenceProof, (runtime.account_id, decision.decision_id))
-    if proof is None or proof.kind != 'arithmetic.v1' or proof.fan_id != decision.fan_id:
+    if proof is None or proof.kind not in {'arithmetic.v1', 'identity.v1'} or proof.fan_id != decision.fan_id:
         return None
     request = s.get(OfEngineRequest, (runtime.account_id, decision.request_id))
     if request is None or request.source_message_id != proof.source_message_id:
@@ -115,7 +125,7 @@ def certified_anchor(s, runtime, decision, state, policy, *, intent=None):
     source = s.get(Message, (runtime.account_id, decision.fan_id, proof.source_message_id))
     if (source is None or source.direction != 'in' or source.is_unsent
             or _hash(source.body) != proof.source_sha256
-            or arithmetic_answer(source.body) != decision.body or _hash(decision.body) != proof.answer_sha256):
+            or verified_answer(source.body) != (proof.kind, decision.body) or _hash(decision.body) != proof.answer_sha256):
         return None
     anchor = _anchor(s, runtime, decision.fan_id, state, policy,
                      own_intent=intent.intent_id if intent is not None else None)

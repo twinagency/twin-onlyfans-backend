@@ -190,3 +190,68 @@ def test_distinct_proven_arithmetic_can_follow_uncertain_arithmetic(database):
     assert authority.dispatch(TENANT, ACCOUNT, intent, wire) == 'accepted'
     assert len(provider.calls) == 2
     store.close()
+
+
+def test_identity_question_can_be_answered_independently_while_greeting_is_unknown(database):
+    store, authority, engine, provider, wire, first = setup(database, first_body='Hello.')
+    engine.model.replies['Are you an AI?'] = SyntheticProposal('I am an AI assistant.')
+    incoming(store, 2, 'Are you an AI?')
+    decision = engine.plan(TENANT, ACCOUNT, FAN, 2)
+    intent = engine.queue(TENANT, ACCOUNT, decision)
+    unthrottle(database[1])
+    assert authority.dispatch(TENANT, ACCOUNT, intent, wire) == 'accepted'
+    with Session(database[1]) as s:
+        assert s.get(OfTextIntent, (ACCOUNT, first)).status == 'unknown'
+        assert s.get(OfEngineIndependenceProof, (ACCOUNT, decision)).kind == 'identity.v1'
+        assert s.get(Message, (ACCOUNT, FAN, 9601)).body == 'I am an AI assistant.'
+    assert len(provider.calls) == 2
+    store.close()
+
+
+@pytest.mark.parametrize('pending,answer', [
+    ('I am an AI assistant.', 'I am an AI assistant.'),
+    ('I am a human.', 'I am an AI assistant.'),
+    ('Hello.', 'I am a human.'),
+])
+def test_identity_reply_does_not_duplicate_contradict_or_trust_model_assertions(database, pending, answer):
+    store, authority, engine, provider, wire, first = setup(database, first_body=pending)
+    engine.model.replies['Are you an AI?'] = SyntheticProposal(answer)
+    incoming(store, 2, 'Are you an AI?')
+    decision = engine.plan(TENANT, ACCOUNT, FAN, 2)
+    with Session(database[1]) as s:
+        assert s.get(OfEngineIndependenceProof, (ACCOUNT, decision)) is None
+    with pytest.raises(Refused):
+        engine.queue(TENANT, ACCOUNT, decision)
+    assert len(provider.calls) == 1
+    store.close()
+
+
+def test_schema_rejects_weakened_identity_independence_constraint(database):
+    from db.schema import check_schema, SchemaMismatch
+    with database[1].connect() as connection:
+        transaction = connection.begin()
+        connection.execute(text('ALTER TABLE of_engine_independence_proof DROP CONSTRAINT ck_of_engine_independence_proof_kind'))
+        connection.execute(text("ALTER TABLE of_engine_independence_proof ADD CONSTRAINT ck_of_engine_independence_proof_kind CHECK (kind <> 'forbidden')"))
+        with pytest.raises(SchemaMismatch, match='identity independence constraint'):
+            check_schema(connection)
+        transaction.rollback()
+    with database[1].connect() as connection:
+        check_schema(connection)
+
+
+def test_identity_unknown_and_prior_unknown_survive_reconciliation(database):
+    store, authority, engine, provider, wire, first = setup(database, ('accepted_lost', 'unknown'), first_body='Hello.')
+    engine.model.replies['Are you an AI?'] = SyntheticProposal('I am an AI assistant.')
+    incoming(store, 2, 'Are you an AI?')
+    decision = engine.plan(TENANT, ACCOUNT, FAN, 2)
+    intent = engine.queue(TENANT, ACCOUNT, decision)
+    unthrottle(database[1])
+    assert authority.dispatch(TENANT, ACCOUNT, intent, wire) == 'unknown'
+    assert wire.reconcile_accepted(first) == 'accepted'
+    with Session(database[1]) as s:
+        old, new = s.get(OfTextIntent, (ACCOUNT, first)), s.get(OfTextIntent, (ACCOUNT, intent))
+        assert old.status == 'accepted' and new.status == 'unknown'
+        assert s.get(OfConversationState, (ACCOUNT, FAN)).unresolved_attempt_id == new.attempt_id
+        assert s.get(OfEngineIndependentAdmission, (ACCOUNT, new.attempt_id)).status == 'unknown'
+    assert len(provider.calls) == 2
+    store.close()

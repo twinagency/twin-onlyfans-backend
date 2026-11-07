@@ -84,3 +84,34 @@ def test_unscoped_history_is_not_exposed_as_memory_or_transcript(database):
     assert snapshot['history_scope_incomplete'] is True
     assert all(row['body'] != 'private prior binding' for row in snapshot['history'])
     store.close()
+
+
+def test_memory_and_history_do_not_cross_creator_or_fan_scope(database):
+    from test_onlyfans_foundation_pg import seed, event
+    from test_onlyfans_text_delivery_pg import current
+    from db.models import Fan, OfConversationState
+    store, authority, engine, model, memory = setup(database)
+    other = seed(database[0], database[1], account='acc-b', tenant=TENANT, fan=FAN)
+    current(database[1], mode='automated', account='acc-b', fan=FAN)
+    authority.configure(TENANT, 'acc-b', expected_revision=0, enabled=True,
+        limit_units=20, throttle_seconds=1, actor='synthetic-operator', reason='Offline test')
+    FansWebhookAdapter(store).bind_simulated(TENANT, 'acc-b', 'acct_other_memory', 'creator-other')
+    engine.select_simulated(TENANT, 'acc-b', FAN)
+    with Session(database[1]) as s, s.begin():
+        s.add(Fan(account_id=ACCOUNT, fan_id=202))
+        s.add(OfConversationState(account_id=ACCOUNT, fan_id=202, mode='automated', revision=0,
+            takeover_state='none', requires_attention=False))
+    engine.select_simulated(TENANT, ACCOUNT, 202)
+    correct(memory, value='Brisbane', key='scope-city')
+    incoming(store, 1, 'hello')
+    engine.plan(TENANT, ACCOUNT, FAN, 1)
+    assert model.calls[-1]['memory']['memory']['facts']['home_city']['value'] == 'Brisbane'
+    for account, fan in [('acc-b', FAN), (ACCOUNT, 202)]:
+        assert store.record(TENANT, account, event(mid=1, fan=fan, body='hello')) == 'accepted'
+        store.drain(TENANT, account)
+        engine.plan(TENANT, account, fan, 1)
+        snapshot = model.calls[-1]
+        assert snapshot['account_id'] == account and snapshot['fan_id'] == fan
+        assert 'home_city' not in snapshot['memory']['memory']['facts']
+        assert all('Brisbane' not in row['body'] for row in snapshot['history'])
+    other.close(); store.close()

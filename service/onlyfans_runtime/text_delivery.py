@@ -506,7 +506,12 @@ class TextAuthority:
                                                       catalog_item_id, quoted_price_cents)
             from conversation_engine.independence import certified_anchor
             independent_anchor = certified_anchor(s, runtime, engine_decision, state, policy) if engine_decision is not None else None
-            from .conversation_policy import action_of
+            if engine_decision is not None and (moxy_event_id is not None or native_plan_id is not None or work is not None):
+                raise Refused('engine action cannot carry a legacy decision')
+            legacy_action = None
+            if engine_decision is None:
+                from .conversation_policy import action_of
+                legacy_action = action_of(origin, catalog_item_id)
             moxy_event = None
             moxy_terms = None
             moxy_action = None
@@ -515,7 +520,7 @@ class TextAuthority:
                 moxy_event, moxy_terms, moxy_action = prepare_decision(s, account_id, fan_id, moxy_event_id, body)
             reason = self._eligibility(s, runtime, policy, state, fan, origin, now,
                 manual_attachment=manual_media is not None,
-                action=('commercial' if catalog_item_id is not None else 'chat') if engine_decision is not None else moxy_action or action_of(origin, catalog_item_id),
+                action=('commercial' if catalog_item_id is not None else 'chat') if engine_decision is not None else moxy_action or legacy_action,
                 engine_action=engine_decision is not None, independent=independent_anchor is not None)
             if reason:
                 raise Refused(reason)

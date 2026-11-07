@@ -1581,6 +1581,19 @@ class OFClient:
                              native_rf=retry_plan.native_rf)
             return self.post_json(path, json_body=retry)
 
+    def _owner_fence(self, chat_id, purpose: str) -> None:
+        """The one engine-ownership gate every legacy DM/tip writer passes before
+        any network work (the Moxy/bridge check stays in `guarded_send`). Refuses
+        for an engine-owned account/fan and fails closed when ownership cannot be
+        read; an unavailable fence module is a refusal, never a bypass.
+        chat_id 0/None means account-level."""
+        try:
+            from moxy_replacement import routing
+        except Exception as exc:  # fail closed
+            from onlyfans_runtime.store import Refused
+            raise Refused("owner_fence_unavailable") from exc
+        routing.refuse_engine_owned(getattr(self, "account_id", ""), purpose, chat_id)
+
     def _bridge_boundary(self, chat_id, *, purpose: str, dispatch_token=None):
         """The Twin bridge's shared transport boundary, or a no-op.
 
@@ -1633,6 +1646,7 @@ class OFClient:
 
         Returns the created message object (same shape as items in
         /chats/.../messages.list)."""
+        self._owner_fence(chat_id, purpose)
         body = message_body(text, locked_text=locked_text, price=price,
             media_files=media_files, previews=previews, is_forward=is_forward,
             reply_to_message_id=reply_to_message_id, giphy_id=giphy_id)
@@ -1693,6 +1707,7 @@ class OFClient:
         and intended whitespace must reach the fan verbatim) while every existing
         caller keeps the legacy composer wrapping.
         """
+        self._owner_fence(chat_id, "other")
         body = {
             "text": body_text,
             "lockedText": False,
@@ -2345,6 +2360,7 @@ class OFClient:
             "scheduledDate": scheduled_date,
             "userIds": [int(chat_id)],
         }
+        self._owner_fence(chat_id, purpose)
         retry_plan = self._apply_cotags(body, media_files, tagged_users, auto_tag)
         with self._bridge_boundary(chat_id, purpose=purpose):
             return self._post_dropping_auto_cotag(
@@ -2405,6 +2421,7 @@ class OFClient:
             body["giphyId"] = str(giphy_id)
         # A scheduled MASS message is a broadcast: its recipient coverage cannot
         # be shown to exclude a bridge-reserved account, so it is refused there.
+        self._owner_fence(0, "broadcast")
         with self._bridge_boundary(0, purpose="broadcast"):
             return self._post_dropping_auto_cotag(
                 f"{API_BASE}/messages/queue", body, retry_plan)
@@ -2480,6 +2497,7 @@ class OFClient:
             # field so the relay forwards rather than dropping silently.
             body["giphyId"] = str(giphy_id)
         # A mass message is a broadcast: refused for a bridge-reserved account.
+        self._owner_fence(0, "broadcast")
         with self._bridge_boundary(0, purpose="broadcast"):
             return self._post_dropping_auto_cotag(
                 f"{API_BASE}/messages/queue", body, retry_plan)
@@ -3657,6 +3675,7 @@ class OFClient:
     def send_tip(self, user_id: int, amount: float, *, message: str = "") -> Any:
         """POST /api2/v2/tips — send a tip to a creator.
         Beware: this MOVES MONEY. Code path exists; deliberately not live-tested."""
+        self._owner_fence(0, "other")
         return self.post_json(f"{API_BASE}/tips",
                               json_body={"userId": user_id, "amount": amount, "message": message})
 

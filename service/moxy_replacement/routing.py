@@ -62,13 +62,60 @@ def selected_sync(account,*,unknown=False):
     return st==SELECTED or (unknown and st==UNKNOWN)
 
 
-def refuse_legacy(account,purpose='other'):
-    """Refuse an automated legacy write. A manual operator send always passes (the
-    human takeover path is not a competing automated writer and needs no lookup)."""
-    if purpose=='manual':return
-    st=owner_state(account)
-    if st==SELECTED:raise Refused('moxy_canonical_owner_required')
-    if st==UNKNOWN:raise Refused('moxy_owner_lookup_failed')
+def engine_owner_modes(account,fan_id=None):
+    """Conversation-engine ownership for an account (or one fan of it).
+
+    Returns (state, modes): state is SELECTED when at least one `of_engine_owner`
+    row matches (modes = the set of their `mode` values), NOT_SELECTED on a
+    DEFINITIVE negative (store read fine and no matching row, or the table does
+    not exist), UNKNOWN when the store could not be read. `fan_id` None/0/invalid
+    means account-level: any engine-owned fan of the account counts, because a
+    broadcast or an account-wide write cannot be shown to exclude them."""
+    cands=_candidates(account)
+    if not cands:return NOT_SELECTED,frozenset()
+    try:
+        fan=int(fan_id) if fan_id not in (None,'') else 0
+    except (TypeError,ValueError):
+        fan=0
+    try:
+        from twin_bridge.coordination import store_target
+        from twin_bridge import store
+        target=store_target()
+        if not target:return UNKNOWN,frozenset()
+        sql='SELECT mode FROM of_engine_owner WHERE account_id IN (%s)'%','.join('?'*len(cands))
+        args=list(cands)
+        if fan>0:
+            sql+=' AND fan_id=?'
+            args.append(fan)
+        with store.readonly(target) as con:
+            if not store.has_table(con,'of_engine_owner'):return NOT_SELECTED,frozenset()
+            modes=frozenset(str(r[0]) for r in con.execute(sql,tuple(args)).fetchall())
+        return (SELECTED,modes) if modes else (NOT_SELECTED,frozenset())
+    except Exception:
+        return UNKNOWN,frozenset()
+
+
+def refuse_engine_owned(account,purpose='other',fan_id=None):
+    """Refuse a legacy write for an account/fan owned by the conversation engine.
+    Fails closed on a failed lookup. The only pass for an owned fan is a manual
+    operator send where every matching owner row is in mode 'human'."""
+    est,modes=engine_owner_modes(account,fan_id)
+    if est==SELECTED and not (purpose=='manual' and modes=={'human'}):
+        raise Refused('engine_canonical_owner_required')
+    # A manual operator send is never blocked by a store outage (the documented
+    # human-takeover policy, same as the Moxy check); everything else fails closed.
+    if est==UNKNOWN and purpose!='manual':raise Refused('engine_owner_lookup_failed')
+
+
+def refuse_legacy(account,purpose='other',fan_id=None):
+    """Refuse a legacy write for a Moxy- or engine-owned account. Moxy: a manual
+    operator send passes with no lookup; every other purpose is refused on
+    SELECTED/UNKNOWN. Engine ownership is then checked for EVERY purpose."""
+    if purpose!='manual':
+        st=owner_state(account)
+        if st==SELECTED:raise Refused('moxy_canonical_owner_required')
+        if st==UNKNOWN:raise Refused('moxy_owner_lookup_failed')
+    refuse_engine_owned(account,purpose,fan_id)
 
 
 def job_fence_reason(account,kind,payload=None,*,state=None):

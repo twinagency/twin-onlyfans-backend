@@ -69,7 +69,7 @@ def status(database, intent):
         return s.get(OfTextIntent, (ACCOUNT, intent))
 
 
-def test_text_accepted_uses_attempt_key_and_strict_ban(database):
+def test_text_accepted_uses_the_logical_action_key_and_strict_ban(database):
     fake = FakeFans()
     try:
         store, authority, engine, transport, _ = build(database, fake)
@@ -78,7 +78,7 @@ def test_text_accepted_uses_attempt_key_and_strict_ban(database):
         assert len(fake.posts) == 1
         post = fake.posts[0]
         row = status(database, intent)
-        assert post['key'] == idempotency_key(row.attempt_id)
+        assert post['key'] == idempotency_key(ACCOUNT, row.intent_id)   # one key per logical message, not per attempt
         assert post['body'] == {'text': 'Hi there', 'blockBannedWords': 'strict_ban'}
         assert post['auth'] == 'Bearer fixture-token' and post['path'] == f'/api/{ACCT}/chats/{FAN}/messages'
         with Session(database[1]) as s:
@@ -144,12 +144,13 @@ def test_conflict_never_resolving_stays_unknown(database):
         fake.close()
 
 
-def test_422_banned_words_is_rejected_not_retried(database):
+def test_422_without_request_outcome_is_unknown_not_a_proof_of_non_delivery(database):
+    # An HTTP 4xx alone does not establish non-delivery (provider idempotency guide): only request_outcome=not_sent does.
     fake = FakeFans(['banned'])
     try:
         store, authority, engine, transport, _ = build(database, fake)
         intent = text_intent(engine, store)
-        assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'not_accepted'
+        assert authority.dispatch(TENANT, ACCOUNT, intent, transport) == 'unknown'
         assert len(fake.posts) == 1
     finally:
         fake.close()

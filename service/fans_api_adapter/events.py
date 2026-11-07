@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Fan, Message, OfConversationState, OfCreatorBinding
 from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy, OfTextIntent
-from db.onlyfans_engine_models import OfFansConnection, OfFansWebhook, OfFansWebhookConflict
+from db.onlyfans_engine_models import OfEngineOwner, OfFansConnection, OfFansWebhook, OfFansWebhookConflict
 from db.onlyfans_fans_intake_models import OfFansEvidence, OfFansLink, OfFansProjection
 from onlyfans_runtime.store import Event, Refused, utcnow
 from transaction_contract import strip_html
@@ -353,7 +353,14 @@ class FansEventIntake:
         fan_id = ev.numeric(to_user.get('id'))
         message_id = ev.numeric(payload.get('id'))
         if payload.get('isFromQueue') is True:
-            return 'ignored', 'queued_broadcast'  # scheduled/mass sends are not a reply in this chat
+            # A scheduled/mass send is not a reply in this chat, so it is not takeover evidence. But a queued send that
+            # reached a fan the engine owns is a competing writer the local fence cannot stop (it was queued at the
+            # provider): surface it for a person instead of ignoring it.
+            owner = s.get(OfEngineOwner, (connection.account_id, fan_id))
+            if owner is not None and owner.mode == 'active':
+                ev.attention(s, connection.account_id, fan_id)
+                return 'projected', 'queued_send_to_engine_owned_fan'
+            return 'ignored', 'queued_broadcast'
         account = connection.account_id
         row, outcome = ev.add(s, connection.account_id, dedupe=f'sent:{message_id}', kind='human_sent',
             source='webhook', event_key=raw.event_key, fan_id=fan_id, message_id=message_id,
@@ -366,23 +373,25 @@ class FansEventIntake:
 
     # ------------------------------------------------------------ re-drivable
     def drive(self, account, fan_id):
-        """Match, settle and revoke until nothing changes. Order-independent and idempotent."""
+        """Link unlocks to their sends, settle them, and flag unlinked reversals. Order-independent and idempotent.
+
+        Transactions and chargebacks are never paired with an unlock by amount or time (see payment_evidence).
+        """
         for _ in range(4):
             now = utcnow()
             with Session(self.engine) as s, s.begin():
                 link = s.scalar(select(OfFansLink).where(OfFansLink.account_id == account).with_for_update())
                 if link is None:
                     return
-                changed = ev.match(s, account, fan_id, now, window=self.window, mismatch_settle=self.settle)
-                paired = ev.paired_unlocks(s, account)
+                changed = ev.match(s, account, fan_id, now)
+                ready = ev.linked_unlocks(s, account)
                 charged = ev.pending_chargebacks(s, account)
             progressed = changed
-            for unlock_id in paired:
-                result = ev.settle_pair(self.store, account, unlock_id, now)
-                progressed = progressed or result not in ('paired', 'deferred')
-            for chargeback_id in charged:
-                result = ev.settle_chargeback(self.store, account, chargeback_id, now)
+            for unlock_id in ready:
+                result = ev.settle_unlock(self.store, account, unlock_id, now)
                 progressed = progressed or result not in ('pending', 'deferred')
+            for chargeback_id in charged:
+                ev.flag_unlinked_reversal(self.store, account, chargeback_id, now)
             if not progressed:
                 return
 
@@ -466,7 +475,7 @@ class FansEventIntake:
         """Periodic re-evaluation of pending evidence (late sends, grace expiry, settle windows)."""
         with Session(self.engine) as s:
             fans = {r[0] for r in s.execute(select(OfFansEvidence.fan_id).where(OfFansEvidence.account_id == account,
-                OfFansEvidence.status.in_(('pending', 'paired'))))}
+                OfFansEvidence.status == 'pending'))}
         for fan_id in sorted(fans):
             self.drive(account, fan_id)
             self.classify_sent(account, fan_id)

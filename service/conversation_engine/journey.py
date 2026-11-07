@@ -6,7 +6,7 @@ Everything here is deterministic and reads/writes the records the engine already
 * ownership        -> ``Store.control`` (request_takeover) which flips ``of_engine_owner.mode`` to ``human``
 * requests         -> ``of_engine_request`` (+ ``EngineService.request_handover``)
 * operator records -> ``of_operator_case`` (flags and human holds)
-* money            -> ``of_fans_evidence`` (applied, paired transactions and chargebacks) and ``of_engine_access_evidence``
+* money            -> ``of_fans_evidence`` (applied provider unlocks tied to our own sends; unlinked transactions and reversals are NOT counted) and ``of_engine_access_evidence``
 * welcome          -> one ``of_engine_offer_grant`` per fan, marked by its ``vault:welcome:`` coverage reference
 
 No new table, no model call, no send. The module is inert unless the account's delivery policy is ``fansapi``.
@@ -158,12 +158,15 @@ def backfill_complete(s, account, fan_id):
 
 
 def verified_spend(s, account, fan_id):
-    """Cents the fan really paid: exactly paired transactions the commerce owner applied, minus applied chargebacks."""
+    """Cents the fan really paid: provider unlocks tied to our own accepted send that the commerce owner applied.
+
+    Unlinked transactions and reversals are NOT counted or subtracted: with no supported link to a purchase they
+    are separate evidence for a person to reconcile (see fans_api_adapter.payment_evidence)."""
     def total(kind):
         return s.scalar(select(func.coalesce(func.sum(OfFansEvidence.amount_cents), 0)).where(
             OfFansEvidence.account_id == account, OfFansEvidence.fan_id == fan_id, OfFansEvidence.kind == kind,
             OfFansEvidence.status == 'applied')) or 0
-    return int(total('transaction') - total('chargeback'))
+    return int(total('unlock'))
 
 
 def _inbound(s, runtime, fan_id, *, upto=None):

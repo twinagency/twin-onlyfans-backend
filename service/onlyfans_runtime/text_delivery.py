@@ -133,6 +133,18 @@ def _stamp(raw):
     return value
 
 
+def _fan_isolated(policy):
+    """Engine (fansapi) accounts admit one fan at a time, never one account at a time.
+
+    A send that is in flight or whose outcome is unknown holds ONLY its own fan: the per-fan
+    ``OfConversationState.unresolved_attempt_id`` (and the engine hold reasons built on it) keeps that
+    fan's dependents from sending, and the account pointer ``active_intent_id`` is not used. Other fans
+    proceed. The account pacing gap (``next_dispatch_at``) is unchanged. Legacy gap-mode accounts keep
+    the single account-wide slot exactly as deployed.
+    """
+    return policy is not None and policy.transport_kind == "fansapi"
+
+
 class TextAuthority:
     """Internal, scoped intent service sharing the existing Store connection pool."""
 
@@ -255,7 +267,8 @@ class TextAuthority:
             if policy.revision != expected_revision:
                 raise Refused("policy revision conflict")
             if transport_kind is not None and transport_kind != policy.transport_kind:
-                if policy.active_intent_id or policy.queued_count:
+                if (policy.active_intent_id or policy.queued_count or s.scalar(select(OfTextIntent.intent_id).where(
+                        OfTextIntent.account_id == account_id, OfTextIntent.status.in_(("dispatching", "unknown"))).limit(1))):
                     raise Refused("delivery mode cannot change with active or queued work")
                 if {transport_kind, policy.transport_kind} == {"fansapi", "native"}:
                     # The legacy Moxy sender and the engine's real provider never swap directly.
@@ -507,6 +520,11 @@ class TextAuthority:
             from conversation_engine.delivery import prepare as prepare_engine_decision
             engine_decision = prepare_engine_decision(s, runtime, fan_id, origin, engine_decision_id, body,
                                                       catalog_item_id, quoted_price_cents)
+            if engine_decision is None and origin != "manual" and policy is not None and policy.transport_kind == "fansapi":
+                # A fansapi account has exactly one automated writer: the conversation engine. A campaign,
+                # engagement or legacy automated intent for any fan of it is a competing writer, even before the
+                # fan has an owner row. Only a human (origin manual, takeover checked below) may write besides it.
+                raise Refused("conversation owned by the new engine")
             from conversation_engine.independence import certified_anchor
             independent_anchor = certified_anchor(s, runtime, engine_decision, state, policy) if engine_decision is not None else None
             if engine_decision is not None and (moxy_event_id is not None or native_plan_id is not None or work is not None):
@@ -732,7 +750,9 @@ class TextAuthority:
                 return intent.status
             from . import concurrent_admission
             concurrent = concurrent_admission.mode(policy) == "concurrent"
-            if not concurrent and (policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True)) and independent_anchor is None:
+            isolated = _fan_isolated(policy)
+            if (not concurrent and not isolated and independent_anchor is None
+                    and (policy.active_intent_id or Store._native_unresolved(s, account_id, dispatching_only=True))):
                 intent.reason = "account_busy"
                 return "queued"
             if not concurrent and policy.next_dispatch_at is not None and policy.next_dispatch_at > now:
@@ -755,7 +775,7 @@ class TextAuthority:
             policy.used_units += 1
             policy.queued_count -= 1
             if not concurrent:
-                if independent_anchor is None:
+                if independent_anchor is None and not isolated:
                     policy.active_intent_id = intent.intent_id
                 policy.next_dispatch_at = now + timedelta(seconds=policy.throttle_seconds)
             intent.status, intent.reason, intent.updated_at = "dispatching", None, now
@@ -910,7 +930,7 @@ class TextAuthority:
                 if (independent_admission is None or independent_admission.status != 'dispatching'
                         or independent_admission.anchor_intent_id != independent_anchor.intent_id or not row.reservation_held):
                     reason = "attempt_ownership_changed"
-            elif (policy.active_intent_id != row.intent_id or not row.reservation_held
+            elif ((policy.active_intent_id != row.intent_id and not _fan_isolated(policy)) or not row.reservation_held
                   or state.unresolved_attempt_id != row.attempt_id):
                 reason = "attempt_ownership_changed"
             if reason is None and policy.used_units > policy.limit_units:
@@ -998,7 +1018,7 @@ class TextAuthority:
                       float(getattr(policy, "conversation_min_gap_seconds", 0) or 0))
             concurrent_admission.release(s, tenant_id, row.account_id, row.fan_id, row.intent_id,
                                          row.attempt_id, "unknown", utcnow(), gap)
-        elif not independent:
+        elif not independent and not _fan_isolated(policy):
             policy.active_intent_id = row.intent_id
 
     def mark_unknown(self, tenant_id, account_id, intent_id, dispatch_token, reason="ambiguous_transport"):
@@ -1265,6 +1285,10 @@ class TextAuthority:
                         else "fansapi" if type(transport) is FansApiRealTransport else "synthetic")
             if policy is None or policy.transport_kind != expected:
                 raise Refused("transport does not match the account delivery mode")
+        if type(transport) is FansApiRealTransport:
+            # Restart recovery: an attempt left 'dispatching' with nobody behind it is UNKNOWN once past its
+            # deadline (it may have reached the provider). It is never re-queued or retried from here.
+            self.expire_dispatches(tenant_id, account_id, limit=32, synthetic_engine_only=True)
         grant = self.admit(tenant_id, account_id, intent_id, transport_generation=transport_generation)
         if isinstance(grant, str):
             return grant

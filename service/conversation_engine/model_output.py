@@ -120,10 +120,11 @@ def proposal_problems(proposal, ctx):
         problems.append('item_scope is only for sales_signal reopen')
     if proposal.sales_signal == 'reopen' and not set(proposal.item_scope) <= ctx.allowed_scope_ids:
         problems.append('item_scope names an item that is not in the approved catalogue match')
-    from .claims import check_plain_text
+    from .claims import check_plain_text, grounding_from_snapshot
     try:
         check_plain_text(texts, proposal, _effective_sales_mode(snapshot, proposal),
-                         {offer['priceCents'] for offer in snapshot['offer_reference']['offers']})
+                         {offer['priceCents'] for offer in snapshot['offer_reference']['offers']},
+                         grounding=grounding_from_snapshot(snapshot, proposal))
     except Refused as exc:
         problems.append(str(exc))
     joined = ' '.join(texts)

@@ -95,16 +95,36 @@ def engine_owner_modes(account,fan_id=None):
         return UNKNOWN,frozenset()
 
 
+PILOT_ENV='TWIN_ENGINE_PILOT_ACCOUNTS'
+
+
+def pilot_accounts():
+    """Accounts declared as engine pilot scope in this process's own configuration (comma-separated ids,
+    either spelling). Known WITHOUT the ownership store, so it still applies when the store cannot be read."""
+    import os
+    out=set()
+    for item in str(os.environ.get(PILOT_ENV,'')).split(','):
+        out.update(_candidates(item))
+    return frozenset(out)
+
+
+def in_pilot_scope(account):
+    return bool(set(_candidates(account))&pilot_accounts())
+
+
 def refuse_engine_owned(account,purpose='other',fan_id=None):
     """Refuse a legacy write for an account/fan owned by the conversation engine.
     Fails closed on a failed lookup. The only pass for an owned fan is a manual
-    operator send where every matching owner row is in mode 'human'."""
+    operator send where every matching owner row is in mode 'human' (a verified
+    human takeover read from the store, never assumed)."""
     est,modes=engine_owner_modes(account,fan_id)
     if est==SELECTED and not (purpose=='manual' and modes=={'human'}):
         raise Refused('engine_canonical_owner_required')
-    # A manual operator send is never blocked by a store outage (the documented
-    # human-takeover policy, same as the Moxy check); everything else fails closed.
-    if est==UNKNOWN and purpose!='manual':raise Refused('engine_owner_lookup_failed')
+    if est==UNKNOWN:
+        # An unrelated account's operator is never blocked by a store outage (the documented human-takeover
+        # policy). A DECLARED pilot account is: with the ownership store unreadable a manual send cannot be told
+        # apart from a send into an engine-owned conversation, so it is held until takeover can be verified.
+        if purpose!='manual' or in_pilot_scope(account):raise Refused('engine_owner_lookup_failed')
 
 
 def refuse_legacy(account,purpose='other',fan_id=None):
@@ -118,7 +138,7 @@ def refuse_legacy(account,purpose='other',fan_id=None):
     refuse_engine_owned(account,purpose,fan_id)
 
 
-def job_fence_reason(account,kind,payload=None,*,state=None):
+def job_fence_reason(account,kind,payload=None,*,state=None,engine_state=None):
     """Why an automation job must not run for this account, or None to run it.
 
     Used by the executor before any model call or state write. Fail closed: a
@@ -130,6 +150,11 @@ def job_fence_reason(account,kind,payload=None,*,state=None):
     st=state if state is not None else owner_state(account)
     if st==SELECTED:return 'moxy_canonical_owner_required'
     if st==UNKNOWN:return 'moxy_owner_lookup_failed'
+    # The conversation engine is the only automated writer for an engine-owned account: refuse before any model
+    # call or state write, not at the final send. Unreadable ownership holds the job (fail closed).
+    est=engine_state if engine_state is not None else engine_owner_modes(account)[0]
+    if est==SELECTED:return 'engine_canonical_owner_required'
+    if est==UNKNOWN:return 'engine_owner_lookup_failed'
     return None
 
 

@@ -147,54 +147,89 @@ def test_duplicate_idempotency_key_is_one_effect_and_conflicting_replay_is_quara
     assert post(world.intake, t, 'evt-t')['projection'] == 'projected'
     assert post(world.intake, u, 'evt-u')['outcome'] == 'duplicate'
     assert post(world.intake, t, 'evt-t')['outcome'] == 'duplicate'
-    assert transactions(world) == [('cleared', 'tx-1', 1000)]
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
     assert count(world, OfFansEvidence) == 2 and count(world, OfFansWebhook) == 2
     # same key, different bytes: kept as conflict evidence, never re-applied
     assert post(world.intake, unlock(amount=99), 'evt-u')['outcome'] == 'quarantined'
-    assert transactions(world) == [('cleared', 'tx-1', 1000)]
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
     # the same payment announced under a new key is still one transaction
     assert post(world.intake, tx(), 'evt-t-again')['outcome'] == 'accepted'
-    assert transactions(world) == [('cleared', 'tx-1', 1000)]
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
 
 
 # --------------------------------------------------------------------------- purchase evidence
 
-def test_unlock_then_transaction_grants_once_and_links_the_frozen_grant(world):
+def test_message_bound_unlock_is_the_purchase_and_a_transaction_is_never_linked_to_it(world):
     assert post(world.intake, unlock(), 'evt-u')['projection'] == 'projected'
-    assert message_state(world) is None  # an unlock alone is not a sale, and is not "not purchased" either
-    assert evidence(world, 'unlock') == [('unlock', 'pending', 'awaiting_transaction')]
-    assert transactions(world) == []
-    post(world.intake, tx(), 'evt-t')
-    assert message_state(world) is True
-    assert transactions(world) == [('cleared', 'tx-1', 1000)]
-    assert [r[1] for r in evidence(world)] == ['applied', 'applied']
+    assert message_state(world) is True  # the provider named OUR message, fan, creator and the frozen price
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]  # keyed by the unlock, no transaction claimed
+    assert evidence(world, 'unlock') == [('unlock', 'applied', None)]
+    post(world.intake, tx(), 'evt-t')  # the separate money record: same fan, same amount, same minute
+    assert evidence(world, 'transaction') == [('transaction', 'pending', 'unlinked_transaction')]
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]  # still exactly one purchase, no tx id attached
     with Session(world.database[1]) as s:
         row = s.scalar(select(OfFansEvidence).where(OfFansEvidence.kind == 'unlock'))
-        assert row.intent_id == world.intent and row.grant_id is not None
+        assert row.intent_id == world.intent and row.grant_id is not None and row.peer_id is None
+        tx_row = s.scalar(select(OfFansEvidence).where(OfFansEvidence.kind == 'transaction'))
+        assert tx_row.peer_id is None and tx_row.intent_id is None and tx_row.status == 'pending'
         offer = s.scalar(select(ContentOffer).where(ContentOffer.account_id == ACCOUNT))
         assert offer.status == 'delivered'
         assert s.scalar(select(OfEngineRequest.next_step)) == 'verify_access'
 
 
-def test_reordered_transaction_before_unlock_gives_the_same_result(world):
+def test_transaction_before_unlock_is_unlinked_and_the_unlock_still_counts_once(world):
     post(world.intake, tx(), 'evt-t')
-    assert evidence(world, 'transaction') == [('transaction', 'pending', 'awaiting_unlock')]
-    assert message_state(world) is None and transactions(world) == []
+    assert evidence(world, 'transaction') == [('transaction', 'pending', 'unlinked_transaction')]
+    assert message_state(world) is None and transactions(world) == []   # money with no message is not a purchase
     post(world.intake, unlock(), 'evt-u')
     assert message_state(world) is True
-    assert transactions(world) == [('cleared', 'tx-1', 1000)]
-    assert [r[1] for r in evidence(world)] == ['applied', 'applied']
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
+    assert sorted(r[1] for r in evidence(world)) == ['applied', 'pending']
 
 
-def test_late_transaction_leaves_the_offer_open_not_unpaid_until_it_arrives(world):
+def test_late_same_value_unrelated_transaction_is_not_attributed_to_the_purchase(world):
     post(world.intake, unlock(), 'evt-u')
-    world.intake.sweep(ACCOUNT)  # time passing without the transaction changes nothing
+    world.intake.sweep(ACCOUNT)
+    before = transactions(world)
+    post(world.intake, tx(txid='tx-other', amount=10, fan=FAN, status='loading'), 'evt-late-1')
+    post(world.intake, tx(txid='tx-other-2', amount=10, fan=FAN), 'evt-late-2')  # a second same-value one: still no guess
+    world.intake.sweep(ACCOUNT)
+    assert transactions(world) == before and len(before) == 1
+    assert evidence(world, 'transaction') == [('transaction', 'pending', 'unlinked_transaction')] * 2
     with Session(world.database[1]) as s:
-        assert s.get(Message, (ACCOUNT, FAN, MESSAGE)).is_paid is None
-        assert s.scalar(select(ContentOffer.status).where(ContentOffer.account_id == ACCOUNT)) == 'open'
-    post(world.intake, tx(status='loading'), 'evt-late')  # up to 3 minutes late, still pending payout
-    assert message_state(world) is True
-    assert transactions(world) == [('pending', 'tx-1', 1000)]
+        assert s.scalar(select(func.count()).select_from(Transaction)) == 1
+        assert held(s, ACCOUNT, FAN) is False                  # unlinked money alone does not freeze the fan
+    from conversation_engine.journey import verified_spend
+    with Session(world.database[1]) as s:
+        assert verified_spend(s, ACCOUNT, FAN) == 1000          # one purchase of 10.00, not three
+
+
+def test_transaction_for_the_wrong_fan_or_unrelated_amount_never_touches_the_purchase(world):
+    post(world.intake, unlock(), 'evt-u')
+    post(world.intake, tx(txid='tx-wrong-fan', fan=FAN + 1), 'evt-t1')
+    post(world.intake, tx(txid='tx-other-amount', amount=25), 'evt-t2')
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
+    assert [r[1:] for r in evidence(world, 'transaction')] == [('pending', 'unlinked_transaction')] * 2
+
+
+def test_transaction_for_another_creators_account_is_refused_and_stores_nothing(world):
+    post(world.intake, unlock(), 'evt-u')
+    before = count(world, OfFansEvidence)
+    with pytest.raises(Refused):
+        post(world.intake, tx(txid='tx-foreign', provider='acct_someone_else'), 'evt-t-foreign')
+    assert count(world, OfFansEvidence) == before
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
+
+
+def test_duplicate_and_late_unlock_is_one_purchase(world):
+    post(world.intake, unlock(), 'evt-u')
+    assert post(world.intake, unlock(), 'evt-u-again')['projection'] == 'projected'   # new delivery key, same natural key
+    world.intake.sweep(ACCOUNT)
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
+    assert evidence(world, 'unlock') == [('unlock', 'applied', None)]
+
+
+
 
 
 def test_unlock_payload_user_id_is_the_creator_not_the_fan(world):
@@ -223,11 +258,11 @@ def test_amount_mismatch_is_held_for_review_and_never_granted(world):
         assert s.get(Message, (ACCOUNT, FAN, MESSAGE)).is_paid is None
 
 
-def test_transaction_amount_differing_from_the_unlock_is_held(world):
+def test_transaction_amount_differing_from_the_unlock_does_not_hold_or_change_the_purchase(world):
     post(world.intake, unlock(), 'evt-u')
     post(world.intake, tx(amount=25), 'evt-t')
-    assert sorted(evidence(world)) == [('transaction', 'held', 'amount_mismatch'), ('unlock', 'held', 'amount_mismatch')]
-    assert transactions(world) == [] and message_state(world) is None
+    assert sorted(evidence(world)) == [('transaction', 'pending', 'unlinked_transaction'), ('unlock', 'applied', None)]
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)] and message_state(world) is True
 
 
 def test_unlock_for_a_message_we_did_not_send_is_never_granted(world):
@@ -239,38 +274,39 @@ def test_unlock_for_a_message_we_did_not_send_is_never_granted(world):
 
 # --------------------------------------------------------------------------- chargebacks
 
-def test_chargeback_revokes_through_the_canonical_owner(world):
+def test_chargeback_with_no_supported_link_is_kept_unlinked_and_flags_the_fan_without_revoking(world):
     post(world.intake, unlock(), 'evt-u')
     post(world.intake, tx(), 'evt-t')
     assert message_state(world) is True
     post(world.intake, chargeback(), 'evt-cb')
-    assert message_state(world) is False
-    assert transactions(world) == [('chargedback', 'tx-1', 1000)]
-    assert evidence(world, 'chargeback') == [('chargeback', 'applied', None)]
+    assert message_state(world) is True                      # a chargeback names a transaction id, not our message
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
+    assert evidence(world, 'chargeback') == [('chargeback', 'pending', 'unlinked_reversal')]
     with Session(world.database[1]) as s:
-        assert s.scalar(select(ContentOffer.status).where(ContentOffer.account_id == ACCOUNT)) == 'cancelled'
-        assert s.scalar(select(OfEngineRequest.next_step)) == 'review_refund_or_chargeback'
-        assert s.get(OfConversationState, (ACCOUNT, FAN)).requires_attention is True
+        assert s.scalar(select(ContentOffer.status).where(ContentOffer.account_id == ACCOUNT)) == 'delivered'
+        assert s.get(OfConversationState, (ACCOUNT, FAN)).requires_attention is True   # a person reconciles it
     post(world.intake, chargeback(), 'evt-cb-2')  # a second announcement changes nothing
-    assert transactions(world) == [('chargedback', 'tx-1', 1000)]
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
+    assert evidence(world, 'chargeback') == [('chargeback', 'pending', 'unlinked_reversal')]
 
 
-def test_chargeback_arriving_before_the_purchase_waits_then_revokes(world):
-    post(world.intake, chargeback(), 'evt-cb')
-    assert evidence(world, 'chargeback') == [('chargeback', 'pending', 'awaiting_purchase')]
-    assert message_state(world) is None
-    post(world.intake, tx(), 'evt-t')
-    post(world.intake, unlock(), 'evt-u')
-    assert message_state(world) is False
-    assert transactions(world) == [('chargedback', 'tx-1', 1000)]
-    assert evidence(world, 'chargeback') == [('chargeback', 'applied', None)]
+def test_reversal_for_a_fan_with_no_purchase_is_recorded_and_flagged_not_dropped(world):
+    post(world.intake, chargeback(txid='tx-nothing', fan=FAN), 'evt-cb')
+    assert evidence(world, 'chargeback') == [('chargeback', 'pending', 'unlinked_reversal')]
+    assert message_state(world) is None and transactions(world) == []
+    with Session(world.database[1]) as s:
+        assert s.get(OfConversationState, (ACCOUNT, FAN)).requires_attention is True
 
 
-def test_provider_undo_status_on_a_transaction_is_a_chargeback(world):
+
+
+
+def test_provider_undo_status_on_a_transaction_is_an_unlinked_reversal(world):
     post(world.intake, unlock(), 'evt-u')
     post(world.intake, tx(status='done'), 'evt-t')
     post(world.intake, tx(status='undo'), 'evt-t-undo')
-    assert message_state(world) is False and transactions(world) == [('chargedback', 'tx-1', 1000)]
+    assert message_state(world) is True and transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
+    assert ('chargeback', 'pending', 'unlinked_reversal') in evidence(world)
 
 
 # --------------------------------------------------------------------------- connection
@@ -289,6 +325,7 @@ def test_reconnect_with_a_new_acct_id_keeps_the_creator_link_and_old_evidence_va
     # a late transaction still addressed to the replaced acct_ id is real evidence for the same creator
     late = post(world.intake, tx(provider=PROVIDER), 'evt-t-old-acct')
     assert late['epoch'] == 1 and message_state(world) is True
+    assert evidence(world, 'transaction') == [('transaction', 'pending', 'unlinked_transaction')]
     # a late "disconnected" about the replaced acct_ id must not take the new connection down
     assert post(world.intake, account_event('disconnected'), 'evt-old-disc')['projection'] == 'ignored'
     with Session(world.database[1]) as s:
@@ -391,7 +428,7 @@ def test_projection_failure_keeps_raw_evidence_and_is_redriven(world, monkeypatc
         assert s.scalar(select(OfFansProjection.status)) == 'pending'
     assert world.intake.reproject_pending(ACCOUNT) == {'evt-u': 'projected'}
     assert post(world.intake, body, 'evt-u')['outcome'] == 'duplicate'
-    assert evidence(world, 'unlock') == [('unlock', 'pending', 'awaiting_transaction')]
+    assert evidence(world, 'unlock') == [('unlock', 'applied', None)]
 
 
 # --------------------------------------------------------------------------- backfill
@@ -458,8 +495,8 @@ def test_pause_gap_is_repaired_by_transactions_and_history_with_a_budget(world):
     assert second['status'] == 'complete' and second['run'] == first['run']
     assert second['pages'] <= 1 + 6
     assert message_state(world) is True
-    assert transactions(world) == [('cleared', 'tx-gap', 1000)]
-    assert [r[1] for r in evidence(world)] == ['applied', 'applied']
+    assert transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
+    assert sorted(r[1] for r in evidence(world)) == ['applied', 'pending']
     # every transaction request carried the explicit startDate; markers are the provider's own
     tx_urls = [u for u in provider.requests if '/transactions' in u]
     assert tx_urls and all('startDate=' in u for u in tx_urls)
@@ -470,7 +507,7 @@ def test_pause_gap_is_repaired_by_transactions_and_history_with_a_budget(world):
         assert s.scalar(select(func.count()).select_from(Message).where(Message.direction == 'in')) >= 1
     # running it again over the same window is idempotent
     again = runner.run(TENANT, ACCOUNT, client, reason='pause_gap', start_date=start, pages_budget=6, history_chats=[FAN])
-    assert again['status'] == 'complete' and transactions(world) == [('cleared', 'tx-gap', 1000)]
+    assert again['status'] == 'complete' and transactions(world) == [('pending', 'unlock:%d' % MESSAGE, 1000)]
     assert count(world, OfFansEvidence) == 2
 
 
@@ -480,7 +517,7 @@ def test_backfill_transaction_without_a_provable_unlock_stays_pending_not_unpaid
     result = runner.run(TENANT, ACCOUNT, client_for(provider), reason='missed_webhooks',
                         start_date=utcnow() - timedelta(days=1), pages_budget=4)
     assert result['status'] == 'complete'
-    assert evidence(world) == [('transaction', 'pending', 'awaiting_unlock')]
+    assert evidence(world) == [('transaction', 'pending', 'unlinked_transaction')]
     assert message_state(world) is None and transactions(world) == []
 
 
@@ -493,7 +530,8 @@ def test_backfill_replays_chargebacks_and_refuses_unusable_pages(world):
     provider = FakeProvider([[]], [], chargebacks=[row])
     result = runner.run(TENANT, ACCOUNT, client_for(provider), reason='missed_webhooks',
                         start_date=utcnow() - timedelta(days=1), pages_budget=4)
-    assert result['status'] == 'complete' and message_state(world) is False
+    assert result['status'] == 'complete' and message_state(world) is True   # unlinked reversal: flagged, not guessed
+    assert ('chargeback', 'pending', 'unlinked_reversal') in evidence(world)
     # a page the provider did not answer is a failed run, never "complete"
     class Down(FakeProvider):
         def __call__(self, **kw):

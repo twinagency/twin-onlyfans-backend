@@ -570,7 +570,15 @@ async def _moxy_fence_reason(account_id: str, kind: str,
         state = await asyncio.to_thread(routing.owner_state, account_id)
         if cache is not None:
             cache[account_id] = state
-    return routing.job_fence_reason(account_id, canonical_kind(kind), payload, state=state)
+    # The conversation engine is the only automated writer for an engine-owned account (fail closed on an
+    # unreadable store). Only reached for a fenced kind, once per account per sweep.
+    if cache is not None and ("engine", account_id) in cache:
+        engine_state = cache[("engine", account_id)]
+    else:
+        engine_state = (await asyncio.to_thread(routing.engine_owner_modes, account_id))[0]
+        if cache is not None:
+            cache[("engine", account_id)] = engine_state
+    return routing.job_fence_reason(account_id, canonical_kind(kind), payload, state=state, engine_state=engine_state)
 
 
 async def _record_moxy_fence(account_id: str, kind: str, reason: str) -> int:

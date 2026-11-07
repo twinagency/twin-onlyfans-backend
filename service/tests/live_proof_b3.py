@@ -120,7 +120,7 @@ def test_live_proof(database, monkeypatch, capsys):
     assert out['paid_result'] == 'accepted'
 
     # 4. deliberate idempotent retry of the text: same key, same payload
-    replay = client.send(CHAT, key=idempotency_key(text_attempt), text=text_payload[0], block_banned_words='strict_ban')
+    replay = client.send(CHAT, key=idempotency_key(ACCOUNT, text_intent), text=text_payload[0], block_banned_words='strict_ban')
     out['replay'] = {'state': replay.state, 'message_id': replay.data and replay.data['message_id'],
                      'replayed': replay.replayed, 'http': replay.http_status}
     assert replay.state == 'accepted' and replay.replayed and str(replay.data['message_id']) == str(out['text_provider_message_id'])

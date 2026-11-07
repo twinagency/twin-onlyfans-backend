@@ -217,8 +217,9 @@ class FansApiClient:
                 pass
         outcome = classify_send_error(status, body)
         if (outcome is Outcome.UNKNOWN and status in (400, 422) and type(body) is dict
-                and body.get('error') != 'IDEMPOTENCY_KEY_MISMATCH'):
-            # Validation refusal (for example a banned word): the provider executed nothing.
+                and body.get('error') != 'IDEMPOTENCY_KEY_MISMATCH' and body.get('request_outcome') == 'not_sent'):
+            # A refusal the provider itself marks as not sent. An HTTP 4xx alone is NOT proof of non-delivery
+            # (docs.onlyfans-api idempotency guide): without request_outcome=not_sent it stays unknown.
             return Result('rejected', trace_id=trace, http_status=status, original_trace_id=original_trace)
         state = ('not_sent' if outcome is Outcome.NOT_SENT else 'key_mismatch' if outcome is Outcome.KEY_MISMATCH
                  else 'conflict' if outcome is Outcome.CONFLICT else 'unknown')

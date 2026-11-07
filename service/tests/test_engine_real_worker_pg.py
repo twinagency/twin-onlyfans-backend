@@ -571,12 +571,14 @@ def _sell(world, item=None):
 def test_verified_purchase_gets_one_short_reaction_and_no_offer_until_his_next_message(world):
     _, offer_message = _sell(world)
     second = world.second_item()
-    assert world.send(unlock(offer_message), key='evt-unlock')['outcome'] == 'evidence'
-    assert world.rows(OfEngineAccessEvidence) == []                  # an unlock alone is not a verified purchase
-    paid = world.send(tx('tx-first'), key='evt-tx')
-    assert paid['journey']['action'] == 'none'
+    paid = world.send(unlock(offer_message), key='evt-unlock')       # the provider named OUR message: that is the purchase
+    assert paid['outcome'] == 'evidence' and paid['journey']['action'] == 'none'
     access = world.rows(OfEngineAccessEvidence)
     assert [(a.status, a.applied) for a in access] == [('confirmed', True)]
+    world.send(tx('tx-first'), key='evt-tx')                         # a separate money record is never linked to it
+    assert [(a.status, a.applied) for a in world.rows(OfEngineAccessEvidence)] == [('confirmed', True)]
+    with Session(world.database[1]) as s:
+        assert verified_spend(s, ACCOUNT, FAN) == 1000
     posts_before = len(world.fans.posts)
     # his next message: the post-purchase turn. An offer, a long message or several parts are all refused.
     offer2 = world.grant(second, ref='vault:synced')
@@ -614,7 +616,7 @@ def test_an_unlock_for_a_message_that_is_not_our_offer_is_not_a_purchase(world):
 
 # ======================================================================== journey (c): whale hold
 
-def _spend(world, cents, txid, status='applied', kind='transaction'):
+def _spend(world, cents, txid, status='applied', kind='unlock'):
     with Session(world.database[1]) as s, s.begin():
         now = utcnow()
         s.add(OfFansEvidence(account_id=ACCOUNT, evidence_id=str(uuid.uuid4()), dedupe_key=f'{kind}:{txid}', kind=kind,
@@ -633,9 +635,8 @@ def test_spend_flag_at_500_keeps_the_engine_talking_and_hold_at_1000_silences_it
     _spend(world, 30_000, 'a1')
     _spend(world, 25_000, 'a2')
     _spend(world, 99_999, 'pending-one', status='pending')           # unmatched money is not verified spend
-    _spend(world, 5_000, 'cb', kind='chargeback')                     # a chargeback reduces verified spend
     with Session(world.database[1]) as s:
-        assert verified_spend(s, ACCOUNT, FAN) == 50_000
+        assert verified_spend(s, ACCOUNT, FAN) == 55_000
     first, mid = world.say('hello')
     assert first['outcome'] == 'accepted'                             # flag only: no hold
     assert ('vip_flag', 'offer', 'open') in world.cases() and world.owner()[0] == 'active'
@@ -656,8 +657,7 @@ def test_spend_flag_at_500_keeps_the_engine_talking_and_hold_at_1000_silences_it
 def test_whale_hold_through_a_real_verified_purchase(world):
     configure_journey(JourneyConfig(whale_hold_cents=1000, whale_flag_cents=500))
     _, offer_message = _sell(world)
-    world.send(unlock(offer_message), key='evt-unlock')
-    paid = world.send(tx('tx-whale'), key='evt-tx')
+    paid = world.send(unlock(offer_message), key='evt-unlock')
     assert paid['journey']['action'] == 'hold' and paid['journey']['spend_cents'] == 1000
     assert world.owner()[0] == 'human'
     posts = len(world.fans.posts)

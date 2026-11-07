@@ -1,22 +1,25 @@
-"""Payment evidence: store first, then match, then feed the canonical commerce owner.
+"""Payment evidence: store first, then link only what the provider names, then feed the canonical commerce owner.
 
-Two independent provider facts describe one purchase and may arrive in either
-order, minutes apart, or twice:
+Provider facts about a purchase:
 
-* ``messages.ppv.unlocked``  names OUR sent message (``message_id``) and the fan
-  (``chat_id``; ``user_id`` is the CREATOR in that event).
-* ``transactions.new``       carries the provider transaction id and amount but
-  no message id, and can be delayed by up to 3 minutes.
+* ``messages.ppv.unlocked``  names OUR sent message (``message_id``), the fan
+  (``chat_id``; ``user_id`` is the CREATOR in that event) and the amount. That
+  is message-bound evidence: it is checked against the accepted send, the fan,
+  the frozen price and the offer grant, and then recorded as the purchase.
+* ``transactions.new``       carries a provider transaction id and an amount but
+  NO message id, and can be delayed by minutes.
+* ``chargebacks.new``        names a transaction id, never a message.
 
-Neither alone creates a sale. A pending-evidence matcher pairs them (same fan,
-equal amount, near in time), links the unlock to the intent and frozen offer
-grant that sent the message, and only then calls ``CommerceIntake`` - the
-existing canonical financial owner. A mismatched amount, an ambiguous pairing
-or a missing grant is held for review and is never granted. Missing evidence
-is never recorded as "not purchased": an unmatched row simply stays pending.
-Chargebacks reuse the same owner (kind ``chargeback``) and so revoke access.
+A transaction or chargeback is NEVER linked to an unlock merely because the
+fan, amount and time happen to fit (that is a coincidence, not a link). They
+stay separate, unlinked evidence rows (status ``pending``, reason
+``unlinked_transaction`` / ``unlinked_reversal``) that a person can reconcile.
+An unlinked reversal flags that fan for human review; it never revokes access
+by guesswork. A mismatched unlock amount, a missing grant or a wrong fan is held
+for review and is never granted. Missing evidence is never recorded as "not
+purchased".
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -139,63 +142,28 @@ def _link_unlock(s, row, now):
             _hold(s, row, 'no_offer_grant', now)
             return None
         row.grant_id = grant.grant_id
-    row.intent_id, row.reason, row.updated_at = intent.intent_id, 'awaiting_transaction', now
+    row.intent_id, row.reason, row.updated_at = intent.intent_id, 'awaiting_commerce', now
     return intent
 
 
-def match(s, account, fan_id, now, *, window, mismatch_settle):
-    """Pair pending unlocks with pending transactions for one fan. Idempotent; order independent."""
+def match(s, account, fan_id, now, *, window=None, mismatch_settle=None):
+    """Link pending unlocks to the send that carries their message id. Transactions are never linked here.
+
+    Idempotent and order independent. Returns True when an unlock became linked (ready for commerce).
+    """
     rows = s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
         OfFansEvidence.fan_id == fan_id, OfFansEvidence.status == 'pending',
         OfFansEvidence.kind.in_(('unlock', 'transaction'))).order_by(OfFansEvidence.occurred_at,
         OfFansEvidence.evidence_id).with_for_update()).all()
-    txs = [r for r in rows if r.kind == 'transaction']
-    price = {}
-    for u in [r for r in rows if r.kind == 'unlock']:
-        intent = _link_unlock(s, u, now)
-        if intent is not None:
-            price[u.evidence_id] = intent.price_cents
-    for t in txs:
-        if t.reason is None:
-            t.reason = 'awaiting_unlock'
-    linked = [u for u in rows if u.kind == 'unlock' and u.status == 'pending' and u.evidence_id in price]
-
-    def near(u, t):
-        return u.source != 'webhook' or abs(u.occurred_at - t.occurred_at) <= window
-
     changed = False
-    for u in linked:
-        if u.status != 'pending':
-            continue
-        free = [t for t in txs if t.status == 'pending' and t.peer_id is None]
-        candidates = [t for t in free if near(u, t)]
-        exact = [t for t in candidates if t.amount_cents == price[u.evidence_id]]
-        if len(exact) == 1:
-            t = exact[0]
-            rivals = [x for x in linked if x is not u and x.status == 'pending' and x.peer_id is None
-                      and price[x.evidence_id] == t.amount_cents and near(x, t)]
-            if rivals:
-                for item in [u, t, *rivals]:
-                    _hold(s, item, 'ambiguous_pairing', now)
-            else:
-                u.peer_id, t.peer_id, u.status, t.status = t.evidence_id, u.evidence_id, 'paired', 'paired'
-                u.reason = t.reason = 'awaiting_commerce'
-                u.updated_at = t.updated_at = now
-            changed = True
-        elif len(exact) > 1:
-            for item in [u, *exact]:
-                _hold(s, item, 'ambiguous_pairing', now)
-            changed = True
-        elif candidates and now - max(u.created_at, *(t.created_at for t in candidates)) >= mismatch_settle:
-            # Same fan, same moment, different money: never grant, let a person decide.
-            for item in [u, *candidates]:
-                _hold(s, item, 'amount_mismatch', now)
-            changed = True
+    for row in rows:
+        if row.kind == 'unlock':
+            was_linked = row.intent_id is not None and row.reason == 'awaiting_commerce'
+            if _link_unlock(s, row, now) is not None and not was_linked:
+                changed = True
+        elif row.reason != 'unlinked_transaction':
+            row.reason, row.updated_at = 'unlinked_transaction', now
     return changed
-
-
-def purchase_time(unlock, tx):
-    return unlock.occurred_at if unlock.source == 'webhook' else tx.occurred_at
 
 
 def _iso(value):
@@ -211,9 +179,12 @@ def _tenant(s, account):
     return binding.tenant_id
 
 
-def paired_unlocks(s, account):
+def linked_unlocks(s, account):
+    """Unlocks the provider tied to one accepted send and that commerce has not applied yet."""
     return list(s.scalars(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account,
-        OfFansEvidence.kind == 'unlock', OfFansEvidence.status == 'paired').order_by(OfFansEvidence.occurred_at)))
+        OfFansEvidence.kind == 'unlock', OfFansEvidence.status == 'pending',
+        OfFansEvidence.intent_id.is_not(None), OfFansEvidence.reason == 'awaiting_commerce')
+        .order_by(OfFansEvidence.occurred_at)))
 
 
 def pending_chargebacks(s, account):
@@ -226,8 +197,8 @@ def _commerce(store):
     return CommerceIntake(store)  # Refused without the worker role: callers defer, never hold
 
 
-def _engine_access(store, account, unlock_id, status, now):
-    """Real-provider accounts only: tell the engine its accepted offer was paid for (or reversed).
+def _engine_access(store, account, unlock_id, now):
+    """Real-provider accounts only: tell the engine its accepted offer was paid for (unlock evidence).
 
     Commerce has already applied the purchase; a refusal here never undoes it. The reason is
     left on the unlock row (status unchanged) so a person can see the engine was not told.
@@ -238,24 +209,15 @@ def _engine_access(store, account, unlock_id, status, now):
         if policy is None or policy.transport_kind != 'fansapi':
             return None
         u = s.get(OfFansEvidence, (account, unlock_id))
-        t = s.get(OfFansEvidence, (account, u.peer_id)) if u is not None and u.peer_id else None
         intent = s.get(OfTextIntent, (account, u.intent_id)) if u is not None and u.intent_id else None
-        if t is None or intent is None:
+        if intent is None:
             return None
         tenant = _tenant(s, account)
-        key = hashlib.sha256(f'engine-access:{status}:{u.evidence_id}:{t.evidence_id}'.encode()).hexdigest()
-        occurred = purchase_time(u, t)
-        if status == 'revoked':
-            cb = s.scalar(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
-                OfFansEvidence.kind == 'chargeback', OfFansEvidence.provider_transaction_id == t.provider_transaction_id,
-                OfFansEvidence.status == 'applied').order_by(OfFansEvidence.occurred_at.desc()).limit(1))
-            if cb is None:
-                return None
-            occurred = max(cb.occurred_at, occurred + timedelta(seconds=1))
+        key = hashlib.sha256(f'engine-access:confirmed:{u.evidence_id}'.encode()).hexdigest()
         observation = ProviderAccessObservation(account_id=account, fan_id=u.fan_id, intent_id=intent.intent_id,
             message_id=u.message_id, media_ids=tuple(json.loads(intent.media_json)), evidence_key=key,
-            evidence_ref=f'fansapi:{u.dedupe_key}'[:128], status=status,
-            occurred_at=occurred.replace(tzinfo=timezone.utc))
+            evidence_ref=f'fansapi:{u.dedupe_key}'[:128], status='confirmed',
+            occurred_at=u.occurred_at.replace(tzinfo=timezone.utc))
     try:
         return record_provider_access(store, tenant, account, observation)
     except Refused as exc:
@@ -265,8 +227,12 @@ def _engine_access(store, account, unlock_id, status, now):
         return 'refused'
 
 
-def settle_pair(store, account, unlock_id, now):
-    """Hand one exact pairing to the canonical owner. Returns the evidence status or 'deferred'."""
+def settle_unlock(store, account, unlock_id, now):
+    """Hand one message-bound, provider-named unlock to the canonical owner. Returns the evidence status or 'deferred'.
+
+    The commerce record is keyed by the unlock (``unlock:<message id>``), not by any ``transactions.new`` row:
+    no transaction is claimed as the payment. Payout is recorded as pending (no clearing evidence).
+    """
     from onlyfans_runtime.commerce import SyntheticCommerceEvent
     try:
         intake = _commerce(store)
@@ -274,17 +240,15 @@ def settle_pair(store, account, unlock_id, now):
         return 'deferred'
     with Session(store.engine) as s, s.begin():
         u = s.get(OfFansEvidence, (account, unlock_id), with_for_update=True)
-        if u is None or u.status != 'paired':
+        if u is None or u.status != 'pending' or u.intent_id is None or u.reason != 'awaiting_commerce':
             return u.status if u is not None else 'missing'
-        t = s.get(OfFansEvidence, (account, u.peer_id), with_for_update=True)
         intent = s.get(OfTextIntent, (account, u.intent_id))
         tenant = _tenant(s, account)
         event = SyntheticCommerceEvent(account_id=account, fan_id=u.fan_id, message_id=u.message_id,
-            event_key=hashlib.sha256(f'{u.evidence_id}:{t.evidence_id}'.encode()).hexdigest()[:64],
-            provider_transaction_id=t.provider_transaction_id, provider_revision=1, kind='purchase',
-            amount_cents=intent.price_cents, currency='USD', occurred_at=_iso(purchase_time(u, t)),
-            evidence_ref=f'fansapi:{u.dedupe_key}+{t.dedupe_key}'[:256],
-            payout_status='pending' if t.provider_status == 'loading' else 'cleared')
+            event_key=hashlib.sha256(f'unlock:{u.evidence_id}'.encode()).hexdigest()[:64],
+            provider_transaction_id=f'unlock:{u.message_id}', provider_revision=1, kind='purchase',
+            amount_cents=intent.price_cents, currency='USD', occurred_at=_iso(u.occurred_at),
+            evidence_ref=f'fansapi:{u.dedupe_key}'[:256], payout_status='pending')
     try:
         outcome = intake.record(tenant, account, event)
         reason = None if outcome == 'applied' else 'commerce_' + outcome
@@ -292,66 +256,28 @@ def settle_pair(store, account, unlock_id, now):
         outcome, reason = 'refused', 'commerce_refused:' + str(exc)[:60]
     with Session(store.engine) as s, s.begin():
         u = s.get(OfFansEvidence, (account, unlock_id), with_for_update=True)
-        t = s.get(OfFansEvidence, (account, u.peer_id), with_for_update=True)
-        for row in (u, t):
-            row.updated_at = now
-            if outcome == 'applied':
-                row.status, row.reason = 'applied', None
-            else:
-                _hold(s, row, reason, now)
+        u.updated_at = now
+        if outcome == 'applied':
+            u.status, u.reason = 'applied', None
+        else:
+            _hold(s, u, reason, now)
         result = u.status
     if outcome == 'applied':
-        _engine_access(store, account, unlock_id, 'confirmed', now)
+        _engine_access(store, account, unlock_id, now)
     return result
 
 
-def settle_chargeback(store, account, chargeback_id, now):
-    """Revoke through the same owner once the purchase it reverses has been applied."""
-    from onlyfans_runtime.commerce import SyntheticCommerceEvent
-    try:
-        intake = _commerce(store)
-    except Refused:
-        return 'deferred'
+def flag_unlinked_reversal(store, account, chargeback_id, now):
+    """A chargeback names a transaction id only. With no supported link to a purchase it is kept as separate
+    evidence and the fan is flagged for a person; nothing is revoked or counted from a guess."""
     with Session(store.engine) as s, s.begin():
         cb = s.get(OfFansEvidence, (account, chargeback_id), with_for_update=True)
         if cb is None or cb.status != 'pending':
             return cb.status if cb is not None else 'missing'
-        t = s.scalar(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
-            OfFansEvidence.kind == 'transaction', OfFansEvidence.provider_transaction_id == cb.provider_transaction_id)
-            .with_for_update())
-        if t is None or t.status != 'applied':
-            if cb.reason != 'awaiting_purchase':
-                cb.reason, cb.updated_at = 'awaiting_purchase', now
-            return 'pending'
-        if cb.amount_cents != t.amount_cents or cb.fan_id != t.fan_id:
-            _hold(s, cb, 'chargeback_mismatch', now)
-            return 'held'
-        u = s.get(OfFansEvidence, (account, t.peer_id))
-        unlock_evidence_id = u.evidence_id
-        intent = s.get(OfTextIntent, (account, u.intent_id))
-        tenant = _tenant(s, account)
-        occurred = max(cb.occurred_at, purchase_time(u, t) + timedelta(seconds=1))
-        event = SyntheticCommerceEvent(account_id=account, fan_id=u.fan_id, message_id=u.message_id,
-            event_key=hashlib.sha256(f'chargeback:{cb.evidence_id}'.encode()).hexdigest()[:64],
-            provider_transaction_id=t.provider_transaction_id, provider_revision=2, kind='chargeback',
-            amount_cents=intent.price_cents, currency='USD', occurred_at=_iso(occurred),
-            evidence_ref=f'fansapi:{cb.dedupe_key}'[:256])
-    try:
-        outcome = intake.record(tenant, account, event)
-        reason = None if outcome == 'applied' else 'commerce_' + outcome
-    except Refused as exc:
-        outcome, reason = 'refused', 'commerce_refused:' + str(exc)[:60]
-    with Session(store.engine) as s, s.begin():
-        cb = s.get(OfFansEvidence, (account, chargeback_id), with_for_update=True)
-        cb.updated_at = now
-        if outcome == 'applied':
-            cb.status, cb.reason = 'applied', None
-        else:
-            _hold(s, cb, reason, now)
-        result = cb.status
-    if outcome == 'applied':
-        _engine_access(store, account, unlock_evidence_id, 'revoked', now)
-    return result
+        if cb.reason != 'unlinked_reversal':
+            cb.reason, cb.updated_at = 'unlinked_reversal', now
+            attention(s, account, cb.fan_id)
+    return 'pending'
 
 
 def fan_is_held(s, account, fan_id=None):

@@ -101,7 +101,7 @@ def _offer_grants(s, runtime, fan_id):
         item = terms['item']
         out.append({'grantId': grant.grant_id, 'itemId': str(grant.item_id),
                     'label': item.get('label') or item.get('description_for_ai'),
-                    'description': item.get('description_for_ai')})
+                    'description': item.get('description_for_ai'), 'mediaCount': len(terms['media_ids'])})
     return out
 
 

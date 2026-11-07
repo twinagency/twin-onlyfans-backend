@@ -4,13 +4,18 @@ Flow: TextAuthority.dispatch -> admit -> FansApiRealTransport.send -> consume_di
 (the one-use wire marker) -> FansApiClient.send -> FansHttpsTransport (httpx).
 Nothing else in the engine can reach the network.
 
-Outcome mapping (one logical message = one Idempotency-Key, reused on every retry):
-  200                              accepted with the provider message id (a replay returns the same id)
-  503 request_outcome=not_sent     retry the SAME key; still not sent after the budget -> not accepted
-  503 unknown / timeout / garbage  unknown: this fan is held, nobody else is touched
-  409 in progress                  retry the same key within the budget; still in progress -> unknown
-  422 / 400 (incl. banned words)   rejected -> not accepted (blockBannedWords=strict_ban is always sent)
-  422 KEY_MISMATCH                 unknown (a human must fix the key mapping; never mint a new key)
+Outcome mapping (one logical message = one Idempotency-Key, derived from account + intent, reused on every
+retry and every restart; at most 3 POSTs TOTAL including the first; only the provider's own outcome fields count,
+never an HTTP status alone - https://docs.onlyfansapi.com/introduction/essentials/idempotency):
+  200 with data.id                   accepted with the provider message id (a replay returns the same id)
+  503 SERVICE_UNAVAILABLE not_sent   retry the SAME key; still not sent after the budget -> not accepted
+  503 IDEMPOTENCY_UNAVAILABLE        this attempt was not executed: retry the SAME key (never after a 409: see _post)
+  503 unknown / timeout / garbage    unknown: this fan is held, nobody else is touched
+  409 IDEMPOTENCY_CONFLICT           retry the same key within the budget; still in progress -> unknown
+  400/422 + request_outcome not_sent rejected -> not accepted (blockBannedWords=strict_ban is always sent)
+  400/422 without that field         unknown (a 4xx alone is not proof of non-delivery)
+  422 IDEMPOTENCY_KEY_MISMATCH       unknown (a human must fix the key mapping; never mint a new key)
+A restart reconciles an attempt left 'dispatching' as UNKNOWN (recover_interrupted); it is never re-queued.
 
 TextAuthority.dispatch accepts this exact type as a first-class transport. It requires the
 account delivery policy to be transport_kind 'fansapi' (never 'synthetic' or 'native') and the
@@ -20,7 +25,7 @@ The transport is inert unless built through `build_real_transport`, which needs 
 same flag and a 0600 credentials file that is not inside any git work tree. The key is
 never logged or returned.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import json
 import os
@@ -44,11 +49,16 @@ ENV_FILE = 'TWIN_ENGINE_FANSAPI_ENV_FILE'
 _NAMESPACE = uuid.UUID('6d1f1c8e-2b0a-4f43-9a55-7f1f0c7e2a10')
 
 
-def idempotency_key(attempt_id):
-    """Deterministic per attempt: a retry of the same attempt always reuses it."""
-    if type(attempt_id) is not str or not attempt_id:
-        raise Refused('attempt id required for an idempotency key')
-    return str(uuid.uuid5(_NAMESPACE, 'twin-engine-send:' + attempt_id))
+def idempotency_key(account_id, intent_id):
+    """One key per LOGICAL message (account + intent), never per attempt.
+
+    The key is derived, so it is always recoverable from the stored intent after a crash, and it is the same
+    on every retry, every restart and every same-action retry that follows a proven not-sent result. It is
+    never rotated to escape an unknown outcome.
+    """
+    if type(account_id) is not str or not account_id or type(intent_id) is not str or not intent_id:
+        raise Refused('account and intent id required for an idempotency key')
+    return str(uuid.uuid5(_NAMESPACE, f'twin-engine-send:v2:{account_id}:{intent_id}'))
 
 
 @dataclass(frozen=True)
@@ -114,7 +124,7 @@ class FansApiRealTransport:
     def __init__(self, store, tenant_id, account_id, client, *, allowed_chats=None, max_attempts=3,
                  retry_delay=1.0, sleep=time.sleep, enabled=False):
         if (enabled is not True or type(client) is not FansApiClient or not client._identity_verified
-                or type(max_attempts) is not int or not 1 <= max_attempts <= 5
+                or type(max_attempts) is not int or not 1 <= max_attempts <= 3
                 or allowed_chats is not None and (type(allowed_chats) is not frozenset or not allowed_chats)):
             raise Refused('explicit real transport configuration required')
         self.store, self.tenant_id, self.account_id, self.client = store, tenant_id, account_id, client
@@ -145,7 +155,7 @@ class FansApiRealTransport:
         grant = authority.consume_dispatch(tenant_id, dispatch)
         if grant is None:
             raise Refused('dispatch is no longer eligible')
-        key = idempotency_key(grant.attempt_id)
+        key = idempotency_key(grant.account_id, grant.intent_id)
         proof = dict(account_id=grant.account_id, fan_id=grant.fan_id, intent_id=grant.intent_id,
                      attempt_id=grant.attempt_id, payload_hash=grant.payload_hash)
         result = self._post(grant.fan_id, key, grant.body, grant.media_ids, grant.preview_ids, grant.price_cents)
@@ -158,7 +168,15 @@ class FansApiRealTransport:
         return None  # unknown, conflict, key mismatch: stays unresolved and holds only this fan
 
     def _post(self, chat_id, key, body, media, previews, price_cents):
+        """At most `max_attempts` (<= 3) POSTs TOTAL, first included, same key and payload every time.
+
+        Only two provider outcomes are retried: an explicit not-sent 503 and a 409 key-in-progress. Everything
+        else (accepted, unknown, key mismatch, malformed, rejected) ends the loop on the first answer. If a 409
+        was seen, a later 'not sent' only describes that one attempt and says nothing about the earlier one (the
+        key may still be running), so the final answer can never be 'not sent' after a conflict.
+        """
         result = None
+        reserved = False
         for attempt in range(self.max_attempts):
             self.sent_calls += 1
             result = self.client.send(chat_id, key=key, text=body, media=[str(v) for v in media],
@@ -166,9 +184,21 @@ class FansApiRealTransport:
                                       block_banned_words='strict_ban')
             if result.state not in ('not_sent', 'conflict'):
                 return result
+            reserved = reserved or result.state == 'conflict'
             if attempt + 1 < self.max_attempts:
                 self.sleep(self.retry_delay * (attempt + 1))
+        if reserved and result.state == 'not_sent':
+            result = replace(result, state='unknown')
         return result
+
+    def recover_interrupted(self):
+        """Restart recovery: a started attempt with no process behind it becomes UNKNOWN (never queued or retried).
+
+        An intent left 'dispatching' past its deadline may or may not have reached the provider. It is held as
+        unknown for this fan only; reconcile_accepted replays the SAME key to find out. Returns how many.
+        """
+        return TextAuthority(self.store).expire_dispatches(self.tenant_id, self.account_id, limit=100,
+                                                           synthetic_engine_only=True)
 
     def reconcile_accepted(self, intent_id):
         """Resolve an unknown attempt by replaying the SAME key and payload.
@@ -184,7 +214,7 @@ class FansApiRealTransport:
                 return row.status if row is not None else 'unknown'
             if self.allowed_chats is not None and str(row.fan_id) not in self.allowed_chats:
                 raise Refused('chat is outside the allowed test scope')
-            args = (row.fan_id, idempotency_key(row.attempt_id), row.body, tuple(json.loads(row.media_json)),
+            args = (row.fan_id, idempotency_key(row.account_id, row.intent_id), row.body, tuple(json.loads(row.media_json)),
                     tuple(json.loads(row.preview_json)), row.price_cents)
             token, attempt, fan, payload_hash = row.dispatch_token, row.attempt_id, row.fan_id, row.payload_hash
         result = self._post(*args)

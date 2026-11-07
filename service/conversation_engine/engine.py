@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import Message, OfConversationState
-from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
+from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_engine_models import OfEngineAttempt, OfEngineDecision, OfEngineOwner, OfEngineRequest, OfEngineOfferGrant, OfFansConnection
 from db.onlyfans_models import OfIngress
 from db.onlyfans_moxy_models import MoxyAccount
@@ -104,7 +104,7 @@ class EngineService:
             runtime = self.store._runtime(s, tenant, account)
             policy = s.get(OfDeliveryPolicy, account)
             state = s.get(OfConversationState, (account, fan_id))
-            if (policy is None or policy.transport_kind != 'synthetic' or not policy.enabled
+            if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or not policy.enabled
                     or state is None or state.mode != 'automated' or state.takeover_state != 'none'
                     or self.store._unresolved(s, account, fan_id, state)):
                 raise Refused('synthetic conversation is not ready')
@@ -138,7 +138,7 @@ class EngineService:
                 OfIngress.binding_id == runtime.binding_id, OfIngress.status == 'applied',
                 OfIngress.source != 'import').limit(1))
             if (owner is None or owner.binding_id != runtime.binding_id or state is None or
-                    policy is None or policy.transport_kind != 'synthetic' or ingress is None or
+                    policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or ingress is None or
                     message.direction != 'in' or message.is_unsent or message.created_at < runtime.activated_at):
                 raise Refused('live canonical incoming message required')
             request = s.scalar(select(OfEngineRequest).where(OfEngineRequest.account_id == account,
@@ -166,7 +166,7 @@ class EngineService:
                         owner = s.get(OfEngineOwner, (account, fan_id))
                         policy = s.get(OfDeliveryPolicy, account)
                         if (state is None or owner is None or owner.binding_id != runtime.binding_id
-                                or policy is None or policy.transport_kind != 'synthetic'):
+                                or policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS):
                             raise Refused('synthetic engine control scope unavailable')
                         expected_revision = state.revision
                         if state.mode == 'no_contact':
@@ -192,7 +192,7 @@ class EngineService:
             state = s.get(OfConversationState, (account, fan_id))
             policy = s.get(OfDeliveryPolicy, account)
             if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id
-                    or policy is None or policy.transport_kind != 'synthetic'
+                    or policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS
                     or state is None or state.mode != 'automated' or state.takeover_state != 'none'):
                 raise Refused('engine owner is unavailable')
             message = s.get(Message, (account, fan_id, source_message_id))
@@ -310,7 +310,7 @@ class EngineService:
                     return existing[0].decision_id
             elif observed_generation is not None:
                 raise Refused('conversation changed during generation')
-            if (policy is None or policy.transport_kind != 'synthetic' or not policy.enabled
+            if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or not policy.enabled
                     or owner is None or owner.mode != 'active' or owner.epoch != epoch or runtime.binding_id != binding
                     or owner.binding_id != binding or current_epoch != snapshot['connection_epoch'] or state is None or state.mode != 'automated'
                     or state.takeover_state != 'none' or state.input_revision != snapshot['input_revision']
@@ -527,7 +527,7 @@ class EngineService:
                     or owner.epoch != decision.owner_epoch or state is None or state.mode != 'automated'
                     or state.takeover_state != 'none' or state.revision != decision.control_revision
                     or state.unresolved_attempt_id is not None
-                    or policy is None or not policy.enabled or policy.transport_kind != 'synthetic'
+                    or policy is None or not policy.enabled or policy.transport_kind not in ENGINE_TRANSPORT_KINDS
                     or policy.revision != intent.policy_revision or intent.binding_id != runtime.binding_id
                     or intent.expires_at <= utcnow() or intent.payload_hash != TextAuthority(self.store)._intent_hash(intent)
                     or request is None or request.status != 'open' or not attempts or len(attempts) >= max_attempts

@@ -8,7 +8,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from db.models import CatalogItem, VaultItem, Message
-from db.onlyfans_delivery_models import OfDeliveryPolicy
+from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEngineCatalogueAlias, OfEngineOwner
 from onlyfans_read.agency_scope import actor_allowed
 from onlyfans_runtime.media_delivery import catalog_terms
@@ -51,6 +51,21 @@ class SyntheticCatalogueCoverage:
     evidence_ref: str
     valid_until: datetime
     snapshot_hash: str
+
+
+@dataclass(frozen=True)
+class VaultCatalogueCoverage:
+    """Real-provider counterpart: the catalogue was complete as of a synced vault pass (evidence_ref 'vault:...')."""
+    account_id: str
+    binding_id: str
+    complete: bool
+    evidence_ref: str
+    valid_until: datetime
+    snapshot_hash: str
+
+
+# policy kind -> (coverage type, evidence prefix); one kind can never use the other's coverage.
+_COVERAGE = {'synthetic': (SyntheticCatalogueCoverage, 'synthetic:'), 'fansapi': (VaultCatalogueCoverage, 'vault:')}
 
 
 def _catalogue_version(s, runtime):
@@ -96,6 +111,20 @@ def synthetic_coverage(store, tenant, account, *, complete, evidence_ref, valid_
         if policy is None or policy.transport_kind != 'synthetic' or version is None:
             raise Refused('synthetic catalogue coverage is unavailable')
         return SyntheticCatalogueCoverage(account, runtime.binding_id, complete, evidence_ref, valid_until, version)
+
+
+def vault_coverage(store, tenant, account, *, complete, evidence_ref, valid_until):
+    if (type(complete) is not bool or type(evidence_ref) is not str or not evidence_ref.startswith('vault:')
+            or len(evidence_ref) > 128 or type(valid_until) is not datetime or valid_until.tzinfo is not None
+            or valid_until <= utcnow()):
+        raise Refused('invalid vault catalogue coverage')
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        policy = s.get(OfDeliveryPolicy, account)
+        version = _catalogue_version(s, runtime)
+        if policy is None or policy.transport_kind != 'fansapi' or version is None:
+            raise Refused('vault catalogue coverage is unavailable')
+        return VaultCatalogueCoverage(account, runtime.binding_id, complete, evidence_ref, valid_until, version)
 
 
 def approve_alias(store, tenant, account, item_id, alias, *, actor):
@@ -151,15 +180,16 @@ def search_scoped(s, runtime, fan_id, query, coverage=None):
     owner = s.get(OfEngineOwner, (account, fan_id))
     policy = s.get(OfDeliveryPolicy, account)
     if (owner is None or owner.binding_id != runtime.binding_id or policy is None
-            or policy.transport_kind != 'synthetic'):
+            or policy.transport_kind not in ENGINE_TRANSPORT_KINDS):
         raise Refused('catalogue search scope is unavailable')
+    coverage_type, coverage_prefix = _COVERAGE[policy.transport_kind]
     if not tokens:
         return {'state':'unclear', 'items':[], 'coverage':'unknown'}
     coverage_state = 'incomplete'
     if coverage is not None:
-        if (type(coverage) is not SyntheticCatalogueCoverage or coverage.account_id != account
+        if (type(coverage) is not coverage_type or coverage.account_id != account
                 or coverage.binding_id != runtime.binding_id or type(coverage.complete) is not bool
-                or type(coverage.evidence_ref) is not str or not coverage.evidence_ref.startswith('synthetic:')
+                or type(coverage.evidence_ref) is not str or not coverage.evidence_ref.startswith(coverage_prefix)
                 or type(coverage.valid_until) is not datetime or coverage.valid_until.tzinfo is not None
                 or type(coverage.snapshot_hash) is not str or len(coverage.snapshot_hash) != 64):
             raise Refused('catalogue coverage scope is invalid')

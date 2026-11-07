@@ -12,9 +12,13 @@ Outcome mapping (one logical message = one Idempotency-Key, reused on every retr
   422 / 400 (incl. banned words)   rejected -> not accepted (blockBannedWords=strict_ban is always sent)
   422 KEY_MISMATCH                 unknown (a human must fix the key mapping; never mint a new key)
 
+TextAuthority.dispatch accepts this exact type as a first-class transport. It requires the
+account delivery policy to be transport_kind 'fansapi' (never 'synthetic' or 'native') and the
+explicit config flag TWIN_ENGINE_FANSAPI_REAL=1 (default OFF) at dispatch time.
+
 The transport is inert unless built through `build_real_transport`, which needs the
-explicit config flag TWIN_ENGINE_FANSAPI_REAL=1 and a 0600 credentials file that is
-not inside any git work tree. The key is never logged or returned.
+same flag and a 0600 credentials file that is not inside any git work tree. The key is
+never logged or returned.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -83,6 +87,10 @@ def load_real_config(env=None, *, require_flag=True):
     return RealFansConfig(values['FANSAPI_KEY'], values['FANSAPI_ACCT'], base)
 
 
+def real_transport_enabled(env=None):
+    return (os.environ if env is None else env).get(FLAG) == '1'
+
+
 def build_client(config, *, creator_id, epoch, transport=None):
     wire = FansHttpsTransport(enabled=True, transport=transport)
     client = FansApiClient(account=config.provider_account, creator_id=creator_id, epoch=epoch,
@@ -90,6 +98,15 @@ def build_client(config, *, creator_id, epoch, transport=None):
     if client.identity().state != 'verified':
         raise Refused('provider identity could not be verified')
     return client
+
+
+def build_real_transport(store, tenant_id, account_id, *, creator_id, epoch, env=None, transport=None,
+                         allowed_chats=None, **options):
+    """Flag-gated factory: refuses unless TWIN_ENGINE_FANSAPI_REAL=1 and the credentials file is safe."""
+    config = load_real_config(env, require_flag=True)
+    client = build_client(config, creator_id=creator_id, epoch=epoch, transport=transport)
+    return FansApiRealTransport(store, tenant_id, account_id, client, allowed_chats=allowed_chats,
+                                enabled=True, **options)
 
 
 class FansApiRealTransport:
@@ -115,7 +132,7 @@ class FansApiRealTransport:
                     or connection.binding_id != runtime.binding_id or connection.status != 'active'
                     or connection.provider_account_id != self.client.account
                     or connection.provider_creator_id != self.client.creator_id
-                    or policy is None or policy.transport_kind != 'synthetic'):
+                    or policy is None or policy.transport_kind != 'fansapi'):
                 raise Refused('real transport binding changed')
 
     def send(self, dispatch, *, authority, tenant_id):

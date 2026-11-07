@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from db.models import Chat, Fan, Message, OfConversationState, OfCreatorBinding, OfMessageDelivery
 from db.onlyfans_models import OfIngress, OfRuntime, OfWork
-from db.onlyfans_delivery_models import OfDeliveryPolicy, OfDeliveryPolicyChange, OfTextIntent, OfNativePlan
+from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy, OfDeliveryPolicyChange, OfTextIntent, OfNativePlan
 from onlyfans_read.contract import UNRESOLVED_OUTCOMES
 from .store import Claim, Refused, Store, _id, utcnow
 
@@ -240,7 +240,7 @@ class TextAuthority:
                 or not isinstance(actor, str) or not 1 <= len(actor) <= 128
                 or not isinstance(reason, str) or not 1 <= len(reason) <= 512
                 or media_enabled is not None and type(media_enabled) is not bool
-                or transport_kind is not None and transport_kind not in {"synthetic", "native"}):
+                or transport_kind is not None and transport_kind not in {"synthetic", "native", "fansapi"}):
             raise Refused("invalid delivery policy")
         with Session(self.engine) as s, s.begin():
             self.store._runtime(s, tenant_id, account_id)
@@ -257,6 +257,9 @@ class TextAuthority:
             if transport_kind is not None and transport_kind != policy.transport_kind:
                 if policy.active_intent_id or policy.queued_count:
                     raise Refused("delivery mode cannot change with active or queued work")
+                if {transport_kind, policy.transport_kind} == {"fansapi", "native"}:
+                    # The legacy Moxy sender and the engine's real provider never swap directly.
+                    raise Refused("delivery mode cannot switch between native and fansapi")
             before = self._policy_values(policy)
             if throttle_seconds > policy.throttle_seconds and policy.next_dispatch_at is not None:
                 policy.next_dispatch_at = max(policy.next_dispatch_at,
@@ -352,7 +355,7 @@ class TextAuthority:
 
     def _eligibility(self, s, runtime, policy, state, fan, origin, now, *, own_attempt_id=None,
                      manual_attachment=False, action=None, engine_action=False, independent=False):
-        if policy is None or not policy.enabled or policy.transport_kind not in {"synthetic", "native"}:
+        if policy is None or not policy.enabled or policy.transport_kind not in {"synthetic", "native", "fansapi"}:
             return "delivery_disabled"
         if not runtime.enabled:
             return "account_disabled"
@@ -1145,7 +1148,7 @@ class TextAuthority:
             if synthetic_engine_only:
                 from conversation_engine.delivery import is_engine_intent
                 policy = s.get(OfDeliveryPolicy, account_id)
-                if (policy is None or policy.transport_kind != 'synthetic' or row.binding_id != runtime.binding_id
+                if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or row.binding_id != runtime.binding_id
                         or not is_engine_intent(s, row)):
                     raise Refused('synthetic engine recovery scope unavailable')
             if row.status != "accepted" or not row.receipt_json:
@@ -1227,6 +1230,7 @@ class TextAuthority:
         from fans_api_adapter.synthetic_transport import FansApiSyntheticTransport
         from fans_api_adapter.local_http import FansApiLocalHttpTransport
         from fans_api_adapter.protocol_lab import FansApiProtocolLabTransport
+        from fans_api_adapter.real_transport import FansApiRealTransport, real_transport_enabled
         # One sender per owned fan: only the FASTT runner's transport may send a
         # operator-authored manual/campaign message for it. Campaign origin
         # retains automated-history and campaign-control validation.
@@ -1240,6 +1244,9 @@ class TextAuthority:
         transport_generation = None
         if type(transport) is FasttManualTransport:
             transport_generation = transport.policy_revision
+        elif type(transport) is FansApiRealTransport:
+            if not real_transport_enabled():
+                raise Refused("real Fans API transport is not enabled")
         elif type(transport) not in {SyntheticTextTransport, FansApiSyntheticTransport, FansApiLocalHttpTransport, FansApiProtocolLabTransport}:
             try:
                 from .loopback_transport import LoopbackTextTransport
@@ -1254,7 +1261,8 @@ class TextAuthority:
         with Session(self.engine) as s:
             self.store._delivery_runtime(s, tenant_id, account_id)
             policy = s.get(OfDeliveryPolicy, account_id)
-            expected = "native" if type(transport) in {NativeProviderConnector, FasttManualTransport} else "synthetic"
+            expected = ("native" if type(transport) in {NativeProviderConnector, FasttManualTransport}
+                        else "fansapi" if type(transport) is FansApiRealTransport else "synthetic")
             if policy is None or policy.transport_kind != expected:
                 raise Refused("transport does not match the account delivery mode")
         grant = self.admit(tenant_id, account_id, intent_id, transport_generation=transport_generation)
@@ -1332,7 +1340,7 @@ class TextAuthority:
             if synthetic_engine_only:
                 from db.onlyfans_engine_models import OfEngineDecision
                 policy = s.get(OfDeliveryPolicy, account_id)
-                if policy is None or policy.transport_kind != 'synthetic':
+                if policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS:
                     raise Refused('synthetic engine recovery scope unavailable')
                 query = query.join(OfEngineDecision, (OfEngineDecision.account_id == OfTextIntent.account_id) &
                     (OfEngineDecision.intent_id == OfTextIntent.intent_id)).where(
@@ -1352,7 +1360,7 @@ class TextAuthority:
             if synthetic_engine_only:
                 from db.onlyfans_engine_models import OfEngineDecision
                 policy = s.get(OfDeliveryPolicy, account_id)
-                if policy is None or policy.transport_kind != 'synthetic':
+                if policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS:
                     raise Refused('synthetic engine recovery scope unavailable')
                 query = query.join(OfEngineDecision, (OfEngineDecision.account_id == OfTextIntent.account_id) &
                     (OfEngineDecision.intent_id == OfTextIntent.intent_id)).where(

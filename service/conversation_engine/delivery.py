@@ -7,7 +7,7 @@ import json
 from sqlalchemy import select
 
 from db.models import OfConversationState
-from db.onlyfans_delivery_models import OfDeliveryPolicy
+from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEngineAttempt, OfEngineDecision, OfEngineOwner, OfEngineRequest, OfEngineOfferGrant, OfFansConnection
 from onlyfans_runtime.store import Refused, utcnow
 from .webhook_conflict import conflicted_sources
@@ -28,7 +28,7 @@ def prepare(s, runtime, fan_id, origin, decision_id, body, catalog_item_id=None,
             or decision.owner_epoch != owner.epoch or decision.status != 'ready'
             or decision.action not in {'reply', 'offer'} or decision.body != body or decision.intent_id is not None
             or state is None or decision.control_revision != state.revision
-            or policy is None or policy.transport_kind != 'synthetic'):
+            or policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS):
         raise Refused('engine decision is stale or unavailable')
     from .sequence import prior_state
     sequence_reason = prior_state(s, runtime, decision, state)

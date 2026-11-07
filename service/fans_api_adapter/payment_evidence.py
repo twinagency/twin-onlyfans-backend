@@ -27,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import OfConversationState, OfCreatorBinding
-from db.onlyfans_delivery_models import OfTextIntent
+from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_engine_models import OfEngineDecision, OfEngineOfferGrant
 from db.onlyfans_fans_intake_models import OfFansEvidence
 from onlyfans_runtime.store import Refused
@@ -226,6 +226,45 @@ def _commerce(store):
     return CommerceIntake(store)  # Refused without the worker role: callers defer, never hold
 
 
+def _engine_access(store, account, unlock_id, status, now):
+    """Real-provider accounts only: tell the engine its accepted offer was paid for (or reversed).
+
+    Commerce has already applied the purchase; a refusal here never undoes it. The reason is
+    left on the unlock row (status unchanged) so a person can see the engine was not told.
+    """
+    from conversation_engine.commerce import ProviderAccessObservation, record_provider_access
+    with Session(store.engine) as s:
+        policy = s.get(OfDeliveryPolicy, account)
+        if policy is None or policy.transport_kind != 'fansapi':
+            return None
+        u = s.get(OfFansEvidence, (account, unlock_id))
+        t = s.get(OfFansEvidence, (account, u.peer_id)) if u is not None and u.peer_id else None
+        intent = s.get(OfTextIntent, (account, u.intent_id)) if u is not None and u.intent_id else None
+        if t is None or intent is None:
+            return None
+        tenant = _tenant(s, account)
+        key = hashlib.sha256(f'engine-access:{status}:{u.evidence_id}:{t.evidence_id}'.encode()).hexdigest()
+        occurred = purchase_time(u, t)
+        if status == 'revoked':
+            cb = s.scalar(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
+                OfFansEvidence.kind == 'chargeback', OfFansEvidence.provider_transaction_id == t.provider_transaction_id,
+                OfFansEvidence.status == 'applied').order_by(OfFansEvidence.occurred_at.desc()).limit(1))
+            if cb is None:
+                return None
+            occurred = max(cb.occurred_at, occurred + timedelta(seconds=1))
+        observation = ProviderAccessObservation(account_id=account, fan_id=u.fan_id, intent_id=intent.intent_id,
+            message_id=u.message_id, media_ids=tuple(json.loads(intent.media_json)), evidence_key=key,
+            evidence_ref=f'fansapi:{u.dedupe_key}'[:128], status=status,
+            occurred_at=occurred.replace(tzinfo=timezone.utc))
+    try:
+        return record_provider_access(store, tenant, account, observation)
+    except Refused as exc:
+        with Session(store.engine) as s, s.begin():
+            row = s.get(OfFansEvidence, (account, unlock_id), with_for_update=True)
+            row.reason, row.updated_at = ('engine_access:' + str(exc))[:96], now
+        return 'refused'
+
+
 def settle_pair(store, account, unlock_id, now):
     """Hand one exact pairing to the canonical owner. Returns the evidence status or 'deferred'."""
     from onlyfans_runtime.commerce import SyntheticCommerceEvent
@@ -260,7 +299,10 @@ def settle_pair(store, account, unlock_id, now):
                 row.status, row.reason = 'applied', None
             else:
                 _hold(s, row, reason, now)
-        return u.status
+        result = u.status
+    if outcome == 'applied':
+        _engine_access(store, account, unlock_id, 'confirmed', now)
+    return result
 
 
 def settle_chargeback(store, account, chargeback_id, now):
@@ -285,6 +327,7 @@ def settle_chargeback(store, account, chargeback_id, now):
             _hold(s, cb, 'chargeback_mismatch', now)
             return 'held'
         u = s.get(OfFansEvidence, (account, t.peer_id))
+        unlock_evidence_id = u.evidence_id
         intent = s.get(OfTextIntent, (account, u.intent_id))
         tenant = _tenant(s, account)
         occurred = max(cb.occurred_at, purchase_time(u, t) + timedelta(seconds=1))
@@ -305,7 +348,10 @@ def settle_chargeback(store, account, chargeback_id, now):
             cb.status, cb.reason = 'applied', None
         else:
             _hold(s, cb, reason, now)
-        return cb.status
+        result = cb.status
+    if outcome == 'applied':
+        _engine_access(store, account, unlock_evidence_id, 'revoked', now)
+    return result
 
 
 def fan_is_held(s, account, fan_id=None):

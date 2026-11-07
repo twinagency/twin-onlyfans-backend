@@ -427,10 +427,10 @@ class Store:
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
             if synthetic_engine_only:
-                from db.onlyfans_delivery_models import OfDeliveryPolicy
+                from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy
                 from db.onlyfans_engine_models import OfEngineOwner
                 policy, owner = s.get(OfDeliveryPolicy, account_id), s.get(OfEngineOwner, (account_id, fan_id))
-                if (policy is None or policy.transport_kind != 'synthetic' or owner is None
+                if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or owner is None
                         or owner.binding_id != runtime.binding_id or action != 'mark_no_contact'):
                     raise Refused('synthetic engine control scope unavailable')
             prior = s.get(OfControlAudit, (account_id, command_key))

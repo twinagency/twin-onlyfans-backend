@@ -3,6 +3,11 @@ from pathlib import Path
 import unittest
 
 
+# The only engine modules that may import httpx: the audited egress module and the real transport
+# that drives it. Nothing else under conversation_engine/ or fans_api_adapter/ may.
+HTTPX_ALLOWED = frozenset({"https_transport.py", "real_transport.py"})
+
+
 class ImportBoundaryTests(unittest.TestCase):
     def test_new_primitives_do_not_import_legacy_writers_or_network_clients(self):
         service_root = Path(__file__).resolve().parents[2]
@@ -20,15 +25,15 @@ class ImportBoundaryTests(unittest.TestCase):
                         continue
                     for module in modules:
                         with self.subTest(path=path.name, module=module):
-                            if path.name == "https_transport.py" and module == "httpx":
-                                continue  # the single audited egress module; asserted below
+                            if path.name in HTTPX_ALLOWED and (module == "httpx" or module.startswith("httpx.")):
+                                continue  # the audited egress modules; asserted below
                             if path.name == "local_http.py" and module == "socket":
                                 continue  # fixture uses SHUT_RDWR to simulate a lost response
                             self.assertFalse(any(module == name or module.startswith(name + ".") for name in forbidden))
                             if path.name in {"identity.py", "evidence.py", "recovery.py", "sales.py"}:
                                 self.assertFalse(module.startswith("onlyfans_runtime"))
 
-    def test_httpx_is_isolated_to_the_one_https_transport_module(self):
+    def test_httpx_is_isolated_to_the_two_egress_modules(self):
         service_root = Path(__file__).resolve().parents[2]
         importers = set()
         for package in ("conversation_engine", "fans_api_adapter"):
@@ -38,7 +43,8 @@ class ImportBoundaryTests(unittest.TestCase):
                              else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
                     if any(n == "httpx" or n.startswith("httpx.") for n in names):
                         importers.add(path.name)
-        self.assertEqual(importers, {"https_transport.py"})
+        self.assertTrue(importers <= HTTPX_ALLOWED, importers - HTTPX_ALLOWED)
+        self.assertIn("https_transport.py", importers)
 
     def test_http_fixture_uses_only_fixed_loopback_endpoints(self):
         service_root = Path(__file__).resolve().parents[2]

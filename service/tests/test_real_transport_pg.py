@@ -15,8 +15,7 @@ from fake_fans_server import FakeFans, ACCT, CREATOR
 from conversation_engine.commerce import RealCatalogueCoverage, approve_catalogue_offer
 from conversation_engine.engine import EngineService, SyntheticModel, SyntheticProposal
 from db.models import Message, VaultItem
-from db.onlyfans_delivery_models import OfTextIntent
-from fans_api_adapter import protocol_lab
+from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
 from fans_api_adapter.intake import FansWebhookAdapter
 from fans_api_adapter.real_transport import (FansApiRealTransport, RealFansConfig, build_client, idempotency_key,
                                              load_real_config)
@@ -25,9 +24,18 @@ from onlyfans_runtime.store import Refused, utcnow
 
 
 @pytest.fixture(autouse=True)
-def registered(monkeypatch):
-    # TextAuthority.dispatch is outside this change: register by exact type for the test only.
-    monkeypatch.setattr(protocol_lab, 'FansApiProtocolLabTransport', FansApiRealTransport)
+def real_flag(monkeypatch):
+    # TextAuthority.dispatch accepts FansApiRealTransport itself, but only behind the explicit flag.
+    monkeypatch.setenv('TWIN_ENGINE_FANSAPI_REAL', '1')
+
+
+def real_policy(database, authority):
+    """Move the account to the real-provider delivery kind (same limits, same revision rules)."""
+    with Session(database[1]) as s:
+        policy = s.get(OfDeliveryPolicy, ACCOUNT)
+        args = dict(expected_revision=policy.revision, enabled=policy.enabled, limit_units=policy.limit_units,
+                    throttle_seconds=policy.throttle_seconds)
+    authority.configure(TENANT, ACCOUNT, actor='real-lab', reason='real provider kind', transport_kind='fansapi', **args)
 
 
 def build(database, fake, *, offer=False, model=None, **kw):
@@ -37,6 +45,7 @@ def build(database, fake, *, offer=False, model=None, **kw):
         item_id = shelf(database[1]); media_policy(authority)
         with Session(database[1]) as s, s.begin():
             for v in s.scalars(select(VaultItem)): v.content_hash_kind = 'vault-metadata-v1'
+    real_policy(database, authority)
     adapter = FansWebhookAdapter(store)
     adapter.bind_simulated(TENANT, ACCOUNT, ACCT, CREATOR)
     engine = EngineService(store, SyntheticModel({}))

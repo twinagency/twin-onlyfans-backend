@@ -16,7 +16,6 @@ from conversation_engine.commerce import RealCatalogueCoverage, approve_catalogu
 from conversation_engine.engine import EngineService, SyntheticModel, SyntheticProposal
 from db.models import Message, VaultItem
 from db.onlyfans_delivery_models import OfTextIntent
-from fans_api_adapter import protocol_lab
 import fans_api_adapter.https_transport as ht
 from fans_api_adapter.intake import FansWebhookAdapter
 from fans_api_adapter.real_transport import FansApiRealTransport, build_client, load_real_config, idempotency_key
@@ -54,7 +53,6 @@ def test_live_proof(database, monkeypatch, capsys):
                     'status': r.status, 'replayed': low.get('idempotent-replayed'), 'credits_balance': bal})
         return r
     monkeypatch.setattr(ht.FansHttpsTransport, '__call__', guarded)
-    monkeypatch.setattr(protocol_lab, 'FansApiProtocolLabTransport', FansApiRealTransport)
 
     config = load_real_config()
     fan = int(CHAT)
@@ -65,6 +63,9 @@ def test_live_proof(database, monkeypatch, capsys):
                         actor='live-operator', reason='B3 live proof')
     authority.configure(TENANT, ACCOUNT, expected_revision=1, enabled=True, media_enabled=True, limit_units=20,
                         throttle_seconds=1, actor='live-operator', reason='B3 live proof media')
+    authority.configure(TENANT, ACCOUNT, expected_revision=2, enabled=True, limit_units=20,
+                        throttle_seconds=1, actor='live-operator', reason='B3 live proof real kind',
+                        transport_kind='fansapi')
     creator = '323358988'
     adapter = FansWebhookAdapter(store)
     adapter.bind_simulated(TENANT, ACCOUNT, config.provider_account, creator)

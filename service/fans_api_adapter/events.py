@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import Fan, Message, OfConversationState, OfCreatorBinding
-from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
+from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_engine_models import OfFansConnection, OfFansWebhook, OfFansWebhookConflict
 from db.onlyfans_fans_intake_models import OfFansEvidence, OfFansLink, OfFansProjection
 from onlyfans_runtime.store import Event, Refused, utcnow
@@ -37,7 +37,7 @@ SUPPORTED = ACCOUNT_EVENTS | {'messages.received', 'messages.sent', 'messages.pp
                               'transactions.new', 'chargebacks.new'}
 # Only the offline lab transport may be driven by this intake until the live
 # transport owner registers a Fans transport kind with the delivery policy.
-ALLOWED_TRANSPORTS = frozenset({'synthetic'})
+ALLOWED_TRANSPORTS = ENGINE_TRANSPORT_KINDS
 _KEY = re.compile(r'[\x21-\x7e]{1,255}\Z')
 
 

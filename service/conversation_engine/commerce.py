@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import Message
-from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
+from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_engine_models import OfEngineAccessEvidence, OfEngineDecision, OfEngineOfferGrant, OfEngineOwner, OfEngineRequest
 from onlyfans_runtime.media_delivery import assert_unowned, catalog_terms
 from onlyfans_runtime.store import Refused, _id, utcnow
@@ -91,6 +91,11 @@ def approve_simulated_offer(store, tenant, account, fan_id, item_id, coverage):
         return grant_id
 
 
+# A grant's coverage evidence must match the policy kind that will send it: lab fixtures for the
+# simulator, synced real vault media for the real provider. Neither can authorize the other.
+_COVERAGE_PREFIX = {'synthetic': 'synthetic:', 'fansapi': 'vault:'}
+
+
 def verified_terms(s, runtime, owner, grant, *, intent_id=None):
     if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id
             or grant is None or grant.binding_id != runtime.binding_id or grant.fan_id != owner.fan_id
@@ -98,7 +103,8 @@ def verified_terms(s, runtime, owner, grant, *, intent_id=None):
             or grant.used_intent_id not in (None, intent_id) or not _sales_permits(owner, grant.item_id)):
         raise Refused('offer authorization is stale or unavailable')
     policy = s.get(OfDeliveryPolicy, runtime.account_id)
-    if policy is None or policy.transport_kind != 'synthetic' or not policy.media_enabled:
+    if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or not policy.media_enabled
+            or not grant.coverage_ref.startswith(_COVERAGE_PREFIX[policy.transport_kind])):
         raise Refused('synthetic media is unavailable')
     terms = catalog_terms(s, runtime.account_id, grant.item_id)
     if _hash(terms) != grant.terms_hash:
@@ -139,7 +145,7 @@ def approve_catalogue_offer(store, tenant, account, fan_id, item_id, coverage):
         owner = s.get(OfEngineOwner, (account, fan_id))
         policy = s.get(OfDeliveryPolicy, account)
         if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id
-                or policy is None or policy.transport_kind != 'synthetic' or not policy.media_enabled
+                or policy is None or policy.transport_kind != 'fansapi' or not policy.media_enabled
                 or not _sales_permits(owner, item_id)):
             raise Refused('catalogue offer is not authorized')
         terms = catalog_terms(s, account, item_id)  # approved, enabled, priced, media live
@@ -176,11 +182,33 @@ class SyntheticAccessObservation:
     occurred_at: datetime
 
 
+@dataclass(frozen=True)
+class ProviderAccessObservation:
+    """Real-provider purchase/chargeback observation for one accepted offer (evidence_ref 'fansapi:...')."""
+    account_id: str
+    fan_id: int
+    intent_id: str
+    message_id: int
+    media_ids: tuple[int, ...]
+    evidence_key: str
+    evidence_ref: str
+    status: str
+    occurred_at: datetime
+
+
 def record_simulated_access(store, tenant, account, observation):
-    if (type(observation) is not SyntheticAccessObservation or observation.account_id != account
+    return _record_access(store, tenant, account, observation, SyntheticAccessObservation, 'synthetic', 'synthetic:')
+
+
+def record_provider_access(store, tenant, account, observation):
+    return _record_access(store, tenant, account, observation, ProviderAccessObservation, 'fansapi', 'fansapi:')
+
+
+def _record_access(store, tenant, account, observation, cls, kind, prefix):
+    if (type(observation) is not cls or observation.account_id != account
             or observation.status not in {'confirmed', 'revoked'} or type(observation.media_ids) is not tuple
             or type(observation.evidence_key) is not str or not 1 <= len(observation.evidence_key) <= 128
-            or type(observation.evidence_ref) is not str or not observation.evidence_ref.startswith('synthetic:')
+            or type(observation.evidence_ref) is not str or not observation.evidence_ref.startswith(prefix)
             or len(observation.evidence_ref) > 128 or not isinstance(observation.occurred_at, datetime)
             or observation.occurred_at.tzinfo is None or observation.occurred_at.utcoffset() is None):
         raise Refused('invalid synthetic access observation')
@@ -191,8 +219,8 @@ def record_simulated_access(store, tenant, account, observation):
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
         policy = s.get(OfDeliveryPolicy, account)
-        if policy is None or policy.transport_kind != 'synthetic':
-            raise Refused('access observation is limited to the synthetic lab')
+        if policy is None or policy.transport_kind != kind:
+            raise Refused('access observation does not match the account delivery mode')
         prior = s.get(OfEngineAccessEvidence, (account, observation.evidence_key))
         if prior is not None:
             if (prior.intent_id, prior.fan_id, prior.message_id, prior.media_json, prior.status,

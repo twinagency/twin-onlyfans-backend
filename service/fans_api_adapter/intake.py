@@ -10,7 +10,7 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
+from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy, OfTextIntent
 from db.onlyfans_engine_models import OfFansConnection, OfFansWebhook, OfFansWebhookConflict
 from onlyfans_runtime.store import Event, Refused, utcnow
 from .webhooks import verify_signature
@@ -83,7 +83,7 @@ class FansWebhookAdapter:
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
             policy = s.get(OfDeliveryPolicy, account)
-            if policy is None or policy.transport_kind != 'synthetic':
+            if policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS:
                 raise Refused('provider binding is limited to the synthetic lab')
             active = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
                                                               OfFansConnection.status == 'active').with_for_update())
@@ -135,7 +135,7 @@ class FansWebhookAdapter:
             if expected_account is not None and (connection.account_id != expected_account or binding.tenant_id != expected_tenant):
                 raise Refused('webhook account scope mismatch')
             policy = s.get(OfDeliveryPolicy, connection.account_id)
-            if policy is None or policy.transport_kind != 'synthetic':
+            if policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS:
                 raise Refused('webhook intake is limited to the synthetic lab')
             runtime = self.store._runtime(s, binding.tenant_id, connection.account_id)
             connection = s.get(OfFansConnection, (connection.account_id, connection.epoch), with_for_update=True)
@@ -187,7 +187,7 @@ class FansWebhookAdapter:
             runtime = self.store._runtime(s, tenant, account)
             policy = s.get(OfDeliveryPolicy, account)
             connection = s.get(OfFansConnection, (account, client.epoch), with_for_update=True)
-            if (policy is None or policy.transport_kind != 'synthetic' or connection is None
+            if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or connection is None
                     or connection.status != 'active' or connection.binding_id != runtime.binding_id
                     or connection.provider_account_id != client.account or connection.provider_creator_id != client.creator_id):
                 raise Refused('protocol observation scope mismatch')

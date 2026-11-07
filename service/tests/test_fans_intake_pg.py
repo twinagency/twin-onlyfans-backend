@@ -510,6 +510,6 @@ def test_backfill_replays_chargebacks_and_refuses_unusable_pages(world):
 def test_schema_chain_contains_the_intake_revision(database):
     from db.schema import HEAD, check_schema
     from db.schema import FANS_INTAKE, REVISION_RANK
-    assert FANS_INTAKE == '0120_fans_intake' and REVISION_RANK[HEAD] == REVISION_RANK[FANS_INTAKE] + 1  # joined chain: 0120 intake, 0121 generations
+    assert FANS_INTAKE == '0120_fans_intake' and REVISION_RANK[HEAD] > REVISION_RANK[FANS_INTAKE]  # joined chain: 0120 intake, 0121 generations, 0122 fansapi
     with database[1].connect() as c:
         check_schema(c)

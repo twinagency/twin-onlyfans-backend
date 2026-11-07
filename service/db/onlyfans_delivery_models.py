@@ -127,10 +127,15 @@ class OfCommerceEvidence(Base):
     payload_json = Column(Text, nullable=False)
 
 
+# Transport kinds the conversation engine may own. 'synthetic' is the simulator and lab
+# path; 'fansapi' is the real Fans API provider. 'native' (legacy Moxy) is never engine-owned.
+ENGINE_TRANSPORT_KINDS = frozenset({'synthetic', 'fansapi'})
+
+
 class OfDeliveryPolicy(Base):
     __tablename__ = "of_delivery_policy"
     __table_args__ = (
-        CheckConstraint("transport_kind IN ('synthetic','native')", name="transport_kind"),
+        CheckConstraint("transport_kind IN ('synthetic','native','fansapi')", name="transport_kind"),
         CheckConstraint("limit_units >= 0 AND limit_units <= 10000", name="limit_units"),
         CheckConstraint("used_units >= 0", name="used_units"),
         CheckConstraint("queued_count >= 0 AND queued_count <= 1000", name="queued_count"),

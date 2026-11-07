@@ -67,7 +67,7 @@ def test_live_proof(database, monkeypatch, capsys):
     authority.configure(TENANT, ACCOUNT, expected_revision=2, enabled=True, limit_units=20,
                         throttle_seconds=1, actor='live-operator', reason='B3 live proof real kind',
                         transport_kind='fansapi')
-    creator = os.environ.get('LIVE_TEST_CREATOR_OF_ID', 'creator-of-id')
+    creator = os.environ.get('LIVE_TEST_CREATOR_OF_ID', '900000000001')
     adapter = FansWebhookAdapter(store)
     adapter.bind_simulated(TENANT, ACCOUNT, config.provider_account, creator)
     client = build_client(config, creator_id=creator, epoch=1)

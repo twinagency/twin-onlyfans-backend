@@ -5,7 +5,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 
-ACCT, CREATOR = 'acct_real_fixture', os.environ.get('LIVE_TEST_CREATOR_OF_ID', 'creator-of-id')
+ACCT, CREATOR = 'acct_real_fixture', os.environ.get('LIVE_TEST_CREATOR_OF_ID', '900000000001')
 
 
 class FakeFans:

@@ -285,6 +285,8 @@ for route in onlyfans_app.app.routes:
     methods = set(getattr(route, "methods", set()))
     if route.path.startswith("/onlyfans/control/v1/"):
         assert methods == {"POST"}, route.path
+    elif route.path.startswith("/onlyfans/control/v2/"):
+        assert methods in ({"GET"}, {"POST"}), route.path
     elif route.path == "/onlyfans/content/v1/accounts/{account_id}/vault/videos/{media_id}/stream":
         assert methods == {"GET", "HEAD"}, route.path
     elif (route.path == "/onlyfans/content-sync/v1/accounts/{account_id}/drafts/{draft_id}/files/{file_id}/chunks/{index}"):

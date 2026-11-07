@@ -2,7 +2,7 @@
 from hashlib import sha256
 import json
 import re
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from db.models import OfConversationState
 from db.onlyfans_delivery_models import OfDeliveryPolicy, OfTextIntent
@@ -67,8 +67,11 @@ def execute(store, tenant, account, request_id, *, action, expected_revision, co
         else:
             if request.status != 'handover_accepted' or request.accepted_by != actor or request.owner != actor:
                 raise Refused('accepted human responsibility is required')
+            latest_generation = s.scalar(select(func.max(OfEngineDecision.generation)).where(
+                OfEngineDecision.account_id == account, OfEngineDecision.request_id == request_id))
             decisions = list(s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == account,
-                OfEngineDecision.request_id == request_id).order_by(OfEngineDecision.part_index)))
+                OfEngineDecision.request_id == request_id, OfEngineDecision.generation == latest_generation)
+                .order_by(OfEngineDecision.part_index)))
             intents = [s.get(OfTextIntent, (account, item.intent_id)) for item in decisions if item.intent_id]
             if any(row is None or row.status in {'dispatching','unknown'} or
                    (row.status == 'accepted' and row.projected_at is None) for row in intents):

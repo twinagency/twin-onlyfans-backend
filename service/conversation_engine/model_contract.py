@@ -33,7 +33,8 @@ def parse_proposal(raw):
             raise ValueError("oversized proposal")
         value = json.loads(raw, object_pairs_hook=_object, parse_constant=_nonfinite)
         if (type(value) is not dict or set(value) - {
-                "body", "sales_signal", "item_scope", "action", "offer_grant_id", "parts"}
+                "body", "sales_signal", "item_scope", "action", "offer_grant_id", "parts",
+            "pitch", "price_claims", "purchase_claim"}
                 or type(value.get("body")) is not str
                 or type(value.get("item_scope", [])) is not list
                 or type(value.get("parts", [])) is not list
@@ -42,6 +43,9 @@ def parse_proposal(raw):
                 or type(value.get("action", "reply")) is not str
                 or value.get("action", "reply") not in {"reply", "offer"}
                 or value.get("offer_grant_id") is not None and type(value.get("offer_grant_id")) is not str
+                or type(value.get("pitch", False)) is not bool or type(value.get("purchase_claim", False)) is not bool
+                or type(value.get("price_claims", [])) is not list
+                or any(type(item) is not int or isinstance(item, bool) for item in value.get("price_claims", []))
                 or any(type(item) is not str for item in value.get("parts", []))
                 or any(type(item) is not str for item in value.get("item_scope", []))):
             raise ValueError("unsupported proposal")
@@ -49,7 +53,9 @@ def parse_proposal(raw):
             item.encode("utf-8")
         return SyntheticProposal(body=value["body"], sales_signal=value.get("sales_signal", "none"),
             item_scope=tuple(value.get("item_scope", [])), action=value.get("action", "reply"),
-            offer_grant_id=value.get("offer_grant_id"), parts=tuple(value.get("parts", [])))
+            offer_grant_id=value.get("offer_grant_id"), parts=tuple(value.get("parts", [])),
+            pitch=value.get("pitch", False), price_claims=tuple(value.get("price_claims", [])),
+            purchase_claim=value.get("purchase_claim", False))
     except (ValueError, TypeError, UnicodeError, RecursionError):
         raise Refused("model proposal does not match its contract") from None
 

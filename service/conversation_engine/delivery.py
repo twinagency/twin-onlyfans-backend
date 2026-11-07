@@ -10,6 +10,7 @@ from db.models import OfConversationState
 from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEngineAttempt, OfEngineDecision, OfEngineOwner, OfEngineRequest, OfEngineOfferGrant, OfFansConnection
 from onlyfans_runtime.store import Refused, utcnow
+from .webhook_conflict import conflicted_sources
 
 
 def prepare(s, runtime, fan_id, origin, decision_id, body, catalog_item_id=None, quoted_price_cents=None):
@@ -53,6 +54,8 @@ def prepare(s, runtime, fan_id, origin, decision_id, body, catalog_item_id=None,
     request = s.get(OfEngineRequest, (runtime.account_id, decision.request_id))
     if request is None or request.fan_id != fan_id or request.binding_id != runtime.binding_id or request.status != 'open':
         raise Refused('engine request is unavailable')
+    if (fan_id, request.source_message_id) in conflicted_sources(s, runtime.account_id):
+        raise Refused('source webhook conflict')
     return decision
 
 
@@ -92,6 +95,8 @@ def current(s, runtime, intent):
              and decision.owner_epoch == owner.epoch and decision.body == intent.body
              and decision.payload_hash == intent.payload_hash and request is not None
              and request.fan_id == intent.fan_id and request.status == 'open')
+    if valid and (intent.fan_id, request.source_message_id) in conflicted_sources(s, intent.account_id):
+        valid = False
     if valid:
         from .memory import current as memory_current
         valid = memory_current(s, runtime, decision)
@@ -134,7 +139,12 @@ def control_changed(s, account_id, fan_id, state):
         return
     owner.epoch += 1
     owner.revision += 1
-    owner.mode = 'human' if state.mode == 'human_controlled' else 'paused'
+    if state.mode == 'automated' and state.takeover_state == 'none':
+        # A hand-back (or an explicit resume) re-activates engine ownership under
+        # the new epoch; earlier decisions carry the old epoch and stay stale.
+        owner.mode = 'active'
+    else:
+        owner.mode = 'human' if state.mode == 'human_controlled' else 'paused'
     owner.updated_at = utcnow()
 
 
@@ -165,7 +175,8 @@ def completed(s, intent):
         request.status, request.next_step = 'waiting_fan', 'await_purchase_or_question'
     else:
         remaining = s.scalar(select(OfEngineDecision.decision_id).where(OfEngineDecision.account_id == intent.account_id,
-            OfEngineDecision.request_id == decision.request_id, OfEngineDecision.part_index > decision.part_index,
+            OfEngineDecision.request_id == decision.request_id, OfEngineDecision.generation == decision.generation,
+            OfEngineDecision.part_index > decision.part_index,
             OfEngineDecision.status != 'completed').limit(1))
         request.status, request.next_step = ('open', 'send_next_part') if remaining is not None else ('completed', 'none')
     request.updated_at = utcnow()
@@ -212,14 +223,16 @@ def unsent_cancelled(s, intent):
         return
     decision.status, decision.updated_at = 'cancelled', utcnow()
     later = s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == intent.account_id,
-        OfEngineDecision.request_id == decision.request_id, OfEngineDecision.part_index > decision.part_index,
+        OfEngineDecision.request_id == decision.request_id, OfEngineDecision.generation == decision.generation,
+        OfEngineDecision.part_index > decision.part_index,
         OfEngineDecision.status == 'ready')).all()
     for part in later:
         part.status, part.updated_at = 'cancelled', utcnow()
     request = s.get(OfEngineRequest, (intent.account_id, decision.request_id))
     if request.status not in {'handover_pending', 'handover_accepted'}:
         request.status = 'open'
-    request.next_step, request.updated_at = 'review_changed_conversation', utcnow()
+    conflicted = (decision.fan_id, request.source_message_id) in conflicted_sources(s, intent.account_id)
+    request.next_step, request.updated_at = ('review_webhook_conflict' if conflicted else 'review_changed_conversation'), utcnow()
     request.revision += 1
 
 

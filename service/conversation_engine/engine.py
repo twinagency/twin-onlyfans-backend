@@ -20,6 +20,9 @@ from db.onlyfans_moxy_models import MoxyAccount
 from onlyfans_runtime.store import Refused, _id, utcnow
 from onlyfans_runtime.text_delivery import TextAuthority
 from .history_scope import current_binding_message, has_unscoped_messages
+from .webhook_conflict import conflicted_sources
+
+MAX_GENERATIONS = 5  # lab bound on regenerations of one request, not an approved budget
 
 
 def _digest(value):
@@ -34,6 +37,41 @@ class SyntheticProposal:
     action: str = 'reply'
     offer_grant_id: str | None = None
     parts: tuple[str, ...] = ()
+    # Model declarations about commercial content in `body`/`parts`. They are
+    # validated in plan(); a declaration never grants permission to sell.
+    pitch: bool = False
+    price_claims: tuple[int, ...] = ()
+    purchase_claim: bool = False
+
+
+def _latest_generation(s, account, request_id):
+    rows = list(s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == account,
+        OfEngineDecision.request_id == request_id).order_by(OfEngineDecision.generation.desc(),
+        OfEngineDecision.part_index)))
+    if not rows:
+        return []
+    return [row for row in rows if row.generation == rows[0].generation]
+
+
+def _proved_unsent(s, account, parts):
+    """True only when every part of a generation is cancelled/held with no send in doubt."""
+    for part in parts:
+        if part.status not in {'cancelled', 'held'}:
+            return False
+        if part.intent_id is None:
+            continue
+        intent = s.get(OfTextIntent, (account, part.intent_id))
+        if intent is None:
+            return False
+        if intent.status == 'cancelled' and part.status == 'cancelled':
+            continue
+        attempts = list(s.scalars(select(OfEngineAttempt).where(OfEngineAttempt.account_id == account,
+            OfEngineAttempt.intent_id == part.intent_id)))
+        if (part.status == 'held' and intent.status == 'not_accepted' and attempts
+                and all(a.outcome == 'not_accepted' and a.evidence_json for a in attempts)):
+            continue
+        return False
+    return True
 
 
 class SyntheticModel:
@@ -171,19 +209,27 @@ class EngineService:
                     binding_id=runtime.binding_id, source_message_id=source_message_id, status='open',
                     owner='engine', next_step='prepare_reply', revision=0, created_at=utcnow(), updated_at=utcnow())
                 s.add(request); s.flush()
-            prior = s.scalar(select(OfEngineDecision).where(OfEngineDecision.account_id == account,
-                                                             OfEngineDecision.request_id == request.request_id).order_by(OfEngineDecision.part_index).limit(1))
-            if prior is not None:
-                return prior.decision_id
+            existing = _latest_generation(s, account, request.request_id)
+            observed_generation = existing[0].generation if existing else None
+            if existing and (request.status != 'open' or existing[0].generation + 1 >= MAX_GENERATIONS
+                             or not _proved_unsent(s, account, existing)):
+                return existing[0].decision_id
+            if (fan_id, source_message_id) in conflicted_sources(s, account):
+                raise Refused('source message has conflicting webhook evidence')
             latest = s.scalar(select(Message).where(Message.account_id == account, Message.fan_id == fan_id,
                 Message.direction == 'in', Message.is_unsent.is_(False), current_binding_message(runtime.binding_id)).order_by(Message.created_at.desc(), Message.message_id.desc()).limit(1))
             stale = latest is None or latest.message_id != source_message_id
             if stale:
-                request.next_step, request.updated_at = 'review_newer_input', utcnow()
+                # Newer input supersedes this request; close it so it cannot linger as open work.
+                if request.status == 'open':
+                    request.status, request.next_step = 'cancelled', 'superseded_by_newer_input'
+                else:
+                    request.next_step = 'superseded_by_newer_input'
+                request.updated_at = utcnow()
                 request.revision += 1
             else:
                 history = list(s.scalars(select(Message).where(Message.account_id == account, Message.fan_id == fan_id,
-                    current_binding_message(runtime.binding_id)).order_by(Message.created_at.desc(), Message.message_id.desc()).limit(101)))
+                    Message.is_unsent.is_(False), current_binding_message(runtime.binding_id)).order_by(Message.created_at.desc(), Message.message_id.desc()).limit(101)))
                 connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account, OfFansConnection.status == 'active'))
                 connection_epoch = connection.epoch if connection else None
                 pending_rows = s.execute(select(OfEngineDecision, OfTextIntent.status).outerjoin(OfTextIntent,
@@ -208,14 +254,17 @@ class EngineService:
                     'owner_epoch': owner.epoch, 'connection_epoch': connection_epoch, 'input_revision': state.input_revision, 'control_revision': state.revision,
                     'sales_mode': owner.sales_mode, 'sales_scope': json.loads(owner.sales_scope_json),
                     'current_message': {'id': source_message_id, 'body': message.body},
-                    'history': [{'id': row.message_id, 'direction': row.direction, 'body': row.body} for row in reversed(history[:100])],
+                    'history': [{'id': row.message_id, 'direction': row.direction, 'body': row.body,
+                        'timestamp': row.created_at.isoformat() if row.created_at else None,
+                        'price_cents': row.price_cents, 'media_count': row.media_count,
+                        'paid': row.is_paid} for row in reversed(history[:100])],
                     'history_truncated': len(history) > 100,
                     'history_scope_incomplete': has_unscoped_messages(s, account, fan_id, runtime.binding_id),
                     'memory': memory_view,
                     'offer_reference': offer_match,
                     'catalogue_search': catalogue_view,
                     'pending_actions': [{'decision_id': d.decision_id, 'request_id': d.request_id,
-                        'action': d.action, 'outcome': intent_status or d.status, 'body': d.body,
+                        'generation': d.generation, 'action': d.action, 'outcome': intent_status or d.status, 'body': d.body,
                         'terms': json.loads(d.terms_json) if d.terms_json else None}
                         for d, intent_status in pending_rows[:50]],
                     'pending_actions_truncated': len(pending_rows) > 50,
@@ -236,7 +285,10 @@ class EngineService:
                 or (proposal.parts and proposal.action != 'reply') or proposal.action not in {'reply', 'offer'}
                 or (proposal.action == 'reply' and proposal.offer_grant_id is not None)
                 or (proposal.action == 'offer' and (type(proposal.offer_grant_id) is not str or len(proposal.offer_grant_id) != 36))
-                or any(type(x) is not str or not x.strip() for x in proposal.item_scope)):
+                or any(type(x) is not str or not x.strip() for x in proposal.item_scope)
+                or type(proposal.pitch) is not bool or type(proposal.purchase_claim) is not bool
+                or type(proposal.price_claims) is not tuple
+                or any(type(x) is not int or isinstance(x, bool) or x < 0 for x in proposal.price_claims)):
             raise Refused('invalid synthetic proposal')
         if proposal.sales_signal == 'reopen' and not proposal.item_scope:
             raise Refused('explicit buying scope required')
@@ -247,25 +299,38 @@ class EngineService:
             owner = s.get(OfEngineOwner, (account, fan_id))
             state = s.get(OfConversationState, (account, fan_id))
             policy = s.get(OfDeliveryPolicy, account)
-            request = s.get(OfEngineRequest, (account, request_id))
-            prior = s.scalar(select(OfEngineDecision).where(OfEngineDecision.account_id == account,
-                                                             OfEngineDecision.request_id == request_id).order_by(OfEngineDecision.part_index).limit(1))
+            request = s.get(OfEngineRequest, (account, request_id), with_for_update=True)
+            existing = _latest_generation(s, account, request_id)
             current_connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account, OfFansConnection.status == 'active'))
             current_epoch = current_connection.epoch if current_connection else None
-            if prior is not None:
-                return prior.decision_id
+            if existing:
+                # Another regenerator won, or the generation we saw is no longer supersedable.
+                if (existing[0].generation != observed_generation or request is None or request.status != 'open'
+                        or not _proved_unsent(s, account, existing)):
+                    return existing[0].decision_id
+            elif observed_generation is not None:
+                raise Refused('conversation changed during generation')
             if (policy is None or policy.transport_kind != 'synthetic' or not policy.enabled
                     or owner is None or owner.mode != 'active' or owner.epoch != epoch or runtime.binding_id != binding
                     or owner.binding_id != binding or current_epoch != snapshot['connection_epoch'] or state is None or state.mode != 'automated'
                     or state.takeover_state != 'none' or state.input_revision != snapshot['input_revision']
                     or state.revision != snapshot['control_revision'] or request is None or request.status != 'open'):
                 raise Refused('conversation changed during generation')
+            if (fan_id, source_message_id) in conflicted_sources(s, account):
+                raise Refused('source message has conflicting webhook evidence')
+            effective_sales_mode = ('paused' if proposal.sales_signal == 'decline'
+                                    else 'reopened_scoped' if proposal.sales_signal == 'reopen' and owner.sales_mode != 'open'
+                                    else owner.sales_mode)
+            from .claims import check_plain_text
+            check_plain_text([proposal.body, *proposal.parts], proposal, effective_sales_mode,
+                {offer['priceCents'] for offer in snapshot['offer_reference']['offers']})
             if proposal.sales_signal == 'decline':
                 owner.sales_mode, owner.sales_scope_json, owner.sales_source_message_id = 'paused', '[]', source_message_id
                 owner.revision += 1; owner.updated_at = utcnow()
-            elif proposal.sales_signal == 'reopen':
-                if owner.sales_mode != 'paused':
-                    raise Refused('sales are not paused')
+            elif proposal.sales_signal == 'reopen' and owner.sales_mode != 'open':
+                # From paused or an earlier scoped reopening the newest explicit
+                # scope replaces the old one. While selling is already open the
+                # signal changes nothing (it must not narrow or raise).
                 owner.sales_mode, owner.sales_scope_json, owner.sales_source_message_id = 'reopened_scoped', json.dumps(sorted(set(proposal.item_scope))), source_message_id
                 owner.revision += 1; owner.updated_at = utcnow()
             decision_id = str(uuid.uuid4())
@@ -289,7 +354,11 @@ class EngineService:
                     if type(label) is not str or not label.strip() or len(label.encode()) > 2000:
                         raise Refused('approved item label is unavailable')
                     cents = terms['price_cents']
-                    body = f"{label.strip()} — USD {cents // 100}.{cents % 100:02d}."
+                    # The drafted answer stays; the commercial section is rendered
+                    # by the application from the frozen terms, never from model text.
+                    body = f"{proposal.body.strip()}\n\n{label.strip()} — USD {cents // 100}.{cents % 100:02d}."
+                    if len(body.encode('utf-8')) > 4000:
+                        raise Refused('answer plus offer exceeds the message limit')
             payload_hash = TextAuthority._wire_hash(account, fan_id, body,
                 terms['media_ids'] if terms else (), terms['preview_ids'] if terms else (), terms['price_cents'] if terms else 0)
             source = s.get(Message, (account, fan_id, source_message_id))
@@ -304,7 +373,15 @@ class EngineService:
             if _digest({'offers':match_offers(s, runtime, fan_id, source.body),
                         'catalogue':search_context(s, runtime, fan_id, source)}) != offer_fingerprint:
                 raise Refused('catalogue or offer references changed during generation')
-            decision = OfEngineDecision(account_id=account, decision_id=decision_id, request_id=request_id, part_index=0, fan_id=fan_id,
+            generation = 0 if observed_generation is None else observed_generation + 1
+            if observed_generation is not None:
+                # Supersede proved-unsent work; keep it as append-only evidence and
+                # make sure a held decision can no longer be retried.
+                for old in existing:
+                    old.status, old.updated_at = 'cancelled', utcnow()
+                request.next_step, request.updated_at = 'prepare_reply', utcnow()
+                request.revision += 1
+            decision = OfEngineDecision(account_id=account, decision_id=decision_id, request_id=request_id, generation=generation, part_index=0, fan_id=fan_id,
                 binding_id=binding, owner_epoch=epoch, connection_epoch=connection_epoch, input_revision=state.input_revision, control_revision=state.revision,
                 action=proposal.action, offer_grant_id=grant.grant_id if grant else None,
                 catalog_item_id=terms['item']['id'] if terms else None,
@@ -319,7 +396,7 @@ class EngineService:
             create_proof(s, runtime, decision, source, state, policy)
             for index, part in enumerate(proposal.parts, start=1):
                 additional = OfEngineDecision(account_id=account, decision_id=str(uuid.uuid4()), request_id=request_id,
-                    part_index=index, fan_id=fan_id, binding_id=binding, owner_epoch=epoch,
+                    generation=generation, part_index=index, fan_id=fan_id, binding_id=binding, owner_epoch=epoch,
                     connection_epoch=connection_epoch, input_revision=state.input_revision,
                     control_revision=state.revision, action='reply', body=part,
                     payload_hash=TextAuthority._wire_hash(account, fan_id, part, (), (), 0),
@@ -349,13 +426,15 @@ class EngineService:
                 current = s.get(OfEngineDecision, (account, decision_id))
                 state = s.get(OfConversationState, (account, fan))
                 request = s.get(OfEngineRequest, (account, current.request_id)) if current else None
-                if current is not None and request is not None and str(exc) == 'sequence conversation changed':
+                if current is not None and request is not None and str(exc) in {'sequence conversation changed', 'source webhook conflict'}:
                     parts = s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == account,
-                        OfEngineDecision.request_id == current.request_id, OfEngineDecision.part_index >= current.part_index,
+                        OfEngineDecision.request_id == current.request_id, OfEngineDecision.generation == current.generation,
+                        OfEngineDecision.part_index >= current.part_index,
                         OfEngineDecision.status == 'ready')).all()
                     for part in parts:
                         part.status, part.updated_at = 'cancelled', utcnow()
-                    request.next_step, request.updated_at = 'review_changed_conversation', utcnow()
+                    request.next_step = 'review_webhook_conflict' if str(exc) == 'source webhook conflict' else 'review_changed_conversation'
+                    request.updated_at = utcnow()
                     request.revision += 1
                 if (state is not None and request is not None and request.status == 'open'
                         and self.store._unresolved(s, account, fan, state)):
@@ -364,6 +443,47 @@ class EngineService:
             raise
 
 
+    def fence_conflicted_sources(self, tenant, account):
+        """Cancel unsent work derived from a source whose webhook later conflicted.
+
+        Ready decisions are cancelled; a queued, never-dispatched intent is
+        cancelled with its queue accounting. Anything dispatching, unknown or
+        accepted is left alone: an ambiguous or finished send is never replayed.
+        Final dispatch also refuses such a source (delivery.current).
+        """
+        fenced = []
+        with Session(self.engine) as s, s.begin():
+            runtime = self.store._runtime(s, tenant, account)
+            policy = s.get(OfDeliveryPolicy, account, with_for_update=True)
+            sources = conflicted_sources(s, account)
+            if not sources:
+                return fenced
+            requests = s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account,
+                OfEngineRequest.binding_id == runtime.binding_id,
+                OfEngineRequest.status.not_in(('completed', 'declined', 'cancelled')))).all()
+            for request in requests:
+                if (request.fan_id, request.source_message_id) not in sources:
+                    continue
+                changed = False
+                for item in _latest_generation(s, account, request.request_id):
+                    if item.status not in {'ready', 'queued'}:
+                        continue
+                    if item.intent_id:
+                        intent = s.get(OfTextIntent, (account, item.intent_id), with_for_update=True)
+                        if intent is None or intent.status != 'queued':
+                            continue  # dispatch fence decides; never touch an in-flight send
+                        if policy is None or policy.queued_count < 1:
+                            raise Refused('delivery queue accounting is inconsistent')
+                        intent.status, intent.reason, intent.updated_at = 'cancelled', 'webhook_conflict', utcnow()
+                        policy.queued_count -= 1
+                    item.status, item.updated_at = 'cancelled', utcnow()
+                    changed = True
+                if changed:
+                    request.next_step, request.updated_at = 'review_webhook_conflict', utcnow()
+                    request.revision += 1
+                    fenced.append(request.request_id)
+        return fenced
+
     def sequence(self, tenant, account, decision_id):
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
@@ -371,7 +491,8 @@ class EngineService:
             if decision is None or decision.binding_id != runtime.binding_id:
                 raise Refused('engine decision unavailable')
             return list(s.scalars(select(OfEngineDecision.decision_id).where(
-                OfEngineDecision.account_id == account, OfEngineDecision.request_id == decision.request_id)
+                OfEngineDecision.account_id == account, OfEngineDecision.request_id == decision.request_id,
+                OfEngineDecision.generation == decision.generation)
                 .order_by(OfEngineDecision.part_index)))
 
 

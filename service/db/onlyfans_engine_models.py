@@ -62,8 +62,9 @@ class OfEngineDecision(Base):
         ForeignKeyConstraint(['account_id', 'request_id'], ['of_engine_request.account_id', 'of_engine_request.request_id'], ondelete='RESTRICT'),
         ForeignKeyConstraint(['account_id', 'intent_id'], ['of_text_intent.account_id', 'of_text_intent.intent_id'], ondelete='RESTRICT'),
         ForeignKeyConstraint(['account_id', 'offer_grant_id'], ['of_engine_offer_grant.account_id', 'of_engine_offer_grant.grant_id'], ondelete='RESTRICT'),
-        UniqueConstraint('account_id', 'request_id', 'part_index', name='uq_engine_decision_request_part',
-                         info={'onlyfans_since': '0117_engine_message_parts'}),
+        UniqueConstraint('account_id', 'request_id', 'generation', 'part_index', name='uq_engine_decision_request_generation_part',
+                         info={'onlyfans_since': '0120_engine_generations'}),
+        CheckConstraint('generation >= 0', name='generation', info={'onlyfans_since': '0120_engine_generations'}),
         UniqueConstraint('account_id', 'intent_id', name='uq_engine_decision_intent'),
         CheckConstraint("status IN ('ready','queued','unknown','completed','cancelled','held')", name='status'),
         CheckConstraint("action IN ('reply','offer')", name='action'),
@@ -75,6 +76,7 @@ class OfEngineDecision(Base):
     decision_id = Column(String(36), primary_key=True)
     request_id = Column(String(36), nullable=False)
     part_index = Column(Integer, nullable=False, server_default=text('0'), info={'onlyfans_since': '0117_engine_message_parts'})
+    generation = Column(Integer, nullable=False, server_default=text('0'), info={'onlyfans_since': '0120_engine_generations'})
     fan_id = Column(BigInteger, nullable=False)
     binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
     owner_epoch = Column(BigInteger, nullable=False)

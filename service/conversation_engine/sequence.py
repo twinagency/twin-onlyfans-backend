@@ -11,7 +11,8 @@ def prior_state(s, runtime, decision, state):
     if decision.part_index == 0:
         return None if state.input_revision == decision.input_revision else 'conversation_changed'
     previous = list(s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == runtime.account_id,
-        OfEngineDecision.request_id == decision.request_id, OfEngineDecision.part_index < decision.part_index)
+        OfEngineDecision.request_id == decision.request_id, OfEngineDecision.generation == decision.generation,
+        OfEngineDecision.part_index < decision.part_index)
         .order_by(OfEngineDecision.part_index)))
     if [row.part_index for row in previous] != list(range(decision.part_index)) or any(row.status != 'completed' for row in previous):
         return 'predecessor_incomplete'

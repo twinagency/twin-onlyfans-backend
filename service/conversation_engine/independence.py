@@ -1,4 +1,4 @@
-"""Application-proven independent replies for the synthetic lab.
+"""Application-proven independent replies, including a narrow supervised Fans API case.
 
 The first proof class is bounded integer arithmetic: the application computes
 and validates the *entire* response from the current canonical message and
@@ -38,19 +38,34 @@ def arithmetic_answer(message):
     return f'{left} + {right} = {left + right}.'
 
 
-def verified_answer(message):
+def verified_answer(message, *, account=None, policy=None):
     if type(message) is str and _IDENTITY.fullmatch(message):
+        if policy is not None and policy.transport_kind == 'fansapi':
+            from .writer_context import active_profile
+            profile = active_profile(account)
+            answer = profile.role_statement.strip() if profile is not None else ''
+            return ('identity.v1', answer) if answer else (None, None)
         return 'identity.v1', _IDENTITY_REPLY
+    # Arithmetic remains a synthetic-lab proof; a Fans API worker only uses
+    # the creator-approved exact identity wording for its narrow first case.
+    if policy is not None and policy.transport_kind == 'fansapi':
+        return None, None
     answer = arithmetic_answer(message)
     return ('arithmetic.v1', answer) if answer is not None else (None, None)
 
 
 def _anchor(s, runtime, fan_id, state, policy, *, own_intent=None):
-    if (state is None or policy is None or policy.transport_kind != 'synthetic'
-            or policy.delivery_mode != 'gap' or state.unresolved_attempt_id is None
-            or policy.active_intent_id is None):
+    if (state is None or policy is None or policy.transport_kind not in {'synthetic', 'fansapi'}
+            or policy.delivery_mode != 'gap' or state.unresolved_attempt_id is None):
         return None
-    anchor = s.get(OfTextIntent, (runtime.account_id, policy.active_intent_id))
+    if policy.transport_kind == 'fansapi':
+        # Fans API uses a per-fan pointer rather than the account-wide slot.
+        anchor = s.scalar(select(OfTextIntent).where(OfTextIntent.account_id == runtime.account_id,
+            OfTextIntent.fan_id == fan_id, OfTextIntent.attempt_id == state.unresolved_attempt_id))
+    else:
+        if policy.active_intent_id is None:
+            return None
+        anchor = s.get(OfTextIntent, (runtime.account_id, policy.active_intent_id))
     if (anchor is None or anchor.fan_id != fan_id or anchor.binding_id != runtime.binding_id
             or anchor.attempt_id != state.unresolved_attempt_id or anchor.status not in {'unknown', 'accepted'}
             or not anchor.reservation_held or anchor.wire_started_at is None):
@@ -65,6 +80,8 @@ def _anchor(s, runtime, fan_id, state, policy, *, own_intent=None):
         return None
     others = select(OfTextIntent.intent_id).where(OfTextIntent.account_id == runtime.account_id,
         OfTextIntent.status.in_(('unknown', 'dispatching')), OfTextIntent.intent_id != anchor.intent_id)
+    if policy.transport_kind == 'fansapi':
+        others = others.where(OfTextIntent.fan_id == fan_id)
     if own_intent is not None:
         others = others.where(OfTextIntent.intent_id != own_intent)
     if s.scalar(others.limit(1)) is not None:
@@ -98,8 +115,23 @@ def _noninterfering_anchor(s, runtime, anchor, answer):
             sorted((left, right)) != sorted((next_left, next_right)))
 
 
-def create_proof(s, runtime, decision, source, state, policy):
-    kind, answer = verified_answer(source.body)
+def can_prepare_identity(s, runtime, fan_id, source_message_id, state, policy):
+    # Only the exact approved identity answer after a neutral unknown reply.
+    if policy is None or policy.transport_kind != 'fansapi' or source_message_id is None:
+        return False
+    source = s.get(Message, (runtime.account_id, fan_id, source_message_id))
+    if source is None or source.direction != 'in' or source.is_unsent:
+        return False
+    kind, answer = verified_answer(source.body, account=runtime.account_id, policy=policy)
+    anchor = _anchor(s, runtime, fan_id, state, policy)
+    return bool(kind == 'identity.v1' and answer and anchor is not None
+                and _noninterfering_anchor(s, runtime, anchor, answer))
+
+
+def create_proof(s, runtime, decision, source, state, policy, *, extra_parts=False):
+    kind, answer = verified_answer(source.body, account=runtime.account_id, policy=policy)
+    if policy is not None and policy.transport_kind == 'fansapi' and extra_parts:
+        return None
     if (decision.action != 'reply' or answer is None or decision.body != answer
             or source.direction != 'in' or source.is_unsent):
         return None
@@ -125,7 +157,8 @@ def certified_anchor(s, runtime, decision, state, policy, *, intent=None):
     source = s.get(Message, (runtime.account_id, decision.fan_id, proof.source_message_id))
     if (source is None or source.direction != 'in' or source.is_unsent
             or _hash(source.body) != proof.source_sha256
-            or verified_answer(source.body) != (proof.kind, decision.body) or _hash(decision.body) != proof.answer_sha256):
+            or verified_answer(source.body, account=runtime.account_id, policy=policy) != (proof.kind, decision.body)
+            or _hash(decision.body) != proof.answer_sha256):
         return None
     anchor = _anchor(s, runtime, decision.fan_id, state, policy,
                      own_intent=intent.intent_id if intent is not None else None)

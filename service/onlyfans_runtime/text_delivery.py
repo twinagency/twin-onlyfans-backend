@@ -1113,7 +1113,8 @@ class TextAuthority:
             state.unresolved_attempt_id = None
             state.updated_at = utcnow()
         if promote is not None:
-            policy.active_intent_id = promote.intent_id
+            if not _fan_isolated(policy):
+                policy.active_intent_id = promote.intent_id
             state.unresolved_attempt_id = promote.attempt_id
             if promote.status == 'unknown':
                 state.requires_attention = True

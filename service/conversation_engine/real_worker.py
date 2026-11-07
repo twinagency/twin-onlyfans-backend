@@ -128,7 +128,7 @@ class RealConversationWorker:
         store.drain(tenant, account)
         approval.retire_superseded(store, tenant, account, fan_id, message_id)   # older unsent drafts lose their approval
         try:
-            self.engine.select_simulated(tenant, account, fan_id)  # 'simulated' by name only: any engine kind
+            self.engine.select_simulated(tenant, account, fan_id, source_message_id=message_id)
         except Refused as exc:
             return {'outcome': 'not_ready', 'detail': str(exc)}
         config = journey_config()

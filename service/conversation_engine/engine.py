@@ -196,17 +196,20 @@ class EngineService:
             return policy.transport_kind == 'fansapi' and policy.enabled is False
         return policy.enabled is True
 
-    def select_simulated(self, tenant, account, fan_id):
-        """Select a conversation only while the existing authority is synthetic."""
+    def select_simulated(self, tenant, account, fan_id, *, source_message_id=None):
+        """Select the existing engine owner, with a narrow proved-independent exception."""
         _id(fan_id)
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
             policy = s.get(OfDeliveryPolicy, account)
             state = s.get(OfConversationState, (account, fan_id))
             if (not self._planning_policy_ok(policy)
-                    or state is None or state.mode != 'automated' or state.takeover_state != 'none'
-                    or self.store._unresolved(s, account, fan_id, state)):
+                    or state is None or state.mode != 'automated' or state.takeover_state != 'none'):
                 raise Refused('synthetic conversation is not ready')
+            if self.store._unresolved(s, account, fan_id, state):
+                from .independence import can_prepare_identity
+                if not can_prepare_identity(s, runtime, fan_id, source_message_id, state, policy):
+                    raise Refused('synthetic conversation is not ready')
             if s.get(MoxyAccount, account) is not None:
                 raise Refused('existing account ownership requires reconciliation')
             row = s.get(OfEngineOwner, (account, fan_id))
@@ -521,7 +524,7 @@ class EngineService:
             from .memory import bind as bind_memory
             bind_memory(s, runtime, decision, source, current_memory, current_fingerprint, offer_fingerprint)
             from .independence import create_proof
-            create_proof(s, runtime, decision, source, state, policy)
+            create_proof(s, runtime, decision, source, state, policy, extra_parts=bool(proposal.parts))
             for index, part in enumerate(proposal.parts, start=1):
                 additional = OfEngineDecision(account_id=account, decision_id=str(uuid.uuid4()), request_id=request_id,
                     generation=generation, part_index=index, fan_id=fan_id, binding_id=binding, owner_epoch=epoch,

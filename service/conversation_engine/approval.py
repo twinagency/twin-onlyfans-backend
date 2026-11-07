@@ -245,7 +245,10 @@ def evaluate(s, runtime, decision, *, now=None, phase='send', need_approval=True
     if controls:
         from .controls import reason as hold_reason
         fan = s.get(Fan, (account, fan_id))
-        hold = hold_reason(s, account, fan_id, state, fan, unresolved=Store._unresolved(s, account, fan_id, state),
+        from .independence import certified_anchor
+        independent = certified_anchor(s, runtime, decision, state, policy) is not None
+        hold = hold_reason(s, account, fan_id, state, fan,
+                           unresolved=Store._unresolved(s, account, fan_id, state) and not independent,
                            commercial=decision.action == 'offer')
         if hold:
             return hold, None, None, None

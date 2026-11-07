@@ -302,7 +302,7 @@ def test_default_off_flag_policy_and_scope(world, monkeypatch):
         policy = s.get(OfDeliveryPolicy, ACCOUNT)
         policy.enabled = True
         policy.transport_kind = 'synthetic'
-    with pytest.raises(Refused, match='enabled fansapi'):
+    with pytest.raises(Refused, match='fansapi account policy'):
         world.say('hello')
     assert world.fans.posts == []
     with pytest.raises(Refused, match='scope mismatch'):

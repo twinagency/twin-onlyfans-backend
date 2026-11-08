@@ -25,6 +25,18 @@ from test_plan_c_scope_pg import ACTOR, OTHER, activate, config_for, install
 @pytest.fixture
 def supervised(configured_draft, tmp_path, monkeypatch):
     world, env, model, seen = configured_draft
+    # Synthetic catalogue ID only; the actual photo must be bound separately.
+    from db.models import CatalogItem, Fan, OfConversationState
+    with Session(world.database[1]) as s, s.begin():
+        s.add(Fan(account_id=ACCOUNT, fan_id=FAN2))
+        s.flush()
+        s.add(OfConversationState(account_id=ACCOUNT, fan_id=FAN2, mode='automated', revision=0,
+                                  takeover_state='none', requires_attention=False))
+        item = s.get(CatalogItem, world.item)
+        media = json.loads(item.media_ids)[:1]
+        item.media_ids, item.preview_media_ids, item.price_cents = json.dumps(media), '[]', 300
+    env = {**env, 'TWIN_PLAN_C_PRICE_CENTS':'300',
+           'TWIN_PLAN_C_MEDIA_IDS':','.join(map(str, media)), 'TWIN_PLAN_C_PREVIEW_IDS':''}
     creds = tmp_path / 'fans-creds'
     creds.write_text('FANSAPI_KEY=fixture-key\nFANSAPI_ACCT=' + PROVIDER + '\n')
     creds.chmod(0o600)
@@ -44,6 +56,7 @@ def stage(pilot, mid, body='hello', fan=FAN, key=None):
 
 
 def approve(world, result):
+    assert result.get('outcome') == 'awaiting_approval', result
     info = result['approval']
     return approval.approve(world.store, TENANT, ACCOUNT, info['requestId'], info['generation'],
                             expected_version=info['version'], actor=ACTOR)

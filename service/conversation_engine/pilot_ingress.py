@@ -71,7 +71,16 @@ def preserve_contact_stops(store, tenant, account, *, limit=100):
         runtime=store._runtime(s,tenant,account,lock=False)
         scope,config=require(s,runtime)
         binding=runtime.binding_id
-        rows=list(s.scalars(_unreviewed(runtime,scope,config).order_by(OfIngress.received_at,OfIngress.event_key).limit(limit)))
+        # Interleave the two fans so a malformed backlog for one cannot
+        # occupy every review slot for the other.
+        from collections import deque
+        groups=[deque(s.scalars(_unreviewed(runtime,scope,config).where(OfIngress.fan_id==fan)
+            .order_by(OfIngress.received_at,OfIngress.event_key).limit(limit))) for fan in config['fans']]
+        rows=[]
+        while len(rows)<limit and any(groups):
+            for group in groups:
+                if group and len(rows)<limit:rows.append(group.popleft())
+    reviewed_count=0
     for row in rows:
         # Applied ingress is canonical immutable source evidence. A later edit
         # of the message display cannot erase a previously received opt-out.
@@ -105,8 +114,9 @@ def preserve_contact_stops(store, tenant, account, *, limit=100):
         # Commit a receipt only AFTER any stop control. A crash in between
         # replays the existing control audit instead of skipping the stop.
         _record_review(store,tenant,account,binding,row,key)
+        reviewed_count+=1
     with Session(store.engine) as s:
         runtime=store._runtime(s,tenant,account,lock=False)
         scope,config=require(s,runtime)
         pending=s.scalar(_unreviewed(runtime,scope,config).limit(1)) is not None
-    return {'reviewed':len(rows),'pending':pending}
+    return {'reviewed':reviewed_count,'pending':pending}

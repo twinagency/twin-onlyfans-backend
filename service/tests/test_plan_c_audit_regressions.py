@@ -234,7 +234,9 @@ def test_request_budget_reserves_unknown_action_and_active_question():
 def test_malformed_ingress_metadata_is_a_fan_scoped_hold_not_a_query_failure(supervised):
     from db.onlyfans_models import OfIngress
     from onlyfans_runtime.store import utcnow
-    w, _, _, seen, _=supervised
+    w, _, _, seen, pilot=supervised
+    stage(pilot,1299,'hello',fan=102)  # establish the provider link without sending
+    before=len(seen)
     with Session(w.database[1]) as s,s.begin():
         runtime=w.store._runtime(s,TENANT,ACCOUNT)
         s.add(OfIngress(account_id=ACCOUNT,event_key='d'*64,binding_id=runtime.binding_id,
@@ -246,4 +248,26 @@ def test_malformed_ingress_metadata_is_a_fan_scoped_hold_not_a_query_failure(sup
         runtime=w.store._runtime(s,TENANT,ACCOUNT)
         assert pilot_scope.delivery_block(s,runtime,FAN)=='pilot_contact_review_pending'
         assert pilot_scope.delivery_block(s,runtime,102) is None
-    assert seen==[] and w.fans.posts==[]
+    assert len(seen)==before and w.fans.posts==[]
+
+
+def test_malformed_review_backlog_does_not_hide_the_other_fan(supervised):
+    from db.onlyfans_models import OfIngress
+    from onlyfans_runtime.store import utcnow
+    from conversation_engine.pilot_ingress import review_pending
+    w, _, _, _, _=supervised
+    with Session(w.database[1]) as s,s.begin():
+        runtime=w.store._runtime(s,TENANT,ACCOUNT)
+        for i in range(5):
+            s.add(OfIngress(account_id=ACCOUNT,event_key=str(i)*64,binding_id=runtime.binding_id,
+                fan_id=FAN,message_id=1400+i,source='ws',payload='{bad-json',status='applied',
+                received_at=utcnow(),applied_at=utcnow()))
+    w.store.record(TENANT,ACCOUNT,event(mid=1500,fan=102,body='hello'))
+    w.store.drain(TENANT,ACCOUNT)
+    result=preserve_contact_stops(w.store,TENANT,ACCOUNT,limit=2)
+    assert result=={'reviewed':1,'pending':True}
+    with Session(w.database[1]) as s:
+        runtime=w.store._runtime(s,TENANT,ACCOUNT,lock=False)
+        scope,config=pilot_scope.require(s,runtime)
+        assert review_pending(s,runtime,scope,config,FAN)
+        assert not review_pending(s,runtime,scope,config,102)

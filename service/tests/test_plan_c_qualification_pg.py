@@ -329,3 +329,20 @@ def test_contact_review_replays_a_committed_stop_after_a_crash(supervised, monke
         assert s.get(OfConversationState,(ACCOUNT,FAN)).revision==revision
         assert len(list(s.scalars(select(OfControlAudit).where(OfControlAudit.command_key.like('engine-stop:%')))))==1
     assert seen==[] and world.fans.posts==[]
+
+
+def test_readiness_distinguishes_a_healthy_loop_from_malformed_evidence_holds(supervised):
+    import hashlib,hmac
+    from fastapi.testclient import TestClient
+    from plan_c_worker import create_app
+    from test_engine_real_worker_pg import SECRET
+    w, _, _, seen, pilot=supervised
+    raw=b'not a valid webhook envelope'
+    pilot.handle(raw,hmac.new(SECRET,raw,hashlib.sha256).hexdigest(),'readiness-malformed')
+    with TestClient(create_app(pilot)) as client:
+        response=_wait_readiness(client,lambda r:r.json()['code']=='ready')
+        data=response.json()
+        assert data['ok'] and data['workHeld'] and not data['sendingReady']
+        assert data['work']['malformedHolds']==1
+        assert raw.decode() not in response.text
+    assert seen==[] and w.fans.posts==[]

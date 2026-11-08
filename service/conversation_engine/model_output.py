@@ -276,15 +276,17 @@ _CITY_CLAIM = re.compile(r"\b(?:i live in|i'?m from|im from|i am from|i'?m based
 
 
 def _affirmative_match(pattern, text):
-    """A local explicit refusal is not an offer; later positive clauses still count."""
-    from .claims import _clauses, _negated, _window
-    for clause, _ in _clauses(text):
+    """Only an explicit local denial exempts a matched prohibited proposal."""
+    from .claims import _clauses, _window
+    auxiliary = r"(?:do not|don't|does not|doesn't|will not|won't|cannot|can't|would not|wouldn't|never|not)"
+    denial = re.compile(r"\b" + auxiliary + r"\s+(?:(?:offer|offering|give|giving|provide|providing|do|doing|sell|selling|arrange|allow|have|make|discuss|support|available|comfortable)\s+)?(?:(?:a|an|any|you|with|for|out|that|the)\s+){0,3}$", re.I)
+    for clause, _ in _clauses(text.replace("’", "'")):
         for match in pattern.finditer(clause):
             before = _window(clause, match.start())
             after = clause[match.end():]
-            reversed_denial = re.search(r"\b(?:not only|not just|no problem|no worries|(?:don't|do not|won't|will not) (?:refuse|deny))\b", before, re.I)
+            denied_before = re.search(r"\b(?:no|without)\s+(?:(?:a|an|any|more)\s+){0,2}$", before + ' ', re.I) or denial.search(before + ' ')
             denied_after = re.match(r"\s+(?:is|are)\s+(?:not|never)\s+(?:available|allowed|offered|permitted)\b|\s+(?:isn't|aren't)\s+(?:available|allowed|offered|permitted)\b", after, re.I)
-            if (not _negated(clause, match.start()) or reversed_denial) and not denied_after:
+            if not denied_before and not denied_after:
                 return match
     return None
 
@@ -295,7 +297,18 @@ def _location_problems(text, profile):
     for match in _CITY_CLAIM.finditer(text):
         stated = re.split(r",|\b(?:and|but|because|where)\b", match.group(1), maxsplit=1, flags=re.I)[0]
         stated = re.sub(r"\s+(?:now|currently|originally)$", '', stated.strip(), flags=re.I)
-        if not expected or _norm_line(stated) != _norm_line(expected):
+        aliases = [expected] if expected else []
+        documented_aliases = profile.fact('home_city_aliases') if hasattr(profile, 'fact') else None
+        if documented_aliases:
+            aliases.extend(documented_aliases.split('|'))
+        normalized = _norm_line(stated)
+        vocatives = {'babe','baby','too','now','currently','actually','love','hun','honey','these','days','at','the','moment'}
+        matches = False
+        for alias in aliases:
+            place = _norm_line(alias)
+            if normalized == place or (place and normalized.startswith(place + ' ') and set(normalized[len(place):].split()) <= vocatives):
+                matches = True
+        if not matches:
             problems.append('states where she lives or is from inconsistently with her documented facts')
     if re.search(r"\bmy (?:real name|address) is\b", text, re.I):
         problems.append('states a private identity or address without supported public wording')

@@ -1,8 +1,7 @@
 """Bounded signed-ingress review; immutable audit receipts survive crashes and restarts."""
 from hashlib import sha256
 import json
-from sqlalchemy import select, func, literal, cast, DateTime
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import select, func, literal, cast, DateTime, or_
 from sqlalchemy.orm import Session
 from db.models import Message, OfConversationState
 from db.onlyfans_models import OfIngress, OfControlAudit
@@ -24,12 +23,14 @@ def _unreviewed(runtime, scope, config):
     reviewed = select(OfLaunchCommand.command_key).where(
         OfLaunchCommand.account_id==OfIngress.account_id, OfLaunchCommand.command_key==key,
         OfLaunchCommand.binding_id==runtime.binding_id, OfLaunchCommand.kind=='plan_c_ingress_review').exists()
-    payload = cast(OfIngress.payload, JSONB)
+    metadata = func.of_engine_pilot_ingress_metadata(OfIngress.payload)
+    stamp = cast(metadata.op('->>')('created_at'), DateTime())
+    direction = metadata.op('->>')('direction')
     return select(OfIngress).where(OfIngress.account_id==runtime.account_id,
         OfIngress.binding_id==runtime.binding_id,OfIngress.fan_id.in_(config['fans']),OfIngress.status=='applied',
         OfIngress.source=='ws',OfIngress.received_at>=scope.created_at,
-        cast(payload['created_at'].astext, DateTime(timezone=True))>=scope.created_at,
-        payload['direction'].astext=='in',~reviewed)
+        or_(stamp.is_(None), stamp>=scope.created_at),
+        or_(direction.is_(None), direction=='in'),~reviewed)
 
 
 def review_pending(s, runtime, scope, config, fan_id):
@@ -74,9 +75,15 @@ def preserve_contact_stops(store, tenant, account, *, limit=100):
     for row in rows:
         # Applied ingress is canonical immutable source evidence. A later edit
         # of the message display cannot erase a previously received opt-out.
-        event=json.loads(row.payload)
+        try:
+            from onlyfans_runtime.store import Event
+            event=Event(**json.loads(row.payload)).normalized()
+            if '\x00' in event.body:
+                continue  # Keep malformed evidence unreviewed and held for this fan.
+        except (ValueError, TypeError, KeyError, UnicodeError, Refused):
+            continue
         key=None
-        if explicit_stop(event['body']):
+        if explicit_stop(event.body):
             digest=sha256(json.dumps([account,row.fan_id,row.message_id],sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
             key='engine-stop:'+digest[:52]
             for attempt in range(3):

@@ -76,7 +76,8 @@ FANSAPI_TRANSPORT = '0122_fansapi_transport'
 ENGINE_MODEL_CALLS = '0123_engine_model_calls'
 ENGINE_APPROVAL = '0124_engine_approval'
 PLAN_C_SCOPE = '0125_plan_c_scope'
-HEAD = PLAN_C_SCOPE
+PLAN_C_INGRESS = '0126_plan_c_ingress'
+HEAD = PLAN_C_INGRESS
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -108,6 +109,7 @@ REVISION_RANK[FANSAPI_TRANSPORT] = 122
 REVISION_RANK[ENGINE_MODEL_CALLS] = 123
 REVISION_RANK[ENGINE_APPROVAL] = 124
 REVISION_RANK[PLAN_C_SCOPE] = 125
+REVISION_RANK[PLAN_C_INGRESS] = 126
 
 
 class SchemaMismatch(RuntimeError):
@@ -397,6 +399,13 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             failures.append("missing engine approval protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing engine approval row security")
+    if expected_rank >= 126:
+        metadata_fn = conn.execute(text("""SELECT p.prosrc::text,l.lanname::text,p.provolatile::text
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
+            WHERE n.nspname=current_schema() AND p.oid=to_regprocedure('of_engine_pilot_ingress_metadata(text)')""")).all()
+        if (len(metadata_fn) != 1 or metadata_fn[0][1:] != ('plpgsql', 'i') or
+                hashlib.sha256(" ".join(metadata_fn[0][0].split()).encode()).hexdigest() != 'fcfb7383c002bf39f9dc91b2335b74ba7c5e3001ba829ebbab043e619a1d01d7'):
+            failures.append("missing safe pilot ingress metadata parser")
     if expected_rank >= 125:
         event_fn = conn.execute(text("""SELECT p.prosrc::text,l.lanname::text,p.provolatile::text
             FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang

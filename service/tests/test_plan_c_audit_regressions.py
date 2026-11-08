@@ -106,18 +106,35 @@ def test_single_photo_is_not_offered_as_a_requested_video():
 
 
 def test_committed_unreviewed_stop_then_greeting_blocks_shared_authority(supervised):
+    import threading
     w, _, _, _, pilot=supervised
     stage(pilot,1000,'hello')
-    preserve_contact_stops(w.store,TENANT,ACCOUNT)
-    for mid,body in [(1001,'stop messaging me'),(1002,'hello again')]:
-        w.store.record(TENANT,ACCOUNT,event(mid=mid,body=body))
-    w.store.drain(TENANT,ACCOUNT)
-    # Model planning is intentionally resumed without another scheduler review.
-    decision=pilot.worker.engine.plan(TENANT,ACCOUNT,FAN,1002)
-    with pytest.raises(Refused,match='pilot_contact_review_pending'):
-        approval.create_draft_approval(w.store,TENANT,ACCOUNT,decision,created_by='engine')
-    with Session(w.database[1]) as s:
-        runtime=w.store._runtime(s,TENANT,ACCOUNT,lock=False)
+    reviewed, resume = threading.Event(), threading.Event()
+    failures=[]
+    def stale_worker():
+        try:
+            preserve_contact_stops(w.store,TENANT,ACCOUNT)
+            reviewed.set()
+            if not resume.wait(10):raise RuntimeError('race barrier timed out')
+            decision=pilot.worker.engine.plan(TENANT,ACCOUNT,FAN,1002)
+            approval.create_draft_approval(w.store,TENANT,ACCOUNT,decision,created_by='engine')
+        except BaseException as exc:
+            failures.append(exc)
+    thread=threading.Thread(target=stale_worker)
+    thread.start()
+    try:
+        assert reviewed.wait(10)
+        # A separate transaction commits after the other worker's review.
+        for mid,body in [(1001,'stop messaging me'),(1002,'hello again')]:
+            w.store.record(TENANT,ACCOUNT,event(mid=mid,body=body))
+        w.store.drain(TENANT,ACCOUNT)
+    finally:
+        resume.set();thread.join(15)
+    assert not thread.is_alive()
+    assert len(failures)==1 and isinstance(failures[0],Refused)
+    assert 'pilot_contact_review_pending' in str(failures[0])
+    with Session(w.database[1]) as s,s.begin():
+        runtime=w.store._runtime(s,TENANT,ACCOUNT)
         assert pilot_scope.delivery_block(s,runtime,FAN)=='pilot_contact_review_pending'
         assert pilot_scope.delivery_block(s,runtime,102) is None
     assert w.fans.posts==[]
@@ -140,6 +157,7 @@ def test_old_unanswered_request_reaches_actual_model_request(supervised):
     from db.onlyfans_engine_models import OfEngineRequest
     from onlyfans_runtime.store import utcnow
     w, _, _, seen, pilot=supervised
+    pilot.worker.engine.select_simulated(TENANT,ACCOUNT,FAN)
     question='Please check the missing beach photo'
     w.store.record(TENANT,ACCOUNT,event(mid=1100,body=question))
     w.store.drain(TENANT,ACCOUNT)
@@ -157,3 +175,75 @@ def test_old_unanswered_request_reaches_actual_model_request(supervised):
     assert question not in history
     assert question in prompt.split('UNRESOLVED REQUESTS AND ACTIONS')[1]
     assert w.fans.posts==[]
+
+
+@pytest.mark.parametrize('raw', ['{', '{"body":"\\u0000","direction":"in","created_at":"2026-11-08T04:00:00+00:00"}',
+    '{"body":"\\ud800","direction":"in","created_at":"2026-11-08T04:00:00+00:00"}',
+    '{"direction":"in","created_at":"tomorrow"}', '{"direction":"in","created_at":"2026-02-30T00:00:00+00:00"}'])
+def test_ingress_metadata_parser_does_not_abort_transaction(database,raw):
+    from sqlalchemy import text
+    with database[1].begin() as c:
+        assert c.scalar(text('SELECT of_engine_pilot_ingress_metadata(:raw)'),{'raw':raw}) is None
+        assert c.scalar(text('SELECT 1'))==1
+
+
+@pytest.mark.parametrize('body', ["I can't wait to offer discounts.","I don't mind offering a discount."])
+def test_negative_words_do_not_hide_an_affirmative_discount(body):
+    from conversation_engine.model_output import edit_problems
+    ctx=JudgeContext(snapshot(),profile())
+    assert judge(json.dumps({'body':body}),ctx).outcome=='invalid'
+    assert any('discount' in x for x in edit_problems([body],ctx))
+
+
+@pytest.mark.parametrize('body', ["I don't offer discounts.","Discounts aren't available.",
+    'I live in Los Angeles babe.','I live in Los Angeles too.'])
+def test_plain_refusals_and_location_vocatives_remain_usable(body):
+    assert judge(json.dumps({'body':body}),JudgeContext(snapshot(),profile())).outcome=='ok'
+
+
+@pytest.mark.parametrize('body', ['I live in London babe.','I live in London too.',
+    'I live in London, not Los Angeles.','I live in Los Angeles London.'])
+def test_wrong_location_is_not_rescued_by_a_vocative_or_approved_city_mention(body):
+    assert judge(json.dumps({'body':body}),JudgeContext(snapshot(),profile())).outcome=='invalid'
+
+
+def test_selected_event_dates_and_evidence_are_preserved():
+    memory={'state':'current','memory':{'learnedProfile':{'memories':[{'field':'travel','value':'trip to Rome',
+        'subject':'fan','status':'upcoming','event_start':'2026-12-05','event_end':'2026-12-10',
+        'last_confirmed':'2026-11-08','evidence':[{'source':'msg:7','at':'2026-11-08','quote':'I fly December 5'}]}]}}}
+    prompt=SpecPromptProvider().render(build_context(snapshot(memory=memory),profile())).messages[1]['content']
+    for value in ['2026-12-05','2026-12-10','2026-11-08','I fly December 5','upcoming']:
+        assert value in prompt
+
+
+def test_request_budget_reserves_unknown_action_and_active_question():
+    from conversation_engine.writer_context import request_context_from
+    requests=[{'request_id':'old'+str(i),'source_message_id':i,'source_body':'x'*300,
+        'status':'open','owner':'engine','next_step':'waiting'} for i in range(20)]
+    requests.append({'request_id':'current','source_message_id':99,'source_body':'Current question?',
+        'status':'open','owner':'engine','next_step':'prepare_reply'})
+    s=snapshot(open_requests=requests,pending_actions=[{'decision_id':'unknown-action',
+        'request_id':'old0','generation':0,'action':'offer','outcome':'unknown'}])
+    lines=request_context_from(s,PromptBudget())
+    rendered='\n'.join(lines)
+    assert 'unknown-action' in rendered and 'Current question?' in rendered
+    assert 'omitted' in rendered
+    assert len(rendered)<=PromptBudget().request_chars
+
+
+def test_malformed_ingress_metadata_is_a_fan_scoped_hold_not_a_query_failure(supervised):
+    from db.onlyfans_models import OfIngress
+    from onlyfans_runtime.store import utcnow
+    w, _, _, seen, _=supervised
+    with Session(w.database[1]) as s,s.begin():
+        runtime=w.store._runtime(s,TENANT,ACCOUNT)
+        s.add(OfIngress(account_id=ACCOUNT,event_key='d'*64,binding_id=runtime.binding_id,
+            fan_id=FAN,message_id=1300,source='ws',payload='{bad-json',status='applied',
+            received_at=utcnow(),applied_at=utcnow()))
+    result=preserve_contact_stops(w.store,TENANT,ACCOUNT)
+    assert result['pending']
+    with Session(w.database[1]) as s,s.begin():
+        runtime=w.store._runtime(s,TENANT,ACCOUNT)
+        assert pilot_scope.delivery_block(s,runtime,FAN)=='pilot_contact_review_pending'
+        assert pilot_scope.delivery_block(s,runtime,102) is None
+    assert seen==[] and w.fans.posts==[]

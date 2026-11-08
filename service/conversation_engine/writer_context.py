@@ -343,6 +343,13 @@ def memory_lines_from(view, budget):
             if proof is None:
                 continue
             qualifier = status + (', potentially stale' if item.get('potentially_stale') else '')
+            for name in ('last_confirmed','event_start','event_end','review_at','active_until'):
+                if item.get(name):
+                    qualifier += ', ' + name + ' ' + str(item[name])[:25]
+            if proof.get('at'):
+                qualifier += ', source_at ' + str(proof['at'])[:25]
+            if proof.get('quote'):
+                qualifier += ', source_quote ' + str(proof['quote'])[:80]
             alternatives = item.get('alternatives') or []
             if alternatives:
                 qualifier += ', conflicting evidence: ' + ' / '.join(str(v)[:60] for v in alternatives[:3])
@@ -384,27 +391,34 @@ def _history_rows(snapshot, budget):
 
 
 def request_context_from(snapshot, budget):
-    lines, size = [], 0
-    for kind, key in (('REQUEST', 'open_requests'), ('ACTION', 'pending_actions')):
-        for row in (snapshot.get(key) or [])[:budget.requests]:
-            if not isinstance(row, dict):
-                continue
+    """Reserve prompt space for uncertain actions and the active request."""
+    requests = [r for r in snapshot.get('open_requests', []) if isinstance(r, dict)]
+    actions = [r for r in snapshot.get('pending_actions', []) if isinstance(r, dict)]
+    unknown = [r for r in actions if r.get('outcome') in ('unknown','dispatching')]
+    active = [r for r in requests if str(r.get('source_message_id')) == str(snapshot['current_message']['id'])]
+    groups = [('ACTION', unknown, budget.request_chars // 2),
+              ('REQUEST', active, budget.request_chars // 4),
+              ('REQUEST', [r for r in requests if r not in active], budget.request_chars),
+              ('ACTION', [r for r in actions if r not in unknown], budget.request_chars)]
+    lines, size, omitted = [], 0, False
+    total = max(0, budget.request_chars - 90)
+    for kind, records, quota in groups:
+        used = 0
+        for row in records[:budget.requests]:
             fields = ('request_id', 'source_message_id', 'status', 'owner', 'next_step') if kind == 'REQUEST' else (
                 'decision_id', 'request_id', 'generation', 'action', 'outcome')
             data = {k: row[k] for k in fields if k in row}
-            text = row.get('source_body' if kind == 'REQUEST' else 'body')
-            if isinstance(text, str):
-                data['source_text' if kind == 'REQUEST' else 'proposed_text'] = text[:300]
+            body = row.get('source_body' if kind == 'REQUEST' else 'body')
+            if isinstance(body, str):
+                data['source_text' if kind == 'REQUEST' else 'proposed_text'] = body[:160]
             line = kind + ' ' + json.dumps(data, ensure_ascii=False, sort_keys=True)
-            if size + len(line) > budget.request_chars:
-                lines.append('Additional unresolved work omitted by the context budget; do not assume it is resolved.')
-                return tuple(lines)
-            lines.append(line)
-            size += len(line)
-        if len(snapshot.get(key) or []) > budget.requests:
-            lines.append('Additional ' + kind.lower() + ' records omitted; their outcomes remain unresolved.')
-    if snapshot.get('open_requests_truncated') or snapshot.get('pending_actions_truncated'):
-        lines.append('Additional unresolved work exists outside this bounded context.')
+            if used + len(line) > quota or size + len(line) > total:
+                omitted = True
+                continue
+            lines.append(line);size += len(line);used += len(line)
+        omitted = omitted or len(records) > budget.requests
+    if omitted or snapshot.get('open_requests_truncated') or snapshot.get('pending_actions_truncated'):
+        lines.append('Additional unresolved records omitted; do not infer completion or a known outcome.')
     return tuple(lines)
 
 

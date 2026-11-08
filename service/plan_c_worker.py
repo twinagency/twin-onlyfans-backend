@@ -15,6 +15,40 @@ _LOG = logging.getLogger(__name__)
 _MAX_BODY = 1_000_000
 
 
+def _work_counts(pilot):
+    """Bounded operational counts; no message text, account IDs or credentials."""
+    from sqlalchemy import select, and_
+    from sqlalchemy.orm import Session
+    from conversation_engine.pilot_scope import require
+    from conversation_engine.pilot_ingress import _unreviewed
+    from db.onlyfans_delivery_models import OfTextIntent
+    from db.onlyfans_fans_intake_models import OfFansProjection
+    from db.onlyfans_engine_models import OfFansConnection, OfEnginePilotWebhookDigest, OfEngineRequest
+    store = getattr(pilot, 'store', None) or pilot.worker.engine.store
+    with Session(store.engine) as s:
+        runtime = store._runtime(s, pilot.tenant, pilot.account, lock=False)
+        scope, config = require(s, runtime)
+        def count(query):
+            return len(s.execute(query.limit(101)).all())
+        counts = {'unreviewedInbound':count(_unreviewed(runtime,scope,config)),
+            'unknownSends':count(select(OfTextIntent.intent_id).where(
+                OfTextIntent.account_id==pilot.account,OfTextIntent.binding_id==runtime.binding_id,
+                OfTextIntent.status=='unknown')),
+            'openRequests':count(select(OfEngineRequest.request_id).where(
+                OfEngineRequest.account_id==pilot.account,OfEngineRequest.binding_id==runtime.binding_id,
+                OfEngineRequest.status.not_in(('completed','declined','cancelled')))),
+            'pendingProviderEvents':count(select(OfFansProjection.event_key).join(OfFansConnection,and_(
+                OfFansProjection.account_id==OfFansConnection.account_id,OfFansProjection.epoch==OfFansConnection.epoch)).where(
+                OfFansProjection.account_id==pilot.account,OfFansConnection.binding_id==runtime.binding_id,
+                OfFansProjection.status.in_(('pending','held')))),
+            'malformedHolds':count(select(OfEnginePilotWebhookDigest.event_key).join(OfFansConnection,and_(
+                OfEnginePilotWebhookDigest.account_id==OfFansConnection.account_id,
+                OfEnginePilotWebhookDigest.epoch==OfFansConnection.epoch)).where(
+                OfEnginePilotWebhookDigest.account_id==pilot.account,OfFansConnection.binding_id==runtime.binding_id,
+                OfEnginePilotWebhookDigest.safety_hold.is_(True)))}
+        return {**counts,'countsCapped':any(v==101 for v in counts.values())}
+
+
 def _response(status, code):
     return JSONResponse({'ok': status == 202, 'code': code}, status_code=status,
                         headers={'Cache-Control': 'private, no-store'})
@@ -62,6 +96,7 @@ def create_app(pilot, *, run_loop=True):
         # Liveness alone does not prove that recovery/planning is progressing.
         # Return counters and coarse states, never exception text or identities.
         mode, sending, reason = 'unavailable', False, 'unavailable'
+        work = None
         current = app.state.pilot
         if current is not None:
             from model_transport.pilot_supervised import IntakeOnlyPilot
@@ -87,11 +122,14 @@ def create_app(pilot, *, run_loop=True):
                     return 'ready'
                 try:
                     reason = await asyncio.to_thread(check)
-                    sending = reason == 'ready' and mode == 'active'
+                    work = await asyncio.to_thread(_work_counts, current)
+                    sending = reason == 'ready' and mode == 'active' and not work['malformedHolds']
                 except Exception:
                     reason = 'scope_or_state_refused'
         ready = reason == 'ready'
         return JSONResponse({'ok':ready, 'mode':mode, 'sendingReady':sending, 'code':reason,
+            'work':work, 'workHeld':bool(work and any(work[k] for k in (
+                'unreviewedInbound','unknownSends','pendingProviderEvents','malformedHolds'))),
             'ticks':progress['ticks'], 'failures':progress['failures'],
             'consecutiveFailures':progress['consecutive_failures']}, status_code=200 if ready else 503,
             headers={'Cache-Control':'private, no-store'})

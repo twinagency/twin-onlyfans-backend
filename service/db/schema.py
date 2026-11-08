@@ -381,7 +381,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             {"table": table, "trigger": trigger}).all()
         if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
                 or guard[0][2] != trigger or guard[0][4] != "plpgsql"
-                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "9cac12064b4377f866c0b5d5022292418e8895e9e5e271c03628e528d4ac134e"):
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != ("7f1c0f9beb768281cbd6fa8b66279f0d24f9b486890d8913de2ce690b3556a73" if expected_rank >= 125 else "9cac12064b4377f866c0b5d5022292418e8895e9e5e271c03628e528d4ac134e")):
             failures.append("missing engine model call protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing engine model call row security")

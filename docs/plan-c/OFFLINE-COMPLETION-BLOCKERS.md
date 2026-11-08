@@ -1,25 +1,30 @@
 # Operational gates retained after offline completion
 
-This document records blockers; it does not authorize activation, real bindings, provider/model calls, offboarding actions, deployment or production changes. Real master owns planning and scope. The bounded completion block changes the existing memory adapter and verifies existing controls, not the commercial scope.
+Real master owns scope. This bounded offline block preserves Malie/two allowed fans/one USD3 photo, autonomous authorization and commercial controls. It authorizes no deployment, pushes, real permission changes, live messages, purchases or live/metered provider/model calls. Current mechanisms and exact procedures are in OFFLINE-OPERATING-PROCEDURES.md; final qualification must be matched to its committed source/image.
 
-## Malformed evidence and unknown sends
+## Retained event and delivery holds
 
-Malformed signed-event safety holds remain retained. A note that evidence was reviewed does not resolve a send or release a hold. The safe ingress parser returns unavailable metadata on decoding failure; the affected input remains unreviewed and held. No general clear/bypass route is added by this block.
+Only five strictly shaped documented nonnegative account counters can be automatically classified irrelevant. The existing backend operator route can also classify exact retained original bytes with current account/binding/epoch/revision, digest, actor and evidence audit. Original rows remain intact and later conflicts re-hold. The unchanged dashboard exposes these as review-only.
 
-Before live use, qualify an audited resolution workflow based on authoritative evidence for the exact account, binding, connection epoch and event/action. Hash-only evidence cannot reconstruct a lost payload or prove a send did not occur. Missing, delayed or unmatched records must not be treated as proof of failure. Unknown sends retain their original identities and must not be recreated under a new action key. Positive provider evidence and its scope/freshness must be established in a separately authorized stage.
+Malformed, material, unknown, conflicting or lost original evidence remains held. Hash-only records cannot reconstruct lost payloads, prove no send occurred, or supply authoritative classification. Resolving these cases requires the exact provider evidence and an approved specific procedure; no blanket clear/retry exists. Unknown sends keep original action identities. Delivery acceptance, unlock/access and financial settlement remain separate; a generic note or same-price transaction supplies no missing authority.
 
-## Account offboarding
+Digest ingestion no longer stops at 10,000 retained rows. All evidence is preserved; storage/backup monitoring and any retention deletion policy remain operational concerns. No deletion or compaction policy was invented.
 
-Dashboard administrator access and the engine's durable operating policy are separate authorities. Revoking a browser/admin session removes that control access; it is not proof that an autonomous policy stopped. Existing scope stop/revision checks invalidate affected unsent machine authorizations, while intake and retained delivery/financial evidence remain necessary for recovery.
+## Model evidence
 
-Real master must confirm the intended account-offboarding procedure and whether account removal/revocation must automatically stop the machine policy. That business/operational decision is not invented in this block. Before live operation, qualify the chosen sequence against actual dashboard identity, durable scope, worker restart mode and all competing writers/provider queues. Do not cancel queues, clear holds or discard unresolved sends as part of an unapproved offboarding action.
+Jesse requires provider evidence tied to the exact call and approved the existing-worker manual reconciliation boundary. New calls can retain provider generation/endpoint correlation. The manual command verifies authenticated metadata and records actual cost/audit while retaining unknown-output holds. Old/time-out calls with no saved correlation remain reserved; administrator cost attestation or guessed IDs do not release them. Actual provider availability, identity and accounting behavior remain unqualified until the separate live stage.
+
+## Existing explicit offboarding
+
+Access and durable machine policy are separate authorities. The supported stopped procedure is explicit pilot stop, delivery policy disable preserving counters/evidence, verify stale worker fences, retain intake-only observations, then revoke owner/session access. Session revocation alone is not a machine-policy stop. No new access model or automatic offboarding rule is needed or introduced. Offline qualification must exercise the real Next/API/owner-SQL path with mocked external systems. Actual deployed sessions, competing writers and already admitted/provider-queued work still require separately authorized verification; do not cancel or assume recall.
 
 ## Other separate-stage gates
 
-- Verify immutable creator and two fan IDs and the selected photo's exact account-bound provider media/version; login names and fixture IDs are insufficient.
-- Qualify the actual model/upstream, routing, rates, budgets and conversational quality. Mock responses establish control flow, not naturalness or real provider behavior.
-- Establish cutover quiescence for already admitted legacy work and provider-side scheduled/mass sends, and verify every deployed writer uses the intended account scope.
-- Obtain a fresh verified backup and restore/rollback evidence for the exact image/schema pair. Development migration tests do not prove a production backup.
-- Bounded memory and request context intentionally omit material when necessary. Rendered omission notices are not a claim that every stored or selected memory fits the model input.
+- Real immutable creator/two fan IDs, the approved durable Malie profile and selected photo provider binding/version. Fixture data and login names are insufficient.
+- Actual DeepSeek/upstream routing, rates, caps and conversational quality; mock outputs establish control flow only.
+- Deployed writer isolation, legacy/provider queues and cutover quiescence for previously admitted work.
+- Fresh verified backup, restore and compatible image/schema rollback. New evidence can intentionally prohibit downgrade; development migration tests are not production recovery evidence.
+- Original source incidents/logs unavailable for replay, and independent review of the final correction/evidence archive.
+- Bounded rendered memory reports omissions; historical/cancelled/expired material is not current fact or action authority.
 
-No live-readiness or release sign-off follows from an offline pass alone.
+No offline result constitutes release or live-readiness sign-off.

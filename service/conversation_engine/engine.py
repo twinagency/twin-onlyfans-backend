@@ -94,10 +94,30 @@ def _proved_unsent(s, account, parts):
     return True
 
 
+
+def _unchanged_offer_hold(s, runtime, existing, snapshot, memory_fingerprint, offer_fingerprint):
+    """Reuse the existing dependency record; never spend another call on an unchanged unavailable offer."""
+    from db.onlyfans_engine_models import OfEngineMemoryBinding
+    head = existing[0] if existing else None
+    if (head is None or head.status != 'held' or head.action != 'offer'
+            or any(part.intent_id is not None for part in existing)
+            or head.owner_epoch != snapshot['owner_epoch'] or head.connection_epoch != snapshot['connection_epoch']
+            or head.input_revision != snapshot['input_revision'] or head.control_revision != snapshot['control_revision']):
+        return False
+    binding = s.get(OfEngineMemoryBinding, (runtime.account_id, head.decision_id))
+    grant = s.get(OfEngineOfferGrant, (runtime.account_id, head.offer_grant_id)) if head.offer_grant_id else None
+    if (binding is None or binding.binding_id != runtime.binding_id or grant is None
+            or binding.fingerprint != memory_fingerprint or binding.offer_fingerprint != offer_fingerprint):
+        return False
+    # A repaired/replaced authority wakes this same request even if unrelated
+    # catalogue/memory fingerprints did not change. No new store or timer.
+    return not any(g['itemId'] == str(grant.item_id) for g in snapshot.get('offer_grants', []))
+
+
 def _offer_grants(s, runtime, fan_id):
     """Approved, unexpired, unused offer grants for this fan whose frozen terms still match the catalogue."""
-    from .commerce import _hash
-    from onlyfans_runtime.media_delivery import catalog_terms
+    from .commerce import verified_terms
+    owner = s.get(OfEngineOwner, (runtime.account_id, fan_id))
     out = []
     grants = s.scalars(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == runtime.account_id,
         OfEngineOfferGrant.fan_id == fan_id, OfEngineOfferGrant.binding_id == runtime.binding_id,
@@ -105,10 +125,8 @@ def _offer_grants(s, runtime, fan_id):
         .order_by(OfEngineOfferGrant.grant_id).limit(6)).all()
     for grant in grants[:5]:
         try:
-            terms = catalog_terms(s, runtime.account_id, grant.item_id, lock=False)
+            terms = verified_terms(s, runtime, owner, grant, lock=False)
         except Refused:
-            continue
-        if _hash(terms) != grant.terms_hash:
             continue
         item = terms['item']
         kinds = [f.get('kind') for f in terms.get('files', [])]
@@ -396,6 +414,9 @@ class EngineService:
                 _journey = journey_context(s, runtime, owner, request, message)
                 if _journey:
                     snapshot['journey'] = _journey
+                if type(self.model).__name__ == 'ModelRuntime' and _unchanged_offer_hold(
+                        s, runtime, existing, snapshot, memory_fingerprint, offer_fingerprint):
+                    return existing[0].decision_id
                 request_id, epoch, binding = request.request_id, owner.epoch, runtime.binding_id
         if stale:
             raise Refused('newer incoming message needs review')

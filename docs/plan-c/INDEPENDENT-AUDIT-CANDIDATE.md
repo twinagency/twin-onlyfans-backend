@@ -1,4 +1,6 @@
-# Independent audit candidate — NOT RELEASE READY
+# Historical independent audit candidate — NOT RELEASE READY
+
+Historical result for commit 9eb8d8f2054dd399e67b29ac2bb268840335403f. Its failures and limits below are preserved as observed then. The continuation repair/evidence register and `OFFLINE-OPERATING-PROCEDURES.md` describe the new candidate; these historical paragraphs do not certify it.
 
 This isolated branch starts at cdae299 and preserves the previous builder's nine-file dirty sales-journey patch and its tests. The original builder and dashboard checkouts were not edited. V1's source snapshot stays fixed; this candidate is a separate V2 update.
 

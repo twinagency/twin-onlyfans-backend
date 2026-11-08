@@ -37,6 +37,8 @@ class ChatResult:
     model: str = ''              # the model id the PROVIDER says answered (may differ from the requested one)
     finish_reason: str | None = None
     provider: str = ''           # upstream provider named in the response, when it names one
+    generation_id: str = ''      # provider-issued correlation only; never supplied by an operator
+    endpoint_sha256: str = ''    # exact configured endpoint that returned the ID
 
 
 # ---- errors -------------------------------------------------------------------
@@ -66,6 +68,10 @@ class ModelOutcomeUnknown(ModelCallError):
 class ModelIncompleteResponse(ModelOutcomeUnknown):
     # Cost and output are not trustworthy after a provider-reported error.
     error_class = 'provider_incomplete'
+
+    def __init__(self, message, *, generation_id='', endpoint_sha256=''):
+        super().__init__(message)
+        self.generation_id, self.endpoint_sha256 = generation_id, endpoint_sha256
 
 
 class ModelUnavailable(Refused):

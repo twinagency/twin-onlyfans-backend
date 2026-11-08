@@ -186,7 +186,11 @@ class OfEngineOfferGrant(Base):
     __table_args__ = (
         ForeignKeyConstraint(['account_id', 'fan_id'], ['of_engine_owner.account_id', 'of_engine_owner.fan_id'], ondelete='RESTRICT'),
         ForeignKeyConstraint(['account_id', 'used_intent_id'], ['of_text_intent.account_id', 'of_text_intent.intent_id'], ondelete='RESTRICT'),
-        UniqueConstraint('account_id', 'fan_id', 'item_id', 'terms_hash', name='uq_engine_offer_grant_terms'),
+        UniqueConstraint('account_id', 'fan_id', 'item_id', 'terms_hash', 'issuance', name='uq_engine_offer_grant_issuance', info={'onlyfans_since':'0127_offer_grant_lineage'}),
+        UniqueConstraint('account_id', 'predecessor_grant_id', name='uq_engine_offer_grant_successor', info={'onlyfans_since':'0127_offer_grant_lineage'}),
+        ForeignKeyConstraint(['account_id', 'predecessor_grant_id'], ['of_engine_offer_grant.account_id', 'of_engine_offer_grant.grant_id'], ondelete='RESTRICT', name='fk_engine_offer_grant_predecessor'),
+        CheckConstraint("issuance >= 0 AND ((issuance = 0 AND predecessor_grant_id IS NULL AND issuance_reason = 'initial') OR (issuance > 0 AND predecessor_grant_id IS NOT NULL AND issuance_reason IN ('cancelled_unsent','expired_renewal')))", name='lineage', info={'onlyfans_since':'0127_offer_grant_lineage'}),
+        CheckConstraint("jsonb_typeof(authorization_json::jsonb) = 'object'", name='authorization', info={'onlyfans_since':'0127_offer_grant_lineage'}),
         {'info': INFO},
     )
     account_id = Column(String, primary_key=True)
@@ -196,6 +200,10 @@ class OfEngineOfferGrant(Base):
     item_id = Column(Integer, ForeignKey('catalog_items.id', ondelete='RESTRICT'), nullable=False)
     terms_hash = Column(String(64), nullable=False)
     coverage_ref = Column(String(128), nullable=False)
+    issuance = Column(Integer, nullable=False, server_default=text('0'), info={'onlyfans_since':'0127_offer_grant_lineage'})
+    predecessor_grant_id = Column(String(36), info={'onlyfans_since':'0127_offer_grant_lineage'})
+    issuance_reason = Column(String(32), nullable=False, server_default=text("'initial'"), info={'onlyfans_since':'0127_offer_grant_lineage'})
+    authorization_json = Column(Text, nullable=False, server_default=text('\'{"kind":"legacy_initial"}\''), info={'onlyfans_since':'0127_offer_grant_lineage'})
     expires_at = Column(DateTime, nullable=False)
     used_intent_id = Column(String(36))
     created_at = Column(DateTime, nullable=False)
@@ -348,6 +356,8 @@ class OfEngineModelCall(Base):
         CheckConstraint("status <> 'settled' OR (usage_known AND actual_microusd IS NOT NULL)", name='settled'),
         Index('ix_engine_model_call_day', 'cost_day', 'account_id'),
         Index('ix_engine_model_call_open', 'account_id', 'request_id', 'generation', 'status'),
+        UniqueConstraint('provider','provider_endpoint_sha256','provider_generation_id', name='uq_engine_model_provider_generation', info={'onlyfans_since':'0128_model_billing_evidence'}),
+        CheckConstraint("(provider_generation_id IS NULL AND provider_endpoint_sha256 IS NULL) OR (provider_generation_id IS NOT NULL AND provider_endpoint_sha256 IS NOT NULL AND provider_generation_id ~ '^[A-Za-z0-9._:-]{1,255}$' AND provider_endpoint_sha256 ~ '^[a-f0-9]{64}$')", name='provider_reference', info={'onlyfans_since':'0128_model_billing_evidence'}),
         {'info': MODEL_CALL_INFO},
     )
     account_id = Column(String, primary_key=True)
@@ -361,6 +371,8 @@ class OfEngineModelCall(Base):
     binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
     owner_epoch = Column(BigInteger, nullable=False)
     provider = Column(String(32), nullable=False)
+    provider_generation_id = Column(String(255), info={'onlyfans_since':'0128_model_billing_evidence'})
+    provider_endpoint_sha256 = Column(String(64), info={'onlyfans_since':'0128_model_billing_evidence'})
     model = Column(String(128), nullable=False)
     prefixed = Column(Boolean, nullable=False)
     status = Column(String(16), nullable=False)

@@ -53,7 +53,11 @@ def validate(config):
         raise Refused('invalid pilot configuration fields')
     coverage = config.get('offer_coverage')
     if 'offer_coverage' in config:
-        _exact(coverage, ('account_id', 'binding_id', 'complete', 'evidence_ref', 'valid_until', 'snapshot_hash'))
+        fields = {'account_id', 'binding_id', 'complete', 'evidence_ref', 'valid_until', 'snapshot_hash'}
+        if type(coverage) is not dict or set(coverage) not in (fields, fields | {'snapshot_kind'}):
+            raise Refused('invalid pilot offer coverage fields')
+        if 'snapshot_kind' in coverage and coverage['snapshot_kind'] != 'pilot-product.v1':
+            raise Refused('unsupported pilot offer coverage version')
         if (type(coverage['account_id']) is not str or not coverage['account_id'] or len(coverage['account_id']) > 128
                 or type(coverage['binding_id']) is not str or not coverage['binding_id'] or len(coverage['binding_id']) > 128
                 or coverage['complete'] is not True or type(coverage['evidence_ref']) is not str
@@ -150,9 +154,53 @@ def current_offer_coverage(s, runtime, config):
     expiry = datetime.fromisoformat(raw['valid_until'])
     if expiry <= utcnow():
         raise Refused('offer_coverage_expired')
-    if raw['snapshot_hash'] != _catalogue_version(s, runtime):
+    # Legacy approvals retain whole-catalogue semantics; they are never silently reinterpreted.
+    version = (_pilot_product_version(s, runtime, config['product'])
+               if raw.get('snapshot_kind') == 'pilot-product.v1' else _catalogue_version(s, runtime))
+    if raw['snapshot_hash'] != version:
         raise Refused('offer_coverage_stale')
     return VaultCatalogueCoverage(runtime.account_id, runtime.binding_id, True, raw['evidence_ref'], expiry, raw['snapshot_hash'])
+
+
+def _pilot_product_version(s, runtime, product):
+    """Only pilot dependencies; general catalogue coverage remains unchanged.
+
+    updated_at remains a frozen version under catalog_terms. Even a sync-only
+    timestamp refresh invalidates this version until explicitly reapproved.
+    """
+    from .commerce import _real_catalogue_terms
+    from .catalogue import aliases_for
+    if not _product_current(s, runtime.account_id, product):
+        raise Refused('offer_coverage_product_changed')
+    terms = _real_catalogue_terms(s, runtime.account_id, product['id'], lock=False)
+    item = s.get(CatalogItem, product['id'])
+    aliases = aliases_for(s, runtime, product['id'], terms)
+    if len(aliases) > 1000:
+        raise Refused('offer_coverage_alias_limit')
+    provenance = [{'media_id': f['media_id'],
+        'content_hash_kind': s.get(VaultItem, (runtime.account_id, f['media_id'])).content_hash_kind}
+        for f in terms['files']]
+    return sha256(json.dumps({'version': 'pilot-product.v1', 'binding': runtime.binding_id,
+        'product': product, 'currency': 'USD', 'terms': terms, 'tags': item.tags,
+        'aliases': aliases, 'media_provenance': provenance},
+        sort_keys=True, separators=(',', ':'), ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def offer_coverage_snapshot(store, tenant, account, *, product, evidence_ref, valid_until):
+    """Read a versioned snapshot for an explicit stopped configure command.
+
+    This records or authorizes nothing. configure owns actor authorization,
+    stopped/disabled requirements, revision checks and the retained audit.
+    """
+    if (type(evidence_ref) is not str or not evidence_ref.startswith('vault:')
+            or not 6 < len(evidence_ref) <= 128 or type(valid_until) is not datetime
+            or valid_until.tzinfo is not None or valid_until <= utcnow()):
+        raise Refused('invalid pilot coverage evidence or expiry')
+    with Session(store.engine) as s:
+        runtime = store._runtime(s, tenant, account, lock=False)
+        return {'account_id': account, 'binding_id': runtime.binding_id, 'complete': True,
+            'evidence_ref': evidence_ref, 'valid_until': valid_until.isoformat(),
+            'snapshot_kind': 'pilot-product.v1', 'snapshot_hash': _pilot_product_version(s, runtime, product)}
 
 
 def _encoded(value):
@@ -260,6 +308,38 @@ def authorize_fan(s, runtime, fan, actor, permission):
         authorize(config, actor, permission)
 
 
+
+def digest_resolution_key(binding, epoch, event_key, payload_sha256):
+    event_hash = sha256(event_key.encode()).hexdigest()
+    return sha256(f'plan-c-digest-resolve:{binding}:{epoch}:{event_hash}:{payload_sha256}'.encode()).hexdigest()
+
+
+def unresolved_webhook_digests(runtime):
+    """One shared view for barriers, queue and readiness; original evidence never changes.
+
+    A later conflicting payload re-holds even a previously resolved benign event.
+    Legacy digest pairs missing a safety_hold flag are also protected.
+    """
+    from sqlalchemy import and_, or_, func, literal, cast, String
+    from sqlalchemy.orm import aliased
+    from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
+    row = OfEnginePilotWebhookDigest
+    other = aliased(row)
+    conflict = select(other.payload_sha256).where(other.account_id == row.account_id,
+        other.epoch == row.epoch, other.event_key == row.event_key,
+        other.payload_sha256 != row.payload_sha256).correlate(row).exists()
+    key_text = (literal('plan-c-digest-resolve:' + runtime.binding_id + ':') + cast(row.epoch, String) + ':'
+        + func.encode(func.sha256(func.convert_to(row.event_key, 'UTF8')), 'hex') + ':' + row.payload_sha256)
+    key = func.encode(func.sha256(func.convert_to(key_text, 'UTF8')), 'hex')
+    resolved = select(OfLaunchCommand.command_key).where(OfLaunchCommand.account_id == row.account_id,
+        OfLaunchCommand.binding_id == runtime.binding_id, OfLaunchCommand.command_key == key,
+        OfLaunchCommand.kind == 'plan_c_webhook_resolution').correlate(row).exists()
+    return select(row).join(OfFansConnection, and_(OfFansConnection.account_id == row.account_id,
+        OfFansConnection.epoch == row.epoch)).where(row.account_id == runtime.account_id,
+        OfFansConnection.binding_id == runtime.binding_id, or_(row.safety_hold.is_(True), conflict),
+        or_(~resolved, conflict))
+
+
 def delivery_block(s, runtime, fan, *, commercial=False):
     """Pending human/provider evidence blocks pilot sends until safely classified."""
     pilot, config = current(s, runtime)
@@ -297,11 +377,8 @@ def delivery_block(s, runtime, fan, *, commercial=False):
         OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan,
         OfFansEvidence.kind.in_(('unlock','transaction','chargeback')),
         OfFansEvidence.status.in_(('pending','held'))).limit(1)) if commercial else None
-    malformed = s.scalar(select(OfEnginePilotWebhookDigest.event_key).join(OfFansConnection,
-        (OfFansConnection.account_id == OfEnginePilotWebhookDigest.account_id) &
-        (OfFansConnection.epoch == OfEnginePilotWebhookDigest.epoch)).where(
-        OfEnginePilotWebhookDigest.account_id == runtime.account_id, OfFansConnection.binding_id == runtime.binding_id,
-        OfEnginePilotWebhookDigest.safety_hold.is_(True)).limit(1))
+    malformed = s.scalar(unresolved_webhook_digests(runtime).with_only_columns(
+        OfEnginePilotWebhookDigest.event_key).limit(1))
     return 'pilot_evidence_pending' if pending is not None or human is not None or money is not None or malformed is not None else None
 
 
@@ -383,6 +460,10 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
             raise Refused('new limits cannot erase existing reservations')
         now = utcnow()
         before = {'revision':row.revision, 'status':row.status, 'fingerprint':row.fingerprint} if row else {}
+        # Retain exact explicit coverage changes for later expiry renewal. Status
+        # commands/unrelated configuration cannot manufacture this evidence.
+        before['offerCoverageBefore'] = old.get('offer_coverage') if row else None
+        before['offerCoverageAfter'] = config.get('offer_coverage')
         encoded, digest = _encoded(config), _fingerprint(config)
         if row is None:
             row = OfEnginePilotScope(scope_id=1, account_id=account, binding_id=runtime.binding_id, revision=1,

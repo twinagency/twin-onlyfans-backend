@@ -5,7 +5,8 @@ Every function opens its own short transaction. Nothing here is ever held open a
 Cost accounting, per call row (micro-USD):
   reserved / calling  -> counts `reserved_microusd` (the call may be in flight)
   settled             -> counts `actual_microusd` (usage known)
-  unknown             -> counts `reserved_microusd` (request may have been charged; conservative)
+  unknown             -> counts reserved cost until provider verification; actual known cost thereafter
+                         (the unknown-output hold remains independent)
   released            -> counts 0 (proved not sent, or the provider refused without a completion)
 
 `reserved_microusd` is ModelConfig.call_bound_microusd(): every allowed input token and output token at the configured
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from hashlib import sha256
 import json
+import re
 import logging
 import uuid
 
@@ -67,7 +69,7 @@ def _row(r):
 
 
 def _counted():
-    return func.coalesce(func.sum(text("CASE status WHEN 'released' THEN 0 WHEN 'settled' THEN actual_microusd ELSE reserved_microusd END")), 0)
+    return func.coalesce(func.sum(text("CASE WHEN status = 'released' THEN 0 WHEN status = 'settled' OR (status = 'unknown' AND usage_known AND actual_microusd IS NOT NULL) THEN actual_microusd ELSE reserved_microusd END")), 0)
 
 
 class ModelLedger:
@@ -206,7 +208,19 @@ class ModelLedger:
         if lapsed:
             raise Refused('model call lease expired before the call')
 
-    def settle(self, account, call_id, worker_id, *, text_value, usage, identity_pending=False):
+    @staticmethod
+    def _capture_generation(row, generation_id, endpoint_sha256):
+        if not generation_id and not endpoint_sha256:
+            return
+        if (type(generation_id) is not str or not re.fullmatch(r'[A-Za-z0-9._:-]{1,255}',generation_id)
+                or type(endpoint_sha256) is not str or not re.fullmatch(r'[a-f0-9]{64}',endpoint_sha256)):
+            raise Refused('invalid provider generation reference')
+        if row.provider_generation_id not in (None,generation_id) or row.provider_endpoint_sha256 not in (None,endpoint_sha256):
+            raise Refused('provider generation reference changed')
+        row.provider_generation_id,row.provider_endpoint_sha256 = generation_id,endpoint_sha256
+
+    def settle(self, account, call_id, worker_id, *, text_value, usage, identity_pending=False,
+               generation_id='', endpoint_sha256=''):
         if type(identity_pending) is not bool:
             raise Refused('invalid identity verification state')
         cfg = self.config
@@ -215,6 +229,9 @@ class ModelLedger:
             row = s.get(OfEngineModelCall, (account, call_id), with_for_update=True)
             if row is None or row.lease_owner != worker_id or row.status not in ('calling', 'unknown'):
                 raise Refused('model call lease is no longer held')
+            if row.usage_known:
+                raise Refused('model call usage is already reconciled')
+            self._capture_generation(row,generation_id,endpoint_sha256)
             prompt_price, completion_price = cfg.prices_for(row.model)  # THIS call's model, not the primary's
             if cost is None and usage.prompt_tokens is not None and usage.completion_tokens is not None and (
                     prompt_price or completion_price):
@@ -240,9 +257,10 @@ class ModelLedger:
             row = self._mine(s, account, call_id, worker_id, 'reserved', 'calling')
             row.status, row.outcome, row.error_class, row.updated_at = 'released', outcome, error_class, self.clock()
 
-    def mark_unknown(self, account, call_id, worker_id, *, outcome, error_class):
+    def mark_unknown(self, account, call_id, worker_id, *, outcome, error_class, generation_id='', endpoint_sha256=''):
         with Session(self.engine) as s, s.begin():
             row = self._mine(s, account, call_id, worker_id, 'calling')
+            self._capture_generation(row,generation_id,endpoint_sha256)
             row.status, row.outcome, row.error_class, row.updated_at = 'unknown', outcome, error_class, self.clock()
 
     def finish_identity(self, account, call_id, worker_id, *, verified):
@@ -285,7 +303,7 @@ class ModelLedger:
         return identity
 
     def unreconciled(self, *, day=None):
-        """`unknown` calls still counted at their full reservation: the operator's reconciliation list."""
+        """Calls with uncertain outcomes/usage; verified usage does not clear an unknown-output hold."""
         with Session(self.engine) as s:
             query = select(OfEngineModelCall).where(OfEngineModelCall.status == 'unknown')
             if day is not None:
@@ -300,6 +318,14 @@ class ModelLedger:
             row = s.get(OfEngineModelCall, (account, call_id), with_for_update=True)
             if row is None or row.status != 'unknown':
                 raise Refused('only an unknown model call can be reconciled')
-            row.status, row.actual_microusd, row.usage_known, row.settled_at = 'settled', actual_microusd, True, self.clock()
-            row.updated_at = row.settled_at
-            row.error_class = ('reconciled:' + (row.error_class or ''))[:64]
+            self.apply_verified_usage(row, actual_microusd, now=self.clock(), retain_unknown_outcome=False)
+
+    @staticmethod
+    def apply_verified_usage(row, actual_microusd, *, now, retain_unknown_outcome):
+        if (type(actual_microusd) is not int or not 0 <= actual_microusd <= 2**63-1
+                or type(retain_unknown_outcome) is not bool or row.status != 'unknown' or row.usage_known):
+            raise Refused('only unknown usage can receive verified cost evidence')
+        row.status = 'unknown' if retain_unknown_outcome else 'settled'
+        row.actual_microusd, row.usage_known, row.settled_at, row.updated_at = actual_microusd, True, now, now
+        row.error_class = ('cost_over_bound' if actual_microusd > row.reserved_microusd
+                           else 'reconciled:' + (row.error_class or ''))[:64]

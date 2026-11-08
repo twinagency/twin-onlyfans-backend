@@ -56,6 +56,15 @@ def _event_fan(raw):
         raise Refused('invalid pilot event') from None
 
 
+
+def _known_irrelevant(raw):
+    from fans_api_adapter.event_scope import known_irrelevant_event
+    try:
+        return known_irrelevant_event(parse_event(raw))
+    except Refused:
+        return False
+
+
 def _record_outside_digest(store, tenant, account, raw, event_key, *, safety_hold=False):
     """Persist only a hash under the active epoch lock so a racing duplicate cannot be lost."""
     if type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', event_key):
@@ -81,16 +90,18 @@ def _record_outside_digest(store, tenant, account, raw, event_key, *, safety_hol
             OfFansConnection.provider_account_id == provider_account).order_by(OfFansConnection.epoch.desc()).limit(1))
         epoch = matched.epoch if matched is not None else active_epoch
         existing = s.get(OfFansWebhook, (account, epoch, event_key))
+        conflict = (existing is not None and existing.payload_sha256 != digest or
+            s.scalar(select(OfEnginePilotWebhookDigest.payload_sha256).where(
+                OfEnginePilotWebhookDigest.account_id == account, OfEnginePilotWebhookDigest.epoch == epoch,
+                OfEnginePilotWebhookDigest.event_key == event_key,
+                OfEnginePilotWebhookDigest.payload_sha256 != digest).limit(1)) is not None)
         marker = s.get(OfEnginePilotWebhookDigest, (account, epoch, event_key, digest))
         if marker is None:
-            from sqlalchemy import func
-            count = s.scalar(select(func.count()).select_from(OfEnginePilotWebhookDigest).where(
-                OfEnginePilotWebhookDigest.account_id == account))
-            if count >= 10000:
-                raise Refused('pilot webhook evidence limit reached')
+            # Append-only replay/conflict evidence has no arbitrary lifetime row cap.
+            # No old rows are deleted or compacted. Storage/backup remains an operational gate.
             s.add(OfEnginePilotWebhookDigest(account_id=account, epoch=epoch, event_key=event_key,
-                                             payload_sha256=digest, safety_hold=(safety_hold or existing is not None and existing.payload_sha256 != digest), received_at=utcnow()))
-        return existing is not None and existing.payload_sha256 != digest
+                payload_sha256=digest, safety_hold=bool(safety_hold or conflict or matched is None), received_at=utcnow()))
+        return bool(conflict)
 
 
 @dataclass(frozen=True)
@@ -135,7 +146,9 @@ class SupervisedPilot:
         return _record_outside_digest(self.worker.engine.store, self.tenant, self.account,
                                       raw, event_key, safety_hold=safety_hold)
 
-    def handle(self, raw, signature, event_key):
+    def handle(self, raw, signature, event_key, *, ingest_only=False):
+        if type(ingest_only) is not bool:
+            raise Refused('invalid intake mode')
         if type(raw) is not bytes or len(raw) > 1_000_000 or not verify_signature(raw, signature, self.secret):
             raise Refused('webhook authentication failed')
         # Stopping planning/sending must not discard receipts, corrections or
@@ -145,17 +158,21 @@ class SupervisedPilot:
             runtime = self.worker.engine.store._runtime(s, self.tenant, self.account, lock=False)
             _, config = require(s, runtime)
             allowed_fans = frozenset(config['fans'])
-        try:
-            self.validate()
-            planning = True
-        except Refused:
-            planning = False
+        # HTTP intake persists and projects receipt-time barriers only. The existing
+        # durable poller owns generation/sending; no request-local background work.
+        planning = False
+        if not ingest_only:
+            try:
+                self.validate()
+                planning = True
+            except Refused:
+                pass
         malformed = False
         try:
             _, fan = _event_fan(raw)
             outside = fan is not None and fan not in allowed_fans
         except Refused:
-            outside, malformed = True, True
+            outside, malformed = True, not _known_irrelevant(raw)
         if outside:
             if self._record_outside_digest(raw, event_key, safety_hold=malformed):
                 return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
@@ -260,6 +277,7 @@ class SupervisedPilot:
         # for repair. Unknown model calls are retained, never automatically retried.
         with Session(store.engine) as s:
             runtime = store._runtime(s, self.tenant, self.account, lock=False)
+            scope, _ = require(s, runtime, active=True)
             request = OfEngineRequest
             existing = select(OfEngineApproval.request_id).where(
                 OfEngineApproval.account_id == request.account_id,
@@ -273,7 +291,7 @@ class SupervisedPilot:
                 OfEngineApproval.authorization_mode == 'autonomous',
                 OfEngineApproval.status.in_(('invalidated', 'expired')),
                 OfEngineApproval.invalidation_reason.in_(
-                    ('memory_changed', 'new_inbound_pending', 'pilot_contact_review_pending', 'ttl'))).exists()
+                    ('memory_changed', 'new_inbound_pending', 'pilot_contact_review_pending', 'unsent_cancelled', 'ttl'))).exists()
             ready = select(OfEngineDecision.decision_id).where(
                 OfEngineDecision.account_id == request.account_id,
                 OfEngineDecision.request_id == request.request_id,
@@ -292,7 +310,12 @@ class SupervisedPilot:
                 request.source_message_id == OfIngress.message_id, request.binding_id == runtime.binding_id))
                 .where(OfIngress.account_id == self.account, OfIngress.binding_id == runtime.binding_id,
                     OfIngress.fan_id.in_(self.allowed_fans), OfIngress.source != 'import',
-                    OfIngress.status.in_(('pending','applied')), OfIngress.received_at >= active_since,
+                    OfIngress.status.in_(('pending','applied')),
+                    # Explicit renewal can repair already-open work from this pilot.
+                    # Intake from before activation without a pilot request remains inert.
+                    or_(OfIngress.received_at >= active_since,
+                        and_(request.request_id.is_not(None), request.created_at >= scope.created_at,
+                             request.status == 'open')),
                     or_(request.request_id.is_(None), and_(request.status == 'open',
                         or_(and_(~existing, or_(ready, ~uncertain)), and_(dead_auto, ~uncertain))))))
             cursor = self.ingress_cursor.get('last')
@@ -318,7 +341,7 @@ class SupervisedPilot:
                         if (latest_approval.authorization_mode != 'autonomous'
                                 or latest_approval.status not in ('invalidated', 'expired')
                                 or latest_approval.invalidation_reason not in (
-                                    'memory_changed', 'new_inbound_pending', 'pilot_contact_review_pending', 'ttl')
+                                    'memory_changed', 'new_inbound_pending', 'pilot_contact_review_pending', 'unsent_cancelled', 'ttl')
                                 ):
                             continue
                         parts = s.scalars(select(OfEngineDecision).where(
@@ -400,7 +423,9 @@ class IntakeOnlyPilot:
     account: str
     secret: bytes = field(repr=False)
 
-    def handle(self, raw, signature, event_key):
+    def handle(self, raw, signature, event_key, *, ingest_only=False):
+        if type(ingest_only) is not bool:
+            raise Refused('invalid intake mode')
         if type(raw) is not bytes or len(raw)>1_000_000 or not verify_signature(raw,signature,self.secret):
             raise Refused('webhook authentication failed')
         with Session(self.store.engine) as s:
@@ -411,7 +436,7 @@ class IntakeOnlyPilot:
             _,fan=_event_fan(raw)
             outside=fan is not None and fan not in config['fans']
         except Refused:
-            outside,malformed=True,True
+            outside,malformed=True,not _known_irrelevant(raw)
         if outside:
             conflict=_record_outside_digest(self.store,self.tenant,self.account,raw,event_key,safety_hold=malformed)
             return {'outcome':'quarantined' if conflict else 'outside_pilot_scope','planning':'held'}

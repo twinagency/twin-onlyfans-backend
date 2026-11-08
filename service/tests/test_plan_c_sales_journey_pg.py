@@ -39,10 +39,9 @@ def install_coverage(world, *, seconds=1800):
         revision, limit, throttle = policy.revision, policy.limit_units, policy.throttle_seconds
     world.authority.configure(TENANT, ACCOUNT, expected_revision=revision, enabled=False,
         limit_units=limit, throttle_seconds=throttle, actor=ACTOR, reason='offline coverage setup')
-    coverage = asdict(vault_coverage(world.store, TENANT, ACCOUNT, complete=True,
-        evidence_ref='vault:offline-setup', valid_until=utcnow() + timedelta(seconds=seconds)))
-    coverage['valid_until'] = coverage['valid_until'].isoformat()
     config = before['config']
+    coverage = pilot_scope.offer_coverage_snapshot(world.store, TENANT, ACCOUNT, product=config['product'],
+        evidence_ref='vault:offline-setup', valid_until=utcnow() + timedelta(seconds=seconds))
     config['offer_coverage'] = coverage
     configured = pilot_scope.configure(world.store, TENANT, ACCOUNT, config,
         expected_revision=stopped['revision'], command_key='a2' * 32, actor=ACTOR, reason='offline standing coverage approval')
@@ -303,7 +302,9 @@ def test_restart_recovers_original_purchase_request_without_new_authority(superv
     monkeypatch.setattr(target, name, interrupted)
     raw, headers = signed(inbound(1540, 'I want to buy the photo'), key='interrupted-purchase')
     with TestClient(create_app(pilot, run_loop=False)) as client:
-        assert client.post('/onlyfans/webhooks/plan-c', content=raw, headers=headers).status_code == 503
+        assert client.post('/onlyfans/webhooks/plan-c', content=raw, headers=headers).status_code == 202
+    with pytest.raises(RuntimeError, match='offline crash at ' + boundary):
+        pilot.tick()
     assert world.fans.posts == []
     with Session(world.database[1]) as session:
         assert len(list(session.scalars(select(OfEngineOfferGrant)))) == 1

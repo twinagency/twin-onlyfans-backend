@@ -77,7 +77,9 @@ ENGINE_MODEL_CALLS = '0123_engine_model_calls'
 ENGINE_APPROVAL = '0124_engine_approval'
 PLAN_C_SCOPE = '0125_plan_c_scope'
 PLAN_C_INGRESS = '0126_plan_c_ingress'
-HEAD = PLAN_C_INGRESS
+OFFER_GRANT_LINEAGE = '0127_offer_grant_lineage'
+MODEL_BILLING_EVIDENCE = '0128_model_billing_evidence'
+HEAD = MODEL_BILLING_EVIDENCE
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -110,6 +112,8 @@ REVISION_RANK[ENGINE_MODEL_CALLS] = 123
 REVISION_RANK[ENGINE_APPROVAL] = 124
 REVISION_RANK[PLAN_C_SCOPE] = 125
 REVISION_RANK[PLAN_C_INGRESS] = 126
+REVISION_RANK[OFFER_GRANT_LINEAGE] = 127
+REVISION_RANK[MODEL_BILLING_EVIDENCE] = 128
 
 
 class SchemaMismatch(RuntimeError):
@@ -292,10 +296,16 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 or " ".join(rows[0][4].split()) != f"BEGIN RAISE EXCEPTION '{message}'; END;"):
             failures.append(f"missing append-only protection {table}")
     if expected_rank >= 113:
+        grant_uniques = {tuple(c['column_names']) for c in inspector.get_unique_constraints('of_engine_offer_grant')}
+        legacy_slot = ('account_id', 'fan_id', 'item_id', 'terms_hash')
+        if (expected_rank < 127 and legacy_slot not in grant_uniques
+                or expected_rank >= 127 and legacy_slot in grant_uniques):
+            failures.append('incompatible offer authorization uniqueness')
+    if expected_rank >= 113:
         # A matching revision is insufficient if the immutable evidence guards
         # or row security have been removed from an existing database.
         for table, trigger, digest in [
-            ("of_engine_offer_grant", "of_engine_offer_grant_guard", "4047964965e2da94c621737aaf4c7a37cfb3f29a71c1f1460e33ecb02d03667f"),
+            ("of_engine_offer_grant", "of_engine_offer_grant_guard", ("af92b7c06ef0ac7f3b949eb42d9b1528f6371bb89b3caf5b68951e2f1bc4b5ac" if expected_rank >= 127 else "4047964965e2da94c621737aaf4c7a37cfb3f29a71c1f1460e33ecb02d03667f")),
             ("of_engine_access_evidence", "of_engine_access_immutable", "b1ca5e7cec1420390577f7847545d2176356f7c3240201d3149e5f19fab9d56b"),
             ("of_fans_connection", "of_fans_connection_guard", "264c6c5c69c11743c33f0596fa521dee3b782e9dc6f769e66fd99f04c118f074"),
             ("of_fans_webhook_conflict", "of_fans_webhook_conflict_immutable", "39d01166ca3144e7023fbc6732a73c9ee1866f05b9b9a9cdb8642133c85ae7e2"),
@@ -307,7 +317,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
                 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
                 WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
                 {"table": table, "trigger": trigger}).all()
-            if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+            if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != (31 if table == "of_engine_offer_grant" and expected_rank >= 127 else 27)
                     or guard[0][2] != trigger or guard[0][4] != "plpgsql"
                     or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != digest):
                 failures.append(f"missing engine evidence protection {table}")
@@ -383,7 +393,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             {"table": table, "trigger": trigger}).all()
         if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
                 or guard[0][2] != trigger or guard[0][4] != "plpgsql"
-                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != ("7f1c0f9beb768281cbd6fa8b66279f0d24f9b486890d8913de2ce690b3556a73" if expected_rank >= 125 else "9cac12064b4377f866c0b5d5022292418e8895e9e5e271c03628e528d4ac134e")):
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != ("5630b811cd298311ff01ddcc0314a176be308b5d56873c50ebd780d0bdd433d8" if expected_rank >= 128 else "7f1c0f9beb768281cbd6fa8b66279f0d24f9b486890d8913de2ce690b3556a73" if expected_rank >= 125 else "9cac12064b4377f866c0b5d5022292418e8895e9e5e271c03628e528d4ac134e")):
             failures.append("missing engine model call protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing engine model call row security")

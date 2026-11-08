@@ -117,9 +117,7 @@ def approve_simulated_offer(store, tenant, account, fan_id, item_id, coverage):
             raise Refused('synthetic ownership coverage does not match the bundle')
         _unowned(s, account, fan_id, terms)
         digest = _hash(terms)
-        prior = s.scalar(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == account,
-            OfEngineOfferGrant.fan_id == fan_id, OfEngineOfferGrant.item_id == item_id,
-            OfEngineOfferGrant.terms_hash == digest))
+        prior = _latest_grant(s, account, fan_id, item_id, digest)
         if prior is not None:
             if prior.binding_id != runtime.binding_id or prior.used_intent_id is not None or prior.expires_at <= utcnow():
                 raise Refused('existing offer authorization needs review')
@@ -136,12 +134,158 @@ def approve_simulated_offer(store, tenant, account, fan_id, item_id, coverage):
 _COVERAGE_PREFIX = {'synthetic': 'synthetic:', 'fansapi': 'vault:'}
 
 
-def verified_terms(s, runtime, owner, grant, *, intent_id=None):
+
+def _latest_grant(s, account, fan_id, item_id, digest):
+    return s.scalar(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == account,
+        OfEngineOfferGrant.fan_id == fan_id, OfEngineOfferGrant.item_id == item_id,
+        OfEngineOfferGrant.terms_hash == digest).order_by(OfEngineOfferGrant.issuance.desc()).limit(1))
+
+
+def _grant_authority(s, runtime, coverage, policy):
+    from .pilot_scope import current
+    pilot, config = current(s, runtime)
+    return {'kind': 'standing_pilot' if pilot else 'explicit_catalogue_coverage',
+        'binding': runtime.binding_id, 'policyRevision': policy.revision,
+        'coverageRef': coverage.evidence_ref, 'validUntil': coverage.valid_until.isoformat(),
+        'pilot': None if pilot is None else {'revision': pilot.revision, 'fingerprint': pilot.fingerprint,
+            'actor': config['operator']['actor'], 'coverage': config.get('offer_coverage')}}
+
+
+def _explicit_renewal(s, runtime, prior, pilot, config):
+    from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+    raw = config.get('offer_coverage')
+    if raw is None or datetime.fromisoformat(raw['valid_until']) <= prior.expires_at:
+        raise Refused('offer_explicit_renewal_required')
+    # Only a later configure command that explicitly changed coverage can renew
+    # authority. Stop/start and unrelated config retain equal before/after values.
+    from sqlalchemy import cast
+    from sqlalchemy.dialects.postgresql import JSONB
+    before_doc, result_doc = cast(OfLaunchCommand.before_json, JSONB), cast(OfLaunchCommand.result_json, JSONB)
+    # Select renewal evidence itself; unrelated status/config audits cannot push
+    # a still-valid permission out of an arbitrary latest-N scan.
+    commands = s.scalars(select(OfLaunchCommand).where(OfLaunchCommand.account_id == runtime.account_id,
+        OfLaunchCommand.binding_id == runtime.binding_id, OfLaunchCommand.kind == 'plan_c_scope',
+        OfLaunchCommand.created_at > prior.created_at,
+        result_doc['fingerprint'].astext == pilot.fingerprint, result_doc['status'].astext == 'configured',
+        before_doc['offerCoverageAfter'] == raw,
+        before_doc['offerCoverageAfter'].is_distinct_from(before_doc['offerCoverageBefore']))
+        .order_by(OfLaunchCommand.created_at.desc()).limit(1))
+    for command in commands:
+        before, result = json.loads(command.before_json), json.loads(command.result_json)
+        if (result.get('fingerprint') == pilot.fingerprint and result.get('status') == 'configured'
+                and before.get('offerCoverageAfter') == raw
+                and before.get('offerCoverageBefore') != raw):
+            return {'commandKey': command.command_key, 'actor': command.actor,
+                'requestHash': command.request_hash, 'coverage': raw}
+    raise Refused('offer_explicit_renewal_required')
+
+
+def _never_dispatched(s, runtime, prior, policy, state):
+    """Terminal engine cancellation plus the final wire fence, under runtime/policy/intent locks."""
+    from db.onlyfans_engine_models import OfEngineAttempt, OfEngineIndependentAdmission
+    intent = s.get(OfTextIntent, (runtime.account_id, prior.used_intent_id), with_for_update=True)
+    if (intent is None or intent.binding_id != runtime.binding_id or intent.fan_id != prior.fan_id
+            or intent.catalog_item_id != prior.item_id or intent.status != 'cancelled' or intent.wire_version != 1
+            or intent.wire_started_at is not None or intent.provider_message_id is not None
+            or intent.receipt_json is not None or intent.projected_at is not None or intent.offer_id is not None
+            or intent.reservation_held or policy.active_intent_id == intent.intent_id
+            or intent.attempt_id is not None and state.unresolved_attempt_id == intent.attempt_id):
+        raise Refused('offer_previous_dispatch_not_fenced')
+    decisions = list(s.scalars(select(OfEngineDecision).where(OfEngineDecision.account_id == runtime.account_id,
+        OfEngineDecision.offer_grant_id == prior.grant_id)))
+    if (len(decisions) != 1 or decisions[0].intent_id != intent.intent_id or decisions[0].status != 'cancelled'
+            or decisions[0].binding_id != runtime.binding_id or decisions[0].fan_id != prior.fan_id):
+        raise Refused('offer_previous_decision_not_retired')
+    attempts = list(s.scalars(select(OfEngineAttempt).where(OfEngineAttempt.account_id == runtime.account_id,
+        OfEngineAttempt.intent_id == intent.intent_id)))
+    if any(a.outcome in ('accepted', 'unknown', 'not_accepted') for a in attempts):
+        raise Refused('offer_previous_wire_evidence_present')
+    if s.scalar(select(OfEngineIndependentAdmission.attempt_id).where(
+            OfEngineIndependentAdmission.account_id == runtime.account_id,
+            OfEngineIndependentAdmission.intent_id == intent.intent_id,
+            OfEngineIndependentAdmission.status.in_(('dispatching', 'unknown'))).limit(1)) is not None:
+        raise Refused('offer_previous_admission_unresolved')
+    return {'intentId': intent.intent_id, 'decisionId': decisions[0].decision_id,
+        'status': intent.status, 'wireVersion': intent.wire_version, 'wireStartedAt': None,
+        'attemptId': intent.attempt_id, 'dispatchTokenHash': _hash(intent.dispatch_token),
+        'attempts': [{'id': a.attempt_id, 'outcome': a.outcome} for a in attempts],
+        'reason': intent.reason, 'fencedAt': intent.updated_at.isoformat()}
+
+
+def _successor(s, runtime, owner, prior, coverage, policy):
+    from db.models import OfConversationState
+    from .pilot_scope import require, current_offer_coverage, delivery_block
+    from .journey import backfill_complete
+    from .history_scope import has_unscoped_messages
+    from .writer_context import active_profile
+    pilot, config = require(s, runtime, active=True)
+    state = s.get(OfConversationState, (runtime.account_id, prior.fan_id))
+    profile = active_profile(runtime.account_id, session=s)
+    if (config['authorization_mode'] != 'autonomous' or prior.fan_id not in config['fans']
+            or config['product']['id'] != prior.item_id or not runtime.enabled or policy.enabled is not True
+            or state is None or state.mode != 'automated' or state.takeover_state != 'none'
+            or profile is None or not profile.may_offer(str(prior.item_id))
+            or not backfill_complete(s, runtime.account_id, prior.fan_id)
+            or has_unscoped_messages(s, runtime.account_id, prior.fan_id, runtime.binding_id)):
+        raise Refused('offer_successor_not_eligible')
+    blocked = delivery_block(s, runtime, prior.fan_id, commercial=True)
+    if blocked:
+        raise Refused(blocked)
+    current_coverage = current_offer_coverage(s, runtime, config)
+    if (coverage.evidence_ref != current_coverage.evidence_ref
+            or coverage.valid_until != current_coverage.valid_until):
+        raise Refused('offer_successor_coverage_mismatch')
+    # Policy is already locked by approval; this locks only the old exact intent.
+    proof = _never_dispatched(s, runtime, prior, policy, state) if prior.used_intent_id else None
+    expired = prior.expires_at <= utcnow()
+    renewal = _explicit_renewal(s, runtime, prior, pilot, config) if expired else None
+    if proof is None and not expired:
+        raise Refused('offer_successor_not_required')
+    terms = _real_catalogue_terms(s, runtime.account_id, prior.item_id)
+    if _hash(terms) != prior.terms_hash:
+        raise Refused('offer_authorization_terms_need_review')
+    _unowned(s, runtime.account_id, prior.fan_id, terms)
+    if (not _sales_permits(owner, prior.item_id)
+            or s.scalar(select(OfTextIntent.intent_id).where(OfTextIntent.account_id == runtime.account_id,
+                OfTextIntent.binding_id == runtime.binding_id, OfTextIntent.fan_id == prior.fan_id,
+                OfTextIntent.status.in_(('dispatching', 'unknown'))).limit(1)) is not None):
+        raise Refused('offer_successor_delivery_hold')
+    from onlyfans_runtime.quote import request_exists
+    if request_exists(s, runtime.account_id, prior.fan_id, terms):
+        raise Refused('an existing offer needs review')
+    authority = _grant_authority(s, runtime, coverage, policy)
+    authority.update({'predecessor': prior.grant_id, 'neverDispatched': proof, 'explicitRenewal': renewal})
+    successor = OfEngineOfferGrant(account_id=runtime.account_id, grant_id=str(uuid.uuid4()), fan_id=prior.fan_id,
+        binding_id=runtime.binding_id, item_id=prior.item_id, terms_hash=prior.terms_hash,
+        coverage_ref=coverage.evidence_ref, expires_at=coverage.valid_until if renewal else min(prior.expires_at, coverage.valid_until),
+        issuance=prior.issuance + 1, predecessor_grant_id=prior.grant_id,
+        issuance_reason='expired_renewal' if renewal else 'cancelled_unsent',
+        authorization_json=json.dumps(authority, sort_keys=True, separators=(',', ':')), created_at=utcnow())
+    s.add(successor);s.flush()
+    return successor
+
+
+def _real_catalogue_terms(s, account, item_id, *, lock=True):
+    """Shared preparation/availability/send provenance checks; read-only when lock=False."""
+    from db.models import VaultItem
+    terms = catalog_terms(s, account, item_id, lock=lock)
+    for saved in terms['files']:
+        media = s.get(VaultItem, (account, saved['media_id']))
+        if media is None or media.removed_at is not None or media.content_hash_kind != 'vault-metadata-v1':
+            raise Refused('media is not a synced real vault item')
+    return terms
+
+
+def verified_terms(s, runtime, owner, grant, *, intent_id=None, lock=True):
     if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id
-            or grant is None or grant.binding_id != runtime.binding_id or grant.fan_id != owner.fan_id
+            or grant is None or type(getattr(grant, 'grant_id', None)) is not str
+            or grant.binding_id != runtime.binding_id or grant.fan_id != owner.fan_id
             or not grant.coverage_ref.startswith(('synthetic:', 'vault:')) or grant.expires_at <= utcnow()
             or grant.used_intent_id not in (None, intent_id) or not _sales_permits(owner, grant.item_id)):
         raise Refused('offer authorization is stale or unavailable')
+    if s.scalar(select(OfEngineOfferGrant.grant_id).where(OfEngineOfferGrant.account_id == runtime.account_id,
+            OfEngineOfferGrant.predecessor_grant_id == grant.grant_id).limit(1)) is not None:
+        raise Refused('offer authorization has a successor')
     policy = s.get(OfDeliveryPolicy, runtime.account_id)
     if (policy is None or policy.transport_kind not in ENGINE_TRANSPORT_KINDS or not policy.media_enabled
             or not grant.coverage_ref.startswith(_COVERAGE_PREFIX[policy.transport_kind])):
@@ -152,7 +296,8 @@ def verified_terms(s, runtime, owner, grant, *, intent_id=None):
         from .journey import backfill_complete
         if not backfill_complete(s, runtime.account_id, owner.fan_id):
             raise Refused('offers wait for a finished backfill of this fan')
-    terms = catalog_terms(s, runtime.account_id, grant.item_id)
+    terms = (_real_catalogue_terms(s, runtime.account_id, grant.item_id, lock=lock)
+             if policy.transport_kind == 'fansapi' else catalog_terms(s, runtime.account_id, grant.item_id, lock=lock))
     if _hash(terms) != grant.terms_hash:
         raise Refused('approved offer terms changed')
     _unowned(s, runtime.account_id, owner.fan_id, terms)
@@ -184,7 +329,6 @@ def approve_catalogue_offer(store, tenant, account, fan_id, item_id, coverage):
 
 def _approve_catalogue_offer(s, runtime, fan_id, item_id, coverage):
     """Shared transaction path for explicit setup and standing-policy preparation."""
-    from db.models import VaultItem
     account = runtime.account_id
     if (type(coverage) is not RealCatalogueCoverage or coverage.account_id != account or coverage.fan_id != fan_id
             or coverage.item_id != item_id):
@@ -195,38 +339,36 @@ def _approve_catalogue_offer(s, runtime, fan_id, item_id, coverage):
             or coverage.valid_until.tzinfo is not None or coverage.valid_until <= utcnow()):
         raise Refused('catalogue coverage is incomplete')
     owner = s.get(OfEngineOwner, (account, fan_id))
-    policy = s.get(OfDeliveryPolicy, account)
+    policy = s.get(OfDeliveryPolicy, account, with_for_update=True)
     if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id
             or policy is None or policy.transport_kind != 'fansapi' or not policy.media_enabled
             or not _sales_permits(owner, item_id)):
         raise Refused('catalogue offer is not authorized')
-    terms = catalog_terms(s, account, item_id)
-    for saved in terms['files']:
-        v = s.get(VaultItem, (account, saved['media_id']))
-        if v is None or v.removed_at is not None or v.content_hash_kind != 'vault-metadata-v1':
-            raise Refused('media is not a synced real vault item')
+    terms = _real_catalogue_terms(s, account, item_id)
     _unowned(s, account, fan_id, terms)
     digest = _hash(terms)
-    query = select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == account,
-        OfEngineOfferGrant.fan_id == fan_id, OfEngineOfferGrant.item_id == item_id,
-        OfEngineOfferGrant.terms_hash == digest)
-    prior = s.scalar(query)
+    prior = _latest_grant(s, account, fan_id, item_id, digest)
     if prior is None:
         try:
             with s.begin_nested():
                 prior = OfEngineOfferGrant(account_id=account, grant_id=str(uuid.uuid4()), fan_id=fan_id,
                     binding_id=runtime.binding_id, item_id=item_id, terms_hash=digest,
-                    coverage_ref=coverage.evidence_ref, expires_at=coverage.valid_until, created_at=utcnow())
+                    coverage_ref=coverage.evidence_ref, expires_at=coverage.valid_until,
+                    issuance=0, issuance_reason='initial',
+                    authorization_json=json.dumps(_grant_authority(s, runtime, coverage, policy), sort_keys=True, separators=(',', ':')),
+                    created_at=utcnow())
                 s.add(prior)
                 s.flush()
         except IntegrityError:
             # Another legitimate preparer won the existing unique terms slot.
             # Validate that record; never delete uniqueness or mint another key.
-            prior = s.scalar(query)
+            prior = _latest_grant(s, account, fan_id, item_id, digest)
             if prior is None:
                 raise Refused('offer preparation conflict needs review') from None
-    if prior.binding_id != runtime.binding_id or prior.used_intent_id is not None or prior.expires_at <= utcnow():
+    if prior.binding_id != runtime.binding_id:
         raise Refused('existing offer authorization needs review')
+    if prior.used_intent_id is not None or prior.expires_at <= utcnow():
+        prior = _successor(s, runtime, owner, prior, coverage, policy)
     _pilot_coverage(s, runtime, prior)
     return prior.grant_id
 
@@ -246,7 +388,8 @@ def prepare_pilot_offer(store, tenant, account, fan_id, message_id, engine):
     """Prepare only the standing approved product, using explicit durable coverage.
 
     No model input grants authority. Missing, stale, expired or consumed
-    evidence remains visible on the same request; it is never renewed here.
+    evidence remains visible on the same request. Expiry can issue a successor
+    only from retained explicit stopped renewal evidence; old grants never change.
     """
     from db.models import OfConversationState
     from .journey import pilot_purchase_scope, live_current_request, backfill_complete
@@ -305,9 +448,7 @@ def prepare_pilot_offer(store, tenant, account, fan_id, message_id, engine):
             _unowned(s, account, fan_id, terms)
             if not _sales_permits(owner, item_id):
                 raise Refused('offer_scoped_reopening_required')
-            prior = s.scalar(select(OfEngineOfferGrant).where(OfEngineOfferGrant.account_id == account,
-                OfEngineOfferGrant.fan_id == fan_id, OfEngineOfferGrant.item_id == item_id,
-                OfEngineOfferGrant.terms_hash == _hash(terms)))
+            prior = _latest_grant(s, account, fan_id, item_id, _hash(terms))
             if prior is None and s.scalar(select(OfEngineOfferGrant.grant_id).where(
                     OfEngineOfferGrant.account_id == account, OfEngineOfferGrant.fan_id == fan_id,
                     OfEngineOfferGrant.item_id == item_id).limit(1)) is not None:

@@ -243,7 +243,8 @@ class ModelRuntime:
             except ModelOutcomeUnknown as exc:
                 incomplete = isinstance(exc, ModelIncompleteResponse)
                 ledger.mark_unknown(turn.account, reservation.call_id, self.worker_id,
-                                    outcome='provider_incomplete' if incomplete else 'timeout', error_class=exc.error_class)
+                                    outcome='provider_incomplete' if incomplete else 'timeout', error_class=exc.error_class,
+                                    generation_id=getattr(exc,'generation_id',''), endpoint_sha256=getattr(exc,'endpoint_sha256',''))
                 dead.add(model); pos = chain_pos + 1
                 if incomplete:
                     blocked = True  # an error-bearing partial response is not a fallback permission
@@ -260,7 +261,8 @@ class ModelRuntime:
             oversize = len(raw.encode('utf-8')) > cfg.max_output_bytes
             text = raw.encode('utf-8')[:cfg.max_output_bytes].decode('utf-8', 'ignore') if oversize else raw
             ledger.settle(turn.account, reservation.call_id, self.worker_id, text_value=text, usage=result.usage,
-                          identity_pending=bool(cfg.upstream_provider))
+                          identity_pending=bool(cfg.upstream_provider), generation_id=getattr(result,'generation_id',''),
+                          endpoint_sha256=getattr(result,'endpoint_sha256',''))
             returned_model = getattr(result, 'model', '') if type(getattr(result, 'model', '')) is str else ''
             returned_provider = getattr(result, 'provider', '') if type(getattr(result, 'provider', '')) is str else ''
             ledger.note_identity(turn.account, reservation.call_id, self.worker_id, requested=model,

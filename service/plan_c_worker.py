@@ -19,7 +19,7 @@ def _work_counts(pilot):
     """Bounded operational counts; no message text, account IDs or credentials."""
     from sqlalchemy import select, and_
     from sqlalchemy.orm import Session
-    from conversation_engine.pilot_scope import require
+    from conversation_engine.pilot_scope import require, unresolved_webhook_digests
     from conversation_engine.pilot_ingress import _unreviewed
     from db.onlyfans_delivery_models import OfTextIntent
     from db.onlyfans_fans_intake_models import OfFansProjection
@@ -41,11 +41,7 @@ def _work_counts(pilot):
                 OfFansProjection.account_id==OfFansConnection.account_id,OfFansProjection.epoch==OfFansConnection.epoch)).where(
                 OfFansProjection.account_id==pilot.account,OfFansConnection.binding_id==runtime.binding_id,
                 OfFansProjection.status.in_(('pending','held')))),
-            'malformedHolds':count(select(OfEnginePilotWebhookDigest.event_key).join(OfFansConnection,and_(
-                OfEnginePilotWebhookDigest.account_id==OfFansConnection.account_id,
-                OfEnginePilotWebhookDigest.epoch==OfFansConnection.epoch)).where(
-                OfEnginePilotWebhookDigest.account_id==pilot.account,OfFansConnection.binding_id==runtime.binding_id,
-                OfEnginePilotWebhookDigest.safety_hold.is_(True)))}
+            'malformedHolds':count(unresolved_webhook_digests(runtime))}
         return {**counts,'countsCapped':any(v==101 for v in counts.values())}
 
 
@@ -151,7 +147,7 @@ def create_app(pilot, *, run_loop=True):
         if not verify_signature(raw, signatures[0], current.secret):
             return _response(401, 'unauthorized')
         try:
-            await asyncio.to_thread(current.handle, raw, signatures[0], keys[0])
+            await asyncio.to_thread(current.handle, raw, signatures[0], keys[0], ingest_only=True)
         except Refused:
             return _response(409, 'scope_or_state_refused')
         except Exception:

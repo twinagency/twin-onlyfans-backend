@@ -72,6 +72,9 @@ def test_normal_http_webhook_approval_dispatch_receipt_duplicate_and_restart(sup
         assert client.post('/onlyfans/webhooks/plan-c', content=raw, headers={**headers, 'Signature':'0'*64}).status_code == 401
         assert client.post('/onlyfans/webhooks/plan-c', content=raw, headers=headers).status_code == 202
         assert client.post('/onlyfans/webhooks/plan-c', content=raw, headers=headers).status_code == 202
+    # HTTP has committed intake only. Normal polling creates the draft.
+    assert seen == [] and world.fans.posts == []
+    pilot.tick()
     with Session(world.database[1]) as s:
         rows = list(s.scalars(select(OfEngineApproval)))
         assert len(rows) == 1 and rows[0].status == 'awaiting'
@@ -132,16 +135,19 @@ def test_correction_and_takeover_invalidate_approval_without_send(supervised):
 
 
 def test_crash_after_intake_is_recovered_without_implicit_approval(supervised, monkeypatch):
-    world, _, _, seen, pilot = supervised
+    world, env, model, seen, pilot = supervised
     original = pilot.worker.engine.plan
     def crash(*args, **kwargs): raise RuntimeError('synthetic crash after intake')
     monkeypatch.setattr(pilot.worker.engine, 'plan', crash)
     raw, headers = signed(inbound(506, 'hello'), key='crash')
     with TestClient(create_app(pilot, run_loop=False)) as client:
-        assert client.post('/onlyfans/webhooks/plan-c', content=raw, headers=headers).status_code == 503
+        assert client.post('/onlyfans/webhooks/plan-c', content=raw, headers=headers).status_code == 202
+    with pytest.raises(RuntimeError, match='synthetic crash after intake'):
+        pilot.tick()
     monkeypatch.setattr(pilot.worker.engine, 'plan', original)
     assert world.fans.posts == []
-    pilot.tick()
+    restarted = build_supervised_pilot(world.store, env, model_transport=model, fans_transport=world.fans.transport)
+    restarted.tick()
     with Session(world.database[1]) as s:
         assert len(list(s.scalars(select(OfFansWebhook)))) == 1
         rows = list(s.scalars(select(OfEngineApproval)))
@@ -298,20 +304,27 @@ def test_autonomous_policy_records_machine_authority_and_sends_once(supervised):
 def test_autonomous_mode_still_invalidates_changed_memory_and_takeover(supervised):
     from onlyfans_runtime.launch_history_memory.memory import HistoricalMemory
     from db.models import OfConversationState
-    world, _, _, _, pilot = supervised
-    stage(pilot, 521)
+    world, _, _, seen, pilot = supervised
+    original = stage(pilot, 521)
     memory = HistoricalMemory(world.store)
     view = memory.read(TENANT, ACCOUNT, FAN)
     memory.correct(TENANT, ACCOUNT, FAN, field='home_city', operation='set', value='Brisbane',
         expected_version=view['version'], command_key='auto-correction', actor=ACTOR, reason='fixture correction')
-    pilot.tick()
-    assert world.fans.posts == []
+    for _ in range(4):pilot.tick()
+    first = [row for row in world.fans.posts if row['path'].endswith('/chats/'+str(FAN)+'/messages')]
+    assert len(first) == 1 and 'Brisbane' in str(seen[-1])
+    with Session(world.database[1]) as s:
+        assert s.get(OfEngineDecision,(ACCOUNT,original['decisionId'])).status == 'cancelled'
     stage(pilot, 522, fan=FAN2)
     with Session(world.database[1]) as s: revision = s.get(OfConversationState, (ACCOUNT,FAN2)).revision
     world.store.control(TENANT, ACCOUNT, FAN2, mode='human_controlled', expected_revision=revision,
         command_key='auto-takeover', actor=ACTOR, reason='fixture stop', action='request_takeover')
-    pilot.tick()
-    assert world.fans.posts == []
+    for _ in range(4):pilot.tick()
+    assert len(world.fans.posts) == 1
+    assert not any(row['path'].endswith('/chats/'+str(FAN2)+'/messages') for row in world.fans.posts)
+    with Session(world.database[1]) as s:
+        assert not list(s.scalars(select(OfEngineDecision).where(OfEngineDecision.fan_id==FAN2,
+            OfEngineDecision.status=='completed')))
 
 
 def test_outside_first_concurrent_key_collision_cannot_send(supervised, monkeypatch):

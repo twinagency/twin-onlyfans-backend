@@ -588,12 +588,6 @@ def unresolved(store, tenant, account, actor=None):
             if conflict is not None:
                 items.append(_item('webhook_conflict', 'review', 'operator', 'review_event_conflict',
                     'A webhook key had conflicting signed payloads. Preserve the evidence and review it before any send.'))
-            from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
-            malformed = s.scalar(select(OfEnginePilotWebhookDigest.event_key).join(OfFansConnection, and_(
-                OfFansConnection.account_id == OfEnginePilotWebhookDigest.account_id,
-                OfFansConnection.epoch == OfEnginePilotWebhookDigest.epoch)).where(
-                OfEnginePilotWebhookDigest.account_id == account, OfFansConnection.binding_id == binding,
-                OfEnginePilotWebhookDigest.safety_hold.is_(True)).limit(1))
             held = s.scalar(select(OfFansProjection.event_key).join(OfFansWebhook, and_(
                 OfFansWebhook.account_id == OfFansProjection.account_id,
                 OfFansWebhook.epoch == OfFansProjection.epoch, OfFansWebhook.event_key == OfFansProjection.event_key))
@@ -603,9 +597,26 @@ def unresolved(store, tenant, account, actor=None):
                 OfFansConnection.binding_id == binding,
                 or_(OfFansWebhook.event_type.in_(('accounts.disconnected','accounts.session_expired','accounts.authentication_failed')),
                     fan_expr.in_(tuple(map(str, allowed))), fan_expr.is_(None))).limit(1))
-            if malformed is not None or held is not None:
+            if held is not None:
                 items.append(_item('unattributed_webhook', 'review', 'operator', 'review_provider_evidence',
                     'Signed provider evidence could not be safely attributed or projected. Sends remain held pending review.'))
+
+        if scope is not None:
+            from .pilot_scope import unresolved_webhook_digests, digest_resolution_key
+            from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
+            digests = list(s.scalars(unresolved_webhook_digests(runtime).order_by(
+                OfEnginePilotWebhookDigest.received_at, OfEnginePilotWebhookDigest.event_key,
+                OfEnginePilotWebhookDigest.payload_sha256).limit(201)))
+            for row in digests[:200]:
+                ident = digest_resolution_key(binding, row.epoch, row.event_key, row.payload_sha256)
+                items.append(_item('provider_event', ident, 'operator', 'classify_exact_provider_evidence',
+                    'A retained provider event holds sends. Supply the exact original event and review evidence; '
+                    'only documented irrelevant evidence can be resolved here.', created=row.received_at,
+                    eventEpoch=row.epoch, eventKey=row.event_key, payloadSha256=row.payload_sha256,
+                    scopeRevision=scope.revision))
+            if len(digests) > 200:
+                items.append(_item('provider_event_backlog', 'more', 'operator', 'review_remaining_provider_events',
+                    'More retained provider holds remain beyond the 200 shown. Resolving one does not clear others.'))
 
         if unscoped_provider_evidence:
             items.append(_item('unscoped_provider_evidence', 'review', 'operator', 'review_evidence_scope',
@@ -623,9 +634,14 @@ def unresolved(store, tenant, account, actor=None):
             summary = ('The model response identity is not verified. Do not use its text; review the recorded call.'
                        if identity else 'A model call is in progress or its usage is uncertain. '
                        'Review the call and cost before retrying; do not assume it was free.')
+            if call.status=='unknown' and call.usage_known and not identity:
+                summary='Provider cost is verified; the model outcome remains uncertain. No retry or send was authorized.'
             items.append(_item('model_call', call.call_id, 'operator',
-                               'review_model_identity' if identity else 'review_model_usage',
-                               summary, cid, revision, call.created_at))
+                               'review_model_identity' if identity else 'review_model_outcome' if call.usage_known else 'review_model_usage',
+                               summary, cid, revision, call.created_at,
+                               usageKnown=call.usage_known, providerGenerationId=call.provider_generation_id,
+                               providerEvidenceAvailable=bool(call.provider_generation_id),
+                               actualMicrousd=call.actual_microusd if call.usage_known else None))
         # Requests with no live approval remain visible, including ones waiting
         # for a fan or provider; displaying one never starts a follow-up.
         shown_drafts = {request_id for (request_id,) in s.execute(select(OfEngineApproval.request_id).where(
@@ -674,6 +690,81 @@ def unresolved(store, tenant, account, actor=None):
 
 
 # ------------------------------------------------------------------ reconcile
+def _reconcile_provider_event(store, tenant, account, item_id, body):
+    """Exact retained bytes and documented semantics, never a blanket clear/retry."""
+    from db.onlyfans_engine_models import OfEnginePilotWebhookDigest, OfFansConnection, OfFansWebhook
+    from fans_api_adapter.events import _parse
+    from fans_api_adapter.event_scope import known_irrelevant_event
+    from .pilot_scope import require, authorize, digest_resolution_key
+    required = {'commandKey','actor','evidenceRef','scopeRevision','eventEpoch','eventKey','payloadSha256','rawBody'}
+    if type(body) is not dict or set(body) != required:
+        raise BadRequest('exact provider-event evidence fields required')
+    key, actor = _key(body['commandKey']), _actor(body['actor'])
+    revision, epoch = _int(body['scopeRevision'], 1), _int(body['eventEpoch'], 1, 2**63-1)
+    event_key, digest = body['eventKey'], body['payloadSha256']
+    if (type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}',event_key)
+            or type(digest) is not str or not _HEX64.fullmatch(digest)
+            or type(body['rawBody']) is not str or not evidence_allowed(PLAN_C_TRANSPORT,body['evidenceRef'])):
+        raise BadRequest('exact provider-event evidence required')
+    try:
+        raw = body['rawBody'].encode('utf-8')
+    except UnicodeError:
+        raise BadRequest('invalid original provider bytes') from None
+    if not raw or len(raw) > 8192:
+        raise BadRequest('original provider evidence exceeds the operator command boundary')
+    binding = _require_gated(store, tenant, account)
+    with Session(store.engine) as s:
+        runtime = store._runtime(s, tenant, account, lock=False)
+        _, config = require(s, runtime)
+        authorize(config, actor, 'reconcile')
+    ident = digest_resolution_key(binding, epoch, event_key, digest)
+    if item_id != 'provider_event:' + ident or key == ident:
+        raise BadRequest('provider-event identity mismatch')
+    request_hash = _digest([account, item_id, body])
+    before = {'id':item_id,'eventEpoch':epoch,'eventKey':event_key,'payloadSha256':digest,'scopeRevision':revision}
+    def run():
+        with Session(store.engine) as s, s.begin():
+            runtime = store._runtime(s, tenant, account)
+            if runtime.binding_id != binding:
+                raise Conflict('scope changed')
+            scope, config = require(s, runtime)
+            authorize(config, actor, 'reconcile')
+            if scope.revision != revision:
+                raise Conflict('pilot revision changed')
+            connection = s.get(OfFansConnection,(account,epoch))
+            row = s.get(OfEnginePilotWebhookDigest,(account,epoch,event_key,digest))
+            if connection is None or connection.binding_id != binding or row is None:
+                raise NotFound('retained provider event unavailable')
+            if hashlib.sha256(raw).hexdigest() != digest:
+                raise Conflict('original provider bytes do not match retained evidence')
+            try:
+                parsed = _parse(raw)
+            except Refused:
+                raise Conflict('malformed provider evidence remains held') from None
+            if parsed['account_id'] != connection.provider_account_id or not known_irrelevant_event(parsed):
+                raise Conflict('evidence does not prove a documented irrelevant event')
+            conflict = s.scalar(select(OfEnginePilotWebhookDigest.payload_sha256).where(
+                OfEnginePilotWebhookDigest.account_id==account,OfEnginePilotWebhookDigest.epoch==epoch,
+                OfEnginePilotWebhookDigest.event_key==event_key,
+                OfEnginePilotWebhookDigest.payload_sha256!=digest).limit(1))
+            original = s.get(OfFansWebhook,(account,epoch,event_key))
+            if conflict is not None or original is not None and original.payload_sha256 != digest:
+                raise Conflict('conflicting provider key remains held')
+            prior = s.get(OfLaunchCommand,(account,ident))
+            result = {'ok':True,'accountId':account,'id':item_id,'action':'reconcile','commandKey':key,
+                'outcome':'documented_irrelevant_event_classified','resolved':True}
+            if prior is not None:
+                if prior.binding_id != binding or prior.kind != 'plan_c_webhook_resolution':
+                    raise Conflict('provider resolution identity conflict')
+                return {**result,'outcome':'already_classified'}
+            if row.safety_hold is not True:
+                raise Conflict('provider event is not awaiting classification')
+            _record(s,account,binding,ident,'plan_c_webhook_resolution',request_hash,actor,body['evidenceRef'],
+                {**before,'classification':'documented_irrelevant_counter','eventType':parsed['event']},result)
+            return result
+    return _idempotent(store,account,binding,key,'plan_c_reconcile',request_hash,actor,body['evidenceRef'],before,run)
+
+
 def reconcile(store, tenant, account, item_id, body):
     """Record the operator's checked evidence for one unresolved item.
 
@@ -683,6 +774,8 @@ def reconcile(store, tenant, account, item_id, body):
       transaction) is dismissed with the operator as resolved_by; it is never converted into a grant.
     unreconciled_access on revoked access evidence: audit only (acknowledged, state untouched).
     human_hold / handover_request: refused; they end with hand back or the request workflow."""
+    if type(item_id) is str and item_id.startswith('provider_event:'):
+        return _reconcile_provider_event(store, tenant, account, item_id, body)
     if type(body) is not dict or set(body) != {'commandKey', 'actor', 'evidenceRef'}:
         raise BadRequest('exact command keys required')
     key, actor = _key(body['commandKey']), _actor(body['actor'])

@@ -25,6 +25,7 @@ a list, so the model judge can send a violation back for ONE corrected draft ins
 """
 from dataclasses import dataclass
 from datetime import timedelta
+import unicodedata
 from hashlib import sha256
 import json
 import re
@@ -174,6 +175,11 @@ def signals(text, config=None):
         found.add('limit')
     if _CUSTOM.search(value):
         found.add('custom')
+    # The approved paid photo cannot silently fulfill a free-content request.
+    # This turn restriction does not pause future selling or create a new action.
+    if re.search(r'\b(?:free|complimentary) (?:photos?|pictures?|pics?)\b'
+                 r'|\b(?:photos?|pictures?|pics?)\b.{0,30}\b(?:for free|at no charge|for nothing)\b', value):
+        found.add('free_content')
     refusal_matches = list(_REFUSAL.finditer(value))
     if refusal_matches:
         price_only = all(re.fullmatch(_PRICE_WORDS, match.group(0)) for match in refusal_matches)
@@ -203,6 +209,10 @@ def pilot_purchase_scope(s, runtime, fan_id, message):
             or fan_id not in config['fans'] or message is None or message.fan_id != fan_id):
         return ()
     value = _norm(message.body).rstrip(' .!?')
+    # Trailing pictographs/emphasis do not change a current request. Quotes,
+    # words, prices and other clauses remain, so fullmatch still excludes them.
+    while value and unicodedata.category(value[-1]) in {'So', 'Sk', 'Mn', 'Cf'}:
+        value = value[:-1].rstrip(' .!?')
     # A current change of mind remains an explicit request; do not broaden to quoted/hypothetical text.
     value = re.sub(r'^actually[, ]+', '', value)
     names = {'photo', 'picture', 'pic'}
@@ -364,7 +374,7 @@ def journey_context(s, runtime, owner, request, message):
     # Hard blocks only. The owner's sales state (paused / scoped) is the existing sales mechanism and is judged
     # separately so an explicit, scoped reopening by the fan can still be honoured in the same turn.
     ctx['offers_allowed'] = bool(verdict['pause'] is None and not compliment and gate and not unscoped
-                                 and not verdict['human'])
+                                 and 'free_content' not in verdict['signals'] and not verdict['human'])
     ctx['sales_mode'] = owner.sales_mode
     ctx['backfill_complete'] = gate
     ctx['history_scope_incomplete'] = bool(unscoped)

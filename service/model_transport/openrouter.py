@@ -12,6 +12,8 @@ Failure classification (it decides how the ledger counts the call):
                                                     -> ModelOutcomeUnknown (may have been charged: counted as spent)
 """
 import json
+from hashlib import sha256
+from decimal import Decimal
 import os
 import re
 import stat
@@ -91,6 +93,58 @@ class OpenRouterClient:
     def __repr__(self):
         return f'OpenRouterClient(url={self._url!r}, key=<redacted>)'
 
+    def endpoint_fingerprint(self):
+        return sha256(self._url.encode()).hexdigest()
+
+    def _generation_reference(self, data):
+        ident = data.get('id')
+        if type(ident) is str and re.fullmatch(r'[A-Za-z0-9._:-]{1,255}', ident):
+            return ident, self.endpoint_fingerprint()
+        return '', ''
+
+    def lookup_generation(self, generation_id, *, timeout_seconds=30):
+        """One manual authenticated metadata read; no generation, retry or inferred zero cost."""
+        from onlyfans_runtime.store import Refused
+        if type(generation_id) is not str or not re.fullmatch(r'[A-Za-z0-9._:-]{1,255}', generation_id):
+            raise Refused('provider generation correlation is unavailable')
+        try:
+            with httpx.Client(transport=self._transport, timeout=httpx.Timeout(timeout_seconds),
+                    follow_redirects=False, trust_env=False) as client:
+                response = client.get(self._url.removesuffix('/chat/completions') + '/generation',
+                    params={'id':generation_id}, headers={'Authorization':'Bearer '+self._key})
+        except httpx.HTTPError:
+            raise Refused('provider billing evidence is unavailable') from None
+        if response.status_code != 200 or len(response.content) > 1_000_000:
+            raise Refused('provider billing evidence is unavailable')
+        def unique(pairs):
+            result = {}
+            for key,value in pairs:
+                if key in result:raise ValueError('duplicate provider billing field')
+                result[key] = value
+            return result
+        try:
+            raw = json.loads(response.content, parse_float=Decimal, object_pairs_hook=unique)
+            data = raw['data']
+            if type(data) is not dict or data.get('id') != generation_id:
+                raise ValueError('generation mismatch')
+            value = data.get('total_cost')
+            if type(value) not in (int,Decimal):raise ValueError('cost unavailable')
+            amount = Decimal(value)
+            if (not amount.is_finite() or amount < 0 or amount*1_000_000 > 2**63-1
+                    or type(data.get('model')) is not str or not data['model']
+                    or data.get('finish_reason') not in ('stop','length','tool_calls','content_filter','error')):
+                raise ValueError('incomplete billing evidence')
+            # Same nearest-microUSD accounting unit as chat Usage; retain exact USD too.
+            cost = int(round(amount*1_000_000))
+        except (ValueError,TypeError,KeyError,ArithmeticError,UnicodeError,RecursionError):
+            raise Refused('provider billing evidence is incomplete or uncorrelated') from None
+        return {'generationId':generation_id,'endpointSha256':self.endpoint_fingerprint(),
+            'model':data['model'],'totalCostUsd':str(amount),'actualMicrousd':cost,
+            'finishReason':data['finish_reason'],
+            'providerName':data.get('provider_name') if type(data.get('provider_name')) is str else None,
+            'createdAt':data.get('created_at') if type(data.get('created_at')) is str else None,
+            'receiptSha256':sha256(response.content).hexdigest()}
+
     def chat(self, request):
         body = {'model': request.model, 'messages': list(request.messages), 'temperature': request.temperature,
                 'max_tokens': request.max_tokens, 'usage': {'include': True}}
@@ -121,15 +175,18 @@ class OpenRouterClient:
             raise ModelOutcomeUnknown('provider answered with an unreadable body') from None
         if type(data) is not dict:
             raise ModelOutcomeUnknown('provider answered with an unreadable body')
+        generation_id, endpoint_sha256 = self._generation_reference(data)
         if data.get('error') is not None:
-            raise ModelIncompleteResponse('provider reported an incomplete response')
+            raise ModelIncompleteResponse('provider reported an incomplete response',
+                generation_id=generation_id, endpoint_sha256=endpoint_sha256)
         usage = data.get('usage') if type(data.get('usage')) is dict else {}
         parsed = Usage(prompt_tokens=_count(usage.get('prompt_tokens')), completion_tokens=_count(usage.get('completion_tokens')),
                        cost_microusd=_microusd(usage.get('cost')))
         choices = data.get('choices')
         choice = choices[0] if type(choices) is list and choices and type(choices[0]) is dict else {}
         if choice.get('error') is not None or choice.get('finish_reason') == 'error':
-            raise ModelIncompleteResponse('provider reported an incomplete response')
+            raise ModelIncompleteResponse('provider reported an incomplete response',
+                generation_id=generation_id, endpoint_sha256=endpoint_sha256)
         message = choice.get('message') if type(choice.get('message')) is dict else {}
         text = message.get('content') if type(message.get('content')) is str else ''
         # `model` is what the provider says answered. A response without one is recorded as such (empty), never
@@ -146,4 +203,5 @@ class OpenRouterClient:
         elif selected:
             upstream = ''  # conflicting metadata is not a verified identity
         return ChatResult(text=text, usage=parsed, model=returned[:128], provider=upstream[:64],
+                          generation_id=generation_id, endpoint_sha256=endpoint_sha256,
                           finish_reason=choice.get('finish_reason') if type(choice.get('finish_reason')) is str else None)

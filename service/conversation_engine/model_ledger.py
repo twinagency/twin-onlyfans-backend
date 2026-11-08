@@ -105,7 +105,7 @@ class ModelLedger:
     def _pilot_guard(s, account, fan_id, binding_id, config, expected_pilot_scope):
         from db.onlyfans_models import OfRuntime
         from db.onlyfans_delivery_models import OfDeliveryPolicy
-        from .pilot_scope import current, require_model, policy_matches, _product_current
+        from .pilot_scope import current, require_model, policy_matches
         runtime = s.get(OfRuntime, account, with_for_update=True)
         if runtime is None or runtime.binding_id != binding_id:
             raise Refused('model call creator binding changed')
@@ -117,8 +117,7 @@ class ModelLedger:
         if expected_pilot_scope != (pilot.revision, pilot.fingerprint):
             raise Refused('model worker pilot revision changed')
         if (fan_id not in scope['fans'] or pilot.status not in ('configured', 'active')
-                or not policy_matches(s.get(OfDeliveryPolicy, account), scope, enabled=pilot.status == 'active')
-                or not _product_current(s, account, scope['product'])):
+                or not policy_matches(s.get(OfDeliveryPolicy, account), scope, enabled=pilot.status == 'active')):
             raise Refused('model call pilot scope changed')
         require_model(scope, account, config)
         return pilot.revision, pilot.fingerprint

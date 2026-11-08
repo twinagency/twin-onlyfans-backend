@@ -53,6 +53,17 @@ def _parse(raw):
     return body
 
 
+def _pilot_fan_allowed(s, runtime, raw, event):
+    from conversation_engine.pilot_scope import current
+    from .event_scope import event_fan
+    from sqlalchemy import literal
+    pilot, config = current(s, runtime)
+    if pilot is None:
+        return True
+    fan = s.scalar(select(event_fan(literal(event), literal(raw))))
+    return fan is None or int(fan) in config['fans']
+
+
 class FansEventIntake:
     def __init__(self, store, *, human_grace_seconds=30, pair_window_seconds=1800, mismatch_settle_seconds=240):
         self.store, self.engine = store, store.engine
@@ -87,6 +98,8 @@ class FansEventIntake:
                 if (connection.account_id != expected_account or binding is None or runtime is None
                         or binding.tenant_id != expected_tenant or connection.binding_id != runtime.binding_id):
                     raise Refused('webhook account scope mismatch')
+                if not _pilot_fan_allowed(s, runtime, raw_body, event):
+                    raise Refused('pilot fan scope changed before intake')
             account, epoch = connection.account_id, connection.epoch
             existing = s.get(OfFansWebhook, (account, epoch, event_key))
             from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
@@ -194,6 +207,9 @@ class FansEventIntake:
                 # Retain raw and projection; never project an old creator's
                 # event through the currently bound creator's account.
                 row.status, row.detail, row.updated_at = 'held', 'historical_creator_binding', now
+                return row.status
+            if not _pilot_fan_allowed(s, runtime, raw.raw_body, raw.event_type):
+                row.status, row.detail, row.updated_at = 'held', 'pilot_fan_scope_changed', now
                 return row.status
             body = _parse(raw.raw_body)
             link = self._link(s, connection, now)

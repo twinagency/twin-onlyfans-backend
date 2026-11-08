@@ -56,6 +56,43 @@ def _event_fan(raw):
         raise Refused('invalid pilot event') from None
 
 
+def _record_outside_digest(store, tenant, account, raw, event_key, *, safety_hold=False):
+    """Persist only a hash under the active epoch lock so a racing duplicate cannot be lost."""
+    if type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', event_key):
+        raise Refused('invalid webhook identity')
+    digest = sha256(raw).hexdigest()
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        require(s, runtime)  # Retained intake evidence grants no model or send rights.
+        active = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
+            OfFansConnection.binding_id == runtime.binding_id, OfFansConnection.status == 'active'))
+        active_epoch = active.epoch if active is not None else None
+        if active is None or active.binding_id != runtime.binding_id or active.status != 'active':
+            raise Refused('pilot connection changed')
+        # A reconnect may legitimately reuse event keys. Resolve a known provider account
+        # to its own epoch; malformed/unknown envelopes are conservatively scoped to active.
+        try:
+            provider_account = json.loads(raw).get('account_id')
+        except (ValueError, TypeError, AttributeError, UnicodeError, RecursionError):
+            provider_account = None
+        matched = s.scalar(select(OfFansConnection).where(
+            OfFansConnection.account_id == account, OfFansConnection.binding_id == runtime.binding_id,
+            OfFansConnection.provider_creator_id == active.provider_creator_id,
+            OfFansConnection.provider_account_id == provider_account).order_by(OfFansConnection.epoch.desc()).limit(1))
+        epoch = matched.epoch if matched is not None else active_epoch
+        existing = s.get(OfFansWebhook, (account, epoch, event_key))
+        marker = s.get(OfEnginePilotWebhookDigest, (account, epoch, event_key, digest))
+        if marker is None:
+            from sqlalchemy import func
+            count = s.scalar(select(func.count()).select_from(OfEnginePilotWebhookDigest).where(
+                OfEnginePilotWebhookDigest.account_id == account))
+            if count >= 10000:
+                raise Refused('pilot webhook evidence limit reached')
+            s.add(OfEnginePilotWebhookDigest(account_id=account, epoch=epoch, event_key=event_key,
+                                             payload_sha256=digest, safety_hold=(safety_hold or existing is not None and existing.payload_sha256 != digest), received_at=utcnow()))
+        return existing is not None and existing.payload_sha256 != digest
+
+
 @dataclass(frozen=True)
 class SupervisedPilot:
     worker: RealConversationWorker
@@ -95,40 +132,8 @@ class SupervisedPilot:
             return scope.active_since
 
     def _record_outside_digest(self, raw, event_key, *, safety_hold=False):
-        """Persist only a hash under the active epoch lock so a racing duplicate cannot be lost."""
-        if type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', event_key):
-            raise Refused('invalid webhook identity')
-        digest = sha256(raw).hexdigest()
-        store = self.worker.engine.store
-        with Session(store.engine) as s, s.begin():
-            runtime = store._runtime(s, self.tenant, self.account)
-            require(s, runtime)  # Retained intake evidence grants no model or send rights.
-            active_epoch = self.worker.transport.client.epoch
-            active = s.get(OfFansConnection, (self.account, active_epoch))
-            if active is None or active.binding_id != runtime.binding_id or active.status != 'active':
-                raise Refused('pilot connection changed')
-            # A reconnect may legitimately reuse event keys. Resolve a known provider account
-            # to its own epoch; malformed/unknown envelopes are conservatively scoped to active.
-            try:
-                provider_account = json.loads(raw).get('account_id')
-            except (ValueError, TypeError, AttributeError, UnicodeError, RecursionError):
-                provider_account = None
-            matched = s.scalar(select(OfFansConnection).where(
-                OfFansConnection.account_id == self.account, OfFansConnection.binding_id == runtime.binding_id,
-                OfFansConnection.provider_creator_id == active.provider_creator_id,
-                OfFansConnection.provider_account_id == provider_account).order_by(OfFansConnection.epoch.desc()).limit(1))
-            epoch = matched.epoch if matched is not None else active_epoch
-            existing = s.get(OfFansWebhook, (self.account, epoch, event_key))
-            marker = s.get(OfEnginePilotWebhookDigest, (self.account, epoch, event_key, digest))
-            if marker is None:
-                from sqlalchemy import func
-                count = s.scalar(select(func.count()).select_from(OfEnginePilotWebhookDigest).where(
-                    OfEnginePilotWebhookDigest.account_id == self.account))
-                if count >= 10000:
-                    raise Refused('pilot webhook evidence limit reached')
-                s.add(OfEnginePilotWebhookDigest(account_id=self.account, epoch=epoch, event_key=event_key,
-                                                 payload_sha256=digest, safety_hold=safety_hold, received_at=utcnow()))
-            return existing is not None and existing.payload_sha256 != digest
+        return _record_outside_digest(self.worker.engine.store, self.tenant, self.account,
+                                      raw, event_key, safety_hold=safety_hold)
 
     def handle(self, raw, signature, event_key):
         if type(raw) is not bytes or len(raw) > 1_000_000 or not verify_signature(raw, signature, self.secret):
@@ -160,6 +165,9 @@ class SupervisedPilot:
                 expected_tenant=self.tenant, expected_account=self.account)
             if result.get('outcome') == 'quarantined':
                 self.worker.engine.fence_conflicted_sources(self.tenant, self.account)
+            self.worker.engine.store.drain(self.tenant, self.account)
+            from conversation_engine.pilot_ingress import preserve_contact_stops
+            preserve_contact_stops(self.worker.engine.store, self.tenant, self.account)
             return {**result, 'planning':'held'}
         result = self.worker.handle(self.tenant, self.account, raw_body=raw, signature=signature,
                                     secret=self.secret, event_key=event_key)
@@ -174,6 +182,9 @@ class SupervisedPilot:
         if active_since is None:
             raise Refused('pilot activation boundary is unavailable')
         store, intake = self.worker.engine.store, self.worker.intake
+        store.drain(self.tenant, self.account)
+        from conversation_engine.pilot_ingress import preserve_contact_stops
+        preserve_contact_stops(store, self.tenant, self.account)
         expired = self.worker.transport.recover_interrupted()
         from fans_api_adapter.event_scope import event_fan, ACCOUNT_EVENTS
         with Session(store.engine) as s:
@@ -305,6 +316,51 @@ class SupervisedPilot:
         return {'expired':expired, 'projected':projected, 'planned':planned, 'dispatched':dispatched}
 
 
+@dataclass(frozen=True)
+class IntakeOnlyPilot:
+    """Paused startup retains evidence; it has no model or sending transport."""
+    store: object
+    tenant: str
+    account: str
+    secret: bytes = field(repr=False)
+
+    def handle(self, raw, signature, event_key):
+        if type(raw) is not bytes or len(raw)>1_000_000 or not verify_signature(raw,signature,self.secret):
+            raise Refused('webhook authentication failed')
+        with Session(self.store.engine) as s:
+            runtime=self.store._runtime(s,self.tenant,self.account,lock=False)
+            _,config=require(s,runtime)
+        malformed=False
+        try:
+            _,fan=_event_fan(raw)
+            outside=fan is not None and fan not in config['fans']
+        except Refused:
+            outside,malformed=True,True
+        if outside:
+            conflict=_record_outside_digest(self.store,self.tenant,self.account,raw,event_key,safety_hold=malformed)
+            return {'outcome':'quarantined' if conflict else 'outside_pilot_scope','planning':'held'}
+        result=FansEventIntake(self.store).accept(raw,signature,self.secret,event_key,
+            expected_tenant=self.tenant,expected_account=self.account)
+        self.tick()
+        return {**result,'planning':'held'}
+
+    def tick(self, *, limit=5):
+        if type(limit) is not int or not 1<=limit<=10:raise Refused('invalid intake batch')
+        with Session(self.store.engine) as s:
+            runtime=self.store._runtime(s,self.tenant,self.account,lock=False)
+            require(s,runtime)
+            pending=s.execute(select(OfFansProjection.epoch,OfFansProjection.event_key).join(OfFansConnection,
+                (OfFansConnection.account_id==OfFansProjection.account_id)&(OfFansConnection.epoch==OfFansProjection.epoch))
+                .where(OfFansProjection.account_id==self.account,OfFansProjection.status=='pending',
+                    OfFansConnection.binding_id==runtime.binding_id).order_by(OfFansProjection.updated_at).limit(limit)).all()
+        intake=FansEventIntake(self.store)
+        for epoch,key in pending:intake._project(self.account,epoch,key)
+        self.store.drain(self.tenant,self.account)
+        from conversation_engine.pilot_ingress import preserve_contact_stops
+        preserve_contact_stops(self.store,self.tenant,self.account)
+        return {'outcome':'intake_only','projected':len(pending)}
+
+
 def build_supervised_pilot(store, environ=None, *, model_transport=None, fans_transport=None):
     env = os.environ if environ is None else environ
     flag = env.get('TWIN_PLAN_C_SUPERVISED', '')
@@ -316,15 +372,17 @@ def build_supervised_pilot(store, environ=None, *, model_transport=None, fans_tr
     tenant, account = env.get('TWIN_PLAN_C_TENANT', ''), env.get('TWIN_PLAN_C_ACCOUNT', '')
     if not _NAME.fullmatch(tenant) or not _NAME.fullmatch(account):
         raise Refused('explicit pilot tenant and account are required')
-    cfg = ModelConfig.from_env(env)
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
-        scope, config = require(s, runtime, active=True)
+        scope, config = require(s, runtime)
+        if scope.status != 'active':
+            return IntakeOnlyPilot(store,tenant,account,_secret(env.get('TWIN_PLAN_C_WEBHOOK_SECRET_FILE','')))
+        cfg = ModelConfig.from_env(env)
         require_model(config, account, cfg)
         policy = s.get(OfDeliveryPolicy, account)
         connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
                                                               OfFansConnection.status == 'active'))
-        if (not policy_matches(policy, config, enabled=True) or not _product_current(s, account, config['product'])
+        if (not policy_matches(policy, config, enabled=True)
                 or connection is None or connection.binding_id != runtime.binding_id or scope.active_since is None):
             raise Refused('supervised pilot startup prerequisites are not met')
         revision, fingerprint, fans = scope.revision, scope.fingerprint, frozenset(config['fans'])

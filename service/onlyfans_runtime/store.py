@@ -407,7 +407,7 @@ class Store:
         runtime.pending_events -= 1
         s.flush()
 
-    def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None, bulk=False, synthetic_engine_only=False):
+    def control(self, tenant_id, account_id, fan_id, *, mode, expected_revision, command_key, actor, reason, consent_ref=None, action=None, bulk=False, synthetic_engine_only=False, expected_binding_id=None):
         from onlyfans_read.agency_scope import current_scope, actor_allowed
         if current_scope.get() is not None and not actor_allowed(actor, capability="chat" if action in {"request_takeover", "release_takeover"} else "manage"):
             raise Refused("management permission required")
@@ -426,6 +426,8 @@ class Store:
             raise Refused("invalid audit evidence")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
+            if expected_binding_id is not None and runtime.binding_id != expected_binding_id:
+                raise Refused('creator binding changed before control')
             from conversation_engine.pilot_scope import current as current_pilot, authorize as authorize_pilot
             pilot, pilot_config = current_pilot(s, runtime)
             if pilot is not None and fan_id in pilot_config['fans']:

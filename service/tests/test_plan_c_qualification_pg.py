@@ -161,7 +161,7 @@ def test_stopped_pilot_retains_incoming_evidence_without_model_or_sending(superv
     result=pilot.handle(raw,headers['Signature'],headers['X-OFAPI-Idempotency-Key'])
     assert result['planning']=='held'
     with Session(world.database[1]) as s:
-        assert s.scalar(select(OfFansProjection).where(OfFansProjection.event_key=='stopped-inbound')).status=='applied'
+        assert s.scalar(select(OfFansProjection).where(OfFansProjection.event_key=='stopped-inbound')).status=='projected'
     assert seen==[] and world.fans.posts==[]
     with pytest.raises(Refused):pilot.tick()
 
@@ -189,4 +189,40 @@ def test_unsupported_manual_path_refuses_before_creating_a_false_unknown(supervi
         world.authority.prepare(TENANT,ACCOUNT,FAN,command_key='unsupported-manual',expected_revision=revision,
             body='Offline operator text',origin='manual',actor=ACTOR)
     with Session(world.database[1]) as s:assert list(s.scalars(select(OfTextIntent)))==[]
+    assert world.fans.posts==[]
+
+@pytest.mark.parametrize('supervised',['autonomous'],indirect=True)
+def test_paused_restart_retains_contact_stop_and_blocks_later_reply(supervised):
+    from db.models import OfConversationState
+    from model_transport.pilot_supervised import IntakeOnlyPilot
+    world,env,model,seen,pilot=supervised
+    before=pilot_scope.describe(world.store,TENANT,ACCOUNT)
+    stopped=pilot_scope.set_status(world.store,TENANT,ACCOUNT,'stopped',expected_revision=before['revision'],
+        command_key='b'*64,actor=ACTOR,reason='offline stop')
+    paused=build_supervised_pilot(world.store,env,model_transport=None,fans_transport=None)
+    assert type(paused) is IntakeOnlyPilot
+    raw,headers=signed(inbound(931,'stop messaging me'),key='paused-contact-stop')
+    assert paused.handle(raw,headers['Signature'],headers['X-OFAPI-Idempotency-Key'])['planning']=='held'
+    with Session(world.database[1]) as s:
+        assert s.get(OfConversationState,(ACCOUNT,FAN)).mode=='no_contact'
+    assert seen==[] and world.fans.posts==[]
+    pilot_scope.set_status(world.store,TENANT,ACCOUNT,'active',expected_revision=stopped['revision'],
+        command_key='c'*64,actor=ACTOR,reason='offline activation')
+    resumed=build_supervised_pilot(world.store,env,model_transport=model,fans_transport=world.fans.transport)
+    stage(resumed,932,'hello again')
+    resumed.tick()
+    with Session(world.database[1]) as s:assert s.get(OfConversationState,(ACCOUNT,FAN)).mode=='no_contact'
+    assert seen==[] and world.fans.posts==[]
+
+
+def test_intake_itself_enforces_current_durable_fans(supervised):
+    from test_engine_real_worker_pg import SECRET
+    from db.onlyfans_engine_models import OfFansWebhook
+    world,_,_,_,pilot=supervised
+    raw,headers=signed(inbound(933,'outside current scope',fan=999),key='direct-intake-outside')
+    with pytest.raises(Refused,match='pilot fan scope changed'):
+        pilot.worker.intake.accept(raw,headers['Signature'],SECRET,'direct-intake-outside',
+            expected_tenant=TENANT,expected_account=ACCOUNT)
+    with Session(world.database[1]) as s:
+        assert s.scalar(select(OfFansWebhook).where(OfFansWebhook.event_key=='direct-intake-outside')) is None
     assert world.fans.posts==[]

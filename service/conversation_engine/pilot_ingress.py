@@ -19,7 +19,7 @@ def preserve_contact_stops(store, tenant, account):
             (Message.account_id==OfIngress.account_id)&(Message.fan_id==OfIngress.fan_id)&
             (Message.message_id==OfIngress.message_id)).where(OfIngress.account_id==account,
             OfIngress.binding_id==binding,OfIngress.fan_id.in_(config['fans']),OfIngress.status=='applied',
-            OfIngress.source=='ws',OfIngress.received_at>=scope.created_at,Message.direction=='in',
+            OfIngress.source=='ws',OfIngress.received_at>=scope.created_at,Message.created_at>=scope.created_at,Message.direction=='in',
             Message.is_unsent.is_(False)).order_by(OfIngress.received_at).execution_options(yield_per=100))
         for fan,mid,body in rows:
             if not explicit_stop(body):continue

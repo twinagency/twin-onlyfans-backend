@@ -433,8 +433,8 @@ class Store:
                                'release_takeover':'handback', 'resume_automation':'handback'}
                 permission = permissions.get(action) or ('handback' if mode == 'automated' else
                              'takeover' if mode == 'human_controlled' else 'stop')
-                safe_system = (actor in {'fans-webhook', 'engine', 'offline-engine'}
-                               and mode in {'paused', 'human_controlled', 'no_contact'})
+                safe_system = ((actor == 'fans-webhook' and mode == 'human_controlled' and action == 'request_takeover')
+                               or (actor in {'engine', 'offline-engine'} and mode == 'no_contact' and action == 'mark_no_contact'))
                 if not safe_system:
                     authorize_pilot(pilot_config, actor, permission)
             if synthetic_engine_only:

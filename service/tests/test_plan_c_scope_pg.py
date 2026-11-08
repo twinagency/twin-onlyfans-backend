@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from conversation_engine import pilot_scope
 from conversation_engine.model_config import ModelConfig
-from db.models import OfCreatorBinding
+from db.models import OfCreatorBinding, CatalogItem
 from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEnginePilotScope
 from db.schema import HEAD, check_schema
@@ -31,6 +31,12 @@ def key(n):
 def config_for(world, env, *, fans=None, requests=10, credits=20, per_request=2):
     model = ModelConfig.from_env(env)
     with Session(world.database[1]) as s, s.begin():
+        item = s.get(CatalogItem, world.item)
+        one_photo = json.loads(item.media_ids)[:1]
+        item.media_ids, item.preview_media_ids, item.price_cents = json.dumps(one_photo), '[]', 300
+        env['TWIN_PLAN_C_PRICE_CENTS'] = '300'
+        env['TWIN_PLAN_C_MEDIA_IDS'] = ','.join(map(str, one_photo))
+        env['TWIN_PLAN_C_PREVIEW_IDS'] = ''
         policy = s.get(OfDeliveryPolicy, ACCOUNT)
         policy.daily_limit_units = min(10, policy.limit_units)
         maximum, daily, throttle = policy.limit_units, policy.daily_limit_units, policy.throttle_seconds
@@ -56,7 +62,7 @@ def activate(world, revision=1, n=2):
         policy = s.get(OfDeliveryPolicy, ACCOUNT)
         current, limit, throttle = policy.revision, policy.limit_units, policy.throttle_seconds
     world.authority.configure(TENANT, ACCOUNT, expected_revision=current, enabled=True, limit_units=limit,
-                              throttle_seconds=throttle, actor='fixture-admin', reason='fixture only')
+                              throttle_seconds=throttle, actor=ACTOR, reason='fixture only')
     return pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'active', expected_revision=revision,
                                   command_key=key(n), actor=ACTOR, reason='fixture activation')
 

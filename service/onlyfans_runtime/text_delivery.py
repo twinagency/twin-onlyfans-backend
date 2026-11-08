@@ -255,7 +255,16 @@ class TextAuthority:
                 or transport_kind is not None and transport_kind not in {"synthetic", "native", "fansapi"}):
             raise Refused("invalid delivery policy")
         with Session(self.engine) as s, s.begin():
-            self.store._runtime(s, tenant_id, account_id)
+            runtime = self.store._runtime(s, tenant_id, account_id)
+            from conversation_engine.pilot_scope import current as current_pilot, authorize
+            pilot, config = current_pilot(s, runtime)
+            if pilot is not None:
+                safe_disable = actor == 'fans-webhook' and not enabled
+                if not safe_disable:
+                    authorize(config, actor, 'activate' if enabled else 'stop')
+                if (limit_units > config['limits']['send_units'] or throttle_seconds < config['limits']['throttle_seconds']
+                        or transport_kind is not None and transport_kind != 'fansapi'):
+                    raise Refused('delivery policy exceeds the durable pilot scope')
             policy = s.scalar(select(OfDeliveryPolicy).where(
                 OfDeliveryPolicy.account_id == account_id).with_for_update())
             if policy is None:
@@ -266,6 +275,10 @@ class TextAuthority:
                 s.flush()
             if policy.revision != expected_revision:
                 raise Refused("policy revision conflict")
+            if pilot is not None and safe_disable and (limit_units != policy.limit_units or
+                    throttle_seconds != policy.throttle_seconds or media_enabled not in (None, policy.media_enabled) or
+                    transport_kind not in (None, policy.transport_kind)):
+                raise Refused('provider safety stop cannot change pilot limits')
             if transport_kind is not None and transport_kind != policy.transport_kind:
                 if (policy.active_intent_id or policy.queued_count or s.scalar(select(OfTextIntent.intent_id).where(
                         OfTextIntent.account_id == account_id, OfTextIntent.status.in_(("dispatching", "unknown"))).limit(1))):

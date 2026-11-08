@@ -668,9 +668,14 @@ def retire_superseded(store, tenant, account, fan_id, keep_source_message_id):
 def expire_stale(store, tenant, account):
     count = 0
     with Session(store.engine) as s, s.begin():
-        store._runtime(s, tenant, account)
-        for row in s.scalars(select(OfEngineApproval).where(OfEngineApproval.account_id == account,
-                OfEngineApproval.status.in_(LIVE), OfEngineApproval.expires_at <= utcnow()).with_for_update()):
+        runtime = store._runtime(s, tenant, account)
+        from .pilot_scope import current as current_pilot
+        pilot, config = current_pilot(s, runtime)
+        query = select(OfEngineApproval).where(OfEngineApproval.account_id == account,
+                OfEngineApproval.status.in_(LIVE), OfEngineApproval.expires_at <= utcnow())
+        if pilot is not None:
+            query = query.where(OfEngineApproval.fan_id.in_(config['fans']))
+        for row in s.scalars(query.with_for_update()):
             row.status, row.invalidation_reason, row.updated_at = 'expired', 'ttl', utcnow()
             count += 1
     return count

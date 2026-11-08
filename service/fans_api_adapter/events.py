@@ -290,6 +290,11 @@ class FansEventIntake:
         """Operator re-enables sending after a reconnect. Never automatic."""
         from onlyfans_runtime.text_delivery import TextAuthority
         with Session(self.engine) as s, s.begin():
+            runtime = self.store._runtime(s, tenant, account)
+            from conversation_engine.pilot_scope import current as current_pilot, authorize
+            pilot, config = current_pilot(s, runtime)
+            if pilot is not None:
+                authorize(config, actor, 'activate')
             link = s.get(OfFansLink, (account, str(creator_id)), with_for_update=True)
             if link is None or link.state != 'connected':
                 raise Refused('provider connection is not healthy')

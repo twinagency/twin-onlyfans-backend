@@ -113,7 +113,7 @@ async def pilot_scope_view(request: Request, account_id: str):
     try:
         from conversation_engine.pilot_scope import describe
         await asyncio.to_thread(v2.require_pilot_reader, store, tenant, account_id, request.headers.get('x-plan-c-actor'))
-        result = await asyncio.to_thread(describe, store, tenant, account_id)
+        result = await asyncio.to_thread(describe, store, tenant, account_id, actor=request.headers.get('x-plan-c-actor'), require_read=True)
     except (v2.NotFound, Refused) as exc:
         return failure(exc)
     return answer({'ok':True, **result})

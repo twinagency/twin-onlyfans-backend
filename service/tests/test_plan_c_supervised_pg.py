@@ -357,3 +357,60 @@ def test_pilot_private_reads_require_the_named_administrator(supervised):
     with pytest.raises(Refused): list_drafts(world.store, TENANT, ACCOUNT, OTHER)
     with pytest.raises(Refused): list_receipts(world.store, TENANT, ACCOUNT, None)
     with pytest.raises(Refused): unresolved(world.store, TENANT, ACCOUNT, OTHER)
+
+
+def test_worker_cannot_start_model_after_scope_changes_between_validation_and_plan(supervised, monkeypatch):
+    world, _, _, seen, pilot = supervised
+    original = pilot.worker.engine.plan
+    def changed(*args, **kwargs):
+        scope = pilot_scope.describe(world.store, TENANT, ACCOUNT)
+        stopped = pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'stopped', expected_revision=scope['revision'],
+            command_key='5'*64, actor=ACTOR, reason='fixture stop')
+        pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'active', expected_revision=stopped['revision'],
+            command_key='6'*64, actor=ACTOR, reason='fixture restart')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(pilot.worker.engine, 'plan', changed)
+    try: stage(pilot, 527)
+    except Refused: pass
+    assert seen == [] and world.fans.posts == []
+
+
+def test_old_unprojected_inbound_is_visible_after_reactivation_without_a_send(supervised, monkeypatch):
+    world, env, model, _, pilot = supervised
+    original = pilot.worker.intake._project
+    def crash(*args, **kwargs): raise RuntimeError('synthetic crash before projection')
+    monkeypatch.setattr(pilot.worker.intake, '_project', crash)
+    with pytest.raises(RuntimeError): stage(pilot, 528, key='old-inbound')
+    monkeypatch.setattr(pilot.worker.intake, '_project', original)
+    state = pilot_scope.describe(world.store, TENANT, ACCOUNT)
+    stopped = pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'stopped', expected_revision=state['revision'],
+        command_key='7'*64, actor=ACTOR, reason='fixture stop')
+    pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'active', expected_revision=stopped['revision'],
+        command_key='8'*64, actor=ACTOR, reason='fixture restart')
+    restarted = build_supervised_pilot(world.store, env, model_transport=model, fans_transport=world.fans.transport)
+    restarted.tick()
+    assert any(item['kind'] == 'pre_activation_webhook' for item in unresolved(world.store, TENANT, ACCOUNT, ACTOR))
+    assert world.fans.posts == []
+
+
+def test_recovery_cursor_does_not_starve_a_different_fan(supervised, monkeypatch):
+    world, env, model, _, _ = supervised
+    def fake(request):
+        if request.method == 'POST' and '/chats/'+str(FAN)+'/messages' in request.url.path:
+            world.fans.posts.append({'path':request.url.path})
+            return answer(503, {'error':'ambiguous'})
+        return world.fans.handle(request)
+    pilot = build_supervised_pilot(world.store, env, model_transport=model, fans_transport=httpx.MockTransport(fake))
+    draft = stage(pilot, 530, fan=FAN); approve(world, draft)
+    assert pilot.tick()['dispatched'] == ['unknown']
+    for mid in range(531, 537): stage(pilot, mid, fan=FAN)
+    original = pilot.worker.engine.plan
+    def crash(*args, **kwargs): raise RuntimeError('synthetic crash before fan-two plan')
+    monkeypatch.setattr(pilot.worker.engine, 'plan', crash)
+    with pytest.raises(RuntimeError): stage(pilot, 540, fan=FAN2)
+    monkeypatch.setattr(pilot.worker.engine, 'plan', original)
+    for _ in range(6): pilot.tick(limit=2)
+    with Session(world.database[1]) as s:
+        pending = list(s.scalars(select(OfEngineApproval).where(OfEngineApproval.fan_id == FAN2)))
+        assert len(pending) == 1 and pending[0].status == 'awaiting'
+    assert len(world.fans.posts) == 1

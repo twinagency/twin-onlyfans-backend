@@ -218,6 +218,9 @@ def list_drafts(store, tenant, account, actor=None):
         from .pilot_scope import current as current_pilot
         runtime = store._runtime(s, tenant, account)
         pilot, pilot_config = current_pilot(s, runtime)
+        if pilot is not None:
+            from .pilot_scope import authorize
+            authorize(pilot_config, actor, 'read')
         allowed = set(pilot_config['fans']) if pilot is not None else None
         for view in views:
             fan_id = int(view['fanId'])
@@ -279,6 +282,9 @@ def list_receipts(store, tenant, account, actor=None):
             raise NotFound('scope unavailable')
         from .pilot_scope import current as current_pilot
         pilot, pilot_config = current_pilot(s, runtime)
+        if pilot is not None:
+            from .pilot_scope import authorize
+            authorize(pilot_config, actor, 'read')
         allowed = set(pilot_config['fans']) if pilot is not None else None
         approved = select(OfEngineApproval.request_id).where(
             OfEngineApproval.account_id == OfEngineDecision.account_id,
@@ -444,6 +450,9 @@ def unresolved(store, tenant, account, actor=None):
         from .pilot_scope import current as current_pilot
         runtime = store._runtime(s, tenant, account)
         scope, pilot_config = current_pilot(s, runtime)
+        if scope is not None:
+            from .pilot_scope import authorize
+            authorize(pilot_config, actor, 'read')
         allowed = set(pilot_config['fans']) if scope is not None else None
         if allowed is not None:
             pilot &= allowed

@@ -62,6 +62,8 @@ def validate(config):
     price = _integer(product['price_cents'], 300, 20000)
     media = _ids(product['media_ids'])
     preview = _ids(product['preview_ids'], empty=True)
+    if price != 300 or len(media) != 1:
+        raise Refused('this pilot requires one photo at USD 3.00')
     if not set(preview).issubset(media):
         raise Refused('pilot previews must belong to the product')
     _exact(operator, ('actor', 'name', 'permissions'))
@@ -361,10 +363,12 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
         return {**result, 'replayed':False}
 
 
-def describe(store, tenant, account):
+def describe(store, tenant, account, *, actor=None, require_read=False):
     with Session(store.engine) as s, s.begin():
-        runtime = store._runtime(s, tenant, account, lock=False)
+        runtime = store._runtime(s, tenant, account, lock=require_read)
         row, config = current(s, runtime)
+        if require_read and row is not None:
+            authorize(config, actor, 'read')
         if row is None:
             return {'accountId':account, 'status':'unconfigured', 'revision':0, 'config':None}
         return {'accountId':account, 'status':row.status, 'revision':row.revision, 'fingerprint':row.fingerprint,

@@ -405,7 +405,7 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             {"table": table, "trigger": trigger}).all()
         if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 31
                 or guard[0][2] != trigger or guard[0][4] != "plpgsql"
-                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "c5c4c6b50b4ab842547d94c45c98c30fa50ca26e8d18fca8919eb17eb1a69b61"):
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "6fe99337ec51184c7d92beee2ba5abf2de83f81576aead67b3adacd39d04ace6"):
             failures.append("missing pilot scope protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing pilot scope row security")

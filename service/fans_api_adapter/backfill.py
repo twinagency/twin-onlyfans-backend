@@ -48,11 +48,25 @@ class FansBackfill:
             return None
         return max(seen) - OVERLAP
 
+    def _pilot_guard(self, tenant, account, client, chats=()):
+        from conversation_engine.pilot_scope import current, ProviderRequestGuard
+        with Session(self.engine) as s, s.begin():
+            runtime = self.store._runtime(s, tenant, account)
+            scope, config = current(s, runtime)
+            if scope is not None:
+                guard = getattr(client, '_request_guard', None)
+                if (scope.status != 'active' or type(guard) is not ProviderRequestGuard
+                        or guard.store is not self.store or guard.tenant != tenant or guard.account != account
+                        or guard.revision != scope.revision
+                        or any(str(chat) not in set(map(str, config['fans'])) for chat in chats)):
+                    raise Refused('backfill lacks current pilot request guard')
+
     def run(self, tenant, account, client, *, reason, start_date=None, pages_budget=5, page_size=100,
             history_chats=()):
         if (type(pages_budget) is not int or not 1 <= pages_budget <= MAX_PAGES or type(page_size) is not int
                 or not 1 <= page_size <= 100 or reason not in {'pause_gap', 'missed_webhooks', 'operator'}):
             raise Refused('invalid backfill budget')
+        self._pilot_guard(tenant, account, client, history_chats)
         now = utcnow()
         with Session(self.engine) as s, s.begin():
             self.store._runtime(s, tenant, account)
@@ -97,6 +111,7 @@ class FansBackfill:
 
     def _page(self, tenant, account, client, state, start, page_size):
         seen = new = 0
+        self._pilot_guard(tenant, account, client, state.get('chats', ()))
         phase = state['phase']
         if phase == 'tx':
             result = client.transactions(limit=page_size, marker=state['tx_marker'], start_date=_fmt(start))

@@ -392,6 +392,10 @@ def _locked_version(s, runtime, account, request_id, generation, expected_versio
     row = _latest(s, account, request_id, generation, lock=True)
     if row is None:
         raise Refused('approval not found')
+    from .pilot_scope import current as current_pilot
+    pilot, config = current_pilot(s, runtime)
+    if row.binding_id != runtime.binding_id or pilot is not None and row.fan_id not in config['fans']:
+        raise Refused('approval not found')
     if type(expected_version) is not int or row.version != expected_version:
         raise Refused('approval version changed')
     return row
@@ -628,9 +632,13 @@ def expire_stale(store, tenant, account):
 
 def pending(store, tenant, account, fan_id=None):
     with Session(store.engine) as s, s.begin():
-        store._runtime(s, tenant, account, lock=False)
+        runtime = store._runtime(s, tenant, account, lock=False)
+        from .pilot_scope import current as current_pilot
+        pilot, config = current_pilot(s, runtime)
         query = select(OfEngineApproval).where(OfEngineApproval.account_id == account,
             OfEngineApproval.status.in_(LIVE)).order_by(OfEngineApproval.created_at).limit(200)
+        if pilot is not None:
+            query = query.where(OfEngineApproval.fan_id.in_(config['fans']))
         if fan_id is not None:
             query = query.where(OfEngineApproval.fan_id == fan_id)
         return [_view(row) for row in s.scalars(query)]

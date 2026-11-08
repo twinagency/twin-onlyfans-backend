@@ -7,6 +7,7 @@ makes a provider/model call. All mutations lock the existing account runtime.
 """
 from hashlib import sha256
 import json
+import os
 import re
 
 from sqlalchemy import select
@@ -18,7 +19,7 @@ from db.onlyfans_engine_models import OfEnginePilotScope, OfFansConnection
 from onlyfans_runtime.launch_operations_models import OfLaunchCommand
 from onlyfans_runtime.store import Refused, utcnow
 
-_ACTIONS = frozenset({'configure', 'activate', 'approve', 'reject', 'edit', 'stop', 'takeover', 'handback', 'reconcile'})
+_ACTIONS = frozenset({'configure', 'activate', 'approve', 'reject', 'edit', 'stop', 'takeover', 'handback', 'reconcile', 'correct'})
 _ACTOR = re.compile(r'op-session:[0-9a-f]{64}\Z')
 _KEY = re.compile(r'[0-9a-f]{64}\Z')
 _CFG = re.compile(r'cfg-[0-9a-f]{12}\Z')
@@ -46,9 +47,14 @@ def _exact(obj, keys):
 
 
 def validate(config):
-    _exact(config, ('fans', 'product', 'operator', 'model', 'limits'))
+    _exact(config, ('fans', 'product', 'operator', 'model', 'limits', 'qualification'))
     fans = _ids(config['fans'])
     product, operator, model, limits = config['product'], config['operator'], config['model'], config['limits']
+    qualification = config['qualification']
+    _exact(qualification, ('mode', 'reference'))
+    if (qualification['mode'] not in ('fixture', 'production') or type(qualification['reference']) is not str
+            or not qualification['reference'].strip() or len(qualification['reference']) > 200):
+        raise Refused('pilot qualification evidence is required')
     _exact(product, ('id', 'price_cents', 'media_ids', 'preview_ids'))
     item = _integer(product['id'], 1, 2**31-1)
     price = _integer(product['price_cents'], 300, 20000)
@@ -82,7 +88,8 @@ def validate(config):
     requests = _integer(limits['provider_requests'], 1, 10**7)
     credits = _integer(limits['provider_credit_budget'], 1, 10**12)
     per_request = _integer(limits['provider_credits_per_request'], 1, credits)
-    return {'fans':fans, 'product':{'id':item, 'price_cents':price, 'media_ids':media, 'preview_ids':preview},
+    return {'qualification':{'mode':qualification['mode'], 'reference':qualification['reference']},
+            'fans':fans, 'product':{'id':item, 'price_cents':price, 'media_ids':media, 'preview_ids':preview},
             'operator':{'actor':actor, 'name':name, 'permissions':sorted(permissions)},
             'model':{'provider':'openrouter', 'primary':model['primary'], 'upstream':model['upstream'],
                      'reported':model['reported'], 'version':model['version'],
@@ -124,6 +131,8 @@ def planning_scope(s, runtime, fan_id, model, *, draft_only):
         raise Refused('pilot planning scope is unavailable')
     require_model(config, runtime.account_id, model.config)
     client = model.client
+    if config['qualification']['mode'] == 'fixture' and not getattr(client, 'fixture_transport', lambda: False)():
+        raise Refused('fixture scope requires a simulated model transport')
     if (type(client).__module__ != 'model_transport.openrouter' or type(client).__name__ != 'OpenRouterClient'
             or getattr(client, '_upstream_provider', None) != config['model']['upstream']
             or getattr(client, '_price_caps', None) != {model.config.primary_model: model.config.prices_for(model.config.primary_model)}):
@@ -175,6 +184,42 @@ def require(s, runtime, *, active=False, lock=False):
 def authorize(config, actor, permission):
     if (actor != config['operator']['actor'] or permission not in config['operator']['permissions']):
         raise Refused('pilot operator permission required')
+
+
+def authorize_fan(s, runtime, fan, actor, permission):
+    row, config = current(s, runtime)
+    if row is not None:
+        if fan not in config['fans']:
+            raise Refused('fan is outside the pilot scope')
+        authorize(config, actor, permission)
+
+
+def delivery_block(s, runtime, fan):
+    """Pending human/provider evidence blocks pilot sends until safely classified."""
+    pilot, config = current(s, runtime)
+    if pilot is None:
+        return None
+    from db.onlyfans_fans_intake_models import OfFansEvidence, OfFansLink, OfFansProjection
+    from db.onlyfans_engine_models import OfFansWebhook
+    conn = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == runtime.account_id,
+        OfFansConnection.binding_id == runtime.binding_id, OfFansConnection.status == 'active'))
+    link = s.get(OfFansLink, (runtime.account_id, conn.provider_creator_id)) if conn is not None else None
+    if conn is None or link is None or link.send_blocked or link.state != 'connected':
+        return 'pilot_provider_link_blocked'
+    pending = s.scalar(select(OfFansProjection.event_key).join(OfFansWebhook,
+        (OfFansWebhook.account_id == OfFansProjection.account_id) &
+        (OfFansWebhook.epoch == OfFansProjection.epoch) &
+        (OfFansWebhook.event_key == OfFansProjection.event_key)).join(OfFansConnection,
+        (OfFansConnection.account_id == OfFansWebhook.account_id) &
+        (OfFansConnection.epoch == OfFansWebhook.epoch)).where(
+        OfFansProjection.account_id == runtime.account_id, OfFansProjection.status == 'pending',
+        OfFansConnection.binding_id == runtime.binding_id,
+        OfFansWebhook.event_type.in_(('messages.sent','accounts.disconnected','accounts.session_expired',
+                                     'accounts.authentication_failed'))).limit(1))
+    human = s.scalar(select(OfFansEvidence.evidence_id).where(
+        OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan,
+        OfFansEvidence.kind == 'human_sent', OfFansEvidence.status.in_(('pending','held'))).limit(1))
+    return 'pilot_evidence_pending' if pending is not None or human is not None else None
 
 
 def policy_matches(policy, config, *, enabled):
@@ -261,7 +306,7 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
             s.add(row)
         elif row.config_json != encoded or row.status != 'configured':
             row.revision += 1
-            row.status, row.config_json, row.fingerprint, row.updated_at = 'configured', encoded, digest, now
+            row.status, row.active_since, row.config_json, row.fingerprint, row.updated_at = 'configured', None, encoded, digest, now
         result = {'accountId':account, 'revision':row.revision, 'status':row.status, 'fingerprint':row.fingerprint}
         _audit(s, runtime, command_key, actor, reason, request_hash, before, result)
         return {**result, 'replayed':False}
@@ -282,6 +327,8 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
         if row.revision != expected_revision:
             raise Refused('pilot revision conflict')
         if status == 'active':
+            if config['qualification']['mode'] == 'fixture' and os.environ.get('TWIN_PLAN_C_FIXTURE_ONLY') != '1':
+                raise Refused('fixture scope cannot activate outside an isolated test')
             policy = s.get(OfDeliveryPolicy, account)
             connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
                                                                   OfFansConnection.status == 'active'))
@@ -297,6 +344,7 @@ def set_status(store, tenant, account, status, *, expected_revision, command_key
         if row.status != status:
             row.revision += 1
             row.status, row.updated_at = status, utcnow()
+            row.active_since = row.updated_at if status == 'active' else None
         result = {'accountId':account, 'revision':row.revision, 'status':row.status, 'fingerprint':row.fingerprint}
         _audit(s, runtime, command_key, actor, reason, request_hash, before, result)
         return {**result, 'replayed':False}
@@ -309,7 +357,7 @@ def describe(store, tenant, account):
         if row is None:
             return {'accountId':account, 'status':'unconfigured', 'revision':0, 'config':None}
         return {'accountId':account, 'status':row.status, 'revision':row.revision, 'fingerprint':row.fingerprint,
-                'config':config, 'providerRequestsUsed':row.provider_requests_used,
+                'activeSince':row.active_since.isoformat() + 'Z' if row.active_since else None, 'config':config, 'providerRequestsUsed':row.provider_requests_used,
                 'providerCreditsReserved':row.provider_credits_reserved}
 
 
@@ -335,7 +383,15 @@ class ProviderRequestGuard:
     def __init__(self, store, tenant, account, revision):
         self.store, self.tenant, self.account, self.revision = store, tenant, account, revision
 
-    def __call__(self, method, url):
+    def __call__(self, method, url, mock_wire=False):
         if method not in ('GET', 'POST') or type(url) is not str:
             raise Refused('invalid pilot provider request')
+        with Session(self.store.engine) as s, s.begin():
+            runtime = self.store._runtime(s, self.tenant, self.account)
+            scope, config = require(s, runtime, active=True)
+            if scope.revision != self.revision:
+                raise Refused('provider guard revision changed')
+            if config['qualification']['mode'] == 'fixture':
+                if mock_wire is not True:
+                    raise Refused('fixture scope requires a simulated provider transport')
         reserve_provider_request(self.store, self.tenant, self.account, expected_revision=self.revision)

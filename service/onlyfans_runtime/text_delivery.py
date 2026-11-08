@@ -734,7 +734,10 @@ class TextAuthority:
                 manual_attachment=self._manual_attachment(intent),
                 action=('commercial' if intent.catalog_item_id is not None else 'chat') if engine_action else self._action(intent),
                 engine_action=engine_action, independent=independent_anchor is not None)
-            if reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
+            if reason is None and engine_action:
+                from conversation_engine.pilot_scope import delivery_block
+                reason = delivery_block(s, runtime, intent.fan_id)
+            if reason == "pilot_evidence_pending" or reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
                 # A different fan's pending ingress can temporarily invalidate the
                 # account history check. Preserve the current, still-unsent reply;
                 # every retry rechecks its snapshot, expiry and conversation holds.
@@ -906,6 +909,9 @@ class TextAuthority:
                 manual_attachment=self._manual_attachment(row),
                 action=('commercial' if row.catalog_item_id is not None else 'chat') if engine_action else self._action(row),
                 engine_action=engine_action, independent=independent_anchor is not None)
+            if reason is None and engine_action:
+                from conversation_engine.pilot_scope import delivery_block
+                reason = delivery_block(s, runtime, row.fan_id)
             from . import concurrent_admission
             concurrent = concurrent_admission.mode(policy) == "concurrent"
             if concurrent:
@@ -935,7 +941,7 @@ class TextAuthority:
                 reason = "attempt_ownership_changed"
             if reason is None and policy.used_units > policy.limit_units:
                 reason = "cap_exhausted"
-            if reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
+            if reason == "pilot_evidence_pending" or reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
                 # No wire marker exists yet. Release this attempt's reservation
                 # and retain the intent for a fresh admission after ingress drains.
                 # Ownership validation above must succeed before this deferral.
@@ -1356,14 +1362,19 @@ class TextAuthority:
                 current = policy.next_dispatch_at
                 policy.next_dispatch_at = max(current, until) if current is not None else until
 
-    def expire_dispatches(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False):
+    def expire_dispatches(self, tenant_id, account_id, *, limit=100, synthetic_engine_only=False, allowed_fans=None):
         if type(limit) is not int or not 1 <= limit <= 100 or type(synthetic_engine_only) is not bool:
             raise Refused("invalid recovery limit")
+        if allowed_fans is not None and (not synthetic_engine_only or type(allowed_fans) is not frozenset or not allowed_fans
+                or any(type(fan) is not int or not 0 < fan < 2**63 for fan in allowed_fans)):
+            raise Refused("invalid recovery fan scope")
         with Session(self.engine) as s, s.begin():
             runtime = self._historical_runtime(s, tenant_id, account_id)
             now = self._db_now(s)
             query = select(OfTextIntent).where(OfTextIntent.account_id == account_id,
                 OfTextIntent.status == "dispatching", OfTextIntent.deadline <= now)
+            if allowed_fans is not None:
+                query = query.where(OfTextIntent.fan_id.in_(allowed_fans))
             if synthetic_engine_only:
                 from db.onlyfans_engine_models import OfEngineDecision
                 policy = s.get(OfDeliveryPolicy, account_id)

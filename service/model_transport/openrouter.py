@@ -85,6 +85,9 @@ class OpenRouterClient:
         self._upstream_provider = upstream_provider
         self._price_caps = dict(price_caps or {})
 
+    def fixture_transport(self):
+        return type(self._transport) is httpx.MockTransport
+
     def __repr__(self):
         return f'OpenRouterClient(url={self._url!r}, key=<redacted>)'
 

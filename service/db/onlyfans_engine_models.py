@@ -360,6 +360,8 @@ class OfEngineModelCall(Base):
     attempt = Column(Integer, nullable=False, server_default=text('1'))
     snapshot_sha256 = Column(String(64), nullable=False)
     prompt_sha256 = Column(String(64), nullable=False)
+    pilot_scope_revision = Column(Integer)
+    pilot_scope_fingerprint = Column(String(64))
     response_text = Column(Text)
     response_sha256 = Column(String(64))
     error_class = Column(String(64))
@@ -426,6 +428,7 @@ class OfEnginePilotScope(Base):
     __table_args__ = (
         CheckConstraint('scope_id = 1', name='singleton'),
         CheckConstraint("status IN ('configured','active','stopped')", name='status'),
+        CheckConstraint("(status = 'active') = (active_since IS NOT NULL)", name='active_since'),
         CheckConstraint('revision > 0 AND provider_requests_used >= 0 AND provider_credits_reserved >= 0', name='numbers'),
         UniqueConstraint('account_id', name='uq_engine_pilot_scope_account'),
         {'info': PILOT_SCOPE_INFO},
@@ -435,6 +438,7 @@ class OfEnginePilotScope(Base):
     binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
     revision = Column(Integer, nullable=False)
     status = Column(String(16), nullable=False)
+    active_since = Column(DateTime)
     config_json = Column(Text, nullable=False)
     fingerprint = Column(String(64), nullable=False)
     provider_requests_used = Column(BigInteger, nullable=False)

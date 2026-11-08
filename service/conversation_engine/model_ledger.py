@@ -116,6 +116,7 @@ class ModelLedger:
                 or not _product_current(s, account, scope['product'])):
             raise Refused('model call pilot scope changed')
         require_model(scope, account, config)
+        return pilot.revision, pilot.fingerprint
 
     def committed(self, *, day, account=None):
         with Session(self.engine) as s:
@@ -137,7 +138,7 @@ class ModelLedger:
         with Session(self.engine) as s, s.begin():
             # One global budget lock: caps are checked and the reservation inserted atomically.
             s.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': _BUDGET_LOCK})
-            self._pilot_guard(s, account, fan_id, binding_id, cfg)
+            pilot_stamp = self._pilot_guard(s, account, fan_id, binding_id, cfg)
             now = self.clock()
             request = s.get(OfEngineRequest, (account, request_id), with_for_update=True)
             owner = s.get(OfEngineOwner, (account, fan_id))
@@ -169,6 +170,8 @@ class ModelLedger:
                 reserved_microusd=bound, usage_known=False, lease_owner=worker_id,
                 lease_expires_at=now + timedelta(seconds=cfg.lease_seconds), attempt=1,
                 snapshot_sha256=snapshot_sha256, prompt_sha256=prompt_sha256, cost_day=day,
+                pilot_scope_revision=pilot_stamp[0] if pilot_stamp else None,
+                pilot_scope_fingerprint=pilot_stamp[1] if pilot_stamp else None,
                 created_at=now, updated_at=now))
             return Reservation(call_id, seq, day)
 
@@ -186,7 +189,10 @@ class ModelLedger:
             from db.onlyfans_models import OfRuntime
             s.get(OfRuntime, account, with_for_update=True)
             row = self._mine(s, account, call_id, worker_id, 'reserved')
-            self._pilot_guard(s, account, row.fan_id, row.binding_id, self.config)
+            pilot_stamp = self._pilot_guard(s, account, row.fan_id, row.binding_id, self.config)
+            if pilot_stamp != ((row.pilot_scope_revision, row.pilot_scope_fingerprint)
+                               if row.pilot_scope_revision is not None else None):
+                raise Refused('model call pilot revision changed before wire')
             now = self.clock()
             lapsed = row.lease_expires_at <= now
             if lapsed:

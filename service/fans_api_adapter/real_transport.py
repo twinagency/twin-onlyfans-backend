@@ -237,7 +237,8 @@ class FansApiRealTransport:
         unknown for this fan only; positive provider evidence is needed to resolve it. Returns how many.
         """
         return TextAuthority(self.store).expire_dispatches(self.tenant_id, self.account_id, limit=100,
-                                                           synthetic_engine_only=True)
+                                                           synthetic_engine_only=True,
+                                                           allowed_fans=frozenset(map(int, self.allowed_chats)))
 
     def reconcile_accepted(self, intent_id):
         """Retain an unknown send; a POST is not a read-only reconciliation.

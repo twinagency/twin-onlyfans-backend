@@ -112,7 +112,8 @@ class FansApiClient:
         # The durable reservation happens before any provider I/O. A refusal
         # is not swallowed as an ambiguous network error.
         if self._request_guard is not None:
-            self._request_guard(method, url)
+            from .https_transport import is_mock_wire
+            self._request_guard(method, url, is_mock_wire(self._http))
         headers = {'Authorization': 'Bearer ' + self._token, 'Accept': 'application/json'}
         if body is not None: headers['Content-Type'] = 'application/json'
         if key is not None: headers['Idempotency-Key'] = key

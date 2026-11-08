@@ -1,0 +1,276 @@
+"""Default-off supervised Plan C worker using the existing delivery authority.
+
+Constructing this worker requires a durable, explicitly active single-pilot
+scope. Tests inject mock HTTP transports; no configuration here activates a
+policy, approves a draft, creates credentials, or starts a process.
+"""
+from dataclasses import dataclass
+import json
+from hashlib import sha256
+import os
+import re
+
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import Session, aliased
+
+from conversation_engine import approval
+from conversation_engine.journey import journey_config
+from conversation_engine.model_config import ModelConfig
+from conversation_engine.pilot_scope import require, require_model, policy_matches, _product_current
+from conversation_engine.real_worker import RealConversationWorker
+from conversation_engine.writer_context import JsonFileCreatorProfiles
+from db.onlyfans_delivery_models import OfDeliveryPolicy
+from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfEngineModelCall, OfEnginePilotScope, OfEngineRequest, OfFansConnection, OfFansWebhook, OfFansWebhookConflict
+from db.onlyfans_fans_intake_models import OfFansProjection
+from db.onlyfans_models import OfIngress
+from fans_api_adapter.events import FansEventIntake
+from fans_api_adapter.real_transport import build_real_transport, load_real_config, real_transport_enabled
+from fans_api_adapter.webhooks import verify_signature
+from onlyfans_runtime.store import Refused, utcnow
+from .pilot_draft import _NAME, _secret
+from .wiring import build_engine_service
+
+
+def _event_fan(raw):
+    try:
+        body = json.loads(raw)
+        event, payload = body['event'], body['payload']
+        if event == 'messages.received': value = payload['fromUser']['id']
+        elif event == 'messages.sent': value = payload['toUser']['id']
+        elif event == 'messages.ppv.unlocked': value = payload['chat_id']
+        elif event == 'subscriptions.new': value = payload['fan']['id']
+        elif event == 'transactions.new': value = (payload.get('fan') or payload['user'])['id']
+        elif event == 'chargebacks.new': value = payload['payment']['user']['id']
+        elif event in {'accounts.connected','accounts.reconnected','accounts.disconnected',
+                       'accounts.session_expired','accounts.authentication_failed'}:
+            return event, None
+        else:
+            raise ValueError('unsupported event')
+        if type(value) not in (int, str) or not str(value).isascii() or not str(value).isdecimal():
+            raise ValueError('invalid fan')
+        fan = int(value)
+        if not 0 < fan < 2**63 or str(fan) != str(value):
+            raise ValueError('invalid fan')
+        return event, fan
+    except (ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError):
+        raise Refused('invalid pilot event') from None
+
+
+@dataclass(frozen=True)
+class SupervisedPilot:
+    worker: RealConversationWorker
+    tenant: str
+    account: str
+    secret: bytes
+    scope_revision: int
+    scope_fingerprint: str
+    allowed_fans: frozenset
+    model_config: ModelConfig
+    profiles: JsonFileCreatorProfiles
+
+    def __repr__(self):
+        return f'SupervisedPilot(account={self.account!r}, secret=<redacted>)'
+
+    def validate(self):
+        self.worker._gate(self.tenant, self.account)
+        journey = journey_config()
+        profile = self.profiles.get(self.account)
+        with Session(self.worker.engine.store.engine) as s, s.begin():
+            runtime = self.worker.engine.store._runtime(s, self.tenant, self.account)
+            scope, config = require(s, runtime, active=True)
+            policy = s.get(OfDeliveryPolicy, self.account)
+            if (scope.revision != self.scope_revision or scope.fingerprint != self.scope_fingerprint
+                    or frozenset(config['fans']) != self.allowed_fans
+                    or self.worker.transport.allowed_chats != frozenset(map(str, self.allowed_fans))
+                    or not policy_matches(policy, config, enabled=True)
+                    or not _product_current(s, self.account, config['product'])
+                    or self.worker.engine.model.config != self.model_config
+                    or journey.temporary_pause_reopen_hours is not None or journey.auto_backfill
+                    or profile is None or profile.missing_inputs() or not profile.offers_permitted
+                    or profile.approved_item_ids != (str(config['product']['id']),)):
+                raise Refused('supervised pilot configuration changed')
+            require_model(config, self.account, self.model_config)
+            return scope.active_since
+
+    def _quarantine_collision(self, raw, event_key):
+        if type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', event_key):
+            raise Refused('invalid webhook identity')
+        digest = sha256(raw).hexdigest()
+        store = self.worker.engine.store
+        with Session(store.engine) as s, s.begin():
+            runtime = store._runtime(s, self.tenant, self.account)
+            rows = s.scalars(select(OfFansWebhook).join(OfFansConnection, and_(
+                OfFansConnection.account_id == OfFansWebhook.account_id,
+                OfFansConnection.epoch == OfFansWebhook.epoch)).where(
+                OfFansWebhook.account_id == self.account, OfFansWebhook.event_key == event_key,
+                OfFansConnection.binding_id == runtime.binding_id)).all()
+            for old in rows:
+                try:
+                    _, fan = _event_fan(old.raw_body)
+                except Refused:
+                    continue
+                if fan is not None and fan not in self.allowed_fans:
+                    continue
+                if old.payload_sha256 != digest:
+                    if s.get(OfFansWebhookConflict, (self.account, old.epoch, event_key, digest)) is None:
+                        s.add(OfFansWebhookConflict(account_id=self.account, epoch=old.epoch, event_key=event_key,
+                            payload_sha256=digest, raw_body=raw, received_at=utcnow()))
+                    return True
+        return False
+
+    def handle(self, raw, signature, event_key):
+        if not verify_signature(raw, signature, self.secret):
+            raise Refused('webhook authentication failed')
+        self.validate()
+        if self._quarantine_collision(raw, event_key):
+            return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
+        _, fan = _event_fan(raw)
+        if fan is not None and fan not in self.allowed_fans:
+            return {'outcome':'outside_pilot_scope'}
+        result = self.worker.handle(self.tenant, self.account, raw_body=raw, signature=signature,
+                                    secret=self.secret, event_key=event_key)
+        self.validate()
+        return result
+
+    def tick(self, *, limit=5):
+        """Recover bounded durable work, then send only current explicitly approved decisions."""
+        if type(limit) is not int or not 1 <= limit <= 10:
+            raise Refused('invalid pilot worker batch')
+        active_since = self.validate()
+        if active_since is None:
+            raise Refused('pilot activation boundary is unavailable')
+        store, intake = self.worker.engine.store, self.worker.intake
+        expired = self.worker.transport.recover_interrupted()
+        with Session(store.engine) as s:
+            pending = s.execute(select(OfFansProjection.epoch, OfFansProjection.event_key, OfFansWebhook.raw_body)
+                .join(OfFansWebhook, and_(OfFansWebhook.account_id == OfFansProjection.account_id,
+                      OfFansWebhook.epoch == OfFansProjection.epoch, OfFansWebhook.event_key == OfFansProjection.event_key))
+                .join(OfFansConnection, and_(OfFansConnection.account_id == OfFansWebhook.account_id,
+                      OfFansConnection.epoch == OfFansWebhook.epoch))
+                .where(OfFansProjection.account_id == self.account, OfFansProjection.status == 'pending',
+                       OfFansConnection.binding_id == s.get(OfEnginePilotScope, 1).binding_id,
+                       OfFansWebhook.received_at >= active_since)
+                .order_by(OfFansProjection.updated_at).limit(limit)).all()
+        projected = 0
+        for epoch, key, raw in pending:
+            self.validate()
+            try:
+                _, fan = _event_fan(raw)
+                if fan is None or fan in self.allowed_fans:
+                    intake._project(self.account, epoch, key)
+                    projected += 1
+            except Refused:
+                continue
+        # Reclassify pending human-send observations before any approved dispatch.
+        for fan in sorted(self.allowed_fans):
+            self.validate()
+            intake.classify_sent(self.account, fan)
+        # Only scope-era inbound messages without a completed draft are eligible
+        # for repair. Unknown model calls are retained, never automatically retried.
+        with Session(store.engine) as s:
+            runtime = store._runtime(s, self.tenant, self.account, lock=False)
+            request = OfEngineRequest
+            existing = select(OfEngineApproval.request_id).where(
+                OfEngineApproval.account_id == request.account_id,
+                OfEngineApproval.request_id == request.request_id).exists()
+            ready = select(OfEngineDecision.decision_id).where(
+                OfEngineDecision.account_id == request.account_id,
+                OfEngineDecision.request_id == request.request_id,
+                OfEngineDecision.binding_id == runtime.binding_id,
+                OfEngineDecision.part_index == 0, OfEngineDecision.status == 'ready').exists()
+            uncertain = select(OfEngineModelCall.call_id).where(
+                OfEngineModelCall.account_id == request.account_id,
+                OfEngineModelCall.request_id == request.request_id,
+                or_(OfEngineModelCall.status.in_(('reserved','calling','unknown','released')),
+                    OfEngineModelCall.outcome.in_(('identity_pending','identity_unverified')))).exists()
+            rows = s.execute(select(OfIngress, request).outerjoin(request, and_(
+                request.account_id == OfIngress.account_id, request.fan_id == OfIngress.fan_id,
+                request.source_message_id == OfIngress.message_id, request.binding_id == runtime.binding_id))
+                .where(OfIngress.account_id == self.account, OfIngress.binding_id == runtime.binding_id,
+                    OfIngress.fan_id.in_(self.allowed_fans), OfIngress.source != 'import',
+                    OfIngress.status.in_(('pending','applied')), OfIngress.received_at >= active_since,
+                    or_(request.request_id.is_(None), and_(request.status == 'open', ~existing,
+                                                          or_(ready, ~uncertain))))
+                .order_by(OfIngress.received_at, OfIngress.event_key).limit(limit)).all()
+            work = []
+            for incoming, request in rows:
+                decision = None if request is None else s.scalar(select(OfEngineDecision).where(
+                    OfEngineDecision.account_id == self.account, OfEngineDecision.request_id == request.request_id,
+                    OfEngineDecision.binding_id == runtime.binding_id, OfEngineDecision.part_index == 0,
+                    OfEngineDecision.status == 'ready').order_by(OfEngineDecision.generation.desc()).limit(1))
+                work.append(('stage', incoming.fan_id, decision.decision_id) if decision is not None
+                            else ('turn', incoming.fan_id, incoming.message_id))
+        planned = []
+        for action, fan, ident in work:
+            self.validate()
+            result = (self.worker.turn(self.tenant, self.account, fan, ident) if action == 'turn'
+                      else self.worker._send(self.tenant, self.account, ident))
+            planned.append(result.get('outcome'))
+        with Session(store.engine) as s:
+            runtime = store._runtime(s, self.tenant, self.account, lock=False)
+            pending_part = aliased(OfEngineDecision)
+            decisions = list(s.scalars(select(OfEngineDecision.decision_id).join(OfEngineApproval, and_(
+                OfEngineApproval.account_id == OfEngineDecision.account_id,
+                OfEngineApproval.request_id == OfEngineDecision.request_id,
+                OfEngineApproval.generation == OfEngineDecision.generation)).where(
+                OfEngineDecision.account_id == self.account, OfEngineDecision.binding_id == runtime.binding_id,
+                OfEngineDecision.fan_id.in_(self.allowed_fans), OfEngineDecision.part_index == 0,
+                OfEngineApproval.status == 'approved',
+                select(pending_part.decision_id).where(
+                    pending_part.account_id == OfEngineApproval.account_id,
+                    pending_part.request_id == OfEngineApproval.request_id,
+                    pending_part.generation == OfEngineApproval.generation,
+                    pending_part.status.in_(('ready','queued'))).exists(),
+                OfEngineApproval.expires_at > utcnow()).order_by(OfEngineApproval.created_at).limit(limit)))
+        dispatched = []
+        for decision in decisions:
+            self.validate()
+            dispatched.append(self.worker.send_approved(self.tenant, self.account, decision)['outcome'])
+        return {'expired':expired, 'projected':projected, 'planned':planned, 'dispatched':dispatched}
+
+
+def build_supervised_pilot(store, environ=None, *, model_transport=None, fans_transport=None):
+    env = os.environ if environ is None else environ
+    flag = env.get('TWIN_PLAN_C_SUPERVISED', '')
+    if flag in ('', '0'):
+        return None
+    if (flag != '1' or store is None or env.get('ONLYFANS_PROCESS_ROLE') != 'worker'
+            or not real_transport_enabled(env) or env.get('TWIN_PLAN_C_DRAFT_ONLY', '') not in ('', '0')):
+        raise Refused('invalid supervised pilot startup')
+    tenant, account = env.get('TWIN_PLAN_C_TENANT', ''), env.get('TWIN_PLAN_C_ACCOUNT', '')
+    if not _NAME.fullmatch(tenant) or not _NAME.fullmatch(account):
+        raise Refused('explicit pilot tenant and account are required')
+    cfg = ModelConfig.from_env(env)
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        scope, config = require(s, runtime, active=True)
+        require_model(config, account, cfg)
+        policy = s.get(OfDeliveryPolicy, account)
+        connection = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == account,
+                                                              OfFansConnection.status == 'active'))
+        if (not policy_matches(policy, config, enabled=True) or not _product_current(s, account, config['product'])
+                or connection is None or connection.binding_id != runtime.binding_id or scope.active_since is None):
+            raise Refused('supervised pilot startup prerequisites are not met')
+        revision, fingerprint, fans = scope.revision, scope.fingerprint, frozenset(config['fans'])
+        creator, epoch, provider_account = connection.provider_creator_id, connection.epoch, connection.provider_account_id
+    profile_path = env.get('ENGINE_MODEL_PROFILES_FILE', '')
+    profiles = JsonFileCreatorProfiles(profile_path)
+    profile = profiles.get(account)
+    journey = journey_config()
+    if (profile is None or profile.missing_inputs() or not profile.offers_permitted
+            or profile.approved_item_ids != (str(config['product']['id']),)
+            or journey.temporary_pause_reopen_hours is not None or journey.auto_backfill):
+        raise Refused('supervised creator or journey configuration is incomplete')
+    secret = _secret(env.get('TWIN_PLAN_C_WEBHOOK_SECRET_FILE', ''))
+    provider = load_real_config(env, require_flag=True)
+    if provider.provider_account != provider_account:
+        raise Refused('provider account does not match the pilot connection')
+    engine = build_engine_service(store, env, transport=model_transport)
+    if engine is None:
+        raise Refused('pilot model runtime is unavailable')
+    transport = build_real_transport(store, tenant, account, creator_id=creator, epoch=epoch, env=env,
+                                     transport=fans_transport, allowed_chats=frozenset(map(str, fans)))
+    worker = RealConversationWorker(engine, FansEventIntake(store), transport)
+    pilot = SupervisedPilot(worker, tenant, account, secret, revision, fingerprint, fans, cfg, profiles)
+    pilot.validate()
+    return pilot

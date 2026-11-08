@@ -50,6 +50,8 @@ def reconcile(authority,tenant,account,fan,intent_id,*,history,complete,provider
     # command through immutable receipt recording and idempotent projection.
     with Session(authority.engine) as s,s.begin():
         runtime=authority.store._runtime(s,tenant,account)
+        from conversation_engine.pilot_scope import authorize_fan
+        authorize_fan(s,runtime,fan,actor,'reconcile')
         row=authority._intent(s,account,intent_id)
         if runtime.binding_id!=intent["binding_id"] or row.attempt_id!=intent["attempt_id"] or row.payload_hash!=intent["payload_hash"]:
             raise Refused("recovery intent changed")

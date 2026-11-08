@@ -83,7 +83,7 @@ class FansEventIntake:
             if expected_account is not None:
                 from db.onlyfans_models import OfRuntime
                 binding = s.get(OfCreatorBinding, connection.binding_id)
-                runtime = s.get(OfRuntime, expected_account)
+                runtime = self.store._runtime(s, expected_tenant, expected_account)
                 if (connection.account_id != expected_account or binding is None or runtime is None
                         or binding.tenant_id != expected_tenant or connection.binding_id != runtime.binding_id):
                     raise Refused('webhook account scope mismatch')
@@ -168,6 +168,8 @@ class FansEventIntake:
         now = utcnow()
         after = []
         with Session(self.engine) as s, s.begin():
+            from db.onlyfans_models import OfRuntime
+            s.scalar(select(OfRuntime).where(OfRuntime.account_id == account).with_for_update())
             row = s.get(OfFansProjection, (account, epoch, event_key), with_for_update=True)
             if row is None or row.status != 'pending':
                 return row.status if row is not None else 'missing'

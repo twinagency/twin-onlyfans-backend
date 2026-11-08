@@ -26,6 +26,8 @@ def correct(store,tenant,account,fan,key,*,expected_revision,command_key,actor,r
     request_hash=digest([key,expected_revision,operation,value,actor,reason])
     with Session(store.engine) as s,s.begin():
         runtime=store._runtime(s,tenant,account)
+        from conversation_engine.pilot_scope import authorize_fan
+        authorize_fan(s,runtime,fan,actor,'correct')
         p=identity(tenant,account,runtime.binding_id,fan)
         s.execute(text('SELECT pg_advisory_xact_lock(hashtext(:k))'),{'k':'profile-correction:'+digest(p)})
         replay=s.execute(text(f'SELECT request_hash,revision FROM of_profile_manual_changes WHERE {SCOPE} AND command_key=:command'),

@@ -21,7 +21,7 @@ from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT
 
 ACTOR = 'op-session:' + 'a' * 64
 OTHER = 'op-session:' + 'b' * 64
-PERMISSIONS = ['configure','activate','approve','reject','edit','stop','takeover','handback','reconcile']
+PERMISSIONS = ['configure','activate','approve','reject','edit','stop','takeover','handback','reconcile','correct']
 
 
 def key(n):
@@ -34,7 +34,7 @@ def config_for(world, env, *, fans=None, requests=10, credits=20, per_request=2)
         policy = s.get(OfDeliveryPolicy, ACCOUNT)
         policy.daily_limit_units = min(10, policy.limit_units)
         maximum, daily, throttle = policy.limit_units, policy.daily_limit_units, policy.throttle_seconds
-    return {'fans':fans or [FAN], 'product':{'id':world.item, 'price_cents':int(env['TWIN_PLAN_C_PRICE_CENTS']),
+    return {'qualification':{'mode':'fixture', 'reference':'offline fixture only'}, 'fans':fans or [FAN], 'product':{'id':world.item, 'price_cents':int(env['TWIN_PLAN_C_PRICE_CENTS']),
             'media_ids':[int(i) for i in env['TWIN_PLAN_C_MEDIA_IDS'].split(',')],
             'preview_ids':[int(i) for i in env['TWIN_PLAN_C_PREVIEW_IDS'].split(',') if i]},
             'operator':{'actor':ACTOR, 'name':'Fixture operator', 'permissions':PERMISSIONS},
@@ -50,6 +50,8 @@ def install(world, config, n=1):
 
 
 def activate(world, revision=1, n=2):
+    import os
+    os.environ['TWIN_PLAN_C_FIXTURE_ONLY'] = '1'
     with Session(world.database[1]) as s:
         policy = s.get(OfDeliveryPolicy, ACCOUNT)
         current, limit, throttle = policy.revision, policy.limit_units, policy.throttle_seconds

@@ -275,7 +275,8 @@ def list_receipts(store, tenant, account):
                 OfEngineDecision.binding_id == binding, OfEngineOwner.binding_id == binding,
                 OfEngineDecision.fan_id == OfTextIntent.fan_id, OfEngineDecision.payload_hash == OfTextIntent.payload_hash,
                 OfTextIntent.status == 'accepted',
-                OfTextIntent.provider_message_id.is_not(None), OfTextIntent.receipt_json.is_not(None), approved)
+                OfTextIntent.provider_message_id.is_not(None), OfTextIntent.receipt_json.is_not(None), approved,
+                True if allowed is None else OfTextIntent.fan_id.in_(allowed))
             .order_by(OfTextIntent.updated_at.desc(), OfTextIntent.intent_id).limit(50)).all()
         result = []
         for intent, decision in rows:
@@ -432,7 +433,8 @@ def unresolved(store, tenant, account):
 
         # 1. Sends whose outcome is unknown. They are never resent and never called "not sent" without proof.
         for row in s.scalars(select(OfTextIntent).where(OfTextIntent.account_id == account, OfTextIntent.binding_id == binding,
-                OfTextIntent.status.in_(('dispatching', 'unknown'))).order_by(OfTextIntent.created_at).limit(200)):
+                OfTextIntent.status.in_(('dispatching', 'unknown')),
+                True if allowed is None else OfTextIntent.fan_id.in_(allowed)).order_by(OfTextIntent.created_at).limit(200)):
             if allowed is not None and row.fan_id not in allowed:
                 continue
             cid, revision = conv(row.fan_id)
@@ -452,7 +454,8 @@ def unresolved(store, tenant, account):
         stale = utcnow() - STALE_PENDING
         for row in s.scalars(select(OfFansEvidence).where(OfFansEvidence.account_id == account,
                 OfFansEvidence.kind.in_(('transaction', 'chargeback')), OfFansEvidence.status.in_(('pending', 'held')),
-                OfFansEvidence.peer_id.is_(None), OfFansEvidence.intent_id.is_(None))
+                OfFansEvidence.peer_id.is_(None), OfFansEvidence.intent_id.is_(None),
+                True if allowed is None else OfFansEvidence.fan_id.in_(allowed))
                 .order_by(OfFansEvidence.created_at).limit(200)):
             if webhook_binding(s, row) != binding:
                 unscoped_provider_evidence = True
@@ -475,7 +478,8 @@ def unresolved(store, tenant, account):
                      OfTextIntent.intent_id == OfEngineAccessEvidence.intent_id)).where(
                 OfEngineAccessEvidence.account_id == account, OfTextIntent.binding_id == binding,
                 OfTextIntent.fan_id == OfEngineAccessEvidence.fan_id,
-                (OfEngineAccessEvidence.status != 'confirmed') | OfEngineAccessEvidence.applied.is_(False))
+                (OfEngineAccessEvidence.status != 'confirmed') | OfEngineAccessEvidence.applied.is_(False),
+                True if allowed is None else OfEngineAccessEvidence.fan_id.in_(allowed))
                 .order_by(OfEngineAccessEvidence.created_at).limit(200)):
             if allowed is not None and row.fan_id not in allowed:
                 continue
@@ -490,7 +494,8 @@ def unresolved(store, tenant, account):
                 OfFansEvidence.kind == 'unlock',
                 (OfFansEvidence.status.in_(('pending', 'paired', 'held'))) |
                 ((OfFansEvidence.status == 'applied') &
-                 (OfFansEvidence.reason == 'unlock_confirmed_finance_unlinked')))
+                 (OfFansEvidence.reason == 'unlock_confirmed_finance_unlinked')),
+                True if allowed is None else OfFansEvidence.fan_id.in_(allowed))
                 .order_by(OfFansEvidence.created_at).limit(200)):
             if webhook_binding(s, row) != binding:
                 unscoped_provider_evidence = True
@@ -544,7 +549,8 @@ def unresolved(store, tenant, account):
             OfEngineApproval.account_id == account, OfEngineApproval.binding_id == binding,
             OfEngineApproval.status.in_(('awaiting', 'approved'))))}
         for request in s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account,
-                OfEngineRequest.binding_id == binding, OfEngineRequest.status.in_(('open', 'waiting_fan', 'waiting_provider')))
+                OfEngineRequest.binding_id == binding, OfEngineRequest.status.in_(('open', 'waiting_fan', 'waiting_provider')),
+                True if allowed is None else OfEngineRequest.fan_id.in_(allowed))
                 .order_by(OfEngineRequest.created_at).limit(200)):
             if allowed is not None and request.fan_id not in allowed:
                 continue
@@ -559,7 +565,8 @@ def unresolved(store, tenant, account):
         for state, owner in s.execute(select(OfConversationState, OfEngineOwner).join(OfEngineOwner, and_(
                 OfEngineOwner.account_id == OfConversationState.account_id, OfEngineOwner.fan_id == OfConversationState.fan_id))
                 .where(OfConversationState.account_id == account, OfEngineOwner.binding_id == binding,
-                       OfConversationState.mode == 'human_controlled').order_by(OfConversationState.updated_at).limit(200)):
+                       OfConversationState.mode == 'human_controlled',
+                        True if allowed is None else OfConversationState.fan_id.in_(allowed)).order_by(OfConversationState.updated_at).limit(200)):
             if allowed is not None and state.fan_id not in allowed:
                 continue
             waiting = state.takeover_state == 'requested'
@@ -571,7 +578,8 @@ def unresolved(store, tenant, account):
         # 5. Requests in a handover state (resolved through the request workflow: accept, then complete or decline).
         for request in s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account,
                 OfEngineRequest.binding_id == binding,
-                OfEngineRequest.status.in_(('handover_pending', 'handover_accepted'))).order_by(OfEngineRequest.updated_at).limit(200)):
+                OfEngineRequest.status.in_(('handover_pending', 'handover_accepted')),
+                True if allowed is None else OfEngineRequest.fan_id.in_(allowed)).order_by(OfEngineRequest.updated_at).limit(200)):
             if allowed is not None and request.fan_id not in allowed:
                 continue
             cid, revision = conv(request.fan_id)

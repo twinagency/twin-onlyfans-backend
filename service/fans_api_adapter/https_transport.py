@@ -15,6 +15,10 @@ from .protocol import ALLOWED_BASES, Response
 MAX_BYTES = 1_000_000
 
 
+def is_mock_wire(wire):
+    return type(wire) is FansHttpsTransport and type(wire._transport) is httpx.MockTransport
+
+
 class FansHttpsTransport:
     def __init__(self, *, enabled=False, transport=None):
         if enabled is not True:

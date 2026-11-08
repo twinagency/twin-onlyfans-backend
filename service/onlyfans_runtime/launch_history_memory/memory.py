@@ -377,6 +377,9 @@ class HistoricalMemory:
             "value": value, "expectedVersion": expected_version, "actor": actor, "reason": reason})
         with Session(self.store.engine) as s, s.begin():
             fan, profile = self._scope(s, tenant_id, account_id, fan_id)
+            from conversation_engine.pilot_scope import authorize_fan
+            runtime = self.store._runtime(s, tenant_id, account_id)
+            authorize_fan(s, runtime, fan_id, actor, 'correct')
             prior = s.get(MemoryCorrection, (account_id, command_key))
             if prior:
                 if prior.request_hash != request_hash:

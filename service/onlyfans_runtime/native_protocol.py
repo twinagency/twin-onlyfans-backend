@@ -130,7 +130,10 @@ def history_text(value):
         if unwrapped != value and "<" not in unwrapped and ">" not in unwrapped:
             return html.unescape(unwrapped)
         if not value.startswith("<p>") or not value.endswith("</p>"):
-            raise NativeProtocolError("unsupported native history formatting") from None
+            # Archived messages can mix bare text with balanced inline links or
+            # emphasis. Supply only the missing container; the same bounded
+            # parser still rejects unknown tags, nested links and bad nesting.
+            value = "<p>" + value + "</p>"
     parser = _HistoryText()
     parser.feed(value)
     parser.close()

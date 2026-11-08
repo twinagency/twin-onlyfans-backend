@@ -201,6 +201,8 @@ class EngineService:
         _id(fan_id)
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
+            from .pilot_scope import planning_scope
+            planning_scope(s, runtime, fan_id, self.model, draft_only=self.draft_only)
             policy = s.get(OfDeliveryPolicy, account)
             state = s.get(OfConversationState, (account, fan_id))
             if (not self._planning_policy_ok(policy)
@@ -290,6 +292,8 @@ class EngineService:
             raise Refused('fan requested no contact')
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
+            from .pilot_scope import planning_scope
+            pilot_stamp = planning_scope(s, runtime, fan_id, self.model, draft_only=self.draft_only)
             owner = s.get(OfEngineOwner, (account, fan_id))
             state = s.get(OfConversationState, (account, fan_id))
             policy = s.get(OfDeliveryPolicy, account)
@@ -376,6 +380,8 @@ class EngineService:
                     'open_requests': [{'request_id': r.request_id, 'source_message_id': r.source_message_id,
                         'status': r.status, 'owner': r.owner, 'next_step': r.next_step} for r in open_rows[:50]],
                     'open_requests_truncated': len(open_rows) > 50}
+                if pilot_stamp is not None:
+                    snapshot['pilot_scope'] = pilot_stamp
                 if type(self.model).__name__ == 'ModelRuntime':
                     # Extra writer context, built only for a real model so fixture snapshots stay unchanged.
                     snapshot['offer_grants'] = _offer_grants(s, runtime, fan_id)
@@ -543,6 +549,9 @@ class EngineService:
         """Re-validate the world a model answer depends on. Short read-only transaction; raises when anything moved."""
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
+            from .pilot_scope import planning_scope
+            if planning_scope(s, runtime, fan_id, self.model, draft_only=self.draft_only) != snapshot.get('pilot_scope'):
+                raise Refused('pilot scope changed during generation')
             owner = s.get(OfEngineOwner, (account, fan_id))
             state = s.get(OfConversationState, (account, fan_id))
             policy = s.get(OfDeliveryPolicy, account)

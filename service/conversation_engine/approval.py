@@ -162,6 +162,20 @@ def _build(s, runtime, parts, request, owner, state):
     policy = s.get(OfDeliveryPolicy, account)
     if policy is None:
         return None, None, 'delivery_policy_unavailable'
+    from .pilot_scope import current as current_pilot
+    try:
+        pilot, pilot_config = current_pilot(s, runtime)
+    except Refused:
+        return None, None, 'pilot_scope_unavailable'
+    if pilot is not None:
+        expected = pilot_config['product']
+        for part in canon_parts:
+            if part['action'] == 'offer':
+                terms = part['terms']
+                if (part['catalog_item_id'] != expected['id'] or terms['price_cents'] != expected['price_cents']
+                        or tuple(map(str, terms['media_ids'])) != tuple(map(str, expected['media_ids']))
+                        or tuple(map(str, terms['preview_ids'])) != tuple(map(str, expected['preview_ids']))):
+                    return None, None, 'pilot_product_scope_changed'
     from .writer_context import CreatorProfile, active_profile
     profile = active_profile(account)
     if profile is not None and type(profile) is not CreatorProfile:
@@ -174,6 +188,8 @@ def _build(s, runtime, parts, request, owner, state):
              'generation': parts[0].generation, 'owner_epoch': owner.epoch, 'control_revision': state.revision,
              'connection_epoch': connection.epoch if connection else None,
              'input_base': state.input_revision - completed, 'parts': canon_parts}
+    if pilot is not None:
+        canon['pilot_scope'] = {'revision': pilot.revision, 'fingerprint': pilot.fingerprint, 'status': pilot.status}
     return _hash(canon), shown, None
 
 
@@ -188,6 +204,17 @@ def evaluate(s, runtime, decision, *, now=None, phase='send', need_approval=True
     policy = s.get(OfDeliveryPolicy, account)
     if policy is None or policy.transport_kind != GATED_TRANSPORT:
         return 'not_gated', None, None, None
+    from .pilot_scope import current as current_pilot, policy_matches, _product_current
+    try:
+        pilot, pilot_config = current_pilot(s, runtime)
+    except Refused:
+        return 'pilot_scope_unavailable', None, None, None
+    if pilot is not None:
+        if (fan_id not in pilot_config['fans'] or pilot.status == 'stopped'
+                or phase == 'send' and pilot.status != 'active'
+                or not policy_matches(policy, pilot_config, enabled=pilot.status == 'active')
+                or not _product_current(s, account, pilot_config['product'])):
+            return 'pilot_scope_unavailable', None, None, None
     from fans_api_adapter.real_transport import real_transport_enabled
     if phase == 'send':   # a draft may be prepared while sending is stopped; nothing can go out until these hold
         if not policy.enabled:
@@ -270,6 +297,12 @@ def evaluate(s, runtime, decision, *, now=None, phase='send', need_approval=True
             or row.source_message_id != request.source_message_id or row.owner_epoch != owner.epoch
             or row.control_revision != state.revision):
         return 'approval_mismatch', row, digest, shown
+    if pilot is not None:
+        from .pilot_scope import authorize
+        try:
+            authorize(pilot_config, row.actor, 'approve')
+        except Refused:
+            return 'pilot_operator_unauthorized', row, digest, shown
     return None, row, digest, shown
 
 
@@ -369,6 +402,10 @@ def approve(store, tenant, account, request_id, generation, *, expected_version,
     failure = None
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
+        from .pilot_scope import current as current_pilot, authorize
+        pilot, pilot_config = current_pilot(s, runtime)
+        if pilot is not None:
+            authorize(pilot_config, actor, 'approve')
         row = _locked_version(s, runtime, account, request_id, generation, expected_version)
         if row.status == 'approved':
             return dict(_view(row), duplicate=True)
@@ -398,6 +435,10 @@ def reject(store, tenant, account, request_id, generation, *, expected_version, 
     note = ('rejected: ' + reason.strip())[:64] if type(reason) is str and reason.strip() else 'rejected'
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
+        from .pilot_scope import current as current_pilot, authorize
+        pilot, pilot_config = current_pilot(s, runtime)
+        if pilot is not None:
+            authorize(pilot_config, actor, 'reject')
         row = _locked_version(s, runtime, account, request_id, generation, expected_version)
         if row.status in ('rejected',) or (row.status == 'invalidated' and row.invalidation_reason.startswith('revoked')):
             return dict(_view(row), duplicate=True)
@@ -431,6 +472,10 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
     failure = None
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
+        from .pilot_scope import current as current_pilot, authorize
+        pilot, pilot_config = current_pilot(s, runtime)
+        if pilot is not None:
+            authorize(pilot_config, actor, 'edit')
         row = _locked_version(s, runtime, account, request_id, generation, expected_version)
         if row.status not in LIVE:
             raise Refused('approval is ' + row.status)

@@ -91,7 +91,9 @@ class FansApiClient:
     No environment variable enables this object and no default HTTP callable is
     supplied. Integrators must obtain the separately approved egress authority.
     """
-    def __init__(self, *, account, creator_id, epoch, token, http, timeout, enabled=False, base=BASE):
+    def __init__(self, *, account, creator_id, epoch, token, http, timeout, enabled=False, base=BASE, request_guard=None):
+        if (request_guard is not None and not callable(request_guard)):
+            raise ValueError('invalid provider request guard')
         if (enabled is not True or type(account) is not str or not _ACCOUNT.fullmatch(account)
                 or type(epoch) is not int or epoch < 1 or type(token) is not str or not token.strip() or len(token) > 4096
                 or token != token.strip() or any(ord(c) < 33 or ord(c) > 126 for c in token) or not callable(http)
@@ -100,12 +102,17 @@ class FansApiClient:
             raise ValueError('explicit protocol configuration required')
         self.account, self.creator_id, self.epoch = account, _id(creator_id), epoch
         self._token, self._http, self._timeout = token, http, timeout
+        self._request_guard = request_guard
         self._identity_verified = False
         self.base = base
         self.last_replayed = False
         self.credits_balance = None
 
     def _request(self, method, url, body=None, key=None):
+        # The durable reservation happens before any provider I/O. A refusal
+        # is not swallowed as an ambiguous network error.
+        if self._request_guard is not None:
+            self._request_guard(method, url)
         headers = {'Authorization': 'Bearer ' + self._token, 'Accept': 'application/json'}
         if body is not None: headers['Content-Type'] = 'application/json'
         if key is not None: headers['Idempotency-Key'] = key

@@ -426,6 +426,17 @@ class Store:
             raise Refused("invalid audit evidence")
         with Session(self.engine) as s, s.begin():
             runtime = self._runtime(s, tenant_id, account_id)
+            from conversation_engine.pilot_scope import current as current_pilot, authorize as authorize_pilot
+            pilot, pilot_config = current_pilot(s, runtime)
+            if pilot is not None and fan_id in pilot_config['fans']:
+                permissions = {'pause_automation':'stop', 'mark_no_contact':'stop', 'request_takeover':'takeover',
+                               'release_takeover':'handback', 'resume_automation':'handback'}
+                permission = permissions.get(action) or ('handback' if mode == 'automated' else
+                             'takeover' if mode == 'human_controlled' else 'stop')
+                safe_system = (actor in {'fans-webhook', 'engine', 'offline-engine'}
+                               and mode in {'paused', 'human_controlled', 'no_contact'})
+                if not safe_system:
+                    authorize_pilot(pilot_config, actor, permission)
             if synthetic_engine_only:
                 from db.onlyfans_delivery_models import ENGINE_TRANSPORT_KINDS, OfDeliveryPolicy
                 from db.onlyfans_engine_models import OfEngineOwner

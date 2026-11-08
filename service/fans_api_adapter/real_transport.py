@@ -101,10 +101,10 @@ def real_transport_enabled(env=None):
     return (os.environ if env is None else env).get(FLAG) == '1'
 
 
-def build_client(config, *, creator_id, epoch, transport=None):
+def build_client(config, *, creator_id, epoch, transport=None, request_guard=None):
     wire = FansHttpsTransport(enabled=True, transport=transport)
     client = FansApiClient(account=config.provider_account, creator_id=creator_id, epoch=epoch,
-                           token=config.token, http=wire, timeout=config.timeout, enabled=True, base=config.base)
+                           token=config.token, http=wire, timeout=config.timeout, enabled=True, base=config.base, request_guard=request_guard)
     if client.identity().state != 'verified':
         raise Refused('provider identity could not be verified')
     return client
@@ -126,8 +126,15 @@ def build_real_transport(store, tenant_id, account_id, *, creator_id, epoch, env
     if not real_transport_enabled(env):
         raise Refused('real Fans API transport is not enabled')
     require_allowed_chats(allowed_chats)  # validate before any provider identity I/O
+    from conversation_engine.pilot_scope import current as current_pilot, ProviderRequestGuard
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant_id, account_id)
+        pilot, pilot_config = current_pilot(s, runtime)
+        if pilot is not None and (pilot.status != 'active' or allowed_chats != frozenset(map(str, pilot_config['fans']))):
+            raise Refused('real transport pilot scope is unavailable')
+        guard = ProviderRequestGuard(store, tenant_id, account_id, pilot.revision) if pilot is not None else None
     config = load_real_config(env, require_flag=True)
-    client = build_client(config, creator_id=creator_id, epoch=epoch, transport=transport)
+    client = build_client(config, creator_id=creator_id, epoch=epoch, transport=transport, request_guard=guard)
     return FansApiRealTransport(store, tenant_id, account_id, client, allowed_chats=allowed_chats,
                                 enabled=True, **options)
 
@@ -142,6 +149,16 @@ class FansApiRealTransport:
         allowed_chats = require_allowed_chats(allowed_chats)
         self.store, self.tenant_id, self.account_id, self.client = store, tenant_id, account_id, client
         self.allowed_chats, self.max_attempts, self.retry_delay, self.sleep = allowed_chats, max_attempts, retry_delay, sleep
+        from conversation_engine.pilot_scope import current as current_pilot, ProviderRequestGuard
+        with Session(store.engine) as s, s.begin():
+            runtime = store._runtime(s, tenant_id, account_id)
+            pilot, pilot_config = current_pilot(s, runtime)
+            if pilot is not None:
+                guard = getattr(client, '_request_guard', None)
+                if (pilot.status != 'active' or allowed_chats != frozenset(map(str, pilot_config['fans']))
+                        or type(guard) is not ProviderRequestGuard or guard.store is not store
+                        or guard.tenant != tenant_id or guard.account != account_id or guard.revision != pilot.revision):
+                    raise Refused('real transport lacks the durable pilot request guard')
         self.sent_calls = 0  # POSTs issued (including same-key retries), for live-run accounting
 
     def _scope(self, dispatch):
@@ -151,6 +168,14 @@ class FansApiRealTransport:
                                                                  OfEngineDecision.intent_id == dispatch.intent_id))
             connection = s.get(OfFansConnection, (self.account_id, self.client.epoch))
             policy = s.get(OfDeliveryPolicy, self.account_id)
+            from conversation_engine.pilot_scope import current as current_pilot, ProviderRequestGuard
+            pilot, pilot_config = current_pilot(s, runtime)
+            if pilot is not None:
+                guard = getattr(self.client, '_request_guard', None)
+                if (pilot.status != 'active' or self.allowed_chats != frozenset(map(str, pilot_config['fans']))
+                        or type(guard) is not ProviderRequestGuard or guard.store is not self.store
+                        or guard.tenant != self.tenant_id or guard.account != self.account_id or guard.revision != pilot.revision):
+                    raise Refused('real transport pilot guard is stale')
             if (decision is None or decision.connection_epoch != self.client.epoch or connection is None
                     or connection.binding_id != runtime.binding_id or connection.status != 'active'
                     or connection.provider_account_id != self.client.account
@@ -189,10 +214,16 @@ class FansApiRealTransport:
         """
         result = None
         for attempt in range(self.max_attempts):
+            try:
+                result = self.client.send(chat_id, key=key, text=body, media=[str(v) for v in media],
+                                          previews=[str(v) for v in previews], price_cents=price_cents,
+                                          block_banned_words='strict_ban')
+            except Refused:
+                # The request guard refused before HTTP. Any earlier attempts
+                # reached this loop only after proven-not-sent results.
+                from .protocol import Result
+                return Result('not_sent')
             self.sent_calls += 1
-            result = self.client.send(chat_id, key=key, text=body, media=[str(v) for v in media],
-                                      previews=[str(v) for v in previews], price_cents=price_cents,
-                                      block_banned_words='strict_ban')
             if result.state != 'not_sent':
                 return result
             if attempt + 1 < self.max_attempts:

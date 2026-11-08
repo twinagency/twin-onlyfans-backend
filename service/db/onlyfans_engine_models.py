@@ -412,3 +412,32 @@ class OfEngineApproval(Base):
     invalidation_reason = Column(String(64))
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
+
+
+PILOT_SCOPE_INFO = {'onlyfans_since': '0125_plan_c_scope'}
+
+
+class OfEnginePilotScope(Base):
+    """One durable pilot configuration and conservative provider-request counters.
+
+    Canonical sends and financial evidence remain in their existing owners.
+    """
+    __tablename__ = 'of_engine_pilot_scope'
+    __table_args__ = (
+        CheckConstraint('scope_id = 1', name='singleton'),
+        CheckConstraint("status IN ('configured','active','stopped')", name='status'),
+        CheckConstraint('revision > 0 AND provider_requests_used >= 0 AND provider_credits_reserved >= 0', name='numbers'),
+        UniqueConstraint('account_id', name='uq_engine_pilot_scope_account'),
+        {'info': PILOT_SCOPE_INFO},
+    )
+    scope_id = Column(Integer, primary_key=True)
+    account_id = Column(String, ForeignKey('of_runtime.account_id', ondelete='RESTRICT'), nullable=False)
+    binding_id = Column(String, ForeignKey('of_creator_bindings.id', ondelete='RESTRICT'), nullable=False)
+    revision = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False)
+    config_json = Column(Text, nullable=False)
+    fingerprint = Column(String(64), nullable=False)
+    provider_requests_used = Column(BigInteger, nullable=False)
+    provider_credits_reserved = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)

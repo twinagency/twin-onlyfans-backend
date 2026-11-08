@@ -105,6 +105,41 @@ async def _command(request, account_id, work):
     return answer(result)
 
 
+@router.get('/accounts/{account_id}/pilot-scope')
+async def pilot_scope_view(request: Request, account_id: str):
+    store, tenant, refusal = gate(request, account_id)
+    if refusal is not None:
+        return refusal
+    try:
+        from conversation_engine.pilot_scope import describe
+        result = await asyncio.to_thread(describe, store, tenant, account_id)
+    except (v2.NotFound, Refused) as exc:
+        return failure(exc)
+    return answer({'ok':True, **result})
+
+
+@router.post('/accounts/{account_id}/pilot-scope/configure')
+async def pilot_scope_configure(request: Request, account_id: str):
+    from conversation_engine.pilot_scope import configure
+    def work(store, tenant, body):
+        if set(body) != {'config', 'expectedRevision', 'commandKey', 'actor', 'reason'}:
+            raise v2.BadRequest('exact configuration fields required')
+        return configure(store, tenant, account_id, body['config'], expected_revision=body['expectedRevision'],
+                         command_key=body['commandKey'], actor=body['actor'], reason=body['reason'])
+    return await _command(request, account_id, work)
+
+
+@router.post('/accounts/{account_id}/pilot-scope/status')
+async def pilot_scope_status(request: Request, account_id: str):
+    from conversation_engine.pilot_scope import set_status
+    def work(store, tenant, body):
+        if set(body) != {'status', 'expectedRevision', 'commandKey', 'actor', 'reason'}:
+            raise v2.BadRequest('exact status fields required')
+        return set_status(store, tenant, account_id, body['status'], expected_revision=body['expectedRevision'],
+                          command_key=body['commandKey'], actor=body['actor'], reason=body['reason'])
+    return await _command(request, account_id, work)
+
+
 @router.get('/accounts/{account_id}/drafts')
 async def drafts(request: Request, account_id: str):
     store, tenant, refusal = gate(request, account_id)

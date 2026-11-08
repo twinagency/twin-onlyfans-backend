@@ -100,6 +100,23 @@ class ModelLedger:
                 .order_by(OfEngineModelCall.seq))]
 
     # ---- reservation -----------------------------------------------------------
+    @staticmethod
+    def _pilot_guard(s, account, fan_id, binding_id, config):
+        from db.onlyfans_models import OfRuntime
+        from db.onlyfans_delivery_models import OfDeliveryPolicy
+        from .pilot_scope import current, require_model, policy_matches, _product_current
+        runtime = s.get(OfRuntime, account, with_for_update=True)
+        if runtime is None or runtime.binding_id != binding_id:
+            raise Refused('model call creator binding changed')
+        pilot, scope = current(s, runtime)
+        if pilot is None:
+            return
+        if (fan_id not in scope['fans'] or pilot.status not in ('configured', 'active')
+                or not policy_matches(s.get(OfDeliveryPolicy, account), scope, enabled=pilot.status == 'active')
+                or not _product_current(s, account, scope['product'])):
+            raise Refused('model call pilot scope changed')
+        require_model(scope, account, config)
+
     def committed(self, *, day, account=None):
         with Session(self.engine) as s:
             return self._committed(s, day, account)
@@ -120,6 +137,7 @@ class ModelLedger:
         with Session(self.engine) as s, s.begin():
             # One global budget lock: caps are checked and the reservation inserted atomically.
             s.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': _BUDGET_LOCK})
+            self._pilot_guard(s, account, fan_id, binding_id, cfg)
             now = self.clock()
             request = s.get(OfEngineRequest, (account, request_id), with_for_update=True)
             owner = s.get(OfEngineOwner, (account, fan_id))
@@ -164,7 +182,11 @@ class ModelLedger:
     def mark_calling(self, account, call_id, worker_id):
         """Last step before the wire: only the live lease holder may proceed, and the lease must not have lapsed."""
         with Session(self.engine) as s, s.begin():
+            # Lock the account before the call row, matching reserve and scope changes.
+            from db.onlyfans_models import OfRuntime
+            s.get(OfRuntime, account, with_for_update=True)
             row = self._mine(s, account, call_id, worker_id, 'reserved')
+            self._pilot_guard(s, account, row.fan_id, row.binding_id, self.config)
             now = self.clock()
             lapsed = row.lease_expires_at <= now
             if lapsed:

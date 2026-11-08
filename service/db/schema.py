@@ -75,7 +75,8 @@ ENGINE_GENERATIONS = '0121_engine_generations'
 FANSAPI_TRANSPORT = '0122_fansapi_transport'
 ENGINE_MODEL_CALLS = '0123_engine_model_calls'
 ENGINE_APPROVAL = '0124_engine_approval'
-HEAD = ENGINE_APPROVAL
+PLAN_C_SCOPE = '0125_plan_c_scope'
+HEAD = PLAN_C_SCOPE
 REVISION_RANK = {"0064_user_llm_keys": 64, BASELINE: 70, FOUNDATION: 71, DELIVERY: 72, EGRESS: 73, NATIVE: 74, BUDGET: 75, MEMORY: 76, MEDIA: 77, CONTROLS: 78, CONFIGURATION: 79, CAMPAIGNS:80, CONNECTION:81, CONTENT:82, VAULT:83, LEDGER:84, CREATOR_FACTS:85, VAULT_EDITS:86, ENROLLMENT:87, VAULT_MEDIA:88, OFFER_IMPORT:89, LAUNCH:90, LAUNCH_CONTROLS:91, LEDGER_HISTORY:92, LEDGER_MARKERS:93, PURCHASE_REPLY:94, CONTENT_FOLD_PENDING:95, VAULT_CONTINUATION:96, CONVERSATION_DEFAULT_OFF:92, RELEASE_CONTROLS:97, LEDGER_EXCLUSION:98}
 HERE = Path(__file__).resolve().parent
 REVISION_RANK[FAN_IDENTITY_SYNC] = 99
@@ -106,6 +107,7 @@ REVISION_RANK[ENGINE_GENERATIONS] = 121
 REVISION_RANK[FANSAPI_TRANSPORT] = 122
 REVISION_RANK[ENGINE_MODEL_CALLS] = 123
 REVISION_RANK[ENGINE_APPROVAL] = 124
+REVISION_RANK[PLAN_C_SCOPE] = 125
 
 
 class SchemaMismatch(RuntimeError):
@@ -395,6 +397,18 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             failures.append("missing engine approval protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing engine approval row security")
+    if expected_rank >= 125:
+        table, trigger = "of_engine_pilot_scope", "of_engine_pilot_scope_guard"
+        guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+            WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+            {"table": table, "trigger": trigger}).all()
+        if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 31
+                or guard[0][2] != trigger or guard[0][4] != "plpgsql"
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "c5c4c6b50b4ab842547d94c45c98c30fa50ca26e8d18fca8919eb17eb1a69b61"):
+            failures.append("missing pilot scope protection")
+        if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
+            failures.append("missing pilot scope row security")
     if expected_rank >= 95:
         marker = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.prosrc::text
             FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid

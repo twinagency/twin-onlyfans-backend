@@ -196,8 +196,14 @@ def list_drafts(store, tenant, account):
     views = approval.pending(store, tenant, account)
     out = []
     with Session(store.engine) as s, s.begin():
+        from .pilot_scope import current as current_pilot
+        runtime = store._runtime(s, tenant, account)
+        pilot, pilot_config = current_pilot(s, runtime)
+        allowed = set(pilot_config['fans']) if pilot is not None else None
         for view in views:
             fan_id = int(view['fanId'])
+            if allowed is not None and fan_id not in allowed:
+                continue
             state = s.get(OfConversationState, (account, fan_id))
             parts = view['parts']
             offers = [p for p in parts if p['action'] == 'offer']
@@ -251,6 +257,9 @@ def list_receipts(store, tenant, account):
             raise NotFound('scope unavailable') from None
         if runtime.binding_id != binding:
             raise NotFound('scope unavailable')
+        from .pilot_scope import current as current_pilot
+        pilot, pilot_config = current_pilot(s, runtime)
+        allowed = set(pilot_config['fans']) if pilot is not None else None
         approved = select(OfEngineApproval.request_id).where(
             OfEngineApproval.account_id == OfEngineDecision.account_id,
             OfEngineApproval.binding_id == binding, OfEngineApproval.fan_id == OfEngineDecision.fan_id,
@@ -270,6 +279,8 @@ def list_receipts(store, tenant, account):
             .order_by(OfTextIntent.updated_at.desc(), OfTextIntent.intent_id).limit(50)).all()
         result = []
         for intent, decision in rows:
+            if allowed is not None and intent.fan_id not in allowed:
+                continue
             try:
                 proof = json.loads(intent.receipt_json)
                 stamp = proof['occurred_at']
@@ -341,6 +352,13 @@ def conversation_command(store, tenant, account, fan_id, action, body):
     binding = _require_gated(store, tenant, account)
     with Session(store.engine) as s, s.begin():
         owner = s.get(OfEngineOwner, (account, fan_id))
+        from .pilot_scope import current as current_pilot, authorize
+        runtime = store._runtime(s, tenant, account)
+        pilot, pilot_config = current_pilot(s, runtime)
+        if pilot is not None:
+            if fan_id not in pilot_config['fans']:
+                raise NotFound('conversation unavailable')
+            authorize(pilot_config, actor, action)
         if s.get(Fan, (account, fan_id)) is None:
             raise NotFound('conversation unavailable')
         if owner is None or owner.binding_id != binding:
@@ -401,6 +419,12 @@ def unresolved(store, tenant, account):
         seen = _acknowledged(s, account, binding)
         pilot = {f for (f,) in s.execute(select(OfEngineOwner.fan_id).where(OfEngineOwner.account_id == account,
                                                                              OfEngineOwner.binding_id == binding))}
+        from .pilot_scope import current as current_pilot
+        runtime = store._runtime(s, tenant, account)
+        scope, pilot_config = current_pilot(s, runtime)
+        allowed = set(pilot_config['fans']) if scope is not None else None
+        if allowed is not None:
+            pilot &= allowed
 
         def conv(fan_id):
             state = s.get(OfConversationState, (account, fan_id))
@@ -409,6 +433,8 @@ def unresolved(store, tenant, account):
         # 1. Sends whose outcome is unknown. They are never resent and never called "not sent" without proof.
         for row in s.scalars(select(OfTextIntent).where(OfTextIntent.account_id == account, OfTextIntent.binding_id == binding,
                 OfTextIntent.status.in_(('dispatching', 'unknown'))).order_by(OfTextIntent.created_at).limit(200)):
+            if allowed is not None and row.fan_id not in allowed:
+                continue
             cid, revision = conv(row.fan_id)
             item_id = f'unknown_send:{row.intent_id}'
             note = seen.get(item_id)
@@ -451,6 +477,8 @@ def unresolved(store, tenant, account):
                 OfTextIntent.fan_id == OfEngineAccessEvidence.fan_id,
                 (OfEngineAccessEvidence.status != 'confirmed') | OfEngineAccessEvidence.applied.is_(False))
                 .order_by(OfEngineAccessEvidence.created_at).limit(200)):
+            if allowed is not None and row.fan_id not in allowed:
+                continue
             item_id = f'unreconciled_access:access-{row.evidence_key}'
             if item_id in seen:
                 continue
@@ -518,6 +546,8 @@ def unresolved(store, tenant, account):
         for request in s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account,
                 OfEngineRequest.binding_id == binding, OfEngineRequest.status.in_(('open', 'waiting_fan', 'waiting_provider')))
                 .order_by(OfEngineRequest.created_at).limit(200)):
+            if allowed is not None and request.fan_id not in allowed:
+                continue
             if request.request_id in shown_drafts:
                 continue
             cid, revision = conv(request.fan_id)
@@ -530,6 +560,8 @@ def unresolved(store, tenant, account):
                 OfEngineOwner.account_id == OfConversationState.account_id, OfEngineOwner.fan_id == OfConversationState.fan_id))
                 .where(OfConversationState.account_id == account, OfEngineOwner.binding_id == binding,
                        OfConversationState.mode == 'human_controlled').order_by(OfConversationState.updated_at).limit(200)):
+            if allowed is not None and state.fan_id not in allowed:
+                continue
             waiting = state.takeover_state == 'requested'
             items.append(_item('human_hold', state.fan_id, 'human',
                                'await_delivery_resolution_then_handback' if waiting else 'awaiting_handback',
@@ -540,6 +572,8 @@ def unresolved(store, tenant, account):
         for request in s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account,
                 OfEngineRequest.binding_id == binding,
                 OfEngineRequest.status.in_(('handover_pending', 'handover_accepted'))).order_by(OfEngineRequest.updated_at).limit(200)):
+            if allowed is not None and request.fan_id not in allowed:
+                continue
             cid, revision = conv(request.fan_id)
             items.append(_item('handover_request', request.request_id, 'human',
                                'accept_handover' if request.status == 'handover_pending' else 'complete_or_decline_with_evidence',
@@ -579,17 +613,22 @@ def reconcile(store, tenant, account, item_id, body):
                 raise NotFound('scope unavailable') from None
             if runtime.binding_id != binding:
                 raise Conflict('scope changed')
+            from .pilot_scope import current as current_pilot, authorize
+            pilot, pilot_config = current_pilot(s, runtime)
+            if pilot is not None:
+                authorize(pilot_config, actor, 'reconcile')
+            allowed = set(pilot_config['fans']) if pilot is not None else None
             outcome = 'recorded'
             if kind == 'unknown_send':
                 row = s.get(OfTextIntent, (account, ident))
-                if row is None or row.binding_id != binding or row.status not in ('dispatching', 'unknown'):
+                if row is None or row.binding_id != binding or row.status not in ('dispatching', 'unknown') or (allowed is not None and row.fan_id not in allowed):
                     raise NotFound('item unavailable')
                 outcome = 'evidence_recorded_hold_retained'
             elif kind in ('unlinked_transaction', 'unreconciled_access') and ident.startswith('access-'):
                 row = s.get(OfEngineAccessEvidence, (account, ident[len('access-'):]))
                 intent = s.get(OfTextIntent, (account, row.intent_id)) if row is not None else None
                 if (row is None or intent is None or intent.binding_id != binding or intent.fan_id != row.fan_id
-                        or (row.status == 'confirmed' and row.applied)):
+                        or (allowed is not None and row.fan_id not in allowed) or (row.status == 'confirmed' and row.applied)):
                     raise NotFound('item unavailable')
                 outcome = 'acknowledged'
             elif kind in ('unlinked_transaction', 'unreconciled_access'):
@@ -598,7 +637,7 @@ def reconcile(store, tenant, account, item_id, body):
                 from fans_api_adapter.evidence_scope import webhook_binding
                 owner = s.get(OfEngineOwner, (account, row.fan_id)) if row is not None else None
                 if (row is None or row.kind not in expected or webhook_binding(s, row) != binding
-                        or owner is None or owner.binding_id != binding):
+                        or owner is None or owner.binding_id != binding or (allowed is not None and row.fan_id not in allowed)):
                     raise NotFound('item unavailable')
                 if row.status == 'dismissed':
                     raise Conflict('item is already resolved')

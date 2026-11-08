@@ -348,14 +348,17 @@ def memory_lines_from(view, budget):
                 continue
             key, value, status = item.get('field'), item.get('value'), item.get('status')
             if (not isinstance(key, str) or not isinstance(value, str) or not value.strip()
-                    or status not in {'current', 'upcoming', 'uncertain', 'past'}
+                    or status not in {'current', 'upcoming', 'uncertain', 'past', 'cancelled', 'expired', 'superseded'}
                     or aliases.get(key, key) in overridden):
                 continue
             proof = next((e for e in reversed(item.get('evidence') or [])
                           if isinstance(e, dict) and isinstance(e.get('source'), str)), None)
             if proof is None:
                 continue
-            qualifier = status + (', potentially stale' if item.get('potentially_stale') else '')
+            state = {'cancelled': 'cancelled, historical; not active or action authority',
+                     'expired': 'expired, historical; outcome unconfirmed',
+                     'superseded': 'superseded, historical; not current fact'}.get(status, status)
+            qualifier = state + (', potentially stale' if item.get('potentially_stale') else '')
             for name in ('last_confirmed','event_start','event_end','review_at','active_until'):
                 if item.get(name):
                     qualifier += ', ' + name + ' ' + excerpt(item[name],25)
@@ -373,9 +376,9 @@ def memory_lines_from(view, budget):
             if context and isinstance(context[-1], dict) and context[-1].get('quote'):
                 qualifier += ', answer to: ' + excerpt(context[-1]['quote'],120)
             line = f"{key.replace('_', ' ')}: {excerpt(value,200)} ({qualifier}; source {excerpt(proof['source'],80)})"
-            core = status + (', conflicting evidence' if alternatives else '')
+            core = state + (', conflicting evidence' if alternatives else '')
             if item.get('potentially_stale'): core += ', potentially stale'
-            for name in ('last_confirmed','event_start','event_end','event_outcome'):
+            for name in ('last_confirmed','event_start','event_end','review_at','active_until','event_outcome'):
                 if item.get(name): core += ', ' + name + ' ' + excerpt(item[name],25)
             essential[line] = f"{key.replace('_', ' ')}: {excerpt(value,200)} ({core}; source {excerpt(proof['source'],80)})"
             lines.append(line)

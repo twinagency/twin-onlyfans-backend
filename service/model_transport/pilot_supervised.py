@@ -262,7 +262,7 @@ class SupervisedPilot:
         with Session(store.engine) as s:
             runtime = store._runtime(s, self.tenant, self.account, lock=False)
             pending_part = aliased(OfEngineDecision)
-            decisions = list(s.scalars(select(OfEngineDecision.decision_id).join(OfEngineApproval, and_(
+            query = select(OfEngineDecision.decision_id, OfEngineApproval.created_at, OfEngineApproval.request_id).join(OfEngineApproval, and_(
                 OfEngineApproval.account_id == OfEngineDecision.account_id,
                 OfEngineApproval.request_id == OfEngineDecision.request_id,
                 OfEngineApproval.generation == OfEngineDecision.generation)).where(
@@ -275,11 +275,15 @@ class SupervisedPilot:
                     pending_part.generation == OfEngineApproval.generation,
                     pending_part.status.in_(('ready','queued'))).exists(),
                 OfEngineApproval.expires_at > utcnow()).order_by(OfEngineApproval.created_at, OfEngineApproval.request_id)
-                .offset(self.send_cursor.get('offset', 0)).limit(limit)))
-            if decisions:
-                self.send_cursor['offset'] = self.send_cursor.get('offset', 0) + len(decisions)
-            else:
+            cursor = self.send_cursor.get('last')
+            page = query.where(tuple_(OfEngineApproval.created_at, OfEngineApproval.request_id) > tuple_(*cursor)) if cursor else query
+            rows = s.execute(page.limit(limit)).all()
+            if not rows and cursor:
                 self.send_cursor.clear()
+                rows = s.execute(query.limit(limit)).all()
+            if rows:
+                self.send_cursor['last'] = (rows[-1][1], rows[-1][2])
+            decisions = [row[0] for row in rows]
         dispatched = []
         for decision in decisions:
             self.validate()

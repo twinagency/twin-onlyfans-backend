@@ -110,7 +110,37 @@ def test_autonomous_photo_receipt_unlock_and_finance_remain_distinct(supervised)
         assert len(access)==1 and access[0].status=='confirmed' and access[0].applied
         evidence = list(s.scalars(select(OfFansEvidence)))
         assert any(e.kind=='unlock' and e.status=='applied' for e in evidence)
-        assert any(e.kind=='transaction' and e.status=='held' for e in evidence)
+        assert any(e.kind=='transaction' and e.status=='pending' and e.reason=='unlinked_transaction' for e in evidence)
+        assert list(s.scalars(select(Transaction))) == []
     from conversation_engine.operator_v2 import list_receipts
     assert list_receipts(world.store,TENANT,ACCOUNT,ACTOR)[0]['messageId']=='7001'
     assert len(world.fans.posts)==1
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_other_fan_quarantine_does_not_consult_legacy_policy(supervised, monkeypatch):
+    from db.onlyfans_models import OfIngress
+    from onlyfans_runtime.text_delivery import TextAuthority
+    from test_engine_real_worker_pg import FAN2
+    world, _, _, _, pilot = supervised
+    stage(pilot,910,fan=FAN2)
+    with Session(world.database[1]) as s, s.begin():
+        row = s.scalar(select(OfIngress).where(OfIngress.account_id==ACCOUNT,OfIngress.fan_id==FAN2))
+        row.status = 'quarantined'
+    def legacy(*args,**kwargs): raise AssertionError('engine called legacy Moxy policy')
+    monkeypatch.setattr(TextAuthority,'_verified_single_fan_pilot',legacy)
+    stage(pilot,911,fan=FAN)
+    pilot.tick()
+    assert len(world.fans.posts)==1 and '/chats/'+str(FAN)+'/' in world.fans.posts[0]['path']
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_global_journey_identity_and_limits_cannot_change_pilot_context(supervised):
+    from conversation_engine.journey import JourneyConfig, configure_journey, identity_line_for, scoped_config
+    world, _, _, _, pilot = supervised
+    configure_journey(JourneyConfig(identity_line='I am a human.',limit_terms=('hello',)))
+    try:
+        with Session(world.database[1]) as s:
+            assert identity_line_for(ACCOUNT,s=s) is None
+            assert scoped_config(s,ACCOUNT).limit_terms == ()
+        stage(pilot,912,'hello')
+        assert pilot.tick()['dispatched']==['accepted']
+    finally: configure_journey(JourneyConfig())

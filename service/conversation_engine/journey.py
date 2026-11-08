@@ -77,9 +77,18 @@ def journey_config():
     return _CONFIG
 
 
+def scoped_config(s, account, config=None):
+    if s is not None:
+        from db.onlyfans_engine_models import OfEnginePilotScope
+        if s.scalar(select(OfEnginePilotScope.scope_id).where(OfEnginePilotScope.account_id == account)) is not None:
+            profile = active_profile(account, session=s)
+            return JourneyConfig(identity_line=profile.role_statement or None, limit_terms=profile.limit_terms)
+    return config or _CONFIG
+
+
 def identity_line_for(account, config=None, *, s=None):
     """The APPROVED identity wording for this account: explicit journey config first, then the creator profile."""
-    config = config or _CONFIG
+    config = scoped_config(s, account, config)
     if config.identity_line and config.identity_line.strip():
         return config.identity_line.strip()
     profile = active_profile(account, session=s)
@@ -244,7 +253,7 @@ def decide(s, runtime, owner, message, config=None):
     ('refusal' temporary or 'sales_optout' explicit), flags: operator flags to raise,
     no_promise: the reply must not promise anything.
     """
-    config = config or _CONFIG
+    config = scoped_config(s, runtime.account_id, config)
     found = signals(message.body, config)
     verdict = {'signals': sorted(found), 'human': None, 'pause': None, 'flags': [], 'no_promise': False}
     if 'platform_banned' in found:
@@ -285,7 +294,7 @@ def journey_context(s, runtime, owner, request, message):
     """Facts for the model snapshot (engine hook 1). Empty for every account that is not 'fansapi'."""
     if not active(s, runtime.account_id) or owner is None:
         return {}
-    config = _CONFIG
+    config = scoped_config(s, runtime.account_id)
     verdict = decide(s, runtime, owner, message, config)
     ctx = {'signals': verdict['signals']}
     if verdict['human']:
@@ -432,11 +441,12 @@ class JourneyService:
         off-platform pause, or a pause whose reason is not a recognised temporary refusal. This runs on an inbound
         message only: it never creates outreach, and the new offer still needs the operator's approval.
         """
-        hours = self.config.temporary_pause_reopen_hours
-        if hours is None:
-            return False
         with Session(self.db) as s, s.begin():
             self.store._runtime(s, tenant, account)
+            config = scoped_config(s, account, self.config)
+            hours = config.temporary_pause_reopen_hours
+            if hours is None:
+                return False
             owner = s.get(OfEngineOwner, (account, fan_id), with_for_update=True)
             message = s.get(Message, (account, fan_id, message_id))
             if (owner is None or owner.sales_mode != 'paused' or owner.sales_source_message_id is None
@@ -445,7 +455,7 @@ class JourneyService:
             source = s.get(Message, (account, fan_id, owner.sales_source_message_id))
             if source is None or source.direction != 'in' or source.message_id == message_id:
                 return False
-            found = signals(source.body, self.config)
+            found = signals(source.body, config)
             if 'refusal' not in found or found & {'sales_optout', 'offplatform', 'meetup', 'limit'}:
                 return False
             if message.created_at - source.created_at < timedelta(hours=hours):
@@ -481,6 +491,7 @@ class JourneyService:
         request_id = None
         with Session(self.db) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
+            target = scoped_config(s, account, self.config).handover_target
             owner = s.get(OfEngineOwner, (account, fan_id))
             if owner is None or owner.binding_id != runtime.binding_id:
                 raise Refused('engine owner is unavailable')
@@ -494,14 +505,14 @@ class JourneyService:
                       origin='detector', scope='all')
         if request_id is not None and self.engine_service is not None:
             try:
-                self.engine_service.request_handover(tenant, account, request_id, target=self.config.handover_target)
+                self.engine_service.request_handover(tenant, account, request_id, target=target)
             except Refused:
                 pass  # already terminal or already handed over
         elif request_id is not None:
             with Session(self.db) as s, s.begin():
                 request = s.get(OfEngineRequest, (account, request_id), with_for_update=True)
                 if request.status in {'open', 'waiting_fan', 'waiting_provider'}:
-                    request.status, request.handover_target = 'handover_pending', self.config.handover_target
+                    request.status, request.handover_target = 'handover_pending', target
                     request.next_step, request.updated_at = 'await_handover_acceptance', utcnow()
                     request.revision += 1
         self._takeover(tenant, account, fan_id, reason, message_id)

@@ -131,7 +131,9 @@ class RealConversationWorker:
             self.engine.select_simulated(tenant, account, fan_id, source_message_id=message_id)
         except Refused as exc:
             return {'outcome': 'not_ready', 'detail': str(exc)}
-        config = journey_config()
+        from .journey import scoped_config
+        with Session(self.engine.engine) as s:
+            config = scoped_config(s, account)
         if config.auto_backfill and self.backfill is not None:
             with Session(self.engine.engine) as s:
                 waiting = not backfill_complete(s, account, fan_id)

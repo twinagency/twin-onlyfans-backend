@@ -403,10 +403,20 @@ class TextAuthority:
             quarantined = select(OfIngress.event_key).where(
                 OfIngress.account_id == runtime.account_id, OfIngress.status == "quarantined")
             if s.scalar(quarantined.limit(1)) is not None:
-                if not self._verified_single_fan_pilot(s, runtime, fan, origin):
+                # Engine isolation uses verified fan/binding identity, never Moxy
+                # ownership. Unknown recipients/bindings remain account-wide holds.
+                if not engine_action and not self._verified_single_fan_pilot(s, runtime, fan, origin):
+                    return "history_quarantined"
+                if fan is None:
                     return "history_quarantined"
                 recipient_conflict = quarantined.where(
                     OfIngress.fan_id.is_(None) | (OfIngress.fan_id == fan.fan_id))
+                if engine_action:
+                    known_fan = select(Fan.fan_id).where(Fan.account_id == runtime.account_id)
+                    recipient_conflict = quarantined.where(
+                        OfIngress.fan_id.is_(None) | (OfIngress.fan_id == fan.fan_id)
+                        | OfIngress.binding_id.is_(None) | (OfIngress.binding_id != runtime.binding_id)
+                        | ~OfIngress.fan_id.in_(known_fan))
                 if s.scalar(recipient_conflict.limit(1)) is not None:
                     return "history_quarantined"
         if engine_action:

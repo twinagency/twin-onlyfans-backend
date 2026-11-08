@@ -316,13 +316,26 @@ def memory_lines_from(view, budget):
     if not isinstance(view, dict) or view.get('state') != 'current':
         return (), (), False
     memory = view.get('memory') or {}
-    lines = []
+    lines, essential = [], {}
+    clipped = False
+    def excerpt(value, maximum):
+        nonlocal clipped
+        text = str(value)
+        if len(text) > maximum:
+            clipped = True
+            return text[:max(0,maximum-3)] + '...'
+        return text
+    clears = {key for key, item in (memory.get('overrides') or {}).items()
+              if isinstance(item, dict) and item.get('operation') == 'clear'}
+    if clears:
+        lines.append('Operator-cleared fields (do not reuse older statements): ' +
+                     ', '.join(_FACT_LABELS.get(key, key.replace('_',' ')) for key in sorted(clears)))
     for key, item in sorted((memory.get('facts') or {}).items()):
-        if isinstance(item, dict) and item.get('value'):
-            lines.append(f"{_FACT_LABELS.get(key, key)}: {str(item['value'])[:80]}")
+        if key not in clears and isinstance(item, dict) and item.get('value'):
+            lines.append(f"{_FACT_LABELS.get(key, key)}: {excerpt(item['value'],80)}")
     for key, value in sorted((memory.get('summaries') or {}).items()):
         if value:
-            lines.append(f"{key.replace('_', ' ')}: {str(value)[:200]}")
+            lines.append(f"{key.replace('_', ' ')}: {excerpt(value,200)}")
     learned = memory.get('learnedProfile')
     if isinstance(learned, dict):
         overridden = set(memory.get('overrides') or {})
@@ -345,26 +358,43 @@ def memory_lines_from(view, budget):
             qualifier = status + (', potentially stale' if item.get('potentially_stale') else '')
             for name in ('last_confirmed','event_start','event_end','review_at','active_until'):
                 if item.get(name):
-                    qualifier += ', ' + name + ' ' + str(item[name])[:25]
+                    qualifier += ', ' + name + ' ' + excerpt(item[name],25)
             if proof.get('at'):
-                qualifier += ', source_at ' + str(proof['at'])[:25]
+                qualifier += ', source_at ' + excerpt(proof['at'],25)
             if proof.get('quote'):
-                qualifier += ', source_quote ' + str(proof['quote'])[:80]
+                qualifier += ', source_quote ' + excerpt(proof['quote'],80)
             alternatives = item.get('alternatives') or []
+            if len(alternatives)>3: clipped=True
             if alternatives:
-                qualifier += ', conflicting evidence: ' + ' / '.join(str(v)[:60] for v in alternatives[:3])
+                qualifier += ', conflicting evidence: ' + ' / '.join(excerpt(v,60) for v in alternatives[:3])
             if item.get('event_outcome') == 'unconfirmed':
                 qualifier += ', outcome unconfirmed'
             context = item.get('contextEvidence') or []
             if context and isinstance(context[-1], dict) and context[-1].get('quote'):
-                qualifier += ', answer to: ' + str(context[-1]['quote'])[:120]
-            lines.append(f"{key.replace('_', ' ')}: {value[:200]} ({qualifier}; source {proof['source'][:80]})")
-    bounded, size = [], 0
+                qualifier += ', answer to: ' + excerpt(context[-1]['quote'],120)
+            line = f"{key.replace('_', ' ')}: {excerpt(value,200)} ({qualifier}; source {excerpt(proof['source'],80)})"
+            core = status + (', conflicting evidence' if alternatives else '')
+            if item.get('potentially_stale'): core += ', potentially stale'
+            for name in ('last_confirmed','event_start','event_end','event_outcome'):
+                if item.get(name): core += ', ' + name + ' ' + excerpt(item[name],25)
+            essential[line] = f"{key.replace('_', ' ')}: {excerpt(value,200)} ({core}; source {excerpt(proof['source'],80)})"
+            lines.append(line)
+    notice = 'Some memory details omitted by budget; retain uncertainty and do not infer absence.'[:max(0,budget.memory_chars)]
+    limit = max(0,budget.memory_chars-len(notice)-2)
+    bounded, size, omitted = [], 0, clipped
     for line in lines:
-        if size + len(line) > budget.memory_chars:
-            break
+        cost = len(line) + (2 if bounded else 0)
+        if size + cost > limit and line in essential:
+            line = essential[line]
+            cost = len(line) + (2 if bounded else 0)
+            omitted = True
+        if size + cost > limit:
+            omitted = True
+            continue
         bounded.append(line)
-        size += len(line)
+        size += cost
+    if omitted and notice:
+        bounded.append(notice)
     excerpts = tuple(str(i.get('excerpt', ''))[:160] for i in (memory.get('interactions') or [])[:budget.memory_excerpts] if i.get('excerpt'))
     return tuple(bounded), excerpts, True
 

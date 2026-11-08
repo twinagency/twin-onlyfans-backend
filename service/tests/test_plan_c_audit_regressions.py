@@ -43,7 +43,9 @@ def test_selected_learned_memories_reach_rendered_writer_without_metadata():
 def test_manual_clear_and_correction_override_learned_location():
     base={'learnedProfile':{'memories':[{'field':'location','value':'Oldtown','subject':'fan','status':'current',
           'evidence':[{'source':'msg:7'}]}]},'overrides':{'home_city':{'operation':'clear'}}}
-    assert not build_context(snapshot(memory={'state':'current','memory':base}),profile()).memory_lines
+    cleared=build_context(snapshot(memory={'state':'current','memory':base}),profile()).memory_lines
+    assert 'Oldtown' not in str(cleared) and 'Operator-cleared' in str(cleared)
+    base['overrides']['home_city']['operation']='set'
     base['facts']={'home_city':{'value':'Newtown','source':'operator'}}
     lines=build_context(snapshot(memory={'state':'current','memory':base}),profile()).memory_lines
     assert 'Newtown' in str(lines) and 'Oldtown' not in str(lines)
@@ -271,3 +273,101 @@ def test_malformed_review_backlog_does_not_hide_the_other_fan(supervised):
         scope,config=pilot_scope.require(s,runtime)
         assert review_pending(s,runtime,scope,config,FAN)
         assert not review_pending(s,runtime,scope,config,102)
+
+
+def test_dense_learned_memory_keeps_essential_fact_dates_and_uncertainty():
+    item={'field':'travel','value':'trip to Rome '+'x'*175,'subject':'fan','status':'uncertain',
+        'event_start':'2026-12-05','event_end':'2026-12-10','last_confirmed':'2026-11-08',
+        'review_at':'2026-11-09','active_until':'2026-12-10','potentially_stale':True,
+        'alternatives':['a'*150,'b'*150,'c'*150],
+        'evidence':[{'source':'source-'+'s'*100,'at':'2026-11-08','quote':'q'*200}],
+        'contextEvidence':[{'quote':'w'*200}]}
+    view={'state':'current','memory':{'learnedProfile':{'memories':[item]}}}
+    lines=build_context(snapshot(memory=view),profile()).memory_lines
+    rendered='; '.join(lines)
+    for value in ['trip to Rome','2026-12-05','2026-12-10','uncertain','conflicting','omitted']:
+        assert value in rendered
+    assert len(rendered)<=PromptBudget().memory_chars
+
+
+@pytest.mark.parametrize('supervised',['autonomous'],indirect=True)
+def test_stop_and_greeting_after_dispatch_grant_cannot_reach_provider(supervised,monkeypatch):
+    from onlyfans_runtime.text_delivery import TextAuthority
+    w, _, _, _, pilot=supervised
+    staged=stage(pilot,1600,'hello')
+    info=staged['approval']
+    approval.authorize_automatic(w.store,TENANT,ACCOUNT,info['requestId'],info['generation'],expected_version=info['version'])
+    original=TextAuthority.consume_dispatch
+    reached=[]
+    def interleaved(self,tenant,grant,**kw):
+        if not reached:
+            reached.append(grant)
+            for mid,body in [(1601,'stop messaging me'),(1602,'hello again')]:
+                w.store.record(TENANT,ACCOUNT,event(mid=mid,body=body))
+            w.store.drain(TENANT,ACCOUNT)
+        return original(self,tenant,grant,**kw)
+    monkeypatch.setattr(TextAuthority,'consume_dispatch',interleaved)
+    try:
+        pilot.worker.send_approved(TENANT,ACCOUNT,staged['decisionId'])
+    except Refused:
+        pass
+    assert reached, 'the existing dispatch-grant boundary must be reached'
+    assert w.fans.posts==[]
+
+
+def _render_memory_budget(memory, budget=PromptBudget(), history=()):
+    ctx=build_context(snapshot(memory={'state':'current','memory':memory},history=list(history)),profile(),budget=budget)
+    prompt=SpecPromptProvider(budget).render(ctx).messages[1]['content']
+    assert len('; '.join(ctx.memory_lines))<=budget.memory_chars
+    return ctx,prompt
+
+
+def _selected_memory(field,value,**extra):
+    return {'field':field,'value':value,'subject':'fan','status':'current',
+            'evidence':[{'source':'msg:'+field,'quote':value}],**extra}
+
+
+def test_multiple_competing_memories_keep_correction_and_report_omissions_in_prompt():
+    entries=[_selected_memory('location','Oldtown'),
+        _selected_memory('travel','trip to Rome',status='uncertain',event_start='2026-12-05',
+            event_end='2026-12-10',alternatives=['date unconfirmed'])]
+    entries += [_selected_memory('interest'+str(i),'long relevant detail '+str(i)+' '+('x'*170)) for i in range(6)]
+    memory={'facts':{'home_city':{'value':'Perth','source':'operator'}},
+        'overrides':{'home_city':{'operation':'set'}},'learnedProfile':{'memories':entries}}
+    ctx,prompt=_render_memory_budget(memory)
+    for value in ['Perth','trip to Rome','uncertain','2026-12-05','2026-12-10','omitted']:
+        assert value in prompt
+    assert 'Oldtown' not in prompt
+    assert any('interest'+str(i) not in '; '.join(ctx.memory_lines) for i in range(6))
+
+
+@pytest.mark.parametrize('operation',['clear','set'])
+def test_rendered_operator_correction_precedence_survives_old_chat(operation):
+    memory={'overrides':{'home_city':{'operation':operation}},
+        'learnedProfile':{'memories':[_selected_memory('location','Oldtown')]}}
+    if operation=='set':memory['facts']={'home_city':{'value':'Perth','source':'operator'}}
+    ctx,prompt=_render_memory_budget(memory,history=[{'id':1,'direction':'in','body':'I live in Oldtown'}])
+    assert 'Oldtown' in prompt.split('LATEST:')[0]  # retained history stays untrusted evidence
+    assert 'Oldtown' not in '; '.join(ctx.memory_lines)
+    if operation=='clear':assert 'Operator-cleared fields (do not reuse older statements): his city' in prompt
+    else:assert 'his city: Perth' in prompt and 'current corrections override older chat' in prompt
+
+
+def test_oversized_entry_does_not_hide_a_later_small_memory():
+    entries=[_selected_memory('travel','large '+'x'*400,status='uncertain',event_start='2026-12-05',
+        event_end='2026-12-10',last_confirmed='2026-11-08'),_selected_memory('hobbies','tennis',evidence=[{'source':'msg:2'}])]
+    ctx,prompt=_render_memory_budget({'learnedProfile':{'memories':entries}},PromptBudget(memory_chars=300))
+    assert 'tennis' in prompt and 'omitted' in prompt
+    assert 'large' not in '; '.join(ctx.memory_lines)
+
+
+def test_a_clipped_value_is_not_presented_as_complete_memory():
+    value='A long personal preference '+'x'*240
+    _,prompt=_render_memory_budget({'learnedProfile':{'memories':[_selected_memory('hobbies',value,evidence=[{'source':'msg:3'}])]}})
+    assert value not in prompt and '...' in prompt and 'omitted' in prompt
+
+
+def test_unavailable_memory_remains_explicit_in_rendered_prompt():
+    ctx=build_context(snapshot(memory={'state':'unavailable','reason':'source_unavailable'}),profile())
+    prompt=SpecPromptProvider().render(ctx).messages[1]['content']
+    assert not ctx.memory_available and 'WHAT SHE KNOWS ABOUT HIM: unavailable' in prompt

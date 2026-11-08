@@ -153,7 +153,7 @@ def planning_scope(s, runtime, fan_id, model, *, draft_only):
             or getattr(client, '_price_caps', None) != {model.config.primary_model: model.config.prices_for(model.config.primary_model)}):
         raise Refused('model transport does not match the pilot scope')
     policy = s.get(OfDeliveryPolicy, runtime.account_id)
-    if not policy_matches(policy, config, enabled=not draft_only) or not _product_current(s, runtime.account_id, config['product']):
+    if not policy_matches(policy, config, enabled=not draft_only):
         raise Refused('pilot delivery policy or product changed')
     return {'revision':row.revision, 'fingerprint':row.fingerprint, 'status':row.status,
             'creator_profile_hash':_fingerprint(config['creator_profile'])}

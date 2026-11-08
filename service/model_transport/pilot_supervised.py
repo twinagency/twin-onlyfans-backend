@@ -23,7 +23,7 @@ from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfEngineModelCall, OfEnginePilotScope, OfEngineRequest, OfFansConnection, OfFansWebhook, OfEnginePilotWebhookDigest
 from db.onlyfans_fans_intake_models import OfFansProjection
 from db.onlyfans_models import OfIngress
-from fans_api_adapter.events import FansEventIntake
+from fans_api_adapter.events import FansEventIntake, _parse as parse_event
 from fans_api_adapter.real_transport import build_real_transport, load_real_config, real_transport_enabled
 from fans_api_adapter.webhooks import verify_signature
 from onlyfans_runtime.store import Refused, utcnow
@@ -33,7 +33,7 @@ from .wiring import build_engine_service
 
 def _event_fan(raw):
     try:
-        body = json.loads(raw)
+        body = parse_event(raw)
         event, payload = body['event'], body['payload']
         if event == 'messages.received': value = payload['fromUser']['id']
         elif event == 'messages.sent': value = payload['toUser']['id']
@@ -85,7 +85,6 @@ class SupervisedPilot:
                     or frozenset(config['fans']) != self.allowed_fans
                     or self.worker.transport.allowed_chats != frozenset(map(str, self.allowed_fans))
                     or not policy_matches(policy, config, enabled=True)
-                    or not _product_current(s, self.account, config['product'])
                     or self.worker.engine.model.config != self.model_config
                     or journey.temporary_pause_reopen_hours is not None or journey.auto_backfill
                     or profile is None or profile.missing_inputs() or not profile.offers_permitted
@@ -103,9 +102,7 @@ class SupervisedPilot:
         store = self.worker.engine.store
         with Session(store.engine) as s, s.begin():
             runtime = store._runtime(s, self.tenant, self.account)
-            scope, _ = require(s, runtime, active=True)
-            if scope.revision != self.scope_revision:
-                raise Refused('pilot scope changed')
+            require(s, runtime)  # Retained intake evidence grants no model or send rights.
             active_epoch = self.worker.transport.client.epoch
             active = s.get(OfFansConnection, (self.account, active_epoch))
             if active is None or active.binding_id != runtime.binding_id or active.status != 'active':
@@ -136,17 +133,34 @@ class SupervisedPilot:
     def handle(self, raw, signature, event_key):
         if type(raw) is not bytes or len(raw) > 1_000_000 or not verify_signature(raw, signature, self.secret):
             raise Refused('webhook authentication failed')
-        self.validate()
+        # Stopping planning/sending must not discard receipts, corrections or
+        # financial observations. A stale worker may ingest only under the
+        # current durable account/fan binding; it cannot plan or dispatch.
+        with Session(self.worker.engine.store.engine) as s:
+            runtime = self.worker.engine.store._runtime(s, self.tenant, self.account, lock=False)
+            _, config = require(s, runtime)
+            allowed_fans = frozenset(config['fans'])
+        try:
+            self.validate()
+            planning = True
+        except Refused:
+            planning = False
         malformed = False
         try:
             _, fan = _event_fan(raw)
-            outside = fan is not None and fan not in self.allowed_fans
+            outside = fan is not None and fan not in allowed_fans
         except Refused:
             outside, malformed = True, True
         if outside:
             if self._record_outside_digest(raw, event_key, safety_hold=malformed):
                 return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
             return {'outcome':'outside_pilot_scope'}
+        if not planning:
+            result = self.worker.intake.accept(raw, signature, self.secret, event_key,
+                expected_tenant=self.tenant, expected_account=self.account)
+            if result.get('outcome') == 'quarantined':
+                self.worker.engine.fence_conflicted_sources(self.tenant, self.account)
+            return {**result, 'planning':'held'}
         result = self.worker.handle(self.tenant, self.account, raw_body=raw, signature=signature,
                                     secret=self.secret, event_key=event_key)
         self.validate()

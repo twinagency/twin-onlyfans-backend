@@ -112,11 +112,33 @@ def in_pilot_scope(account):
     return bool(set(_candidates(account))&pilot_accounts())
 
 
+def durable_pilot_state(account):
+    """A configured/stopped pilot still owns its account before any lazy fan owner exists."""
+    candidates = _candidates(account)
+    if not candidates:
+        return NOT_SELECTED
+    try:
+        from twin_bridge.coordination import store_target
+        from twin_bridge import store
+        target = store_target()
+        if not target:
+            return UNKNOWN
+        with store.readonly(target) as con:
+            if not store.has_table(con, 'of_engine_pilot_scope'):
+                return NOT_SELECTED
+            query = 'SELECT account_id FROM of_engine_pilot_scope WHERE scope_id=1 AND account_id IN (%s)' % ','.join('?' * len(candidates))
+            return SELECTED if con.execute(query, tuple(candidates)).fetchone() is not None else NOT_SELECTED
+    except Exception:
+        return UNKNOWN
+
+
 def refuse_engine_owned(account,purpose='other',fan_id=None):
     """Refuse a legacy write for an account/fan owned by the conversation engine.
     Fails closed on a failed lookup. The only pass for an owned fan is a manual
     operator send where every matching owner row is in mode 'human' (a verified
     human takeover read from the store, never assumed)."""
+    if durable_pilot_state(account) == SELECTED:
+        raise Refused('pilot_canonical_authority_required')
     est,modes=engine_owner_modes(account,fan_id)
     if est==SELECTED and not (purpose=='manual' and modes=={'human'}):
         raise Refused('engine_canonical_owner_required')
@@ -146,6 +168,7 @@ def job_fence_reason(account,kind,payload=None,*,state=None,engine_state=None):
     human deferral) are never fenced."""
     k=str(kind)
     if k not in MOXY_FENCED_KINDS:return None
+    if durable_pilot_state(account) == SELECTED:return 'pilot_canonical_authority_required'
     if k=='scheduled_send' and isinstance(payload,dict) and str(payload.get('send_purpose') or '')=='manual':return None
     st=state if state is not None else owner_state(account)
     if st==SELECTED:return 'moxy_canonical_owner_required'

@@ -58,14 +58,14 @@ def test_malformed_sql_fan_parser_is_total_and_does_not_abort_transaction(superv
         assert conn.execute(text('SELECT 1')).scalar() == 1
 
 @pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
-def test_photo_kind_change_fails_closed_before_send(supervised):
+def test_photo_kind_change_does_not_block_plain_chat(supervised):
     world, _, _, _, pilot = supervised
     stage(pilot, 902)
     config = pilot_scope.describe(world.store, TENANT, ACCOUNT)['config']
     with Session(world.database[1]) as s, s.begin():
         s.get(VaultItem, (ACCOUNT,config['product']['media_ids'][0])).kind = 'video'
-    with pytest.raises(Refused): pilot.tick()
-    assert world.fans.posts == []
+    assert pilot.tick()['dispatched'] == ['accepted']
+    assert world.fans.posts[0]['body'].get('price',0)==0
 
 def test_raw_newer_correction_blocks_dispatch_before_projection(supervised, monkeypatch):
     world, _, _, _, pilot = supervised
@@ -80,7 +80,8 @@ def test_raw_newer_correction_blocks_dispatch_before_projection(supervised, monk
     assert world.fans.posts == []
 
 @pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
-def test_autonomous_photo_receipt_unlock_and_finance_remain_distinct(supervised):
+@pytest.mark.parametrize('change_kind',[False,True])
+def test_autonomous_photo_receipt_unlock_and_finance_remain_distinct(supervised,change_kind):
     from conversation_engine.commerce import RealCatalogueCoverage, approve_catalogue_offer
     from db.onlyfans_fans_intake_models import OfFansEvidence
     world, env, _, _, pilot = supervised
@@ -96,6 +97,10 @@ def test_autonomous_photo_receipt_unlock_and_finance_remain_distinct(supervised)
     pilot = build_supervised_pilot(world.store,env,model_transport=httpx.MockTransport(respond),fans_transport=world.fans.transport)
     draft = stage(pilot,905,'I want to buy the photo')
     assert draft['outcome'] == 'awaiting_approval', draft
+    if change_kind:
+        with Session(world.database[1]) as s,s.begin():s.get(VaultItem,(ACCOUNT,11)).kind='video'
+        assert pilot.tick()['dispatched']==[] and world.fans.posts==[]
+        return
     assert pilot.tick()['dispatched'] == ['accepted']
     sent = world.fans.posts[0]['body']
     assert sent['price'] == 3.0 and sent['mediaFiles'] == ['11'] and sent['previews'] == []
@@ -144,3 +149,33 @@ def test_global_journey_identity_and_limits_cannot_change_pilot_context(supervis
         stage(pilot,912,'hello')
         assert pilot.tick()['dispatched']==['accepted']
     finally: configure_journey(JourneyConfig())
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_stopped_pilot_retains_incoming_evidence_without_model_or_sending(supervised):
+    from db.onlyfans_fans_intake_models import OfFansProjection
+    world, _, _, seen, pilot=supervised
+    state=pilot_scope.describe(world.store,TENANT,ACCOUNT)
+    pilot_scope.set_status(world.store,TENANT,ACCOUNT,'stopped',expected_revision=state['revision'],
+        command_key='e'*64,actor=ACTOR,reason='offline stop')
+    raw,headers=signed(inbound(920,'please correct this'),key='stopped-inbound')
+    result=pilot.handle(raw,headers['Signature'],headers['X-OFAPI-Idempotency-Key'])
+    assert result['planning']=='held'
+    with Session(world.database[1]) as s:
+        assert s.scalar(select(OfFansProjection).where(OfFansProjection.event_key=='stopped-inbound')).status=='applied'
+    assert seen==[] and world.fans.posts==[]
+    with pytest.raises(Refused):pilot.tick()
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_duplicate_json_keys_are_retained_as_a_safety_hold(supervised):
+    import hashlib,hmac
+    from test_engine_real_worker_pg import SECRET
+    from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
+    world,_,_,_,pilot=supervised
+    stage(pilot,921)
+    raw=b'{"event":"messages.received","account_id":"acct_real_worker","payload":{"fromUser":{"id":101},"fromUser":{"id":102}}}'
+    signature=hmac.new(SECRET,raw,hashlib.sha256).hexdigest()
+    pilot.handle(raw,signature,'ambiguous-json')
+    pilot.tick()
+    with Session(world.database[1]) as s:
+        assert s.scalar(select(OfEnginePilotWebhookDigest).where(OfEnginePilotWebhookDigest.event_key=='ambiguous-json')).safety_hold
+    assert world.fans.posts==[]

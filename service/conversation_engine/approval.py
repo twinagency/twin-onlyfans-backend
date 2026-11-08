@@ -213,7 +213,7 @@ def evaluate(s, runtime, decision, *, now=None, phase='send', need_approval=True
         if (fan_id not in pilot_config['fans'] or pilot.status == 'stopped'
                 or phase == 'send' and pilot.status != 'active'
                 or not policy_matches(policy, pilot_config, enabled=pilot.status == 'active')
-                or not _product_current(s, account, pilot_config['product'])):
+                or decision.action == 'offer' and not _product_current(s, account, pilot_config['product'])):
             return 'pilot_scope_unavailable', None, None, None
     from fans_api_adapter.real_transport import real_transport_enabled
     if phase == 'send':   # a draft may be prepared while sending is stopped; nothing can go out until these hold

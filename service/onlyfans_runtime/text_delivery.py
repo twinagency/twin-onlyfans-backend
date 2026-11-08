@@ -543,6 +543,14 @@ class TextAuthority:
             from conversation_engine.delivery import prepare as prepare_engine_decision
             engine_decision = prepare_engine_decision(s, runtime, fan_id, origin, engine_decision_id, body,
                                                       catalog_item_id, quoted_price_cents)
+            if origin == "manual" and policy is not None and policy.transport_kind == "fansapi":
+                from conversation_engine.pilot_scope import current as current_pilot
+                pilot, _ = current_pilot(s, runtime)
+                if pilot is not None:
+                    # The Fans API transport requires an engine decision. Refuse
+                    # unsupported manual work before it can reserve an attempt
+                    # and become a false unknown without ever reaching the wire.
+                    raise Refused('pilot manual transport is not qualified')
             if engine_decision is None and origin != "manual" and policy is not None and policy.transport_kind == "fansapi":
                 # A fansapi account has exactly one automated writer: the conversation engine. A campaign,
                 # engagement or legacy automated intent for any fan of it is a competing writer, even before the

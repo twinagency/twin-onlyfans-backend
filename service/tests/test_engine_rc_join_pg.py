@@ -42,12 +42,12 @@ def _revisions():
 
 
 def test_single_linear_head_and_declared_chain():
-    from db.schema import ENGINE_APPROVAL, ENGINE_GENERATIONS, ENGINE_MODEL_CALLS, FANS_INTAKE, FANSAPI_TRANSPORT, HEAD, REVISION_RANK
+    from db.schema import ENGINE_APPROVAL, ENGINE_GENERATIONS, ENGINE_MODEL_CALLS, FANS_INTAKE, FANSAPI_TRANSPORT, HEAD, PLAN_C_SCOPE, REVISION_RANK
     script = _revisions()
-    assert script.get_heads() == [HEAD] == [ENGINE_APPROVAL]
+    assert script.get_heads() == [HEAD] == [PLAN_C_SCOPE]
     chain = [r.revision for r in script.walk_revisions('base', HEAD)]
-    assert chain[:6] == ['0124_engine_approval', '0123_engine_model_calls', '0122_fansapi_transport', '0121_engine_generations', '0120_fans_intake', '0119_identity_independence']
-    assert [REVISION_RANK[v] for v in (FANS_INTAKE, ENGINE_GENERATIONS, FANSAPI_TRANSPORT, ENGINE_MODEL_CALLS, ENGINE_APPROVAL)] == [120, 121, 122, 123, 124]
+    assert chain[:7] == ['0125_plan_c_scope', '0124_engine_approval', '0123_engine_model_calls', '0122_fansapi_transport', '0121_engine_generations', '0120_fans_intake', '0119_identity_independence']
+    assert [REVISION_RANK[v] for v in (FANS_INTAKE, ENGINE_GENERATIONS, FANSAPI_TRANSPORT, ENGINE_MODEL_CALLS, ENGINE_APPROVAL, PLAN_C_SCOPE)] == [120, 121, 122, 123, 124, 125]
     # no fork anywhere above the live Moxy base (older history legitimately contains merge points)
     assert all(len(r.nextrev) <= 1 for r in script.walk_revisions('0111_moxy_owner', HEAD))
 

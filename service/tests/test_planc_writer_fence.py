@@ -161,3 +161,16 @@ def test_executor_engine_state_override_is_fail_closed(store):
     assert routing.job_fence_reason(OTHER, "ai_chatter", {}, engine_state=routing.UNKNOWN) == "engine_owner_lookup_failed"
     assert routing.job_fence_reason(OTHER, "ai_chatter", {}, engine_state=routing.SELECTED) == "engine_canonical_owner_required"
     assert routing.job_fence_reason(OTHER, "ai_chatter", {}, engine_state=routing.NOT_SELECTED) is None
+
+@pytest.mark.parametrize('name',sorted(WRITERS))
+@pytest.mark.parametrize('purpose',['other','manual'])
+def test_durable_scope_fences_legacy_writers_before_lazy_fan_selection(store,monkeypatch,name,purpose):
+    con=sqlite3.connect(store)
+    con.execute('DELETE FROM of_engine_owner')
+    con.execute('CREATE TABLE of_engine_pilot_scope (scope_id integer primary key, account_id text)')
+    con.execute('INSERT INTO of_engine_pilot_scope VALUES (1,?)',(PILOT,));con.commit();con.close()
+    monkeypatch.delenv(routing.PILOT_ENV,raising=False)
+    c,posts=client(PILOT)
+    with pytest.raises(Refused,match='pilot_canonical_authority_required'):WRITERS[name](c,OTHER_FAN,purpose)
+    assert posts==[]
+    assert routing.job_fence_reason(PILOT,'scheduled_send',{'send_purpose':'manual'})=='pilot_canonical_authority_required'

@@ -12,9 +12,29 @@ OLD_APPROVAL_GUARD = "CREATE OR REPLACE FUNCTION of_engine_approval_guard() RETU
 MODEL_GUARD = "CREATE OR REPLACE FUNCTION of_engine_model_call_guard() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'engine model call evidence is retained'; END IF;\n  IF ROW(NEW.account_id,NEW.call_id,NEW.request_id,NEW.generation,NEW.seq,NEW.chain_pos,NEW.chain_step,NEW.fan_id,NEW.binding_id,\n         NEW.owner_epoch,NEW.provider,NEW.model,NEW.prefixed,NEW.reserved_microusd,NEW.snapshot_sha256,NEW.prompt_sha256,NEW.cost_day,NEW.created_at,NEW.pilot_scope_revision,NEW.pilot_scope_fingerprint)\n     IS DISTINCT FROM ROW(OLD.account_id,OLD.call_id,OLD.request_id,OLD.generation,OLD.seq,OLD.chain_pos,OLD.chain_step,OLD.fan_id,OLD.binding_id,\n         OLD.owner_epoch,OLD.provider,OLD.model,OLD.prefixed,OLD.reserved_microusd,OLD.snapshot_sha256,OLD.prompt_sha256,OLD.cost_day,OLD.created_at,OLD.pilot_scope_revision,OLD.pilot_scope_fingerprint)\n     OR (OLD.status = 'settled' AND ROW(NEW.status,NEW.actual_microusd,NEW.usage_known,NEW.response_sha256) IS DISTINCT FROM ROW(OLD.status,OLD.actual_microusd,OLD.usage_known,OLD.response_sha256))\n     OR (OLD.status = 'released' AND NEW.status <> 'released')\n     OR (OLD.status = 'unknown' AND NEW.status NOT IN ('unknown','settled'))\n     OR (OLD.status = 'calling' AND NEW.status = 'reserved')\n  THEN RAISE EXCEPTION 'engine model call identity is immutable'; END IF;\n  RETURN NEW;\nEND $$"
 OLD_MODEL_GUARD = "CREATE OR REPLACE FUNCTION of_engine_model_call_guard() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n  IF TG_OP = 'DELETE' THEN RAISE EXCEPTION 'engine model call evidence is retained'; END IF;\n  IF ROW(NEW.account_id,NEW.call_id,NEW.request_id,NEW.generation,NEW.seq,NEW.chain_pos,NEW.chain_step,NEW.fan_id,NEW.binding_id,\n         NEW.owner_epoch,NEW.provider,NEW.model,NEW.prefixed,NEW.reserved_microusd,NEW.snapshot_sha256,NEW.prompt_sha256,NEW.cost_day,NEW.created_at)\n     IS DISTINCT FROM ROW(OLD.account_id,OLD.call_id,OLD.request_id,OLD.generation,OLD.seq,OLD.chain_pos,OLD.chain_step,OLD.fan_id,OLD.binding_id,\n         OLD.owner_epoch,OLD.provider,OLD.model,OLD.prefixed,OLD.reserved_microusd,OLD.snapshot_sha256,OLD.prompt_sha256,OLD.cost_day,OLD.created_at)\n     OR (OLD.status = 'settled' AND ROW(NEW.status,NEW.actual_microusd,NEW.usage_known,NEW.response_sha256) IS DISTINCT FROM ROW(OLD.status,OLD.actual_microusd,OLD.usage_known,OLD.response_sha256))\n     OR (OLD.status = 'released' AND NEW.status <> 'released')\n     OR (OLD.status = 'unknown' AND NEW.status NOT IN ('unknown','settled'))\n     OR (OLD.status = 'calling' AND NEW.status = 'reserved')\n  THEN RAISE EXCEPTION 'engine model call identity is immutable'; END IF;\n  RETURN NEW;\nEND $$"
 
+EVENT_FAN = """CREATE FUNCTION of_engine_pilot_event_fan(raw bytea, event_type text) RETURNS text
+LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE body jsonb; fan text;
+BEGIN
+  body := convert_from(raw, 'UTF8')::jsonb;
+  CASE event_type
+    WHEN 'messages.received' THEN fan := body #>> '{payload,fromUser,id}';
+    WHEN 'messages.sent' THEN fan := body #>> '{payload,toUser,id}';
+    WHEN 'messages.ppv.unlocked' THEN fan := body #>> '{payload,chat_id}';
+    WHEN 'subscriptions.new' THEN fan := body #>> '{payload,fan,id}';
+    WHEN 'transactions.new' THEN fan := COALESCE(body #>> '{payload,fan,id}', body #>> '{payload,user,id}');
+    WHEN 'chargebacks.new' THEN fan := body #>> '{payload,payment,user,id}';
+    ELSE RETURN NULL;
+  END CASE;
+  IF fan IS NULL OR fan !~ '^[1-9][0-9]{0,18}$' OR fan::numeric > 9223372036854775807 THEN RETURN NULL; END IF;
+  RETURN fan;
+EXCEPTION WHEN others THEN RETURN NULL;
+END $$"""
+
 DIGEST_TABLE = """CREATE TABLE of_engine_pilot_webhook_digest (
   account_id VARCHAR NOT NULL, epoch BIGINT NOT NULL, event_key VARCHAR(255) NOT NULL,
-  payload_sha256 VARCHAR(64) NOT NULL, received_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+  payload_sha256 VARCHAR(64) NOT NULL, safety_hold BOOLEAN NOT NULL DEFAULT false,
+  received_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
   PRIMARY KEY(account_id,epoch,event_key,payload_sha256),
   FOREIGN KEY(account_id,epoch) REFERENCES of_fans_connection(account_id,epoch) ON DELETE RESTRICT
 )"""
@@ -68,6 +88,7 @@ def upgrade():
     op.add_column('of_engine_model_call', sa.Column('pilot_scope_revision', sa.Integer(), nullable=True))
     op.add_column('of_engine_model_call', sa.Column('pilot_scope_fingerprint', sa.String(64), nullable=True))
     op.execute(MODEL_GUARD)
+    op.execute(EVENT_FAN)
     op.execute(DIGEST_TABLE)
     op.execute(DIGEST_GUARD)
     op.execute('CREATE TRIGGER of_engine_pilot_webhook_digest_guard BEFORE UPDATE OR DELETE ON of_engine_pilot_webhook_digest FOR EACH ROW EXECUTE FUNCTION of_engine_pilot_webhook_digest_guard()')
@@ -95,6 +116,7 @@ def downgrade():
     op.execute('DROP TRIGGER of_engine_pilot_webhook_digest_guard ON of_engine_pilot_webhook_digest')
     op.execute('DROP FUNCTION of_engine_pilot_webhook_digest_guard()')
     op.drop_table('of_engine_pilot_webhook_digest')
+    op.execute('DROP FUNCTION of_engine_pilot_event_fan(bytea,text)')
     op.execute(OLD_MODEL_GUARD)
     op.execute(OLD_APPROVAL_GUARD)
     op.drop_constraint('ck_of_engine_approval_authorization_mode', 'of_engine_approval', type_='check')

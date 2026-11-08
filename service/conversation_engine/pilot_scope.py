@@ -13,7 +13,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import CatalogItem
+from db.models import CatalogItem, VaultItem
 from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEnginePilotScope, OfFansConnection
 from onlyfans_runtime.launch_operations_models import OfLaunchCommand
@@ -47,10 +47,19 @@ def _exact(obj, keys):
 
 
 def validate(config):
-    _exact(config, ('fans', 'product', 'operator', 'model', 'limits', 'qualification', 'authorization_mode'))
+    _exact(config, ('fans', 'product', 'operator', 'model', 'limits', 'qualification', 'authorization_mode', 'creator_profile'))
     if config['authorization_mode'] not in ('supervised', 'autonomous'):
         raise Refused('explicit pilot authorization mode is required')
+    from .writer_context import CreatorProfile, profile_data
+    try:
+        profile = CreatorProfile.from_dict(config['creator_profile'])
+    except (KeyError, ValueError, TypeError):
+        raise Refused('invalid pilot creator profile') from None
+    if profile.missing_inputs():
+        raise Refused('pilot creator boundaries are required')
     fans = _ids(config['fans'])
+    if len(fans) != 2:
+        raise Refused('this pilot requires exactly two verified fan IDs')
     product, operator, model, limits = config['product'], config['operator'], config['model'], config['limits']
     qualification = config['qualification']
     _exact(qualification, ('mode', 'reference'))
@@ -93,7 +102,7 @@ def validate(config):
     requests = _integer(limits['provider_requests'], 1, 10**7)
     credits = _integer(limits['provider_credit_budget'], 1, 10**12)
     per_request = _integer(limits['provider_credits_per_request'], 1, credits)
-    return {'authorization_mode':config['authorization_mode'], 'qualification':{'mode':qualification['mode'], 'reference':qualification['reference']},
+    return {'creator_profile':profile_data(profile), 'authorization_mode':config['authorization_mode'], 'qualification':{'mode':qualification['mode'], 'reference':qualification['reference']},
             'fans':fans, 'product':{'id':item, 'price_cents':price, 'media_ids':media, 'preview_ids':preview},
             'operator':{'actor':actor, 'name':name, 'permissions':sorted(permissions)},
             'model':{'provider':'openrouter', 'primary':model['primary'], 'upstream':model['upstream'],
@@ -135,6 +144,7 @@ def planning_scope(s, runtime, fan_id, model, *, draft_only):
             or row.status != ('configured' if draft_only else 'active')):
         raise Refused('pilot planning scope is unavailable')
     require_model(config, runtime.account_id, model.config)
+    require_profile(config, model.profiles.get(runtime.account_id))
     client = model.client
     if config['qualification']['mode'] == 'fixture' and not getattr(client, 'fixture_transport', lambda: False)():
         raise Refused('fixture scope requires a simulated model transport')
@@ -145,7 +155,14 @@ def planning_scope(s, runtime, fan_id, model, *, draft_only):
     policy = s.get(OfDeliveryPolicy, runtime.account_id)
     if not policy_matches(policy, config, enabled=not draft_only) or not _product_current(s, runtime.account_id, config['product']):
         raise Refused('pilot delivery policy or product changed')
-    return {'revision':row.revision, 'fingerprint':row.fingerprint, 'status':row.status}
+    return {'revision':row.revision, 'fingerprint':row.fingerprint, 'status':row.status,
+            'creator_profile_hash':_fingerprint(config['creator_profile'])}
+
+
+def require_profile(config, profile):
+    from .writer_context import profile_data
+    if profile_data(profile) != config['creator_profile']:
+        raise Refused('creator profile does not match the durable pilot scope')
 
 
 def _product_current(s, account, product):
@@ -155,8 +172,10 @@ def _product_current(s, account, product):
         previews = json.loads(item.preview_media_ids)
         if type(media) is not list or type(previews) is not list:
             return False
+        photo = s.get(VaultItem, (account, product['media_ids'][0]))
         return (item.account_id == account and item.enabled is True and item.script_id is None
-                and item.price_cents == product['price_cents']
+                and item.kind in ('image', 'photo') and photo is not None and photo.kind in ('image', 'photo')
+                and photo.removed_at is None and item.price_cents == product['price_cents']
                 and tuple(map(str, media)) == tuple(map(str, product['media_ids']))
                 and tuple(map(str, previews)) == tuple(map(str, product['preview_ids'])))
     except (AttributeError, TypeError, ValueError):
@@ -205,7 +224,7 @@ def delivery_block(s, runtime, fan, *, commercial=False):
     if pilot is None:
         return None
     from db.onlyfans_fans_intake_models import OfFansEvidence, OfFansLink, OfFansProjection
-    from db.onlyfans_engine_models import OfFansWebhook
+    from db.onlyfans_engine_models import OfFansWebhook, OfEnginePilotWebhookDigest
     conn = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == runtime.account_id,
         OfFansConnection.binding_id == runtime.binding_id, OfFansConnection.status == 'active'))
     link = s.get(OfFansLink, (runtime.account_id, conn.provider_creator_id)) if conn is not None else None
@@ -220,11 +239,12 @@ def delivery_block(s, runtime, fan, *, commercial=False):
         (OfFansWebhook.event_key == OfFansProjection.event_key)).join(OfFansConnection,
         (OfFansConnection.account_id == OfFansWebhook.account_id) &
         (OfFansConnection.epoch == OfFansWebhook.epoch)).where(
-        OfFansProjection.account_id == runtime.account_id, OfFansProjection.status == 'pending',
+        OfFansProjection.account_id == runtime.account_id, OfFansProjection.status.in_(('pending','held')),
         OfFansConnection.binding_id == runtime.binding_id,
         or_(OfFansWebhook.event_type.in_(('accounts.disconnected','accounts.session_expired','accounts.authentication_failed')),
-            (OfFansWebhook.event_type == 'messages.sent') &
-            or_(sent_fan == str(fan), sent_fan.is_(None), ~sent_fan.op('~')('^[1-9][0-9]{0,18}$')))).limit(1))
+            (OfFansWebhook.event_type.in_(('messages.sent','messages.received') +
+                (('messages.ppv.unlocked','transactions.new','chargebacks.new') if commercial else ()))) &
+            or_(sent_fan == str(fan), sent_fan.is_(None)))).limit(1))
     human = s.scalar(select(OfFansEvidence.evidence_id).where(
         OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan,
         OfFansEvidence.kind == 'human_sent', OfFansEvidence.status.in_(('pending','held'))).limit(1))
@@ -232,7 +252,12 @@ def delivery_block(s, runtime, fan, *, commercial=False):
         OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan,
         OfFansEvidence.kind.in_(('unlock','transaction','chargeback')),
         OfFansEvidence.status.in_(('pending','held'))).limit(1)) if commercial else None
-    return 'pilot_evidence_pending' if pending is not None or human is not None or money is not None else None
+    malformed = s.scalar(select(OfEnginePilotWebhookDigest.event_key).join(OfFansConnection,
+        (OfFansConnection.account_id == OfEnginePilotWebhookDigest.account_id) &
+        (OfFansConnection.epoch == OfEnginePilotWebhookDigest.epoch)).where(
+        OfEnginePilotWebhookDigest.account_id == runtime.account_id, OfFansConnection.binding_id == runtime.binding_id,
+        OfEnginePilotWebhookDigest.safety_hold.is_(True)).limit(1))
+    return 'pilot_evidence_pending' if pending is not None or human is not None or money is not None or malformed is not None else None
 
 
 def policy_matches(policy, config, *, enabled):

@@ -32,12 +32,12 @@ def bind(s, runtime, decision, source, view, fingerprint, offer_fingerprint):
         source_sha256=sha256(source.body.encode('utf-8')).hexdigest(), status=view['state'], fingerprint=fingerprint, offer_fingerprint=offer_fingerprint, created_at=utcnow()))
 
 
-def references_fingerprint(account, policy, offer_view, catalogue_view):
+def references_fingerprint(account, policy, offer_view, catalogue_view, *, s=None):
     """Bind real-pilot context to the creator profile used when the draft was made."""
     data = {'offers': offer_view, 'catalogue': catalogue_view}
     if policy is not None and policy.transport_kind == 'fansapi':
         from .writer_context import CreatorProfile, active_profile
-        profile = active_profile(account)
+        profile = active_profile(account, session=s)
         if profile is not None and type(profile) is not CreatorProfile:
             from onlyfans_runtime.store import Refused
             raise Refused('creator profile is unavailable')
@@ -64,6 +64,6 @@ def current(s, runtime, decision):
     policy = s.get(OfDeliveryPolicy, runtime.account_id)
     if policy is None:
         return False
-    offer_fingerprint = references_fingerprint(runtime.account_id, policy, offer_view, catalogue_view)
+    offer_fingerprint = references_fingerprint(runtime.account_id, policy, offer_view, catalogue_view, s=s)
     return (binding.status == view['state'] and binding.fingerprint == fingerprint
             and binding.offer_fingerprint == offer_fingerprint)

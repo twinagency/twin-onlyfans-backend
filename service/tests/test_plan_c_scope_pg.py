@@ -14,7 +14,7 @@ from db.onlyfans_delivery_models import OfDeliveryPolicy
 from db.onlyfans_engine_models import OfEnginePilotScope
 from db.schema import HEAD, check_schema
 from onlyfans_runtime.store import Refused
-from test_engine_real_worker_pg import world  # noqa: F401
+from test_engine_real_worker_pg import world, FAN2  # noqa: F401
 from test_plan_c_draft_app_pg import configured_draft  # noqa: F401
 from test_onlyfans_foundation_pg import database  # noqa: F401
 from test_onlyfans_text_delivery_pg import ACCOUNT, FAN, TENANT
@@ -33,14 +33,16 @@ def config_for(world, env, *, fans=None, requests=10, credits=20, per_request=2)
     with Session(world.database[1]) as s, s.begin():
         item = s.get(CatalogItem, world.item)
         one_photo = json.loads(item.media_ids)[:1]
-        item.media_ids, item.preview_media_ids, item.price_cents = json.dumps(one_photo), '[]', 300
+        item.media_ids, item.preview_media_ids, item.price_cents, item.kind = json.dumps(one_photo), '[]', 300, 'image'
         env['TWIN_PLAN_C_PRICE_CENTS'] = '300'
         env['TWIN_PLAN_C_MEDIA_IDS'] = ','.join(map(str, one_photo))
         env['TWIN_PLAN_C_PREVIEW_IDS'] = ''
         policy = s.get(OfDeliveryPolicy, ACCOUNT)
         policy.daily_limit_units = min(10, policy.limit_units)
         maximum, daily, throttle = policy.limit_units, policy.daily_limit_units, policy.throttle_seconds
-    return {'authorization_mode':'supervised', 'qualification':{'mode':'fixture', 'reference':'offline fixture only'}, 'fans':fans or [FAN], 'product':{'id':world.item, 'price_cents':int(env['TWIN_PLAN_C_PRICE_CENTS']),
+    from conversation_engine.writer_context import JsonFileCreatorProfiles, profile_data
+    profile = profile_data(JsonFileCreatorProfiles(env['ENGINE_MODEL_PROFILES_FILE']).get(ACCOUNT))
+    return {'creator_profile':profile, 'authorization_mode':'supervised', 'qualification':{'mode':'fixture', 'reference':'offline fixture only'}, 'fans':fans or [FAN, FAN2], 'product':{'id':world.item, 'price_cents':int(env['TWIN_PLAN_C_PRICE_CENTS']),
             'media_ids':[int(i) for i in env['TWIN_PLAN_C_MEDIA_IDS'].split(',')],
             'preview_ids':[int(i) for i in env['TWIN_PLAN_C_PREVIEW_IDS'].split(',') if i]},
             'operator':{'actor':ACTOR, 'name':'Fixture operator', 'permissions':PERMISSIONS},
@@ -94,7 +96,7 @@ def test_scope_is_durable_idempotent_and_actor_permissions_fail_closed(configure
         pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'stopped', expected_revision=1, command_key=key(3),
                                actor=OTHER, reason='fixture')
     actual = pilot_scope.describe(world.store, TENANT, ACCOUNT)
-    assert actual['config']['fans'] == [FAN] and actual['config']['operator']['name'] == 'Fixture operator'
+    assert actual['config']['fans'] == [FAN, FAN2] and actual['config']['operator']['name'] == 'Fixture operator'
     with Session(world.database[1]) as s:
         assert s.get(OfEnginePilotScope, 1).fingerprint == first['fingerprint']
 

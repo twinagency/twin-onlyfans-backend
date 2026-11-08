@@ -38,11 +38,11 @@ def arithmetic_answer(message):
     return f'{left} + {right} = {left + right}.'
 
 
-def verified_answer(message, *, account=None, policy=None):
+def verified_answer(message, *, account=None, policy=None, s=None):
     if type(message) is str and _IDENTITY.fullmatch(message):
         if policy is not None and policy.transport_kind == 'fansapi':
             from .writer_context import active_profile
-            profile = active_profile(account)
+            profile = active_profile(account, session=s)
             answer = profile.role_statement.strip() if profile is not None else ''
             return ('identity.v1', answer) if answer else (None, None)
         return 'identity.v1', _IDENTITY_REPLY
@@ -122,14 +122,14 @@ def can_prepare_identity(s, runtime, fan_id, source_message_id, state, policy):
     source = s.get(Message, (runtime.account_id, fan_id, source_message_id))
     if source is None or source.direction != 'in' or source.is_unsent:
         return False
-    kind, answer = verified_answer(source.body, account=runtime.account_id, policy=policy)
+    kind, answer = verified_answer(source.body, account=runtime.account_id, policy=policy, s=s)
     anchor = _anchor(s, runtime, fan_id, state, policy)
     return bool(kind == 'identity.v1' and answer and anchor is not None
                 and _noninterfering_anchor(s, runtime, anchor, answer))
 
 
 def create_proof(s, runtime, decision, source, state, policy, *, extra_parts=False):
-    kind, answer = verified_answer(source.body, account=runtime.account_id, policy=policy)
+    kind, answer = verified_answer(source.body, account=runtime.account_id, policy=policy, s=s)
     if policy is not None and policy.transport_kind == 'fansapi' and extra_parts:
         return None
     if (decision.action != 'reply' or answer is None or decision.body != answer
@@ -157,7 +157,7 @@ def certified_anchor(s, runtime, decision, state, policy, *, intent=None):
     source = s.get(Message, (runtime.account_id, decision.fan_id, proof.source_message_id))
     if (source is None or source.direction != 'in' or source.is_unsent
             or _hash(source.body) != proof.source_sha256
-            or verified_answer(source.body, account=runtime.account_id, policy=policy) != (proof.kind, decision.body)
+            or verified_answer(source.body, account=runtime.account_id, policy=policy, s=s) != (proof.kind, decision.body)
             or _hash(decision.body) != proof.answer_sha256):
         return None
     anchor = _anchor(s, runtime, decision.fan_id, state, policy,

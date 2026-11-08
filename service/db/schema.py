@@ -398,6 +398,13 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing engine approval row security")
     if expected_rank >= 125:
+        event_fn = conn.execute(text("""SELECT p.prosrc::text,l.lanname::text,p.provolatile::text
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
+            WHERE n.nspname=current_schema() AND p.oid=to_regprocedure('of_engine_pilot_event_fan(bytea,text)')""")).all()
+        if (len(event_fn) != 1 or event_fn[0][1:] != ('plpgsql', 'i') or
+                hashlib.sha256(" ".join(event_fn[0][0].split()).encode()).hexdigest() != "c879762ff0058c0f3b8584da72b6a5b19687f239351b730eec837f22697e6205"):
+            failures.append("missing safe pilot event parser")
+    if expected_rank >= 125:
         table, trigger = "of_engine_pilot_webhook_digest", "of_engine_pilot_webhook_digest_guard"
         guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
             FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang

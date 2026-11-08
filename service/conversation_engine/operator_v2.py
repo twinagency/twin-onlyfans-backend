@@ -19,7 +19,7 @@ import json
 import re
 import threading
 from datetime import datetime, timedelta
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -569,11 +569,41 @@ def unresolved(store, tenant, account, actor=None):
             if prior is not None:
                 items.append(_item('pre_activation_webhook', 'review', 'operator', 'review_earlier_inbound',
                     'An earlier inbound event was retained before this activation. Review it; it is not automatically sent.'))
+            from db.onlyfans_models import OfIngress
+            completed = select(OfEngineRequest.request_id).where(OfEngineRequest.account_id == OfIngress.account_id,
+                OfEngineRequest.fan_id == OfIngress.fan_id, OfEngineRequest.binding_id == binding,
+                OfEngineRequest.source_message_id == OfIngress.message_id, OfEngineRequest.status == 'completed').exists()
+            old_ingress = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == account,
+                OfIngress.binding_id == binding, OfIngress.fan_id.in_(allowed), OfIngress.source != 'import',
+                OfIngress.received_at < scope.active_since, OfIngress.status.in_(('pending','applied')),
+                ~completed).limit(1))
+            if old_ingress is not None:
+                items.append(_item('pre_activation_ingress', 'review', 'operator', 'review_earlier_inbound',
+                    'An earlier projected inbound event remains unresolved. It is retained and is not automatically sent.'))
             conflict = s.scalar(select(OfFansProjection.event_key).where(OfFansProjection.account_id == account,
                 OfFansProjection.status == 'held', OfFansProjection.detail == 'pilot_event_key_conflict').limit(1))
             if conflict is not None:
                 items.append(_item('webhook_conflict', 'review', 'operator', 'review_event_conflict',
                     'A webhook key had conflicting signed payloads. Preserve the evidence and review it before any send.'))
+            from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
+            malformed = s.scalar(select(OfEnginePilotWebhookDigest.event_key).join(OfFansConnection, and_(
+                OfFansConnection.account_id == OfEnginePilotWebhookDigest.account_id,
+                OfFansConnection.epoch == OfEnginePilotWebhookDigest.epoch)).where(
+                OfEnginePilotWebhookDigest.account_id == account, OfFansConnection.binding_id == binding,
+                OfEnginePilotWebhookDigest.safety_hold.is_(True)).limit(1))
+            held = s.scalar(select(OfFansProjection.event_key).join(OfFansWebhook, and_(
+                OfFansWebhook.account_id == OfFansProjection.account_id,
+                OfFansWebhook.epoch == OfFansProjection.epoch, OfFansWebhook.event_key == OfFansProjection.event_key))
+                .join(OfFansConnection, and_(OfFansConnection.account_id == OfFansWebhook.account_id,
+                      OfFansConnection.epoch == OfFansWebhook.epoch)).where(
+                OfFansProjection.account_id == account, OfFansProjection.status == 'held',
+                OfFansConnection.binding_id == binding,
+                or_(OfFansWebhook.event_type.in_(('accounts.disconnected','accounts.session_expired','accounts.authentication_failed')),
+                    fan_expr.in_(tuple(map(str, allowed))), fan_expr.is_(None))).limit(1))
+            if malformed is not None or held is not None:
+                items.append(_item('unattributed_webhook', 'review', 'operator', 'review_provider_evidence',
+                    'Signed provider evidence could not be safely attributed or projected. Sends remain held pending review.'))
+
         if unscoped_provider_evidence:
             items.append(_item('unscoped_provider_evidence', 'review', 'operator', 'review_evidence_scope',
                                'Provider evidence cannot be safely attributed to the current creator binding. '

@@ -34,7 +34,7 @@ def supervised(configured_draft, tmp_path, monkeypatch, request):
                                   takeover_state='none', requires_attention=False))
         item = s.get(CatalogItem, world.item)
         media = json.loads(item.media_ids)[:1]
-        item.media_ids, item.preview_media_ids, item.price_cents = json.dumps(media), '[]', 300
+        item.media_ids, item.preview_media_ids, item.price_cents, item.kind = json.dumps(media), '[]', 300, 'image'
     env = {**env, 'TWIN_PLAN_C_PRICE_CENTS':'300',
            'TWIN_PLAN_C_MEDIA_IDS':','.join(map(str, media)), 'TWIN_PLAN_C_PREVIEW_IDS':''}
     creds = tmp_path / 'fans-creds'

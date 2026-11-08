@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, aliased
 from conversation_engine import approval
 from conversation_engine.journey import journey_config
 from conversation_engine.model_config import ModelConfig
-from conversation_engine.pilot_scope import require, require_model, policy_matches, _product_current
+from conversation_engine.pilot_scope import require, require_model, require_profile, policy_matches, _product_current
 from conversation_engine.real_worker import RealConversationWorker
 from conversation_engine.writer_context import JsonFileCreatorProfiles
 from db.onlyfans_delivery_models import OfDeliveryPolicy
@@ -68,6 +68,7 @@ class SupervisedPilot:
     model_config: ModelConfig
     profiles: JsonFileCreatorProfiles
     ingress_cursor: dict = field(default_factory=dict, compare=False, repr=False)
+    send_cursor: dict = field(default_factory=dict, compare=False, repr=False)
 
     def __repr__(self):
         return f'SupervisedPilot(account={self.account!r}, secret=<redacted>)'
@@ -91,9 +92,10 @@ class SupervisedPilot:
                     or profile.approved_item_ids != (str(config['product']['id']),)):
                 raise Refused('supervised pilot configuration changed')
             require_model(config, self.account, self.model_config)
+            require_profile(config, profile)
             return scope.active_since
 
-    def _record_outside_digest(self, raw, event_key):
+    def _record_outside_digest(self, raw, event_key, *, safety_hold=False):
         """Persist only a hash under the active epoch lock so a racing duplicate cannot be lost."""
         if type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', event_key):
             raise Refused('invalid webhook identity')
@@ -128,20 +130,21 @@ class SupervisedPilot:
                 if count >= 10000:
                     raise Refused('pilot webhook evidence limit reached')
                 s.add(OfEnginePilotWebhookDigest(account_id=self.account, epoch=epoch, event_key=event_key,
-                                                 payload_sha256=digest, received_at=utcnow()))
+                                                 payload_sha256=digest, safety_hold=safety_hold, received_at=utcnow()))
             return existing is not None and existing.payload_sha256 != digest
 
     def handle(self, raw, signature, event_key):
         if type(raw) is not bytes or len(raw) > 1_000_000 or not verify_signature(raw, signature, self.secret):
             raise Refused('webhook authentication failed')
         self.validate()
+        malformed = False
         try:
             _, fan = _event_fan(raw)
             outside = fan is not None and fan not in self.allowed_fans
         except Refused:
-            outside = True
+            outside, malformed = True, True
         if outside:
-            if self._record_outside_digest(raw, event_key):
+            if self._record_outside_digest(raw, event_key, safety_hold=malformed):
                 return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
             return {'outcome':'outside_pilot_scope'}
         result = self.worker.handle(self.tenant, self.account, raw_body=raw, signature=signature,
@@ -271,7 +274,12 @@ class SupervisedPilot:
                     pending_part.request_id == OfEngineApproval.request_id,
                     pending_part.generation == OfEngineApproval.generation,
                     pending_part.status.in_(('ready','queued'))).exists(),
-                OfEngineApproval.expires_at > utcnow()).order_by(OfEngineApproval.created_at).limit(limit)))
+                OfEngineApproval.expires_at > utcnow()).order_by(OfEngineApproval.created_at, OfEngineApproval.request_id)
+                .offset(self.send_cursor.get('offset', 0)).limit(limit)))
+            if decisions:
+                self.send_cursor['offset'] = self.send_cursor.get('offset', 0) + len(decisions)
+            else:
+                self.send_cursor.clear()
         dispatched = []
         for decision in decisions:
             self.validate()
@@ -311,6 +319,7 @@ def build_supervised_pilot(store, environ=None, *, model_transport=None, fans_tr
             or profile.approved_item_ids != (str(config['product']['id']),)
             or journey.temporary_pause_reopen_hours is not None or journey.auto_backfill):
         raise Refused('supervised creator or journey configuration is incomplete')
+    require_profile(config, profile)
     secret = _secret(env.get('TWIN_PLAN_C_WEBHOOK_SECRET_FILE', ''))
     provider = load_real_config(env, require_flag=True)
     if provider.provider_account != provider_account:

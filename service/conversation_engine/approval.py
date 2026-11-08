@@ -177,7 +177,7 @@ def _build(s, runtime, parts, request, owner, state):
                         or tuple(map(str, terms['preview_ids'])) != tuple(map(str, expected['preview_ids']))):
                     return None, None, 'pilot_product_scope_changed'
     from .writer_context import CreatorProfile, active_profile
-    profile = active_profile(account)
+    profile = active_profile(account, session=s)
     if profile is not None and type(profile) is not CreatorProfile:
         return None, None, 'creator_profile_unavailable'
     profile_hash = _hash(asdict(profile)) if profile is not None else None
@@ -546,7 +546,7 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
             head = decisions[0]
             from .writer_context import CreatorProfile, active_profile
             from .model_output import JudgeContext, edit_problems
-            profile = active_profile(account)
+            profile = active_profile(account, session=s)
             if type(profile) is not CreatorProfile or profile.missing_inputs():
                 raise Refused('creator profile is unavailable for edit validation')
             if head.action == 'offer' and not profile.may_offer(head.catalog_item_id):
@@ -647,6 +647,9 @@ def retire_superseded(store, tenant, account, fan_id, keep_source_message_id):
     with Session(store.engine) as s, s.begin():
         runtime = store._runtime(s, tenant, account)
         if not is_gated(s, account):
+            return 0
+        latest = _latest_inbound(s, runtime, fan_id)
+        if latest is None or latest.message_id != keep_source_message_id:
             return 0
         count = invalidate_fan_in_session(s, account, fan_id, 'newer_inbound', keep_source=keep_source_message_id)
         for request in s.scalars(select(OfEngineRequest).where(OfEngineRequest.account_id == account,

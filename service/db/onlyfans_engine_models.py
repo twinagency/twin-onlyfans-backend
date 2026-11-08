@@ -143,6 +143,7 @@ class OfEnginePilotWebhookDigest(Base):
     epoch = Column(BigInteger, primary_key=True)
     event_key = Column(String(255), primary_key=True)
     payload_sha256 = Column(String(64), primary_key=True)
+    safety_hold = Column(Boolean, nullable=False, server_default=text('false'))
     received_at = Column(DateTime, nullable=False)
 
 

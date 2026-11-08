@@ -148,8 +148,28 @@ def set_active_profiles(profiles):
     _ACTIVE_PROFILES = profiles
 
 
-def active_profile(account_id):
+def profile_data(profile):
+    """Canonical, complete creator input for durable scope binding."""
+    from dataclasses import asdict
+    if type(profile) is not CreatorProfile:
+        raise Refused('creator profile is unavailable')
+    data = asdict(profile)
+    data['facts'] = dict(profile.facts)
+    return json.loads(json.dumps(data))
+
+
+def active_profile(account_id, *, session=None):
     """The approved creator profile for an account from the active source, or None (missing input)."""
+    if session is not None:
+        from db.onlyfans_engine_models import OfEnginePilotScope
+        from sqlalchemy import select
+        row = session.scalar(select(OfEnginePilotScope).where(OfEnginePilotScope.account_id == account_id))
+        if row is not None:
+            from .pilot_scope import validate, _fingerprint, _encoded
+            config = validate(json.loads(row.config_json))
+            if _fingerprint(config) != row.fingerprint or _encoded(config) != row.config_json:
+                raise Refused('pilot creator profile binding changed')
+            return CreatorProfile.from_dict(config['creator_profile'])
     if _ACTIVE_PROFILES is not None:
         return _ACTIVE_PROFILES.get(account_id)
     path = os.environ.get('ENGINE_MODEL_PROFILES_FILE', '')

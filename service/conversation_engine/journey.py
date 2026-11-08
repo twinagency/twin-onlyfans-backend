@@ -77,12 +77,12 @@ def journey_config():
     return _CONFIG
 
 
-def identity_line_for(account, config=None):
+def identity_line_for(account, config=None, *, s=None):
     """The APPROVED identity wording for this account: explicit journey config first, then the creator profile."""
     config = config or _CONFIG
     if config.identity_line and config.identity_line.strip():
         return config.identity_line.strip()
-    profile = active_profile(account)
+    profile = active_profile(account, session=s)
     line = (getattr(profile, 'role_statement', '') or '').strip()
     return line or None
 
@@ -249,7 +249,7 @@ def decide(s, runtime, owner, message, config=None):
     verdict = {'signals': sorted(found), 'human': None, 'pause': None, 'flags': [], 'no_promise': False}
     if 'platform_banned' in found:
         verdict['human'] = 'platform_banned'   # a banned theme pushed by the fan: a person decides, the model never answers it
-    if 'identity' in found and identity_line_for(runtime.account_id, config) is None:
+    if 'identity' in found and identity_line_for(runtime.account_id, config, s=s) is None:
         verdict['human'] = 'identity'
     history = _inbound(s, runtime, owner.fan_id, upto=message.message_id)
     ask_count = sum(1 for row in history if signals(row.body, config) & {'offplatform', 'meetup'})
@@ -305,7 +305,7 @@ def journey_context(s, runtime, owner, request, message):
         ctx['compliment_after_unlock'] = True
     if verdict['no_promise']:
         ctx['no_promise'] = True
-    line = identity_line_for(runtime.account_id, config)
+    line = identity_line_for(runtime.account_id, config, s=s)
     if line is not None and 'identity' in verdict['signals']:
         ctx['approved_identity_line'] = line
     return ctx

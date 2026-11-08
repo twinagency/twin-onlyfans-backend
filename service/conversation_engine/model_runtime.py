@@ -100,6 +100,12 @@ class ModelRuntime:
         if profile is None:
             turn.handover('creator_profile_missing')
             raise Refused('creator facts are unavailable for this account; request handed to a human')
+        scope = turn.snapshot.get('pilot_scope')
+        if scope is not None:
+            from .pilot_scope import _fingerprint
+            from .writer_context import profile_data
+            if _fingerprint(profile_data(profile)) != scope.get('creator_profile_hash'):
+                raise Refused('creator profile does not match the planning snapshot')
         missing = profile.missing_inputs()
         if missing:
             turn.handover('creator_profile_incomplete', {'missing': list(missing)})

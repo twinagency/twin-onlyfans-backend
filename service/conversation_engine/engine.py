@@ -358,7 +358,7 @@ class EngineService:
                 from .catalogue import search_context
                 catalogue_view = search_context(s, runtime, fan_id, message)
                 from .memory import references_fingerprint
-                offer_fingerprint = references_fingerprint(account, policy, offer_match, catalogue_view)
+                offer_fingerprint = references_fingerprint(account, policy, offer_match, catalogue_view, s=s)
                 snapshot = {'account_id': account, 'fan_id': fan_id, 'binding_id': runtime.binding_id,
                     'owner_epoch': owner.epoch, 'connection_epoch': connection_epoch, 'input_revision': state.input_revision, 'control_revision': state.revision,
                     'sales_mode': owner.sales_mode, 'sales_scope': json.loads(owner.sales_scope_json),
@@ -508,7 +508,7 @@ class EngineService:
             from .catalogue import search_context
             from .memory import references_fingerprint
             if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body),
-                                      search_context(s, runtime, fan_id, source)) != offer_fingerprint:
+                                      search_context(s, runtime, fan_id, source), s=s) != offer_fingerprint:
                 raise Refused('catalogue, offer or creator profile changed during generation')
             generation = 0 if observed_generation is None else observed_generation + 1
             if observed_generation is not None:
@@ -583,7 +583,7 @@ class EngineService:
             from .catalogue import search_context
             from .memory import references_fingerprint
             if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body),
-                                      search_context(s, runtime, fan_id, source)) != offer_fingerprint:
+                                      search_context(s, runtime, fan_id, source), s=s) != offer_fingerprint:
                 raise Refused('catalogue, offer or creator profile changed during generation')
 
     def _handover_model(self, tenant, account, request_id, target, reason='model_handover', detail=None):

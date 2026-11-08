@@ -182,3 +182,94 @@ def test_unknown_send_is_retained_and_different_fan_can_progress(supervised):
     assert len(world.fans.posts) == 2
     with Session(world.database[1]) as s:
         assert s.scalar(select(OfTextIntent).where(OfTextIntent.fan_id == FAN)).status == 'unknown'
+
+
+def test_preconstructed_backfill_client_cannot_bypass_the_pilot_budget(supervised):
+    from datetime import datetime
+    from fans_api_adapter.backfill import FansBackfill
+    world, _, _, _, _ = supervised
+    before = pilot_scope.describe(world.store, TENANT, ACCOUNT)['providerRequestsUsed']
+    with pytest.raises(Refused, match='backfill lacks current pilot request guard'):
+        FansBackfill(world.intake).run(TENANT, ACCOUNT, world.transport.client, reason='operator',
+                                      start_date=datetime(2025, 1, 1), history_chats=(FAN,))
+    assert pilot_scope.describe(world.store, TENANT, ACCOUNT)['providerRequestsUsed'] == before
+    assert world.fans.posts == []
+
+
+def test_fixture_scope_refuses_real_provider_wire_before_identity_io(supervised):
+    world, env, model, _, _ = supervised
+    before = pilot_scope.describe(world.store, TENANT, ACCOUNT)['providerRequestsUsed']
+    with pytest.raises(Refused, match='fixture scope requires a simulated provider transport'):
+        build_supervised_pilot(world.store, env, model_transport=model, fans_transport=None)
+    assert pilot_scope.describe(world.store, TENANT, ACCOUNT)['providerRequestsUsed'] == before
+    assert world.fans.posts == []
+
+
+def test_pending_human_send_blocks_approved_draft_then_takes_over(supervised):
+    from datetime import timedelta
+    from db.models import OfConversationState
+    from db.onlyfans_fans_intake_models import OfFansEvidence
+    from test_engine_real_worker_pg import iso
+    from onlyfans_runtime.store import utcnow
+    world, _, _, _, pilot = supervised
+    draft = stage(pilot, 510)
+    approve(world, draft)
+    body = {'event':'messages.sent', 'account_id':PROVIDER, 'payload':{
+        'id':5555, 'text':'human response', 'createdAt':iso(1), 'price':0, 'media':[],
+        'isFromQueue':False, 'queueId':1, 'toUser':{'id':FAN}}}
+    raw, headers = signed(body, key='human-sent')
+    pilot.handle(raw, headers['Signature'], headers['X-OFAPI-Idempotency-Key'])
+    pilot.tick()
+    assert world.fans.posts == []
+    with Session(world.database[1]) as s, s.begin():
+        evidence = s.scalar(select(OfFansEvidence).where(OfFansEvidence.kind == 'human_sent'))
+        assert evidence.status == 'pending'
+        evidence.created_at = utcnow() - timedelta(minutes=2)
+    pilot.tick()
+    with Session(world.database[1]) as s:
+        assert s.get(OfConversationState, (ACCOUNT,FAN)).mode == 'human_controlled'
+    assert world.fans.posts == []
+
+
+def test_auth_failure_after_projection_blocks_wire_even_if_callback_crashes(supervised, monkeypatch):
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    from db.onlyfans_fans_intake_models import OfFansLink
+    world, _, _, _, pilot = supervised
+    draft = stage(pilot, 511)
+    approve(world, draft)
+    def crash(*args): raise RuntimeError('synthetic callback crash')
+    monkeypatch.setattr(pilot.worker.intake, '_disable_sends', crash)
+    raw, headers = signed({'event':'accounts.authentication_failed','account_id':PROVIDER,'payload':{}},
+                          key='auth-failed')
+    with pytest.raises(RuntimeError):
+        pilot.handle(raw, headers['Signature'], headers['X-OFAPI-Idempotency-Key'])
+    with Session(world.database[1]) as s:
+        assert s.scalar(select(OfFansLink)).send_blocked is True
+        assert s.get(OfDeliveryPolicy, ACCOUNT).enabled is True
+    pilot.tick()
+    assert world.fans.posts == []
+
+
+def test_reserved_model_call_cannot_cross_pilot_stop_and_reactivation(supervised):
+    from db.onlyfans_engine_models import OfEngineModelCall, OfEngineRequest
+    world, _, _, _, pilot = supervised
+    draft = stage(pilot, 512)
+    with Session(world.database[1]) as s:
+        prior = s.scalar(select(OfEngineModelCall))
+        request = s.get(OfEngineRequest, (ACCOUNT, prior.request_id))
+        args = dict(account=ACCOUNT, request_id=prior.request_id, generation=prior.generation,
+                    fan_id=prior.fan_id, binding_id=prior.binding_id, owner_epoch=prior.owner_epoch,
+                    chain_pos=1, chain_step='primary', model=prior.model, prefixed=False,
+                    snapshot_sha256='a'*64, prompt_sha256='b'*64, worker_id='fixture-worker', provider=prior.provider)
+    ledger = pilot.worker.engine.model.ledger
+    reservation = ledger.reserve(**args)
+    status = pilot_scope.describe(world.store, TENANT, ACCOUNT)
+    stopped = pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'stopped', expected_revision=status['revision'],
+        command_key='3'*64, actor=ACTOR, reason='fixture stop')
+    pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'active', expected_revision=stopped['revision'],
+        command_key='4'*64, actor=ACTOR, reason='fixture restart')
+    with pytest.raises(Refused, match='model call pilot revision changed before wire'):
+        ledger.mark_calling(ACCOUNT, reservation.call_id, 'fixture-worker')
+    with Session(world.database[1]) as s:
+        assert s.get(OfEngineModelCall, (ACCOUNT, reservation.call_id)).status == 'reserved'
+    assert world.fans.posts == []

@@ -196,7 +196,10 @@ def require_pilot_reader(store, tenant, account, actor):
     from db.onlyfans_engine_models import OfEnginePilotScope
     from .pilot_scope import current as current_pilot, authorize
     with Session(store.engine) as s, s.begin():
-        runtime = store._runtime(s, tenant, account, lock=False)
+        try:
+            runtime = store._runtime(s, tenant, account, lock=False)
+        except Refused:
+            raise NotFound('scope unavailable') from None
         selected = s.get(OfEnginePilotScope, 1)
         if selected is not None and selected.account_id != account:
             raise NotFound('scope unavailable')

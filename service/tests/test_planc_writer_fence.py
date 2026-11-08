@@ -31,7 +31,7 @@ def store(tmp_path, monkeypatch):
     con.commit()
     con.close()
     monkeypatch.setattr(coordination, "_database_url", lambda: f"sqlite:///{path}")
-    monkeypatch.setenv(routing.PILOT_ENV, PILOT)
+    monkeypatch.delenv(routing.PILOT_ENV, raising=False)
     return path
 
 
@@ -60,6 +60,7 @@ WRITERS = {
 @pytest.fixture
 def outage(monkeypatch):
     """The ownership store cannot be read."""
+    monkeypatch.setenv(routing.PILOT_ENV, PILOT)
     monkeypatch.setattr(coordination, "_database_url", lambda: "")
 
 
@@ -77,7 +78,7 @@ def test_store_outage_holds_every_automated_writer_for_the_pilot_account(store, 
 @pytest.mark.parametrize("name", ["send_message", "schedule_message"])
 def test_store_outage_holds_a_manual_send_into_a_declared_pilot_account(store, outage, name):
     c, posts = client(PILOT)
-    with pytest.raises(Refused, match="engine_owner_lookup_failed"):
+    with pytest.raises(Refused, match="pilot_canonical_authority_required"):
         WRITERS[name](c, HUMAN_FAN, "manual")      # cannot be told apart from a send into an engine-owned chat
     assert posts == []
 
@@ -152,9 +153,9 @@ def test_executor_fence_refuses_every_messaging_kind_for_an_engine_owned_account
 
 
 def test_executor_fence_holds_on_store_outage_and_leaves_non_messaging_kinds_alone(store, outage):
-    assert routing.job_fence_reason(PILOT, "ai_chatter", {}) in {"moxy_owner_lookup_failed", "engine_owner_lookup_failed"}
+    assert routing.job_fence_reason(PILOT, "ai_chatter", {}) in {"moxy_owner_lookup_failed", "engine_owner_lookup_failed", "pilot_canonical_authority_required"}
     assert routing.job_fence_reason(PILOT, "scrape_chats", {}) is None
-    assert routing.job_fence_reason(PILOT, "scheduled_send", {"send_purpose": "manual"}) is None  # the send-time fence decides
+    assert routing.job_fence_reason(PILOT, "scheduled_send", {"send_purpose": "manual"}) == "pilot_canonical_authority_required"
 
 
 def test_executor_engine_state_override_is_fail_closed(store):
@@ -174,3 +175,18 @@ def test_durable_scope_fences_legacy_writers_before_lazy_fan_selection(store,mon
     with pytest.raises(Refused,match='pilot_canonical_authority_required'):WRITERS[name](c,OTHER_FAN,purpose)
     assert posts==[]
     assert routing.job_fence_reason(PILOT,'scheduled_send',{'send_purpose':'manual'})=='pilot_canonical_authority_required'
+
+
+@pytest.mark.parametrize('lookup', [routing.UNKNOWN, routing.NOT_SELECTED, routing.SELECTED])
+@pytest.mark.parametrize('name', sorted(WRITERS))
+@pytest.mark.parametrize('purpose', ['manual', 'other'])
+def test_declared_pilot_never_falls_back_to_a_legacy_writer(store, monkeypatch, lookup, name, purpose):
+    monkeypatch.setenv(routing.PILOT_ENV, PILOT)
+    monkeypatch.setattr(routing, 'durable_pilot_state', lambda account: lookup)
+    # An independently successful owner lookup must not override the manifest.
+    monkeypatch.setattr(routing, 'engine_owner_modes', lambda *args: (routing.SELECTED, frozenset({'human'})))
+    c, posts = client(PILOT)
+    with pytest.raises(Refused, match='pilot_canonical_authority_required'):
+        WRITERS[name](c, HUMAN_FAN, purpose)
+    assert posts == []
+    assert routing.job_fence_reason(PILOT, 'scheduled_send', {'send_purpose':'manual'}) == 'pilot_canonical_authority_required'

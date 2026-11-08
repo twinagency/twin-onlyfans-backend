@@ -160,6 +160,11 @@ class SupervisedPilot:
             if self._record_outside_digest(raw, event_key, safety_hold=malformed):
                 return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
             return {'outcome':'outside_pilot_scope'}
+        if planning:
+            self.worker.engine.store.drain(self.tenant, self.account)
+            from conversation_engine.pilot_ingress import preserve_contact_stops
+            if preserve_contact_stops(self.worker.engine.store, self.tenant, self.account)['pending']:
+                planning = False
         if not planning:
             result = self.worker.intake.accept(raw, signature, self.secret, event_key,
                 expected_tenant=self.tenant, expected_account=self.account)
@@ -184,7 +189,9 @@ class SupervisedPilot:
         store, intake = self.worker.engine.store, self.worker.intake
         store.drain(self.tenant, self.account)
         from conversation_engine.pilot_ingress import preserve_contact_stops
-        preserve_contact_stops(store, self.tenant, self.account)
+        review = preserve_contact_stops(store, self.tenant, self.account)
+        if review['pending']:
+            return {'expired':[], 'projected':0, 'planned':[], 'dispatched':[], 'contactReviewPending':True}
         expired = self.worker.transport.recover_interrupted()
         from fans_api_adapter.event_scope import event_fan, ACCOUNT_EVENTS
         with Session(store.engine) as s:

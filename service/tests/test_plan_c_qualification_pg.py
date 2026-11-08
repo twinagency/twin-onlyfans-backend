@@ -226,3 +226,106 @@ def test_intake_itself_enforces_current_durable_fans(supervised):
     with Session(world.database[1]) as s:
         assert s.scalar(select(OfFansWebhook).where(OfFansWebhook.event_key=='direct-intake-outside')) is None
     assert world.fans.posts==[]
+
+
+def _wait_readiness(client, predicate):
+    import time
+    end = time.monotonic() + 8
+    while time.monotonic() < end:
+        response = client.get('/readyz')
+        if predicate(response):
+            return response
+        time.sleep(.05)
+    raise AssertionError(response.json())
+
+
+def test_worker_readiness_reports_loop_failure_and_recovery(supervised, monkeypatch):
+    from fastapi.testclient import TestClient
+    from plan_c_worker import create_app
+    _, _, _, seen, pilot = supervised
+    fail = [True]
+    def tick(self):
+        if fail[0]:
+            raise RuntimeError('private exception content must stay private')
+    monkeypatch.setattr(type(pilot), 'tick', tick)
+    with TestClient(create_app(pilot)) as client:
+        response = _wait_readiness(client, lambda r: r.json()['code']=='loop_failed')
+        assert response.status_code == 503
+        assert response.json()['consecutiveFailures'] >= 1
+        assert 'private exception' not in response.text
+        assert client.get('/healthz').status_code == 200
+        fail[0] = False
+        response = _wait_readiness(client, lambda r: r.json()['code']=='ready')
+        assert response.status_code == 200 and response.json()['sendingReady']
+        assert response.json()['failures'] >= 1
+    assert seen == []
+
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_intake_only_readiness_requires_restart_after_activation(supervised):
+    from fastapi.testclient import TestClient
+    from plan_c_worker import create_app
+    world, env, _, seen, _ = supervised
+    before = pilot_scope.describe(world.store, TENANT, ACCOUNT)
+    stopped = pilot_scope.set_status(world.store,TENANT,ACCOUNT,'stopped',expected_revision=before['revision'],
+        command_key='d'*64,actor=ACTOR,reason='offline stop for readiness')
+    paused = build_supervised_pilot(world.store, env)
+    with TestClient(create_app(paused)) as client:
+        response = _wait_readiness(client, lambda r: r.json()['code']=='ready')
+        assert response.json()['mode']=='intake_only' and not response.json()['sendingReady']
+        pilot_scope.set_status(world.store,TENANT,ACCOUNT,'active',expected_revision=stopped['revision'],
+            command_key='f'*64,actor=ACTOR,reason='offline activation for readiness')
+        response = client.get('/readyz')
+        assert response.status_code==503 and response.json()['code']=='restart_required'
+        assert not response.json()['sendingReady']
+    assert seen==[] and world.fans.posts==[]
+
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_contact_review_is_bounded_and_does_not_skip_late_rows(supervised):
+    from conversation_engine.pilot_ingress import preserve_contact_stops
+    from test_onlyfans_foundation_pg import event
+    from db.models import OfConversationState
+    from onlyfans_runtime.launch_operations_models import OfLaunchCommand
+    world, _, _, seen, _ = supervised
+    for mid, body in [(940,'hello'),(941,'another message'),(942,'stop messaging me'),(943,'later chat')]:
+        world.store.record(TENANT,ACCOUNT,event(mid=mid,fan=FAN,body=body))
+    world.store.drain(TENANT,ACCOUNT)
+    assert preserve_contact_stops(world.store,TENANT,ACCOUNT,limit=2)=={'reviewed':2,'pending':True}
+    with Session(world.database[1]) as s:
+        assert s.get(OfConversationState,(ACCOUNT,FAN)).mode!='no_contact'
+    assert preserve_contact_stops(world.store,TENANT,ACCOUNT,limit=2)=={'reviewed':2,'pending':False}
+    with Session(world.database[1]) as s:
+        assert s.get(OfConversationState,(ACCOUNT,FAN)).mode=='no_contact'
+        assert len(list(s.scalars(select(OfLaunchCommand).where(OfLaunchCommand.kind=='plan_c_ingress_review'))))==4
+    # A lower message identity arriving after a completed batch is still reviewed.
+    world.store.record(TENANT,ACCOUNT,event(mid=939,fan=FAN,body='a late message'))
+    world.store.drain(TENANT,ACCOUNT)
+    assert preserve_contact_stops(world.store,TENANT,ACCOUNT,limit=2)=={'reviewed':1,'pending':False}
+    assert preserve_contact_stops(world.store,TENANT,ACCOUNT,limit=2)=={'reviewed':0,'pending':False}
+    assert seen==[] and world.fans.posts==[]
+
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_contact_review_replays_a_committed_stop_after_a_crash(supervised, monkeypatch):
+    from conversation_engine import pilot_ingress
+    from test_onlyfans_foundation_pg import event
+    from db.models import OfConversationState
+    from db.onlyfans_models import OfControlAudit
+    world, _, _, seen, _ = supervised
+    world.store.record(TENANT,ACCOUNT,event(mid=950,fan=FAN,body='please stop messaging me'))
+    world.store.drain(TENANT,ACCOUNT)
+    record=pilot_ingress._record_review
+    def crash(*args):raise RuntimeError('crash after control before review receipt')
+    monkeypatch.setattr(pilot_ingress,'_record_review',crash)
+    with pytest.raises(RuntimeError,match='crash after control'):
+        pilot_ingress.preserve_contact_stops(world.store,TENANT,ACCOUNT)
+    with Session(world.database[1]) as s:
+        revision=s.get(OfConversationState,(ACCOUNT,FAN)).revision
+        assert s.get(OfConversationState,(ACCOUNT,FAN)).mode=='no_contact'
+    monkeypatch.setattr(pilot_ingress,'_record_review',record)
+    assert pilot_ingress.preserve_contact_stops(world.store,TENANT,ACCOUNT)=={'reviewed':1,'pending':False}
+    with Session(world.database[1]) as s:
+        assert s.get(OfConversationState,(ACCOUNT,FAN)).revision==revision
+        assert len(list(s.scalars(select(OfControlAudit).where(OfControlAudit.command_key.like('engine-stop:%')))))==1
+    assert seen==[] and world.fans.posts==[]

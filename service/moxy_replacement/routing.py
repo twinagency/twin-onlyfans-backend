@@ -137,7 +137,11 @@ def refuse_engine_owned(account,purpose='other',fan_id=None):
     Fails closed on a failed lookup. The only pass for an owned fan is a manual
     operator send where every matching owner row is in mode 'human' (a verified
     human takeover read from the store, never assumed)."""
-    if durable_pilot_state(account) == SELECTED:
+    # A process manifest is itself an explicit claim of exclusive pilot ownership.
+    # It must not become a legacy-send allowance when any store lookup is stale,
+    # unavailable, or pointed at an older database. Human takeover uses the
+    # canonical authority, never this legacy transport.
+    if in_pilot_scope(account) or durable_pilot_state(account) == SELECTED:
         raise Refused('pilot_canonical_authority_required')
     est,modes=engine_owner_modes(account,fan_id)
     if est==SELECTED and not (purpose=='manual' and modes=={'human'}):
@@ -165,10 +169,10 @@ def job_fence_reason(account,kind,payload=None,*,state=None,engine_state=None):
 
     Used by the executor before any model call or state write. Fail closed: a
     failed owner lookup refuses a fenced kind. Manual-stamped scheduled sends (a
-    human deferral) are never fenced."""
+    human deferral) still obey exclusive pilot ownership."""
     k=str(kind)
     if k not in MOXY_FENCED_KINDS:return None
-    if durable_pilot_state(account) == SELECTED:return 'pilot_canonical_authority_required'
+    if in_pilot_scope(account) or durable_pilot_state(account) == SELECTED:return 'pilot_canonical_authority_required'
     if k=='scheduled_send' and isinstance(payload,dict) and str(payload.get('send_purpose') or '')=='manual':return None
     st=state if state is not None else owner_state(account)
     if st==SELECTED:return 'moxy_canonical_owner_required'

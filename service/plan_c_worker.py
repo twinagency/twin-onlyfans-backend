@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import logging
 import os
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -20,6 +21,8 @@ def _response(status, code):
 
 
 def create_app(pilot, *, run_loop=True):
+    progress = {'ticks':0, 'failures':0, 'consecutive_failures':0, 'last_success':None}
+
     @asynccontextmanager
     async def lifespan(app):
         stop = asyncio.Event()
@@ -27,7 +30,12 @@ def create_app(pilot, *, run_loop=True):
             while not stop.is_set():
                 try:
                     await asyncio.to_thread(pilot.tick)
+                    progress['ticks'] += 1
+                    progress['consecutive_failures'] = 0
+                    progress['last_success'] = time.monotonic()
                 except Exception:
+                    progress['failures'] += 1
+                    progress['consecutive_failures'] += 1
                     # Preserve evidence and continue on transient failures; do not log message content or credentials.
                     _LOG.warning('pilot worker tick refused or unavailable')
                 try:
@@ -48,6 +56,45 @@ def create_app(pilot, *, run_loop=True):
     @app.get('/healthz')
     async def health():
         return {'ok': True, 'role': 'supervised-worker'}
+
+    @app.get('/readyz')
+    async def readiness():
+        # Liveness alone does not prove that recovery/planning is progressing.
+        # Return counters and coarse states, never exception text or identities.
+        mode, sending, reason = 'unavailable', False, 'unavailable'
+        current = app.state.pilot
+        if current is not None:
+            from model_transport.pilot_supervised import IntakeOnlyPilot
+            mode = 'intake_only' if isinstance(current, IntakeOnlyPilot) else 'active'
+            if not run_loop:
+                reason = 'loop_disabled'
+            elif progress['consecutive_failures']:
+                reason = 'loop_failed'
+            elif progress['last_success'] is None:
+                reason = 'loop_starting'
+            elif time.monotonic() - progress['last_success'] > 30:
+                reason = 'loop_stale'
+            else:
+                def check():
+                    if isinstance(current, IntakeOnlyPilot):
+                        from sqlalchemy.orm import Session
+                        from conversation_engine.pilot_scope import require
+                        with Session(current.store.engine) as s:
+                            runtime = current.store._runtime(s, current.tenant, current.account, lock=False)
+                            scope, _ = require(s, runtime)
+                            return 'restart_required' if scope.status == 'active' else 'ready'
+                    current.validate()
+                    return 'ready'
+                try:
+                    reason = await asyncio.to_thread(check)
+                    sending = reason == 'ready' and mode == 'active'
+                except Exception:
+                    reason = 'scope_or_state_refused'
+        ready = reason == 'ready'
+        return JSONResponse({'ok':ready, 'mode':mode, 'sendingReady':sending, 'code':reason,
+            'ticks':progress['ticks'], 'failures':progress['failures'],
+            'consecutiveFailures':progress['consecutive_failures']}, status_code=200 if ready else 503,
+            headers={'Cache-Control':'private, no-store'})
 
     @app.post('/onlyfans/webhooks/plan-c')
     async def webhook(request: Request):

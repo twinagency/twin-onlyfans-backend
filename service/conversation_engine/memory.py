@@ -58,7 +58,9 @@ def current(s, runtime, decision):
         return False
     view, fingerprint = projection(s, runtime, decision.fan_id, source)
     from .offers import match as match_offers
-    offer_view = match_offers(s, runtime, decision.fan_id, source.body)
+    # The current action's own admission is not a newly discovered prior card.
+    offer_view = match_offers(s, runtime, decision.fan_id, source.body, include_cards=True,
+                             exclude_intent_id=decision.intent_id)
     from .catalogue import search_context
     catalogue_view = search_context(s, runtime, decision.fan_id, source)
     policy = s.get(OfDeliveryPolicy, runtime.account_id)

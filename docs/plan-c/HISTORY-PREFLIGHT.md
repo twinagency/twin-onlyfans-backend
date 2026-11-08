@@ -1,0 +1,11 @@
+# Bounded pilot history preflight
+
+The pilot intentionally refuses auto_backfill. A finished, scope-correct history/transaction/chargeback read is a setup dependency, not a reason to remove the offer gate or seed a fake complete row.
+
+The existing supported library path is `fans_api_adapter.backfill.FansBackfill(pilot.worker.intake).run(...)`, using `pilot.worker.transport.client`, which already has the pilot ProviderRequestGuard. Read `service/tests/test_independent_audit_pg.py::test_bounded_history_preflight_unblocks_the_same_purchase_request` for an executable OFFLINE example. It begins with no per-fan grant/backfill, exhausts a one-page budget, resumes the same run with two more pages, verifies exact request-budget consumption and then sends/recognizes one fixture $3 card. It does not use a seeded completed backfill.
+
+Before a REAL invocation, separate authorization must identify the creator/account, immutable allowed fan IDs, sufficient start-date coverage, read-credit ceiling, model ceiling, current source/image/profile and named administrator. Verify the active durable pilot scope and configure permission with `pilot_scope.authorize(config, actor, 'configure')`; use the normal configured guarded client, never an unguarded replacement. Run one serialized preflight per account and use only approved allowed chats. Keep the account's sender ownership fenced. Do not copy the fixture's 2015 date or fixture identities into production as an approved policy.
+
+On budget_exhausted, incomplete, conflicting or malformed evidence, retain the run marker and offer hold. Resume only within the approved total budget, same scope and start boundary; do not create a new cursor to skip pages. Verify a complete run covers every permitted fan in done_chats and that no unscoped history, unresolved money, ownership or connection evidence remains. A successful read is not by itself evidence that all financial transactions are attributed, nor does it activate the pilot.
+
+This is a documented existing library workflow, not a new operator endpoint. Production execution, concurrent administrative use and real-provider pagination remain unqualified. If a UI action is required, record that as outstanding implementation; do not claim the library test proves it exists.

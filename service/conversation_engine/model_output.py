@@ -439,6 +439,9 @@ def proposal_problems(proposal, ctx):
         problems.append('item_scope is only for sales_signal reopen')
     if proposal.sales_signal == 'reopen' and not set(proposal.item_scope) <= ctx.allowed_scope_ids:
         problems.append('item_scope names an item that is not in the approved catalogue match')
+    if (proposal.sales_signal == 'reopen' and snapshot.get('pilot_scope') is not None
+            and not set(proposal.item_scope) <= set((snapshot.get('journey') or {}).get('explicit_purchase_scope', []))):
+        problems.append('reopen needs a clear current purchase request, not a historical, ambiguous or hypothetical reference')
     from .claims import check_plain_text, grounding_from_snapshot
     try:
         wording = (ctx.identity_line or getattr(ctx.profile, 'role_statement', '') or '').strip()

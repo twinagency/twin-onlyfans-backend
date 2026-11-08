@@ -38,7 +38,7 @@ from db.onlyfans_engine_models import OfEngineAccessEvidence, OfEngineDecision, 
 from db.onlyfans_fans_intake_models import OfFansBackfill, OfFansEvidence
 from onlyfans_runtime.store import Refused, utcnow
 from .history_scope import current_binding_message, has_unscoped_messages
-from .writer_context import active_profile
+from .writer_context import active_profile, identity_question
 
 HISTORY_LIMIT = 200
 
@@ -98,13 +98,6 @@ def identity_line_for(account, config=None, *, s=None):
 
 # ------------------------------------------------------------------ text signals
 # Narrow, reviewed word lists. A miss means the model answers normally; a hit never sends anything.
-_IDENTITY = re.compile(
-    r"\b(?:are you (?:an? )?(?:real|human|bot|ai|robot|actually (?:her|real|you)|a person|a girl|automated)"
-    r"|is this (?:an? )?(?:bot|ai|real|robot|automated|really (?:her|you))"
-    r"|am i (?:talking|chatting|speaking|texting) (?:to|with) (?:an? )?(?:real|bot|ai|human|person|someone)"
-    r"|who am i (?:talking|chatting|speaking|texting) (?:to|with)"
-    r"|(?:talking|chatting|speaking|texting) (?:to|with) (?:an? )?(?:agency|chatter|team|staff|employee|someone else)"
-    r"|who runs this account|do you work for an? agency|agency|chatter(?:s)?)\b")
 _OFFPLATFORM = re.compile(
     r"\b(?:whatsapp|telegram|snap(?:chat)?|insta(?:gram)?|kik|discord|signal app|wechat|skype|facetime|"
     r"your (?:phone )?number|phone number|text me|call me|email|e-mail|gmail|add me|dm me on|"
@@ -146,6 +139,19 @@ _BANNED_FAN = re.compile(
     r"how much (?:to|for) (?:meet|fuck|sex))\b", re.I)
 
 
+# Mentioning a contact service is not itself asking to move a conversation.
+_OFFPLATFORM_ASK = re.compile(
+    r"\b(?:what(?:'s| is|s) your|(?:your|ur) (?:phone|number|email|e-mail|whatsapp|telegram|snap|instagram|kik|discord)"
+    r"|do you have|are you on|can (?:i|we|you)|could (?:i|we|you)|let(?:'s|s| us)"
+    r"|(?:text|call|message|contact|add|dm|email) (?:me|you)|(?:pay|tip) (?:you|with|via|on))\b")
+_PRICE_WORDS = r"too (?:expensive|much|pricey|steep)"
+_DIRECT_PRICE_REFUSAL = re.compile(
+    r"^(?:(?:no|nah|sorry)[, ]+)?(?:way |really )?" + _PRICE_WORDS + r"\b"
+    r"|\b(?:it'?s|it is|that'?s|that is|this is) (?:way |really )?" + _PRICE_WORDS + r"\b"
+    r"|\b(?:your|the|that|this) (?:price|photo|picture|pic|video|content|offer|card|set)\b.{0,40}\b" + _PRICE_WORDS + r"\b"
+    r"|\b" + _PRICE_WORDS + r" for me\b")
+
+
 def _norm(text):
     return re.sub(r'\s+', ' ', str(text or '').lower().replace('’', "'")).strip()
 
@@ -158,9 +164,9 @@ def signals(text, config=None):
     from .safety_context import sensitive_match
     if sensitive_match(_BANNED_FAN, value):
         found.add('platform_banned')
-    if _IDENTITY.search(value):
+    if identity_question(value):
         found.add('identity')
-    if _OFFPLATFORM.search(value):
+    if _OFFPLATFORM.search(value) and (_OFFPLATFORM_ASK.search(value) or _OFFPLATFORM.fullmatch(value.rstrip(' .!?'))):
         found.add('offplatform')
     if _MEETUP.search(value):
         found.add('meetup')
@@ -168,14 +174,66 @@ def signals(text, config=None):
         found.add('limit')
     if _CUSTOM.search(value):
         found.add('custom')
-    if _REFUSAL.search(value):
-        found.add('refusal')
+    refusal_matches = list(_REFUSAL.finditer(value))
+    if refusal_matches:
+        price_only = all(re.fullmatch(_PRICE_WORDS, match.group(0)) for match in refusal_matches)
+        # A complaint about an unrelated expense is not a refusal of this creator's
+        # sale. Direct refusal/opt-out and first-person affordability remain intact.
+        if not price_only or _DIRECT_PRICE_REFUSAL.search(value):
+            found.add('refusal')
     if _SALES_OPTOUT.search(value):
         found.add('sales_optout')
         found.add('refusal')
     if _COMPLIMENT.search(value) and not _ASKS.search(value) and not found:
         found.add('compliment')
     return frozenset(found)
+
+
+def pilot_purchase_scope(s, runtime, fan_id, message):
+    """Recognize a narrow current request, not a quotation, hypothetical or reference.
+
+    This is input interpretation only. The caller must independently check the
+    live request, controls, history, policy, coverage and delivery authority.
+    """
+    from .pilot_scope import current
+    from .catalogue import normalize
+    from db.models import CatalogItem
+    pilot, config = current(s, runtime)
+    if (pilot is None or pilot.status != 'active' or config['authorization_mode'] != 'autonomous'
+            or fan_id not in config['fans'] or message is None or message.fan_id != fan_id):
+        return ()
+    value = _norm(message.body).rstrip(' .!?')
+    # A current change of mind remains an explicit request; do not broaden to quoted/hypothetical text.
+    value = re.sub(r'^actually[, ]+', '', value)
+    names = {'photo', 'picture', 'pic'}
+    item = s.get(CatalogItem, config['product']['id'])
+    if item is not None and item.account_id == runtime.account_id and item.label:
+        label = normalize(item.label)
+        if label and len(label) <= 80:
+            names.add(label)
+    noun = '(?:' + '|'.join(re.escape(name) for name in sorted(names)) + ')'
+    prefix = (r"(?:i (?:want|would like|am ready) to (?:buy|purchase)|can i (?:buy|purchase)"
+              r"|i(?:'ll| will) (?:take|buy)|i want|(?:please )?(?:(?:can|could|would) you )?(?:send|show)(?: me)?)")
+    if not re.fullmatch(prefix + r' (?:the |this |that |your |a )?' + noun + r'(?: please)?', value):
+        return ()
+    return (str(config['product']['id']),)
+
+
+def live_current_request(s, runtime, fan_id, message):
+    """The same bound incoming evidence required by EngineService.plan, still latest."""
+    from db.onlyfans_models import OfIngress
+    from .engine import conflicted_sources
+    if (message is None or message.direction != 'in' or message.is_unsent
+            or message.account_id != runtime.account_id or message.fan_id != fan_id
+            or message.created_at < runtime.activated_at):
+        return False
+    proof = s.scalar(select(OfIngress.event_key).where(OfIngress.account_id == runtime.account_id,
+        OfIngress.binding_id == runtime.binding_id, OfIngress.fan_id == fan_id,
+        OfIngress.message_id == message.message_id, OfIngress.status == 'applied', OfIngress.source != 'import').limit(1))
+    latest = s.scalar(select(Message.message_id).where(Message.account_id == runtime.account_id,
+        Message.fan_id == fan_id, Message.direction == 'in', Message.is_unsent.is_(False),
+        current_binding_message(runtime.binding_id)).order_by(Message.created_at.desc(), Message.message_id.desc()).limit(1))
+    return bool(proof and latest == message.message_id and (fan_id, message.message_id) not in conflicted_sources(s, runtime.account_id))
 
 
 def promises_custom(*bodies):
@@ -310,6 +368,9 @@ def journey_context(s, runtime, owner, request, message):
     ctx['sales_mode'] = owner.sales_mode
     ctx['backfill_complete'] = gate
     ctx['history_scope_incomplete'] = bool(unscoped)
+    scope = pilot_purchase_scope(s, runtime, owner.fan_id, message)
+    if scope:
+        ctx['explicit_purchase_scope'] = list(scope)
     if compliment:
         ctx['compliment_after_unlock'] = True
     if verdict['no_promise']:
@@ -385,6 +446,7 @@ class JourneyService:
             self._pause_selling(tenant, account, fan_id, message_id, verdict['pause'])
         else:
             reopened = self._lapse_temporary_pause(tenant, account, fan_id, message_id)
+            reopened = self._reopen_current_purchase(tenant, account, fan_id, message_id) or reopened
         for flag in verdict['flags']:
             self._flag(tenant, account, fan_id, message_id, flag)
         if verdict['human']:
@@ -398,6 +460,45 @@ class JourneyService:
         return {'action': 'none'}
 
     # -- writes
+    def _reopen_current_purchase(self, tenant, account, fan_id, message_id):
+        """Use the existing scoped sales transition before building the model's context.
+
+        The current request is its evidence. This changes no contact/control
+        state, grants no offer, and never turns a pause into globally open sales.
+        """
+        from .pilot_scope import planning_scope, delivery_block
+        if self.engine_service is None:
+            return False
+        with Session(self.db) as s, s.begin():
+            runtime = self.store._runtime(s, tenant, account)
+            message = s.get(Message, (account, fan_id, message_id))
+            scope = pilot_purchase_scope(s, runtime, fan_id, message)
+            if not scope or not live_current_request(s, runtime, fan_id, message):
+                return False
+            owner = s.get(OfEngineOwner, (account, fan_id))
+            state = s.get(OfConversationState, (account, fan_id))
+            if (owner is None or owner.mode != 'active' or owner.binding_id != runtime.binding_id
+                    or state is None or state.mode != 'automated' or state.takeover_state != 'none'
+                    or self.store._unresolved(s, account, fan_id, state)
+                    or delivery_block(s, runtime, fan_id, commercial=True)):
+                return False
+            try:
+                planning_scope(s, runtime, fan_id, self.engine_service.model, draft_only=self.engine_service.draft_only)
+            except Refused:
+                return False
+            if decide(s, runtime, owner, message, self.config)['pause'] is not None:
+                return False
+            if owner.sales_mode == 'open':
+                return False
+            encoded = json.dumps(sorted(set(scope)))
+            if (owner.sales_mode == 'reopened_scoped' and owner.sales_scope_json == encoded
+                    and owner.sales_source_message_id == message_id):
+                return True
+            owner.sales_mode, owner.sales_scope_json, owner.sales_source_message_id = 'reopened_scoped', encoded, message_id
+            owner.revision += 1
+            owner.updated_at = utcnow()
+            return True
+
     def _pause_selling(self, tenant, account, fan_id, message_id, why):
         """Stop the pitch NOW: pause selling and invalidate every unsent sales draft for this fan."""
         with Session(self.db) as s, s.begin():

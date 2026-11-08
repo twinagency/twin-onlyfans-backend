@@ -354,7 +354,7 @@ class EngineService:
                 from .memory import projection as memory_projection
                 memory_view, memory_fingerprint = memory_projection(s, runtime, fan_id, message)
                 from .offers import match as match_offers
-                offer_match = match_offers(s, runtime, fan_id, message.body)
+                offer_match = match_offers(s, runtime, fan_id, message.body, include_cards=True)
                 from .catalogue import search_context
                 catalogue_view = search_context(s, runtime, fan_id, message)
                 from .memory import references_fingerprint
@@ -438,6 +438,9 @@ class EngineService:
             raise Refused('explicit buying scope required')
         if proposal.sales_signal != 'reopen' and proposal.item_scope:
             raise Refused('unexpected buying scope')
+        if (proposal.sales_signal == 'reopen' and snapshot.get('pilot_scope') is not None
+                and not set(proposal.item_scope) <= set((snapshot.get('journey') or {}).get('explicit_purchase_scope', []))):
+            raise Refused('clear current buying scope required')
         with Session(self.engine) as s, s.begin():
             runtime = self.store._runtime(s, tenant, account)
             owner = s.get(OfEngineOwner, (account, fan_id))
@@ -512,7 +515,7 @@ class EngineService:
             from .offers import match as match_offers
             from .catalogue import search_context
             from .memory import references_fingerprint
-            if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body),
+            if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body, include_cards=True),
                                       search_context(s, runtime, fan_id, source), s=s) != offer_fingerprint:
                 raise Refused('catalogue, offer or creator profile changed during generation')
             generation = 0 if observed_generation is None else observed_generation + 1
@@ -587,7 +590,7 @@ class EngineService:
             from .offers import match as match_offers
             from .catalogue import search_context
             from .memory import references_fingerprint
-            if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body),
+            if references_fingerprint(account, policy, match_offers(s, runtime, fan_id, source.body, include_cards=True),
                                       search_context(s, runtime, fan_id, source), s=s) != offer_fingerprint:
                 raise Refused('catalogue, offer or creator profile changed during generation')
 

@@ -202,7 +202,7 @@ class PromptContext:
     memory_lines: tuple = ()
     memory_excerpts: tuple = ()
     memory_available: bool = True
-    request_context: tuple = ()       # scoped unresolved work; evidence, never fresh action authority
+    request_context: tuple = ()       # scoped work and existing-card facts; never fresh action authority
     sales_mode: str = 'open'          # open | paused | reopened_scoped
     sales_scope: tuple = ()           # item ids when reopened_scoped
     scope_items: tuple = ()           # ({'itemId','label'}) for those ids when known
@@ -237,15 +237,28 @@ def digest_messages(messages):
 
 
 # ---- context building (code decides; no model involved) -----------------------------
-_ROLE_RX = re.compile(r"\b(are you (a )?(real|bot|ai|robot|human|fake|an? agency|chatbot)|is this (a )?(bot|ai|real|fake|agency)|"
-                      r"(real|actual) (person|girl|woman)|who(?:'?s| is) (this|typing|really)|am i (talking|chatting) to (a )?(bot|ai|real)|"
-                      r"this isn'?t (really )?(her|you)|agency)\b", re.I)
+_ROLE_RX = re.compile(
+    r"\b(?:are you (?:an? )?(?:real|human|bot|ai|robot|chatbot|fake|actually (?:her|real|you)|a person|a girl|automated)"
+    r"|is this (?:an? )?(?:bot|ai|real|robot|chatbot|fake|automated|really (?:her|you))"
+    r"|am i (?:talking|chatting|speaking|texting) (?:to|with) (?:an? )?(?:real|bot|ai|human|person|someone)"
+    r"|who am i (?:talking|chatting|speaking|texting) (?:to|with)"
+    r"|(?:talking|chatting|speaking|texting) (?:to|with) (?:an? )?(?:agency|chatter|team|staff|employee|someone else)"
+    r"|who runs this account|do you work for an? agency"
+    r"|are you (?:with|using|working for) (?:an? )?agency"
+    r"|(?:are you|you are|you're|is this) (?:an? )?chatter"
+    r"|is (?:an? )?(?:agency|chatter|team) (?:running|answering|writing)"
+    r"|who(?:'s| is) (?:this|typing|really)|this isn'?t (?:really )?(?:her|you))\b", re.I)
 _CONTENT_RX = re.compile(r"\b(send|show|got|have|any|sell|buy|want|see)\b.{0,40}\b(pics?|pictures?|photos?|vids?|videos?|nudes?|content|ppv|set|bundle|more of you|clip)\b|"
                          r"\b(pics?|photos?|vids?|videos?|nudes?|ppv)\b.{0,20}\b(please|pls|of you|for me)\b", re.I)
 
 
+def identity_question(text):
+    """Shared interpretation for writing, validation and journey decisions, not a send proof."""
+    return bool(_ROLE_RX.search(str(text or '').replace('’', "'")))
+
+
 def classify_turn(fan_text):
-    if _ROLE_RX.search(fan_text):
+    if identity_question(fan_text):
         return 'role_question'
     if _CONTENT_RX.search(fan_text):
         return 'content_request'
@@ -429,29 +442,44 @@ def request_context_from(snapshot, budget):
     actions = [r for r in snapshot.get('pending_actions', []) if isinstance(r, dict)]
     unknown = [r for r in actions if r.get('outcome') in ('unknown','dispatching')]
     active = [r for r in requests if str(r.get('source_message_id')) == str(snapshot['current_message']['id'])]
-    groups = [('ACTION', unknown, budget.request_chars // 2),
+    references = snapshot.get('offer_reference') or {}
+    cards = [c for c in references.get('cards', []) if isinstance(c, dict)]
+    groups = [('ACTION', unknown, budget.request_chars // (3 if cards else 2)),
               ('REQUEST', active, budget.request_chars // 4),
+              ('CARD', cards, budget.request_chars // 3),
               ('REQUEST', [r for r in requests if r not in active], budget.request_chars),
               ('ACTION', [r for r in actions if r not in unknown], budget.request_chars)]
     lines, size, omitted = [], 0, False
-    total = max(0, budget.request_chars - 90)
+    total = max(0, budget.request_chars - (150 if cards or references.get('cardsCoverage') == 'incomplete' else 90))
     for kind, records, quota in groups:
         used = 0
         for row in records[:budget.requests]:
-            fields = ('request_id', 'source_message_id', 'status', 'owner', 'next_step') if kind == 'REQUEST' else (
-                'decision_id', 'request_id', 'generation', 'action', 'outcome')
+            fields = (('request_id', 'source_message_id', 'status', 'owner', 'next_step') if kind == 'REQUEST' else
+                      ('offerId', 'itemId', 'intentId', 'messageId', 'label', 'priceCents', 'currency',
+                       'financialReview') if kind == 'CARD' else
+                      ('decision_id', 'request_id', 'generation', 'action', 'outcome'))
             data = {k: row[k] for k in fields if k in row}
+            if kind == 'CARD' and isinstance(data.get('label'), str) and len(data['label']) > 120:
+                data['label'] = data['label'][:117] + '...'
+                omitted = True
             body = row.get('source_body' if kind == 'REQUEST' else 'body')
             if isinstance(body, str):
                 data['source_text' if kind == 'REQUEST' else 'proposed_text'] = body[:160]
-            line = kind + ' ' + json.dumps(data, ensure_ascii=False, sort_keys=True)
+            prefix = ('CARD facts (reference ' + str(references.get('state', 'unavailable'))
+                      + '; send ' + str(row.get('sendState', 'unavailable'))
+                      + '; access ' + str(row.get('accessState', 'unavailable'))
+                      + '; financial settlement not established; not action authority): '
+                      if kind == 'CARD' else kind + ' ')
+            line = prefix + json.dumps(data, ensure_ascii=False, sort_keys=True)
             if used + len(line) > quota or size + len(line) > total:
                 omitted = True
                 continue
             lines.append(line);size += len(line);used += len(line)
         omitted = omitted or len(records) > budget.requests
-    if omitted or snapshot.get('open_requests_truncated') or snapshot.get('pending_actions_truncated'):
-        lines.append('Additional unresolved records omitted; do not infer completion or a known outcome.')
+    incomplete = references.get('cardsCoverage') == 'incomplete' or references.get('cardsTruncated')
+    if omitted or incomplete or snapshot.get('open_requests_truncated') or snapshot.get('pending_actions_truncated'):
+        lines.append('Additional unresolved/card records omitted or coverage incomplete; do not infer completion or a known outcome.'
+                     if cards or incomplete else 'Additional unresolved records omitted; do not infer completion or a known outcome.')
     return tuple(lines)
 
 

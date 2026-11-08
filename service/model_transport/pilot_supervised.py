@@ -222,6 +222,40 @@ class SupervisedPilot:
             self.validate()
             intake.drive(self.account, fan, fan_scoped=True)
             intake.classify_sent(self.account, fan)
+        # Invalidating an approval can happen before a dispatcher sees its queued
+        # intent. Retire that unsent intent through the existing queue accounting;
+        # do not leave it outside both the send and regeneration scans.
+        with Session(store.engine) as s:
+            runtime = store._runtime(s, self.tenant, self.account, lock=False)
+            invalid_queued = s.execute(select(OfEngineDecision.decision_id, OfEngineDecision.intent_id).join(
+                OfEngineApproval, and_(OfEngineApproval.account_id == OfEngineDecision.account_id,
+                    OfEngineApproval.request_id == OfEngineDecision.request_id,
+                    OfEngineApproval.generation == OfEngineDecision.generation)).where(
+                OfEngineDecision.account_id == self.account, OfEngineDecision.binding_id == runtime.binding_id,
+                OfEngineDecision.fan_id.in_(self.allowed_fans), OfEngineDecision.status == 'queued',
+                OfEngineDecision.intent_id.is_not(None),
+                OfEngineApproval.authorization_mode == 'autonomous',
+                OfEngineApproval.status.in_(('invalidated', 'expired'))).distinct().limit(limit)).all()
+        for decision_id, intent_id in invalid_queued:
+            self.validate()
+            reason = self.worker._guard(self.tenant, self.account, decision_id)
+            if reason:
+                self.worker._cancel_queued(self.tenant, self.account, intent_id, reason)
+        # Expire model leases through the existing ledger. A reservation that never
+        # reached the wire can resume; a calling lease becomes unknown and stays held.
+        with Session(store.engine) as s:
+            runtime = store._runtime(s, self.tenant, self.account, lock=False)
+            expired_calls = s.execute(select(OfEngineModelCall.request_id, OfEngineModelCall.generation).where(
+                OfEngineModelCall.account_id == self.account,
+                OfEngineModelCall.binding_id == runtime.binding_id,
+                OfEngineModelCall.fan_id.in_(self.allowed_fans),
+                OfEngineModelCall.created_at >= active_since,
+                OfEngineModelCall.status.in_(('reserved', 'calling')),
+                OfEngineModelCall.lease_expires_at <= utcnow()).order_by(
+                    OfEngineModelCall.lease_expires_at, OfEngineModelCall.call_id).limit(limit)).all()
+        for request_id, generation in expired_calls:
+            self.validate()
+            self.worker.engine.model.ledger.sweep(self.account, request_id, generation)
         # Only scope-era inbound messages without a completed draft are eligible
         # for repair. Unknown model calls are retained, never automatically retried.
         with Session(store.engine) as s:
@@ -230,6 +264,16 @@ class SupervisedPilot:
             existing = select(OfEngineApproval.request_id).where(
                 OfEngineApproval.account_id == request.account_id,
                 OfEngineApproval.request_id == request.request_id).exists()
+            # Revisit only locally repairable, autonomous drafts. This is scheduling eligibility,
+            # never send authority; the worker rechecks all live controls and creates a new generation.
+            dead_auto = select(OfEngineApproval.request_id).where(
+                OfEngineApproval.account_id == request.account_id,
+                OfEngineApproval.request_id == request.request_id,
+                OfEngineApproval.binding_id == runtime.binding_id,
+                OfEngineApproval.authorization_mode == 'autonomous',
+                OfEngineApproval.status.in_(('invalidated', 'expired')),
+                OfEngineApproval.invalidation_reason.in_(
+                    ('memory_changed', 'new_inbound_pending', 'pilot_contact_review_pending', 'ttl'))).exists()
             ready = select(OfEngineDecision.decision_id).where(
                 OfEngineDecision.account_id == request.account_id,
                 OfEngineDecision.request_id == request.request_id,
@@ -238,7 +282,10 @@ class SupervisedPilot:
             uncertain = select(OfEngineModelCall.call_id).where(
                 OfEngineModelCall.account_id == request.account_id,
                 OfEngineModelCall.request_id == request.request_id,
-                or_(OfEngineModelCall.status.in_(('reserved','calling','unknown','released')),
+                or_(OfEngineModelCall.status.in_(('reserved','calling','unknown')),
+                    and_(OfEngineModelCall.status == 'released',
+                         or_(OfEngineModelCall.outcome.is_(None), OfEngineModelCall.outcome != 'lease_expired',
+                             OfEngineModelCall.wire_started_at.is_not(None))),
                     OfEngineModelCall.outcome.in_(('identity_pending','identity_unverified')))).exists()
             query = (select(OfIngress, request).outerjoin(request, and_(
                 request.account_id == OfIngress.account_id, request.fan_id == OfIngress.fan_id,
@@ -246,8 +293,8 @@ class SupervisedPilot:
                 .where(OfIngress.account_id == self.account, OfIngress.binding_id == runtime.binding_id,
                     OfIngress.fan_id.in_(self.allowed_fans), OfIngress.source != 'import',
                     OfIngress.status.in_(('pending','applied')), OfIngress.received_at >= active_since,
-                    or_(request.request_id.is_(None), and_(request.status == 'open', ~existing,
-                                                          or_(ready, ~uncertain)))))
+                    or_(request.request_id.is_(None), and_(request.status == 'open',
+                        or_(and_(~existing, or_(ready, ~uncertain)), and_(dead_auto, ~uncertain))))))
             cursor = self.ingress_cursor.get('last')
             if cursor is not None:
                 query = query.where(tuple_(OfIngress.received_at, OfIngress.event_key) > tuple_(*cursor))
@@ -262,6 +309,31 @@ class SupervisedPilot:
                     OfEngineDecision.account_id == self.account, OfEngineDecision.request_id == request.request_id,
                     OfEngineDecision.binding_id == runtime.binding_id, OfEngineDecision.part_index == 0,
                     OfEngineDecision.status == 'ready').order_by(OfEngineDecision.generation.desc()).limit(1))
+                if request is not None:
+                    latest_approval = s.scalar(select(OfEngineApproval).where(
+                        OfEngineApproval.account_id == self.account,
+                        OfEngineApproval.request_id == request.request_id).order_by(
+                            OfEngineApproval.generation.desc(), OfEngineApproval.version.desc()).limit(1))
+                    if latest_approval is not None:
+                        if (latest_approval.authorization_mode != 'autonomous'
+                                or latest_approval.status not in ('invalidated', 'expired')
+                                or latest_approval.invalidation_reason not in (
+                                    'memory_changed', 'new_inbound_pending', 'pilot_contact_review_pending', 'ttl')
+                                ):
+                            continue
+                        parts = s.scalars(select(OfEngineDecision).where(
+                            OfEngineDecision.account_id == self.account,
+                            OfEngineDecision.request_id == request.request_id,
+                            OfEngineDecision.generation == latest_approval.generation)).all()
+                        from conversation_engine.engine import _latest_generation, _proved_unsent
+                        latest_parts = _latest_generation(s, self.account, request.request_id)
+                        if (not parts or not latest_parts or latest_parts[0].generation != latest_approval.generation
+                                or not (all(part.status == 'ready' and part.intent_id is None for part in parts)
+                                        or _proved_unsent(s, self.account, parts))):
+                            continue
+                        # turn() retires a ready draft or uses the engine's existing
+                        # proof of cancellation before regenerating. It cannot replay it.
+                        decision = None
                 work.append(('stage', incoming.fan_id, decision.decision_id) if decision is not None
                             else ('turn', incoming.fan_id, incoming.message_id))
         planned = []

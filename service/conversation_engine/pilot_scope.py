@@ -6,6 +6,7 @@ explicitly activated, fully configured scope; no function starts a worker or
 makes a provider/model call. All mutations lock the existing account runtime.
 """
 from hashlib import sha256
+from datetime import datetime
 import json
 import os
 import re
@@ -47,7 +48,25 @@ def _exact(obj, keys):
 
 
 def validate(config):
-    _exact(config, ('fans', 'product', 'operator', 'model', 'limits', 'qualification', 'authorization_mode', 'creator_profile'))
+    required = {'fans', 'product', 'operator', 'model', 'limits', 'qualification', 'authorization_mode', 'creator_profile'}
+    if type(config) is not dict or not required <= set(config) <= required | {'offer_coverage'}:
+        raise Refused('invalid pilot configuration fields')
+    coverage = config.get('offer_coverage')
+    if 'offer_coverage' in config:
+        _exact(coverage, ('account_id', 'binding_id', 'complete', 'evidence_ref', 'valid_until', 'snapshot_hash'))
+        if (type(coverage['account_id']) is not str or not coverage['account_id'] or len(coverage['account_id']) > 128
+                or type(coverage['binding_id']) is not str or not coverage['binding_id'] or len(coverage['binding_id']) > 128
+                or coverage['complete'] is not True or type(coverage['evidence_ref']) is not str
+                or not coverage['evidence_ref'].startswith('vault:') or not 6 < len(coverage['evidence_ref']) <= 128
+                or type(coverage['snapshot_hash']) is not str or not re.fullmatch('[0-9a-f]{64}', coverage['snapshot_hash'])
+                or type(coverage['valid_until']) is not str):
+            raise Refused('invalid pilot offer coverage')
+        try:
+            expiry = datetime.fromisoformat(coverage['valid_until'])
+            if expiry.tzinfo is not None or expiry.isoformat() != coverage['valid_until']:
+                raise ValueError()
+        except ValueError:
+            raise Refused('pilot offer coverage needs an explicit UTC expiry') from None
     if config['authorization_mode'] not in ('supervised', 'autonomous'):
         raise Refused('explicit pilot authorization mode is required')
     from .writer_context import CreatorProfile, profile_data
@@ -102,7 +121,7 @@ def validate(config):
     requests = _integer(limits['provider_requests'], 1, 10**7)
     credits = _integer(limits['provider_credit_budget'], 1, 10**12)
     per_request = _integer(limits['provider_credits_per_request'], 1, credits)
-    return {'creator_profile':profile_data(profile), 'authorization_mode':config['authorization_mode'], 'qualification':{'mode':qualification['mode'], 'reference':qualification['reference']},
+    result = {'creator_profile':profile_data(profile), 'authorization_mode':config['authorization_mode'], 'qualification':{'mode':qualification['mode'], 'reference':qualification['reference']},
             'fans':fans, 'product':{'id':item, 'price_cents':price, 'media_ids':media, 'preview_ids':preview},
             'operator':{'actor':actor, 'name':name, 'permissions':sorted(permissions)},
             'model':{'provider':'openrouter', 'primary':model['primary'], 'upstream':model['upstream'],
@@ -111,6 +130,29 @@ def validate(config):
             'limits':{'send_units':send_units, 'daily_send_units':daily_units, 'throttle_seconds':throttle,
                       'provider_requests':requests, 'provider_credit_budget':credits,
                       'provider_credits_per_request':per_request}}
+    if 'offer_coverage' in config:
+        result['offer_coverage'] = dict(coverage)
+    return result
+
+
+def current_offer_coverage(s, runtime, config):
+    """The operator's existing VaultCatalogueCoverage, frozen in the existing pilot policy.
+
+    No expiry/reference is inferred. Absent or expired approval stays unavailable;
+    reading an expired policy remains possible for stop/recovery operations.
+    """
+    from .catalogue import VaultCatalogueCoverage, _catalogue_version
+    raw = config.get('offer_coverage')
+    if raw is None:
+        raise Refused('offer_coverage_missing')
+    if raw['account_id'] != runtime.account_id or raw['binding_id'] != runtime.binding_id:
+        raise Refused('offer_coverage_scope_changed')
+    expiry = datetime.fromisoformat(raw['valid_until'])
+    if expiry <= utcnow():
+        raise Refused('offer_coverage_expired')
+    if raw['snapshot_hash'] != _catalogue_version(s, runtime):
+        raise Refused('offer_coverage_stale')
+    return VaultCatalogueCoverage(runtime.account_id, runtime.binding_id, True, raw['evidence_ref'], expiry, raw['snapshot_hash'])
 
 
 def _encoded(value):
@@ -334,6 +376,8 @@ def configure(store, tenant, account, config, *, expected_revision, command_key,
                     raise Refused('resolve retained fan delivery before removing the fan')
         if not _product_current(s, account, config['product']):
             raise Refused('pilot product or price is unavailable')
+        if 'offer_coverage' in config:
+            current_offer_coverage(s, runtime, config)
         if row is not None and (row.provider_requests_used > config['limits']['provider_requests']
                 or row.provider_credits_reserved > config['limits']['provider_credit_budget']):
             raise Refused('new limits cannot erase existing reservations')

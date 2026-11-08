@@ -142,6 +142,10 @@ class RealConversationWorker:
         try:
             self.engine.select_simulated(tenant, account, fan_id, source_message_id=message_id)
         except Refused as exc:
+            from .commerce import prepare_pilot_offer
+            prepared = prepare_pilot_offer(store, tenant, account, fan_id, message_id, self.engine)
+            if prepared is not None and prepared['state'] == 'held':
+                return {'outcome': 'held', **prepared}
             return {'outcome': 'not_ready', 'detail': str(exc)}
         from .journey import scoped_config
         with Session(self.engine.engine) as s:
@@ -156,6 +160,10 @@ class RealConversationWorker:
         verdict = self.journey.before_plan(tenant, account, fan_id, message_id)
         if verdict['action'] == 'handled':
             return {'outcome': 'handed_to_human', 'reason': verdict['reason']}
+        from .commerce import prepare_pilot_offer
+        prepared = prepare_pilot_offer(store, tenant, account, fan_id, message_id, self.engine)
+        if prepared is not None and prepared['state'] == 'held':
+            return {'outcome': 'held', **prepared}
         try:
             decision = self.engine.plan(tenant, account, fan_id, message_id)
             if approval.retire_dead_draft(store, tenant, account, decision):
@@ -311,7 +319,7 @@ class RealConversationWorker:
             return
         with Session(self.engine.engine) as s, s.begin():
             self.engine.store._runtime(s, tenant, account)
-            request = None
+            request, changed = None, False
             for decision_id in decision_ids:
                 decision = s.get(OfEngineDecision, (account, decision_id), with_for_update=True)
                 if decision is None:
@@ -319,8 +327,12 @@ class RealConversationWorker:
                 request = s.get(OfEngineRequest, (account, decision.request_id), with_for_update=True)
                 if decision.status == 'ready' and decision.intent_id is None:
                     decision.status, decision.updated_at = 'cancelled', utcnow()
-                approval.invalidate_generation_in_session(s, account, decision.request_id, decision.generation, reason)
-            if request is not None and request.status in {'open', 'waiting_fan'}:
+                    changed = True
+                invalidated = approval.invalidate_generation_in_session(s, account, decision.request_id, decision.generation, reason)
+                changed = bool(changed or invalidated)
+            # A racing worker encountering an already retired generation must not
+            # change request context underneath the worker generating its replacement.
+            if changed and request is not None and request.status in {'open', 'waiting_fan'}:
                 request.next_step, request.updated_at = 'review_changed_conversation', utcnow()
                 request.revision += 1
 

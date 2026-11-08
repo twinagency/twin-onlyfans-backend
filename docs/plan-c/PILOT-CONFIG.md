@@ -1,3 +1,5 @@
+> Historical record. Its provisional fan/product/approval settings are superseded for the current pilot. Do not use this document to configure or activate a worker. See [CURRENT-PILOT.md](CURRENT-PILOT.md) and the exact source/image qualification record.
+
 # Plan C test configuration (decision register) - 2026-11-07
 Ronan (owner) instruction 2026-11-07 evening: test only, reuse the already-connected OnlyFans account, invent any missing test details, choose the model, finish fast. This is a TEST configuration, not a production pilot allowlist.
 

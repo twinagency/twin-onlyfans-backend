@@ -1,3 +1,5 @@
+> Historical record. Its provisional fan/product/approval settings are superseded for the current pilot. Do not use this document to configure or activate a worker. See [CURRENT-PILOT.md](CURRENT-PILOT.md) and the exact source/image qualification record.
+
 # Plan C handoff: state of the narrow supervised OnlyFans pilot
 
 Written 2026-11-07 22:35 AEST (Work Server clock 12:35 UTC) by Claude for Ronan, Jesse and whoever continues (ChatGPT/Codex). No secrets in this file. Plan C = the narrow, supervised pilot described in CLAUDE-PILOT-HANDOFF.md (Jesse/Codex, 7 Nov) plus Ronan's test-only decisions below.

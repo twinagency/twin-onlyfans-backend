@@ -121,8 +121,8 @@ _INVOLVEMENT = re.compile(
     r"\b(?:me|us) and (?:her|the girl|the creator|the team)\b|\b(?:it'?s|this is) (?:really |actually )?(?:me|her)\b.{0,12}\b(?:typing|writing|texting|replying)\b|"
     r"\bwe (?:both|all) (?:read|write|reply)\b", re.I)
 _DISCOUNT = re.compile(
-    r"\b(discount|cheaper|half[- ]price|special price|price drop|lower (the )?price|knock (some|a bit) off|\d+ ?% ?off|"
-    r"for less|sale price|deal for you|bundle|payment plan|pay (me )?later)\b", re.I)
+    r"\b(discounts?|cheaper|half[- ]price|special price|price drop|lower (the )?price|knock (some|a bit) off|\d+ ?% ?off|"
+    r"for less|sale price|deal for you|bundles?|payment plans?|pay (me )?later)\b", re.I)
 _LATER = re.compile(
     r"\b(i'?ll|i will|ill|i'?m going to|im gonna|let me) (text|message|msg|dm|write|ping|check in|get back|come back|reach out|hit you up)"
     r"( to)?( with)?( you)?( on you)? ?(later|tomorrow|tonight|again|soon|in the morning|in \d+|when|after)\b", re.I)
@@ -168,9 +168,8 @@ def content_facts(snapshot, offer):
     for kind, key in (('picture', 'pictures'), ('video', 'videos'), ('other', 'total')):
         if type(media.get(key)) is int:
             facts[kind].add(media[key])
-    for row in snapshot.get('history', []):
-        if row.get('direction') == 'out' and type(row.get('media_count')) is int and row['media_count'] > 0:
-            facts['history'].add(row['media_count'])
+    # An untyped count on an unrelated historical card proves neither this
+    # item's quantity nor whether it contains photos or videos.
     return facts
 
 
@@ -179,7 +178,7 @@ def _unsupported_quantities(texts, snapshot, offer):
     bad = []
     for text in texts:
         for count, kind in quantity_claims(text):
-            if count not in facts[kind] and count not in facts['history']:
+            if count not in facts[kind]:
                 bad.append(f'{count} {kind}')
     return bad
 
@@ -255,7 +254,7 @@ def _writing_problems(proposal, ctx, texts):
     snapshot = ctx.snapshot
     if _WITHHOLD.search(joined):
         problems.append('makes an answer or item conditional on him answering, tell her something or earning it; answer first')
-    if _DISCOUNT.search(joined):
+    if _affirmative_match(_DISCOUNT, joined):
         problems.append('offers a discount, cheaper option or bundle; the price is fixed and there is one product')
     if _LATER.search(joined):
         problems.append('promises to message him later; there is no timed follow-up')
@@ -273,6 +272,43 @@ def _writing_problems(proposal, ctx, texts):
 
 _AGE = re.compile(r"\b(i'?m|im|i am) \d{2}\b(?! ?(min|mins|minutes|sec|secs|hrs?|hours?|%|more|percent))|\b\d{2} ?(yo|y/o|years? old)\b", re.I)
 _LOCATION = re.compile(r"\b(i live in|i'?m from|im from|my (real name|address) is)\b", re.I)
+_CITY_CLAIM = re.compile(r"\b(?:i live in|i'?m from|im from|i am from|i'?m based in|i am based in|my home city is)\s+([^.!?;\n]+)", re.I)
+
+
+def _affirmative_match(pattern, text):
+    """A local explicit refusal is not an offer; later positive clauses still count."""
+    from .claims import _clauses, _negated, _window
+    for clause, _ in _clauses(text):
+        for match in pattern.finditer(clause):
+            before = _window(clause, match.start())
+            after = clause[match.end():]
+            reversed_denial = re.search(r"\b(?:not only|not just|no problem|no worries|(?:don't|do not|won't|will not) (?:refuse|deny))\b", before, re.I)
+            denied_after = re.match(r"\s+(?:is|are)\s+(?:not|never)\s+(?:available|allowed|offered|permitted)\b|\s+(?:isn't|aren't)\s+(?:available|allowed|offered|permitted)\b", after, re.I)
+            if (not _negated(clause, match.start()) or reversed_denial) and not denied_after:
+                return match
+    return None
+
+
+def _location_problems(text, profile):
+    expected = profile.fact('home_city') if hasattr(profile, 'fact') else None
+    problems = []
+    for match in _CITY_CLAIM.finditer(text):
+        stated = re.split(r",|\b(?:and|but|because|where)\b", match.group(1), maxsplit=1, flags=re.I)[0]
+        stated = re.sub(r"\s+(?:now|currently|originally)$", '', stated.strip(), flags=re.I)
+        if not expected or _norm_line(stated) != _norm_line(expected):
+            problems.append('states where she lives or is from inconsistently with her documented facts')
+    if re.search(r"\bmy (?:real name|address) is\b", text, re.I):
+        problems.append('states a private identity or address without supported public wording')
+    return problems
+
+
+def _approved_public_contact(text, profile):
+    handle = profile.fact('telegram') if hasattr(profile, 'fact') else None
+    if not isinstance(handle, str) or not re.fullmatch(r'@[A-Za-z0-9_]{5,32}', handle):
+        return False
+    # Only this neutral, documented statement is allowed; it grants no
+    # off-platform conversation, payment, meetup or different contact authority.
+    return text.strip().rstrip('.').lower() == ('My public Telegram is ' + handle).lower()
 
 
 def extract_json_text(raw):
@@ -325,15 +361,16 @@ def creator_problems(texts, ctx):
     profile = ctx.profile
     joined = ' '.join(texts)
     for name, rx in _RULES:
-        match = rx.search(joined)
+        if name == 'contact details or socials' and _approved_public_contact(joined, profile):
+            continue
+        match = _affirmative_match(rx, joined) if name == 'promises to meet' else rx.search(joined)
         if match:
             problems.append(f"{name} ('{match.group(0).strip()[:40]}')")
     age = profile.fact('age') if hasattr(profile, 'fact') else None
     found_age = _AGE.search(joined)
     if found_age and (age is None or age not in found_age.group(0)):
         problems.append('states an age that is not in her documented facts')
-    if _LOCATION.search(joined) and not (profile.fact('home_city') if hasattr(profile, 'fact') else None):
-        problems.append('states where she lives or is from; no such fact is documented')
+    problems.extend(_location_problems(joined, profile))
     problems.extend(_sexual_problems(texts, ctx))
     low = joined.lower()
     for term in getattr(profile, 'private_terms', ()) or ():
@@ -343,7 +380,7 @@ def creator_problems(texts, ctx):
         if phrase and phrase.lower() in low:
             problems.append(f"uses a banned line ('{phrase}')")
     for term in getattr(profile, 'limit_terms', ()) or ():
-        if term and re.search(r'\b' + re.escape(term.lower()) + r'\b', low):
+        if term and _affirmative_match(re.compile(r'\b' + re.escape(term.lower()) + r'\b', re.I), joined):
             problems.append(f"crosses one of her documented limits ('{term}')")
     return problems
 
@@ -354,11 +391,15 @@ def edit_problems(texts, ctx):
     joined = ' '.join(texts)
     if _WITHHOLD.search(joined):
         problems.append('makes an answer conditional on the fan answering')
-    if _DISCOUNT.search(joined):
+    if _affirmative_match(_DISCOUNT, joined):
         problems.append('offers a discount, cheaper option or bundle')
     if _LATER.search(joined):
         problems.append('promises to message later')
     problems.extend(_identity_problems(texts, ctx))
+    from .writer_context import offer_for
+    offer = offer_for(ctx.snapshot, ctx.profile, ctx.snapshot['current_message']['body'])
+    if _unsupported_quantities(texts, ctx.snapshot, offer):
+        problems.append('states a content quantity that is not in the card facts')
     return problems
 
 

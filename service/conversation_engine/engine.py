@@ -359,6 +359,10 @@ class EngineService:
                 catalogue_view = search_context(s, runtime, fan_id, message)
                 from .memory import references_fingerprint
                 offer_fingerprint = references_fingerprint(account, policy, offer_match, catalogue_view, s=s)
+                request_text = dict(s.execute(select(Message.message_id, Message.body).where(
+                    Message.account_id == account, Message.fan_id == fan_id,
+                    Message.message_id.in_([r.source_message_id for r in open_rows]),
+                    current_binding_message(runtime.binding_id))).all())
                 snapshot = {'account_id': account, 'fan_id': fan_id, 'binding_id': runtime.binding_id,
                     'owner_epoch': owner.epoch, 'connection_epoch': connection_epoch, 'input_revision': state.input_revision, 'control_revision': state.revision,
                     'sales_mode': owner.sales_mode, 'sales_scope': json.loads(owner.sales_scope_json),
@@ -378,6 +382,7 @@ class EngineService:
                         for d, intent_status in pending_rows[:50]],
                     'pending_actions_truncated': len(pending_rows) > 50,
                     'open_requests': [{'request_id': r.request_id, 'source_message_id': r.source_message_id,
+                        'source_body': request_text.get(r.source_message_id),
                         'status': r.status, 'owner': r.owner, 'next_step': r.next_step} for r in open_rows[:50]],
                     'open_requests_truncated': len(open_rows) > 50}
                 if pilot_stamp is not None:

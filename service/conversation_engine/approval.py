@@ -237,6 +237,12 @@ def evaluate(s, runtime, decision, *, now=None, phase='send', need_approval=True
         return 'conversation_not_automated', None, None, None
     if state.revision != decision.control_revision:
         return 'control_changed', None, None, None
+    from .pilot_scope import current as current_pilot
+    pilot, config = current_pilot(s, runtime)
+    if pilot is not None:
+        from .pilot_ingress import review_pending
+        if review_pending(s, runtime, pilot, config, fan_id):
+            return 'pilot_contact_review_pending', None, None, None
     if (fan_id, request.source_message_id) in conflicted_sources(s, account):
         return 'webhook_conflict', None, None, None
     latest = _latest_inbound(s, runtime, fan_id)

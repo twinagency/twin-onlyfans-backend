@@ -126,6 +126,18 @@ class RealConversationWorker:
             return {'outcome': 'outside_pilot_scope'}
         store = self.engine.store
         store.drain(tenant, account)
+        from .pilot_scope import current as current_pilot
+        from .pilot_ingress import preserve_contact_stops, review_pending
+        with Session(store.engine) as s:
+            runtime = store._runtime(s, tenant, account, lock=False)
+            pilot, _ = current_pilot(s, runtime)
+        if pilot is not None:
+            preserve_contact_stops(store, tenant, account)
+            with Session(store.engine) as s:
+                runtime = store._runtime(s, tenant, account, lock=False)
+                pilot, config = current_pilot(s, runtime)
+                if pilot is not None and review_pending(s, runtime, pilot, config, fan_id):
+                    return {'outcome':'held', 'detail':'pilot_contact_review_pending'}
         approval.retire_superseded(store, tenant, account, fan_id, message_id)   # older unsent drafts lose their approval
         try:
             self.engine.select_simulated(tenant, account, fan_id, source_message_id=message_id)

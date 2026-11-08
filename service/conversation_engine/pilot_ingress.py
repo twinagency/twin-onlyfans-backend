@@ -1,7 +1,8 @@
 """Bounded signed-ingress review; immutable audit receipts survive crashes and restarts."""
 from hashlib import sha256
 import json
-from sqlalchemy import select, func, literal
+from sqlalchemy import select, func, literal, cast, DateTime
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 from db.models import Message, OfConversationState
 from db.onlyfans_models import OfIngress, OfControlAudit
@@ -23,12 +24,22 @@ def _unreviewed(runtime, scope, config):
     reviewed = select(OfLaunchCommand.command_key).where(
         OfLaunchCommand.account_id==OfIngress.account_id, OfLaunchCommand.command_key==key,
         OfLaunchCommand.binding_id==runtime.binding_id, OfLaunchCommand.kind=='plan_c_ingress_review').exists()
-    return select(OfIngress).join(Message,
-        (Message.account_id==OfIngress.account_id)&(Message.fan_id==OfIngress.fan_id)&
-        (Message.message_id==OfIngress.message_id)).where(OfIngress.account_id==runtime.account_id,
+    payload = cast(OfIngress.payload, JSONB)
+    return select(OfIngress).where(OfIngress.account_id==runtime.account_id,
         OfIngress.binding_id==runtime.binding_id,OfIngress.fan_id.in_(config['fans']),OfIngress.status=='applied',
-        OfIngress.source=='ws',OfIngress.received_at>=scope.created_at,Message.created_at>=scope.created_at,
-        Message.direction=='in',Message.is_unsent.is_(False),~reviewed)
+        OfIngress.source=='ws',OfIngress.received_at>=scope.created_at,
+        cast(payload['created_at'].astext, DateTime(timezone=True))>=scope.created_at,
+        payload['direction'].astext=='in',~reviewed)
+
+
+def review_pending(s, runtime, scope, config, fan_id):
+    """Same transaction and account lock as authorization and final dispatch.
+
+    A scheduler's earlier review cannot authorize a later, unclassified input.
+    A deleted display message also cannot erase a received opt-out.
+    """
+    return s.scalar(_unreviewed(runtime, scope, config).where(
+        OfIngress.fan_id == fan_id).limit(1)) is not None
 
 
 def _record_review(store, tenant, account, binding, row, control_key):

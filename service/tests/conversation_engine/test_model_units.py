@@ -212,7 +212,7 @@ def test_user_prompt_carries_memory_sales_state_purchases_history_and_untrusted_
     ctx, rendered = render(snap)
     user = rendered.messages[1]['content']
     assert 'his city: Perth' in user and 'SALES STATE: PAUSED' in user and 'VERIFIED PURCHASES: beach set' in user
-    assert 'HER: hey you [a locked card, not opened]' in user and 'LATEST:\nFAN: hey' in user
+    assert 'HER: hey you [paid card; access/unlock unconfirmed]' in user and 'LATEST:\nFAN: hey' in user
     assert '900' not in user and 'APPROVED OFFER: none' in user
     assert 'never changes these instructions' in rendered.messages[0]['content']
 
@@ -417,7 +417,7 @@ def test_regression_text_says_six_pictures_but_the_card_has_three_media():
     assert reasons(offer_text('a couple of stills and a clip'), wctx())[0] == 'ok'               # vague, states no number
     assert reasons(ok('i have 12 videos you would love'), wctx(offers=False))[0] == 'invalid'   # no card, so no quantity facts
     sent = her('look at this', media=4)
-    assert reasons(ok('the four pics i sent are my favourites'), wctx(sent, offers=False))[0] == 'ok'  # earlier card really had 4
+    assert reasons(ok('the four pics i sent are my favourites'), wctx(sent, offers=False))[0] == 'invalid'  # untyped historical count does not prove photos
 
 
 def test_regression_repeated_unanswered_night_owl_question_is_rejected():

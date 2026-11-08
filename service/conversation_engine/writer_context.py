@@ -186,6 +186,8 @@ class PromptBudget:
     latest_chars: int = 1200
     memory_chars: int = 900
     memory_excerpts: int = 3
+    request_chars: int = 1800
+    requests: int = 8
     purchases: int = 20
     examples: int = 12
     example_chars: int = 140
@@ -200,6 +202,7 @@ class PromptContext:
     memory_lines: tuple = ()
     memory_excerpts: tuple = ()
     memory_available: bool = True
+    request_context: tuple = ()       # scoped unresolved work; evidence, never fresh action authority
     sales_mode: str = 'open'          # open | paused | reopened_scoped
     sales_scope: tuple = ()           # item ids when reopened_scoped
     scope_items: tuple = ()           # ({'itemId','label'}) for those ids when known
@@ -262,6 +265,14 @@ def pick_offer(snapshot, fan_text):
     if not grants:
         return None
     words = set(re.findall(r'[a-z0-9]+', fan_text.lower()))
+    video = bool(words & {'video', 'videos', 'vid', 'vids', 'clip', 'clips'})
+    picture = bool(words & {'photo', 'photos', 'picture', 'pictures', 'pic', 'pics', 'image', 'images'})
+    if video != picture:
+        key = 'videos' if video else 'pictures'
+        grants = [g for g in grants if isinstance(g.get('media'), dict)
+                  and type(g['media'].get(key)) is int and g['media'][key] > 0]
+        if not grants:
+            return None
     def score(grant):
         text = set(re.findall(r'[a-z0-9]+', f"{grant.get('label', '')} {grant.get('description', '')}".lower()))
         return (-len(words & text), str(grant['itemId']))
@@ -314,11 +325,41 @@ def memory_lines_from(view, budget):
             lines.append(f"{key.replace('_', ' ')}: {str(value)[:200]}")
     learned = memory.get('learnedProfile')
     if isinstance(learned, dict):
-        for key, value in sorted(learned.items()):
-            if isinstance(value, str) and value:
-                lines.append(f"{key.replace('_', ' ')}: {value[:200]}")
+        overridden = set(memory.get('overrides') or {})
+        overridden.update(k for k, v in (memory.get('facts') or {}).items()
+                          if isinstance(v, dict) and v.get('source') == 'operator')
+        aliases = {'location':'home_city', 'current_location':'home_city', 'name':'real_name',
+                   'age':'his_age', 'job':'occupation', 'interests':'hobbies'}
+        for item in (learned.get('memories') or [])[:10]:
+            if not isinstance(item, dict) or item.get('subject') != 'fan':
+                continue
+            key, value, status = item.get('field'), item.get('value'), item.get('status')
+            if (not isinstance(key, str) or not isinstance(value, str) or not value.strip()
+                    or status not in {'current', 'upcoming', 'uncertain', 'past'}
+                    or aliases.get(key, key) in overridden):
+                continue
+            proof = next((e for e in reversed(item.get('evidence') or [])
+                          if isinstance(e, dict) and isinstance(e.get('source'), str)), None)
+            if proof is None:
+                continue
+            qualifier = status + (', potentially stale' if item.get('potentially_stale') else '')
+            alternatives = item.get('alternatives') or []
+            if alternatives:
+                qualifier += ', conflicting evidence: ' + ' / '.join(str(v)[:60] for v in alternatives[:3])
+            if item.get('event_outcome') == 'unconfirmed':
+                qualifier += ', outcome unconfirmed'
+            context = item.get('contextEvidence') or []
+            if context and isinstance(context[-1], dict) and context[-1].get('quote'):
+                qualifier += ', answer to: ' + str(context[-1]['quote'])[:120]
+            lines.append(f"{key.replace('_', ' ')}: {value[:200]} ({qualifier}; source {proof['source'][:80]})")
+    bounded, size = [], 0
+    for line in lines:
+        if size + len(line) > budget.memory_chars:
+            break
+        bounded.append(line)
+        size += len(line)
     excerpts = tuple(str(i.get('excerpt', ''))[:160] for i in (memory.get('interactions') or [])[:budget.memory_excerpts] if i.get('excerpt'))
-    return tuple(lines), excerpts, True
+    return tuple(bounded), excerpts, True
 
 
 def _history_rows(snapshot, budget):
@@ -330,10 +371,41 @@ def _history_rows(snapshot, budget):
         who = 'FAN' if row['direction'] == 'in' else 'HER'
         text = (row.get('body') or '').strip()
         if row['direction'] == 'out' and (row.get('media_count') or row.get('price_cents')):
-            text = (text + ' ' if text else '') + ('[a locked card he opened]' if row.get('paid') else '[a locked card, not opened]')
+            if (row.get('price_cents') or 0) > 0:
+                label = '[paid card; access/unlock recorded; financial settlement not established here]' if row.get('paid') else '[paid card; access/unlock unconfirmed]'
+            elif row.get('price_cents') == 0:
+                label = '[free media; no paid unlock required]'
+            else:
+                label = '[media shared; pricing and access status unavailable]'
+            text = (text + ' ' if text else '') + label
         if text:
             rows.append((who, text[:budget.history_message_chars]))
     return tuple(rows)
+
+
+def request_context_from(snapshot, budget):
+    lines, size = [], 0
+    for kind, key in (('REQUEST', 'open_requests'), ('ACTION', 'pending_actions')):
+        for row in (snapshot.get(key) or [])[:budget.requests]:
+            if not isinstance(row, dict):
+                continue
+            fields = ('request_id', 'source_message_id', 'status', 'owner', 'next_step') if kind == 'REQUEST' else (
+                'decision_id', 'request_id', 'generation', 'action', 'outcome')
+            data = {k: row[k] for k in fields if k in row}
+            text = row.get('source_body' if kind == 'REQUEST' else 'body')
+            if isinstance(text, str):
+                data['source_text' if kind == 'REQUEST' else 'proposed_text'] = text[:300]
+            line = kind + ' ' + json.dumps(data, ensure_ascii=False, sort_keys=True)
+            if size + len(line) > budget.request_chars:
+                lines.append('Additional unresolved work omitted by the context budget; do not assume it is resolved.')
+                return tuple(lines)
+            lines.append(line)
+            size += len(line)
+        if len(snapshot.get(key) or []) > budget.requests:
+            lines.append('Additional ' + kind.lower() + ' records omitted; their outcomes remain unresolved.')
+    if snapshot.get('open_requests_truncated') or snapshot.get('pending_actions_truncated'):
+        lines.append('Additional unresolved work exists outside this bounded context.')
+    return tuple(lines)
 
 
 def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, budget=PromptBudget()):
@@ -349,6 +421,7 @@ def build_context(snapshot, profile, *, examples=(), fix=(), prefixed=False, bud
     scope_items = tuple({'itemId': i, 'label': catalogue[i].get('label', '')} for i in scope if i in catalogue)
     return PromptContext(profile=profile, turn_kind=classify_turn(fan_text), fan_text=fan_text,
         history=_history_rows(snapshot, budget), memory_lines=lines, memory_excerpts=excerpts, memory_available=available,
+        request_context=request_context_from(snapshot, budget),
         sales_mode=snapshot.get('sales_mode', 'open'), sales_scope=scope, scope_items=scope_items, offer=offer,
         outstanding_card=matched[0] if matched else None,
         purchases=tuple(p['label'] for p in purchases[:budget.purchases]) if isinstance(purchases, list) else None,

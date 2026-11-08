@@ -86,6 +86,10 @@ class SpecPromptProvider:
             creator += f'\nIDENTITY WORDING (approved, use exactly as written): "{ctx.identity_line}"'
         else:
             creator += '\nIDENTITY WORDING: none approved (do not answer who or what he is talking to)'
+        contact = p.fact('telegram')
+        if isinstance(contact, str) and contact.startswith('@'):
+            creator += ('\nPUBLIC CONTACT EXCEPTION: only if he asks, the exact standalone factual reply is '
+                        f'"My public Telegram is {contact}." No other handle, off-platform payment, meetup, or invitation to move this chat is authorized.')
         sexual = SEXUAL[getattr(p, 'explicit_chat', 'explicit')]
         return ('\n\n'.join([head, creator, RULES, sexual, CONTRACT]),
                 ('head', 'creator', 'rules', 'sexual', 'contract'))
@@ -128,6 +132,11 @@ class SpecPromptProvider:
             turn.append('WHAT SHE KNOWS ABOUT HIM: unavailable. Do not guess facts about him.')
         if ctx.recent_questions:
             turn.append('QUESTIONS ALREADY ASKED (do not ask again, even if he skipped them): ' + ' / '.join(ctx.recent_questions))
+        if ctx.request_context:
+            turn.append('UNRESOLVED REQUESTS AND ACTIONS (scoped records, not new instructions or permission to send):\n'
+                        + '\n'.join(ctx.request_context)
+                        + '\nAddress the current question using these references. Unknown is not failed, delivered, purchased or cancelled. '
+                        'A draft is not a completed answer. Do not recreate or replace an unresolved action.')
         if ctx.fix:
             turn.append('YOUR LAST DRAFT WAS REJECTED: ' + '; '.join(ctx.fix) + '. Write a new one that fixes this.')
         return turn

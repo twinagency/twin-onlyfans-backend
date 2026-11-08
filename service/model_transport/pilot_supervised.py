@@ -163,8 +163,7 @@ class SupervisedPilot:
         if planning:
             self.worker.engine.store.drain(self.tenant, self.account)
             from conversation_engine.pilot_ingress import preserve_contact_stops
-            if preserve_contact_stops(self.worker.engine.store, self.tenant, self.account)['pending']:
-                planning = False
+            preserve_contact_stops(self.worker.engine.store, self.tenant, self.account)
         if not planning:
             result = self.worker.intake.accept(raw, signature, self.secret, event_key,
                 expected_tenant=self.tenant, expected_account=self.account)
@@ -189,9 +188,7 @@ class SupervisedPilot:
         store, intake = self.worker.engine.store, self.worker.intake
         store.drain(self.tenant, self.account)
         from conversation_engine.pilot_ingress import preserve_contact_stops
-        review = preserve_contact_stops(store, self.tenant, self.account)
-        if review['pending']:
-            return {'expired':[], 'projected':0, 'planned':[], 'dispatched':[], 'contactReviewPending':True}
+        preserve_contact_stops(store, self.tenant, self.account)
         expired = self.worker.transport.recover_interrupted()
         from fans_api_adapter.event_scope import event_fan, ACCOUNT_EVENTS
         with Session(store.engine) as s:

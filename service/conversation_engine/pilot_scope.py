@@ -223,6 +223,9 @@ def delivery_block(s, runtime, fan, *, commercial=False):
     pilot, config = current(s, runtime)
     if pilot is None:
         return None
+    from .pilot_ingress import review_pending
+    if review_pending(s, runtime, pilot, config, fan):
+        return 'pilot_contact_review_pending'
     from db.onlyfans_fans_intake_models import OfFansEvidence, OfFansLink, OfFansProjection
     from db.onlyfans_engine_models import OfFansWebhook, OfEnginePilotWebhookDigest
     conn = s.scalar(select(OfFansConnection).where(OfFansConnection.account_id == runtime.account_id,

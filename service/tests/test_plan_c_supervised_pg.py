@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from conversation_engine import approval, pilot_scope
 from conversation_engine.operator_v2 import list_receipts, unresolved
 from db.onlyfans_delivery_models import OfTextIntent
-from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfFansWebhook, OfFansWebhookConflict
+from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfFansWebhook, OfEnginePilotWebhookDigest
 from model_transport.pilot_supervised import build_supervised_pilot
 from onlyfans_runtime.store import Refused
 from plan_c_worker import create_app
@@ -23,7 +23,7 @@ from test_plan_c_scope_pg import ACTOR, OTHER, activate, config_for, install
 
 
 @pytest.fixture
-def supervised(configured_draft, tmp_path, monkeypatch):
+def supervised(configured_draft, tmp_path, monkeypatch, request):
     world, env, model, seen = configured_draft
     # Synthetic catalogue ID only; the actual photo must be bound separately.
     from db.models import CatalogItem, Fan, OfConversationState
@@ -44,7 +44,9 @@ def supervised(configured_draft, tmp_path, monkeypatch):
            'ONLYFANS_PROCESS_ROLE':'worker', 'TWIN_ENGINE_FANSAPI_REAL':'1',
            'TWIN_ENGINE_FANSAPI_ENV_FILE':str(creds)}
     monkeypatch.setenv('TWIN_PLAN_C_FIXTURE_ONLY', '1')
-    install(world, config_for(world, env, fans=[FAN, FAN2], requests=100, credits=200))
+    cfg = config_for(world, env, fans=[FAN, FAN2], requests=100, credits=200)
+    cfg['authorization_mode'] = getattr(request, 'param', 'supervised')
+    install(world, cfg)
     activate(world)
     pilot = build_supervised_pilot(world.store, env, model_transport=model, fans_transport=world.fans.transport)
     yield world, env, model, seen, pilot
@@ -81,7 +83,7 @@ def test_normal_http_webhook_approval_dispatch_receipt_duplicate_and_restart(sup
     result = pilot.tick()
     assert result['dispatched'] == ['accepted']
     assert len(world.fans.posts) == 1
-    receipt = list_receipts(world.store, TENANT, ACCOUNT)
+    receipt = list_receipts(world.store, TENANT, ACCOUNT, ACTOR)
     assert len(receipt) == 1 and receipt[0]['messageId'] == '7001' and receipt[0]['projected']
     assert pilot.tick()['dispatched'] == []
     restarted = build_supervised_pilot(world.store, env, model_transport=model, fans_transport=world.fans.transport)
@@ -100,7 +102,7 @@ def test_conflicting_duplicate_outside_scope_or_unsupported_fences_approved_draf
     assert pilot.handle(raw2, headers2['Signature'], 'collision')['outcome'] == 'quarantined'
     assert pilot.tick()['dispatched'] == [] and world.fans.posts == []
     with Session(world.database[1]) as s:
-        assert len(list(s.scalars(select(OfFansWebhookConflict)))) == 2
+        assert len(list(s.scalars(select(OfEnginePilotWebhookDigest)))) == 2
         assert s.scalar(select(OfEngineApproval)).status == 'invalidated'
 
 
@@ -176,7 +178,7 @@ def test_unknown_send_is_retained_and_different_fan_can_progress(supervised):
     world.no_throttle()
     assert pilot.tick()['dispatched'] == ['accepted']
     assert len(world.fans.posts) == 2
-    assert any(item['kind'] == 'unknown_send' for item in unresolved(world.store, TENANT, ACCOUNT))
+    assert any(item['kind'] == 'unknown_send' for item in unresolved(world.store, TENANT, ACCOUNT, ACTOR))
     restarted = build_supervised_pilot(world.store, env, model_transport=model, fans_transport=fake)
     restarted.tick()
     assert len(world.fans.posts) == 2
@@ -268,8 +270,90 @@ def test_reserved_model_call_cannot_cross_pilot_stop_and_reactivation(supervised
         command_key='3'*64, actor=ACTOR, reason='fixture stop')
     pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'active', expected_revision=stopped['revision'],
         command_key='4'*64, actor=ACTOR, reason='fixture restart')
-    with pytest.raises(Refused, match='model call pilot revision changed before wire'):
+    with pytest.raises(Refused, match='model worker pilot revision changed'):
         ledger.mark_calling(ACCOUNT, reservation.call_id, 'fixture-worker')
     with Session(world.database[1]) as s:
         assert s.get(OfEngineModelCall, (ACCOUNT, reservation.call_id)).status == 'reserved'
     assert world.fans.posts == []
+
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_autonomous_policy_records_machine_authority_and_sends_once(supervised):
+    world, env, model, _, pilot = supervised
+    draft = stage(pilot, 520)
+    assert draft['outcome'] == 'awaiting_approval' and world.fans.posts == []
+    result = pilot.tick()
+    assert result['dispatched'] == ['accepted']
+    with Session(world.database[1]) as s:
+        row = s.scalar(select(OfEngineApproval))
+        assert row.authorization_mode == 'autonomous' and row.actor.startswith('autonomous-policy:')
+        assert row.status == 'consumed'
+    pilot.tick()
+    restarted = build_supervised_pilot(world.store, env, model_transport=model, fans_transport=world.fans.transport)
+    restarted.tick()
+    assert len(world.fans.posts) == 1
+
+
+@pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
+def test_autonomous_mode_still_invalidates_changed_memory_and_takeover(supervised):
+    from onlyfans_runtime.launch_history_memory.memory import HistoricalMemory
+    from db.models import OfConversationState
+    world, _, _, _, pilot = supervised
+    stage(pilot, 521)
+    memory = HistoricalMemory(world.store)
+    view = memory.read(TENANT, ACCOUNT, FAN)
+    memory.correct(TENANT, ACCOUNT, FAN, field='home_city', operation='set', value='Brisbane',
+        expected_version=view['version'], command_key='auto-correction', actor=ACTOR, reason='fixture correction')
+    pilot.tick()
+    assert world.fans.posts == []
+    stage(pilot, 522, fan=FAN2)
+    with Session(world.database[1]) as s: revision = s.get(OfConversationState, (ACCOUNT,FAN2)).revision
+    world.store.control(TENANT, ACCOUNT, FAN2, mode='human_controlled', expected_revision=revision,
+        command_key='auto-takeover', actor=ACTOR, reason='fixture stop', action='request_takeover')
+    pilot.tick()
+    assert world.fans.posts == []
+
+
+def test_outside_first_concurrent_key_collision_cannot_send(supervised, monkeypatch):
+    from threading import Event
+    world, _, _, _, pilot = supervised
+    arrived, release = Event(), Event()
+    original = pilot.worker.intake.accept
+    def paused(*args, **kwargs):
+        arrived.set()
+        assert release.wait(8)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(pilot.worker.intake, 'accept', paused)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        future = pool.submit(stage, pilot, 523, 'allowed', FAN, 'racing-key')
+        assert arrived.wait(8)
+        raw, headers = signed(inbound(524, 'outside', fan=999), key='racing-key')
+        assert pilot.handle(raw, headers['Signature'], 'racing-key')['outcome'] == 'outside_pilot_scope'
+        release.set()
+        assert future.result(timeout=15)['outcome'] == 'quarantined'
+    pilot.tick()
+    assert world.fans.posts == []
+    with Session(world.database[1]) as s:
+        assert s.scalar(select(OfFansWebhook)).status == 'quarantined'
+        assert s.scalar(select(OfEnginePilotWebhookDigest)) is not None
+
+
+def test_fixture_scope_refuses_real_model_before_wire(supervised, monkeypatch):
+    from model_transport.openrouter import OpenRouterClient
+    world, env, _, seen, _ = supervised
+    def unexpected(*args, **kwargs): raise AssertionError('real model wire must not be reached')
+    monkeypatch.setattr(OpenRouterClient, 'chat', unexpected)
+    pilot = build_supervised_pilot(world.store, env, model_transport=None, fans_transport=world.fans.transport)
+    result = stage(pilot, 525)
+    assert result['outcome'] == 'not_ready' and 'simulated model' in result['detail']
+    assert seen == [] and world.fans.posts == []
+
+
+def test_pilot_private_reads_require_the_named_administrator(supervised):
+    from conversation_engine.operator_v2 import list_drafts
+    world, _, _, _, pilot = supervised
+    stage(pilot, 526)
+    assert len(list_drafts(world.store, TENANT, ACCOUNT, ACTOR)) == 1
+    with pytest.raises(Refused): list_drafts(world.store, TENANT, ACCOUNT, OTHER)
+    with pytest.raises(Refused): list_receipts(world.store, TENANT, ACCOUNT, None)
+    with pytest.raises(Refused): unresolved(world.store, TENANT, ACCOUNT, OTHER)

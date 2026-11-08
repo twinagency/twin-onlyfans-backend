@@ -196,17 +196,19 @@ def _tenant(s, account):
     return binding.tenant_id
 
 
-def linked_unlocks(s, account):
+def linked_unlocks(s, account, fan_id=None):
     """Unlocks the provider tied to one accepted send and that commerce has not applied yet."""
     return list(s.scalars(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account,
         OfFansEvidence.kind == 'unlock', OfFansEvidence.status == 'pending',
-        OfFansEvidence.intent_id.is_not(None), OfFansEvidence.reason == 'awaiting_commerce')
+        OfFansEvidence.intent_id.is_not(None), OfFansEvidence.reason == 'awaiting_commerce',
+        True if fan_id is None else OfFansEvidence.fan_id == fan_id)
         .order_by(OfFansEvidence.occurred_at)))
 
 
-def pending_chargebacks(s, account):
+def pending_chargebacks(s, account, fan_id=None):
     return list(s.scalars(select(OfFansEvidence.evidence_id).where(OfFansEvidence.account_id == account,
-        OfFansEvidence.kind == 'chargeback', OfFansEvidence.status == 'pending').order_by(OfFansEvidence.occurred_at)))
+        OfFansEvidence.kind == 'chargeback', OfFansEvidence.status == 'pending',
+        True if fan_id is None else OfFansEvidence.fan_id == fan_id).order_by(OfFansEvidence.occurred_at)))
 
 
 def _commerce(store):

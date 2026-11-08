@@ -159,6 +159,12 @@ def build_draft_pilot(store, environ=None, *, model_transport=None):
     engine = build_engine_service(store, env, transport=model_transport, draft_only=True)
     if engine is None:
         raise Refused('draft model runtime is unavailable')
+    from conversation_engine.pilot_scope import current as current_pilot
+    with Session(store.engine) as session, session.begin():
+        runtime = store._runtime(session, tenant, account)
+        pilot_scope, _ = current_pilot(session, runtime)
+        if pilot_scope is not None:
+            engine.model.ledger.expected_pilot_scope = (pilot_scope.revision, pilot_scope.fingerprint)
     worker = RealConversationWorker(engine, intake, transport)
     pilot = DraftPilot(worker, tenant, account, secret, item, price, media, previews, profiles, allowed, cfg)
     pilot.validate()

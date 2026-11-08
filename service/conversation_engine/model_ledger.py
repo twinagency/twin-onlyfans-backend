@@ -73,6 +73,7 @@ def _counted():
 class ModelLedger:
     def __init__(self, engine, config, *, clock=utcnow):
         self.engine, self.config, self.clock = engine, config, clock
+        self.expected_pilot_scope = None
 
     # ---- lease recovery ------------------------------------------------------
     def _expire(self, s, rows, now):
@@ -101,7 +102,7 @@ class ModelLedger:
 
     # ---- reservation -----------------------------------------------------------
     @staticmethod
-    def _pilot_guard(s, account, fan_id, binding_id, config):
+    def _pilot_guard(s, account, fan_id, binding_id, config, expected_pilot_scope):
         from db.onlyfans_models import OfRuntime
         from db.onlyfans_delivery_models import OfDeliveryPolicy
         from .pilot_scope import current, require_model, policy_matches, _product_current
@@ -110,7 +111,11 @@ class ModelLedger:
             raise Refused('model call creator binding changed')
         pilot, scope = current(s, runtime)
         if pilot is None:
+            if expected_pilot_scope is not None:
+                raise Refused('model worker pilot scope disappeared')
             return
+        if expected_pilot_scope != (pilot.revision, pilot.fingerprint):
+            raise Refused('model worker pilot revision changed')
         if (fan_id not in scope['fans'] or pilot.status not in ('configured', 'active')
                 or not policy_matches(s.get(OfDeliveryPolicy, account), scope, enabled=pilot.status == 'active')
                 or not _product_current(s, account, scope['product'])):
@@ -138,7 +143,7 @@ class ModelLedger:
         with Session(self.engine) as s, s.begin():
             # One global budget lock: caps are checked and the reservation inserted atomically.
             s.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': _BUDGET_LOCK})
-            pilot_stamp = self._pilot_guard(s, account, fan_id, binding_id, cfg)
+            pilot_stamp = self._pilot_guard(s, account, fan_id, binding_id, cfg, self.expected_pilot_scope)
             now = self.clock()
             request = s.get(OfEngineRequest, (account, request_id), with_for_update=True)
             owner = s.get(OfEngineOwner, (account, fan_id))
@@ -189,7 +194,7 @@ class ModelLedger:
             from db.onlyfans_models import OfRuntime
             s.get(OfRuntime, account, with_for_update=True)
             row = self._mine(s, account, call_id, worker_id, 'reserved')
-            pilot_stamp = self._pilot_guard(s, account, row.fan_id, row.binding_id, self.config)
+            pilot_stamp = self._pilot_guard(s, account, row.fan_id, row.binding_id, self.config, self.expected_pilot_scope)
             if pilot_stamp != ((row.pilot_scope_revision, row.pilot_scope_fingerprint)
                                if row.pilot_scope_revision is not None else None):
                 raise Refused('model call pilot revision changed before wire')

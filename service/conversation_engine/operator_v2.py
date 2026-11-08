@@ -105,6 +105,10 @@ def _scope(store, tenant, account):
             runtime = store._runtime(s, tenant, account, lock=False)
         except Refused:
             raise NotFound('scope unavailable') from None
+        from db.onlyfans_engine_models import OfEnginePilotScope
+        selected = s.get(OfEnginePilotScope, 1)
+        if selected is not None and selected.account_id != account:
+            raise NotFound('scope unavailable')
         policy = s.get(OfDeliveryPolicy, account)
         return runtime.binding_id, policy is not None and policy.transport_kind == PLAN_C_TRANSPORT
 
@@ -187,8 +191,23 @@ def _fan_evidence(s, binding, account, fan_id):
     return '; '.join(notes) or None
 
 
-def list_drafts(store, tenant, account):
+def require_pilot_reader(store, tenant, account, actor):
+    """A configured singleton pilot is readable only by its named administrator."""
+    from db.onlyfans_engine_models import OfEnginePilotScope
+    from .pilot_scope import current as current_pilot, authorize
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account, lock=False)
+        selected = s.get(OfEnginePilotScope, 1)
+        if selected is not None and selected.account_id != account:
+            raise NotFound('scope unavailable')
+        pilot, config = current_pilot(s, runtime)
+        if pilot is not None:
+            authorize(config, actor, 'read')
+
+
+def list_drafts(store, tenant, account, actor=None):
     """Live (awaiting or approved) draft versions in the shape the dashboard parses (planc-dash plan-c.ts)."""
+    require_pilot_reader(store, tenant, account, actor)
     binding, gated = _scope(store, tenant, account)
     if not gated:
         return []
@@ -241,12 +260,13 @@ def _refusal(exc):
     return Conflict(text)
 
 
-def list_receipts(store, tenant, account):
+def list_receipts(store, tenant, account, actor=None):
     """Recent provider acceptances for approved engine sends in this creator binding.
 
     A receipt means the provider accepted a message; it does not establish a
     fan read, payment, settlement, or access. Unknown sends are never included.
     """
+    require_pilot_reader(store, tenant, account, actor)
     binding, gated = _scope(store, tenant, account)
     if not gated:
         return []
@@ -410,8 +430,9 @@ def _acknowledged(s, account, binding):
     return out
 
 
-def unresolved(store, tenant, account):
+def unresolved(store, tenant, account, actor=None):
     """Every item has an owner and a next step. Owners are roles (the dashboard limits owner to 64 characters)."""
+    require_pilot_reader(store, tenant, account, actor)
     binding, gated = _scope(store, tenant, account)
     if not gated:
         return []
@@ -524,6 +545,26 @@ def unresolved(store, tenant, account):
         if s.scalar(select(OfFansProjection.event_key).where(OfFansProjection.account_id == account,
                 OfFansProjection.status == 'held', OfFansProjection.detail == 'historical_creator_binding').limit(1)):
             unscoped_provider_evidence = True
+        if scope is not None and scope.active_since is not None:
+            from fans_api_adapter.event_scope import event_fan
+            from db.onlyfans_engine_models import OfFansWebhook, OfFansConnection
+            fan_expr = event_fan(OfFansWebhook.event_type, OfFansWebhook.raw_body)
+            prior = s.scalar(select(OfFansProjection.event_key).join(OfFansWebhook, and_(
+                OfFansWebhook.account_id == OfFansProjection.account_id,
+                OfFansWebhook.epoch == OfFansProjection.epoch, OfFansWebhook.event_key == OfFansProjection.event_key))
+                .join(OfFansConnection, and_(OfFansConnection.account_id == OfFansWebhook.account_id,
+                      OfFansConnection.epoch == OfFansWebhook.epoch)).where(
+                OfFansProjection.account_id == account, OfFansProjection.status == 'pending',
+                OfFansConnection.binding_id == binding, OfFansWebhook.event_type == 'messages.received',
+                OfFansWebhook.received_at < scope.active_since, fan_expr.in_(tuple(map(str, allowed)))).limit(1))
+            if prior is not None:
+                items.append(_item('pre_activation_webhook', 'review', 'operator', 'review_earlier_inbound',
+                    'An earlier inbound event was retained before this activation. Review it; it is not automatically sent.'))
+            conflict = s.scalar(select(OfFansProjection.event_key).where(OfFansProjection.account_id == account,
+                OfFansProjection.status == 'held', OfFansProjection.detail == 'pilot_event_key_conflict').limit(1))
+            if conflict is not None:
+                items.append(_item('webhook_conflict', 'review', 'operator', 'review_event_conflict',
+                    'A webhook key had conflicting signed payloads. Preserve the evidence and review it before any send.'))
         if unscoped_provider_evidence:
             items.append(_item('unscoped_provider_evidence', 'review', 'operator', 'review_evidence_scope',
                                'Provider evidence cannot be safely attributed to the current creator binding. '

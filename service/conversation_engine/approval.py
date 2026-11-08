@@ -100,7 +100,7 @@ def _latest(s, account, request_id, generation, *, lock=False):
 def _view(row):
     return {'requestId': row.request_id, 'generation': row.generation, 'version': row.version, 'status': row.status,
             'fanId': row.fan_id, 'sourceMessageId': row.source_message_id, 'draftHash': row.draft_hash,
-            'createdBy': row.created_by, 'actor': row.actor,
+            'createdBy': row.created_by, 'actor': row.actor, 'authorizationMode':row.authorization_mode,
             'decidedAt': row.decided_at.isoformat() if row.decided_at else None,
             'expiresAt': row.expires_at.isoformat(), 'invalidationReason': row.invalidation_reason,
             'parts': json.loads(row.parts_json)}
@@ -299,10 +299,16 @@ def evaluate(s, runtime, decision, *, now=None, phase='send', need_approval=True
         return 'approval_mismatch', row, digest, shown
     if pilot is not None:
         from .pilot_scope import authorize
-        try:
-            authorize(pilot_config, row.actor, 'approve')
-        except Refused:
-            return 'pilot_operator_unauthorized', row, digest, shown
+        if row.authorization_mode != pilot_config['authorization_mode']:
+            return 'pilot_authorization_mode_changed', row, digest, shown
+        if row.authorization_mode == 'autonomous':
+            if row.actor != 'autonomous-policy:' + pilot.fingerprint:
+                return 'pilot_automatic_authorization_invalid', row, digest, shown
+        else:
+            try:
+                authorize(pilot_config, row.actor, 'approve')
+            except Refused:
+                return 'pilot_operator_unauthorized', row, digest, shown
     return None, row, digest, shown
 
 
@@ -375,7 +381,10 @@ def create_draft_approval(store, tenant, account, decision_id, *, created_by='en
             raise Refused(reason)
         state = s.get(OfConversationState, (account, decision.fan_id))
         now = utcnow()
-        row = OfEngineApproval(account_id=account, request_id=decision.request_id, generation=decision.generation, version=1,
+        from .pilot_scope import current as current_pilot
+        pilot, config = current_pilot(s, runtime)
+        mode = config['authorization_mode'] if pilot is not None else 'supervised'
+        row = OfEngineApproval(authorization_mode=mode, account_id=account, request_id=decision.request_id, generation=decision.generation, version=1,
             fan_id=decision.fan_id, binding_id=runtime.binding_id,
             source_message_id=s.get(OfEngineRequest, (account, decision.request_id)).source_message_id,
             owner_epoch=decision.owner_epoch, control_revision=state.revision, input_revision=parts[0].input_revision,
@@ -411,6 +420,8 @@ def approve(store, tenant, account, request_id, generation, *, expected_version,
         if pilot is not None:
             authorize(pilot_config, actor, 'approve')
         row = _locked_version(s, runtime, account, request_id, generation, expected_version)
+        if row.authorization_mode != 'supervised':
+            raise Refused('this draft uses autonomous authorization')
         if row.status == 'approved':
             return dict(_view(row), duplicate=True)
         if row.status != 'awaiting':
@@ -429,6 +440,41 @@ def approve(store, tenant, account, request_id, generation, *, expected_version,
                 failure = 'draft is stale: ' + reason
             else:
                 row.status, row.actor, row.decided_at, row.updated_at = 'approved', actor, now, now
+                row.expires_at = now + timedelta(seconds=approval_ttl_seconds())
+                return dict(_view(row), duplicate=False)
+    raise Refused(failure)
+
+
+def authorize_automatic(store, tenant, account, request_id, generation, *, expected_version):
+    """Record explicit machine policy authorization; never impersonate a human approver."""
+    failure = None
+    with Session(store.engine) as s, s.begin():
+        runtime = store._runtime(s, tenant, account)
+        from .pilot_scope import require
+        pilot, config = require(s, runtime, active=True)
+        if config['authorization_mode'] != 'autonomous':
+            raise Refused('autonomous authorization is not configured')
+        row = _locked_version(s, runtime, account, request_id, generation, expected_version)
+        if row.authorization_mode != 'autonomous':
+            raise Refused('draft authorization mode changed')
+        if row.status == 'approved':
+            return dict(_view(row), duplicate=True)
+        if row.status != 'awaiting':
+            raise Refused('authorization is ' + row.status)
+        now = utcnow()
+        if row.expires_at <= now:
+            row.status, row.invalidation_reason, row.updated_at = 'expired', 'ttl', now
+            failure = 'authorization expired'
+        else:
+            parts = _generation_parts(s, account, request_id, generation)
+            reason, _, digest, _ = evaluate(s, runtime, parts[0], phase='draft', need_approval=False) if parts else ('parts_incomplete', None, None, None)
+            if reason is None and digest != row.draft_hash:
+                reason = 'draft_changed'
+            if reason:
+                row.status, row.invalidation_reason, row.updated_at = 'invalidated', reason[:64], now
+                failure = 'draft is stale: ' + reason
+            else:
+                row.status, row.actor, row.decided_at, row.updated_at = 'approved', 'autonomous-policy:' + pilot.fingerprint, now, now
                 row.expires_at = now + timedelta(seconds=approval_ttl_seconds())
                 return dict(_view(row), duplicate=False)
     raise Refused(failure)
@@ -555,7 +601,7 @@ def edit(store, tenant, account, request_id, generation, *, expected_version, ac
             if reason:
                 raise Refused('edited draft is not valid: ' + reason)
             state = s.get(OfConversationState, (account, head.fan_id))
-            fresh_row = OfEngineApproval(account_id=account, request_id=request_id, generation=generation_next,
+            fresh_row = OfEngineApproval(authorization_mode=row.authorization_mode, account_id=account, request_id=request_id, generation=generation_next,
                 version=row.version + 1, fan_id=row.fan_id, binding_id=row.binding_id, source_message_id=row.source_message_id,
                 owner_epoch=row.owner_epoch, control_revision=state.revision, input_revision=row.input_revision,
                 connection_epoch=row.connection_epoch, status='awaiting',

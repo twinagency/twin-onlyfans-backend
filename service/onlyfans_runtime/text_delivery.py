@@ -736,7 +736,7 @@ class TextAuthority:
                 engine_action=engine_action, independent=independent_anchor is not None)
             if reason is None and engine_action:
                 from conversation_engine.pilot_scope import delivery_block
-                reason = delivery_block(s, runtime, intent.fan_id)
+                reason = delivery_block(s, runtime, intent.fan_id, commercial=intent.catalog_item_id is not None)
             if reason == "pilot_evidence_pending" or reason == "history_not_current" and self._waiting_for_ingress(runtime, now):
                 # A different fan's pending ingress can temporarily invalidate the
                 # account history check. Preserve the current, still-unsent reply;
@@ -911,7 +911,7 @@ class TextAuthority:
                 engine_action=engine_action, independent=independent_anchor is not None)
             if reason is None and engine_action:
                 from conversation_engine.pilot_scope import delivery_block
-                reason = delivery_block(s, runtime, row.fan_id)
+                reason = delivery_block(s, runtime, row.fan_id, commercial=row.catalog_item_id is not None)
             from . import concurrent_admission
             concurrent = concurrent_admission.mode(policy) == "concurrent"
             if concurrent:
@@ -1297,7 +1297,8 @@ class TextAuthority:
         if type(transport) is FansApiRealTransport:
             # Restart recovery: an attempt left 'dispatching' with nobody behind it is UNKNOWN once past its
             # deadline (it may have reached the provider). It is never re-queued or retried from here.
-            self.expire_dispatches(tenant_id, account_id, limit=32, synthetic_engine_only=True)
+            self.expire_dispatches(tenant_id, account_id, limit=32, synthetic_engine_only=True,
+                                   allowed_fans=frozenset(map(int, transport.allowed_chats)))
         grant = self.admit(tenant_id, account_id, intent_id, transport_generation=transport_generation)
         if isinstance(grant, str):
             return grant

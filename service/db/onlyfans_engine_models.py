@@ -132,6 +132,20 @@ class OfFansWebhook(Base):
     received_at = Column(DateTime, nullable=False)
 
 
+class OfEnginePilotWebhookDigest(Base):
+    """Hash-only evidence for authenticated events outside the active pilot scope."""
+    __tablename__ = 'of_engine_pilot_webhook_digest'
+    __table_args__ = (
+        ForeignKeyConstraint(['account_id', 'epoch'], ['of_fans_connection.account_id', 'of_fans_connection.epoch'], ondelete='RESTRICT'),
+        {'info': {'onlyfans_since': '0125_plan_c_scope'}},
+    )
+    account_id = Column(String, primary_key=True)
+    epoch = Column(BigInteger, primary_key=True)
+    event_key = Column(String(255), primary_key=True)
+    payload_sha256 = Column(String(64), primary_key=True)
+    received_at = Column(DateTime, nullable=False)
+
+
 class OfEngineAttempt(Base):
     __tablename__ = 'of_engine_attempt'
     __table_args__ = (
@@ -407,6 +421,7 @@ class OfEngineApproval(Base):
     status = Column(String(16), nullable=False)
     parts_json = Column(Text, nullable=False)
     draft_hash = Column(String(64), nullable=False)
+    authorization_mode = Column(String(16), nullable=False, server_default=text("'supervised'"))
     created_by = Column(String(128), nullable=False)
     actor = Column(String(128))
     decided_at = Column(DateTime)

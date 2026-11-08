@@ -4,13 +4,13 @@ Constructing this worker requires a durable, explicitly active single-pilot
 scope. Tests inject mock HTTP transports; no configuration here activates a
 policy, approves a draft, creates credentials, or starts a process.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from hashlib import sha256
 import os
 import re
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, tuple_
 from sqlalchemy.orm import Session, aliased
 
 from conversation_engine import approval
@@ -20,7 +20,7 @@ from conversation_engine.pilot_scope import require, require_model, policy_match
 from conversation_engine.real_worker import RealConversationWorker
 from conversation_engine.writer_context import JsonFileCreatorProfiles
 from db.onlyfans_delivery_models import OfDeliveryPolicy
-from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfEngineModelCall, OfEnginePilotScope, OfEngineRequest, OfFansConnection, OfFansWebhook, OfFansWebhookConflict
+from db.onlyfans_engine_models import OfEngineApproval, OfEngineDecision, OfEngineModelCall, OfEnginePilotScope, OfEngineRequest, OfFansConnection, OfFansWebhook, OfEnginePilotWebhookDigest
 from db.onlyfans_fans_intake_models import OfFansProjection
 from db.onlyfans_models import OfIngress
 from fans_api_adapter.events import FansEventIntake
@@ -67,6 +67,7 @@ class SupervisedPilot:
     allowed_fans: frozenset
     model_config: ModelConfig
     profiles: JsonFileCreatorProfiles
+    ingress_cursor: dict = field(default_factory=dict, compare=False, repr=False)
 
     def __repr__(self):
         return f'SupervisedPilot(account={self.account!r}, secret=<redacted>)'
@@ -92,40 +93,56 @@ class SupervisedPilot:
             require_model(config, self.account, self.model_config)
             return scope.active_since
 
-    def _quarantine_collision(self, raw, event_key):
+    def _record_outside_digest(self, raw, event_key):
+        """Persist only a hash under the active epoch lock so a racing duplicate cannot be lost."""
         if type(event_key) is not str or not re.fullmatch(r'[\x21-\x7e]{1,255}', event_key):
             raise Refused('invalid webhook identity')
         digest = sha256(raw).hexdigest()
         store = self.worker.engine.store
         with Session(store.engine) as s, s.begin():
             runtime = store._runtime(s, self.tenant, self.account)
-            rows = s.scalars(select(OfFansWebhook).join(OfFansConnection, and_(
-                OfFansConnection.account_id == OfFansWebhook.account_id,
-                OfFansConnection.epoch == OfFansWebhook.epoch)).where(
-                OfFansWebhook.account_id == self.account, OfFansWebhook.event_key == event_key,
-                OfFansConnection.binding_id == runtime.binding_id)).all()
-            for old in rows:
-                try:
-                    _, fan = _event_fan(old.raw_body)
-                except Refused:
-                    continue
-                if fan is not None and fan not in self.allowed_fans:
-                    continue
-                if old.payload_sha256 != digest:
-                    if s.get(OfFansWebhookConflict, (self.account, old.epoch, event_key, digest)) is None:
-                        s.add(OfFansWebhookConflict(account_id=self.account, epoch=old.epoch, event_key=event_key,
-                            payload_sha256=digest, raw_body=raw, received_at=utcnow()))
-                    return True
-        return False
+            scope, _ = require(s, runtime, active=True)
+            if scope.revision != self.scope_revision:
+                raise Refused('pilot scope changed')
+            active_epoch = self.worker.transport.client.epoch
+            active = s.get(OfFansConnection, (self.account, active_epoch))
+            if active is None or active.binding_id != runtime.binding_id or active.status != 'active':
+                raise Refused('pilot connection changed')
+            # A reconnect may legitimately reuse event keys. Resolve a known provider account
+            # to its own epoch; malformed/unknown envelopes are conservatively scoped to active.
+            try:
+                provider_account = json.loads(raw).get('account_id')
+            except (ValueError, TypeError, AttributeError, UnicodeError, RecursionError):
+                provider_account = None
+            matched = s.scalar(select(OfFansConnection).where(
+                OfFansConnection.account_id == self.account, OfFansConnection.binding_id == runtime.binding_id,
+                OfFansConnection.provider_creator_id == active.provider_creator_id,
+                OfFansConnection.provider_account_id == provider_account).order_by(OfFansConnection.epoch.desc()).limit(1))
+            epoch = matched.epoch if matched is not None else active_epoch
+            existing = s.get(OfFansWebhook, (self.account, epoch, event_key))
+            marker = s.get(OfEnginePilotWebhookDigest, (self.account, epoch, event_key, digest))
+            if marker is None:
+                from sqlalchemy import func
+                count = s.scalar(select(func.count()).select_from(OfEnginePilotWebhookDigest).where(
+                    OfEnginePilotWebhookDigest.account_id == self.account))
+                if count >= 10000:
+                    raise Refused('pilot webhook evidence limit reached')
+                s.add(OfEnginePilotWebhookDigest(account_id=self.account, epoch=epoch, event_key=event_key,
+                                                 payload_sha256=digest, received_at=utcnow()))
+            return existing is not None and existing.payload_sha256 != digest
 
     def handle(self, raw, signature, event_key):
-        if not verify_signature(raw, signature, self.secret):
+        if type(raw) is not bytes or len(raw) > 1_000_000 or not verify_signature(raw, signature, self.secret):
             raise Refused('webhook authentication failed')
         self.validate()
-        if self._quarantine_collision(raw, event_key):
-            return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
-        _, fan = _event_fan(raw)
-        if fan is not None and fan not in self.allowed_fans:
+        try:
+            _, fan = _event_fan(raw)
+            outside = fan is not None and fan not in self.allowed_fans
+        except Refused:
+            outside = True
+        if outside:
+            if self._record_outside_digest(raw, event_key):
+                return {'outcome':'quarantined', 'fenced':self.worker.engine.fence_conflicted_sources(self.tenant, self.account)}
             return {'outcome':'outside_pilot_scope'}
         result = self.worker.handle(self.tenant, self.account, raw_body=raw, signature=signature,
                                     secret=self.secret, event_key=event_key)
@@ -141,16 +158,22 @@ class SupervisedPilot:
             raise Refused('pilot activation boundary is unavailable')
         store, intake = self.worker.engine.store, self.worker.intake
         expired = self.worker.transport.recover_interrupted()
+        from fans_api_adapter.event_scope import event_fan, ACCOUNT_EVENTS
         with Session(store.engine) as s:
+            runtime = store._runtime(s, self.tenant, self.account, lock=False)
+            fan_expr = event_fan(OfFansWebhook.event_type, OfFansWebhook.raw_body)
+            malformed = or_(fan_expr.is_(None), ~fan_expr.op('~')('^[1-9][0-9]{0,18}$'))
             pending = s.execute(select(OfFansProjection.epoch, OfFansProjection.event_key, OfFansWebhook.raw_body)
                 .join(OfFansWebhook, and_(OfFansWebhook.account_id == OfFansProjection.account_id,
                       OfFansWebhook.epoch == OfFansProjection.epoch, OfFansWebhook.event_key == OfFansProjection.event_key))
                 .join(OfFansConnection, and_(OfFansConnection.account_id == OfFansWebhook.account_id,
                       OfFansConnection.epoch == OfFansWebhook.epoch))
                 .where(OfFansProjection.account_id == self.account, OfFansProjection.status == 'pending',
-                       OfFansConnection.binding_id == s.get(OfEnginePilotScope, 1).binding_id,
-                       OfFansWebhook.received_at >= active_since)
-                .order_by(OfFansProjection.updated_at).limit(limit)).all()
+                       OfFansConnection.binding_id == runtime.binding_id,
+                       or_(OfFansWebhook.event_type != 'messages.received', OfFansWebhook.received_at >= active_since),
+                       or_(OfFansWebhook.event_type.in_(ACCOUNT_EVENTS),
+                           fan_expr.in_(tuple(map(str, self.allowed_fans))), malformed))
+                .order_by(OfFansProjection.updated_at, OfFansProjection.event_key).limit(limit)).all()
         projected = 0
         for epoch, key, raw in pending:
             self.validate()
@@ -160,10 +183,12 @@ class SupervisedPilot:
                     intake._project(self.account, epoch, key)
                     projected += 1
             except Refused:
-                continue
+                # Authenticated but malformed input is held by the intake, never projected into another fan.
+                intake._project(self.account, epoch, key)
         # Reclassify pending human-send observations before any approved dispatch.
         for fan in sorted(self.allowed_fans):
             self.validate()
+            intake.drive(self.account, fan, fan_scoped=True)
             intake.classify_sent(self.account, fan)
         # Only scope-era inbound messages without a completed draft are eligible
         # for repair. Unknown model calls are retained, never automatically retried.
@@ -183,15 +208,22 @@ class SupervisedPilot:
                 OfEngineModelCall.request_id == request.request_id,
                 or_(OfEngineModelCall.status.in_(('reserved','calling','unknown','released')),
                     OfEngineModelCall.outcome.in_(('identity_pending','identity_unverified')))).exists()
-            rows = s.execute(select(OfIngress, request).outerjoin(request, and_(
+            query = (select(OfIngress, request).outerjoin(request, and_(
                 request.account_id == OfIngress.account_id, request.fan_id == OfIngress.fan_id,
                 request.source_message_id == OfIngress.message_id, request.binding_id == runtime.binding_id))
                 .where(OfIngress.account_id == self.account, OfIngress.binding_id == runtime.binding_id,
                     OfIngress.fan_id.in_(self.allowed_fans), OfIngress.source != 'import',
                     OfIngress.status.in_(('pending','applied')), OfIngress.received_at >= active_since,
                     or_(request.request_id.is_(None), and_(request.status == 'open', ~existing,
-                                                          or_(ready, ~uncertain))))
-                .order_by(OfIngress.received_at, OfIngress.event_key).limit(limit)).all()
+                                                          or_(ready, ~uncertain)))))
+            cursor = self.ingress_cursor.get('last')
+            if cursor is not None:
+                query = query.where(tuple_(OfIngress.received_at, OfIngress.event_key) > tuple_(*cursor))
+            rows = s.execute(query.order_by(OfIngress.received_at, OfIngress.event_key).limit(limit)).all()
+            if rows:
+                self.ingress_cursor['last'] = (rows[-1][0].received_at, rows[-1][0].event_key)
+            else:
+                self.ingress_cursor.clear()
             work = []
             for incoming, request in rows:
                 decision = None if request is None else s.scalar(select(OfEngineDecision).where(
@@ -206,6 +238,24 @@ class SupervisedPilot:
             result = (self.worker.turn(self.tenant, self.account, fan, ident) if action == 'turn'
                       else self.worker._send(self.tenant, self.account, ident))
             planned.append(result.get('outcome'))
+        with Session(store.engine) as s:
+            runtime = store._runtime(s, self.tenant, self.account, lock=False)
+            scope, config = require(s, runtime, active=True)
+            automatic = []
+            if config['authorization_mode'] == 'autonomous':
+                automatic = list(s.execute(select(OfEngineApproval.request_id, OfEngineApproval.generation,
+                    OfEngineApproval.version).where(OfEngineApproval.account_id == self.account,
+                    OfEngineApproval.binding_id == runtime.binding_id, OfEngineApproval.fan_id.in_(self.allowed_fans),
+                    OfEngineApproval.authorization_mode == 'autonomous', OfEngineApproval.status == 'awaiting',
+                    OfEngineApproval.created_at >= active_since, OfEngineApproval.expires_at > utcnow())
+                    .order_by(OfEngineApproval.created_at).limit(limit)))
+        for request_id, generation, version in automatic:
+            self.validate()
+            try:
+                approval.authorize_automatic(store, self.tenant, self.account, request_id, generation,
+                                             expected_version=version)
+            except Refused:
+                pass
         with Session(store.engine) as s:
             runtime = store._runtime(s, self.tenant, self.account, lock=False)
             pending_part = aliased(OfEngineDecision)
@@ -268,6 +318,7 @@ def build_supervised_pilot(store, environ=None, *, model_transport=None, fans_tr
     engine = build_engine_service(store, env, transport=model_transport)
     if engine is None:
         raise Refused('pilot model runtime is unavailable')
+    engine.model.ledger.expected_pilot_scope = (revision, fingerprint)
     transport = build_real_transport(store, tenant, account, creator_id=creator, epoch=epoch, env=env,
                                      transport=fans_transport, allowed_chats=frozenset(map(str, fans)))
     worker = RealConversationWorker(engine, FansEventIntake(store), transport)

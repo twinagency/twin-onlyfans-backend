@@ -89,6 +89,19 @@ class FansEventIntake:
                     raise Refused('webhook account scope mismatch')
             account, epoch = connection.account_id, connection.epoch
             existing = s.get(OfFansWebhook, (account, epoch, event_key))
+            from db.onlyfans_engine_models import OfEnginePilotWebhookDigest
+            conflict = s.scalar(select(OfEnginePilotWebhookDigest.payload_sha256).where(
+                OfEnginePilotWebhookDigest.account_id == account, OfEnginePilotWebhookDigest.epoch == epoch,
+                OfEnginePilotWebhookDigest.event_key == event_key,
+                OfEnginePilotWebhookDigest.payload_sha256 != digest).limit(1))
+            if conflict is not None:
+                if existing is None:
+                    s.add(OfFansWebhook(account_id=account, epoch=epoch, event_key=event_key, event_type=event[:80],
+                        payload_sha256=digest, raw_body=raw_body, status='quarantined', received_at=now))
+                    s.flush()
+                    s.add(OfFansProjection(account_id=account, epoch=epoch, event_key=event_key,
+                        status='held', detail='pilot_event_key_conflict', attempts=0, updated_at=now))
+                return {'outcome':'quarantined', 'account':account}
             if existing is not None:
                 if existing.payload_sha256 != digest:
                     if s.get(OfFansWebhookConflict, (account, epoch, event_key, digest)) is None:
@@ -392,7 +405,7 @@ class FansEventIntake:
         return 'projected', 'sent_' + outcome
 
     # ------------------------------------------------------------ re-drivable
-    def drive(self, account, fan_id):
+    def drive(self, account, fan_id, *, fan_scoped=False):
         """Link unlocks to their sends, settle them, and flag unlinked reversals. Order-independent and idempotent.
 
         Transactions and chargebacks are never paired with an unlock by amount or time (see payment_evidence).
@@ -404,8 +417,8 @@ class FansEventIntake:
                 if link is None:
                     return
                 changed = ev.match(s, account, fan_id, now)
-                ready = ev.linked_unlocks(s, account)
-                charged = ev.pending_chargebacks(s, account)
+                ready = ev.linked_unlocks(s, account, fan_id if fan_scoped else None)
+                charged = ev.pending_chargebacks(s, account, fan_id if fan_scoped else None)
             progressed = changed
             for unlock_id in ready:
                 result = ev.settle_unlock(self.store, account, unlock_id, now)

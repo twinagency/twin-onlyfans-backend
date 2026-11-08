@@ -19,7 +19,7 @@ from db.onlyfans_engine_models import OfEnginePilotScope, OfFansConnection
 from onlyfans_runtime.launch_operations_models import OfLaunchCommand
 from onlyfans_runtime.store import Refused, utcnow
 
-_ACTIONS = frozenset({'configure', 'activate', 'approve', 'reject', 'edit', 'stop', 'takeover', 'handback', 'reconcile', 'correct'})
+_ACTIONS = frozenset({'configure', 'activate', 'approve', 'reject', 'edit', 'stop', 'takeover', 'handback', 'reconcile', 'correct', 'read'})
 _ACTOR = re.compile(r'op-session:[0-9a-f]{64}\Z')
 _KEY = re.compile(r'[0-9a-f]{64}\Z')
 _CFG = re.compile(r'cfg-[0-9a-f]{12}\Z')
@@ -47,7 +47,9 @@ def _exact(obj, keys):
 
 
 def validate(config):
-    _exact(config, ('fans', 'product', 'operator', 'model', 'limits', 'qualification'))
+    _exact(config, ('fans', 'product', 'operator', 'model', 'limits', 'qualification', 'authorization_mode'))
+    if config['authorization_mode'] not in ('supervised', 'autonomous'):
+        raise Refused('explicit pilot authorization mode is required')
     fans = _ids(config['fans'])
     product, operator, model, limits = config['product'], config['operator'], config['model'], config['limits']
     qualification = config['qualification']
@@ -68,7 +70,8 @@ def validate(config):
             or name != name.strip() or len(name) > 100 or any(ord(c) < 32 for c in name)
             or type(permissions) is not list or any(type(value) is not str or value not in _ACTIONS for value in permissions)
             or len(set(permissions)) != len(permissions)
-            or not {'configure', 'activate', 'approve', 'stop'}.issubset(permissions)):
+            or not {'configure', 'activate', 'stop', 'read'}.issubset(permissions)
+            or config['authorization_mode'] == 'supervised' and 'approve' not in permissions):
         raise Refused('invalid pilot operator permissions')
     _exact(model, ('provider', 'primary', 'upstream', 'reported', 'version', 'daily_cap_microusd', 'creator_cap_microusd'))
     if (model['provider'] != 'openrouter' or type(model['primary']) is not str or not _MODEL.fullmatch(model['primary'])
@@ -88,7 +91,7 @@ def validate(config):
     requests = _integer(limits['provider_requests'], 1, 10**7)
     credits = _integer(limits['provider_credit_budget'], 1, 10**12)
     per_request = _integer(limits['provider_credits_per_request'], 1, credits)
-    return {'qualification':{'mode':qualification['mode'], 'reference':qualification['reference']},
+    return {'authorization_mode':config['authorization_mode'], 'qualification':{'mode':qualification['mode'], 'reference':qualification['reference']},
             'fans':fans, 'product':{'id':item, 'price_cents':price, 'media_ids':media, 'preview_ids':preview},
             'operator':{'actor':actor, 'name':name, 'permissions':sorted(permissions)},
             'model':{'provider':'openrouter', 'primary':model['primary'], 'upstream':model['upstream'],
@@ -194,7 +197,7 @@ def authorize_fan(s, runtime, fan, actor, permission):
         authorize(config, actor, permission)
 
 
-def delivery_block(s, runtime, fan):
+def delivery_block(s, runtime, fan, *, commercial=False):
     """Pending human/provider evidence blocks pilot sends until safely classified."""
     pilot, config = current(s, runtime)
     if pilot is None:
@@ -206,6 +209,9 @@ def delivery_block(s, runtime, fan):
     link = s.get(OfFansLink, (runtime.account_id, conn.provider_creator_id)) if conn is not None else None
     if conn is None or link is None or link.send_blocked or link.state != 'connected':
         return 'pilot_provider_link_blocked'
+    from fans_api_adapter.event_scope import event_fan
+    from sqlalchemy import or_
+    sent_fan = event_fan(OfFansWebhook.event_type, OfFansWebhook.raw_body)
     pending = s.scalar(select(OfFansProjection.event_key).join(OfFansWebhook,
         (OfFansWebhook.account_id == OfFansProjection.account_id) &
         (OfFansWebhook.epoch == OfFansProjection.epoch) &
@@ -214,12 +220,17 @@ def delivery_block(s, runtime, fan):
         (OfFansConnection.epoch == OfFansWebhook.epoch)).where(
         OfFansProjection.account_id == runtime.account_id, OfFansProjection.status == 'pending',
         OfFansConnection.binding_id == runtime.binding_id,
-        OfFansWebhook.event_type.in_(('messages.sent','accounts.disconnected','accounts.session_expired',
-                                     'accounts.authentication_failed'))).limit(1))
+        or_(OfFansWebhook.event_type.in_(('accounts.disconnected','accounts.session_expired','accounts.authentication_failed')),
+            (OfFansWebhook.event_type == 'messages.sent') &
+            or_(sent_fan == str(fan), sent_fan.is_(None), ~sent_fan.op('~')('^[1-9][0-9]{0,18}$')))).limit(1))
     human = s.scalar(select(OfFansEvidence.evidence_id).where(
         OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan,
         OfFansEvidence.kind == 'human_sent', OfFansEvidence.status.in_(('pending','held'))).limit(1))
-    return 'pilot_evidence_pending' if pending is not None or human is not None else None
+    money = s.scalar(select(OfFansEvidence.evidence_id).where(
+        OfFansEvidence.account_id == runtime.account_id, OfFansEvidence.fan_id == fan,
+        OfFansEvidence.kind.in_(('unlock','transaction','chargeback')),
+        OfFansEvidence.status.in_(('pending','held'))).limit(1)) if commercial else None
+    return 'pilot_evidence_pending' if pending is not None or human is not None or money is not None else None
 
 
 def policy_matches(policy, config, *, enabled):

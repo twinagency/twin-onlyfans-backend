@@ -393,10 +393,22 @@ def check_schema(conn: Connection, *, expected: str = HEAD) -> None:
             {"table": table, "trigger": trigger}).all()
         if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 31  # row, before, insert|delete|update
                 or guard[0][2] != trigger or guard[0][4] != "plpgsql"
-                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "03250ff630dcd19c1a14dd18e20934cf84f1592947a78fd840deb37dae020d98"):
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != ("535d3bb84a6721a4bd2efcf1777254b01bf12f50474f2f69e45522b1e5ae469e" if expected_rank >= 125 else "03250ff630dcd19c1a14dd18e20934cf84f1592947a78fd840deb37dae020d98")):
             failures.append("missing engine approval protection")
         if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
             failures.append("missing engine approval row security")
+    if expected_rank >= 125:
+        table, trigger = "of_engine_pilot_webhook_digest", "of_engine_pilot_webhook_digest_guard"
+        guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text
+            FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_language l ON l.oid=p.prolang
+            WHERE t.tgrelid=to_regclass(:table) AND t.tgname=:trigger AND NOT t.tgisinternal"""),
+            {"table": table, "trigger": trigger}).all()
+        if (len(guard) != 1 or guard[0][0] not in {"O", "A"} or guard[0][1] != 27
+                or guard[0][2] != trigger or guard[0][4] != "plpgsql"
+                or hashlib.sha256(" ".join(guard[0][3].split()).encode()).hexdigest() != "643e5c1a1e6ad1c0ee60e28d0daae132dd018e027d4ebc6cb49a25e3c8632689"):
+            failures.append("missing pilot webhook digest protection")
+        if not conn.scalar(text("SELECT relrowsecurity FROM pg_class WHERE oid=to_regclass(:table)"), {"table": table}):
+            failures.append("missing pilot webhook digest row security")
     if expected_rank >= 125:
         table, trigger = "of_engine_pilot_scope", "of_engine_pilot_scope_guard"
         guard = conn.execute(text("""SELECT t.tgenabled::text,t.tgtype::integer,p.proname::text,p.prosrc::text,l.lanname::text

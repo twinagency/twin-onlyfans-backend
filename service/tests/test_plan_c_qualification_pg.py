@@ -179,3 +179,14 @@ def test_duplicate_json_keys_are_retained_as_a_safety_hold(supervised):
     with Session(world.database[1]) as s:
         assert s.scalar(select(OfEnginePilotWebhookDigest).where(OfEnginePilotWebhookDigest.event_key=='ambiguous-json')).safety_hold
     assert world.fans.posts==[]
+
+def test_unsupported_manual_path_refuses_before_creating_a_false_unknown(supervised):
+    from db.models import OfConversationState
+    from db.onlyfans_delivery_models import OfTextIntent
+    world,*_=supervised
+    with Session(world.database[1]) as s:revision=s.get(OfConversationState,(ACCOUNT,FAN)).revision
+    with pytest.raises(Refused,match='manual transport is not qualified'):
+        world.authority.prepare(TENANT,ACCOUNT,FAN,command_key='unsupported-manual',expected_revision=revision,
+            body='Offline operator text',origin='manual',actor=ACTOR)
+    with Session(world.database[1]) as s:assert list(s.scalars(select(OfTextIntent)))==[]
+    assert world.fans.posts==[]

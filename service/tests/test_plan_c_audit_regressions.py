@@ -133,3 +133,27 @@ def test_deleted_display_message_does_not_retract_received_stop(supervised):
     with Session(w.database[1]) as s:
         assert s.get(OfConversationState,(ACCOUNT,FAN)).mode=='no_contact'
     assert w.fans.posts==[]
+
+
+def test_old_unanswered_request_reaches_actual_model_request(supervised):
+    import uuid
+    from db.onlyfans_engine_models import OfEngineRequest
+    from onlyfans_runtime.store import utcnow
+    w, _, _, seen, pilot=supervised
+    question='Please check the missing beach photo'
+    w.store.record(TENANT,ACCOUNT,event(mid=1100,body=question))
+    w.store.drain(TENANT,ACCOUNT)
+    with Session(w.database[1]) as s,s.begin():
+        runtime=w.store._runtime(s,TENANT,ACCOUNT)
+        s.add(OfEngineRequest(account_id=ACCOUNT,request_id=str(uuid.uuid4()),fan_id=FAN,
+            binding_id=runtime.binding_id,source_message_id=1100,status='open',owner='engine',
+            next_step='prepare_reply',revision=0,created_at=utcnow(),updated_at=utcnow()))
+    for mid in range(1101,1121):
+        w.store.record(TENANT,ACCOUNT,event(mid=mid,body='An intervening ordinary message'))
+    w.store.drain(TENANT,ACCOUNT)
+    stage(pilot,1121,'hello again')
+    prompt=seen[-1]['messages'][-1]['content']
+    history=prompt.split('LATEST:')[0]
+    assert question not in history
+    assert question in prompt.split('UNRESOLVED REQUESTS AND ACTIONS')[1]
+    assert w.fans.posts==[]

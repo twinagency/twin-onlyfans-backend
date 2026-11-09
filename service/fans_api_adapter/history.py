@@ -8,6 +8,9 @@ from urllib.parse import quote, urlsplit
 
 from conversation_engine.identity import require_identifier
 
+# Both documented API origins; continuations must stay on the configured one.
+ALLOWED_BASES = ("https://app.onlyfansapi.com", "https://api.fansapi.com")
+
 
 @dataclass(frozen=True, slots=True)
 class HistoryPage:
@@ -22,7 +25,10 @@ def _path_component(value: str, name: str) -> str:
     return quote(value, safe="")
 
 
-def validate_history_next_page(value: str, *, connection_id: str, chat_id: str) -> str:
+def validate_history_next_page(value: str, *, connection_id: str, chat_id: str,
+                               base: str = ALLOWED_BASES[0]) -> str:
+    if base not in ALLOWED_BASES:
+        raise ValueError("unsupported provider origin")
     expected_path = f"/api/{_path_component(connection_id, 'connection_id')}/chats/{_path_component(chat_id, 'chat_id')}/messages"
     if type(value) is not str or not value or value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
         raise ValueError("invalid continuation URL")
@@ -31,13 +37,16 @@ def validate_history_next_page(value: str, *, connection_id: str, chat_id: str) 
         port = parts.port
     except ValueError as exc:
         raise ValueError("invalid continuation URL") from exc
-    if (parts.scheme != "https" or parts.hostname != "app.onlyfansapi.com" or port not in (None, 443) or
+    if (parts.scheme != "https" or parts.hostname != urlsplit(base).hostname or port not in (None, 443) or
             parts.username is not None or parts.password is not None or parts.fragment or parts.path != expected_path):
         raise ValueError("continuation URL is outside the allowed account and chat")
     return value
 
 
-def parse_history_page(body: object, *, connection_id: str, chat_id: str) -> HistoryPage:
+def parse_history_page(body: object, *, connection_id: str, chat_id: str,
+                       base: str = ALLOWED_BASES[0]) -> HistoryPage:
+    if base not in ALLOWED_BASES:
+        raise ValueError("unsupported provider origin")
     _path_component(connection_id, "connection_id")
     _path_component(chat_id, "chat_id")
     if type(body) is not dict or type(body.get("data")) is not list or type(body.get("_pagination")) is not dict:
@@ -47,5 +56,5 @@ def parse_history_page(body: object, *, connection_id: str, chat_id: str) -> His
         raise ValueError("history completeness is unknown")
     next_page = pagination["next_page"]
     if next_page is not None:
-        next_page = validate_history_next_page(next_page, connection_id=connection_id, chat_id=chat_id)
+        next_page = validate_history_next_page(next_page, connection_id=connection_id, chat_id=chat_id, base=base)
     return HistoryPage(tuple(body["data"]), next_page)

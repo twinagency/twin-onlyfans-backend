@@ -63,6 +63,44 @@ class ProtocolTests(unittest.TestCase):
             with self.assertRaises(ValueError): c.history(101, next_page=bad)
         self.assertEqual(len(fake.calls),2)
 
+
+    def test_history_keeps_the_configured_origin_and_never_crosses_between_provider_hosts(self):
+        bases = ('https://app.onlyfansapi.com', 'https://api.fansapi.com')
+        for base in bases:
+            other = next(value for value in bases if value != base)
+            path = '/api/acct_test/chats/101/messages'
+            next_url = base + path + '?limit=10&order=desc&first_id=9'
+            fake = FakeHTTP([
+                response(200, [{'id':'acct_test','onlyfans_id':123,'is_authenticated':True}]),
+                # A short real-shaped page with a continuation is not complete.
+                response(200, {'data':[{'id':9}], '_pagination':{'next_page':next_url}}),
+                response(200, {'data':[], '_pagination':{'next_page':None}}),
+                response(200, {'data':[{'id':8}], '_pagination':{'next_page':other+path+'?first_id=8'}}),
+            ])
+            c = FansApiClient(account='acct_test', creator_id='123', epoch=2, token='fixture-token',
+                              http=fake, timeout=2, enabled=True, base=base)
+            with self.subTest(base=base):
+                self.assertEqual(c.identity().state, 'verified')
+                first = c.history(101, limit=10)
+                self.assertEqual(first.state, 'observed')
+                self.assertEqual(first.next_page, next_url)
+                last = c.history(101, limit=10, next_page=first.next_page)
+                self.assertEqual(last.state, 'observed')
+                self.assertIsNone(last.next_page)
+                self.assertEqual(fake.calls[2]['url'], next_url)
+                for bad in [other+path, base+'/api/acct_other/chats/101/messages',
+                            base+'/api/acct_test/chats/102/messages',
+                            base+path+'?limit=100000', base+path+'#fragment',
+                            'http://'+base.split('://',1)[1]+path]:
+                    with self.assertRaises(ValueError):
+                        c.history(101, next_page=bad)
+                self.assertEqual(len(fake.calls), 3)
+                self.assertEqual(c.history(101).state, 'unavailable')
+                self.assertEqual(len(fake.calls), 4)
+                for call in fake.calls:
+                    self.assertFalse(call['follow_redirects'])
+                    self.assertEqual(call['headers']['Authorization'], 'Bearer fixture-token')
+
     def test_wire_price_and_one_post(self):
         fake=FakeHTTP([response(200, {'data':{'id':987,'createdAt':'2026-11-07T00:00:00Z'}}, {'x-ofapi-trace-id':'trace-1','X-OFAPI-Idempotency-Original-Trace-Id':'original-1'})])
         c=client(fake); result=c.send(101,key='stable-key',text='Offer',media=[11,12],previews=[11],price_cents=1001)

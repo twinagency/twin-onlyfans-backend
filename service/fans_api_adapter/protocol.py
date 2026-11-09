@@ -16,15 +16,13 @@ from decimal import Decimal
 import json
 import re
 from urllib.parse import urlencode, urlsplit, parse_qsl
-from .history import parse_history_page, validate_history_next_page
+from .history import ALLOWED_BASES, parse_history_page, validate_history_next_page
 from .intake import _nonfinite, _unique_object
 from .send_outcome import classify_send_error
 from .webhooks import verify_signature
 from conversation_engine.recovery import Outcome
 
-BASE = 'https://app.onlyfansapi.com'
-# The provider moved API calls to api.fansapi.com; both hosts are the same service.
-ALLOWED_BASES = ('https://app.onlyfansapi.com', 'https://api.fansapi.com')
+BASE = ALLOWED_BASES[0]
 _ACCOUNT = re.compile(r'acct_[A-Za-z0-9_-]{1,240}\Z')
 _NUMERIC = re.compile(r'[1-9][0-9]{0,18}\Z')
 _KEY = re.compile(r'[\x21-\x7e]{1,255}\Z')
@@ -157,7 +155,7 @@ class FansApiClient:
         chat = _id(chat_id)
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError('invalid page bound')
-        url = (validate_history_next_page(next_page, connection_id=self.account, chat_id=chat)
+        url = (validate_history_next_page(next_page, connection_id=self.account, chat_id=chat, base=self.base)
                if next_page is not None else self.base + f'/api/{self.account}/chats/{chat}/messages?' + urlencode({'limit':limit, 'order':'desc'}))
         if next_page is not None:
             pairs = parse_qsl(urlsplit(url).query, keep_blank_values=True, max_num_fields=8)
@@ -175,7 +173,7 @@ class FansApiClient:
         if status != 200:
             return Result('unavailable', trace_id=trace, http_status=status, original_trace_id=original_trace)
         try:
-            page = parse_history_page(body, connection_id=self.account, chat_id=chat)
+            page = parse_history_page(body, connection_id=self.account, chat_id=chat, base=self.base)
             if len(page.messages) > limit or any(type(item) is not dict for item in page.messages):
                 raise ValueError('unbounded or invalid page')
             for item in page.messages:

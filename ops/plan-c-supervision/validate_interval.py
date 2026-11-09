@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from model_transport.pilot_supervised import _event_fan
 FANS=frozenset((318022380,601164546))
+REQUIRED_PILOT_RECEIPT='evt_62d643e7c8006e2e7e5dd61e22d3ec10eb0bb0f0'
 PROVIDER='acct_7bf8540de5a84f459058490fee26c47f'
 URL='https://peterson-blacks-quit-ceremony.trycloudflare.com/onlyfans/webhooks/plan-c'
 
@@ -47,6 +48,8 @@ def validate(root):
         findings.append({'event_key':key,'event':event,'fan':fan,
             'local_digest':digests[0]['hash'],'disposition':'outside_approved_fans',
             'limitation':'provider object does not reproduce retained exact raw bytes'})
+    if REQUIRED_PILOT_RECEIPT not in {r['event_key'] for r in matched}:
+        raise RuntimeError('known post-incident pilot receipt missing from provider interval')
     return {'interval_valid_for_bounded_scope':True,'matched_receipts':matched,
             'outside_scope_limitations':findings,'full_event_continuity_claimed':False}
 

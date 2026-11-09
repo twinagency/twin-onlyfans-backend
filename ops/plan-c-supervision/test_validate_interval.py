@@ -1,16 +1,19 @@
 import base64,hashlib,json,tempfile,unittest
+from unittest.mock import patch
+import copy
 from pathlib import Path
 import validate_interval as v
 
 class IntervalTests(unittest.TestCase):
  def setUp(self):
   self.t=tempfile.TemporaryDirectory();self.p=Path(self.t.name)
+  self.pin=patch.object(v,'REQUIRED_PILOT_RECEIPT','key');self.pin.start()
   self.payload={'event':'messages.received','account_id':v.PROVIDER,'payload':{'fromUser':{'id':318022380},'text':'fixture'}}
   raw=json.dumps(self.payload).encode()
   self.row={'idempotency_key':'key','event':'messages.received','payload':self.payload,'succeeded':True,'status_code':202,'url':v.URL}
   self.local={'receipts':[{'key':'key','raw':base64.b64encode(raw).decode(),'hash':hashlib.sha256(raw).hexdigest(),'status':'accepted','projection':'projected'}],'digests':[]}
   self.rows=[self.row];self.page={'next_page':None}
- def tearDown(self):self.t.cleanup()
+ def tearDown(self):self.pin.stop();self.t.cleanup()
  def run_case(self):
   for name,obj in [('manifest.json',{'provider_delivery_count':len(self.rows)}),('deliveries.json',{'data':self.rows,'_pagination':self.page}),('local-receipts.json',self.local)]:
    (self.p/name).write_text(json.dumps(obj))
@@ -18,8 +21,9 @@ class IntervalTests(unittest.TestCase):
  def test_matches_exact_receipt(self):
   self.assertTrue(self.run_case()['interval_valid_for_bounded_scope'])
  def test_nonpilot_digest_is_retained_as_explicit_limitation(self):
-  self.payload['payload']['fromUser']['id']=12345
-  self.local={'receipts':[],'digests':[{'key':'key','hash':'a'*64,'hold':False}]}
+  other=copy.deepcopy(self.row);other['idempotency_key']='other'
+  other['payload']['payload']['fromUser']['id']=12345
+  self.rows.append(other);self.local['digests']=[{'key':'other','hash':'a'*64,'hold':False}]
   r=self.run_case();self.assertFalse(r['full_event_continuity_claimed'])
   self.assertEqual(r['outside_scope_limitations'][0]['fan'],12345)
  def test_pilot_digest_cannot_replace_receipt(self):
@@ -32,6 +36,13 @@ class IntervalTests(unittest.TestCase):
   self.row['succeeded']=False
   with self.assertRaises(RuntimeError):self.run_case()
   self.row['succeeded']=True;self.page['next_page']='more'
+  with self.assertRaises(RuntimeError):self.run_case()
+ def test_empty_listing_cannot_erase_known_postincident_receipt(self):
+  self.rows=[]
+  with self.assertRaises(RuntimeError):self.run_case()
+ def test_dropped_known_receipt_is_not_a_complete_interval(self):
+  self.row['idempotency_key']='other'
+  self.local['receipts'][0]['key']='other'
   with self.assertRaises(RuntimeError):self.run_case()
  def test_conflict_digest_refuses(self):
   self.payload['payload']['fromUser']['id']=12345

@@ -161,7 +161,8 @@ class SupervisedPilot:
                     or not policy_matches(policy, config, enabled=True)
                     or self.worker.engine.model.config != self.model_config
                     or journey.temporary_pause_reopen_hours is not None or journey.auto_backfill
-                    or profile is None or profile.missing_inputs() or not profile.offers_permitted
+                    or profile is None or profile.missing_inputs()
+                    or (config.get('delivery_mode', 'full') != 'text_only' and not profile.offers_permitted)
                     or profile.approved_item_ids != (str(config['product']['id']),)):
                 raise Refused('supervised pilot configuration changed')
             require_model(config, self.account, self.model_config)
@@ -535,7 +536,8 @@ def build_supervised_pilot(store, environ=None, *, model_transport=None, fans_tr
     profiles = JsonFileCreatorProfiles(profile_path)
     profile = profiles.get(account)
     journey = journey_config()
-    if (profile is None or profile.missing_inputs() or not profile.offers_permitted
+    if (profile is None or profile.missing_inputs()
+            or (config.get('delivery_mode', 'full') != 'text_only' and not profile.offers_permitted)
             or profile.approved_item_ids != (str(config['product']['id']),)
             or journey.temporary_pause_reopen_hours is not None or journey.auto_backfill):
         raise Refused('supervised creator or journey configuration is incomplete')

@@ -10,14 +10,24 @@ import stat
 import uuid
 
 APPROVED_INCIDENT='c59fd2459671cc3e0d3a82a1a8de26b9675cc24a4e0567e3f712ea3b89016725'
+WEBHOOK_INCIDENT='c240c781574ad075939782179ab926c9f0a69cc3fc40a292f81f7d3f57e3ad14'
+
+def incident_spec(incident_hash):
+    # Only these two independently identified incidents are approved for this owner.
+    if incident_hash==APPROVED_INCIDENT:
+        return {'classification':'credit_monitor_unavailable','scope_revision':12}
+    if incident_hash==WEBHOOK_INCIDENT:
+        return {'classification':'provider_webhook_health_unavailable','scope_revision':16}
+    return None
+
 ACCOUNT='of-323358988'
 BINDING='01612323-b06f-5320-b623-4e032f474a6e'
 
-def classify_journal(raw):
+def classify_journal(raw,expected='credit_monitor_unavailable'):
     failures=re.findall(rb'pilot_supervisor_stopped:([A-Za-z0-9_]+)',raw)
-    if failures != [b'credit_monitor_unavailable']:
+    if expected not in ('credit_monitor_unavailable','provider_webhook_health_unavailable') or failures != [expected.encode()]:
         raise RuntimeError('additional or different supervisor failure requires its own evidence')
-    return 'credit_monitor_unavailable'
+    return expected
 
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
@@ -26,11 +36,12 @@ def encoded(value):
     return json.dumps(value,sort_keys=True,separators=(',',':')).encode()
 
 def _valid_resolution(value, incident_hash):
-    return (incident_hash==APPROVED_INCIDENT and type(value) is dict and value.get('version')=='plan-c-monitor-resolution.v1'
+    spec=incident_spec(incident_hash)
+    return (spec is not None and type(value) is dict and value.get('version')=='plan-c-monitor-resolution.v1'
         and value.get('incident_sha256')==incident_hash
         and value.get('account_id')==ACCOUNT and value.get('binding_id')==BINDING
         and type(value.get('connection_epoch')) is int and value['connection_epoch']==1 and type(value.get('scope_revision')) is int
-        and value['scope_revision']>0 and value.get('classification')=='credit_monitor_unavailable'
+        and value['scope_revision']==spec['scope_revision'] and value.get('classification')==spec['classification']
         and re.fullmatch(r'op-session:[a-f0-9]{64}',str(value.get('actor',''))) is not None
         and all(re.fullmatch('[a-f0-9]{64}',str(value.get(k,''))) is not None
                 for k in ('audit_command_key','evidence_sha256'))
@@ -132,13 +143,25 @@ def resolve(root,receipt,audit,*,after_audit=None):
     """Publish only after the existing DB audit commits. Crash/replay stays fenced."""
     with locked(root) as root:
         marker=root/'outage-open.json';raw=marker.read_bytes();h=digest(raw)
-        if h!=APPROVED_INCIDENT or not _valid_resolution(receipt,h):
+        if incident_spec(h) is None or not _valid_resolution(receipt,h):
             raise RuntimeError('wrong or unsupported monitor incident')
         existing=root/'incident-resolution.json'
         if existing.exists():
             saved=json.loads(existing.read_bytes())
-            if saved!=receipt:raise RuntimeError('resolution evidence conflict')
-            if not unresolved(marker):return 'replayed'
+            if saved.get('incident_sha256')==h:
+                if saved!=receipt:raise RuntimeError('resolution evidence conflict')
+                if not unresolved(marker):return 'replayed'
+            else:
+                # Preserve an earlier approved incident's immutable history while
+                # atomically replacing only the current resolution pointer.
+                prior_hash=saved.get('incident_sha256','')
+                try:
+                    prior_raw=(root/'incident-history'/prior_hash).read_bytes()
+                    prior_receipt=(root/'incident-history'/('resolution-'+saved.get('audit_command_key','')+'.json')).read_bytes()
+                    valid=(_valid_resolution(saved,prior_hash) and digest(prior_raw)==prior_hash
+                           and prior_receipt==encoded(saved))
+                except (OSError,TypeError,ValueError):valid=False
+                if not valid:raise RuntimeError('prior incident history is incomplete or conflicting')
         audit(receipt)
         if after_audit:after_audit()
         if marker.read_bytes()!=raw:raise RuntimeError('incident changed during resolution')

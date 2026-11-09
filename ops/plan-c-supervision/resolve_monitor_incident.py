@@ -23,9 +23,10 @@ def main():
   raise RuntimeError('recovery image revision mismatch')
  assert_sender_stopped()
  marker=(SUP/'outage-open.json').read_bytes()
- if state.digest(marker)!=state.APPROVED_INCIDENT:raise RuntimeError('incident changed or not approved')
+ incident_hash=state.digest(marker);spec=state.incident_spec(incident_hash)
+ if spec is None:raise RuntimeError('incident changed or not approved')
  if not state.unresolved(SUP/'outage-open.json'):
-  print(json.dumps({'result':'replayed','sendingEnabled':False,'incident_sha256':state.APPROVED_INCIDENT}))
+  print(json.dumps({'result':'replayed','sendingEnabled':False,'incident_sha256':incident_hash}))
   return
  resume=len(sys.argv)==3 and sys.argv[1]=='--resume'
  if len(sys.argv)!=1 and not resume:raise RuntimeError('expected no args or --resume evidence-directory')
@@ -43,7 +44,7 @@ def main():
   command([sys.executable,str(HERE/'collect_monitor_evidence.py'),str(evidence)])
   manifest=read(evidence/'manifest.json')
   validator=['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL',
-    '--security-opt','no-new-privileges','-e','PYTHONPATH=/app:/app/service',
+    '--security-opt','no-new-privileges','-e','PYTHONPATH=/app:/app/service:/app/ops/plan-c-supervision',
     '-v',str(evidence)+':/proof:ro','-v',str(HERE/'validate_interval.py')+':/opt/validate.py:ro',
     '--entrypoint','python',image,'/opt/validate.py']
   findings=json.loads(command(validator))
@@ -55,9 +56,9 @@ def main():
   evidence_hash=state.digest(state.encoded(sources))
   (evidence/'source-hashes.json').write_bytes(state.encoded(sources))
   actor=read(ROOT/'config/pilot-operator-identity.json')['actor']
-  receipt={'version':'plan-c-monitor-resolution.v1','incident_sha256':state.APPROVED_INCIDENT,
+  receipt={'version':'plan-c-monitor-resolution.v1','incident_sha256':incident_hash,
    'account_id':state.ACCOUNT,'binding_id':state.BINDING,'connection_epoch':1,
-   'scope_revision':manifest['scope_revision'],'classification':'credit_monitor_unavailable',
+   'scope_revision':manifest['scope_revision'],'classification':spec['classification'],
    'actor':actor,'audit_command_key':state.digest(('monitor-resolution:'+state.APPROVED_INCIDENT+':'+evidence_hash).encode()),
    'evidence_sha256':evidence_hash,'resolved_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
   (evidence/'receipt.json').write_bytes(state.encoded(receipt))
@@ -85,5 +86,5 @@ def main():
   state.atomic(SUP/'budget-state.json',state.encoded(budget))
  result=state.resolve(SUP,receipt,audit)
  print(json.dumps({'result':result,'evidence':str(evidence),'sendingEnabled':False,
-                   'incident_sha256':state.APPROVED_INCIDENT},sort_keys=True))
+                   'incident_sha256':incident_hash},sort_keys=True))
 if __name__=='__main__':main()

@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 from model_transport.pilot_supervised import _event_fan
+from incident_state import WEBHOOK_INCIDENT,incident_spec
 FANS=frozenset((318022380,601164546))
 REQUIRED_PILOT_RECEIPT='evt_62d643e7c8006e2e7e5dd61e22d3ec10eb0bb0f0'
 PROVIDER='acct_7bf8540de5a84f459058490fee26c47f'
@@ -21,6 +22,23 @@ def validate(root):
     rows=deliveries['data']
     if type(rows) is not list or len(rows)!=manifest['provider_delivery_count']:
         raise RuntimeError('interval evidence count changed')
+    if 'incident_sha256' in manifest:
+        spec=incident_spec(manifest['incident_sha256'])
+        if spec is None or manifest.get('classification')!=spec['classification'] or manifest.get('scope_revision')!=spec['scope_revision']:
+            raise RuntimeError('incident hash, classification or scope changed')
+    current_case=manifest.get('incident_sha256')==WEBHOOK_INCIDENT
+    if current_case:
+        spec=incident_spec(WEBHOOK_INCIDENT)
+        if manifest.get('classification')!=spec['classification'] or manifest.get('scope_revision')!=spec['scope_revision']:
+            raise RuntimeError('incident classification or scope changed')
+        recent=json.loads((root/'incident-deliveries.json').read_bytes())
+        if (recent['_pagination'].get('next_page') is not None or type(recent['data']) is not list
+                or type(recent.get('_meta',{}).get('_credits',{}).get('used')) is not int
+                or recent['_meta']['_credits']['used']!=0 or len(recent['data'])!=manifest.get('incident_delivery_count')):
+            raise RuntimeError('incident window evidence incomplete or changed')
+        by_key={r.get('idempotency_key'):r for r in rows}
+        if any(by_key.get(r.get('idempotency_key'))!=r for r in recent['data']):
+            raise RuntimeError('incident window has unmatched reported delivery')
     receipts={r['key']:r for r in local['receipts']}
     findings=[];matched=[]
     for row in rows:
@@ -49,9 +67,11 @@ def validate(root):
             'local_digest':digests[0]['hash'],'disposition':'outside_approved_fans',
             'limitation':'provider object does not reproduce retained exact raw bytes'})
     if REQUIRED_PILOT_RECEIPT not in {r['event_key'] for r in matched}:
-        raise RuntimeError('known post-incident pilot receipt missing from provider interval')
+        raise RuntimeError('known prior pilot receipt missing from full monitor window' if current_case else 'known post-incident pilot receipt missing from provider interval')
     return {'interval_valid_for_bounded_scope':True,'matched_receipts':matched,
-            'outside_scope_limitations':findings,'full_event_continuity_claimed':False}
+            'outside_scope_limitations':findings,'full_event_continuity_claimed':False,
+            **({'reported_incident_window_count':manifest['incident_delivery_count'],
+                'anchor_context':'known prior receipt predates this incident','original_failure_subcause':'not retained'} if current_case else {})}
 
 if __name__=='__main__':
     print(json.dumps(validate('/proof'),sort_keys=True))

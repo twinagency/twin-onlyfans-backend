@@ -1,12 +1,14 @@
 # Recovery for the identified Plan C monitor incident
 
 This is the existing pilot supervisor/worker owner's manually invoked recovery.
-It is pinned to incident SHA256
-c59fd2459671cc3e0d3a82a1a8de26b9675cc24a4e0567e3f712ea3b89016725,
-account of-323358988, binding 01612323-b06f-5320-b623-4e032f474a6e,
-connection epoch1 and the existing stopped scope revision. It does not activate,
-publish a sender permit, release application holds or settle/refund any cost.
-Another incident stays held for its own evidence and decision.
+Only these independently identified incidents are supported, for account
+of-323358988, binding01612323-b06f-5320-b623-4e032f474a6e and connection epoch1:
+- c59fd2459671cc3e0d3a82a1a8de26b9675cc24a4e0567e3f712ea3b89016725:
+  credit_monitor_unavailable, stopped scope12.
+- c240c781574ad075939782179ab926c9f0a69cc3fc40a292f81f7d3f57e3ad14:
+  provider_webhook_health_unavailable, stopped scope16.
+It does not activate, publish a sender permit, release application holds or
+settle/refund costs. Every unlisted incident stays held for its own decision.
 
 The collector reads the exact dedicated webhook's supported complete bounded
 delivery listing, current subscription and usage, and retains source bytes.
@@ -70,3 +72,17 @@ The installation's existing worker.sh can embed these exact reviewed bytes in
 its Python heredoc, preserving its current file mount and intake continuity.
 Record the entrypoint and wrapper hashes and preserve the prior wrapper. Any
 embedded copy must equal this file; it is not a separate implementation.
+
+For the second approved incident, retain the complete monitoring-period listing
+from the existing webhook-enable evidence and separately record the reported
+18:54+ incident window. A known older signed receipt anchors the full listing;
+it is explicitly not a fresh post-incident delivery. Every reported record in
+the narrower window must match the retained full listing, including payload and
+status. An empty narrow window cannot erase the required full-window anchor.
+Unmatched, incomplete, wrong-case or changed evidence refuses recovery. The
+original network subcause was not retained; no timeout change is implied.
+
+A second approved resolution preserves the first immutable incident and audit
+receipt; only the current pointer is replaced after the new DB audit commits.
+Missing prior history, a subsequent failure or a class/revision/hash mix-up
+stays held. Both cases use the same existing audited owner and actor checks.

@@ -15,8 +15,9 @@ class IntervalTests(unittest.TestCase):
   self.rows=[self.row];self.page={'next_page':None}
  def tearDown(self):self.pin.stop();self.t.cleanup()
  def run_case(self):
-  for name,obj in [('manifest.json',{'provider_delivery_count':len(self.rows)}),('deliveries.json',{'data':self.rows,'_pagination':self.page}),('local-receipts.json',self.local)]:
+  for name,obj in [('manifest.json',{'provider_delivery_count':len(self.rows),**getattr(self,'manifest_extra',{})}),('deliveries.json',{'data':self.rows,'_pagination':self.page}),('local-receipts.json',self.local)]:
    (self.p/name).write_text(json.dumps(obj))
+  if hasattr(self,'recent'):(self.p/'incident-deliveries.json').write_text(json.dumps(self.recent))
   return v.validate(self.p)
  def test_matches_exact_receipt(self):
   self.assertTrue(self.run_case()['interval_valid_for_bounded_scope'])
@@ -47,5 +48,27 @@ class IntervalTests(unittest.TestCase):
  def test_conflict_digest_refuses(self):
   self.payload['payload']['fromUser']['id']=12345
   self.local={'receipts':[],'digests':[{'key':'key','hash':'a'*64,'hold':True}]}
+  with self.assertRaises(RuntimeError):self.run_case()
+ def second_case(self):
+  self.manifest_extra={'incident_sha256':v.WEBHOOK_INCIDENT,'classification':'provider_webhook_health_unavailable','scope_revision':16,'incident_delivery_count':0}
+  self.recent={'data':[],'_pagination':{'next_page':None},'_meta':{'_credits':{'used':0}}}
+ def test_second_empty_incident_window_needs_full_prior_anchor(self):
+  self.second_case();r=self.run_case()
+  self.assertEqual(r['reported_incident_window_count'],0)
+  self.assertIn('predates',r['anchor_context']);self.assertEqual(r['original_failure_subcause'],'not retained')
+  self.assertFalse(r['full_event_continuity_claimed'])
+  self.rows=[]
+  with self.assertRaises(RuntimeError):self.run_case()
+ def test_second_window_cannot_hide_new_or_changed_delivery(self):
+  self.second_case();row=copy.deepcopy(self.row);row['idempotency_key']='not-in-full'
+  self.recent['data']=[row];self.manifest_extra['incident_delivery_count']=1
+  with self.assertRaises(RuntimeError):self.run_case()
+ def test_second_window_page_class_scope_and_hash_mixups_refuse(self):
+  self.second_case()
+  for field,value in [('classification','credit_monitor_unavailable'),('scope_revision',12),('incident_sha256','f'*64)]:
+   original=self.manifest_extra[field];self.manifest_extra[field]=value
+   with self.assertRaises(RuntimeError):self.run_case()
+   self.manifest_extra[field]=original
+  self.recent['_pagination']['next_page']='more'
   with self.assertRaises(RuntimeError):self.run_case()
 if __name__=='__main__':unittest.main()

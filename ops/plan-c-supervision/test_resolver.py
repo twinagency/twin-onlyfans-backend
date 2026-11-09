@@ -31,7 +31,7 @@ class ResolverTests(unittest.TestCase):
    return json.dumps([{'Id':self.image,'Config':{'Labels':{'org.opencontainers.image.revision':self.commit}}}]).encode()
   if args[0]==r.sys.executable:
    target=Path(args[2]);target.mkdir()
-   self.write(target/'manifest.json',{'scope_revision':12,'credit_estimate':208})
+   self.write(target/'manifest.json',{'scope_revision':st.incident_spec(st.digest((self.sup/'outage-open.json').read_bytes()))['scope_revision'],'credit_estimate':208})
    (target/'journal.txt').write_text('fixture monitor failure')
    return b'{}'
   if '/opt/validate.py' in args:return b'{"interval_valid_for_bounded_scope":true}'
@@ -60,6 +60,27 @@ class ResolverTests(unittest.TestCase):
   with patch.object(r.sys,'argv',['resolver','--resume',str(evidence)]):r.main()
   self.assertFalse(st.unresolved(self.sup/'outage-open.json'))
   self.assertEqual(len([x for x in self.calls if x[0]==r.sys.executable]),1)
+ def test_second_command_case_succeeds_and_replay_does_not_recollect(self):
+  with patch.object(st,'APPROVED_INCIDENT','e'*64),patch.object(st,'WEBHOOK_INCIDENT',self.h):
+   r.main();self.assertFalse(st.unresolved(self.sup/'outage-open.json'))
+   evidence=next(p for p in (self.root/'evidence').iterdir() if p.is_dir())
+   receipt=json.loads((evidence/'receipt.json').read_bytes())
+   self.assertEqual((receipt['classification'],receipt['scope_revision']),('provider_webhook_health_unavailable',16))
+   count=len(self.calls);r.main()
+   self.assertEqual(len([a for a in self.calls[count:] if a[0]==r.sys.executable]),0)
+ def test_second_command_crash_new_failure_refuses_explicit_resume(self):
+  original=st.atomic
+  def fail(path,raw):
+   if Path(path).name=='incident-resolution.json':raise RuntimeError('second publication crash')
+   return original(path,raw)
+  with patch.object(st,'APPROVED_INCIDENT','e'*64),patch.object(st,'WEBHOOK_INCIDENT',self.h):
+   with patch.object(st,'atomic',side_effect=fail):
+    with self.assertRaises(RuntimeError):r.main()
+   evidence=next(p for p in (self.root/'evidence').iterdir() if p.is_dir())
+   st.record_failure(self.sup,{'failure':'third failure'})
+   with patch.object(r.sys,'argv',['resolver','--resume',str(evidence)]):
+    with self.assertRaises(RuntimeError):r.main()
+   self.assertTrue(st.unresolved(self.sup/'outage-open.json'))
  def test_changed_incident_refuses_before_collection(self):
   (self.sup/'outage-open.json').write_text('new failure')
   with self.assertRaises(RuntimeError):r.main()

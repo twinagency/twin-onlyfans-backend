@@ -120,6 +120,50 @@ class IncidentTests(unittest.TestCase):
   old=access.read_bytes()
   self.assertEqual(m.resolve(self.root,self.receipt,self.audit.append),'resolved')
   self.assertEqual(access.read_bytes(),old);self.assertFalse(m.unresolved(self.marker))
+ def second_case(self):
+  m.resolve(self.root,self.receipt,self.audit.append)
+  h=m.record_failure(self.root,{'failure':'provider_webhook_health_unavailable'})
+  receipt={**self.receipt,'incident_sha256':h,'classification':'provider_webhook_health_unavailable',
+           'scope_revision':16,'audit_command_key':'d'*64}
+  return h,receipt
+ def test_second_case_preserves_prior_history_and_replays_without_new_permit(self):
+  h,receipt=self.second_case();original=(self.root/'incident-history'/('resolution-'+self.receipt['audit_command_key']+'.json')).read_bytes()
+  with patch.object(m,'WEBHOOK_INCIDENT',h):
+   for field,value in [('classification','credit_monitor_unavailable'),('scope_revision',12),('incident_sha256','f'*64)]:
+    with self.assertRaises(RuntimeError):m.resolve(self.root,{**receipt,field:value},self.audit.append)
+   self.assertEqual(m.resolve(self.root,receipt,self.audit.append),'resolved')
+   self.assertEqual(m.resolve(self.root,receipt,self.audit.append),'replayed')
+   self.assertFalse(m.unresolved(self.marker));self.assertFalse((self.root/'budget-state.json').exists())
+  self.assertEqual((self.root/'incident-history'/('resolution-'+self.receipt['audit_command_key']+'.json')).read_bytes(),original)
+  self.assertEqual((self.root/'incident-history'/self.h).read_bytes(),self.raw)
+ def test_second_case_crash_then_new_failure_cannot_resume_old_evidence(self):
+  h,receipt=self.second_case()
+  def crash():raise RuntimeError('after second DB audit')
+  with patch.object(m,'WEBHOOK_INCIDENT',h):
+   with self.assertRaises(RuntimeError):m.resolve(self.root,receipt,self.audit.append,after_audit=crash)
+   self.assertTrue(m.unresolved(self.marker))
+   m.record_failure(self.root,{'failure':'unlisted third failure'})
+   with self.assertRaises(RuntimeError):m.resolve(self.root,receipt,self.audit.append)
+   self.assertTrue(m.unresolved(self.marker))
+  self.assertTrue((self.root/'incident-history'/h).exists())
+ def test_second_case_crash_can_resume_exact_evidence_and_preserve_old_audit(self):
+  h,receipt=self.second_case()
+  def crash():raise RuntimeError('publication crash')
+  with patch.object(m,'WEBHOOK_INCIDENT',h):
+   with self.assertRaises(RuntimeError):m.resolve(self.root,receipt,self.audit.append,after_audit=crash)
+   self.assertEqual(m.resolve(self.root,receipt,self.audit.append),'resolved')
+   self.assertFalse(m.unresolved(self.marker))
+  self.assertTrue((self.root/'incident-history'/('resolution-'+self.receipt['audit_command_key']+'.json')).exists())
+ def test_second_case_cannot_overwrite_missing_prior_history(self):
+  h,receipt=self.second_case();(self.root/'incident-history'/self.h).unlink()
+  with patch.object(m,'WEBHOOK_INCIDENT',h):
+   with self.assertRaises(RuntimeError):m.resolve(self.root,receipt,self.audit.append)
+   self.assertTrue(m.unresolved(self.marker))
+ def test_second_case_journal_classification_is_specific(self):
+  raw=b'pilot_supervisor_stopped:provider_webhook_health_unavailable'
+  self.assertEqual(m.classify_journal(raw,'provider_webhook_health_unavailable'),'provider_webhook_health_unavailable')
+  for bad in (raw+b'\n'+raw,b'pilot_supervisor_stopped:credit_monitor_unavailable'):
+   with self.assertRaises(RuntimeError):m.classify_journal(bad,'provider_webhook_health_unavailable')
  def test_resolved_field_alone_is_ineffective(self):
   self.marker.write_text('{"resolved": true}')
   self.assertTrue(m.unresolved(self.marker))

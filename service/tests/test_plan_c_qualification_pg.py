@@ -82,19 +82,40 @@ def test_raw_newer_correction_blocks_dispatch_before_projection(supervised, monk
 @pytest.mark.parametrize('supervised', ['autonomous'], indirect=True)
 @pytest.mark.parametrize('change_kind',[False,True])
 def test_autonomous_photo_receipt_unlock_and_finance_remain_distinct(supervised,change_kind):
-    from conversation_engine.commerce import RealCatalogueCoverage, approve_catalogue_offer
     from db.onlyfans_fans_intake_models import OfFansEvidence
-    world, env, _, _, pilot = supervised
-    world.backfilled(FAN)
-    pilot.worker.engine.select_simulated(TENANT, ACCOUNT, FAN)
-    grant = approve_catalogue_offer(world.store, TENANT, ACCOUNT, FAN, world.item,
-        RealCatalogueCoverage(ACCOUNT,FAN,world.item,'vault:offline-qualified',utcnow()+timedelta(minutes=30)))
-    def respond(request):
-        return httpx.Response(200,json={'model':'m/primary','choices':[{'message':{'content':json.dumps({
-            'body':'Here is the photo', 'action':'offer','offer_grant_id':grant,'pitch':True})},'finish_reason':'stop'}],
-            'usage':{'prompt_tokens':100,'completion_tokens':20,'cost':0.0001},
-            'openrouter_metadata':{'endpoints':{'available':[{'provider':'Fixture Provider','selected':True}]}}})
-    pilot = build_supervised_pilot(world.store,env,model_transport=httpx.MockTransport(respond),fans_transport=world.fans.transport)
+    from db.onlyfans_models import OfRuntime
+    from db.onlyfans_delivery_models import OfDeliveryPolicy
+    from conversation_engine import pilot_scope
+    from fans_api_adapter.backfill import FansBackfill
+    from test_engine_real_worker_pg import FAN2
+    from test_plan_c_stopped_backfill_pg import START, guard, client
+    from test_plan_c_sales_journey_pg import install_coverage, writer
+    from test_plan_c_scope_pg import activate, key
+    world, env, _, initial_model_calls, _ = supervised
+    install_coverage(world)
+    before = pilot_scope.describe(world.store, TENANT, ACCOUNT)
+    stopped = pilot_scope.set_status(world.store, TENANT, ACCOUNT, 'stopped',
+        expected_revision=before['revision'], command_key=key(1801), actor=ACTOR,
+        reason='offline complete history preparation')
+    with Session(world.database[1]) as s:
+        policy = s.get(OfDeliveryPolicy, ACCOUNT)
+        revision, limit, throttle = policy.revision, policy.limit_units, policy.throttle_seconds
+    world.authority.configure(TENANT, ACCOUNT, expected_revision=revision, enabled=False,
+        limit_units=limit, throttle_seconds=throttle, actor=ACTOR, reason='offline history preparation')
+    with Session(world.database[1]) as s, s.begin():
+        s.get(OfRuntime, ACCOUNT).enabled = False
+    guarded = guard(world, stopped['revision'], command=1802)
+    provider, provider_calls = client(world, guarded)
+    history = FansBackfill(world.intake).run(TENANT, ACCOUNT, provider, reason='operator',
+        start_date=START, pages_budget=5, history_chats=(FAN, FAN2))
+    assert history['status'] == 'complete'
+    world.store.drain(TENANT, ACCOUNT)
+    assert not initial_model_calls and not world.fans.posts
+    assert all(method == 'GET' for method, _ in provider_calls)
+    with Session(world.database[1]) as s, s.begin():
+        s.get(OfRuntime, ACCOUNT).enabled = True
+    activate(world, revision=stopped['revision'], n=1803)
+    pilot, _, _ = writer(world, env)
     draft = stage(pilot,905,'I want to buy the photo')
     assert draft['outcome'] == 'awaiting_approval', draft
     if change_kind:
